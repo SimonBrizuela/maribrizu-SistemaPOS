@@ -1,4 +1,5 @@
 import { collection, getDocs, query, orderBy, doc, updateDoc, getDoc } from 'firebase/firestore';
+import { invalidateCacheByPrefix } from '../cache.js';
 
 // Mapa de subcategorías por rubro cargado desde Firebase sub_categories
 // Se llena en initSubCats()
@@ -413,6 +414,7 @@ export async function renderInventario(container, db) {
     if (isNaN(valor) || valor < 0) { alert('Stock inválido'); return; }
     try {
       await updateDoc(doc(db, 'catalogo', docId), { stock: valor, ultima_actualizacion: today() });
+      invalidateCacheByPrefix('catalogo');
       const idx = prods.findIndex(x => x.doc_id === docId);
       if (idx !== -1) {
         prods[idx].stock = valor;

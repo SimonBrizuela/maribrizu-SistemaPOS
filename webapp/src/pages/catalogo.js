@@ -2,6 +2,7 @@
   collection, getDocs, doc, setDoc, updateDoc, getDoc,
   query, orderBy, writeBatch, deleteDoc, limit
 } from 'firebase/firestore';
+import { invalidateCacheByPrefix } from '../cache.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function fmt(n) {
@@ -903,6 +904,7 @@ export async function renderCatalogo(container, db) {
         if (!confirm('¿Eliminar este producto del catálogo?')) return;
         const id = btn.dataset.id;
         await deleteDoc(doc(db, 'catalogo', id));
+        invalidateCacheByPrefix('catalogo');
         allProductos = allProductos.filter(p => p.doc_id !== id);
         aplicarFiltros();
         renderStats();
@@ -1131,6 +1133,7 @@ export async function renderCatalogo(container, db) {
 
       try {
         await updateDoc(doc(db, 'catalogo', prod.doc_id), update);
+        invalidateCacheByPrefix('catalogo');
 
         // Sincronizar con inventario para que el POS reciba el precio actualizado
         try {
@@ -1803,6 +1806,7 @@ export async function renderCatalogo(container, db) {
           precio_venta: nuevoPrecio,
           ultima_actualizacion: today()
         });
+        invalidateCacheByPrefix('catalogo');
         // Sincronizar con inventario para que el POS reciba el precio actualizado
         try {
           const invDocId = String(p.id || p.doc_id);
@@ -2058,6 +2062,7 @@ export async function renderCatalogo(container, db) {
       btn.disabled = true; btn.textContent = 'Guardando...';
       try {
         await setDoc(doc(db, 'catalogo', codigo), nuevo);
+        invalidateCacheByPrefix('catalogo');
         await cargarDatos();
         renderStats();
         msgEl.innerHTML = `<div style="padding:12px;background:#f0fdf4;border-radius:8px;color:#166534">Producto <b>${nombre}</b> guardado correctamente.</div>`;

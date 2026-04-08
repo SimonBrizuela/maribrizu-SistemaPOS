@@ -195,11 +195,13 @@ export async function renderPromociones(container, db) {
     } else if (action === 'toggle') {
       const newActivo = promo.activo === false ? true : false;
       await updateDoc(doc(db, 'promociones', id), { activo: newActivo });
+      invalidateCacheByPrefix('promociones');
       promo.activo = newActivo;
       renderGrid();
     } else if (action === 'delete') {
       if (!confirm(`¿Eliminar la promoción "${promo.nombre}"?\nEsta acción no se puede deshacer.`)) return;
       await deleteDoc(doc(db, 'promociones', id));
+      invalidateCacheByPrefix('promociones');
       promociones = promociones.filter(p => p._id !== id);
       renderGrid();
     }
