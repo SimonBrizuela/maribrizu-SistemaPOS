@@ -1,13 +1,13 @@
 import { collection, getDocs, query, orderBy } from 'firebase/firestore';
+import { getCached } from '../cache.js';
 
 export async function renderResumenes(container, db) {
-  const snap = await getDocs(
-    query(collection(db, 'resumenes_mensuales'), orderBy('anio', 'desc'))
-  );
-  // Ordenar también por mes_num en el cliente para evitar índice compuesto
-  const meses = snap.docs
-    .map(d => ({ id: d.id, ...d.data() }))
-    .sort((a, b) => b.anio - a.anio || b.mes_num - a.mes_num);
+  const meses = await getCached('resumenes:mensuales', async () => {
+    const snap = await getDocs(query(collection(db, 'resumenes_mensuales'), orderBy('anio', 'desc')));
+    return snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .sort((a, b) => b.anio - a.anio || b.mes_num - a.mes_num);
+  });
 
   // Totales generales
   const totalGeneral = meses.reduce((a, m) => a + (m.total || 0), 0);

@@ -1,8 +1,11 @@
 import { collection, getDocs, query, orderBy, where } from 'firebase/firestore';
+import { getCached } from '../cache.js';
 
 export async function renderCierres(container, db) {
-  const snap = await getDocs(query(collection(db, 'cierres_caja'), orderBy('fecha_apertura', 'desc')));
-  const todos = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  const todos = await getCached('cierres:caja', async () => {
+    const snap = await getDocs(query(collection(db, 'cierres_caja'), orderBy('fecha_apertura', 'desc')));
+    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  });
 
   // Separar caja abierta (sin fecha_cierre o fecha_cierre nula) de las cerradas
   const cajaAbierta = todos.find(c => !c.fecha_cierre || c.fecha_cierre === null || c.fecha_cierre === '');

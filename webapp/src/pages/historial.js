@@ -1,14 +1,18 @@
 import { collection, getDocs, query, orderBy, where } from 'firebase/firestore';
 import { openSaleModal } from '../components/modal.js';
+import { getCached } from '../cache.js';
 
 export async function renderHistorial(container, db) {
-  const [histSnap, ventasDiaSnap] = await Promise.all([
-    getDocs(query(collection(db, 'historial_diario'), orderBy('fecha', 'desc'))),
-    getDocs(query(collection(db, 'ventas_por_dia'), orderBy('fecha', 'desc'))),
+  const [historial, ventasDia] = await Promise.all([
+    getCached('historial:diario', async () => {
+      const snap = await getDocs(query(collection(db, 'historial_diario'), orderBy('fecha', 'desc')));
+      return snap.docs.map(d => d.data());
+    }),
+    getCached('historial:ventas_dia', async () => {
+      const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('fecha', 'desc')));
+      return snap.docs.map(d => d.data());
+    }),
   ]);
-
-  const historial   = histSnap.docs.map(d => d.data());
-  const ventasDia   = ventasDiaSnap.docs.map(d => d.data());
 
   container.innerHTML = `
     <!-- Historial Diario -->

@@ -1,4 +1,5 @@
 import { db } from './firebase.js';
+import { invalidateCacheByPrefix } from './cache.js';
 import './styles/login.css';
 import { renderDashboard } from './pages/dashboard.js';
 import { renderVentas } from './pages/ventas.js';
@@ -16,6 +17,12 @@ import { isLoggedIn, getSession, logout } from './auth.js';
 
 // ── Estado global ──
 let currentPage = 'dashboard';
+
+// ── Cache en memoria por sesión ──
+// Cachea los DATOS de Firebase, no el HTML. Así los eventos siempre se registran bien.
+// El botón Refresh invalida el cache de la página actual y recarga desde Firebase.
+export const _dataCache = {};         // { colección: datos[] }
+const NO_CACHE = new Set(['dashboard']); // estas siempre se recargan (datos en tiempo real)
 
 const pages = {
   dashboard:  { title: 'Dashboard',              render: renderDashboard },
@@ -49,8 +56,14 @@ function navigate(page) {
   loadPage(page);
 }
 
-async function loadPage(page) {
+async function loadPage(page, forceRefresh = false) {
   const content = document.getElementById('pageContent');
+
+  // Si se fuerza refresh → limpiar cache de datos de esa página
+  if (forceRefresh && !NO_CACHE.has(page)) {
+    invalidateCacheByPrefix(page);
+  }
+
   content.innerHTML = `<div class="loader"><div class="spinner"></div><span>Cargando datos...</span></div>`;
   setStatus('connecting');
   try {
@@ -141,11 +154,11 @@ function initApp(session) {
   const overlay = document.getElementById('sidebarOverlay');
   if (overlay) overlay.addEventListener('click', closeSidebar);
 
-  // Refresh button
+  // Refresh button → fuerza recarga desde Firebase invalidando el cache
   document.getElementById('refreshBtn').addEventListener('click', () => {
     const btn = document.getElementById('refreshBtn');
     btn.classList.add('spinning');
-    loadPage(currentPage).finally(() => {
+    loadPage(currentPage, true).finally(() => {
       setTimeout(() => btn.classList.remove('spinning'), 500);
     });
   });

@@ -1,8 +1,11 @@
 import { collection, getDocs, query, orderBy } from 'firebase/firestore';
+import { getCached } from '../cache.js';
 
 export async function renderProductos(container, db) {
-  const snap = await getDocs(query(collection(db, 'productos_mas_vendidos'), orderBy('total_vendido', 'desc')));
-  const productos = snap.docs.map(d => d.data());
+  const productos = await getCached('productos:mas_vendidos', async () => {
+    const snap = await getDocs(query(collection(db, 'productos_mas_vendidos'), orderBy('total_vendido', 'desc')));
+    return snap.docs.map(d => d.data());
+  });
 
   const totalUnidades = productos.reduce((s, p) => s + (p.total_vendido || 0), 0);
   const totalIngresos = productos.reduce((s, p) => s + (p.ingresos || 0), 0);

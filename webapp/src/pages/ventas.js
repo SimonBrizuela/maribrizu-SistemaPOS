@@ -1,25 +1,28 @@
 import { collection, getDocs, query, orderBy, limit, where } from 'firebase/firestore';
 import { openSaleModal } from '../components/modal.js';
+import { getCached } from '../cache.js';
 
 export async function renderVentas(container, db) {
-  // Cargar ventas e items en paralelo (una sola lectura de cada colección)
-  const [snapVentas, snapItems] = await Promise.all([
-    getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc'), limit(500))),
-    getDocs(query(collection(db, 'ventas_por_dia'), orderBy('num_venta', 'asc'), limit(2000)))
+  // Cargar ventas e items en paralelo, con cache en memoria
+  const [ventas, itemsPorVenta] = await Promise.all([
+    getCached('ventas:lista', async () => {
+      const snap = await getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc'), limit(500)));
+      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    }),
+    getCached('ventas:items', async () => {
+      const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('num_venta', 'asc'), limit(2000)));
+      const map = {};
+      snap.docs.forEach(d => {
+        const data = d.data();
+        const key = String(data.num_venta);
+        if (!map[key]) map[key] = [];
+        const nombre = data.producto || data.product_name || '';
+        const cant   = data.cantidad || data.quantity || 1;
+        if (nombre) map[key].push(`${nombre}${cant > 1 ? ` x${cant}` : ''}`);
+      });
+      return map;
+    })
   ]);
-
-  const ventas = snapVentas.docs.map(d => ({ id: d.id, ...d.data() }));
-
-  // Construir mapa: num_venta → lista de nombres de productos
-  const itemsPorVenta = {};
-  snapItems.docs.forEach(d => {
-    const data = d.data();
-    const key = String(data.num_venta);
-    if (!itemsPorVenta[key]) itemsPorVenta[key] = [];
-    const nombre = data.producto || data.product_name || '';
-    const cant   = data.cantidad || data.quantity || 1;
-    if (nombre) itemsPorVenta[key].push(`${nombre}${cant > 1 ? ` x${cant}` : ''}`);
-  });
 
   // Enriquecer cada venta con sus productos
   ventas.forEach(v => {
