@@ -1,9 +1,31 @@
-import { collection, getDocs, query, orderBy, limit } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, limit, where } from 'firebase/firestore';
 import { openSaleModal } from '../components/modal.js';
 
 export async function renderVentas(container, db) {
-  const snap = await getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc'), limit(500)));
-  const ventas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  // Cargar ventas e items en paralelo (una sola lectura de cada colección)
+  const [snapVentas, snapItems] = await Promise.all([
+    getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc'), limit(500))),
+    getDocs(query(collection(db, 'ventas_por_dia'), orderBy('num_venta', 'asc'), limit(2000)))
+  ]);
+
+  const ventas = snapVentas.docs.map(d => ({ id: d.id, ...d.data() }));
+
+  // Construir mapa: num_venta → lista de nombres de productos
+  const itemsPorVenta = {};
+  snapItems.docs.forEach(d => {
+    const data = d.data();
+    const key = String(data.num_venta);
+    if (!itemsPorVenta[key]) itemsPorVenta[key] = [];
+    const nombre = data.producto || data.product_name || '';
+    const cant   = data.cantidad || data.quantity || 1;
+    if (nombre) itemsPorVenta[key].push(`${nombre}${cant > 1 ? ` x${cant}` : ''}`);
+  });
+
+  // Enriquecer cada venta con sus productos
+  ventas.forEach(v => {
+    const key = String(v.sale_id || v.id);
+    v._productosTexto = (itemsPorVenta[key] || []).join(', ');
+  });
 
   container.innerHTML = `
     <div class="filter-bar">
@@ -49,9 +71,9 @@ export async function renderVentas(container, db) {
         <td><b>#${v.sale_id || v.id || '-'}</b></td>
         <td>${fmtDate(dt)}</td>
         <td class="vta-col-hora">${fmtTime(dt)}</td>
-        <td class="vta-col-productos" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${v.productos || 'Click para ver detalle'}">
-          ${v.productos
-            ? `<span style="color:var(--text-muted);font-size:12px">${v.productos}</span>`
+        <td class="vta-col-productos" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${v._productosTexto || 'Click para ver detalle'}">
+          ${v._productosTexto
+            ? `<span style="color:var(--text-muted);font-size:12px">${v._productosTexto}</span>`
             : `<span style="color:var(--primary);font-size:12px;cursor:pointer">🔍 Ver detalle</span>`}
         </td>
         <td class="vta-col-items" style="text-align:center"><span class="badge badge-gray">${v.items_count || '-'}</span></td>
