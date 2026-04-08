@@ -49,3 +49,33 @@ pos_system/reports/*.pdf
 tmp_rovodev_*
 *.tmp
 *.bak
+
+# Node modules (webapp)
+webapp/node_modules/
+
+# Imágenes sueltas (capturas de pantalla, no son parte del sistema)
+2026-*.png
+Tabla Cobre.png
+multimedia.png
+"logo (2).png"
+webapp/2026-*.png
+webapp/undefined*.png
+webapp/*.jpeg
+webapp/*.jpg
+
+# CSVs de importación (datos locales)
+*.csv
+
+# Archivos de texto internos / notas
+PENDIENTES_SISTEMA_POS.txt
+PROGRESO_SISTEMA_POS.txt
+duplicados_reporte.txt
+productos_nuevos_hoja_principal.txt
+
+# PDFs varios
+puntos-de-venta.pdf
+presupuesto_libreria.html
+
+# Scripts de utilidad puntual
+csv_to_firebase.py
+build_usb.bat
