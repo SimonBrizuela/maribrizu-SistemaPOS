@@ -1,0 +1,738 @@
+"""
+Vista Fiscal — Pestaña principal para gestión de facturas electrónicas AFIP.
+Contiene dos sub-tabs: Emitir Factura (manual) e Historial de Facturas.
+"""
+from PyQt5.QtWidgets import (
+    QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QTableWidget,
+    QTableWidgetItem, QLabel, QPushButton, QLineEdit, QFormLayout,
+    QGroupBox, QComboBox, QHeaderView, QMessageBox, QFrame, QScrollArea
+)
+from PyQt5.QtCore import Qt
+from PyQt5.QtGui import QFont, QColor
+from datetime import datetime
+
+
+class FiscalView(QWidget):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
+
+        # Título
+        title = QLabel('Facturación Electrónica AFIP')
+        title.setFont(QFont('Segoe UI', 15, QFont.Bold))
+        title.setStyleSheet('color: #0d6efd;')
+        layout.addWidget(title)
+
+        # Sub-tabs
+        self.tabs = QTabWidget()
+        self.tabs.setFont(QFont('Segoe UI', 10))
+
+        self.emitir_tab = self._build_emitir_tab()
+        self.historial_tab = self._build_historial_tab()
+        self.config_tab = self._build_config_tab()
+
+        self.tabs.addTab(self.emitir_tab,   'Emitir Factura Manual')
+        self.tabs.addTab(self.historial_tab, 'Historial de Facturas')
+        self.tabs.addTab(self.config_tab,    'Configuracion AFIP')
+
+        self.tabs.currentChanged.connect(self._on_tab_changed)
+        layout.addWidget(self.tabs)
+
+    # ── TAB 1: Emitir factura manual ─────────────────────────────────────────
+    def _build_emitir_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(12)
+
+        info = QLabel(
+            'Desde aquí podés emitir una factura manualmente ingresando los ítems y datos del cliente.\n'
+            'Para facturar desde una venta registrada, usá el botón "Facturar AFIP" en la pestaña Ventas.'
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet(
+            'background:#e7f3ff; border:1px solid #b6d4fe; border-radius:6px;'
+            'padding:8px 12px; color:#084298; font-size:11px;'
+        )
+        layout.addWidget(info)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet('QScrollArea { border: none; }')
+        inner = QWidget()
+        form_layout = QVBoxLayout(inner)
+        form_layout.setSpacing(10)
+
+        # ── Tipo de comprobante ───────────────────────────────────────────────
+        tipo_group = QGroupBox('Comprobante')
+        tipo_group.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        tipo_form = QFormLayout(tipo_group)
+        tipo_form.setSpacing(8)
+
+        self.m_tipo_combo = QComboBox()
+        self.m_tipo_combo.addItems([
+            'FAC. ELEC. B', 'FAC. ELEC. A', 'FAC. ELEC. C',
+            'NOTA CRED. B', 'NOTA CRED. A', 'NOTA CRED. C',
+            'NOTA DEB. B',  'NOTA DEB. A',  'NOTA DEB. C',
+        ])
+        self.m_tipo_combo.setFont(QFont('Segoe UI', 10))
+        self.m_tipo_combo.currentTextChanged.connect(self._on_tipo_changed)
+        tipo_form.addRow('Tipo:', self.m_tipo_combo)
+
+        self.m_nombre_comp_input = QLineEdit('FACTURA')
+        self.m_nombre_comp_input.setFont(QFont('Segoe UI', 10))
+        self.m_nombre_comp_input.setPlaceholderText('FACTURA / NOTA DE CRÉDITO / etc.')
+        tipo_form.addRow('Nombre comprobante:', self.m_nombre_comp_input)
+
+        self.m_concepto_combo = QComboBox()
+        self.m_concepto_combo.addItems(['1 - Productos', '2 - Servicios', '3 - Productos y Servicios'])
+        self.m_concepto_combo.setFont(QFont('Segoe UI', 10))
+        tipo_form.addRow('Concepto:', self.m_concepto_combo)
+
+        self.m_pago_input = QLineEdit('Efectivo')
+        self.m_pago_input.setFont(QFont('Segoe UI', 10))
+        tipo_form.addRow('Forma de pago:', self.m_pago_input)
+
+        form_layout.addWidget(tipo_group)
+
+        # ── Cliente ───────────────────────────────────────────────────────────
+        cli_group = QGroupBox('Datos del Receptor (Cliente)')
+        cli_group.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        cli_form = QFormLayout(cli_group)
+        cli_form.setSpacing(8)
+
+        self.m_cliente_input = QLineEdit('CONSUMIDOR FINAL')
+        self.m_cliente_input.setFont(QFont('Segoe UI', 10))
+        cli_form.addRow('Razón Social:', self.m_cliente_input)
+
+        self.m_cuit_input = QLineEdit('')
+        self.m_cuit_input.setFont(QFont('Segoe UI', 10))
+        self.m_cuit_input.setPlaceholderText('Vacío = Consumidor Final')
+        cli_form.addRow('CUIT:', self.m_cuit_input)
+
+        self.m_dom_receptor_input = QLineEdit('')
+        self.m_dom_receptor_input.setFont(QFont('Segoe UI', 10))
+        self.m_dom_receptor_input.setPlaceholderText('Domicilio del cliente')
+        cli_form.addRow('Domicilio:', self.m_dom_receptor_input)
+
+        self.m_cond_iva_receptor_combo = QComboBox()
+        self.m_cond_iva_receptor_combo.addItems([
+            'Consumidor Final', 'Responsable Inscripto', 'Monotributista', 'Exento', 'No Categorizado'
+        ])
+        self.m_cond_iva_receptor_combo.setFont(QFont('Segoe UI', 10))
+        cli_form.addRow('Condición IVA:', self.m_cond_iva_receptor_combo)
+
+        form_layout.addWidget(cli_group)
+
+        # ── Items ─────────────────────────────────────────────────────────────
+        items_group = QGroupBox('Ítems de la Factura')
+        items_group.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        items_v = QVBoxLayout(items_group)
+
+        self.m_items_table = QTableWidget()
+        self.m_items_table.setColumnCount(4)
+        self.m_items_table.setHorizontalHeaderLabels(['Descripción', 'Cantidad', 'Precio Unit.', 'Importe'])
+        self.m_items_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.m_items_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.m_items_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.m_items_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.m_items_table.setMinimumHeight(160)
+        items_v.addWidget(self.m_items_table)
+
+        items_btn_row = QHBoxLayout()
+        add_item_btn = QPushButton('+ Agregar ítem')
+        add_item_btn.setFont(QFont('Segoe UI', 9))
+        add_item_btn.clicked.connect(self._add_item_row)
+        items_btn_row.addWidget(add_item_btn)
+
+        del_item_btn = QPushButton('− Quitar seleccionado')
+        del_item_btn.setFont(QFont('Segoe UI', 9))
+        del_item_btn.setObjectName('btnSecondary')
+        del_item_btn.clicked.connect(self._del_item_row)
+        items_btn_row.addWidget(del_item_btn)
+        items_btn_row.addStretch()
+        items_v.addLayout(items_btn_row)
+        form_layout.addWidget(items_group)
+
+        # ── CAE / Totales ─────────────────────────────────────────────────────
+        afip_group = QGroupBox('Totales y Datos AFIP')
+        afip_group.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        afip_form = QFormLayout(afip_group)
+        afip_form.setSpacing(8)
+
+        self.m_total_input = QLineEdit('0.00')
+        self.m_total_input.setFont(QFont('Segoe UI', 10))
+        afip_form.addRow('Total ($):', self.m_total_input)
+
+        self.m_iva_input = QLineEdit('0.00')
+        self.m_iva_input.setFont(QFont('Segoe UI', 10))
+        afip_form.addRow('IVA Contenido ($):', self.m_iva_input)
+
+        self.m_otros_imp_input = QLineEdit('0.00')
+        self.m_otros_imp_input.setFont(QFont('Segoe UI', 10))
+        afip_form.addRow('Otros Imp. ($):', self.m_otros_imp_input)
+
+        afip_form.addRow(QLabel('── CAE (se puede cargar manual o solicitar a AFIP) ──'))
+
+        self.m_cae_input = QLineEdit('')
+        self.m_cae_input.setFont(QFont('Segoe UI', 10))
+        self.m_cae_input.setPlaceholderText('Se completa automático al solicitar a AFIP')
+        afip_form.addRow('CAE:', self.m_cae_input)
+
+        self.m_vto_input = QLineEdit('')
+        self.m_vto_input.setFont(QFont('Segoe UI', 10))
+        self.m_vto_input.setPlaceholderText('AAAAMMDD — se completa automático')
+        afip_form.addRow('Vto. CAE:', self.m_vto_input)
+
+        form_layout.addWidget(afip_group)
+        scroll.setWidget(inner)
+        layout.addWidget(scroll)
+
+        # ── Botones emitir ────────────────────────────────────────────────────
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
+        afip_btn = QPushButton('Solicitar CAE a AFIP y Generar PDF')
+        afip_btn.setMinimumHeight(46)
+        afip_btn.setFont(QFont('Segoe UI', 11, QFont.Bold))
+        afip_btn.setStyleSheet('''
+            QPushButton {
+                background: #198754; color: white;
+                border: none; border-radius: 8px;
+            }
+            QPushButton:hover { background: #157347; }
+        ''')
+        afip_btn.clicked.connect(self._emit_con_afip)
+        btn_row.addWidget(afip_btn, 2)
+
+        manual_btn = QPushButton('Solo PDF (sin AFIP)')
+        manual_btn.setMinimumHeight(46)
+        manual_btn.setFont(QFont('Segoe UI', 11, QFont.Bold))
+        manual_btn.setStyleSheet('''
+            QPushButton {
+                background: #0d6efd; color: white;
+                border: none; border-radius: 8px;
+            }
+            QPushButton:hover { background: #0b5ed7; }
+        ''')
+        manual_btn.clicked.connect(self._emit_manual)
+        btn_row.addWidget(manual_btn, 1)
+
+        layout.addLayout(btn_row)
+        return widget
+
+    def _add_item_row(self):
+        row = self.m_items_table.rowCount()
+        self.m_items_table.insertRow(row)
+        self.m_items_table.setItem(row, 0, QTableWidgetItem('Producto'))
+        self.m_items_table.setItem(row, 1, QTableWidgetItem('1'))
+        self.m_items_table.setItem(row, 2, QTableWidgetItem('0.00'))
+        self.m_items_table.setItem(row, 3, QTableWidgetItem('0.00'))
+
+    def _del_item_row(self):
+        row = self.m_items_table.currentRow()
+        if row >= 0:
+            self.m_items_table.removeRow(row)
+
+    def _on_tipo_changed(self, tipo_txt):
+        """Actualiza el nombre del comprobante automáticamente al cambiar el tipo."""
+        mapping = {
+            'FAC. ELEC. A': 'FACTURA',
+            'FAC. ELEC. B': 'FACTURA',
+            'FAC. ELEC. C': 'FACTURA',
+            'NOTA CRED. A': 'NOTA DE CRÉDITO',
+            'NOTA CRED. B': 'NOTA DE CRÉDITO',
+            'NOTA CRED. C': 'NOTA DE CRÉDITO',
+            'NOTA DEB. A':  'NOTA DE DÉBITO',
+            'NOTA DEB. B':  'NOTA DE DÉBITO',
+            'NOTA DEB. C':  'NOTA DE DÉBITO',
+        }
+        self.m_nombre_comp_input.setText(mapping.get(tipo_txt, 'FACTURA'))
+
+    def _get_factura_dict(self, cae='', vto_cae='', nro=None):
+        """Arma el dict factura con todos los datos del formulario."""
+        from pos_system.database.db_manager import DatabaseManager
+        tipo = self.m_tipo_combo.currentText()
+        cliente = self.m_cliente_input.text().strip() or 'CONSUMIDOR FINAL'
+        cuit_cli = self.m_cuit_input.text().strip()
+        dom_receptor = self.m_dom_receptor_input.text().strip()
+        cond_iva_receptor = self.m_cond_iva_receptor_combo.currentText()
+        concepto = int(self.m_concepto_combo.currentText()[0])
+
+        try:
+            total  = float(self.m_total_input.text().replace(',', '.'))
+            iva    = float(self.m_iva_input.text().replace(',', '.'))
+            otros  = float(self.m_otros_imp_input.text().replace(',', '.'))
+        except ValueError:
+            raise ValueError('Total, IVA u Otros Imp. inválido')
+
+        items = []
+        for r in range(self.m_items_table.rowCount()):
+            try:
+                desc    = (self.m_items_table.item(r, 0) or QTableWidgetItem('')).text()
+                cant    = float((self.m_items_table.item(r, 1) or QTableWidgetItem('1')).text())
+                precio  = float((self.m_items_table.item(r, 2) or QTableWidgetItem('0')).text())
+                importe = float((self.m_items_table.item(r, 3) or QTableWidgetItem('0')).text())
+                items.append({'cantidad': cant, 'descripcion': desc, 'iva': 21.0,
+                              'precio': precio, 'importe': importe})
+            except Exception:
+                pass
+
+        if not items:
+            raise ValueError('Agregue al menos un ítem')
+
+        # Datos emisor desde DB
+        db = DatabaseManager()
+        def cfg(key, default=''):
+            res = db.execute_query("SELECT value FROM config WHERE key=?", (key,))
+            return (res[0]['value'] or default) if res and res[0]['value'] else default
+
+        cuit_emisor   = cfg('afip_cuit')
+        razon_social  = cfg('afip_razon_social')
+        domicilio     = cfg('afip_domicilio')
+        localidad     = cfg('afip_localidad')
+        telefono      = cfg('afip_telefono')
+        ing_brutos    = cfg('afip_ing_brutos')
+        inicio_act    = cfg('afip_inicio_actividades')
+        cond_iva_em   = cfg('afip_condicion_iva', 'Responsable Inscripto')
+        punto_venta   = int(cfg('afip_punto_venta', '1') or '1')
+
+        if nro is None:
+            res = db.execute_query(
+                "SELECT MAX(nro_comprobante) as m FROM facturas WHERE tipo_comprobante=?", (tipo,)
+            )
+            nro = (res[0]['m'] or 0) + 1 if res else 1
+
+        return {
+            'cuit': cuit_emisor, 'razon_social': razon_social,
+            'domicilio': domicilio, 'localidad': localidad,
+            'telefono': telefono, 'ing_brutos': ing_brutos,
+            'inicio_actividades': inicio_act, 'condicion_iva': cond_iva_em,
+            'tipo_comprobante': tipo,
+            'tipo_comprobante_nombre': self.m_nombre_comp_input.text().strip() or 'FACTURA',
+            'punto_venta': punto_venta,
+            'nro_comprobante': nro,
+            'fecha': datetime.now().strftime('%d/%m/%Y'),
+            'pago': self.m_pago_input.text(),
+            'cliente': cliente,
+            'cuit_receptor': cuit_cli,
+            'domicilio_receptor': dom_receptor,
+            'condicion_iva_receptor': cond_iva_receptor,
+            'concepto': concepto,
+            'items': items,
+            'total': total,
+            'iva_contenido': iva,
+            'otros_impuestos': otros,
+            'cae': cae,
+            'vto_cae': vto_cae,
+        }, db, punto_venta, tipo, cuit_cli, cliente, iva, otros, nro
+
+    def _abrir_pdf(self, pdf_path):
+        import os, subprocess, sys
+        if sys.platform == 'win32':
+            os.startfile(pdf_path)
+        else:
+            subprocess.Popen(['xdg-open', pdf_path])
+
+    def _emit_manual(self):
+        """Genera PDF con CAE manual (ya cargado en el formulario)."""
+        from pos_system.utils.pdf_generator import PDFGenerator
+        cae = self.m_cae_input.text().strip()
+        vto = self.m_vto_input.text().strip()
+        try:
+            factura, db, pto_venta, tipo, cuit_cli, cliente, iva, otros, nro = \
+                self._get_factura_dict(cae=cae, vto_cae=vto)
+        except ValueError as e:
+            QMessageBox.warning(self, 'Error', str(e))
+            return
+        try:
+            gen = PDFGenerator()
+            pdf_path = gen.generate_factura_afip_a4(factura)
+            db.execute_update(
+                """INSERT INTO facturas
+                   (sale_id, tipo_comprobante, punto_venta, nro_comprobante, fecha,
+                    cliente, cuit_cliente, cae, vto_cae, total, iva_contenido,
+                    otros_impuestos, pdf_path)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (None, tipo, pto_venta, nro,
+                 datetime.now().isoformat(), cliente, cuit_cli,
+                 cae, vto, factura['total'], iva, otros, pdf_path)
+            )
+            reply = QMessageBox.question(
+                self, 'PDF generado',
+                f'Comprobante #{nro} generado.\n\n¿Abrir el PDF?',
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+            )
+            if reply == QMessageBox.Yes:
+                self._abrir_pdf(pdf_path)
+            self.refresh_data()
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'Error al generar PDF:\n{str(e)}')
+
+    def _emit_con_afip(self):
+        """Solicita CAE a AFIP (WSFE) y genera el PDF con diseño oficial."""
+        from pos_system.utils.pdf_generator import PDFGenerator
+        from pos_system.database.db_manager import DatabaseManager
+        try:
+            factura, db, pto_venta, tipo, cuit_cli, cliente, iva, otros, nro = \
+                self._get_factura_dict()
+        except ValueError as e:
+            QMessageBox.warning(self, 'Error', str(e))
+            return
+
+        # Leer credenciales AFIP
+        def cfg(key, default=''):
+            res = db.execute_query("SELECT value FROM config WHERE key=?", (key,))
+            return (res[0]['value'] or default) if res and res[0]['value'] else default
+
+        cert_path  = cfg('afip_cert_path')
+        key_path   = cfg('afip_key_path')
+        produccion = cfg('afip_produccion', '0') == '1'
+
+        if not cert_path or not key_path:
+            QMessageBox.warning(
+                self, 'Sin certificado AFIP',
+                'Para solicitar CAE automáticamente necesitás configurar el\n'
+                'certificado (.crt) y la clave privada (.key) de AFIP.\n\n'
+                'Configuralos en la pestaña Configuracion AFIP.\n\n'
+                'Por ahora podés usar "Solo PDF" ingresando el CAE manualmente.'
+            )
+            return
+
+        from pos_system.utils.afip_wsfe import AfipWsfe, AFIPError, calcular_iva_neto
+        try:
+            afip = AfipWsfe(
+                cuit=factura['cuit'],
+                cert_path=cert_path,
+                key_path=key_path,
+                produccion=produccion,
+            )
+            total     = factura['total']
+            iva_cont  = factura['iva_contenido']
+            neto_grav = round(total - iva_cont - factura['otros_impuestos'], 2)
+            concepto  = factura.get('concepto', 1)
+
+            resultado = afip.solicitar_cae(
+                tipo_comprobante=tipo,
+                punto_venta=pto_venta,
+                nro_comprobante=nro,
+                importe_total=total,
+                importe_neto_gravado=neto_grav,
+                importe_iva=iva_cont,
+                importe_otros=factura['otros_impuestos'],
+                concepto=concepto,
+                cuit_receptor=cuit_cli or None,
+                condicion_iva_receptor=factura['condicion_iva_receptor'],
+            )
+        except ImportError as e:
+            QMessageBox.critical(self, 'Dependencia faltante', str(e))
+            return
+        except AFIPError as e:
+            QMessageBox.critical(self, 'Error AFIP', str(e))
+            return
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'Error inesperado al contactar AFIP:\n{str(e)}')
+            return
+
+        cae     = resultado['cae']
+        vto_cae = resultado['vto_cae']
+        nro_real = resultado['nro_comprobante']
+
+        # Actualizar campos en la UI
+        self.m_cae_input.setText(cae)
+        self.m_vto_input.setText(vto_cae)
+
+        # Actualizar factura con CAE real
+        factura['cae']             = cae
+        factura['vto_cae']         = vto_cae
+        factura['nro_comprobante'] = nro_real
+
+        try:
+            gen = PDFGenerator()
+            pdf_path = gen.generate_factura_afip_a4(factura)
+            db.execute_update(
+                """INSERT INTO facturas
+                   (sale_id, tipo_comprobante, punto_venta, nro_comprobante, fecha,
+                    cliente, cuit_cliente, cae, vto_cae, total, iva_contenido,
+                    otros_impuestos, pdf_path)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (None, tipo, pto_venta, nro_real,
+                 datetime.now().isoformat(), cliente, cuit_cli,
+                 cae, vto_cae, total, iva_cont, otros, pdf_path)
+            )
+            entorno = 'PRODUCCIÓN' if produccion else 'HOMOLOGACIÓN'
+            reply = QMessageBox.question(
+                self, f'CAE obtenido — {entorno}',
+                f'CAE: {cae}\nVto.: {vto_cae}\nComprobante Nro: {nro_real}\n\n¿Abrir el PDF?',
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+            )
+            if reply == QMessageBox.Yes:
+                self._abrir_pdf(pdf_path)
+            self.refresh_data()
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'CAE obtenido pero error al generar PDF:\n{str(e)}')
+
+    # ── TAB 2: Historial ──────────────────────────────────────────────────────
+    def _build_historial_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+
+        # Barra de acciones
+        action_row = QHBoxLayout()
+        refresh_btn = QPushButton('Actualizar')
+        refresh_btn.setFont(QFont('Segoe UI', 9))
+        refresh_btn.clicked.connect(self.refresh_data)
+        action_row.addWidget(refresh_btn)
+        action_row.addStretch()
+        layout.addLayout(action_row)
+
+        # Tabla
+        self.h_table = QTableWidget()
+        self.h_table.setColumnCount(8)
+        self.h_table.setHorizontalHeaderLabels(
+            ['#', 'Tipo', 'Nro.', 'Fecha', 'Cliente', 'CAE', 'Total', 'PDF']
+        )
+        self.h_table.verticalHeader().setVisible(False)
+        self.h_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.h_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.h_table.setAlternatingRowColors(True)
+        hh = self.h_table.horizontalHeader()
+        hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(4, QHeaderView.Stretch)
+        hh.setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(7, QHeaderView.ResizeToContents)
+        layout.addWidget(self.h_table)
+
+        # Botón reimprimir
+        reimp_btn = QPushButton('Abrir / Reimprimir seleccionada')
+        reimp_btn.setFont(QFont('Segoe UI', 10))
+        reimp_btn.setMinimumHeight(40)
+        reimp_btn.clicked.connect(self._reprint_selected)
+        layout.addWidget(reimp_btn)
+
+        return widget
+
+    def _reprint_selected(self):
+        row = self.h_table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, 'Sin selección', 'Seleccione una factura de la lista.')
+            return
+        pdf_item = self.h_table.item(row, 7)
+        if not pdf_item:
+            return
+        pdf_path = pdf_item.data(Qt.UserRole)
+        if not pdf_path:
+            QMessageBox.warning(self, 'Sin PDF', 'No hay PDF disponible para esta factura.')
+            return
+        import os, subprocess, sys
+        if not os.path.exists(pdf_path):
+            QMessageBox.warning(self, 'Archivo no encontrado',
+                                f'No se encontró el archivo:\n{pdf_path}')
+            return
+        if sys.platform == 'win32':
+            os.startfile(pdf_path)
+        else:
+            subprocess.Popen(['xdg-open', pdf_path])
+
+    # ── TAB 3: Configuración AFIP ─────────────────────────────────────────────
+    def _build_config_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        info = QLabel(
+            'Configurá los datos del emisor (tu negocio) para que aparezcan en todas las facturas.\n'
+            'Estos datos se guardan en la base de datos y se usan automáticamente al emitir facturas.'
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet(
+            'background:#fff3cd; border:1px solid #ffecb5; border-radius:6px;'
+            'padding:8px 12px; color:#664d03; font-size:11px;'
+        )
+        layout.addWidget(info)
+
+        group = QGroupBox('Datos del Emisor (Tu Negocio)')
+        group.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        form = QFormLayout(group)
+        form.setSpacing(10)
+
+        fields = [
+            ('CUIT:',              'cuit',             'Ej: 20123456789'),
+            ('Razón Social:',      'razon_social',     'Nombre legal del negocio'),
+            ('Domicilio:',         'domicilio',        'Ej: Av. Colón 123'),
+            ('Localidad:',         'localidad',        'Ej: CÓRDOBA (5000) - CÓRDOBA'),
+            ('Teléfono:',          'telefono',         'Ej: 3511234567'),
+            ('Ing. Brutos:',       'ing_brutos',       'Número de Ingresos Brutos'),
+            ('Inicio de Act.:',    'inicio_actividades','Ej: 01/01/2020'),
+            ('Condición IVA:',     'condicion_iva',    'Ej: Responsable Inscripto'),
+            ('Punto de Venta:',    'punto_venta',      'Número de punto de venta AFIP'),
+            ('Cert. AFIP (.crt):', 'cert_path',        'Ruta completa al certificado digital AFIP'),
+            ('Clave Priv. (.key):','key_path',         'Ruta completa a la clave privada AFIP'),
+        ]
+
+        self.cfg_fields = {}
+        for label, key, placeholder in fields:
+            inp = QLineEdit()
+            inp.setFont(QFont('Segoe UI', 10))
+            inp.setPlaceholderText(placeholder)
+            form.addRow(label, inp)
+            self.cfg_fields[key] = inp
+
+        # Entorno AFIP
+        from PyQt5.QtWidgets import QCheckBox
+        self.cfg_produccion_check = QCheckBox('Usar entorno PRODUCCIÓN (desactivado = Homologación/Prueba)')
+        self.cfg_produccion_check.setFont(QFont('Segoe UI', 10))
+        self.cfg_produccion_check.setStyleSheet('color: #dc3545; font-weight: bold;')
+        form.addRow('Entorno AFIP:', self.cfg_produccion_check)
+
+        layout.addWidget(group)
+
+        info2 = QLabel(
+            'Para obtener CAE automatico:\n'
+            '1. Obtené tu certificado digital en AFIP (Mis Aplicaciones Web → Administración de Certificados)\n'
+            '2. Generá tu clave privada: openssl genrsa -out clave.key 2048\n'
+            '3. Generá el CSR: openssl req -new -key clave.key -out solicitud.csr\n'
+            '4. Cargá el CSR en AFIP y descargá el .crt\n'
+            '5. Cargá las rutas del .crt y .key en los campos de arriba\n'
+            '6. Instalar dependencias: pip install zeep pyOpenSSL'
+        )
+        info2.setWordWrap(True)
+        info2.setStyleSheet(
+            'background:#d1e7dd; border:1px solid #a3cfbb; border-radius:6px;'
+            'padding:10px 12px; color:#0a3622; font-size:10px;'
+        )
+        layout.addWidget(info2)
+
+        save_btn = QPushButton('Guardar Configuración AFIP')
+        save_btn.setMinimumHeight(44)
+        save_btn.setFont(QFont('Segoe UI', 11, QFont.Bold))
+        save_btn.setStyleSheet('''
+            QPushButton {
+                background: #198754; color: white;
+                border: none; border-radius: 8px;
+            }
+            QPushButton:hover { background: #157347; }
+        ''')
+        save_btn.clicked.connect(self._save_config)
+        layout.addWidget(save_btn)
+        layout.addStretch()
+
+        self._load_config_fields()
+        return widget
+
+    def _load_config_fields(self):
+        """Carga los valores actuales de config en los campos."""
+        try:
+            from pos_system.database.db_manager import DatabaseManager
+            db = DatabaseManager()
+            field_map = {
+                'afip_cuit': 'cuit', 'afip_razon_social': 'razon_social',
+                'afip_domicilio': 'domicilio', 'afip_localidad': 'localidad',
+                'afip_telefono': 'telefono', 'afip_ing_brutos': 'ing_brutos',
+                'afip_inicio_actividades': 'inicio_actividades',
+                'afip_condicion_iva': 'condicion_iva', 'afip_punto_venta': 'punto_venta',
+                'afip_cert_path': 'cert_path', 'afip_key_path': 'key_path',
+            }
+            for db_key, field_key in field_map.items():
+                res = db.execute_query("SELECT value FROM config WHERE key=?", (db_key,))
+                if res and res[0]['value'] and field_key in self.cfg_fields:
+                    self.cfg_fields[field_key].setText(res[0]['value'])
+            # Entorno
+            res = db.execute_query("SELECT value FROM config WHERE key='afip_produccion'")
+            if res and res[0]['value']:
+                self.cfg_produccion_check.setChecked(res[0]['value'] == '1')
+        except Exception:
+            pass
+
+    def _save_config(self):
+        """Guarda los datos del emisor en la tabla config."""
+        try:
+            from pos_system.database.db_manager import DatabaseManager
+            db = DatabaseManager()
+            field_map = {
+                'cuit': 'afip_cuit', 'razon_social': 'afip_razon_social',
+                'domicilio': 'afip_domicilio', 'localidad': 'afip_localidad',
+                'telefono': 'afip_telefono', 'ing_brutos': 'afip_ing_brutos',
+                'inicio_actividades': 'afip_inicio_actividades',
+                'condicion_iva': 'afip_condicion_iva', 'punto_venta': 'afip_punto_venta',
+                'cert_path': 'afip_cert_path', 'key_path': 'afip_key_path',
+            }
+            for field_key, db_key in field_map.items():
+                value = self.cfg_fields[field_key].text().strip()
+                db.execute_update(
+                    "INSERT OR REPLACE INTO config (key, value, updated_at) VALUES (?, ?, ?)",
+                    (db_key, value, datetime.now().isoformat())
+                )
+            # Guardar entorno
+            prod_val = '1' if self.cfg_produccion_check.isChecked() else '0'
+            db.execute_update(
+                "INSERT OR REPLACE INTO config (key, value, updated_at) VALUES (?, ?, ?)",
+                ('afip_produccion', prod_val, datetime.now().isoformat())
+            )
+            QMessageBox.information(self, 'Guardado', 'Configuración AFIP guardada correctamente.')
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'Error al guardar:\n{str(e)}')
+
+    # ── Refresh ───────────────────────────────────────────────────────────────
+    def refresh_data(self):
+        self._load_historial()
+        self._load_config_fields()
+
+    def _load_historial(self):
+        try:
+            from pos_system.database.db_manager import DatabaseManager
+            db = DatabaseManager()
+            rows = db.execute_query(
+                "SELECT * FROM facturas ORDER BY created_at DESC LIMIT 500"
+            )
+            self.h_table.setRowCount(len(rows))
+            for i, r in enumerate(rows):
+                fecha_str = ''
+                try:
+                    fecha_str = datetime.fromisoformat(r['created_at']).strftime('%d/%m/%Y %H:%M')
+                except Exception:
+                    fecha_str = r.get('created_at', '')
+
+                cae_short = str(r.get('cae', ''))[:14] if r.get('cae') else '—'
+                has_cae = bool(r.get('cae'))
+
+                self.h_table.setItem(i, 0, QTableWidgetItem(str(r['id'])))
+                self.h_table.setItem(i, 1, QTableWidgetItem(r.get('tipo_comprobante', '')))
+                nro_item = QTableWidgetItem(str(r.get('nro_comprobante', '')).zfill(8))
+                self.h_table.setItem(i, 2, nro_item)
+                self.h_table.setItem(i, 3, QTableWidgetItem(fecha_str))
+                self.h_table.setItem(i, 4, QTableWidgetItem(r.get('cliente', '')))
+                cae_item = QTableWidgetItem(cae_short)
+                if has_cae:
+                    cae_item.setForeground(QColor('#198754'))
+                else:
+                    cae_item.setForeground(QColor('#dc3545'))
+                self.h_table.setItem(i, 5, cae_item)
+                self.h_table.setItem(i, 6, QTableWidgetItem(f'${float(r.get("total", 0)):.2f}'))
+
+                pdf_item = QTableWidgetItem('Abrir' if r.get('pdf_path') else '—')
+                pdf_item.setData(Qt.UserRole, r.get('pdf_path'))
+                if r.get('pdf_path'):
+                    pdf_item.setForeground(QColor('#0d6efd'))
+                self.h_table.setItem(i, 7, pdf_item)
+
+        except Exception as e:
+            pass
+
+    def _on_tab_changed(self, index):
+        if index == 1:
+            self._load_historial()
+        elif index == 2:
+            self._load_config_fields()

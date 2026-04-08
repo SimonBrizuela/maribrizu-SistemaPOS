@@ -1,0 +1,99 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>POS Dashboard</title>
+  <link rel="stylesheet" href="/src/styles/main.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
+</head>
+<body>
+  <!-- Overlay para cerrar sidebar en mobile -->
+  <div class="sidebar-overlay" id="sidebarOverlay"></div>
+
+  <div id="app" style="display:none">
+    <!-- Sidebar -->
+    <nav class="sidebar" id="sidebar">
+      <div class="sidebar-header">
+        <span class="material-icons logo-icon">point_of_sale</span>
+        <h1>POS</h1>
+      </div>
+      <ul class="nav-links">
+        <li><a href="#" class="nav-link active" data-page="dashboard"><span class="material-icons">dashboard</span> Dashboard</a></li>
+        <li><a href="#" class="nav-link" data-page="ventas"><span class="material-icons">receipt_long</span> Ventas</a></li>
+        <li><a href="#" class="nav-link" data-page="productos"><span class="material-icons">trending_up</span> Más Vendidos</a></li>
+        <li><a href="#" class="nav-link" data-page="inventario"><span class="material-icons">inventory_2</span> Inventario</a></li>
+        <li><a href="#" class="nav-link" data-page="historial"><span class="material-icons">calendar_month</span> Historial Diario</a></li>
+        <li><a href="#" class="nav-link" data-page="cierres"><span class="material-icons">lock_clock</span> Cierres de Caja</a></li>
+        <li><a href="#" class="nav-link" data-page="resumenes"><span class="material-icons">bar_chart</span> Resúmenes Mensuales</a></li>
+        <li><a href="#" class="nav-link" data-page="catalogo"><span class="material-icons">menu_book</span> Catálogo</a></li>
+        <li><a href="#" class="nav-link" data-page="turnos"><span class="material-icons">badge</span> Turnos / Cajeros</a></li>
+        <li><a href="#" class="nav-link" data-page="articulos_unicos"><span class="material-icons">link</span> Artículos Únicos</a></li>
+        <li><a href="#" class="nav-link" data-page="promociones"><span class="material-icons">local_offer</span> Promociones</a></li>
+      </ul>
+      <div class="sidebar-footer">
+        <span class="status-dot" id="statusDot"></span>
+        <span id="statusText">Conectando...</span>
+      </div>
+    </nav>
+
+    <!-- Main content -->
+    <main class="main-content">
+      <header class="topbar">
+        <button class="menu-btn" id="menuBtn"><span class="material-icons">menu</span></button>
+        <h2 id="pageTitle">Dashboard</h2>
+        <div class="topbar-right">
+          <span class="material-icons" id="refreshBtn" title="Actualizar" style="cursor:pointer">refresh</span>
+          <span id="lastUpdate"></span>
+        </div>
+      </header>
+
+      <div class="refresh-hint">↕ Deslizá la tabla para ver más columnas</div>
+
+      <div class="page-content" id="pageContent">
+        <!-- Contenido dinámico -->
+      </div>
+    </main>
+  </div>
+
+  <!-- Bottom Nav (solo mobile) -->
+  <nav class="bottom-nav" id="bottomNav" style="display:none">
+    <a class="bottom-nav-item active" data-page="dashboard">
+      <span class="material-icons">dashboard</span>
+      <span class="label">Inicio</span>
+    </a>
+    <a class="bottom-nav-item" data-page="ventas">
+      <span class="material-icons">receipt_long</span>
+      <span class="label">Ventas</span>
+    </a>
+    <a class="bottom-nav-item" data-page="productos">
+      <span class="material-icons">trending_up</span>
+      <span class="label">Top</span>
+    </a>
+    <a class="bottom-nav-item" data-page="inventario">
+      <span class="material-icons">inventory_2</span>
+      <span class="label">Stock</span>
+    </a>
+    <a class="bottom-nav-item" data-page="historial">
+      <span class="material-icons">calendar_month</span>
+      <span class="label">Historial</span>
+    </a>
+    <a class="bottom-nav-item" data-page="cierres">
+      <span class="material-icons">lock_clock</span>
+      <span class="label">Cierres</span>
+    </a>
+    <a class="bottom-nav-item" data-page="resumenes">
+      <span class="material-icons">bar_chart</span>
+      <span class="label">Meses</span>
+    </a>
+    <a class="bottom-nav-item" data-page="catalogo">
+      <span class="material-icons">menu_book</span>
+      <span class="label">Catálogo</span>
+    </a>
+  </nav>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>

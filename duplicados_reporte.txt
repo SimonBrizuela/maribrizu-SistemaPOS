@@ -1,0 +1,106 @@
+DUPLICADOS POR NOMBRE SIMILAR
+Grupos encontrados: 25
+Docs a eliminar: 27
+==========================================================================================
+
+GRUPO: [AURICULAR GTC INTERNO HSG 151]
+  MANTENER →  id=LI6870                     cod=LI6870        AURICULAR GTC INTERNO HSG-151                            rubro=LIBRERÍA         precio=$ 8500.00  fuente=csv_import
+  ELIMINAR    id=204098                     cod=204098        AURICULAR GTC INTERNO HSG-151                            rubro=REGALERÍA        precio=$ 2537.04  fuente=csv_import
+
+GRUPO: [BARNIZ Y DILUYENTE EQ BRILLANTE MATE SATINADO X 250 CC]
+  MANTENER →  id=190500000251               cod=190500000251  BARNIZ Y DILUYENTE EQ BRILLANTE/MATE/SATINADO X 250 CC   rubro=LIBRERÍA         precio=$ 6200.00  fuente=csv_import
+  ELIMINAR    id=LI6879                     cod=LI6879        BARNIZ Y DILUYENTE EQ BRILLANTE/MATE/SATINADO X 250  CC  rubro=LIBRERÍA         precio=$ 6200.00  fuente=csv_import
+
+GRUPO: [BOTELLA BEL GIOCO STRAW TOP]
+  MANTENER →  id=LI4975                     cod=LI4975        BOTELLA BEL GIOCO STRAW-TOP                              rubro=LIBRERÍA         precio=$ 5800.00  fuente=csv_import
+  ELIMINAR    id=190500000505               cod=190500000505  BOTELLA BEL GIOCO STRAW TOP                              rubro=REGALERÍA        precio=$ 3590.40  fuente=csv_import
+
+GRUPO: [BOXER EYELIT ART 594 TALLE S AL XXL]
+  MANTENER →  id=ME594                      cod=ME594         BOXER EYELIT ART 594 TALLE S AL XXL                      rubro=LENCERÍA         precio=$ 6476.80  fuente=csv_import
+  ELIMINAR    id=ME1414                     cod=ME1414        BOXER EYELIT ART 594 TALLE S AL XXL                      rubro=LENCERÍA         precio=$ 5704.00  fuente=csv_import
+
+GRUPO: [CAMARA GTC WEBCAM WCG 002]
+  MANTENER →  id=204781                     cod=204781        CAMARA GTC WEBCAM WCG-002                                rubro=LIBRERÍA         precio=$18700.00  fuente=csv_import
+  ELIMINAR    id=204092                     cod=204092        CAMARA GTC WEBCAM WCG-002                                rubro=REGALERÍA        precio=$12727.00  fuente=csv_import
+
+GRUPO: [CARPETA GADRI A4 OFICIO REGISTRADOR]
+  MANTENER →  id=190500000850               cod=190500000850  CARPETA GADRI A4 / OFICIO REGISTRADOR                    rubro=LIBRERÍA         precio=$ 6400.00  fuente=csv_import
+  ELIMINAR    id=190500000966               cod=190500000966  CARPETA GADRI A4 / OFICIO REGISTRADOR                    rubro=LIBRERÍA         precio=$ 5700.00  fuente=csv_import
+
+GRUPO: [CARPETA ME RIVADAVIA AROS CON CIERRE LONA]
+  MANTENER →  id=LI5189                     cod=LI5189        CARPETA ME RIVADAVIA AROS CON CIERRE LONA                rubro=LIBRERÍA         precio=$21000.00  fuente=csv_import
+  ELIMINAR    id=LI5187                     cod=LI5187        CARPETA ME RIVADAVIA AROS CON CIERRE LONA                rubro=LIBRERÍA         precio=$19800.00  fuente=csv_import
+
+GRUPO: [CARTUCHOS NEW JET HP COLOR H93A]
+  MANTENER →  id=LI7040                     cod=LI7040        CARTUCHOS NEW JET HP COLOR H93A                          rubro=LIBRERÍA         precio=$62700.00  fuente=csv_import
+  ELIMINAR    id=204040                     cod=204040        CARTUCHOS NEW JET HP COLOR H93A                          rubro=REGALERÍA        precio=$20974.80  fuente=csv_import
+
+GRUPO: [CIERRE COMUN 55]
+  MANTENER →  id=294000522                  cod=294000522     CIERRE COMUN 55                                          rubro=MERCERÍA         precio=$  787.60  fuente=csv_import
+  ELIMINAR    id=190500000515               cod=190500000515  CIERRE COMUN 55                                          rubro=MERCERÍA         precio=$  577.08  fuente=csv_import
+
+GRUPO: [CIERRE COMUN 60]
+  MANTENER →  id=294000523                  cod=294000523     CIERRE COMUN 60                                          rubro=MERCERÍA         precio=$  836.00  fuente=csv_import
+  ELIMINAR    id=190500000514               cod=190500000514  CIERRE COMUN 60                                          rubro=MERCERÍA         precio=$  617.08  fuente=csv_import
+
+GRUPO: [CUADERNO INKDROP A4 TAPA SEMIRIGIDA X80]
+  MANTENER →  id=190500001252               cod=190500001252  CUADERNO INKDROP A4 TAPA SEMIRIGIDA  X80                 rubro=LIBRERÍA         precio=$10700.00  fuente=csv_import
+  ELIMINAR    id=190500001276               cod=190500001276  CUADERNO INKDROP A4 TAPA SEMIRIGIDA X80                  rubro=LIBRERÍA         precio=$10700.00  fuente=csv_import
+
+GRUPO: [KIT BIJOUTERIE COLLAR CON DIJE PULSERA]
+  MANTENER →  id=ACC0006                    cod=ACC0006       KIT BIJOUTERIE COLLAR CON DIJE + PULSERA                 rubro=ACCESORIOS       precio=$ 2134.00  fuente=csv_import
+  ELIMINAR    id=ACC0050                    cod=ACC0050       KIT BIJOUTERIE COLLAR CON DIJE + PULSERA                 rubro=ACCESORIOS       precio=$ 2134.00  fuente=csv_import
+
+GRUPO: [LANZA AGUA 8292]
+  MANTENER →  id=JUG70265                   cod=JUG70265      LANZA AGUA 8292                                          rubro=JUGUETERÍA       precio=$ 4840.00  fuente=csv_import
+  ELIMINAR    id=JUG763                     cod=JUG763        LANZA AGUA 8292                                          rubro=JUGUETERÍA       precio=$ 4668.40  fuente=csv_import
+
+GRUPO: [MEDIA FLOYD ART 60 T 2 ZOQUETE LISO NINO]
+  MANTENER →  id=ME700                      cod=ME700         MEDIA FLOYD ART 60 T.2 ZOQUETE LISO NIÑO                 rubro=LENCERÍA         precio=$11000.00  fuente=csv_import
+  ELIMINAR    id=ME704                      cod=ME704         MEDIA FLOYD ART 60 T.2 ZOQUETE LISO NIÑO                 rubro=LENCERÍA         precio=$ 1833.33  fuente=csv_import
+
+GRUPO: [MOCHILA IMPORTADA ESPALDA PREMIUM 10]
+  MANTENER →  id=190500002058               cod=190500002058  MOCHILA IMPORTADA ESPALDA  PREMIUM 10                    rubro=LIBRERÍA         precio=$20700.00  fuente=csv_import
+  ELIMINAR    id=LI6024                     cod=LI6024        MOCHILA IMPORTADA ESPALDA PREMIUM 10                     rubro=LIBRERÍA         precio=$20700.00  fuente=csv_import
+
+GRUPO: [MOUSE GTC INALAMBRICO MIG 117]
+  MANTENER →  id=LIB488895555               cod=LIB488895555  MOUSE GTC INALAMBRICO MIG 117                            rubro=ACCESORIOS       precio=$ 8712.00  fuente=csv_import
+  ELIMINAR    id=204277                     cod=204277        MOUSE GTC INALAMBRICO MIG 117                            rubro=REGALERÍA        precio=$ 2631.55  fuente=csv_import
+
+GRUPO: [PANUELO]
+  MANTENER →  id=ACC125888889               cod=ACC125888889  PAÑUELO                                                  rubro=ACCESORIOS       precio=$12320.00  fuente=csv_import
+  ELIMINAR    id=ACC21558999                cod=ACC21558999   PAÑUELO                                                  rubro=ACCESORIOS       precio=$ 9680.00  fuente=csv_import
+  ELIMINAR    id=ACC258889                  cod=ACC258889     PAÑUELO                                                  rubro=ACCESORIOS       precio=$ 9680.00  fuente=csv_import
+
+GRUPO: [PERFORADORA ASB CON FORMA PARA GOMA EVA]
+  MANTENER →  id=301183                     cod=301183        PERFORADORA ASB CON FORMA PARA GOMA EVA                  rubro=LIBRERÍA         precio=$17100.00  fuente=csv_import
+  ELIMINAR    id=301151                     cod=301151        PERFORADORA ASB CON FORMA PARA GOMA EVA                  rubro=LIBRERÍA         precio=$11200.00  fuente=csv_import
+  ELIMINAR    id=301187                     cod=301187        PERFORADORA ASB CON FORMA PARA GOMA EVA                  rubro=LIBRERÍA         precio=$ 8400.00  fuente=csv_import
+
+GRUPO: [REPUESTO HOJAS RIVADAVIA SIN BANDA RIVADAVIA X 480]
+  MANTENER →  id=190500003411               cod=190500003411  REPUESTO HOJAS RIVADAVIA SIN BANDA RIVADAVIA X 480       rubro=LIBRERÍA         precio=$37900.00  fuente=csv_import
+  ELIMINAR    id=301261                     cod=301261        REPUESTO HOJAS RIVADAVIA SIN BANDA RIVADAVIA X 480       rubro=LIBRERÍA         precio=$37900.00  fuente=csv_import
+
+GRUPO: [RESMA HUSARES A4 75 GR PASTEL X 100]
+  MANTENER →  id=190500003471               cod=190500003471  RESMA HUSARES A4 75 GR PASTEL X 100                      rubro=LIBRERÍA         precio=$ 7900.00  fuente=csv_import
+  ELIMINAR    id=RESMA-HUSARES-A4-75-GR-PA  cod=              RESMA HUSARES A4 75 GR PASTEL X 100                      rubro=PAPELERA         precio=$ 4809.00  fuente=csv_import
+
+GRUPO: [ROMPECABEZAS EM CHICO 0753 10]
+  MANTENER →  id=294001348                  cod=294001348     ROMPECABEZAS EM CHICO 0753-10                            rubro=JUGUETERÍA       precio=$ 1760.00  fuente=csv_import
+  ELIMINAR    id=LI6519                     cod=LI6519        ROMPECABEZAS EM CHICO 0753-10                            rubro=LIBRERÍA         precio=$ 1600.00  fuente=csv_import
+
+GRUPO: [SEPARADOR INKDROP FANTASIA X 6 RIVADAVIA]
+  MANTENER →  id=190500003656               cod=190500003656  SEPARADOR INKDROP FANTASIA X 6 RIVADAVIA                 rubro=LIBRERÍA         precio=$ 2700.00  fuente=csv_import
+  ELIMINAR    id=301010                     cod=301010        SEPARADOR INKDROP FANTASIA X 6 RIVADAVIA                 rubro=LIBRERÍA         precio=$ 2700.00  fuente=csv_import
+
+GRUPO: [SET PULSERA ARMAR]
+  MANTENER →  id=JUG722                     cod=JUG722        SET PULSERA ARMAR                                        rubro=JUGUETERÍA       precio=$13200.00  fuente=csv_import
+  ELIMINAR    id=JUG731                     cod=JUG731        SET PULSERA ARMAR                                        rubro=JUGUETERÍA       precio=$ 8899.99  fuente=csv_import
+
+GRUPO: [TONER LASER GTC P HP 105 A]
+  MANTENER →  id=204172                     cod=204172        TONER LASER GTC P/HP 105 A                               rubro=REGALERÍA        precio=$25539.80  fuente=csv_import
+  ELIMINAR    id=LI7382                     cod=LI7382        TONER LASER GTC P/HP  105 A                              rubro=LIBRERÍA         precio=$18700.00  fuente=csv_import
+
+GRUPO: [VASO CHIMOLA 350ML BZ10]
+  MANTENER →  id=LI7406                     cod=LI7406        VASO CHIMOLA 350ML BZ10                                  rubro=LIBRERÍA         precio=$20900.00  fuente=csv_import
+  ELIMINAR    id=497504                     cod=497504        VASO CHIMOLA 350ML BZ10                                  rubro=REGALERÍA        precio=$19690.00  fuente=csv_import

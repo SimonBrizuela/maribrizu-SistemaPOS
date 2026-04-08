@@ -1,0 +1,51 @@
+# Base de datos local (no se comparte entre PCs)
+pos_database.db
+pos_database_backup_*.db
+backups/
+
+# Claves y credenciales (nunca subir)
+firebase_key.json
+*.key
+*.pem
+
+# Logs
+pos_system.log
+*.log
+
+# Compilados y distribución
+dist/
+dist2/
+dist3/
+dist4/
+build/
+*.spec
+*.exe
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.eggs/
+
+# Entornos virtuales
+venv/
+env/
+.env
+.venv/
+
+# IDEs
+.vscode/
+.idea/
+*.suo
+*.user
+
+# Reportes generados
+pos_system/reports/*.pdf
+
+# Archivos temporales
+tmp_rovodev_*
+*.tmp
+*.bak

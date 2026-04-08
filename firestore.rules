@@ -1,0 +1,104 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── VENTAS ────────────────────────────────────────────────────────────────
+    // Lectura pública. Escritura permitida desde el POS (SDK Admin) y la app.
+    // El campo 'cajero' y 'turno_nombre' identifican quién realizó la venta.
+    match /ventas/{ventaId} {
+      allow read: if true;
+      allow write: if true;   // POS usa SDK Admin (bypass), webapp solo lee
+    }
+
+    // ── INVENTARIO ────────────────────────────────────────────────────────────
+    // Lectura y escritura: el POS sincroniza stock en tiempo real.
+    match /inventario/{productoId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // ── HISTORIAL DIARIO ──────────────────────────────────────────────────────
+    match /historial_diario/{diaId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // ── PRODUCTOS MÁS VENDIDOS ────────────────────────────────────────────────
+    match /productos_mas_vendidos/{productoId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // ── VENTAS POR DÍA (detalle de items por turno/cajero) ───────────────────
+    // Incluye campo 'cajero' con el nombre del turno que realizó la venta.
+    match /ventas_por_dia/{itemId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // ── CIERRES DE CAJA ───────────────────────────────────────────────────────
+    // Incluye campo 'cajero' con el nombre del turno que cerró la caja.
+    match /cierres_caja/{cierreId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // ── RESÚMENES MENSUALES ───────────────────────────────────────────────────
+    match /resumenes_mensuales/{mesId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // ── TURNOS ────────────────────────────────────────────────────────────────
+    match /turnos/{turnoId} {
+      allow read, write: if true;
+    }
+
+    // ── SUBCATEGORÍAS ─────────────────────────────────────────────────────────
+    // Catálogo de subcategorías por rubro. Lectura pública, escritura desde POS.
+    match /sub_categories/{docId} {
+      allow read, write: if true;
+    }
+
+    // ── CATÁLOGO ──────────────────────────────────────────────────────────────
+    // Lectura y escritura pública: la web edita precios/stock/duplicados en tiempo real.
+    // Los CSV se suben con el script csv_to_firebase.py (SDK Admin, bypass de rules).
+    match /catalogo/{productoId} {
+      allow read, write: if true;
+    }
+
+    // ── RUBROS ────────────────────────────────────────────────────────────────
+    // Colección maestra de rubros y sub-rubros.
+    // El POS tiene un listener en tiempo real sobre esta colección.
+    // La web puede leer y escribir (agregar/quitar rubros desde el panel).
+    match /rubros/{rubroId} {
+      allow read, write: if true;
+    }
+
+    // ── CONFIGURACIÓN DEL SISTEMA ─────────────────────────────────────────────
+    // Incluye: config/rubros (lista de rubros), config/sub_rubros, config/settings.
+    match /config/{docId} {
+      allow read, write: if true;
+    }
+
+    // ── PRODUCTOS REMOTOS ─────────────────────────────────────────────────────
+    // La web escribe aquí para enviar cambios al POS (listener bidireccional).
+    // El POS lee y aplica los cambios automáticamente.
+    match /productos_remotos/{productoId} {
+      allow read, write: if true;
+    }
+
+    // ── PROMOCIONES ───────────────────────────────────────────────────────────
+    // La web crea/edita/elimina promociones. El POS las lee en tiempo real.
+    // El POS usa SDK Admin (bypass de rules) para lecturas desde el servidor.
+    match /promociones/{promoId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // ── BLOQUEAR TODO LO DEMÁS ────────────────────────────────────────────────
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
