@@ -7,14 +7,107 @@ export async function renderCierres(container, db) {
     return snap.docs.map(d => ({ id: d.id, ...d.data() }));
   });
 
-  // Separar caja abierta (sin fecha_cierre o fecha_cierre nula) de las cerradas
-  const cajaAbierta = todos.find(c => !c.fecha_cierre || c.fecha_cierre === null || c.fecha_cierre === '');
+  // Separar cajas abiertas (sin fecha_cierre) de las cerradas
+  const cajasAbiertas = todos.filter(c => !c.fecha_cierre || c.fecha_cierre === null || c.fecha_cierre === '');
   const cierres = todos.filter(c => c.fecha_cierre && c.fecha_cierre !== '');
 
-  const totalCierres = cierres.length;
-  const totalVentas  = cierres.reduce((s, c) => s + (c.total_ventas || 0), 0);
-  const totalEfect   = cierres.reduce((s, c) => s + (c.total_efectivo || 0), 0);
-  const totalTransf  = cierres.reduce((s, c) => s + (c.total_transferencia || 0), 0);
+  // Caja abierta consolidada: calcular totales desde la colección `ventas`
+  // para no depender del documento de cierres_caja (que solo se actualiza al cerrar/sincronizar)
+  let cajaAbierta = null;
+  if (cajasAbiertas.length > 0) {
+    const fechaAperturaRaw = cajasAbiertas.reduce(
+      (min, c) => (!min || toDate(c.fecha_apertura) < toDate(min) ? c.fecha_apertura : min), null
+    );
+    const fechaAperturaDate = toDate(fechaAperturaRaw);
+
+    // Leer ventas desde Firebase y filtrar las que ocurrieron después de la apertura
+    const ventasSnap = await getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc')));
+    let totalEfectivo = 0, totalTransferencia = 0, totalTransacciones = 0;
+    for (const doc of ventasSnap.docs) {
+      const v = doc.data();
+      const vDate = toDate(v.created_at);
+      if (!vDate || !fechaAperturaDate) continue;
+      if (vDate < fechaAperturaDate) continue;
+      const monto = parseFloat(v.total_amount || 0);
+      if (v.payment_type === 'cash') totalEfectivo += monto;
+      else if (v.payment_type === 'transfer') totalTransferencia += monto;
+      totalTransacciones++;
+    }
+
+    cajaAbierta = {
+      cajero:              cajasAbiertas.map(c => c.cajero || c.pc_id || 'PC').join(', '),
+      fecha_apertura:      fechaAperturaRaw,
+      monto_inicial:       cajasAbiertas[0]?.monto_inicial || 0,
+      total_ventas:        totalEfectivo + totalTransferencia,
+      total_efectivo:      totalEfectivo,
+      total_transferencia: totalTransferencia,
+      total_retiros:       cajasAbiertas.reduce((s, c) => s + (c.total_retiros || 0), 0),
+      total_transacciones: totalTransacciones,
+      productos_vendidos:  [],
+      retiros:             cajasAbiertas.flatMap(c => c.retiros || []),
+      _pcs:                cajasAbiertas.length,
+    };
+  }
+
+  // Agrupar cierres por session_id (misma sesión = mismo día de cierre)
+  // Docs sin session_id se tratan como sesión individual (compatibilidad con datos viejos)
+  const sesionesMap = {};
+  for (const c of cierres) {
+    const key = c.session_id || c.id; // fallback al id del doc para datos sin session_id
+    if (!sesionesMap[key]) {
+      sesionesMap[key] = {
+        session_id:          key,
+        fecha_apertura:      c.fecha_apertura,
+        fecha_cierre:        c.fecha_cierre,
+        cajero:              [],
+        pcs:                 [],
+        monto_inicial:       c.monto_inicial || 0,  // compartido entre PCs, no se suma
+        total_ventas:        0,
+        total_efectivo:      0,
+        total_transferencia: 0,
+        total_retiros:       0,
+        total_transacciones: 0,
+        num_ventas_efectivo: 0,
+        num_ventas_transferencia: 0,
+        monto_inicial_sum:   c.monto_inicial || 0,
+        monto_esperado:      0,
+        monto_final:         0,
+        productos_vendidos:  [],
+        retiros:             [],
+        _docs:               [],
+      };
+    }
+    const s = sesionesMap[key];
+    s._docs.push(c);
+    if (c.cajero && !s.cajero.includes(c.cajero)) s.cajero.push(c.cajero);
+    if (c.pc_id  && !s.pcs.includes(c.pc_id))    s.pcs.push(c.pc_id);
+    s.total_ventas        += (c.total_ventas        || 0);
+    s.total_efectivo      += (c.total_efectivo      || 0);
+    s.total_transferencia += (c.total_transferencia || 0);
+    s.total_retiros       += (c.total_retiros       || 0);
+    s.total_transacciones += (c.total_transacciones || 0);
+    s.num_ventas_efectivo += (c.num_ventas_efectivo || 0);
+    s.num_ventas_transferencia += (c.num_ventas_transferencia || 0);
+    // monto_inicial es el mismo en todas las PCs (viene de PC1), no se acumula
+    s.monto_esperado      += (c.monto_esperado      || 0);
+    s.monto_final         += (c.monto_final         || 0);
+    // Usar la apertura más temprana y el cierre más tardío
+    if (!s.fecha_apertura || toDate(c.fecha_apertura) < toDate(s.fecha_apertura)) s.fecha_apertura = c.fecha_apertura;
+    if (!s.fecha_cierre   || toDate(c.fecha_cierre)   > toDate(s.fecha_cierre))   s.fecha_cierre   = c.fecha_cierre;
+    s.productos_vendidos.push(...(c.productos_vendidos || []));
+    s.retiros.push(...(c.retiros || []));
+  }
+  // Convertir mapa a array ordenado por fecha_cierre desc
+  const sesiones = Object.values(sesionesMap).sort((a, b) => toDate(b.fecha_cierre) - toDate(a.fecha_cierre));
+  for (const s of sesiones) {
+    s.cajero        = s.cajero.join(', ') || '-';
+    s.monto_inicial = s.monto_inicial_sum;
+  }
+
+  const totalCierres = sesiones.length;
+  const totalVentas  = sesiones.reduce((s, c) => s + (c.total_ventas || 0), 0);
+  const totalEfect   = sesiones.reduce((s, c) => s + (c.total_efectivo || 0), 0);
+  const totalTransf  = sesiones.reduce((s, c) => s + (c.total_transferencia || 0), 0);
 
   // Calcular tiempo abierta
   function tiempoAbierto(apertura) {
@@ -36,10 +129,10 @@ export async function renderCierres(container, db) {
           <div style="width:12px;height:12px;border-radius:50%;background:#34d399;box-shadow:0 0 0 3px rgba(52,211,153,0.3);animation:pulse 2s infinite"></div>
           <div>
             <div style="font-size:16px;font-weight:800">Caja Abierta</div>
-            <div style="font-size:12px;color:#6ee7b7;margin-top:2px">Cajero: ${cajaAbierta.cajero || 'Sin cajero'} · Abierta hace ${tiempoAbierto(cajaAbierta.fecha_apertura)}</div>
+            <div style="font-size:12px;color:#6ee7b7;margin-top:2px">${cajaAbierta._pcs > 1 ? `${cajaAbierta._pcs} cajas activas · ` : `Cajero: ${cajaAbierta.cajero || 'Sin cajero'} · `}Abierta hace ${tiempoAbierto(cajaAbierta.fecha_apertura)}</div>
           </div>
         </div>
-        <div style="font-size:11px;color:#6ee7b7">Apertura: ${fmtDT(toDate(cajaAbierta.fecha_apertura))}</div>
+        <div style="font-size:11px;color:#6ee7b7">Apertura: ${fmtDT(parseArDate(cajaAbierta.fecha_apertura))}</div>
       </div>
 
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px;margin-top:16px">
@@ -145,14 +238,15 @@ export async function renderCierres(container, db) {
             <th class="cie-col-transferencia">Transferencia</th><th class="cie-col-retiros">Retiros</th><th>Cajero</th>
           </tr></thead>
           <tbody id="cierresBody">
-            ${cierres.length === 0
+            ${sesiones.length === 0
               ? `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text-muted)">Sin cierres registrados</td></tr>`
-              : cierres.map((c, i) => {
-                  const apertura = toDate(c.fecha_apertura);
-                  const cierre   = toDate(c.fecha_cierre);
+              : sesiones.map((c, i) => {
+                  const apertura = parseArDate(c.fecha_apertura);
+                  const cierre   = parseArDate(c.fecha_cierre);
                   const retiros  = c.total_retiros || 0;
+                  const pcLabel  = c.pcs.length > 1 ? ` <span style="font-size:10px;color:var(--text-muted)">(${c.pcs.length} PCs)</span>` : '';
                   return `<tr class="clickable-row" data-idx="${i}" style="cursor:pointer" title="Ver detalle del cierre">
-                    <td><b>#${c.register_id || c.id || '-'}</b></td>
+                    <td><b>${c.session_id || '-'}</b>${pcLabel}</td>
                     <td>${fmtDT(apertura)}</td>
                     <td class="cie-col-cierre">${fmtDT(cierre)}</td>
                     <td style="text-align:center"><span class="badge badge-blue">${c.total_transacciones || 0}</span></td>
@@ -176,7 +270,7 @@ export async function renderCierres(container, db) {
   container.querySelectorAll('.clickable-row').forEach(row => {
     row.addEventListener('click', () => {
       const idx = parseInt(row.dataset.idx);
-      openCierreModal(cierres[idx]);
+      openCierreModal(sesiones[idx]);
     });
     row.addEventListener('mouseenter', () => row.style.background = 'var(--bg)');
     row.addEventListener('mouseleave', () => row.style.background = '');
@@ -186,8 +280,8 @@ export async function renderCierres(container, db) {
 function openCierreModal(c) {
   document.querySelector('.modal-overlay')?.remove();
 
-  const apertura  = toDate(c.fecha_apertura);
-  const cierre    = toDate(c.fecha_cierre);
+  const apertura  = parseArDate(c.fecha_apertura);
+  const cierre    = parseArDate(c.fecha_cierre);
   const retiros   = c.total_retiros || 0;
   const efectivo  = c.total_efectivo || 0;
   const transf    = c.total_transferencia || 0;
@@ -216,7 +310,7 @@ function openCierreModal(c) {
         <div style="display:flex;align-items:center;gap:10px">
           <span class="material-icons" style="color:#94a3b8">lock_clock</span>
           <div>
-            <h3 style="color:white;margin:0">Cierre de Caja #${c.register_id || c.id || '-'}</h3>
+            <h3 style="color:white;margin:0">Cierre ${c.session_id || c.register_id || '-'}${c.pcs && c.pcs.length > 1 ? ` (${c.pcs.length} PCs)` : ''}</h3>
             <div style="font-size:11px;color:#94a3b8;margin-top:2px">${c.cajero || 'Sin cajero'} · Duración: ${duracion}</div>
           </div>
         </div>
@@ -317,7 +411,7 @@ function openCierreModal(c) {
             <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;margin-bottom:6px">
               <div>
                 <div style="font-size:12px;font-weight:600;color:#991b1b">${r.reason || r.motivo || 'Retiro'}</div>
-                <div style="font-size:11px;color:#64748b">${r.created_at ? fmtDT(toDate(r.created_at)) : ''}</div>
+                <div style="font-size:11px;color:#64748b">${r.created_at ? fmtDT(parseArDate(r.created_at)) : ''}</div>
               </div>
               <div style="font-size:15px;font-weight:700;color:#dc3545">-$${fmt(r.amount || r.monto || 0)}</div>
             </div>
@@ -358,11 +452,19 @@ function toDate(val) {
   return new Date(val);
 }
 
+// Para display: compensar naive hora AR guardada como UTC → sumar 3h
+function parseArDate(val) {
+  if (!val) return null;
+  if (val?.toDate) return new Date(val.toDate().getTime() + 3 * 60 * 60 * 1000);
+  return new Date(val);
+}
+
 function fmt(n) {
   return Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
 
 function fmtDT(d) {
   if (!d || isNaN(d)) return '-';
-  return d.toLocaleDateString('es-AR') + ' ' + d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' });
+  const opts = { timeZone: 'America/Argentina/Buenos_Aires' };
+  return d.toLocaleDateString('es-AR', opts) + ' ' + d.toLocaleTimeString('es-AR', { ...opts, hour: '2-digit', minute: '2-digit' });
 }
