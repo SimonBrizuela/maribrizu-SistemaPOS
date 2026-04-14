@@ -165,7 +165,7 @@ class MainWindow(QMainWindow):
 
         # Verificar actualizaciones en segundo plano (30s de retraso para no entorpecer el inicio)
         from PyQt5.QtCore import QTimer as _QT2
-        _QT2.singleShot(30000, self._check_for_updates)
+        _QT2.singleShot(8000, self._check_for_updates)
 
         # Poller de sync remoto: detecta comando del admin → sube o descarga en silencio
         self._last_sync_trigger_ts = None
