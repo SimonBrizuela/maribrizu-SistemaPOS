@@ -164,21 +164,48 @@ class DownloadWorker(QThread):
             productos_actualizados = 0
             productos_sin_cambios  = 0
 
-            # Descargar desde 'catalogo' (tiene precio_venta correcto) en lugar de 'inventario'
+            # Leer timestamp del último sync para hacer delta query
+            from pos_system.config import DATA_DIR
+            import datetime as _dt, time as _time
+            _sync_file = DATA_DIR / "last_catalog_sync.txt"
+            _local_epoch = 0.0
             try:
+                if _sync_file.exists():
+                    _local_epoch = float(_sync_file.read_text(encoding='utf-8').strip())
+            except Exception:
+                pass
+
+            # Delta sync: solo docs modificados desde el último sync
+            try:
+                if _local_epoch > 0:
+                    _last_dt = _dt.datetime.fromtimestamp(_local_epoch, tz=_dt.timezone.utc)
+                    all_docs = list(
+                        fb.db.collection('catalogo')
+                          .where('ultima_actualizacion', '>=', _last_dt)
+                          .stream()
+                    )
+                    self.log_message.emit(
+                        f'Delta sync: {len(all_docs)} productos modificados desde el último sync.', 'info')
+                else:
+                    all_docs = list(fb.db.collection('catalogo').stream())
+                    self.log_message.emit(
+                        f'Sync completo: {len(all_docs)} productos en catálogo Firebase.', 'info')
+                productos_fb = []
+                for d in all_docs:
+                    data = d.to_dict()
+                    if data:
+                        data['doc_id'] = d.id
+                        productos_fb.append(data)
+            except Exception as e_cat:
+                self.log_message.emit(f'Error leyendo catálogo, usando sync completo: {e_cat}', 'warn')
+                _local_epoch = 0.0
                 all_docs = list(fb.db.collection('catalogo').stream())
                 productos_fb = []
                 for d in all_docs:
                     data = d.to_dict()
                     if data:
-                        data['doc_id'] = d.id  # Guardar el ID del documento de Firebase
+                        data['doc_id'] = d.id
                         productos_fb.append(data)
-                self.log_message.emit(f'{len(productos_fb)} productos encontrados en catálogo Firebase.', 'info')
-            except Exception as e_cat:
-                self.log_message.emit(f'Error leyendo catálogo, usando inventario: {e_cat}', 'warn')
-                productos_fb = fb.download_products(
-                    progress_cb=lambda cur, tot, msg: self.pct_detail.emit(cur, max(tot, 1), msg)
-                )
 
             total_fb = len(productos_fb)
             for i, p in enumerate(productos_fb):
@@ -308,7 +335,8 @@ class DownloadWorker(QThread):
             self.progress.emit(step, self.TOTAL_STEPS)
 
             remotos = fb.download_precios_actualizados(
-                progress_cb=lambda cur, tot, msg: self.pct_detail.emit(cur, max(tot, 1), msg)
+                progress_cb=lambda cur, tot, msg: self.pct_detail.emit(cur, max(tot, 1), msg),
+                since_epoch=_local_epoch,
             )
             precios_actualizados = 0
             precios_sin_cambios  = 0
@@ -404,6 +432,12 @@ class DownloadWorker(QThread):
             else:
                 self.log_message.emit(
                     'ℹ️ No hay datos en "productos_remotos"', 'warn')
+
+            # Guardar timestamp del sync para delta en próximos arranques/syncs
+            try:
+                _sync_file.write_text(str(_time.time()), encoding='utf-8')
+            except Exception:
+                pass
 
             # ── FINALIZAR ────────────────────────────────────────────────
             step = self.TOTAL_STEPS

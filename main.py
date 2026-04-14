@@ -112,21 +112,37 @@ def _sync_inventory_from_firebase(db):
 
         logger.info("Firebase: Descargando catálogo desde Firestore...")
 
-        # El catalogo real esta en la coleccion 'catalogo'
-        # Con 6000+ productos usamos paginacion para no saturar la memoria
         from pos_system.models.product import Product
         from pos_system.utils.validators import ValidationError
+        import datetime as _dt, time as _time
         product_model = Product(db)
 
         actualizados = 0
         creados = 0
         errores = 0
-        total_fb = 0
 
-        # Traer todos los docs de una vez con stream() — Firestore lo maneja eficientemente
-        all_docs = list(fb.db.collection('catalogo').stream())
+        # Delta sync: solo productos modificados desde el último sync
+        try:
+            if local_epoch > 0:
+                last_dt = _dt.datetime.fromtimestamp(local_epoch, tz=_dt.timezone.utc)
+                all_docs = list(
+                    fb.db.collection('catalogo')
+                      .where('ultima_actualizacion', '>=', last_dt)
+                      .stream()
+                )
+                logger.info(f"Firebase: {len(all_docs)} productos modificados desde el último sync.")
+            else:
+                all_docs = list(fb.db.collection('catalogo').stream())
+                logger.info(f"Firebase: {len(all_docs)} productos en catálogo (sync completo).")
+        except Exception as e_query:
+            logger.warning(f"Firebase: delta query falló ({e_query}), usando sync completo.")
+            all_docs = list(fb.db.collection('catalogo').stream())
+
         total_fb = len(all_docs)
-        logger.info(f"Firebase: {total_fb} productos encontrados en catalogo.")
+        if total_fb == 0:
+            logger.info("Firebase: Sin productos modificados — nada que actualizar.")
+            sync_file.write_text(str(_time.time()), encoding='utf-8')
+            return
 
         for doc in all_docs:
             p = doc.to_dict()
@@ -244,8 +260,7 @@ def _sync_inventory_from_firebase(db):
 
         # Guardar timestamp del sync exitoso para el próximo arranque
         try:
-            import time
-            sync_file.write_text(str(time.time()), encoding='utf-8')
+            sync_file.write_text(str(_time.time()), encoding='utf-8')
         except Exception:
             pass
 

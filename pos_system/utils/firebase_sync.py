@@ -887,16 +887,25 @@ class FirebaseSync:
             logger.error(f"Firebase: Error descargando rubros: {e}")
             return []
 
-    def download_precios_actualizados(self, progress_cb=None) -> list:
+    def download_precios_actualizados(self, progress_cb=None, since_epoch=0.0) -> list:
         """
         Descarga la colección 'productos_remotos' (precios y datos actualizados desde la web).
+        Si since_epoch > 0, solo descarga docs modificados desde esa fecha (delta sync).
         Retorna lista de dicts con datos actualizados.
         """
         if not self.enabled:
             return []
         try:
             col = self.db.collection('productos_remotos')
-            docs = list(col.stream())
+            if since_epoch > 0:
+                import datetime
+                last_dt = datetime.datetime.fromtimestamp(since_epoch, tz=datetime.timezone.utc)
+                try:
+                    docs = list(col.where('ultima_actualizacion', '>=', last_dt).stream())
+                except Exception:
+                    docs = list(col.stream())
+            else:
+                docs = list(col.stream())
             total = len(docs)
             productos = []
             for i, doc in enumerate(docs):
