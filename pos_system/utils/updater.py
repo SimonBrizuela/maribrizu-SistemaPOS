@@ -72,13 +72,17 @@ def check_for_updates(current_version: str, repo: str, callback=None):
                 'release_notes': release_notes,
             })
 
-            logger.info(f"Updater: actual={current_version}, última={tag}, update={has_update}")
+            logger.info(f"Updater: version actual={current_version}, ultima={tag}, hay_update={has_update}, download_url={download_url or 'NINGUNA'}")
+            if has_update and not download_url:
+                logger.warning("Updater: hay nueva version pero no tiene asset ZIP/EXE en el release")
+            if has_update and download_url:
+                logger.info(f"Updater: iniciando descarga de v{tag}...")
 
             if callback:
                 callback(has_update, _update_cache.copy())
 
         except Exception as e:
-            logger.debug(f"Updater: no se pudo verificar: {e}")
+            logger.warning(f"Updater: error al verificar actualizaciones: {e}")
             if callback:
                 callback(False, {})
 
@@ -152,7 +156,7 @@ def download_and_apply_update(download_url: str, app_dir: str,
                 on_done(True)
 
         except Exception as e:
-            logger.error(f'Updater: error al aplicar update: {e}')
+            logger.warning(f'Updater: error al descargar/aplicar update: {e}')
             if on_done:
                 on_done(False)
 
