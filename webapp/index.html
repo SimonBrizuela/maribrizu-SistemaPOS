@@ -10,7 +10,6 @@
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 </head>
 <body>
-  <!-- Overlay para cerrar sidebar en mobile -->
   <div class="sidebar-overlay" id="sidebarOverlay"></div>
 
   <div id="app" style="display:none">
@@ -20,19 +19,59 @@
         <span class="material-icons logo-icon">point_of_sale</span>
         <h1>POS</h1>
       </div>
-      <ul class="nav-links">
-        <li><a href="#" class="nav-link active" data-page="dashboard"><span class="material-icons">dashboard</span> Dashboard</a></li>
-        <li><a href="#" class="nav-link" data-page="ventas"><span class="material-icons">receipt_long</span> Ventas</a></li>
-        <li><a href="#" class="nav-link" data-page="productos"><span class="material-icons">trending_up</span> Más Vendidos</a></li>
-        <li><a href="#" class="nav-link" data-page="inventario"><span class="material-icons">inventory_2</span> Inventario</a></li>
-        <li><a href="#" class="nav-link" data-page="historial"><span class="material-icons">calendar_month</span> Historial Diario</a></li>
-        <li><a href="#" class="nav-link" data-page="cierres"><span class="material-icons">lock_clock</span> Cierres de Caja</a></li>
-        <li><a href="#" class="nav-link" data-page="resumenes"><span class="material-icons">bar_chart</span> Resúmenes Mensuales</a></li>
-        <li><a href="#" class="nav-link" data-page="catalogo"><span class="material-icons">menu_book</span> Catálogo</a></li>
-        <li><a href="#" class="nav-link" data-page="turnos"><span class="material-icons">badge</span> Turnos / Cajeros</a></li>
-        <li><a href="#" class="nav-link" data-page="articulos_unicos"><span class="material-icons">link</span> Artículos Únicos</a></li>
-        <li><a href="#" class="nav-link" data-page="promociones"><span class="material-icons">local_offer</span> Promociones</a></li>
-      </ul>
+
+      <div class="nav-links">
+
+        <!-- Grupo: Analíticas -->
+        <div class="nav-group" data-group="analiticas">
+          <button class="nav-group-header">
+            <span class="material-icons">bar_chart</span>
+            <span class="nav-group-label">Analíticas</span>
+            <span class="material-icons nav-group-arrow">expand_more</span>
+          </button>
+          <div class="nav-group-items">
+            <a href="#" class="nav-link" data-page="control_total"><span class="material-icons">account_balance_wallet</span> Control Total</a>
+            <a href="#" class="nav-link" data-page="dashboard"><span class="material-icons">dashboard</span> Dashboard</a>
+            <a href="#" class="nav-link" data-page="ventas"><span class="material-icons">receipt_long</span> Ventas</a>
+            <a href="#" class="nav-link" data-page="historial"><span class="material-icons">calendar_month</span> Historial Diario</a>
+            <a href="#" class="nav-link" data-page="cierres"><span class="material-icons">lock_clock</span> Cierres de Caja</a>
+            <a href="#" class="nav-link" data-page="resumenes"><span class="material-icons">bar_chart</span> Resúmenes</a>
+          </div>
+        </div>
+
+        <!-- Grupo: Productos -->
+        <div class="nav-group" data-group="productos">
+          <button class="nav-group-header">
+            <span class="material-icons">inventory_2</span>
+            <span class="nav-group-label">Productos</span>
+            <span class="material-icons nav-group-arrow">expand_more</span>
+          </button>
+          <div class="nav-group-items">
+            <a href="#" class="nav-link" data-page="catalogo"><span class="material-icons">menu_book</span> Catálogo</a>
+            <a href="#" class="nav-link" data-page="productos"><span class="material-icons">trending_up</span> Más Vendidos</a>
+            <a href="#" class="nav-link" data-page="inventario"><span class="material-icons">inventory_2</span> Inventario</a>
+            <a href="#" class="nav-link" data-page="articulos_unicos"><span class="material-icons">link</span> Artículos Únicos</a>
+            <a href="#" class="nav-link" data-page="promociones"><span class="material-icons">local_offer</span> Promociones</a>
+          </div>
+        </div>
+
+        <!-- Grupo: Gestión -->
+        <div class="nav-group" data-group="gestion">
+          <button class="nav-group-header">
+            <span class="material-icons">manage_accounts</span>
+            <span class="nav-group-label">Gestión</span>
+            <span class="material-icons nav-group-arrow">expand_more</span>
+          </button>
+          <div class="nav-group-items">
+            <a href="#" class="nav-link" data-page="turnos"><span class="material-icons">badge</span> Turnos / Cajeros</a>
+            <a href="#" class="nav-link" data-page="facturas"><span class="material-icons">request_quote</span> Facturación AFIP</a>
+            <a href="#" class="nav-link" data-page="perfiles"><span class="material-icons">manage_accounts</span> Perfiles ARCA</a>
+            <a href="#" class="nav-link" data-page="clientes"><span class="material-icons">contacts</span> Clientes</a>
+          </div>
+        </div>
+
+      </div>
+
       <div class="sidebar-footer">
         <span class="status-dot" id="statusDot"></span>
         <span id="statusText">Conectando...</span>
@@ -52,14 +91,16 @@
 
       <div class="refresh-hint">↕ Deslizá la tabla para ver más columnas</div>
 
-      <div class="page-content" id="pageContent">
-        <!-- Contenido dinámico -->
-      </div>
+      <div class="page-content" id="pageContent"></div>
     </main>
   </div>
 
-  <!-- Bottom Nav (solo mobile) -->
+  <!-- Bottom Nav (mobile) -->
   <nav class="bottom-nav" id="bottomNav" style="display:none">
+    <a class="bottom-nav-item" data-page="control_total">
+      <span class="material-icons">account_balance_wallet</span>
+      <span class="label">Control</span>
+    </a>
     <a class="bottom-nav-item active" data-page="dashboard">
       <span class="material-icons">dashboard</span>
       <span class="label">Inicio</span>
@@ -68,29 +109,13 @@
       <span class="material-icons">receipt_long</span>
       <span class="label">Ventas</span>
     </a>
-    <a class="bottom-nav-item" data-page="productos">
-      <span class="material-icons">trending_up</span>
-      <span class="label">Top</span>
-    </a>
-    <a class="bottom-nav-item" data-page="inventario">
-      <span class="material-icons">inventory_2</span>
-      <span class="label">Stock</span>
+    <a class="bottom-nav-item" data-page="catalogo">
+      <span class="material-icons">menu_book</span>
+      <span class="label">Catálogo</span>
     </a>
     <a class="bottom-nav-item" data-page="historial">
       <span class="material-icons">calendar_month</span>
       <span class="label">Historial</span>
-    </a>
-    <a class="bottom-nav-item" data-page="cierres">
-      <span class="material-icons">lock_clock</span>
-      <span class="label">Cierres</span>
-    </a>
-    <a class="bottom-nav-item" data-page="resumenes">
-      <span class="material-icons">bar_chart</span>
-      <span class="label">Meses</span>
-    </a>
-    <a class="bottom-nav-item" data-page="catalogo">
-      <span class="material-icons">menu_book</span>
-      <span class="label">Catálogo</span>
     </a>
   </nav>
 

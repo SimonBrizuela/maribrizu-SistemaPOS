@@ -1,26 +1,37 @@
-import { collection, getDocs, query, orderBy, limit, where, Timestamp } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import { openSaleModal } from '../components/modal.js';
+import { getCached } from '../cache.js';
 
 export async function renderDashboard(container, db) {
-  // Obtener ventas de hoy
-  const hoy = new Date();
-  hoy.setHours(0, 0, 0, 0);
+  // Obtener ventas de hoy (medianoche en hora Argentina)
+  const hoy = new Date(todayAR() + 'T00:00:00-03:00');
 
-  const [ventasSnap, catalogoSnap, productosSnap, historialSnap] = await Promise.all([
-    getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc'), limit(200))),
-    getDocs(collection(db, 'catalogo')),   // ← catálogo completo (12.941 productos)
-    getDocs(query(collection(db, 'productos_mas_vendidos'), orderBy('total_vendido', 'desc'), limit(5))),
-    getDocs(query(collection(db, 'historial_diario'), orderBy('fecha', 'desc'), limit(7))),
+  const [ventas, catalogo, topProds, historial] = await Promise.all([
+    // Ventas: TTL 1 min (se ven datos de hoy, queremos relativamente fresco)
+    getCached('dashboard:ventas', async () => {
+      const snap = await getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc'), limit(500)));
+      return snap.docs.map(d => d.data());
+    }, { ttl: 60 * 1000 }),
+    // Catálogo completo: TTL 10 min, solo en memoria (12k+ docs, demasiado para localStorage)
+    getCached('catalogo:all', async () => {
+      const snap = await getDocs(collection(db, 'catalogo'));
+      return snap.docs.map(d => d.data());
+    }, { ttl: 10 * 60 * 1000, memOnly: true }),
+    // Top productos: TTL 3 min
+    getCached('dashboard:top_productos', async () => {
+      const snap = await getDocs(query(collection(db, 'productos_mas_vendidos'), orderBy('total_vendido', 'desc'), limit(5)));
+      return snap.docs.map(d => d.data());
+    }, { ttl: 3 * 60 * 1000 }),
+    // Historial diario: TTL 3 min
+    getCached('dashboard:historial', async () => {
+      const snap = await getDocs(query(collection(db, 'historial_diario'), orderBy('fecha', 'desc'), limit(7)));
+      return snap.docs.map(d => d.data());
+    }, { ttl: 3 * 60 * 1000 }),
   ]);
 
-  const ventas = ventasSnap.docs.map(d => d.data());
-  const catalogo = catalogoSnap.docs.map(d => d.data());
-  const topProds = productosSnap.docs.map(d => d.data());
-  const historial = historialSnap.docs.map(d => d.data());
-
-  // Stats de hoy
+  // Stats de hoy (en hora Argentina)
   const ventasHoy = ventas.filter(v => {
-    const fecha = v.created_at?.toDate ? v.created_at.toDate() : new Date(v.created_at);
+    const fecha = parseArDate(v.created_at);
     return fecha >= hoy;
   });
 
@@ -33,9 +44,9 @@ export async function renderDashboard(container, db) {
   const stockAgotado = catalogo.filter(p => (p.stock || 0) === 0).length;
 
   // Total mes
-  const inicioMes = new Date(hoy.getFullYear(), hoy.getMonth(), 1);
+  const inicioMes = new Date(todayAR().slice(0, 7) + '-01T00:00:00-03:00');
   const ventasMes = ventas.filter(v => {
-    const fecha = v.created_at?.toDate ? v.created_at.toDate() : new Date(v.created_at);
+    const fecha = parseArDate(v.created_at);
     return fecha >= inicioMes;
   });
   const totalMes = ventasMes.reduce((s, v) => s + (v.total_amount || 0), 0);
@@ -102,7 +113,7 @@ export async function renderDashboard(container, db) {
           </tr></thead>
           <tbody>
             ${ventas.slice(0, 10).map((v, i) => {
-              const dt = v.created_at?.toDate ? v.created_at.toDate() : new Date(v.created_at);
+              const dt = parseArDate(v.created_at);
               const esEfectivo = v.payment_type === 'cash';
               const tieneDescuento = (v.discount || 0) > 0;
               return `<tr class="clickable-row" data-idx="${i}" title="Click para ver detalle">
@@ -152,6 +163,19 @@ export async function renderDashboard(container, db) {
   `).join('');
 }
 
+// Fecha actual en Argentina (YYYY-MM-DD)
+function todayAR() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+}
+// Compensar: created_at fue guardado como naive hora AR → Firestore lo trata como UTC → sumar 3h
+// Maneja tres formas: Timestamp live (.toDate), Timestamp de localStorage ({ seconds, nanoseconds }), ISO string
+function parseArDate(raw) {
+  if (!raw) return new Date(NaN);
+  if (typeof raw.toDate === 'function') return new Date(raw.toDate().getTime() + 3 * 60 * 60 * 1000);
+  if (typeof raw === 'object' && raw.seconds !== undefined)
+    return new Date(raw.seconds * 1000 + Math.floor((raw.nanoseconds || 0) / 1e6) + 3 * 60 * 60 * 1000);
+  return new Date(raw);
+}
 function fmt(n) { return Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-function fmtDate(d) { return d.toLocaleDateString('es-AR'); }
-function fmtTime(d) { return d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }); }
+function fmtDate(d) { return d.toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' }); }
+function fmtTime(d) { return d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' }); }

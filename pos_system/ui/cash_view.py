@@ -6,6 +6,7 @@ from pos_system.ui.components import PriceInput
 from PyQt5.QtCore import Qt, QUrl
 from PyQt5.QtGui import QFont, QDesktopServices
 from datetime import datetime
+from pos_system.utils.firebase_sync import now_ar
 import os
 import subprocess
 import platform
@@ -219,6 +220,16 @@ class CashView(QWidget):
         
     def refresh_data(self):
         current_register = self.cash_register_model.get_current()
+        if not current_register:
+            # Fallback: si Firebase tiene una caja abierta, crearla localmente
+            try:
+                from pos_system.utils.firebase_sync import get_firebase_sync
+                fb = get_firebase_sync()
+                if fb:
+                    fb.ensure_local_register(self.db)
+                    current_register = self.cash_register_model.get_current()
+            except Exception:
+                pass
         
         if current_register:
             # Caja abierta
@@ -308,6 +319,23 @@ class CashView(QWidget):
             register_id = self.cash_register_model.open_register(initial_amount, notes)
             
             if register_id:
+                # Subir caja a Firebase para que todas las PCs la vean
+                try:
+                    from pos_system.utils.firebase_sync import get_firebase_sync
+                    fb = get_firebase_sync()
+                    if fb:
+                        register = self.cash_register_model.get_current()
+                        if register:
+                            register_with_cajero = dict(register)
+                            register_with_cajero['cajero'] = (
+                                self.current_user.get('turno_nombre')
+                                or self.current_user.get('full_name')
+                                or self.current_user.get('username', '')
+                            )
+                            fb.sync_open_register(register_with_cajero)
+                except Exception as e:
+                    pass  # No bloquear si Firebase falla
+
                 QMessageBox.information(self, 'Éxito', 
                     f'Caja abierta correctamente\n\nMonto inicial: ${initial_amount:.2f}')
                 self.refresh_data()
@@ -335,7 +363,7 @@ class CashView(QWidget):
                     withdrawal = {
                         'amount': amount,
                         'reason': reason,
-                        'created_at': datetime.now().isoformat()
+                        'created_at': now_ar().isoformat()
                     }
                     pdf_path = self.pdf_generator.generate_withdrawal_ticket(withdrawal)
 
@@ -392,8 +420,25 @@ class CashView(QWidget):
                 closing_report['final_amount'] = final_amount
                 closing_report['notes'] = notes
 
+                # Marcar caja como cerrada en Firebase (broadcast a todas las PCs)
+                try:
+                    from pos_system.utils.firebase_sync import get_firebase_sync, now_ar
+                    fb = get_firebase_sync()
+                    if fb:
+                        session_id = now_ar().strftime('%Y-%m-%d')
+                        closing_report['session_id'] = session_id
+                        fb.sync_close_register(session_id=session_id)
+                        fb.sync_cash_closing(closing_report, session_id=session_id)
+                except Exception:
+                    pass
+
                 # Generar reporte PDF tipo ticket
-                pdf_path = self.pdf_generator.generate_cash_closing_ticket(closing_report)
+                pdf_path = None
+                try:
+                    pdf_path = self.pdf_generator.generate_cash_closing_ticket(closing_report)
+                except Exception as e:
+                    import logging
+                    logging.getLogger(__name__).error(f"Error generando PDF de cierre: {e}")
 
                 # ── Sincronizar con Google Sheets ──
                 try:
@@ -415,16 +460,23 @@ class CashView(QWidget):
                     diff_text = '\n\nCierre exacto'
                 
                 # Preguntar si desea imprimir
-                reply = QMessageBox.question(
-                    self,
-                    'Caja Cerrada',
-                    f'Caja cerrada correctamente{diff_text}\n\n¿Desea abrir el reporte para imprimir?',
-                    QMessageBox.Yes | QMessageBox.No,
-                    QMessageBox.Yes
-                )
-                
-                if reply == QMessageBox.Yes:
-                    self.open_pdf(pdf_path)
+                if pdf_path:
+                    reply = QMessageBox.question(
+                        self,
+                        'Caja Cerrada',
+                        f'Caja cerrada correctamente{diff_text}\n\n¿Desea abrir el reporte para imprimir?',
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.Yes
+                    )
+                    
+                    if reply == QMessageBox.Yes:
+                        self.open_pdf(pdf_path)
+                else:
+                    QMessageBox.information(
+                        self,
+                        'Caja Cerrada',
+                        f'Caja cerrada correctamente{diff_text}'
+                    )
                     
                 self.refresh_data()
                 main_window = self.get_main_window()

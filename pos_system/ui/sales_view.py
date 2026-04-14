@@ -110,6 +110,385 @@ class BarcodeScanner(QLineEdit):
             self.setText(self.text() + text)
 
 
+class ProductSearchDialog(QDialog):
+    """Diálogo ampliado para buscar y seleccionar productos con fuente grande."""
+    product_selected = pyqtSignal(dict)
+    cart_total_changed = pyqtSignal(float)
+
+    def __init__(self, parent=None, db=None, initial_text='', rubro=None, subcategory=None, cart=None):
+        super().__init__(parent)
+        self.db = db
+        self._rubro = rubro
+        self._subcategory = subcategory
+        self._cart = cart or []
+        title = 'Buscar Producto'
+        if subcategory:
+            title += f'  —  {rubro} > {subcategory}'
+        elif rubro:
+            title += f'  —  {rubro}'
+        self.setWindowTitle(title)
+        self.setWindowFlags(Qt.Window | Qt.WindowCloseButtonHint | Qt.WindowMaximizeButtonHint)
+        from PyQt5.QtWidgets import QDesktopWidget
+        screen = QDesktopWidget().availableGeometry()
+        w = int(screen.width() * 0.90)
+        h = int(screen.height() * 0.88)
+        self.setMinimumSize(min(860, w), min(520, h))
+        self.resize(w, h)
+        self.move(screen.x() + (screen.width() - w) // 2, screen.y() + (screen.height() - h) // 2)
+        self._init_ui(initial_text)
+
+    def _init_ui(self, initial_text=''):
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(280)
+        self._search_timer.timeout.connect(self._do_search)
+        self._pending_text = ''
+
+        # Timer para auto-limpiar filtro si no hay resultados con rubro activo
+        self._auto_clear_filter_timer = QTimer(self)
+        self._auto_clear_filter_timer.setSingleShot(True)
+        self._auto_clear_filter_timer.setInterval(2000)  # 2 segundos
+        self._auto_clear_filter_timer.timeout.connect(self._auto_clear_filter)
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(8)
+
+        # ── Barra superior: búsqueda + filtro ──
+        search_row = QHBoxLayout()
+        search_row.setSpacing(8)
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText('Buscar por nombre o código...')
+        self.search_input.setFont(QFont('Segoe UI', 13))
+        self.search_input.setMinimumHeight(42)
+        self.search_input.setStyleSheet('''
+            QLineEdit {
+                border: 2px solid #6366f1;
+                border-radius: 8px;
+                padding: 6px 14px;
+                background: white;
+                font-size: 13px;
+            }
+        ''')
+        self.search_input.textChanged.connect(self._on_search)
+        self.search_input.returnPressed.connect(self._select_first)
+        search_row.addWidget(self.search_input, 1)
+
+        clear_btn = QPushButton('Limpiar')
+        clear_btn.setMinimumHeight(42)
+        clear_btn.setFont(QFont('Segoe UI', 10))
+        clear_btn.setStyleSheet('QPushButton { background:#f1f5f9; color:#1e293b; border:1.5px solid #cbd5e1; border-radius:8px; padding:0 12px; } QPushButton:hover { background:#e2e8f0; }')
+        clear_btn.clicked.connect(lambda: self.search_input.clear())
+        search_row.addWidget(clear_btn)
+        root.addLayout(search_row)
+
+        # Filtro activo
+        from PyQt5.QtWidgets import QWidget as _W
+        self._filter_bar = _W()
+        fb = QHBoxLayout(self._filter_bar)
+        fb.setContentsMargins(0, 0, 0, 0)
+        filtro_txt = 'Filtrando: '
+        if self._subcategory:
+            filtro_txt += f'{self._rubro} > {self._subcategory}'
+        elif self._rubro:
+            filtro_txt += self._rubro
+        self._filter_lbl = QLabel(filtro_txt)
+        self._filter_lbl.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        self._filter_lbl.setStyleSheet('color:#6366f1; background:#eef2ff; border:1px solid #c7d2fe; border-radius:5px; padding:3px 8px;')
+        fb.addWidget(self._filter_lbl)
+        cf_btn = QPushButton('x  Todos los productos')
+        cf_btn.setFont(QFont('Segoe UI', 10))
+        cf_btn.setStyleSheet('QPushButton { background:#f1f5f9; color:#1e293b; border:1.5px solid #cbd5e1; border-radius:5px; padding:3px 10px; } QPushButton:hover { background:#e2e8f0; }')
+        cf_btn.clicked.connect(self._clear_filter)
+        fb.addWidget(cf_btn)
+        fb.addStretch()
+        root.addWidget(self._filter_bar)
+        self._filter_bar.setVisible(bool(self._subcategory or self._rubro))
+
+        # Contador
+        self.result_count_lbl = QLabel('')
+        self.result_count_lbl.setFont(QFont('Segoe UI', 9))
+        self.result_count_lbl.setStyleSheet('color:#64748b;')
+        root.addWidget(self.result_count_lbl)
+
+        # ── Splitter: tabla búsqueda | panel carrito ──
+        from PyQt5.QtWidgets import QSplitter
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.setHandleWidth(6)
+        splitter.setStyleSheet('QSplitter::handle { background: #e2e8f0; border-radius: 3px; }')
+
+        # Tabla de resultados
+        self.table = QTableWidget()
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(['Producto', 'Código', 'Categoría', 'Precio', 'Stock'])
+        self.table.verticalHeader().setVisible(False)
+        self.table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setAlternatingRowColors(True)
+        self.table.setFont(QFont('Segoe UI', 12))
+        self.table.horizontalHeader().setFont(QFont('Segoe UI', 11, QFont.Bold))
+        self.table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.table.setStyleSheet('''
+            QTableWidget { border: 1.5px solid #e2e8f0; border-radius: 8px; gridline-color: #f1f5f9; }
+            QTableWidget::item { padding: 6px; }
+            QTableWidget::item:selected { background: #6366f1; color: white; }
+            QHeaderView::section { background: #f8fafc; padding: 6px; border: none; border-bottom: 2px solid #e2e8f0; font-weight: bold; }
+        ''')
+        self.table.verticalHeader().setDefaultSectionSize(38)
+        self.table.doubleClicked.connect(self._on_double_click)
+        self.table.keyPressEvent = self._table_key_press
+        splitter.addWidget(self.table)
+
+        # Panel derecho: carrito
+        cart_panel = QWidget()
+        cart_panel.setMinimumWidth(230)
+        cart_panel.setMaximumWidth(380)
+        cart_panel.setStyleSheet('QWidget { background: #f8fafc; border-radius: 10px; }')
+        cp = QVBoxLayout(cart_panel)
+        cp.setContentsMargins(10, 10, 10, 10)
+        cp.setSpacing(6)
+
+        cart_title = QLabel('Carrito actual')
+        cart_title.setFont(QFont('Segoe UI', 11, QFont.Bold))
+        cart_title.setStyleSheet('color: #1e293b; background: transparent; border: none;')
+        cp.addWidget(cart_title)
+
+        self.cart_list = QTableWidget()
+        self.cart_list.setColumnCount(2)
+        self.cart_list.setHorizontalHeaderLabels(['Producto', 'Cant. / Total'])
+        self.cart_list.verticalHeader().setVisible(False)
+        self.cart_list.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.cart_list.setSelectionMode(QTableWidget.NoSelection)
+        self.cart_list.setFocusPolicy(Qt.NoFocus)
+        self.cart_list.setFont(QFont('Segoe UI', 10))
+        self.cart_list.horizontalHeader().setFont(QFont('Segoe UI', 10, QFont.Bold))
+        self.cart_list.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        self.cart_list.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)
+        self.cart_list.setColumnWidth(1, 88)
+        self.cart_list.setAlternatingRowColors(True)
+        self.cart_list.verticalHeader().setDefaultSectionSize(30)
+        self.cart_list.setStyleSheet('''
+            QTableWidget { border: 1px solid #e2e8f0; border-radius: 6px; gridline-color: #f1f5f9; background: white; }
+            QTableWidget::item { padding: 3px 5px; }
+            QHeaderView::section { background: #f1f5f9; padding: 4px; border: none; border-bottom: 1.5px solid #e2e8f0; font-size: 10px; }
+        ''')
+        cp.addWidget(self.cart_list, 1)
+
+        # Total en el panel derecho
+        total_frame = QFrame()
+        total_frame.setStyleSheet('QFrame { background: #1a1a2e; border-radius: 8px; border: none; }')
+        tl = QHBoxLayout(total_frame)
+        tl.setContentsMargins(12, 10, 12, 10)
+        tl.setSpacing(8)
+        total_lbl = QLabel('TOTAL')
+        total_lbl.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        total_lbl.setStyleSheet('color:#adb5bd; background:transparent; border:none;')
+        tl.addWidget(total_lbl)
+        self.dialog_total_amount = QLabel('$0.00')
+        self.dialog_total_amount.setFont(QFont('Segoe UI', 18, QFont.Bold))
+        self.dialog_total_amount.setStyleSheet('color:#4ade80; background:transparent; border:none;')
+        self.dialog_total_amount.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        self.dialog_total_amount.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        tl.addWidget(self.dialog_total_amount)
+        cp.addWidget(total_frame)
+
+        hint = QLabel('Enter o doble click para agregar')
+        hint.setFont(QFont('Segoe UI', 9))
+        hint.setStyleSheet('color:#94a3b8; background:transparent; border:none;')
+        hint.setAlignment(Qt.AlignCenter)
+        cp.addWidget(hint)
+
+        splitter.addWidget(cart_panel)
+
+        # Proporciones: 68% búsqueda, 32% carrito
+        splitter.setStretchFactor(0, 68)
+        splitter.setStretchFactor(1, 32)
+        root.addWidget(splitter, 1)
+
+        # Poblar carrito inicial
+        self.update_cart_display(self._cart)
+
+        # Cargar resultados
+        if initial_text:
+            self.search_input.setText(initial_text)
+        elif self._rubro or self._subcategory:
+            self._do_search()
+        else:
+            self._show_hint()
+
+        self.search_input.setFocus()
+        # Diferir deselección al siguiente ciclo del event loop (setFocus selecciona después)
+        QTimer.singleShot(0, lambda: (
+            self.search_input.deselect(),
+            self.search_input.setCursorPosition(len(self.search_input.text()))
+        ))
+
+    def update_cart_display(self, cart_items):
+        """Actualiza la tabla del carrito en el panel derecho."""
+        self._cart = cart_items
+        self.cart_list.setRowCount(len(cart_items))
+        total = 0.0
+        for row, item in enumerate(cart_items):
+            name = str(item.get('product_name') or item.get('name', ''))
+            qty = item.get('quantity', 1)
+            subtotal = float(item.get('subtotal', 0))
+            total += subtotal
+
+            name_item = QTableWidgetItem(name)
+            name_item.setToolTip(name)
+            self.cart_list.setItem(row, 0, name_item)
+
+            # Columna combinada: "x2  $500"
+            detail_item = QTableWidgetItem(f'x{qty}  ${subtotal:,.0f}')
+            detail_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            detail_item.setForeground(QColor('#6366f1'))
+            self.cart_list.setItem(row, 1, detail_item)
+
+        if cart_items:
+            self.cart_list.scrollToBottom()
+
+        total_str = f'${total:,.2f}'
+        font_size = 18 if len(total_str) <= 10 else (15 if len(total_str) <= 13 else 12)
+        self.dialog_total_amount.setFont(QFont('Segoe UI', font_size, QFont.Bold))
+        self.dialog_total_amount.setText(total_str)
+
+    def _clear_filter(self):
+        """Quita el filtro de rubro/subcategoría y busca en todos los productos."""
+        self._auto_clear_filter_timer.stop()
+        self._rubro = None
+        self._subcategory = None
+        self._filter_bar.setVisible(False)
+        self.setWindowTitle('Buscar Producto')
+        text = self.search_input.text().strip()
+        if text:
+            self._pending_text = text
+            self._do_search()
+        else:
+            self._show_hint()
+
+    def _auto_clear_filter(self):
+        """Limpia el filtro automáticamente cuando no hay resultados en el rubro actual."""
+        self._clear_filter()
+
+    def _show_hint(self):
+        self.table.setRowCount(1)
+        self.table.setSpan(0, 0, 1, 5)
+        item = QTableWidgetItem('Escribí para buscar productos...')
+        item.setTextAlignment(Qt.AlignCenter)
+        item.setForeground(QColor('#94a3b8'))
+        item.setFont(QFont('Segoe UI', 13))
+        self.table.setItem(0, 0, item)
+        self.result_count_lbl.setText('')
+
+    def _on_search(self, text):
+        """Dispara el debounce — la búsqueda real ocurre 300ms después de dejar de escribir."""
+        self._pending_text = text.strip()
+        if not self._pending_text:
+            self._search_timer.stop()
+            self._show_hint()
+            return
+        self._search_timer.start()  # reinicia el timer en cada tecla
+
+    def _do_search(self):
+        """Ejecuta la búsqueda real después del debounce."""
+        text = self._pending_text
+        try:
+            clauses, params = [], []
+
+            # Filtro por rubro/subcategoría si están seleccionados
+            if self._subcategory:
+                clauses.append("UPPER(category) = ?")
+                params.append(self._subcategory.upper())
+            elif self._rubro:
+                clauses.append("UPPER(rubro) = ?")
+                params.append(self._rubro.upper())
+
+            # Filtro por texto si hay algo escrito
+            if text:
+                words = [w for w in text.split() if w]
+                for w in words:
+                    pat = f'%{w.upper()}%'
+                    clauses.append("(UPPER(name) LIKE ? OR UPPER(barcode) LIKE ?)")
+                    params.extend([pat, pat])
+
+            if not clauses:
+                self._show_hint()
+                return
+
+            where = ' AND '.join(clauses)
+            query = f"SELECT * FROM products WHERE {where} ORDER BY is_favorite DESC, name ASC LIMIT 100"
+            results = self.db.execute_query(query, tuple(params))
+        except Exception:
+            results = []
+
+        self.table.clearSpans()
+        self.table.setRowCount(0)  # limpiar primero para evitar flickering
+        self.table.setRowCount(len(results))
+        for row, p in enumerate(results):
+            name_item = QTableWidgetItem(str(p.get('name', '')))
+            name_item.setData(Qt.UserRole, p)  # guardar datos en el item de nombre
+            self.table.setItem(row, 0, name_item)
+            self.table.setItem(row, 1, QTableWidgetItem(str(p.get('barcode', '') or '')))
+            self.table.setItem(row, 2, QTableWidgetItem(str(p.get('category', '') or '')))
+            price_item = QTableWidgetItem(f"${float(p.get('price', 0)):,.2f}")
+            price_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.table.setItem(row, 3, price_item)
+            stock = p.get('stock', 0)
+            stock_item = QTableWidgetItem(str(stock if stock is not None else 0))
+            stock_item.setTextAlignment(Qt.AlignCenter)
+            if stock is not None and stock <= 0:
+                stock_item.setForeground(QColor('#dc3545'))
+            self.table.setItem(row, 4, stock_item)
+
+        n = len(results)
+        self.result_count_lbl.setText(f'{n} resultado{"s" if n != 1 else ""} encontrado{"s" if n != 1 else ""}')
+        if n > 0:
+            self.table.selectRow(0)
+
+        # Si hay filtro activo y 0 resultados con texto escrito → auto-limpiar en 2s
+        has_filter = bool(self._rubro or self._subcategory)
+        has_text   = bool(self._pending_text)
+        if has_filter and has_text and n == 0:
+            self.result_count_lbl.setText('0 resultados en este rubro — buscando en todos...')
+            self._auto_clear_filter_timer.start()
+        else:
+            self._auto_clear_filter_timer.stop()
+
+    def _select_first(self):
+        if self.table.rowCount() > 0 and self.table.item(0, 0):
+            p = self.table.item(0, 0).data(Qt.UserRole)
+            if p:
+                self.product_selected.emit(p)
+
+    def _on_double_click(self, index):
+        row = index.row()
+        item = self.table.item(row, 0)
+        if item:
+            p = item.data(Qt.UserRole)
+            if p:
+                self.product_selected.emit(p)
+
+    def _on_select(self):
+        row = self.table.currentRow()
+        if row >= 0:
+            item = self.table.item(row, 0)
+            if item:
+                p = item.data(Qt.UserRole)
+                if p:
+                    self.product_selected.emit(p)
+
+    def _table_key_press(self, event):
+        if event.key() in (Qt.Key_Return, Qt.Key_Enter):
+            self._on_select()
+        else:
+            QTableWidget.keyPressEvent(self.table, event)
+
+
 class SalesView(QWidget):
     # Señal emitida desde hilo de Firebase para refrescar UI en el hilo principal
     inventory_updated = pyqtSignal()
@@ -385,6 +764,23 @@ class SalesView(QWidget):
         products_title.setFont(QFont('Segoe UI', 13, QFont.Bold))
         products_title.setStyleSheet('color: #212529;')
         filter_row.addWidget(products_title)
+
+        # Botón lupa para abrir búsqueda ampliada
+        lupa_btn = QPushButton('🔍  Vista ampliada')
+        lupa_btn.setMinimumHeight(34)
+        lupa_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        lupa_btn.setToolTip('Abrir búsqueda ampliada de productos (fuente grande)')
+        lupa_btn.setStyleSheet('''
+            QPushButton {
+                background: #6366f1; color: white;
+                border: none; border-radius: 6px; padding: 4px 14px;
+            }
+            QPushButton:hover { background: #4f46e5; }
+            QPushButton:pressed { background: #4338ca; }
+        ''')
+        lupa_btn.clicked.connect(self._open_search_dialog)
+        filter_row.addWidget(lupa_btn)
+
         filter_row.addStretch()
 
         # Indicador de acción (escáner)
@@ -572,6 +968,7 @@ class SalesView(QWidget):
         self.cart_table.setColumnWidth(4, 90)
         self.cart_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Fixed)
         self.cart_table.setColumnWidth(5, 34)
+        self.cart_table.setFocusPolicy(Qt.NoFocus)
         cart_left.addWidget(self.cart_table, 1)
 
         # Aviso de promoción cercana
@@ -597,9 +994,9 @@ class SalesView(QWidget):
         # Total frame
         total_frame = QFrame()
         total_frame.setStyleSheet('QFrame { background: #1a1a2e; border-radius: 10px; }')
-        total_frame.setMinimumWidth(220)
+        total_frame.setMinimumWidth(240)
         total_layout = QVBoxLayout(total_frame)
-        total_layout.setContentsMargins(16, 14, 16, 14)
+        total_layout.setContentsMargins(12, 14, 12, 14)
         total_layout.setSpacing(4)
 
         total_lbl = QLabel('TOTAL')
@@ -612,6 +1009,8 @@ class SalesView(QWidget):
         self.total_amount_label.setFont(QFont('Segoe UI', 24, QFont.Bold))
         self.total_amount_label.setStyleSheet('color: #4ade80; background: transparent; border: none;')
         self.total_amount_label.setAlignment(Qt.AlignCenter)
+        self.total_amount_label.setMinimumWidth(220)
+        self.total_amount_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         total_layout.addWidget(self.total_amount_label)
         cart_right.addWidget(total_frame)
 
@@ -657,10 +1056,40 @@ class SalesView(QWidget):
 
     # ── Lógica de búsqueda y sugerencias ──
 
+    def _open_search_dialog(self):
+        """Abre el diálogo de búsqueda ampliada de productos."""
+        if hasattr(self, '_search_dialog') and self._search_dialog:
+            self._search_dialog.activateWindow()
+            self._search_dialog.raise_()
+            return
+        initial_text = self.barcode_field.text().strip()
+        rubro = getattr(self, '_selected_category', None)
+        subcat = getattr(self, '_selected_subcategory', None)
+        dlg = ProductSearchDialog(
+            parent=self, db=self.db, initial_text=initial_text,
+            rubro=rubro, subcategory=subcat, cart=list(self.cart)
+        )
+        dlg.product_selected.connect(self._on_product_selected_from_dialog)
+        self._search_dialog = dlg
+        dlg.exec_()
+        self._search_dialog = None
+
+    def _on_product_selected_from_dialog(self, product: dict):
+        """Agrega al carrito el producto seleccionado desde el diálogo ampliado."""
+        self.add_to_cart(product)
+        if hasattr(self, '_search_dialog') and self._search_dialog:
+            self._search_dialog.update_cart_display(list(self.cart))
+            self._search_dialog.close()
+
     def _products_table_key_press(self, event):
-        """Enter en la tabla de productos agrega al carrito."""
+        """Enter agrega al carrito; chars imprimibles se redirigen al campo de búsqueda."""
         if event.key() in (Qt.Key_Return, Qt.Key_Enter):
             self.add_to_cart_from_table()
+        elif event.text() and not event.modifiers():
+            # Cualquier char imprimible (incluyendo dígitos del escáner) va al barcode_field
+            self.barcode_field.setFocus()
+            self.barcode_field.setText(self.barcode_field.text() + event.text())
+            self.barcode_field.setCursorPosition(len(self.barcode_field.text()))
         else:
             QTableWidget.keyPressEvent(self.products_table, event)
 
@@ -751,7 +1180,7 @@ class SalesView(QWidget):
         return query, tuple(params)
 
     def _on_search_text_changed(self, text: str):
-        """Tipeo manual — buscar en BD, mostrar sugerencias Y actualizar tabla en tiempo real."""
+        """Tipeo manual — buscar en BD, mostrar sugerencias Y auto-abrir diálogo ampliado."""
         text = text.strip()
         if len(text) < 1:
             self._hide_suggestions()
@@ -773,7 +1202,37 @@ class SalesView(QWidget):
         self._all_products = matches
         self._populate_products_table(matches)
 
-        # Los resultados ya están en la tabla — nada más que hacer
+        # Auto-abrir diálogo de búsqueda ampliada después de 600ms de escribir
+        if not hasattr(self, '_auto_open_timer'):
+            self._auto_open_timer = QTimer(self)
+            self._auto_open_timer.setSingleShot(True)
+            self._auto_open_timer.timeout.connect(self._auto_open_search_dialog)
+        
+        if len(text) >= 2:  # Mínimo 2 caracteres
+            self._auto_open_timer.start(1000)  # 1000ms de debounce
+        else:
+            self._auto_open_timer.stop()
+
+    def _auto_open_search_dialog(self):
+        """Abre el diálogo de búsqueda ampliada si no está ya abierto."""
+        if hasattr(self, '_search_dialog') and self._search_dialog:
+            text = self.barcode_field.text().strip()
+            if text:
+                self._search_dialog.search_input.setText(text)
+            return
+        text = self.barcode_field.text().strip()
+        if len(text) < 2:
+            return
+        rubro = getattr(self, '_selected_category', None)
+        subcat = getattr(self, '_selected_subcategory', None)
+        dlg = ProductSearchDialog(
+            parent=self, db=self.db, initial_text=text,
+            rubro=rubro, subcategory=subcat, cart=list(self.cart)
+        )
+        dlg.product_selected.connect(self._on_product_selected_from_dialog)
+        self._search_dialog = dlg
+        dlg.exec_()
+        self._search_dialog = None
 
     def _hide_suggestions(self):
         """Compatibilidad — ya no hay dropdown de sugerencias."""
@@ -934,6 +1393,9 @@ class SalesView(QWidget):
         self._selected_subcategory = None if text.startswith('--') else text
         if self._selected_category:
             self._load_products_by_category(self._selected_category)
+            # Abrir vista ampliada al seleccionar una categoría concreta
+            if self._selected_subcategory:
+                QTimer.singleShot(150, self._open_search_dialog)
         else:
             self.products_table.setRowCount(0)
             self._all_products = []
@@ -1301,22 +1763,26 @@ class SalesView(QWidget):
 
     def add_to_cart(self, product):
         stock = product['stock']
-        # Stock -1 = servicio/ilimitado. Stock 0 también se permite vender
-        # (el stock puede no estar actualizado en la BD local)
-        is_unlimited = (stock <= 0 or stock == -1)
+        # Stock -1 = servicio/ilimitado (sin control de stock)
+        is_unlimited = (stock is None or stock == -1)
 
         for item in self.cart:
             if item['product_id'] == product['id']:
-                if is_unlimited or item['quantity'] < stock:
-                    item['quantity'] += 1
-                    # Recalcular precio con la nueva cantidad (importa para nxm/bundle)
-                    pricing = self._resolve_price_for_product(product, item['quantity'])
-                    item.update(pricing)
-                    item['subtotal'] = round(item['quantity'] * item['unit_price'], 2)
-                else:
-                    QMessageBox.warning(self, 'Stock Insuficiente',
-                                        f'No hay mas stock disponible para "{product["name"]}"')
+                item['quantity'] += 1
+                pricing = self._resolve_price_for_product(product, item['quantity'])
+                item.update(pricing)
+                item['subtotal'] = round(item['quantity'] * item['unit_price'], 2)
                 self.update_cart_display()
+                return
+
+        # Primer agregado: avisar si stock = 0 pero dejar vender
+        if not is_unlimited and stock == 0:
+            reply = QMessageBox.question(
+                self, 'Sin Stock',
+                f'"{product["name"]}" no tiene stock registrado.\n¿Querés agregarlo igual?',
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            if reply == QMessageBox.No:
                 return
 
         pricing = self._resolve_price_for_product(product, 1)
@@ -1433,17 +1899,20 @@ class SalesView(QWidget):
 
             total += item['subtotal']
 
-        # Total con ahorro si aplica
+        # Total con ahorro si aplica — ajustar fuente según longitud del monto
+        total_str = f'${total:,.2f}'
+        font_size = 24 if len(total_str) <= 10 else (20 if len(total_str) <= 13 else 17)
         total_discount = sum(item.get('discount_amount', 0) for item in self.cart)
         if total_discount > 0:
             self.total_amount_label.setText(
-                f'<span style="font-size:13px;color:#6ee7b7;font-weight:normal;">'
-                f'Ahorro: ${total_discount:.2f}</span><br>'
-                f'<b style="color:#4ade80;font-size:26px;">${total:.2f}</b>'
+                f'<span style="font-size:12px;color:#6ee7b7;font-weight:normal;">'
+                f'Ahorro: ${total_discount:,.2f}</span><br>'
+                f'<b style="color:#4ade80;font-size:{font_size}px;">{total_str}</b>'
             )
             self.total_amount_label.setTextFormat(Qt.RichText)
         else:
-            self.total_amount_label.setText(f'${total:.2f}')
+            self.total_amount_label.setFont(QFont('Segoe UI', font_size, QFont.Bold))
+            self.total_amount_label.setText(total_str)
             self.total_amount_label.setTextFormat(Qt.PlainText)
         self._update_change()
         self._update_promo_hints()
@@ -1621,62 +2090,35 @@ class SalesView(QWidget):
                 pdf_path = None
                 # pdf_path = self.pdf_generator.generate_sale_ticket(sale)
 
-                # ── Sincronizar con Google Sheets ──
-                try:
-                    from pos_system.utils.google_sheets_sync import get_sync
-                    sync = get_sync()
-                    if sync and sync.enabled:
-                        # Sync venta
-                        sale['username']     = turno_nombre
-                        sale['turno_nombre'] = turno_nombre
-                        sale['cajero']       = turno_nombre
-                        sync.sync_sale(sale)
-                        # Sync detalle por dia (nueva hoja Ventas por Dia)
-                        sync.sync_sale_detail_by_day(sale)
-                        # Sync inventario actualizado
-                        products = self.product_model.get_all()
-                        sync.sync_inventory(products)
-                        # Sync productos mas vendidos (ranking actualizado)
-                        sync.sync_top_products(self.db)
+                # ── Firebase: subir venta automáticamente si hay caja abierta ──
+                sale['username']     = turno_nombre
+                sale['turno_nombre'] = turno_nombre
+                sale['cajero']       = turno_nombre
+                self._upload_sale_to_firebase(sale)
 
-                    # Firebase sync (en paralelo, no bloquea)
-                    try:
-                        from pos_system.utils.firebase_sync import get_firebase_sync
-                        fb = get_firebase_sync()
-                        if fb:
-                            sale['username']     = turno_nombre
-                            sale['turno_nombre'] = turno_nombre
-                            sale['cajero']       = turno_nombre
-                            fb.sync_sale(sale)
-                            fb.sync_sale_detail_by_day(sale, db_manager=self.db)
-                            products = self.product_model.get_all()
-                            fb.sync_inventory(products)
-                            fb.sync_top_products(self.db)
-                    except Exception as _fbe:
-                        pass
-                except Exception as gs_err:
-                    import logging
-                    logging.getLogger(__name__).warning(f"Google Sheets sync error (venta): {gs_err}")
+                # ── Preguntar si desea factura ARCA ─────────────────────────────
+                from pos_system.ui.arca_perfil_dialog import ArcoPerfilDialog
+                arca_dlg = ArcoPerfilDialog(self, total=total)
+                arca_dlg.exec_()
 
-                # ── Preguntar si desea factura AFIP ─────────────────────────────
-                reply = QMessageBox(self)
-                reply.setWindowTitle('¿Emitir Factura AFIP?')
-                reply.setText(
-                    f'<b>Venta registrada</b> — Total: <b>${total:,.2f}</b><br><br>'
-                    '¿Desea emitir también una <b>Factura Electrónica AFIP</b> (A4)?'
-                )
-                reply.setIcon(QMessageBox.Question)
-                btn_si   = reply.addButton('Sí, emitir Factura AFIP', QMessageBox.AcceptRole)
-                btn_no   = reply.addButton('No, solo registrar',      QMessageBox.RejectRole)
-                reply.setDefaultButton(btn_si)
-                reply.exec_()
-
-                if reply.clickedButton() == btn_si:
+                if arca_dlg.facturar and arca_dlg.selected_profile:
+                    perfil = arca_dlg.selected_profile
+                    cliente_data = arca_dlg.selected_cliente
                     from pos_system.ui.factura_dialog import FacturaDialog
                     auto_virt = (payment_type == 'transfer')
-                    fac_dlg = FacturaDialog(self, sale=sale, auto_virtual=auto_virt)
+                    fac_dlg = FacturaDialog(
+                        self, sale=sale, auto_virtual=auto_virt,
+                        perfil=perfil, cliente_data=cliente_data
+                    )
                     if fac_dlg.exec_() == QDialog.Accepted and fac_dlg.pdf_path:
-                        self.open_pdf(fac_dlg.pdf_path)
+                        resp = QMessageBox.question(
+                            self, 'Imprimir',
+                            '¿Desea abrir/imprimir la factura?',
+                            QMessageBox.Yes | QMessageBox.No,
+                            QMessageBox.Yes
+                        )
+                        if resp == QMessageBox.Yes:
+                            self.open_pdf(fac_dlg.pdf_path)
                 else:
                     # Solo abrir el ticket si fue generado
                     if pdf_path:
@@ -1696,6 +2138,42 @@ class SalesView(QWidget):
             QMessageBox.critical(self, 'Error', f'Error al registrar la venta: {str(e)}')
 
 
+    def _upload_sale_to_firebase(self, sale: dict):
+        """Sube la venta a Firebase en hilo de fondo, solo si hay una caja abierta."""
+        import threading
+        import logging as _log
+
+        def _do():
+            try:
+                # Solo subir si hay caja abierta
+                caja = self.db.get_current_cash_register()
+                if not caja or caja.get('status') != 'open':
+                    _log.getLogger(__name__).debug(
+                        "Firebase: venta no subida — no hay caja abierta."
+                    )
+                    return
+
+                from pos_system.utils.firebase_sync import get_firebase_sync
+                fb = get_firebase_sync()
+                if not fb or not fb.enabled:
+                    return
+
+                # Agregar cash_register_id al documento de Firebase
+                sale_with_caja = dict(sale)
+                sale_with_caja['cash_register_id'] = caja.get('id')
+
+                fb.sync_sale(sale_with_caja)
+                fb.sync_sale_detail_by_day(sale_with_caja, db_manager=self.db)
+                _log.getLogger(__name__).info(
+                    f"Firebase: Venta #{sale.get('id')} subida (caja #{caja.get('id')})."
+                )
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"Firebase upload venta: {e}")
+
+        threading.Thread(target=_do, daemon=True).start()
+
+
 class PaymentDialog(QDialog):
     """Dialogo de cobro: seleccion de pago, monto y teclado numerico"""
 
@@ -1705,6 +2183,7 @@ class PaymentDialog(QDialog):
         self.payment_type = 'cash'
         self.cash_received = 0.0
         self.change_given = 0.0
+        self._raw_amount = ""   # valor sin comas, para parsear
         self.setWindowTitle('Cobrar')
         self.setFixedWidth(520)
         self.setModal(True)
@@ -1814,7 +2293,8 @@ class PaymentDialog(QDialog):
         self.amount_input.setAlignment(Qt.AlignRight)
         self.amount_input.setMinimumHeight(44)
         self.amount_input.setFont(QFont('Segoe UI', 20, QFont.Bold))
-        self.amount_input.textChanged.connect(self._update_change)
+        self.amount_input.setReadOnly(True)  # Solo numpad/teclado vía keyPressEvent
+        # No conectar textChanged — actualizamos manualmente para evitar parsear comas
         left.addWidget(self.amount_input)
 
         # Vuelto
@@ -1874,6 +2354,42 @@ class PaymentDialog(QDialog):
         self.facturar_btn.clicked.connect(self._confirm)
         main.addWidget(self.facturar_btn)
 
+    def keyPressEvent(self, event):
+        """Permite ingresar montos con el teclado numérico físico."""
+        key = event.key()
+        text = event.text()
+
+        # Dígitos 0-9 (teclado principal y numpad)
+        if key in (Qt.Key_0, Qt.Key_1, Qt.Key_2, Qt.Key_3, Qt.Key_4,
+                   Qt.Key_5, Qt.Key_6, Qt.Key_7, Qt.Key_8, Qt.Key_9):
+            if self.payment_type == 'cash':
+                self._numpad_press(text)
+            return
+
+        # Doble cero con Ins del numpad (opcional, no estándar — usar solo dígitos)
+        if key in (Qt.Key_Period, Qt.Key_Comma) or (text in ('.', ',')):
+            if self.payment_type == 'cash':
+                self._numpad_press('.')
+            return
+
+        # Borrar
+        if key in (Qt.Key_Backspace, Qt.Key_Delete):
+            if self.payment_type == 'cash':
+                self._numpad_delete()
+            return
+
+        # Enter/Return confirma el cobro
+        if key in (Qt.Key_Return, Qt.Key_Enter):
+            self._confirm()
+            return
+
+        # Escape cancela
+        if key == Qt.Key_Escape:
+            self.reject()
+            return
+
+        super().keyPressEvent(event)
+
     def _set_payment(self, ptype):
         self.payment_type = ptype
         if ptype == 'cash':
@@ -1887,37 +2403,54 @@ class PaymentDialog(QDialog):
             self.cash_panel.setVisible(False)
             self.transfer_panel.setVisible(True)
 
+    @staticmethod
+    def _fmt_input(raw: str) -> str:
+        """Formatea el string crudo con separadores de miles, conservando el punto decimal."""
+        if not raw:
+            return ''
+        if '.' in raw:
+            int_part, dec_part = raw.split('.', 1)
+        else:
+            int_part, dec_part = raw, None
+        try:
+            formatted = f'{int(int_part):,}' if int_part else '0'
+        except ValueError:
+            formatted = int_part
+        return f'{formatted}.{dec_part}' if dec_part is not None else formatted
+
     def _numpad_press(self, text):
-        current = self.amount_input.text()
-        if text == '.' and '.' in current:
+        if text == '.' and '.' in self._raw_amount:
             return
-        if text == '00' and not current:
+        if text == '00' and not self._raw_amount:
             return
-        self.amount_input.setText(current + text)
+        self._raw_amount += text
+        self.amount_input.setText(self._fmt_input(self._raw_amount))
+        self._update_change()
 
     def _numpad_delete(self):
-        current = self.amount_input.text()
-        self.amount_input.setText(current[:-1])
+        self._raw_amount = self._raw_amount[:-1]
+        self.amount_input.setText(self._fmt_input(self._raw_amount))
+        self._update_change()
 
     def _update_change(self):
         try:
-            received = float(self.amount_input.text()) if self.amount_input.text() else 0.0
+            received = float(self._raw_amount) if self._raw_amount else 0.0
         except ValueError:
             received = 0.0
         change = received - self.total
         if change >= 0:
-            self.change_lbl.setText(f'${change:.2f}')
+            self.change_lbl.setText(f'${change:,.2f}')
             self.change_lbl.setStyleSheet('color: #16a34a; font-size: 22px; font-weight: bold; background: transparent; border: none;')
             self.change_lbl.parent().setStyleSheet('QFrame { background: #f0fdf4; border: 2px solid #86efac; border-radius: 10px; }')
         else:
-            self.change_lbl.setText(f'Faltan ${abs(change):.2f}')
+            self.change_lbl.setText(f'Faltan ${abs(change):,.2f}')
             self.change_lbl.setStyleSheet('color: #dc3545; font-size: 18px; font-weight: bold; background: transparent; border: none;')
             self.change_lbl.parent().setStyleSheet('QFrame { background: #fff5f5; border: 2px solid #fca5a5; border-radius: 10px; }')
 
     def _confirm(self):
         if self.payment_type == 'cash':
             try:
-                received = float(self.amount_input.text()) if self.amount_input.text() else 0.0
+                received = float(self._raw_amount) if self._raw_amount else 0.0
             except ValueError:
                 received = 0.0
             if received > 0 and received < self.total:

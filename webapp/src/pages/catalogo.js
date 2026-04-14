@@ -1,8 +1,8 @@
 ﻿import {
   collection, getDocs, doc, setDoc, updateDoc, getDoc,
-  query, orderBy, writeBatch, deleteDoc, limit
+  query, orderBy, writeBatch, deleteDoc, limit, serverTimestamp
 } from 'firebase/firestore';
-import { invalidateCacheByPrefix } from '../cache.js';
+import { getCached, invalidateCache, invalidateCacheByPrefix } from '../cache.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function fmt(n) {
@@ -289,6 +289,7 @@ async function subirCatalogoFirebase(db, productos, onProgress) {
     count += chunk.length;
     if (onProgress) onProgress(count, productos.length);
   }
+  _touchCatalogoMeta(db).catch(() => {});
 }
 
 // ── Parsear CSV de proveedor (Montenegro) ─────────────────────────────────────
@@ -319,6 +320,19 @@ function parseProveedorCSV(text) {
 }
 
 // ── Render principal ──────────────────────────────────────────────────────────
+/**
+ * Escribe un timestamp en config/catalogo_meta para que el POS sepa
+ * que el catálogo cambió y deba re-sincronizar en el próximo arranque.
+ * Fire-and-forget: no bloquea la UI si Firebase está lento.
+ */
+async function _touchCatalogoMeta(db) {
+  try {
+    await setDoc(doc(db, 'config', 'catalogo_meta'), {
+      last_updated: serverTimestamp(),
+    }, { merge: true });
+  } catch(e) { /* silently ignore */ }
+}
+
 export async function renderCatalogo(container, db) {
   // Estado local
   let allProductos = [];
@@ -367,12 +381,14 @@ export async function renderCatalogo(container, db) {
     'SERVICIOS':   [],
   };
 
-  // Cargar datos de Firebase con loader
+  // Cargar datos de Firebase con loader (con cache compartido con dashboard)
   async function cargarDatos() {
     mostrarLoader('Conectando con la base de datos...');
-    const snap = await getDocs(query(collection(db, 'catalogo'), orderBy('nombre')));
-    actualizarLoader(`Procesando ${snap.docs.length} productos...`);
-    allProductos = snap.docs.map(d => ({ doc_id: d.id, ...d.data() }));
+    allProductos = await getCached('catalogo:all', async () => {
+      const snap = await getDocs(query(collection(db, 'catalogo'), orderBy('nombre')));
+      actualizarLoader(`Procesando ${snap.docs.length} productos...`);
+      return snap.docs.map(d => ({ doc_id: d.id, ...d.data() }));
+    }, { ttl: 10 * 60 * 1000, memOnly: true });
     filtrados = [...allProductos];
   }
 
@@ -642,6 +658,7 @@ export async function renderCatalogo(container, db) {
     const sinPrecio  = base.filter(p => p.estado === 'sin_precio').length;
     const duplicados = base.filter(p => p.duplicado).length;
     const agotados   = base.filter(p => (p.stock||0) === 0 && p.estado === 'activo' && !p.duplicado).length;
+    const decimales  = base.filter(p => p.precio_venta > 0 && (p.precio_venta % 100) !== 0).length;
     const grid = document.getElementById('statsGrid');
     if (!grid) return;
 
@@ -666,6 +683,10 @@ export async function renderCatalogo(container, db) {
       <div class="card stat-card" data-filtro="agotado" style="${cardStyle}" title="Ver agotados">
         <div class="icon-wrap bg-red"><span class="material-icons">remove_shopping_cart</span></div>
         <div class="label">Agotados</div><div class="value">${agotados}</div>
+      </div>
+      <div class="card stat-card" data-filtro="decimales" style="${cardStyle}" title="Ver precios no redondeados">
+        <div class="icon-wrap" style="background:#7c3aed"><span class="material-icons">pending</span></div>
+        <div class="label">Decimales</div><div class="value">${decimales}</div>
       </div>
     `;
 
@@ -723,7 +744,10 @@ export async function renderCatalogo(container, db) {
 
     tc.innerHTML = `
       <div class="filter-bar" style="flex-wrap:wrap;gap:8px">
-        <input type="text" id="buscar" placeholder="🔍 Buscar por nombre, código o barra..." style="min-width:240px;flex:1" />
+        <div style="position:relative;flex:2;min-width:280px;display:flex;align-items:center">
+          <span class="material-icons" style="position:absolute;left:12px;font-size:24px;color:#65676b;pointer-events:none">search</span>
+          <input type="text" id="buscar" placeholder="Buscar por nombre, código o barra..." style="width:100%;padding:10px 14px 10px 44px;font-size:14px;box-sizing:border-box" />
+        </div>
         <select id="filtroCat"><option value="">Todas las categorías</option>${cats.map(c=>`<option value="${c}">${c}</option>`).join('')}</select>
         <select id="filtroProv"><option value="">Todos los proveedores</option>${provs.map(p=>`<option value="${p}">${p}</option>`).join('')}</select>
         <select id="filtroMarca"><option value="">Todas las marcas</option>${marcas.map(m=>`<option value="${m}">${m}</option>`).join('')}</select>
@@ -734,13 +758,19 @@ export async function renderCatalogo(container, db) {
           <option value="sin_precio">Sin Precio</option>
           <option value="duplicado">Duplicado</option>
           <option value="agotado">Agotado</option>
+          <option value="decimales">Precio Decimal</option>
         </select>
         <button id="btnLimpiar" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:none;cursor:pointer;color:var(--text-muted);font-size:13px">Limpiar</button>
       </div>
       <div class="table-card">
         <div class="table-card-header">
           <h3>Catálogo${rubroActivo !== 'TODOS' ? ' — ' + rubroActivo.charAt(0) + rubroActivo.slice(1).toLowerCase() : ''}</h3>
-          <span id="catCount" style="color:var(--text-muted);font-size:13px"></span>
+          <div style="display:flex;align-items:center;gap:12px">
+            <span id="catCount" style="color:var(--text-muted);font-size:13px"></span>
+            <button id="btnRedondearTodos" style="display:none;padding:8px 16px;border-radius:8px;border:none;background:#7c3aed;color:#fff;cursor:pointer;font-size:13px;font-weight:700;align-items:center;gap:6px">
+              <span class="material-icons" style="font-size:16px">auto_fix_high</span>Redondear todos
+            </button>
+          </div>
         </div>
         <div class="table-wrap">
           <table>
@@ -807,6 +837,7 @@ export async function renderCatalogo(container, db) {
         if (estado === 'activo'     && (p.estado !== 'activo' || p.duplicado)) return false;
         if (estado === 'sin_precio' && p.estado !== 'sin_precio') return false;
         if (estado === 'con_stock'  && (p.estado !== 'activo' || p.duplicado || (p.stock||0) === 0)) return false;
+        if (estado === 'decimales'  && !((p.precio_venta > 0) && (p.precio_venta % 100) !== 0)) return false;
       }
       return true;
     });
@@ -905,11 +936,57 @@ export async function renderCatalogo(container, db) {
         const id = btn.dataset.id;
         await deleteDoc(doc(db, 'catalogo', id));
         invalidateCacheByPrefix('catalogo');
+        _touchCatalogoMeta(db).catch(() => {});
         allProductos = allProductos.filter(p => p.doc_id !== id);
         aplicarFiltros();
         renderStats();
       });
     });
+
+    // Mostrar botón "Redondear todos" solo cuando el filtro activo es decimales
+    const btnRedondearTodos = document.getElementById('btnRedondearTodos');
+    if (btnRedondearTodos) {
+      const estadoActivo = document.getElementById('filtroEstado')?.value || '';
+      if (estadoActivo === 'decimales' && filtrados.length > 0) {
+        btnRedondearTodos.style.display = 'flex';
+        btnRedondearTodos.onclick = null;
+        btnRedondearTodos.addEventListener('click', async () => {
+          if (!confirm(`¿Redondear al centena más cercano los ${filtrados.length} productos con precio decimal?`)) return;
+          btnRedondearTodos.disabled = true;
+          btnRedondearTodos.innerHTML = '<span class="material-icons" style="font-size:16px;animation:spin 0.8s linear infinite">refresh</span> Redondeando...';
+          try {
+            const BATCH = 500;
+            const ts = new Date().toLocaleDateString('es-AR');
+            for (let i = 0; i < filtrados.length; i += BATCH) {
+              const batch = writeBatch(db);
+              filtrados.slice(i, i + BATCH).forEach(p => {
+                const redondeado = Math.round(p.precio_venta / 100) * 100;
+                const nuevoMargen = p.costo > 0 ? Math.round(((redondeado - p.costo) / p.costo) * 100) : p.margen || 0;
+                batch.update(doc(db, 'catalogo', p.doc_id), {
+                  precio_venta: redondeado,
+                  margen: nuevoMargen,
+                  ultima_actualizacion: ts,
+                });
+                // Actualizar en memoria
+                p.precio_venta = redondeado;
+                p.margen = nuevoMargen;
+              });
+              await batch.commit();
+            }
+            invalidateCacheByPrefix('catalogo');
+            _touchCatalogoMeta(db).catch(() => {});
+            aplicarFiltros();
+            renderStats();
+          } catch(e) {
+            alert('Error al redondear: ' + e.message);
+            btnRedondearTodos.disabled = false;
+            btnRedondearTodos.innerHTML = '<span class="material-icons" style="font-size:16px">auto_fix_high</span>Redondear todos';
+          }
+        });
+      } else {
+        btnRedondearTodos.style.display = 'none';
+      }
+    }
 
     renderPaginacion(pages);
   }
@@ -1027,7 +1104,10 @@ export async function renderCatalogo(container, db) {
             </div>
             <div>
               <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:6px">PRECIO VENTA $</label>
-              <input id="ed_precio" type="number" step="0.01" min="0" value="${prod.precio_venta || 0}" style="width:100%;padding:10px 12px;border:1.5px solid #1877f2;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit;font-weight:700" />
+              <div style="display:flex;gap:6px;align-items:center">
+                <input id="ed_precio" type="number" step="0.01" min="0" value="${prod.precio_venta || 0}" style="width:100%;padding:10px 12px;border:1.5px solid #1877f2;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit;font-weight:700" />
+                <button id="btn_redondear" type="button" title="Redondear al centena más cercano" style="flex-shrink:0;padding:10px 10px;border-radius:8px;border:1.5px solid #e4e6eb;background:#f0f2f5;cursor:pointer;font-size:12px;font-weight:700;color:#444;white-space:nowrap;line-height:1">±100</button>
+              </div>
             </div>
           </div>
 
@@ -1080,6 +1160,15 @@ export async function renderCatalogo(container, db) {
       if (c > 0 && p > 0) inMargen.value = Math.round(((p - c) / c) * 100);
     });
 
+    overlay.querySelector('#btn_redondear').addEventListener('click', () => {
+      const p = parseFloat(inPrecio.value) || 0;
+      if (!p) return;
+      const redondeado = Math.round(p / 100) * 100;
+      inPrecio.value = redondeado;
+      const c = parseFloat(inCosto.value) || 0;
+      if (c > 0) inMargen.value = Math.round(((redondeado - c) / c) * 100);
+    });
+
     // Actualizar sub-rubros disponibles al cambiar rubro
     overlay.querySelector('#ed_rubro').addEventListener('change', (e) => {
       const nuevoRubro = e.target.value.toUpperCase();
@@ -1109,12 +1198,14 @@ export async function renderCatalogo(container, db) {
       const nuevaMarca    = (overlay.querySelector('#ed_marca').value || '').trim().toUpperCase() || 'SIN MARCA';
       const nuevoProv     = (overlay.querySelector('#ed_proveedor').value || '').trim() || 'SIN PROVEEDOR';
       const nuevoCodigo   = (overlay.querySelector('#ed_codigo').value || '').trim();
-      const nuevoBarra    = (overlay.querySelector('#ed_barra').value || '').trim();
+      const barraRaw      = (overlay.querySelector('#ed_barra').value || '').trim();
+      const nuevoBarra    = /^[A-Za-z0-9\-_]{3,50}$/.test(barraRaw) ? barraRaw : '';
       const nuevoCosto    = parseFloat(inCosto.value) || 0;
       const nuevoPrecio   = parseFloat(inPrecio.value) || 0;
-      const nuevoStock    = parseInt(overlay.querySelector('#ed_stock').value) ?? 0;
+      const nuevoStock    = Math.max(0, parseInt(overlay.querySelector('#ed_stock').value) || 0);
 
       if (!nuevoNombre) { alert('El nombre no puede estar vacío'); btn.disabled = false; btn.innerHTML = '<span class="material-icons" style="font-size:16px">save</span>Guardar cambios'; return; }
+      if (barraRaw && !nuevoBarra) { alert('El código de barras solo puede tener letras, números, guiones y guiones bajos (mínimo 3 caracteres).'); btn.disabled = false; btn.innerHTML = '<span class="material-icons" style="font-size:16px">save</span>Guardar cambios'; return; }
 
       const update = {
         nombre:               nuevoNombre,
@@ -1134,6 +1225,7 @@ export async function renderCatalogo(container, db) {
       try {
         await updateDoc(doc(db, 'catalogo', prod.doc_id), update);
         invalidateCacheByPrefix('catalogo');
+        _touchCatalogoMeta(db).catch(() => {});
 
         // Sincronizar con inventario para que el POS reciba el precio actualizado
         try {
@@ -1190,11 +1282,13 @@ export async function renderCatalogo(container, db) {
     input.select();
 
     const guardar = async () => {
-      const nuevo = parseFloat(input.value) || 0;
+      let nuevo = parseFloat(input.value) || 0;
+      if (field === 'stock') nuevo = Math.max(0, Math.round(nuevo));
       const update = { [field]: nuevo, ultima_actualizacion: today() };
       if (field === 'costo') update.estado = nuevo === 0 ? 'sin_precio' : 'activo';
       try {
         await updateDoc(doc(db, 'catalogo', id), update);
+        _touchCatalogoMeta(db).catch(() => {});
         // Si se editó el stock o el precio, también actualizar inventario
         // para que el POS lo reciba en tiempo real via listener.
         // inventario usa el ID numérico del producto (campo 'id'), no el doc_id del catálogo.
@@ -1354,7 +1448,8 @@ export async function renderCatalogo(container, db) {
         progPct.textContent = '100%';
         progText.textContent = '¡Listo!';
 
-        // Recargar datos locales
+        // Recargar datos locales (invalidar cache para ver los cambios)
+        invalidateCache('catalogo:all');
         await cargarDatos();
         renderStats();
 
@@ -1524,6 +1619,7 @@ export async function renderCatalogo(container, db) {
           const btn = document.getElementById('btnAprobarNuevos');
           btn.disabled = true; btn.textContent = 'Agregando...';
           await subirCatalogoFirebase(db, pendientes.nuevos, null);
+          invalidateCache('catalogo:all');
           await cargarDatos();
           renderStats();
           document.getElementById('applyMsg').innerHTML = `<div style="padding:10px;background:#f0fdf4;border-radius:8px;color:#166534">${pendientes.nuevos.length} productos nuevos agregados al catálogo.</div>`;
@@ -1542,6 +1638,8 @@ export async function renderCatalogo(container, db) {
               });
             }
           }
+          _touchCatalogoMeta(db).catch(() => {});
+          invalidateCache('catalogo:all');
           await cargarDatos();
           renderStats();
           document.getElementById('applyMsg').innerHTML = `<div style="padding:10px;background:#fefce8;border-radius:8px;color:#854d0e">${pendientes.cambioPrecio.length} precios actualizados.</div>`;
@@ -1647,6 +1745,7 @@ export async function renderCatalogo(container, db) {
           precio_venta: nuevoPrecio,
           ultima_actualizacion: today()
         });
+        _touchCatalogoMeta(db).catch(() => {});
         // Sincronizar con inventario para que el POS reciba el precio actualizado
         try {
           const invDocId = String(p.id || p.doc_id);
@@ -1807,6 +1906,7 @@ export async function renderCatalogo(container, db) {
           ultima_actualizacion: today()
         });
         invalidateCacheByPrefix('catalogo');
+        _touchCatalogoMeta(db).catch(() => {});
         // Sincronizar con inventario para que el POS reciba el precio actualizado
         try {
           const invDocId = String(p.id || p.doc_id);
@@ -2039,18 +2139,21 @@ export async function renderCatalogo(container, db) {
         console.warn('No se pudo obtener pos_id_counter:', e.message);
       }
 
+      const barraRawNuevo = document.getElementById('np_barra').value.trim();
+      const codBarraNuevo = /^[A-Za-z0-9\-_]{3,50}$/.test(barraRawNuevo) ? barraRawNuevo : '';
+
       const nuevo = {
         doc_id: codigo,
         codigo,
         nombre,
-        cod_barra: document.getElementById('np_barra').value.trim(),
+        cod_barra: codBarraNuevo,
         categoria,
         proveedor: document.getElementById('np_prov').value.trim() || 'SIN PROVEEDOR',
         marca: document.getElementById('np_marca').value.trim().toUpperCase() || 'SIN MARCA',
         moneda: 'PESOS',
         costo,
         precio_venta: precio,
-        stock: parseInt(document.getElementById('np_stock').value) || 0,
+        stock: Math.max(0, parseInt(document.getElementById('np_stock').value) || 0),
         estado: costo === 0 ? 'sin_precio' : 'activo',
         duplicado: false,
         pos_id: nextPosId,
@@ -2063,6 +2166,7 @@ export async function renderCatalogo(container, db) {
       try {
         await setDoc(doc(db, 'catalogo', codigo), nuevo);
         invalidateCacheByPrefix('catalogo');
+        _touchCatalogoMeta(db).catch(() => {});
         await cargarDatos();
         renderStats();
         msgEl.innerHTML = `<div style="padding:12px;background:#f0fdf4;border-radius:8px;color:#166534">Producto <b>${nombre}</b> guardado correctamente.</div>`;
@@ -2396,7 +2500,8 @@ export async function renderCatalogo(container, db) {
         progPct.textContent = pct + '%';
         progText.textContent = `Actualizando... ${done}/${afectados.length}`;
       }
-
+      _touchCatalogoMeta(db).catch(() => {});
+      invalidateCache('catalogo:all');
       await cargarDatos();
       renderStats();
       progWrap.style.display = 'none';

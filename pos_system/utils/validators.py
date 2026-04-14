@@ -33,7 +33,7 @@ def validate_price(value: float, allow_zero: bool = False) -> Tuple[bool, Option
     if value < 0:
         return False, "El precio no puede ser negativo"
     
-    if value > 999999.99:
+    if value > 99999999.99:
         return False, "El precio es demasiado alto"
     
     return True, None

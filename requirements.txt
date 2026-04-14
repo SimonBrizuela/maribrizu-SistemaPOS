@@ -4,3 +4,6 @@ reportlab>=4.0.4
 python-dateutil>=2.8.2
 matplotlib>=3.7.2
 pytest>=7.4.0
+zeep>=4.2.1
+pyOpenSSL>=23.0.0
+lxml>=4.9.0

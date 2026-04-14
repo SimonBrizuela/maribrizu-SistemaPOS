@@ -10,6 +10,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor
 from datetime import datetime
+from pos_system.utils.firebase_sync import now_ar
 
 
 class FiscalView(QWidget):
@@ -35,10 +36,12 @@ class FiscalView(QWidget):
         self.emitir_tab = self._build_emitir_tab()
         self.historial_tab = self._build_historial_tab()
         self.config_tab = self._build_config_tab()
+        self.perfiles_tab = self._build_perfiles_tab()
 
         self.tabs.addTab(self.emitir_tab,   'Emitir Factura Manual')
         self.tabs.addTab(self.historial_tab, 'Historial de Facturas')
         self.tabs.addTab(self.config_tab,    'Configuracion AFIP')
+        self.tabs.addTab(self.perfiles_tab,  'Perfiles ARCA')
 
         self.tabs.currentChanged.connect(self._on_tab_changed)
         layout.addWidget(self.tabs)
@@ -317,7 +320,7 @@ class FiscalView(QWidget):
             'tipo_comprobante_nombre': self.m_nombre_comp_input.text().strip() or 'FACTURA',
             'punto_venta': punto_venta,
             'nro_comprobante': nro,
-            'fecha': datetime.now().strftime('%d/%m/%Y'),
+            'fecha': now_ar().strftime('%d/%m/%Y'),
             'pago': self.m_pago_input.text(),
             'cliente': cliente,
             'cuit_receptor': cuit_cli,
@@ -360,7 +363,7 @@ class FiscalView(QWidget):
                     otros_impuestos, pdf_path)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (None, tipo, pto_venta, nro,
-                 datetime.now().isoformat(), cliente, cuit_cli,
+                 now_ar().isoformat(), cliente, cuit_cli,
                  cae, vto, factura['total'], iva, otros, pdf_path)
             )
             reply = QMessageBox.question(
@@ -462,7 +465,7 @@ class FiscalView(QWidget):
                     otros_impuestos, pdf_path)
                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (None, tipo, pto_venta, nro_real,
-                 datetime.now().isoformat(), cliente, cuit_cli,
+                 now_ar().isoformat(), cliente, cuit_cli,
                  cae, vto_cae, total, iva_cont, otros, pdf_path)
             )
             entorno = 'PRODUCCIÓN' if produccion else 'HOMOLOGACIÓN'
@@ -673,7 +676,7 @@ class FiscalView(QWidget):
                 value = self.cfg_fields[field_key].text().strip()
                 db.execute_update(
                     "INSERT OR REPLACE INTO config (key, value, updated_at) VALUES (?, ?, ?)",
-                    (db_key, value, datetime.now().isoformat())
+                    (db_key, value, now_ar().isoformat())
                 )
             # Guardar entorno
             prod_val = '1' if self.cfg_produccion_check.isChecked() else '0'
@@ -736,3 +739,280 @@ class FiscalView(QWidget):
             self._load_historial()
         elif index == 2:
             self._load_config_fields()
+        elif index == 3:
+            self._load_perfiles()
+
+    # ── TAB 4: Perfiles ARCA ─────────────────────────────────────────────────
+    def _build_perfiles_tab(self):
+        widget = QWidget()
+        layout = QVBoxLayout(widget)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(10)
+
+        info = QLabel(
+            'Cada perfil es un emisor (dueno/socio) con su propio CUIT y cuenta ARCA.\n'
+            'Al cobrar una venta, el cajero elige en que perfil facturar para equilibrar ventas.'
+        )
+        info.setWordWrap(True)
+        info.setStyleSheet(
+            'background:#e7f3ff; border:1px solid #b6d4fe; border-radius:6px;'
+            'padding:8px 12px; color:#084298; font-size:11px;'
+        )
+        layout.addWidget(info)
+
+        # ── Formulario ────────────────────────────────────────────────────────
+        form_group = QGroupBox('Nuevo perfil / Editar')
+        form_group.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        form = QFormLayout(form_group)
+        form.setSpacing(8)
+
+        self.p_nombre_input = QLineEdit()
+        self.p_nombre_input.setPlaceholderText('Ej: Maria / Juan')
+        self.p_nombre_input.setFont(QFont('Segoe UI', 10))
+        form.addRow('Nombre (para el boton):', self.p_nombre_input)
+
+        self.p_razon_input = QLineEdit()
+        self.p_razon_input.setPlaceholderText('Nombre completo para la factura')
+        self.p_razon_input.setFont(QFont('Segoe UI', 10))
+        form.addRow('Razon Social:', self.p_razon_input)
+
+        self.p_cuit_input = QLineEdit()
+        self.p_cuit_input.setPlaceholderText('Ej: 20123456789')
+        self.p_cuit_input.setFont(QFont('Segoe UI', 10))
+        form.addRow('CUIT:', self.p_cuit_input)
+
+        self.p_domicilio_input = QLineEdit()
+        self.p_domicilio_input.setPlaceholderText('Domicilio fiscal')
+        self.p_domicilio_input.setFont(QFont('Segoe UI', 10))
+        form.addRow('Domicilio:', self.p_domicilio_input)
+
+        self.p_localidad_input = QLineEdit()
+        self.p_localidad_input.setFont(QFont('Segoe UI', 10))
+        form.addRow('Localidad:', self.p_localidad_input)
+
+        self.p_cond_combo = QComboBox()
+        self.p_cond_combo.setFont(QFont('Segoe UI', 10))
+        self.p_cond_combo.addItems(['Monotributista', 'Responsable Inscripto', 'Exento'])
+        form.addRow('Condicion IVA:', self.p_cond_combo)
+
+        self.p_pv_input = QLineEdit('1')
+        self.p_pv_input.setPlaceholderText('Ej: 1')
+        self.p_pv_input.setFont(QFont('Segoe UI', 10))
+        form.addRow('Punto de Venta:', self.p_pv_input)
+
+        self.p_cert_input = QLineEdit()
+        self.p_cert_input.setPlaceholderText('Ruta al archivo .crt de AFIP')
+        self.p_cert_input.setFont(QFont('Segoe UI', 10))
+        form.addRow('Certificado (.crt):', self.p_cert_input)
+
+        self.p_key_input = QLineEdit()
+        self.p_key_input.setPlaceholderText('Ruta al archivo .key de AFIP')
+        self.p_key_input.setFont(QFont('Segoe UI', 10))
+        form.addRow('Clave privada (.key):', self.p_key_input)
+
+        self.p_prod_combo = QComboBox()
+        self.p_prod_combo.setFont(QFont('Segoe UI', 10))
+        self.p_prod_combo.addItems(['Produccion (real)', 'Homologacion (prueba)'])
+        form.addRow('Entorno AFIP:', self.p_prod_combo)
+
+        btn_row = QHBoxLayout()
+        btn_row.setSpacing(8)
+
+        self.p_guardar_btn = QPushButton('Guardar perfil')
+        self.p_guardar_btn.setMinimumHeight(38)
+        self.p_guardar_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        self.p_guardar_btn.setStyleSheet('''
+            QPushButton { background:#0d6efd; color:white; border:none; border-radius:6px; }
+            QPushButton:hover { background:#0b5ed7; }
+        ''')
+        self.p_guardar_btn.clicked.connect(self._guardar_perfil)
+        btn_row.addWidget(self.p_guardar_btn)
+
+        self.p_limpiar_btn = QPushButton('Limpiar')
+        self.p_limpiar_btn.setMinimumHeight(38)
+        self.p_limpiar_btn.setFont(QFont('Segoe UI', 10))
+        self.p_limpiar_btn.setStyleSheet('''
+            QPushButton { background:#6c757d; color:white; border:none; border-radius:6px; }
+            QPushButton:hover { background:#5c636a; }
+        ''')
+        self.p_limpiar_btn.clicked.connect(self._limpiar_form_perfil)
+        btn_row.addWidget(self.p_limpiar_btn)
+
+        form.addRow(btn_row)
+        layout.addWidget(form_group)
+
+        # ── Tabla ─────────────────────────────────────────────────────────────
+        lbl_tabla = QLabel('Perfiles cargados:')
+        lbl_tabla.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        layout.addWidget(lbl_tabla)
+
+        self.p_table = QTableWidget()
+        self.p_table.setColumnCount(6)
+        self.p_table.setHorizontalHeaderLabels([
+            'ID', 'Nombre', 'CUIT', 'Condicion IVA', 'Entorno', 'Acciones'
+        ])
+        self.p_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
+        self.p_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        self.p_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        self.p_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.p_table.setColumnHidden(0, True)
+        self.p_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.p_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.p_table.setAlternatingRowColors(True)
+        self.p_table.setFont(QFont('Segoe UI', 9))
+        self.p_table.verticalHeader().setDefaultSectionSize(36)
+        layout.addWidget(self.p_table)
+
+        self._perfil_editando_id = None
+        return widget
+
+    def _load_perfiles(self):
+        try:
+            from pos_system.database.db_manager import DatabaseManager
+            db = DatabaseManager()
+            rows = db.execute_query(
+                "SELECT * FROM perfiles_facturacion WHERE activo=1 ORDER BY nombre ASC"
+            )
+            self.p_table.setRowCount(len(rows))
+            for i, r in enumerate(rows):
+                entorno = 'Produccion' if r.get('produccion') else 'Homologacion'
+                cert_ok = '✓' if r.get('cert_path') else '—'
+
+                self.p_table.setItem(i, 0, QTableWidgetItem(str(r['id'])))
+                self.p_table.setItem(i, 1, QTableWidgetItem(r.get('nombre', '')))
+                self.p_table.setItem(i, 2, QTableWidgetItem(r.get('cuit', '')))
+                self.p_table.setItem(i, 3, QTableWidgetItem(r.get('condicion_iva', '')))
+                entorno_item = QTableWidgetItem(f'{entorno}  cert:{cert_ok}')
+                entorno_item.setForeground(
+                    QColor('#198754') if r.get('produccion') else QColor('#856404')
+                )
+                self.p_table.setItem(i, 4, entorno_item)
+
+                acciones_widget = QWidget()
+                acc_layout = QHBoxLayout(acciones_widget)
+                acc_layout.setContentsMargins(4, 2, 4, 2)
+                acc_layout.setSpacing(6)
+
+                edit_btn = QPushButton('Editar')
+                edit_btn.setFixedHeight(28)
+                edit_btn.setStyleSheet('QPushButton{background:#0d6efd;color:white;border:none;border-radius:4px;font-size:11px;} QPushButton:hover{background:#0b5ed7;}')
+                edit_btn.clicked.connect(lambda _, row=r: self._editar_perfil(row))
+                acc_layout.addWidget(edit_btn)
+
+                del_btn = QPushButton('Eliminar')
+                del_btn.setFixedHeight(28)
+                del_btn.setStyleSheet('QPushButton{background:#dc3545;color:white;border:none;border-radius:4px;font-size:11px;} QPushButton:hover{background:#bb2d3b;}')
+                del_btn.clicked.connect(lambda _, rid=r['id']: self._eliminar_perfil(rid))
+                acc_layout.addWidget(del_btn)
+
+                self.p_table.setCellWidget(i, 5, acciones_widget)
+
+        except Exception as e:
+            QMessageBox.warning(self, 'Error', f'Error al cargar perfiles: {e}')
+
+    def _guardar_perfil(self):
+        nombre = self.p_nombre_input.text().strip()
+        cuit = self.p_cuit_input.text().strip()
+        if not nombre:
+            QMessageBox.warning(self, 'Falta nombre', 'Ingresa el nombre del perfil.')
+            return
+        if not cuit:
+            QMessageBox.warning(self, 'Falta CUIT', 'Ingresa el CUIT del emisor.')
+            return
+
+        from pos_system.database.db_manager import DatabaseManager
+        db = DatabaseManager()
+        produccion = 1 if self.p_prod_combo.currentIndex() == 0 else 0
+
+        try:
+            if self._perfil_editando_id:
+                db.execute_update(
+                    """UPDATE perfiles_facturacion SET
+                       nombre=?, razon_social=?, cuit=?, domicilio=?, localidad=?,
+                       condicion_iva=?, punto_venta=?, cert_path=?, key_path=?,
+                       produccion=?, updated_at=(SELECT localtime_now())
+                       WHERE id=?""",
+                    (
+                        nombre,
+                        self.p_razon_input.text().strip() or nombre,
+                        cuit,
+                        self.p_domicilio_input.text().strip(),
+                        self.p_localidad_input.text().strip(),
+                        self.p_cond_combo.currentText(),
+                        int(self.p_pv_input.text().strip() or 1),
+                        self.p_cert_input.text().strip(),
+                        self.p_key_input.text().strip(),
+                        produccion,
+                        self._perfil_editando_id,
+                    )
+                )
+            else:
+                db.execute_update(
+                    """INSERT INTO perfiles_facturacion
+                       (nombre, razon_social, cuit, domicilio, localidad,
+                        condicion_iva, punto_venta, cert_path, key_path, produccion)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (
+                        nombre,
+                        self.p_razon_input.text().strip() or nombre,
+                        cuit,
+                        self.p_domicilio_input.text().strip(),
+                        self.p_localidad_input.text().strip(),
+                        self.p_cond_combo.currentText(),
+                        int(self.p_pv_input.text().strip() or 1),
+                        self.p_cert_input.text().strip(),
+                        self.p_key_input.text().strip(),
+                        produccion,
+                    )
+                )
+            self._limpiar_form_perfil()
+            self._load_perfiles()
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'No se pudo guardar el perfil:\n{e}')
+
+    def _editar_perfil(self, row: dict):
+        self._perfil_editando_id = row['id']
+        self.p_nombre_input.setText(row.get('nombre', ''))
+        self.p_razon_input.setText(row.get('razon_social', ''))
+        self.p_cuit_input.setText(row.get('cuit', ''))
+        self.p_domicilio_input.setText(row.get('domicilio', ''))
+        self.p_localidad_input.setText(row.get('localidad', ''))
+        idx = self.p_cond_combo.findText(row.get('condicion_iva', 'Monotributista'))
+        if idx >= 0:
+            self.p_cond_combo.setCurrentIndex(idx)
+        self.p_pv_input.setText(str(row.get('punto_venta', 1)))
+        self.p_cert_input.setText(row.get('cert_path', ''))
+        self.p_key_input.setText(row.get('key_path', ''))
+        self.p_prod_combo.setCurrentIndex(0 if row.get('produccion') else 1)
+        self.p_guardar_btn.setText('Actualizar perfil')
+
+    def _eliminar_perfil(self, perfil_id: int):
+        resp = QMessageBox.question(
+            self, 'Confirmar', '¿Eliminar este perfil?',
+            QMessageBox.Yes | QMessageBox.No
+        )
+        if resp != QMessageBox.Yes:
+            return
+        try:
+            from pos_system.database.db_manager import DatabaseManager
+            db = DatabaseManager()
+            db.execute_update(
+                "UPDATE perfiles_facturacion SET activo=0 WHERE id=?", (perfil_id,)
+            )
+            self._load_perfiles()
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'No se pudo eliminar el perfil:\n{e}')
+
+    def _limpiar_form_perfil(self):
+        self._perfil_editando_id = None
+        self.p_nombre_input.clear()
+        self.p_razon_input.clear()
+        self.p_cuit_input.clear()
+        self.p_domicilio_input.clear()
+        self.p_localidad_input.clear()
+        self.p_cond_combo.setCurrentIndex(0)
+        self.p_pv_input.setText('1')
+        self.p_cert_input.clear()
+        self.p_key_input.clear()
+        self.p_prod_combo.setCurrentIndex(0)
+        self.p_guardar_btn.setText('Guardar perfil')

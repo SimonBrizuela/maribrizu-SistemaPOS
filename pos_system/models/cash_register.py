@@ -1,6 +1,7 @@
-﻿from datetime import datetime
+from datetime import datetime
 from typing import List, Dict, Optional
 from pos_system.database.db_manager import DatabaseManager
+from pos_system.utils.firebase_sync import now_ar
 
 class CashRegister:
     """Modelo para caja registradora"""
@@ -16,10 +17,10 @@ class CashRegister:
             raise Exception("Ya hay una caja abierta. Debe cerrarla primero.")
         
         query = """
-            INSERT INTO cash_register (initial_amount, notes, status)
-            VALUES (?, ?, 'open')
+            INSERT INTO cash_register (opening_date, initial_amount, notes, status)
+            VALUES (?, ?, ?, 'open')
         """
-        return self.db.execute_update(query, (initial_amount, notes))
+        return self.db.execute_update(query, (now_ar().isoformat(), initial_amount, notes))
     
     def get_current(self) -> Optional[Dict]:
         """Obtiene la caja actual abierta"""
@@ -48,7 +49,7 @@ class CashRegister:
                 notes = ?
             WHERE id = ?
         """
-        self.db.execute_update(query, (datetime.now().isoformat(), final_amount, notes, cash_register_id))
+        self.db.execute_update(query, (now_ar().isoformat(), final_amount, notes, cash_register_id))
         
         # Obtener el reporte completo
         return self.get_closing_report(cash_register_id)

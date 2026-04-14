@@ -1,4 +1,4 @@
-﻿import sqlite3
+import sqlite3
 import logging
 from contextlib import contextmanager
 from datetime import datetime
@@ -11,7 +11,10 @@ logger = logging.getLogger(__name__)
 class DatabaseManager:
     """Database manager with connection pooling and transaction support"""
     
-    def __init__(self, db_path: str = "pos_database.db"):
+    def __init__(self, db_path: str = None):
+        if db_path is None:
+            from pos_system.config import DATABASE_PATH
+            db_path = str(DATABASE_PATH)
         self.db_path = Path(db_path)
         self._ensure_db_exists()
         
@@ -19,12 +22,20 @@ class DatabaseManager:
         """Ensure database file and parent directories exist"""
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
         
+    def _setup_connection(self, conn):
+        """Configura la conexión SQLite con timezone local y otras opciones."""
+        conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA foreign_keys = ON")
+        # Registrar función para hora de Argentina (UTC-3), reemplaza CURRENT_TIMESTAMP que usa UTC
+        from datetime import datetime as _dt, timezone as _tz, timedelta as _td
+        _TZ_AR = _tz(_td(hours=-3))
+        conn.create_function("localtime_now", 0, lambda: _dt.now(_TZ_AR).strftime("%Y-%m-%d %H:%M:%S"))
+
     @contextmanager
     def get_connection(self):
         """Context manager for database connections"""
         conn = sqlite3.connect(str(self.db_path))
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
+        self._setup_connection(conn)
         try:
             yield conn
             conn.commit()
@@ -38,8 +49,7 @@ class DatabaseManager:
     def connect(self):
         """Legacy method for backward compatibility"""
         conn = sqlite3.connect(str(self.db_path))
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA foreign_keys = ON")
+        self._setup_connection(conn)
         return conn
     
     def close(self):
@@ -60,7 +70,7 @@ class DatabaseManager:
                     full_name TEXT NOT NULL,
                     role TEXT NOT NULL DEFAULT 'cajero',
                     is_active BOOLEAN DEFAULT 1,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT (localtime_now()),
                     last_login TIMESTAMP
                 )
             """)
@@ -80,8 +90,8 @@ class DatabaseManager:
                     is_favorite BOOLEAN DEFAULT 0,
                     discount_type TEXT DEFAULT NULL,
                     discount_value REAL DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT (localtime_now()),
+                    updated_at TIMESTAMP DEFAULT (localtime_now())
                 )
             """)
             # Migrar columnas de descuento si no existen (base de datos existente)
@@ -115,12 +125,18 @@ class DatabaseManager:
                     payment_type TEXT NOT NULL,
                     cash_received REAL DEFAULT 0,
                     change_given REAL DEFAULT 0,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT (localtime_now()),
                     cash_register_id INTEGER,
                     user_id INTEGER,
-                    notes TEXT
+                    notes TEXT,
+                    turno_nombre TEXT DEFAULT ''
                 )
             """)
+            # Migrar turno_nombre si no existe (bases de datos existentes)
+            try:
+                cursor.execute("ALTER TABLE sales ADD COLUMN turno_nombre TEXT DEFAULT ''")
+            except Exception:
+                pass
             
             # Tabla de items de venta (detalle)
             cursor.execute("""
@@ -154,6 +170,24 @@ class DatabaseManager:
                 except Exception:
                     pass
 
+            # Migrar perfiles_facturacion si ya existe sin columnas nuevas
+            for col_def in [
+                "ALTER TABLE perfiles_facturacion ADD COLUMN firebase_id TEXT DEFAULT ''",
+                "ALTER TABLE perfiles_facturacion ADD COLUMN razon_social TEXT DEFAULT ''",
+                "ALTER TABLE perfiles_facturacion ADD COLUMN domicilio TEXT DEFAULT ''",
+                "ALTER TABLE perfiles_facturacion ADD COLUMN localidad TEXT DEFAULT ''",
+                "ALTER TABLE perfiles_facturacion ADD COLUMN ing_brutos TEXT DEFAULT ''",
+                "ALTER TABLE perfiles_facturacion ADD COLUMN inicio_actividades TEXT DEFAULT ''",
+                "ALTER TABLE perfiles_facturacion ADD COLUMN punto_venta INTEGER DEFAULT 1",
+                "ALTER TABLE perfiles_facturacion ADD COLUMN cert_path TEXT DEFAULT ''",
+                "ALTER TABLE perfiles_facturacion ADD COLUMN key_path TEXT DEFAULT ''",
+                "ALTER TABLE perfiles_facturacion ADD COLUMN produccion INTEGER DEFAULT 1",
+            ]:
+                try:
+                    cursor.execute(col_def)
+                except Exception:
+                    pass
+
             # Tabla de ventas con descuento total
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS promotions (
@@ -165,8 +199,8 @@ class DatabaseManager:
                     required_quantity INTEGER DEFAULT 1,
                     free_quantity INTEGER DEFAULT 0,
                     is_active BOOLEAN DEFAULT 1,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT (localtime_now()),
+                    updated_at TIMESTAMP DEFAULT (localtime_now())
                 )
             """)
             cursor.execute("""
@@ -186,7 +220,7 @@ class DatabaseManager:
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS cash_register (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    opening_date TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    opening_date TIMESTAMP DEFAULT (localtime_now()),
                     closing_date TIMESTAMP,
                     initial_amount REAL DEFAULT 0,
                     final_amount REAL DEFAULT 0,
@@ -208,7 +242,7 @@ class DatabaseManager:
                     cash_register_id INTEGER NOT NULL,
                     amount REAL NOT NULL,
                     reason TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT (localtime_now()),
                     user_id INTEGER,
                     FOREIGN KEY (cash_register_id) REFERENCES cash_register(id)
                 )
@@ -221,7 +255,7 @@ class DatabaseManager:
                     product_id INTEGER NOT NULL,
                     quantity_change INTEGER NOT NULL,
                     reason TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT (localtime_now()),
                     user_id INTEGER,
                     FOREIGN KEY (product_id) REFERENCES products(id)
                 )
@@ -232,7 +266,7 @@ class DatabaseManager:
                 CREATE TABLE IF NOT EXISTS config (
                     key TEXT PRIMARY KEY,
                     value TEXT,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    updated_at TIMESTAMP DEFAULT (localtime_now())
                 )
             """)
 
@@ -241,7 +275,7 @@ class DatabaseManager:
                 CREATE TABLE IF NOT EXISTS categories (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL UNIQUE,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    created_at TIMESTAMP DEFAULT (localtime_now())
                 )
             """)
             # Insertar categorías por defecto si la tabla está vacía
@@ -281,12 +315,55 @@ class DatabaseManager:
                     iva_contenido REAL DEFAULT 0,
                     otros_impuestos REAL DEFAULT 0,
                     pdf_path TEXT,
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    created_at TIMESTAMP DEFAULT (localtime_now()),
                     FOREIGN KEY (sale_id) REFERENCES sales(id)
                 )
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_facturas_sale ON facturas(sale_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_facturas_fecha ON facturas(created_at)")
+
+            # Tabla de perfiles de facturación ARCA (emisores / dueños)
+            # Cada perfil es una persona/entidad con su propio CUIT y cuenta ARCA
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS perfiles_facturacion (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    firebase_id TEXT UNIQUE DEFAULT '',
+                    nombre TEXT NOT NULL,
+                    cuit TEXT NOT NULL DEFAULT '',
+                    razon_social TEXT DEFAULT '',
+                    domicilio TEXT DEFAULT '',
+                    localidad TEXT DEFAULT '',
+                    condicion_iva TEXT NOT NULL DEFAULT 'Monotributista',
+                    ing_brutos TEXT DEFAULT '',
+                    inicio_actividades TEXT DEFAULT '',
+                    punto_venta INTEGER DEFAULT 1,
+                    cert_path TEXT DEFAULT '',
+                    key_path TEXT DEFAULT '',
+                    produccion INTEGER DEFAULT 1,
+                    activo INTEGER NOT NULL DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT (localtime_now()),
+                    updated_at TIMESTAMP DEFAULT (localtime_now())
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_perfiles_activo ON perfiles_facturacion(activo)")
+
+            # Tabla de clientes para facturación
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS clientes_facturacion (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    firebase_id TEXT UNIQUE DEFAULT '',
+                    nombre TEXT NOT NULL,
+                    razon_social TEXT DEFAULT '',
+                    cuit TEXT DEFAULT '',
+                    domicilio TEXT DEFAULT '',
+                    localidad TEXT DEFAULT '',
+                    condicion_iva TEXT DEFAULT 'Consumidor Final',
+                    activo INTEGER NOT NULL DEFAULT 1,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_clientes_activo ON clientes_facturacion(activo)")
 
             # Índices para mejorar el rendimiento
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(created_at)")
@@ -367,7 +444,7 @@ class DatabaseManager:
             logger.error(f"Database optimization failed: {e}")
             raise
 
-    # ── Gestión de Rubros/Categorías ──
+    # -- Gestión de Rubros/Categorías --
 
     def get_all_categories(self) -> List[Dict]:
         """Retorna todas las categorías/rubros de la tabla categories"""
@@ -405,7 +482,7 @@ class DatabaseManager:
         self.execute_update("UPDATE sub_categories SET rubro_name = ? WHERE rubro_name = ?", (new_name, old_name))
         return True
 
-    # ── Gestión de Subcategorías ──
+    # -- Gestión de Subcategorías --
 
     def get_subcategories(self, rubro_name: str) -> List[str]:
         """Retorna las subcategorías de un rubro."""

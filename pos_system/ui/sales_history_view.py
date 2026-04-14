@@ -6,6 +6,7 @@ import os
 import platform
 import subprocess
 from datetime import datetime, timedelta
+from pos_system.utils.firebase_sync import now_ar
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
                              QTableWidgetItem, QPushButton, QLabel, QComboBox,
                              QDialog, QFormLayout, QMessageBox, QHeaderView,

@@ -2,21 +2,33 @@
 Configuration settings for POS System
 """
 import os
+import sys
 from pathlib import Path
 
 # Base directories
-BASE_DIR = Path(__file__).resolve().parent.parent
-ASSETS_DIR = BASE_DIR / "pos_system" / "assets"
+# APP_DIR: donde está el ejecutable (o el script en desarrollo)
+# DATA_DIR: donde se guardan datos del usuario (escribible en cualquier PC)
+if getattr(sys, 'frozen', False):
+    # Corriendo como ejecutable PyInstaller
+    APP_DIR = Path(sys.executable).parent
+    DATA_DIR = Path(os.environ.get('APPDATA', Path.home())) / "SistemaPOS"
+else:
+    # Corriendo como script Python (desarrollo)
+    APP_DIR = Path(__file__).resolve().parent.parent
+    DATA_DIR = APP_DIR
+
+BASE_DIR = APP_DIR
+ASSETS_DIR = APP_DIR / "_internal" / "pos_system" / "assets" if getattr(sys, 'frozen', False) else APP_DIR / "pos_system" / "assets"
 IMAGES_DIR = ASSETS_DIR / "images"
-REPORTS_DIR = BASE_DIR / "pos_system" / "reports"
+REPORTS_DIR = DATA_DIR / "reports"
 
 # Database
-DATABASE_PATH = BASE_DIR / "pos_database.db"
-DATABASE_BACKUP_DIR = BASE_DIR / "backups"
+DATABASE_PATH = DATA_DIR / "pos_database.db"
+DATABASE_BACKUP_DIR = DATA_DIR / "backups"
 
 # Application settings
 APP_NAME = "Sistema POS"
-APP_VERSION = "2.0.0"
+APP_VERSION = "2.0.1"
 ORGANIZATION = "POS System"
 
 # UI Settings
@@ -32,7 +44,7 @@ CURRENCY_SYMBOL = "$"
 CURRENCY_FORMAT = "{:.2f}"
 
 # Logging
-LOG_FILE = BASE_DIR / "pos_system.log"
+LOG_FILE = DATA_DIR / "pos_system.log"
 LOG_MAX_BYTES = 10 * 1024 * 1024  # 10MB
 LOG_BACKUP_COUNT = 5
 LOG_FORMAT = "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -81,6 +93,9 @@ AFIP_PUNTO_VENTA      = int(os.getenv("AFIP_PUNTO_VENTA", "1"))   # Número de p
 # Formato: "usuario/repositorio"  Ej: "maribrizu/SistemaPOS"
 GITHUB_REPO = os.getenv("GITHUB_REPO", "SimonBrizuela/maribrizu-SistemaPOS")
 
+# Carpeta de certificados AFIP (escritos automáticamente desde Firebase)
+CERTS_DIR = DATA_DIR / "certs"
+
 # Create necessary directories
-for directory in [IMAGES_DIR, REPORTS_DIR, DATABASE_BACKUP_DIR]:
+for directory in [REPORTS_DIR, DATABASE_BACKUP_DIR, DATA_DIR, CERTS_DIR]:
     directory.mkdir(parents=True, exist_ok=True)

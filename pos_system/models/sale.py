@@ -1,5 +1,6 @@
 import logging
 from datetime import datetime
+from pos_system.utils.firebase_sync import now_ar
 from typing import List, Dict, Optional
 from pos_system.database.db_manager import DatabaseManager
 

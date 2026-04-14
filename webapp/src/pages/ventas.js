@@ -67,7 +67,7 @@ export async function renderVentas(container, db) {
       return;
     }
     tbody.innerHTML = data.map((v, i) => {
-      const dt = v.created_at?.toDate ? v.created_at.toDate() : new Date(v.created_at);
+      const dt = parseArDate(v.created_at);
       const esEfectivo = v.payment_type === 'cash';
       const tieneDescuento = (v.discount || 0) > 0;
       return `<tr class="clickable-row" data-idx="${i}" title="Click para ver detalle">
@@ -108,12 +108,12 @@ export async function renderVentas(container, db) {
     const cajero = document.getElementById('filtroCajero').value.toLowerCase();
 
     if (desde) data = data.filter(v => {
-      const dt = v.created_at?.toDate ? v.created_at.toDate() : new Date(v.created_at);
-      return dt >= new Date(desde);
+      const dt = parseArDate(v.created_at);
+      return dt >= new Date(desde + 'T00:00:00-03:00');
     });
     if (hasta) data = data.filter(v => {
-      const dt = v.created_at?.toDate ? v.created_at.toDate() : new Date(v.created_at);
-      return dt <= new Date(hasta + 'T23:59:59');
+      const dt = parseArDate(v.created_at);
+      return dt <= new Date(hasta + 'T23:59:59-03:00');
     });
     if (pago) data = data.filter(v => v.payment_type === pago);
     if (cajero) data = data.filter(v =>
@@ -129,6 +129,16 @@ export async function renderVentas(container, db) {
   renderRows(ventas);
 }
 
+// created_at se guardó como datetime naive (hora AR) → Firestore lo trata como UTC → sumar 3h
+// Maneja: Timestamp live (.toDate), Timestamp de localStorage ({ seconds, nanoseconds }), ISO string
+function parseArDate(raw) {
+  if (!raw) return new Date(NaN);
+  if (typeof raw.toDate === 'function') return new Date(raw.toDate().getTime() + 3 * 60 * 60 * 1000);
+  if (typeof raw === 'object' && raw.seconds !== undefined)
+    return new Date(raw.seconds * 1000 + Math.floor((raw.nanoseconds || 0) / 1e6) + 3 * 60 * 60 * 1000);
+  return new Date(raw);
+}
+
 function fmt(n) { return Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-function fmtDate(d) { return d.toLocaleDateString('es-AR'); }
-function fmtTime(d) { return d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }); }
+function fmtDate(d) { return d.toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' }); }
+function fmtTime(d) { return d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' }); }

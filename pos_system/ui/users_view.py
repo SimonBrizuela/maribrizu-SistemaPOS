@@ -141,6 +141,12 @@ class UsersView(QWidget):
         deactivate_btn.clicked.connect(self.deactivate_user)
         btn_layout.addWidget(deactivate_btn)
 
+        delete_btn = QPushButton('Eliminar')
+        delete_btn.setMinimumHeight(38)
+        delete_btn.setStyleSheet(self._btn_style('#6f1a1a', '#4a1010'))
+        delete_btn.clicked.connect(self.delete_user)
+        btn_layout.addWidget(delete_btn)
+
         btn_layout.addStretch()
 
         # Hint de doble clic
@@ -202,7 +208,7 @@ class UsersView(QWidget):
             last_login = user.get('last_login') or 'Nunca'
             if last_login != 'Nunca':
                 try:
-                    from datetime import datetime
+                    from pos_system.utils.firebase_sync import now_ar
                     dt = datetime.fromisoformat(last_login)
                     last_login = dt.strftime('%d/%m/%Y %H:%M')
                 except Exception:
@@ -215,6 +221,16 @@ class UsersView(QWidget):
             QMessageBox.warning(self, 'Atención', 'Seleccioná un cajero de la lista primero.')
             return None
         return int(self.table.item(row, 0).text())
+
+    def _sync_users_firebase(self):
+        """Sube todos los cajeros a Firebase en background."""
+        try:
+            from pos_system.utils.firebase_sync import get_firebase_sync
+            fb = get_firebase_sync()
+            if fb:
+                fb.sync_users(self.db)
+        except Exception as e:
+            logger.warning(f"No se pudo sincronizar cajeros con Firebase: {e}")
 
     def add_user(self):
         dialog = UserDialog(self)
@@ -233,6 +249,7 @@ class UsersView(QWidget):
                     f'Usuario: {dialog.username_input.text().strip()}'
                 )
                 self.refresh_data()
+                self._sync_users_firebase()
             except Exception as e:
                 QMessageBox.critical(self, 'Error al crear', str(e))
 
@@ -251,6 +268,7 @@ class UsersView(QWidget):
                 )
                 QMessageBox.information(self, 'Actualizado', 'Cajero actualizado correctamente.')
                 self.refresh_data()
+                self._sync_users_firebase()
             except Exception as e:
                 QMessageBox.critical(self, 'Error', str(e))
 
@@ -283,9 +301,60 @@ class UsersView(QWidget):
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
         if reply == QMessageBox.Yes:
+            # Obtener username antes de desactivar para eliminarlo de Firebase
+            user_row = self.user_model.get_by_id(user_id)
+            username = user_row.get('username', '') if user_row else ''
             self.user_model.delete(user_id)
+            # Eliminar de Firebase inmediatamente para que no reaparezca en otras PCs
+            if username:
+                try:
+                    from pos_system.utils.firebase_sync import get_firebase_sync
+                    fb = get_firebase_sync()
+                    if fb and fb.enabled:
+                        fb.delete_user_from_firebase(username)
+                except Exception:
+                    pass
             QMessageBox.information(self, 'Desactivado', f'"{nombre}" fue desactivado.')
             self.refresh_data()
+            self._sync_users_firebase()
+
+
+    def delete_user(self):
+        user_id = self._get_selected_user_id()
+        if not user_id:
+            return
+        if user_id == self.current_user.get('id'):
+            QMessageBox.warning(self, 'Error', 'No podés eliminar tu propio usuario.')
+            return
+        row = self.table.currentRow()
+        nombre = self.table.item(row, 2).text() if row >= 0 else 'este cajero'
+        username = self.table.item(row, 1).text() if row >= 0 else ''
+        reply = QMessageBox.question(
+            self, 'Eliminar cajero',
+            f'¿Eliminar permanentemente a "{nombre}" (@{username})?\n\nEsta acción NO se puede deshacer.',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply != QMessageBox.Yes:
+            return
+        # Segunda confirmación
+        reply2 = QMessageBox.question(
+            self, 'Confirmar eliminación',
+            f'Confirmá: eliminar "{nombre}" para siempre.',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply2 != QMessageBox.Yes:
+            return
+        self.user_model.hard_delete(user_id)
+        try:
+            from pos_system.utils.firebase_sync import get_firebase_sync
+            fb = get_firebase_sync()
+            if fb and fb.enabled:
+                fb.delete_user_from_firebase(username)
+        except Exception:
+            pass
+        QMessageBox.information(self, 'Eliminado', f'"{nombre}" fue eliminado permanentemente.')
+        self.refresh_data()
+        self._sync_users_firebase()
 
 
 class UserDialog(QDialog):

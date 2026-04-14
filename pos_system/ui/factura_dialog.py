@@ -11,6 +11,7 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 from datetime import datetime
+from pos_system.utils.firebase_sync import now_ar
 
 
 class FacturaDialog(QDialog):
@@ -23,15 +24,21 @@ class FacturaDialog(QDialog):
         parent: widget padre
     """
 
-    def __init__(self, parent=None, sale: dict = None, auto_virtual: bool = False):
+    def __init__(self, parent=None, sale: dict = None, auto_virtual: bool = False, perfil: dict = None, cliente_data: dict = None):
         super().__init__(parent)
         self.sale = sale or {}
         self.auto_virtual = auto_virtual
+        self.perfil = perfil  # dict con datos del perfil ARCA seleccionado
+        self.cliente_data = cliente_data  # dict con datos del cliente receptor
         self.pdf_path = None
         self._setup_emisor_data()
         self.init_ui()
-        if auto_virtual:
+        if perfil:
+            self._prefill_perfil(perfil)
+        elif auto_virtual:
             self._prefill_virtual()
+        if cliente_data:
+            self._prefill_cliente(cliente_data)
 
     def _setup_emisor_data(self):
         """Carga datos del emisor desde config."""
@@ -125,6 +132,18 @@ class FacturaDialog(QDialog):
         self.cuit_cliente_input.setPlaceholderText('Ej: 20123456789 (vacío = Consumidor Final)')
         cliente_layout.addRow('CUIT Cliente:', self.cuit_cliente_input)
 
+        self.domicilio_cliente_input = QLineEdit('')
+        self.domicilio_cliente_input.setFont(QFont('Segoe UI', 10))
+        self.domicilio_cliente_input.setPlaceholderText('Opcional')
+        cliente_layout.addRow('Domicilio:', self.domicilio_cliente_input)
+
+        self.condicion_iva_cliente = QComboBox()
+        self.condicion_iva_cliente.setFont(QFont('Segoe UI', 10))
+        self.condicion_iva_cliente.addItems([
+            'Consumidor Final', 'Responsable Inscripto', 'Monotributista', 'Exento'
+        ])
+        cliente_layout.addRow('Condición IVA:', self.condicion_iva_cliente)
+
         main.addWidget(cliente_group)
 
         # ── Datos AFIP (CAE - completar cuando se integre WSFE) ──────────────
@@ -163,12 +182,26 @@ class FacturaDialog(QDialog):
 
         main.addWidget(afip_group)
 
-        # Aviso si no hay datos del emisor configurados
-        if not self.emisor.get('cuit'):
+        # Indicador automático vs manual para CAE
+        if self.emisor.get('cert_path') and self.emisor.get('key_path'):
+            afip_badge = QLabel('✔  CAE automático — se solicitará a AFIP al generar')
+            afip_badge.setStyleSheet(
+                'background:#e7f3ff; color:#0d6efd; border:1px solid #b6d4fe;'
+                'border-radius:6px; padding:6px 10px; font-size:11px;'
+            )
+            main.addWidget(afip_badge)
+        elif not self.emisor.get('cuit'):
             warn = QLabel('Configure los datos del emisor en la pestana Fiscal → Configuración AFIP')
             warn.setStyleSheet('color: #dc3545; font-size: 11px; padding: 4px;')
             warn.setWordWrap(True)
             main.addWidget(warn)
+        else:
+            manual_badge = QLabel('ⓘ  Sin certificado — ingresá el CAE manualmente si lo tenés')
+            manual_badge.setStyleSheet(
+                'background:#fff3cd; color:#856404; border:1px solid #ffecb5;'
+                'border-radius:6px; padding:6px 10px; font-size:11px;'
+            )
+            main.addWidget(manual_badge)
 
         # ── Botones ───────────────────────────────────────────────────────────
         btn_row = QHBoxLayout()
@@ -195,6 +228,43 @@ class FacturaDialog(QDialog):
         btn_row.addWidget(emit_btn, 2)
 
         main.addLayout(btn_row)
+
+    def _prefill_perfil(self, perfil: dict):
+        """Usa los datos del perfil como EMISOR (reemplaza config AFIP global)."""
+        self.emisor = {
+            'cuit':               perfil.get('cuit', ''),
+            'razon_social':       perfil.get('razon_social') or perfil.get('nombre', ''),
+            'domicilio':          perfil.get('domicilio', ''),
+            'localidad':          perfil.get('localidad', ''),
+            'telefono':           '',
+            'ing_brutos':         perfil.get('ing_brutos', ''),
+            'inicio_actividades': perfil.get('inicio_actividades', ''),
+            'condicion_iva':      perfil.get('condicion_iva', 'Monotributista'),
+            'punto_venta':        perfil.get('punto_venta', 1),
+            'cert_path':          perfil.get('cert_path', ''),
+            'key_path':           perfil.get('key_path', ''),
+            'produccion':         bool(perfil.get('produccion', 0)),
+        }
+
+    def _prefill_cliente(self, cliente: dict):
+        """Pre-rellena los datos del receptor con el cliente seleccionado."""
+        nombre = cliente.get('razon_social') or cliente.get('nombre', '')
+        cuit = cliente.get('cuit', '')
+        domicilio = cliente.get('domicilio', '')
+        cond_iva = cliente.get('condicion_iva', '')
+        if nombre:
+            self.cliente_input.setText(nombre)
+        if cuit:
+            self.cuit_cliente_input.setText(cuit)
+        if domicilio:
+            self.domicilio_cliente_input.setText(domicilio)
+        if cond_iva:
+            idx = self.condicion_iva_cliente.findText(cond_iva)
+            if idx >= 0:
+                self.condicion_iva_cliente.setCurrentIndex(idx)
+        # Sugerir Tipo A si es Responsable Inscripto
+        if cond_iva == 'Responsable Inscripto':
+            self.tipo_combo.setCurrentText('FAC. ELEC. A')
 
     def _prefill_virtual(self):
         """Pre-rellena para pago virtual: Tipo B, Consumidor Final."""
@@ -223,18 +293,65 @@ class FacturaDialog(QDialog):
             return 1
 
     def _emit_factura(self):
-        """Genera el PDF de la factura y lo guarda."""
+        """Genera el PDF. Si el perfil tiene cert+key, solicita CAE a AFIP automáticamente."""
         from pos_system.utils.pdf_generator import PDFGenerator
         from pos_system.database.db_manager import DatabaseManager
 
         tipo = self.tipo_combo.currentText()
         cliente = self.cliente_input.text().strip() or 'CONSUMIDOR FINAL'
         cuit_cliente = self.cuit_cliente_input.text().strip()
+        dom_cliente = self.domicilio_cliente_input.text().strip()
+        cond_iva_cliente = self.condicion_iva_cliente.currentText()
         cae = self.cae_input.text().strip()
         vto_cae = self.vto_cae_input.text().strip()
         total = float(self.sale.get('total_amount', 0))
         iva = self.iva_spin.value()
         nro = self._get_next_nro_comprobante(tipo)
+
+        # ── Intentar CAE automático si el perfil tiene certificados ─────────
+        cert_path = self.emisor.get('cert_path', '')
+        key_path  = self.emisor.get('key_path', '')
+        if cert_path and key_path and not cae:
+            try:
+                from pos_system.utils.afip_wsfe import AfipWsfe, AFIPError, calcular_iva_neto
+                afip = AfipWsfe(
+                    cuit=self.emisor.get('cuit', ''),
+                    cert_path=cert_path,
+                    key_path=key_path,
+                    produccion=bool(self.emisor.get('produccion', False)),
+                )
+                neto, iva_calc = calcular_iva_neto(total, 21.0)
+                resultado = afip.solicitar_cae(
+                    tipo_comprobante=tipo,
+                    punto_venta=int(self.emisor.get('punto_venta', 1)),
+                    nro_comprobante=nro,
+                    importe_total=total,
+                    importe_neto_gravado=neto,
+                    importe_iva=iva if iva > 0 else iva_calc,
+                    concepto=1,
+                    cuit_receptor=cuit_cliente or None,
+                    condicion_iva_receptor=cond_iva_cliente,
+                )
+                cae     = str(resultado['cae'])
+                vto_cae = str(resultado['vto_cae'])
+                # Mostrar en el formulario
+                self.cae_input.setText(cae)
+                self.vto_cae_input.setText(vto_cae)
+            except ImportError:
+                QMessageBox.warning(
+                    self, 'Dependencia faltante',
+                    'Para CAE automático instalá: pip install zeep pyOpenSSL\n\n'
+                    'Se generará la factura sin CAE.'
+                )
+            except Exception as e:
+                resp = QMessageBox.question(
+                    self, 'Error AFIP',
+                    f'No se pudo obtener el CAE de AFIP:\n{e}\n\n'
+                    '¿Generar igualmente la factura sin CAE?',
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+                )
+                if resp != QMessageBox.Yes:
+                    return
 
         # Construir items de factura desde los items de la venta
         items_factura = []
@@ -273,8 +390,11 @@ class FacturaDialog(QDialog):
             'turno':              str(self.sale.get('id', '')).zfill(5),
             'pago':               self.pago_input.text().strip(),
             'modalidad':          self.modalidad_input.text().strip(),
-            # Cliente
-            'cliente':            cliente if not cuit_cliente else f'{cliente} — CUIT: {cuit_cliente}',
+            # Cliente / Receptor
+            'cliente':               cliente,
+            'cuit_receptor':         cuit_cliente,
+            'domicilio_receptor':    dom_cliente,
+            'condicion_iva_receptor': cond_iva_cliente,
             # Items
             'items':              items_factura,
             # Totales

@@ -163,8 +163,9 @@ export async function renderResumenes(container, db) {
       // Agrupar ventas por mes
       const ventasPorMes = {};
       ventas.forEach(v => {
-        const dt = v.created_at?.toDate ? v.created_at.toDate() : new Date(v.created_at);
-        const mesKey = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,'0')}`;
+        const dt = parseArDate(v.created_at);
+        const arStr = dt.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+        const mesKey = arStr.slice(0, 7); // "YYYY-MM"
         if (!ventasPorMes[mesKey]) ventasPorMes[mesKey] = [];
         ventasPorMes[mesKey].push({ ...v, _dt: dt });
       });
@@ -347,8 +348,8 @@ export async function renderResumenes(container, db) {
             const saleId = v.sale_id || v.id;
             const items  = itemsPorVenta[String(saleId)] || [];
             const dt     = v._dt;
-            const fecha  = dt.toLocaleDateString('es-AR');
-            const hora   = dt.toLocaleTimeString('es-AR',{hour:'2-digit',minute:'2-digit'});
+            const fecha  = dt.toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' });
+            const hora   = dt.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' });
             const esCash = v.payment_type === 'cash';
             const pago   = esCash ? 'Efectivo' : 'Transferencia';
             const cajero = v.cajero || v.username || '-';
@@ -409,6 +410,16 @@ export async function renderResumenes(container, db) {
       btn.innerHTML = '<span class="material-icons" style="font-size:16px">picture_as_pdf</span> Exportar PDF';
     }
   });
+}
+
+// Compensar: created_at fue guardado como naive hora AR → Firestore lo trata como UTC → sumar 3h
+// Maneja: Timestamp live (.toDate), Timestamp de localStorage ({ seconds, nanoseconds }), ISO string
+function parseArDate(raw) {
+  if (!raw) return new Date(NaN);
+  if (typeof raw.toDate === 'function') return new Date(raw.toDate().getTime() + 3 * 60 * 60 * 1000);
+  if (typeof raw === 'object' && raw.seconds !== undefined)
+    return new Date(raw.seconds * 1000 + Math.floor((raw.nanoseconds || 0) / 1e6) + 3 * 60 * 60 * 1000);
+  return new Date(raw);
 }
 
 function fmt(n) {

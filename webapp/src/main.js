@@ -1,7 +1,8 @@
 import { db } from './firebase.js';
-import { invalidateCacheByPrefix } from './cache.js';
+import { invalidateCacheByPrefix, peekCache } from './cache.js';
 import './styles/login.css';
 import { renderDashboard } from './pages/dashboard.js';
+import { renderControlTotal } from './pages/control_total.js';
 import { renderVentas } from './pages/ventas.js';
 import { renderProductos } from './pages/productos.js';
 import { renderInventario } from './pages/inventario.js';
@@ -12,30 +13,33 @@ import { renderCatalogo } from './pages/catalogo.js';
 import { renderTurnos } from './pages/turnos.js';
 import { renderArticulosUnicos } from './pages/articulos_unicos.js';
 import { renderPromociones } from './pages/promociones.js';
+import { renderFacturas } from './pages/facturas.js';
+import { renderPerfiles } from './pages/perfiles.js';
+import { renderClientes } from './pages/clientes.js';
 import { renderLogin } from './pages/login.js';
 import { isLoggedIn, getSession, logout } from './auth.js';
 
 // ── Estado global ──
 let currentPage = 'dashboard';
 
-// ── Cache en memoria por sesión ──
-// Cachea los DATOS de Firebase, no el HTML. Así los eventos siempre se registran bien.
-// El botón Refresh invalida el cache de la página actual y recarga desde Firebase.
-export const _dataCache = {};         // { colección: datos[] }
-const NO_CACHE = new Set(['dashboard']); // estas siempre se recargan (datos en tiempo real)
-
+// Clave primaria de cache por página (para saber si hay datos cacheados antes de renderizar)
+// Páginas sin cacheKey siempre muestran el spinner al cargar.
 const pages = {
-  dashboard:  { title: 'Dashboard',              render: renderDashboard },
-  ventas:     { title: 'Ventas',                 render: renderVentas },
-  productos:  { title: 'Productos Más Vendidos', render: renderProductos },
-  inventario: { title: 'Inventario',             render: renderInventario },
-  historial:  { title: 'Historial Diario',       render: renderHistorial },
-  cierres:    { title: 'Cierres de Caja',        render: renderCierres },
-  resumenes:  { title: 'Resúmenes Mensuales',    render: renderResumenes },
-  catalogo:   { title: 'Catálogo de Productos',  render: renderCatalogo },
-  turnos:          { title: 'Turnos / Cajeros',       render: renderTurnos },
-  articulos_unicos:{ title: 'Artículos con Variantes', render: renderArticulosUnicos },
-  promociones:     { title: 'Promociones',              render: renderPromociones },
+  dashboard:       { title: 'Dashboard',               render: renderDashboard,       cacheKey: 'dashboard:ventas' },
+  control_total:   { title: 'Control Total',            render: renderControlTotal,     cacheKey: null },
+  ventas:          { title: 'Ventas',                  render: renderVentas,           cacheKey: 'ventas:lista' },
+  productos:       { title: 'Productos Más Vendidos',  render: renderProductos,        cacheKey: 'productos:mas_vendidos' },
+  inventario:      { title: 'Inventario',              render: renderInventario,       cacheKey: null },
+  historial:       { title: 'Historial Diario',        render: renderHistorial,        cacheKey: 'historial:diario' },
+  cierres:         { title: 'Cierres de Caja',         render: renderCierres,          cacheKey: 'cierres:caja' },
+  resumenes:       { title: 'Resúmenes Mensuales',     render: renderResumenes,        cacheKey: 'resumenes:mensuales' },
+  catalogo:        { title: 'Catálogo de Productos',   render: renderCatalogo,         cacheKey: null }, // memOnly, no aplica
+  turnos:          { title: 'Turnos / Cajeros',        render: renderTurnos,           cacheKey: null },
+  articulos_unicos:{ title: 'Artículos con Variantes', render: renderArticulosUnicos,  cacheKey: null },
+  promociones:     { title: 'Promociones',             render: renderPromociones,      cacheKey: null },
+  facturas:        { title: 'Facturación AFIP',        render: renderFacturas,         cacheKey: null },
+  perfiles:        { title: 'Perfiles ARCA',           render: renderPerfiles,         cacheKey: null },
+  clientes:        { title: 'Perfiles de Clientes',    render: renderClientes,         cacheKey: null },
 };
 
 // ── Navegación ──
@@ -51,20 +55,76 @@ function navigate(page) {
     l.classList.toggle('active', l.dataset.page === page);
   });
   document.getElementById('pageTitle').textContent = pages[page].title;
-  // Scroll arriba al cambiar página
+  // Abrir el grupo que contiene la página activa
+  openGroupForPage(page);
   window.scrollTo({ top: 0, behavior: 'smooth' });
   loadPage(page);
+}
+
+// ── Grupos colapsables del sidebar ──
+function initNavGroups() {
+  const saved = JSON.parse(localStorage.getItem('nav:openGroups') || '[]');
+
+  document.querySelectorAll('.nav-group').forEach(group => {
+    const groupId = group.dataset.group;
+    const header  = group.querySelector('.nav-group-header');
+    const items   = group.querySelector('.nav-group-items');
+    const arrow   = group.querySelector('.nav-group-arrow');
+
+    // Restaurar estado guardado
+    const isOpen = saved.includes(groupId);
+    if (isOpen) {
+      items.classList.add('open');
+      arrow.classList.add('rotated');
+    }
+
+    header.addEventListener('click', () => {
+      const opening = !items.classList.contains('open');
+      items.classList.toggle('open', opening);
+      arrow.classList.toggle('rotated', opening);
+
+      // Persistir en localStorage
+      const current = JSON.parse(localStorage.getItem('nav:openGroups') || '[]');
+      const updated = opening
+        ? [...new Set([...current, groupId])]
+        : current.filter(g => g !== groupId);
+      localStorage.setItem('nav:openGroups', JSON.stringify(updated));
+    });
+  });
+}
+
+function openGroupForPage(page) {
+  const link = document.querySelector(`.nav-link[data-page="${page}"]`);
+  if (!link) return;
+  const group = link.closest('.nav-group');
+  if (!group) return;
+  const groupId = group.dataset.group;
+  const items   = group.querySelector('.nav-group-items');
+  const arrow   = group.querySelector('.nav-group-arrow');
+  if (!items.classList.contains('open')) {
+    items.classList.add('open');
+    arrow.classList.add('rotated');
+    const current = JSON.parse(localStorage.getItem('nav:openGroups') || '[]');
+    localStorage.setItem('nav:openGroups', JSON.stringify([...new Set([...current, groupId])]));
+  }
 }
 
 async function loadPage(page, forceRefresh = false) {
   const content = document.getElementById('pageContent');
 
   // Si se fuerza refresh → limpiar cache de datos de esa página
-  if (forceRefresh && !NO_CACHE.has(page)) {
+  if (forceRefresh) {
     invalidateCacheByPrefix(page);
   }
 
-  content.innerHTML = `<div class="loader"><div class="spinner"></div><span>Cargando datos...</span></div>`;
+  // Mostrar spinner solo si no hay datos cacheados válidos
+  // (si hay cache, render() termina en <10ms y el contenido aparece directo)
+  const { cacheKey } = pages[page];
+  const hasCached = !forceRefresh && cacheKey && peekCache(cacheKey);
+  if (!hasCached) {
+    content.innerHTML = `<div class="loader"><div class="spinner"></div><span>Cargando datos...</span></div>`;
+  }
+
   setStatus('connecting');
   try {
     await pages[page].render(content, db);
@@ -129,6 +189,9 @@ function initApp(session) {
     logoutBtn.addEventListener('click', () => { logout(); location.reload(); });
     sidebarFooter.appendChild(logoutBtn);
   }
+
+  // Grupos colapsables del sidebar
+  initNavGroups();
 
   // Nav links (sidebar)
   document.querySelectorAll('.nav-link').forEach(link => {

@@ -17,7 +17,10 @@ except ImportError:
     _QRCODE_AVAILABLE = False
 
 class PDFGenerator:
-    def __init__(self, output_dir='pos_system/reports'):
+    def __init__(self, output_dir=None):
+        if output_dir is None:
+            from pos_system.config import REPORTS_DIR
+            output_dir = str(REPORTS_DIR)
         self.output_dir = output_dir
         os.makedirs(output_dir, exist_ok=True)
         self.styles = getSampleStyleSheet()

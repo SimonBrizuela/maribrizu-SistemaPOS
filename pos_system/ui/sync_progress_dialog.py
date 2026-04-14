@@ -6,7 +6,7 @@ Incluye menú para elegir Subir Datos o Descargar Datos.
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                               QProgressBar, QTextEdit, QPushButton, QWidget,
                               QFrame, QApplication, QSizePolicy, QMenu, QAction)
-from PyQt5.QtCore import Qt, pyqtSignal, QThread, QTimer
+from PyQt5.QtCore import Qt, pyqtSignal, QThread, QTimer, QElapsedTimer
 from PyQt5.QtGui import QFont, QColor, QTextCursor
 import logging
 
@@ -23,9 +23,10 @@ class DownloadWorker(QThread):
 
     TOTAL_STEPS = 4
 
-    def __init__(self, main_window):
+    def __init__(self, main_window, write_trigger=True):
         super().__init__()
         self.main_window = main_window
+        self.write_trigger = write_trigger  # False en auto-sync para evitar loop
 
     # ── Helpers de fecha ─────────────────────────────────────────────────
     @staticmethod
@@ -91,6 +92,7 @@ class DownloadWorker(QThread):
                         'stock':       int(row.get('stock') or 0),
                         'barcode':     str(row.get('barcode') or ''),
                         'firebase_id': str(row.get('firebase_id') or ''),
+                        'name':        str(row.get('name') or ''),
                         'ts':          ts,
                     }
                 if row.get('barcode'):
@@ -205,46 +207,54 @@ class DownloadWorker(QThread):
 
                 # NOTA: NO insertar cat en categories — esa tabla es solo para RUBROS.
 
+                # ── Timestamp de Firebase para comparar ──────────────────
+                fb_ts     = str(p.get('ultima_actualizacion') or p.get('updated_at') or '').strip()
+                fb_ts_num = self._parse_fecha(fb_ts) if fb_ts else 0.0
+
                 # ── Buscar si ya existe localmente ────────────────────────
                 # Prioridad: 1) firebase_id (más confiable), 2) barcode, 3) nombre
-                local_id = None
+                local_id     = None
+                local_ts_num = 0.0
 
                 if firebase_id and firebase_id in local_by_firebase_id:
-                    local_id, _ = local_by_firebase_id[firebase_id]
+                    local_id, local_ts_num = local_by_firebase_id[firebase_id]
                 elif pid and pid in local_by_id:
-                    local_id = int(pid)
+                    local_id     = int(pid)
+                    local_ts_num = local_by_id[pid]
                 elif barcode and barcode in local_by_barcode:
-                    local_id, _ = local_by_barcode[barcode]
+                    local_id, local_ts_num = local_by_barcode[barcode]
                 elif nombre.lower() in local_by_name:
-                    local_id, _ = local_by_name[nombre.lower()]
+                    local_id, local_ts_num = local_by_name[nombre.lower()]
 
-                # ── Decidir si actualizar comparando valores reales (sin query extra) ──
+                # ── Actualizar solo si hubo cambios (comparar timestamps) ──
                 if local_id is not None:
-                    lr = local_data_by_id.get(local_id)
-                    if lr and (abs(lr['price'] - precio) < 0.01
-                               and lr['stock'] == stock
-                               and lr['barcode'] == str(barcode or '')
-                               and lr['firebase_id'] == firebase_id):
+                    # Si Firebase tiene timestamp y es igual o anterior al local → sin cambios
+                    if fb_ts_num > 0.0 and local_ts_num > 0.0 and fb_ts_num <= local_ts_num:
                         productos_sin_cambios += 1
-                        continue
-
-                    db.execute_update("""
-                        UPDATE products SET
-                            name = ?, price = ?, cost = ?, stock = ?,
-                            category = ?, barcode = ?, discount_value = ?,
-                            firebase_id = ?, rubro = ?,
-                            updated_at = CURRENT_TIMESTAMP
-                        WHERE id = ?
-                    """, (nombre, precio, costo, stock, cat, barcode, desc, firebase_id, rubro, local_id))
-                    productos_actualizados += 1
-                    # Actualizar índices y caché local
-                    local_by_firebase_id[firebase_id] = (local_id, 9999999999.0)
-                    local_by_id[str(local_id)] = 9999999999.0
-                    local_data_by_id[local_id] = {
-                        'price': precio, 'stock': stock,
-                        'barcode': str(barcode or ''), 'firebase_id': firebase_id,
-                        'ts': 9999999999.0,
-                    }
+                    else:
+                        if fb_ts:
+                            db.execute_update("""
+                                UPDATE products SET
+                                    name = ?, price = ?, cost = ?, stock = ?,
+                                    category = ?, barcode = ?, discount_value = ?,
+                                    firebase_id = ?, rubro = ?, updated_at = ?
+                                WHERE id = ?
+                            """, (nombre, precio, costo, stock, cat, barcode, desc,
+                                  firebase_id, rubro, fb_ts, local_id))
+                        else:
+                            db.execute_update("""
+                                UPDATE products SET
+                                    name = ?, price = ?, cost = ?, stock = ?,
+                                    category = ?, barcode = ?, discount_value = ?,
+                                    firebase_id = ?, rubro = ?,
+                                    updated_at = CURRENT_TIMESTAMP
+                                WHERE id = ?
+                            """, (nombre, precio, costo, stock, cat, barcode, desc,
+                                  firebase_id, rubro, local_id))
+                        productos_actualizados += 1
+                        new_ts = fb_ts or '9999-99-99'
+                        local_by_firebase_id[firebase_id] = (local_id, new_ts)
+                        local_by_id[str(local_id)] = new_ts
                 else:
                     # Producto nuevo — insertar con firebase_id
                     try:
@@ -269,7 +279,6 @@ class DownloadWorker(QThread):
             self.log_message.emit(
                 f'Inventario: {productos_nuevos} nuevos · '
                 f'{productos_actualizados} actualizados · '
-                f'{productos_sin_cambios} ya estaban al día '
                 f'(total Firebase: {total_fb})', 'ok')
 
             # ── PASO 4: Precios remotos — solo novedades ──────────────────
@@ -377,6 +386,15 @@ class DownloadWorker(QThread):
             self.log_message.emit('══════════════════════════════════════', 'ok')
             self.log_message.emit(f'{resumen}', 'ok')
             self.log_message.emit('══════════════════════════════════════', 'ok')
+
+            # Trigger para que las demás PCs también descarguen
+            if self.write_trigger:
+                try:
+                    from pos_system.utils.firebase_sync import _get_pc_id
+                    fb.write_sync_trigger(_get_pc_id(), command='download')
+                except Exception:
+                    pass
+
             self.finished.emit(True, resumen)
 
         except Exception as e:
@@ -393,10 +411,11 @@ class SyncWorker(QThread):
     step_changed  = pyqtSignal(str)          # descripción del paso actual
     finished      = pyqtSignal(bool, str)    # (exito, mensaje_final)
 
-    def __init__(self, main_window, full_history=True):
+    def __init__(self, main_window, full_history=True, write_trigger=True):
         super().__init__()
         self.main_window = main_window
         self.full_history = full_history
+        self.write_trigger = write_trigger  # False en auto-sync para evitar loop
 
     def run(self):
         try:
@@ -452,6 +471,8 @@ class SyncWorker(QThread):
             self.step_changed.emit(f'Subiendo {len(all_sales)} ventas a Firebase...')
             self.log_message.emit(f'Sincronizando {len(all_sales)} ventas...', 'info')
 
+            from pos_system.utils.firebase_sync import _get_pc_id
+            _pc_id = _get_pc_id()
             total_ventas = len(all_sales)
             batch = firedb.batch()
             count = 0
@@ -467,9 +488,11 @@ class SyncWorker(QThread):
                 )
                 if len(items) > 3:
                     productos_str += f' (+{len(items)-3} más)'
-                ref = firedb.collection('ventas').document(sale_id)
+                fb_sale_id = f"{_pc_id}_{sale_id}"
+                ref = firedb.collection('ventas').document(fb_sale_id)
                 batch.set(ref, {
                     'sale_id':       int(sale_id),
+                    'pc_id':         _pc_id,
                     'created_at':    created_at,
                     'payment_type':  s.get('payment_type', ''),
                     'total_amount':  float(s.get('total_amount', 0) or 0),
@@ -526,6 +549,7 @@ class SyncWorker(QThread):
             if caja_abierta:
                 try:
                     reg_id = str(caja_abierta['id'])
+                    fb_reg_id = f"{_pc_id}_{reg_id}"
                     apertura = fb._parse_dt(caja_abierta.get('opening_date'))
                     # Obtener usuario que abrió la caja
                     cajero = ''
@@ -545,8 +569,9 @@ class SyncWorker(QThread):
                     # Retiros de esta caja
                     retiros_list = register_model.get_withdrawals(caja_abierta['id'])
                     retiros_fb = [{'amount': float(w.get('amount', 0)), 'reason': w.get('reason', ''), 'created_at': str(w.get('created_at', ''))} for w in retiros_list]
-                    fb.db.collection('cierres_caja').document(reg_id).set({
+                    fb.db.collection('cierres_caja').document(fb_reg_id).set({
                         'register_id':           int(reg_id),
+                        'pc_id':                 _pc_id,
                         'fecha_apertura':        apertura,
                         'fecha_cierre':          None,
                         'monto_inicial':         float(caja_abierta.get('initial_amount', 0)),
@@ -582,6 +607,14 @@ class SyncWorker(QThread):
             self.log_message.emit('Resúmenes mensuales sincronizados', 'ok')
             self.progress.emit(5, 5)
 
+            # Escribir trigger para que las demás PCs suban sus datos también
+            if self.write_trigger:
+                try:
+                    from pos_system.utils.firebase_sync import _get_pc_id
+                    fb.write_sync_trigger(_get_pc_id(), command='upload')
+                except Exception:
+                    pass
+
             self.step_changed.emit('Sincronización completada')
             self.finished.emit(True, 'Sincronización con Firebase completada correctamente.')
 
@@ -611,6 +644,8 @@ class SyncProgressDialog(QDialog):
         self.full_history = full_history
         self._finished    = False
         self.worker       = None
+        self._elapsed     = QElapsedTimer()
+        self._elapsed.start()
 
         is_download = (mode == 'download')
         self.setWindowTitle('Descargando datos...' if is_download else 'Subiendo datos...')
@@ -619,10 +654,10 @@ class SyncProgressDialog(QDialog):
 
         # Tamaño adaptable: mínimo razonable, crece con la pantalla
         screen = QApplication.primaryScreen().availableGeometry()
-        w = max(540, min(680, int(screen.width() * 0.45)))
-        h = max(480, min(620, int(screen.height() * 0.62)))
+        w = max(540, min(700, int(screen.width() * 0.47)))
+        h = max(500, min(650, int(screen.height() * 0.65)))
         self.resize(w, h)
-        self.setMinimumSize(480, 420)
+        self.setMinimumSize(500, 450)
 
         self._init_ui(is_download)
         self._center_on_screen()
@@ -634,59 +669,97 @@ class SyncProgressDialog(QDialog):
             screen.y() + (screen.height() - self.height()) // 2,
         )
 
+    _SPINNER_FRAMES = ('⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏')
+
     def _init_ui(self, is_download: bool):
-        icon_char  = 'Descarga' if is_download else 'Nube'
-        title_text = 'Descargando datos desde Firebase' if is_download else 'Subiendo datos a Firebase'
+        icon_char   = '⬇' if is_download else '⬆'
+        title_text  = 'Descargando datos desde Firebase' if is_download else 'Subiendo datos a Firebase'
         total_steps = DownloadWorker.TOTAL_STEPS if is_download else 5
 
         self.setStyleSheet('''
-            QDialog { background: #f8f9fa; }
-            QLabel#dlgTitle { font-size: 15px; font-weight: bold; color: #1e293b; }
-            QLabel#dlgStep  { font-size: 12px; color: #475569; }
-            QLabel#dlgDetail { font-size: 11px; color: #64748b; }
+            QDialog { background: #f0f4f8; }
+            QFrame#headerCard {
+                background: #1e293b;
+                border-radius: 12px;
+            }
+            QLabel#dlgIcon  { font-size: 28px; color: #60a5fa; }
+            QLabel#dlgTitle { font-size: 15px; font-weight: bold; color: #f1f5f9; }
+            QLabel#dlgStep  { font-size: 12px; color: #94a3b8; }
+            QLabel#statusBadge {
+                font-size: 12px; font-weight: bold;
+                padding: 3px 12px; border-radius: 10px;
+            }
+            QLabel#elapsedLbl { font-size: 11px; color: #64748b; }
+            QLabel#dlgDetail  { font-size: 11px; color: #64748b; }
             QProgressBar {
                 border: none; border-radius: 6px;
-                background: #e2e8f0; height: 16px; text-align: center;
+                background: #cbd5e1; height: 18px; text-align: center;
                 font-size: 11px; color: #1e293b;
             }
             QProgressBar::chunk {
                 background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                    stop:0 #0d6efd, stop:1 #0ea5e9);
+                    stop:0 #3b82f6, stop:1 #06b6d4);
+                border-radius: 6px;
+            }
+            QProgressBar#progressDone::chunk {
+                background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
+                    stop:0 #16a34a, stop:1 #22c55e);
+                border-radius: 6px;
+            }
+            QProgressBar#progressError::chunk {
+                background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
+                    stop:0 #dc2626, stop:1 #f87171);
                 border-radius: 6px;
             }
             QProgressBar#detailBar::chunk {
                 background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                    stop:0 #198754, stop:1 #20c997);
+                    stop:0 #0891b2, stop:1 #22d3ee);
                 border-radius: 4px;
             }
             QProgressBar#detailBar {
-                height: 10px; border-radius: 4px;
+                height: 8px; border-radius: 4px;
             }
             QTextEdit {
-                background: #1e293b; color: #e2e8f0;
-                border-radius: 8px; border: none;
+                background: #0f172a; color: #e2e8f0;
+                border-radius: 8px; border: 1px solid #334155;
                 font-family: Consolas, monospace; font-size: 11px;
                 padding: 8px;
             }
-            QPushButton#closeBtn {
-                background: #0d6efd; color: white; border: none;
-                border-radius: 8px; font-size: 13px; font-weight: bold;
-                padding: 10px 28px;
+            QLabel#logHeader {
+                color: #64748b; font-weight: 600; font-size: 11px;
+                padding: 2px 0px;
             }
-            QPushButton#closeBtn:hover { background: #0b5ed7; }
-            QPushButton#closeBtn:disabled { background: #94a3b8; color: #e2e8f0; }
+            QPushButton#closeBtn {
+                background: #3b82f6; color: white; border: none;
+                border-radius: 8px; font-size: 13px; font-weight: bold;
+                padding: 10px 32px;
+            }
+            QPushButton#closeBtn:hover  { background: #2563eb; }
+            QPushButton#closeBtn:disabled {
+                background: #475569; color: #94a3b8;
+            }
         ''')
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 18, 22, 18)
-        layout.setSpacing(12)
+        layout.setContentsMargins(18, 16, 18, 16)
+        layout.setSpacing(10)
 
-        # ── Header ──────────────────────────────────────────────────────
-        header = QHBoxLayout()
-        icon_lbl = QLabel(icon_char)
-        icon_lbl.setFont(QFont('Segoe UI', 26))
-        icon_lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-        header.addWidget(icon_lbl)
+        # ── Tarjeta header oscura ────────────────────────────────────────
+        header_card = QFrame()
+        header_card.setObjectName('headerCard')
+        header_layout = QVBoxLayout(header_card)
+        header_layout.setContentsMargins(16, 14, 16, 14)
+        header_layout.setSpacing(6)
+
+        # Fila superior: icono + título + badge estado
+        top_row = QHBoxLayout()
+        top_row.setSpacing(12)
+
+        self.icon_lbl = QLabel(icon_char)
+        self.icon_lbl.setObjectName('dlgIcon')
+        self.icon_lbl.setFont(QFont('Segoe UI', 28))
+        self.icon_lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        top_row.addWidget(self.icon_lbl)
 
         title_col = QVBoxLayout()
         title_col.setSpacing(2)
@@ -699,24 +772,65 @@ class SyncProgressDialog(QDialog):
         self.step_lbl.setObjectName('dlgStep')
         self.step_lbl.setWordWrap(True)
         title_col.addWidget(self.step_lbl)
-        header.addLayout(title_col, 1)
-        layout.addLayout(header)
+        top_row.addLayout(title_col, 1)
 
-        # ── Barra de progreso de pasos ───────────────────────────────────
+        # Badge de estado
+        self.status_badge = QLabel('  EN PROCESO  ')
+        self.status_badge.setObjectName('statusBadge')
+        self.status_badge.setStyleSheet(
+            'QLabel { background: #1d4ed8; color: #bfdbfe;'
+            ' font-size: 11px; font-weight: bold;'
+            ' padding: 4px 10px; border-radius: 10px; }'
+        )
+        self.status_badge.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        top_row.addWidget(self.status_badge, 0, Qt.AlignTop)
+        header_layout.addLayout(top_row)
+
+        # Fila inferior del header: spinner + texto operación + cronómetro
+        bottom_row = QHBoxLayout()
+        bottom_row.setSpacing(6)
+
+        self.spinner_lbl = QLabel(self._SPINNER_FRAMES[0])
+        self.spinner_lbl.setFont(QFont('Consolas', 13))
+        self.spinner_lbl.setStyleSheet('color: #60a5fa;')
+        self.spinner_lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        bottom_row.addWidget(self.spinner_lbl)
+
+        self.running_lbl = QLabel('Operación en curso...')
+        self.running_lbl.setStyleSheet('color: #60a5fa; font-size: 11px; font-weight: 600;')
+        bottom_row.addWidget(self.running_lbl, 1)
+
+        self.elapsed_lbl = QLabel('00:00')
+        self.elapsed_lbl.setObjectName('elapsedLbl')
+        self.elapsed_lbl.setStyleSheet('color: #64748b; font-size: 11px;')
+        self.elapsed_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        bottom_row.addWidget(self.elapsed_lbl)
+
+        header_layout.addLayout(bottom_row)
+        layout.addWidget(header_card)
+
+        # ── Barras de progreso ───────────────────────────────────────────
+        prog_row = QHBoxLayout()
+        prog_row.setSpacing(8)
+        prog_lbl = QLabel('Pasos:')
+        prog_lbl.setStyleSheet('color: #475569; font-size: 11px; font-weight: 600;')
+        prog_lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+        prog_row.addWidget(prog_lbl)
+
         self.progress_bar = QProgressBar()
         self.progress_bar.setMinimum(0)
         self.progress_bar.setMaximum(total_steps)
         self.progress_bar.setValue(0)
         self.progress_bar.setFormat('Paso %v de %m')
-        layout.addWidget(self.progress_bar)
+        prog_row.addWidget(self.progress_bar, 1)
+        layout.addLayout(prog_row)
 
-        # ── Barra de detalle (por ítem dentro del paso) ──────────────────
         self.detail_bar = QProgressBar()
         self.detail_bar.setObjectName('detailBar')
         self.detail_bar.setMinimum(0)
         self.detail_bar.setMaximum(100)
         self.detail_bar.setValue(0)
-        self.detail_bar.setFormat('%p%')
+        self.detail_bar.setFormat('')
         layout.addWidget(self.detail_bar)
 
         self.detail_lbl = QLabel('')
@@ -727,13 +841,16 @@ class SyncProgressDialog(QDialog):
         # Separador
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet('color: #e2e8f0;')
+        sep.setStyleSheet('color: #cbd5e1;')
         layout.addWidget(sep)
 
         # ── Log en tiempo real ───────────────────────────────────────────
-        log_lbl = QLabel('Registro en tiempo real:')
-        log_lbl.setStyleSheet('color: #475569; font-weight: 600; font-size: 12px;')
-        layout.addWidget(log_lbl)
+        log_hdr = QHBoxLayout()
+        log_lbl = QLabel('REGISTRO EN TIEMPO REAL')
+        log_lbl.setObjectName('logHeader')
+        log_hdr.addWidget(log_lbl)
+        log_hdr.addStretch()
+        layout.addLayout(log_hdr)
 
         self.log_area = QTextEdit()
         self.log_area.setReadOnly(True)
@@ -746,25 +863,42 @@ class SyncProgressDialog(QDialog):
         self.close_btn = QPushButton('Cerrar')
         self.close_btn.setObjectName('closeBtn')
         self.close_btn.setEnabled(False)
-        self.close_btn.setMinimumWidth(120)
+        self.close_btn.setMinimumWidth(130)
         self.close_btn.clicked.connect(self.accept)
         btn_row.addWidget(self.close_btn)
         layout.addLayout(btn_row)
 
-        # Animación en título
+        # Timers: animación + cronómetro
+        self._spin_idx  = 0
         self._dot_count = 0
         self._dot_timer = QTimer(self)
         self._dot_timer.timeout.connect(self._animate_dots)
-        self._dot_timer.start(500)
+        self._dot_timer.start(120)
+
+        self._clock_timer = QTimer(self)
+        self._clock_timer.timeout.connect(self._update_elapsed)
+        self._clock_timer.start(1000)
 
     def _animate_dots(self):
         if self._finished:
             self._dot_timer.stop()
             return
+        # Rotar spinner
+        self._spin_idx = (self._spin_idx + 1) % len(self._SPINNER_FRAMES)
+        self.spinner_lbl.setText(self._SPINNER_FRAMES[self._spin_idx])
+        # Título con puntos animados
         self._dot_count = (self._dot_count + 1) % 4
         dots = '.' * self._dot_count
         base = 'Descargando datos' if self.mode == 'download' else 'Subiendo datos'
         self.setWindowTitle(f'{base}{dots}')
+
+    def _update_elapsed(self):
+        if self._finished:
+            self._clock_timer.stop()
+            return
+        secs = int(self._elapsed.elapsed() / 1000)
+        m, s = divmod(secs, 60)
+        self.elapsed_lbl.setText(f'{m:02d}:{s:02d}')
 
     def start_sync(self, main_window):
         """Inicia el worker adecuado según el modo."""
@@ -807,13 +941,71 @@ class SyncProgressDialog(QDialog):
     def _on_finished(self, success, message):
         self._finished = True
         self._dot_timer.stop()
-        self.detail_bar.setValue(100 if success else self.detail_bar.value())
+        self._clock_timer.stop()
+
+        # Tiempo total transcurrido
+        secs = int(self._elapsed.elapsed() / 1000)
+        m, s = divmod(secs, 60)
+        elapsed_str = f'{m:02d}:{s:02d}'
+        self.elapsed_lbl.setText(f'Duración: {elapsed_str}')
+        self.elapsed_lbl.setStyleSheet('color: #475569; font-size: 11px;')
+
         if success:
+            # Spinner → checkmark
+            self.spinner_lbl.setText('✔')
+            self.spinner_lbl.setStyleSheet('color: #22c55e; font-size: 14px; font-weight: bold;')
+
+            self.running_lbl.setText('Operación finalizada correctamente')
+            self.running_lbl.setStyleSheet('color: #22c55e; font-size: 11px; font-weight: 600;')
+
+            # Badge verde
+            self.status_badge.setText('  COMPLETADO  ')
+            self.status_badge.setStyleSheet(
+                'QLabel { background: #14532d; color: #86efac;'
+                ' font-size: 11px; font-weight: bold;'
+                ' padding: 4px 10px; border-radius: 10px; }'
+            )
+
+            # Barra principal verde
+            self.progress_bar.setObjectName('progressDone')
+            self.progress_bar.setFormat('Completado')
+            self.progress_bar.style().unpolish(self.progress_bar)
+            self.progress_bar.style().polish(self.progress_bar)
+
+            # Icono header
+            self.icon_lbl.setText('✅')
+
             titulo = 'Descarga completada' if self.mode == 'download' else 'Sincronización completada'
             self.setWindowTitle(titulo)
         else:
-            self.setWindowTitle('Error: Error en la operación')
+            # Spinner → X
+            self.spinner_lbl.setText('✖')
+            self.spinner_lbl.setStyleSheet('color: #f87171; font-size: 14px; font-weight: bold;')
+
+            self.running_lbl.setText('La operación terminó con errores')
+            self.running_lbl.setStyleSheet('color: #f87171; font-size: 11px; font-weight: 600;')
+
+            # Badge rojo
+            self.status_badge.setText('  ERROR  ')
+            self.status_badge.setStyleSheet(
+                'QLabel { background: #7f1d1d; color: #fca5a5;'
+                ' font-size: 11px; font-weight: bold;'
+                ' padding: 4px 10px; border-radius: 10px; }'
+            )
+
+            # Barra principal roja
+            self.progress_bar.setObjectName('progressError')
+            self.progress_bar.setFormat('Error')
+            self.progress_bar.style().unpolish(self.progress_bar)
+            self.progress_bar.style().polish(self.progress_bar)
+
+            # Icono header
+            self.icon_lbl.setText('❌')
+
+            self.setWindowTitle('Error en la operación')
             self._on_log(f'Error: {message}', 'error')
+
+        self.detail_bar.setValue(100 if success else self.detail_bar.value())
         self.progress_bar.setValue(self.progress_bar.maximum())
         self.close_btn.setEnabled(True)
 

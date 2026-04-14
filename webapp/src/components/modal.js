@@ -8,7 +8,9 @@ export function openSaleModal(venta, db) {
   // Eliminar modal previo si existe
   document.querySelector('.modal-overlay')?.remove();
 
-  const dt = venta.created_at?.toDate ? venta.created_at.toDate() : new Date(venta.created_at);
+  // created_at fue guardado como naive hora AR → Firestore lo trata como UTC → sumar 3h
+  const _rawDt = venta.created_at?.toDate ? venta.created_at.toDate() : new Date(venta.created_at);
+  const dt = new Date(_rawDt.getTime() + 3 * 60 * 60 * 1000);
   const esEfectivo = venta.payment_type === 'cash';
   const saleId = venta.sale_id || venta.id;
 
@@ -29,11 +31,11 @@ export function openSaleModal(venta, db) {
           <div class="detail-grid">
             <div class="detail-item">
               <span class="detail-label">Fecha</span>
-              <span class="detail-value">${dt.toLocaleDateString('es-AR')}</span>
+              <span class="detail-value">${dt.toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' })}</span>
             </div>
             <div class="detail-item">
               <span class="detail-label">Hora</span>
-              <span class="detail-value">${dt.toLocaleTimeString('es-AR', {hour:'2-digit',minute:'2-digit'})}</span>
+              <span class="detail-value">${dt.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' })}</span>
             </div>
             <div class="detail-item">
               <span class="detail-label">Cajero</span>

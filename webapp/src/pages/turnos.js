@@ -17,10 +17,8 @@ export async function renderTurnos(container, db) {
   );
   const ventas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
 
-  // Rango de fechas por defecto: hoy
-  const hoy = new Date();
-  hoy.setHours(0, 0, 0, 0);
-  const manana = new Date(hoy); manana.setDate(manana.getDate() + 1);
+  // Rango de fechas por defecto: hoy en hora Argentina
+  const hoy = new Date(todayAR() + 'T00:00:00-03:00');
 
   container.innerHTML = `
     <div class="filter-bar" style="margin-bottom:16px;flex-wrap:wrap;gap:8px">
@@ -101,19 +99,18 @@ export async function renderTurnos(container, db) {
   document.head.appendChild(style);
 
   // ── Fecha actual en inputs ────────────────────────────────────────────
-  const fmtInputDate = d => d.toISOString().slice(0, 10);
-  document.getElementById('filtroDesde').value = fmtInputDate(hoy);
-  document.getElementById('filtroHasta').value = fmtInputDate(new Date());
+  document.getElementById('filtroDesde').value = todayAR();
+  document.getElementById('filtroHasta').value = todayAR();
 
   // ── Función principal: calcular y renderizar ──────────────────────────
   function calcularYRenderizar() {
-    const desde  = new Date(document.getElementById('filtroDesde').value + 'T00:00:00');
-    const hasta  = new Date(document.getElementById('filtroHasta').value + 'T23:59:59');
+    const desde  = new Date(document.getElementById('filtroDesde').value + 'T00:00:00-03:00');
+    const hasta  = new Date(document.getElementById('filtroHasta').value + 'T23:59:59-03:00');
     const filtroN = document.getElementById('filtroCajeroNombre').value.toLowerCase();
 
     // Filtrar ventas por rango de fechas
     const ventasFiltradas = ventas.filter(v => {
-      const dt = v.created_at?.toDate ? v.created_at.toDate() : new Date(v.created_at);
+      const dt = parseArDate(v.created_at);
       return dt >= desde && dt <= hasta;
     });
 
@@ -209,13 +206,13 @@ export async function renderTurnos(container, db) {
       `👤 ${nombre} — ${data.ventas.length} ventas · $${fmt(data.total)}`;
 
     const ventasOrdenadas = [...data.ventas].sort((a, b) => {
-      const da = a.created_at?.toDate ? a.created_at.toDate() : new Date(a.created_at);
-      const db_ = b.created_at?.toDate ? b.created_at.toDate() : new Date(b.created_at);
+      const da = parseArDate(a.created_at);
+      const db_ = parseArDate(b.created_at);
       return db_ - da;
     });
 
     document.getElementById('cajeroDetalleBody').innerHTML = ventasOrdenadas.map((v, i) => {
-      const dt = v.created_at?.toDate ? v.created_at.toDate() : new Date(v.created_at);
+      const dt = parseArDate(v.created_at);
       const esEfectivo = v.payment_type === 'cash';
       return `<tr class="clickable-row" data-idx="${i}" style="cursor:pointer">
         <td><b>#${v.sale_id || v.id || '-'}</b></td>
@@ -251,21 +248,20 @@ export async function renderTurnos(container, db) {
       document.querySelectorAll('.btn-period').forEach(b => b.classList.remove('active'));
       btn.classList.add('active');
 
-      const hoyD = new Date(); hoyD.setHours(0,0,0,0);
-      const hoyFin = new Date(); hoyFin.setHours(23,59,59,999);
+      const hoyStr = todayAR(); // "YYYY-MM-DD" en hora Argentina
 
       if (btn.dataset.period === 'hoy') {
-        document.getElementById('filtroDesde').value = fmtInputDate(hoyD);
-        document.getElementById('filtroHasta').value = fmtInputDate(hoyFin);
+        document.getElementById('filtroDesde').value = hoyStr;
+        document.getElementById('filtroHasta').value = hoyStr;
       } else if (btn.dataset.period === 'semana') {
-        const ini = new Date(hoyD);
-        ini.setDate(ini.getDate() - ini.getDay()); // lunes
-        document.getElementById('filtroDesde').value = fmtInputDate(ini);
-        document.getElementById('filtroHasta').value = fmtInputDate(hoyFin);
+        const hoyD = new Date(hoyStr + 'T00:00:00-03:00');
+        const dow = hoyD.getDay() === 0 ? 6 : hoyD.getDay() - 1; // lunes=0
+        const lunes = new Date(hoyD.getTime() - dow * 86400000);
+        document.getElementById('filtroDesde').value = lunes.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+        document.getElementById('filtroHasta').value = hoyStr;
       } else if (btn.dataset.period === 'mes') {
-        const ini = new Date(hoyD.getFullYear(), hoyD.getMonth(), 1);
-        document.getElementById('filtroDesde').value = fmtInputDate(ini);
-        document.getElementById('filtroHasta').value = fmtInputDate(hoyFin);
+        document.getElementById('filtroDesde').value = hoyStr.slice(0, 7) + '-01';
+        document.getElementById('filtroHasta').value = hoyStr;
       }
       calcularYRenderizar();
     });
@@ -283,6 +279,19 @@ export async function renderTurnos(container, db) {
   calcularYRenderizar();
 }
 
+// Fecha actual en Argentina (YYYY-MM-DD)
+function todayAR() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+}
+// Compensar: created_at fue guardado como naive hora AR → Firestore lo trata como UTC → sumar 3h
+// Maneja: Timestamp live (.toDate), Timestamp de localStorage ({ seconds, nanoseconds }), ISO string
+function parseArDate(raw) {
+  if (!raw) return new Date(NaN);
+  if (typeof raw.toDate === 'function') return new Date(raw.toDate().getTime() + 3 * 60 * 60 * 1000);
+  if (typeof raw === 'object' && raw.seconds !== undefined)
+    return new Date(raw.seconds * 1000 + Math.floor((raw.nanoseconds || 0) / 1e6) + 3 * 60 * 60 * 1000);
+  return new Date(raw);
+}
 function fmt(n) { return Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-function fmtDate(d) { return d.toLocaleDateString('es-AR'); }
-function fmtTime(d) { return d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit' }); }
+function fmtDate(d) { return d.toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' }); }
+function fmtTime(d) { return d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' }); }

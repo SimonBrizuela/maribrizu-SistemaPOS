@@ -7,8 +7,10 @@ import logging
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QLineEdit, QPushButton, QListWidget, QListWidgetItem,
                              QFrame, QApplication, QSizePolicy, QMessageBox)
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
+
+AUTOSELECT_SECONDS = 30
 
 logger = logging.getLogger(__name__)
 
@@ -50,8 +52,14 @@ class TurnoDialog(QDialog):
             screen.y() + (screen.height() - self.height()) // 2,
         )
 
+        self._countdown = AUTOSELECT_SECONDS
+        self._timer = QTimer(self)
+        self._timer.setInterval(1000)
+        self._timer.timeout.connect(self._on_tick)
+
         self._init_ui()
         self._load_cajeros()
+        self._timer.start()
 
     def _init_ui(self):
         self.setStyleSheet('''
@@ -161,7 +169,14 @@ class TurnoDialog(QDialog):
         self.nombre_input.setText(self.turno_nombre)
         self.nombre_input.setMinimumHeight(40)
         self.nombre_input.returnPressed.connect(self._confirm)
+        self.nombre_input.textChanged.connect(lambda _: self._reset_timer())
         layout.addWidget(self.nombre_input)
+
+        # ── Countdown ─────────────────────────────────────────────────────
+        self._countdown_lbl = QLabel(f'Se seleccionará automáticamente en {AUTOSELECT_SECONDS}s...')
+        self._countdown_lbl.setStyleSheet('color: #6c757d; font-size: 10px;')
+        self._countdown_lbl.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._countdown_lbl)
 
         # ── Botones ───────────────────────────────────────────────────────
         btn_row = QHBoxLayout()
@@ -210,14 +225,54 @@ class TurnoDialog(QDialog):
         except Exception as e:
             logger.warning(f'TurnoDialog: No se pudieron cargar cajeros: {e}')
 
+    def _reset_timer(self):
+        """Reinicia el countdown cuando el usuario interactúa."""
+        self._countdown = AUTOSELECT_SECONDS
+        self._countdown_lbl.setText(f'Se seleccionará automáticamente en {AUTOSELECT_SECONDS}s...')
+
+    def _on_tick(self):
+        """Descuenta 1 segundo; al llegar a 0 auto-confirma con el primer cajero."""
+        self._countdown -= 1
+        if self._countdown <= 0:
+            self._timer.stop()
+            self._autoselect_first_cajero()
+        else:
+            self._countdown_lbl.setText(f'Se seleccionará automáticamente en {self._countdown}s...')
+
+    def _autoselect_first_cajero(self):
+        """Selecciona el primer cajero de la lista y confirma automáticamente."""
+        # Buscar primer usuario con rol 'cajero'
+        first_cajero = None
+        for nombre, role in self._cajeros_data.items():
+            if role == 'cajero':
+                first_cajero = nombre
+                break
+        # Si no hay cajeros registrados, usar el primer usuario que haya
+        if not first_cajero and self._cajeros_data:
+            first_cajero = next(iter(self._cajeros_data))
+
+        if first_cajero:
+            self.nombre_input.setText(first_cajero)
+            self.turno_nombre = first_cajero
+            self.turno_role = self._cajeros_data.get(first_cajero, 'cajero')
+            logger.info(f'Turno auto-seleccionado por inactividad: {first_cajero}')
+            self.accept()
+        else:
+            # Sin cajeros registrados, simplemente aceptar con lo que hay
+            self.turno_nombre = self.nombre_input.text().strip() or 'Cajero'
+            self.turno_role = 'cajero'
+            self.accept()
+
     def _on_list_click(self, item: QListWidgetItem):
         """Al hacer clic en un cajero, poner su nombre en el campo de texto."""
+        self._reset_timer()
         nombre = item.data(Qt.UserRole)
         if nombre:
             self.nombre_input.setText(nombre)
 
     def _on_list_double_click(self, item: QListWidgetItem):
         """Doble clic confirma directamente."""
+        self._reset_timer()
         nombre = item.data(Qt.UserRole)
         if nombre:
             self.nombre_input.setText(nombre)
@@ -226,6 +281,7 @@ class TurnoDialog(QDialog):
     ADMIN_PASSWORD = 'agustin1212'
 
     def _confirm(self):
+        self._timer.stop()
         nombre = self.nombre_input.text().strip()
         if not nombre:
             QMessageBox.warning(self, 'Nombre requerido',
@@ -261,6 +317,7 @@ class TurnoDialog(QDialog):
 
     def _skip(self):
         """Omitir: mantener el nombre actual."""
+        self._timer.stop()
         self.turno_nombre = self.nombre_input.text().strip() or self.turno_nombre
         rol_destino = self._cajeros_data.get(self.turno_nombre, 'admin')
 

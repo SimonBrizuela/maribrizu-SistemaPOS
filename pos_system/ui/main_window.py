@@ -1,12 +1,14 @@
 import logging
 import threading
+from pathlib import Path
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QTabWidget, QLabel, QStatusBar, QShortcut,
                              QPushButton, QMessageBox, QSizePolicy, QApplication)
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont, QKeySequence
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+from pos_system.utils.firebase_sync import now_ar
 
 from pos_system.ui.products_view import ProductsView
 from pos_system.ui.sales_view import SalesView
@@ -24,6 +26,15 @@ class MainWindow(QMainWindow):
     cloud_sync_ok    = pyqtSignal()        # toast éxito (thread-safe)
     cloud_sync_error = pyqtSignal(str)     # toast error (thread-safe)
     cloud_sync_info  = pyqtSignal(str)     # toast info  (thread-safe)
+    # Señales thread-safe para eventos de caja desde Firebase
+    _sig_caja_open  = pyqtSignal(int)      # reg_id abierto remotamente
+    _sig_caja_close = pyqtSignal(str)      # session_id cerrado remotamente
+    # Señal thread-safe: admin de otra PC disparó sync → 'upload' o 'download'
+    _sig_remote_sync = pyqtSignal(str, str)  # (command, pc_id)
+    # Señal thread-safe: auto-update terminó (éxito/fallo)
+    _sig_update_ready = pyqtSignal(bool)
+    # Señal thread-safe: delta sync de productos al arranque terminó
+    _sig_delta_sync_done = pyqtSignal(int)  # n_updated
 
     def __init__(self, current_user: dict = None):
         super().__init__()
@@ -43,6 +54,9 @@ class MainWindow(QMainWindow):
 
     def init_ui(self):
         from pos_system.config import APP_NAME, WINDOW_WIDTH, WINDOW_HEIGHT, WINDOW_MIN_WIDTH, WINDOW_MIN_HEIGHT
+        
+        # Iniciar listeners de sincronización en tiempo real
+        self._start_realtime_sync_listeners()
 
         self.setWindowTitle(APP_NAME)
 
@@ -91,8 +105,7 @@ class MainWindow(QMainWindow):
             self.products_view = ProductsView(self)
             # Promociones se gestionan desde la webapp (Firebase) — no hay tab local
             self.promotions_view = None
-            from pos_system.ui.fiscal_view import FiscalView
-            self.fiscal_view = FiscalView(self)
+            self.fiscal_view = None
             from pos_system.ui.users_view import UsersView
             self.users_view = UsersView(self, current_user=self.current_user)
         else:
@@ -112,7 +125,6 @@ class MainWindow(QMainWindow):
         if is_admin:
             self.tabs.addTab(self.products_view, 'Productos')
             # Promociones ya no tiene tab — se gestionan desde la webapp
-            self.tabs.addTab(self.fiscal_view, 'Fiscal')
             self.tabs.addTab(self.users_view, 'Cajeros')
 
         main_layout.addWidget(self.tabs)
@@ -154,6 +166,18 @@ class MainWindow(QMainWindow):
         # Verificar actualizaciones en segundo plano (30s de retraso para no entorpecer el inicio)
         from PyQt5.QtCore import QTimer as _QT2
         _QT2.singleShot(30000, self._check_for_updates)
+
+        # Poller de sync remoto: detecta comando del admin → sube o descarga en silencio
+        self._last_sync_trigger_ts = None
+        self._sig_remote_sync.connect(self._on_remote_sync_detected)
+        self._sig_update_ready.connect(self._on_update_ready)
+        self._remote_sync_poller = QTimer()
+        self._remote_sync_poller.timeout.connect(self._poll_sync_trigger)
+        self._remote_sync_poller.start(60_000)  # cada 60 segundos
+
+        # Delta sync de productos al arranque: 8s de retraso para no entorpecer el inicio
+        self._sig_delta_sync_done.connect(self._on_delta_sync_done)
+        QTimer.singleShot(8_000, self._start_delta_product_sync)
 
     def setup_shortcuts(self):
         """Setup keyboard shortcuts"""
@@ -331,8 +355,8 @@ class MainWindow(QMainWindow):
         except Exception:
             self.cloud_btn.setVisible(True)
 
-        # ── Botón de actualización disponible (oculto por defecto) ──────
-        self.update_btn = QPushButton('🔔 Actualización disponible')
+        # ── Indicador de actualización (oculto por defecto, no clickeable) ─
+        self.update_btn = QPushButton('⬇ Descargando actualización...')
         self.update_btn.setStyleSheet(f'''
             QPushButton {{
                 background: #fff3cd;
@@ -343,13 +367,24 @@ class MainWindow(QMainWindow):
                 font-size: {btn_font_size}px;
                 font-weight: bold;
             }}
-            QPushButton:hover {{ background: #ffe69c; border-color: #e0a800; }}
-            QPushButton:pressed {{ background: #ffd866; }}
+            QPushButton:disabled {{ background: #fff3cd; color: #856404; }}
         ''')
         self.update_btn.setFont(QFont('Segoe UI', btn_font_size, QFont.Bold))
+        self.update_btn.setEnabled(False)
         self.update_btn.setVisible(False)
-        self.update_btn.clicked.connect(self._on_update_clicked)
         header_layout.addWidget(self.update_btn)
+
+        # ── Botón Inicio Automático (solo admin) ──────────────────────────
+        if user_role == 'admin':
+            self._autostart_btn = QPushButton()
+            self._autostart_btn.setFont(QFont('Segoe UI', btn_font_size))
+            self._autostart_btn.setMinimumHeight(30)
+            self._autostart_btn.clicked.connect(self._toggle_autostart)
+            self._autostart_btn.setToolTip(
+                'Habilitar o deshabilitar que la app se abra automáticamente al encender la PC'
+            )
+            header_layout.addWidget(self._autostart_btn)
+            self._refresh_autostart_btn()
 
         # ── Botón logout ──────────────────────────────────────────────────
         logout_btn = QPushButton('Cerrar Sesión')
@@ -413,23 +448,178 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.debug(f"Error checking low stock: {e}")
 
-    def check_cash_register_status(self):
+    def _start_realtime_sync_listeners(self):
+        """Inicia listeners de sincronizacion en tiempo real para ventas y cierres de caja."""
         try:
-            current_register = self.cash_register.get_current()
-            if not current_register:
-                if MessageBox.confirm(
-                    self,
-                    'Caja Cerrada',
-                    '¿Desea abrir la caja para comenzar a trabajar?'
-                ):
-                    self.tabs.setCurrentWidget(self.cash_view)
+            from pos_system.utils.firebase_sync import get_firebase_sync
+            fb = get_firebase_sync()
+            if not fb:
+                return
+
+            # IMPORTANTE: estos callbacks corren en hilo de Firebase (background).
+            # Usar señales Qt (pyqtSignal) para comunicación cross-thread → thread-safe.
+
+            # 1. Listener de CAJA (caja_activa/current) - el mas directo y confiable.
+            # Cuando PC-A abre la caja, ensure_local_register crea el mismo ID en PC-B.
+            # Cuando PC-A la cierra, on_register_close actualiza la SQLite de PC-B.
+            # Conectar señales (main thread) a slots antes de iniciar el listener
+            self._sig_caja_open.connect(self._on_caja_open_slot)
+            self._sig_caja_close.connect(self._on_caja_close_slot)
+
+            def on_register_open(reg_id):
+                self._sig_caja_open.emit(int(reg_id))
+
+            def on_register_close(session_id=''):
+                self._sig_caja_close.emit(session_id or '')
+
+            fb.start_register_listener(self.db, on_open=on_register_open, on_close=on_register_close)
+
+            # Si hay una caja abierta localmente, asegurarse de que Firebase la tenga.
+            # Cubre el caso donde sync_open_register falló la vez anterior (red caída, etc.)
+            def _push_local_register_if_needed():
+                try:
+                    local_reg = self.cash_register.get_current()
+                    if not local_reg:
+                        return
+                    remote = fb.get_active_register()
+                    if not remote or remote.get('id') != local_reg.get('id'):
+                        reg_with_cajero = dict(local_reg)
+                        reg_with_cajero['cajero'] = (
+                            self.current_user.get('turno_nombre')
+                            or self.current_user.get('full_name')
+                            or self.current_user.get('username', '')
+                        )
+                        fb.sync_open_register(reg_with_cajero)
+                        logger.info(f"Startup: Caja local #{local_reg['id']} re-sincronizada a Firebase.")
+                except Exception as e:
+                    logger.warning(f"Startup: No se pudo verificar caja en Firebase: {e}")
+            threading.Thread(target=_push_local_register_if_needed, daemon=True).start()
+
+            # 2. Listener de VENTAS desde otras computadoras.
+            # Bug anterior: refresh_all_views() solo leia la SQLite local (vacia en PC-B).
+            # Solucion: insertar la venta en la SQLite local antes de refrescar la vista.
+            def on_new_sale(sale_data):
+                sale_id = sale_data.get('sale_id')
+                from pos_system.utils.firebase_sync import _get_pc_id
+                # Ignorar ventas de esta misma PC (rebote de Firebase tras subir)
+                if sale_data.get('pc_id') == _get_pc_id():
+                    return
+                logger.info(f"Firebase: Nueva venta remota #{sale_id} (de {sale_data.get('pc_id','?')})")
+                _sale = dict(sale_data)
+
+                def _do_insert_sale():
+                    try:
+                        if not sale_id:
+                            self.refresh_all_views()
+                            return
+                        # No insertar si ya existe localmente (evitar duplicados)
+                        existing = self.db.execute_query(
+                            "SELECT id FROM sales WHERE id = ?", (sale_id,)
+                        )
+                        if existing:
+                            self.refresh_all_views()
+                            return
+                        # Caja activa local (ya sincronizada por start_register_listener)
+                        current = self.cash_register.get_current()
+                        cash_register_id = current['id'] if current else None
+                        # Parsear fecha
+                        created_at_raw = _sale.get('created_at')
+                        if hasattr(created_at_raw, 'timestamp'):
+                            from datetime import timezone as _tz
+                            created_at = datetime.fromtimestamp(
+                                created_at_raw.timestamp(), tz=_tz.utc
+                            ).strftime('%Y-%m-%d %H:%M:%S')
+                        elif isinstance(created_at_raw, str):
+                            created_at = created_at_raw[:19].replace('T', ' ')
+                        else:
+                            created_at = now_ar().strftime('%Y-%m-%d %H:%M:%S')
+                        total        = float(_sale.get('total_amount', 0) or 0)
+                        payment_type = _sale.get('payment_type', 'cash')
+                        cajero       = _sale.get('cajero') or _sale.get('username', '')
+                        # Insertar venta con el mismo ID que tiene en Firebase y en PC-A
+                        self.db.execute_update(
+                            """INSERT OR IGNORE INTO sales
+                               (id, total_amount, payment_type, cash_received, change_given,
+                                created_at, cash_register_id, turno_nombre, notes)
+                               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                            (sale_id, total, payment_type,
+                             float(_sale.get('cash_received', 0) or 0),
+                             float(_sale.get('change_given', 0) or 0),
+                             created_at, cash_register_id, cajero,
+                             'Sincronizado desde otra PC')
+                        )
+                        # Actualizar totales de la caja con esta venta remota
+                        if cash_register_id:
+                            if payment_type == 'cash':
+                                self.db.execute_update(
+                                    "UPDATE cash_register SET cash_sales = cash_sales + ?, total_sales = total_sales + ? WHERE id = ?",
+                                    (total, total, cash_register_id)
+                                )
+                            else:
+                                self.db.execute_update(
+                                    "UPDATE cash_register SET transfer_sales = transfer_sales + ?, total_sales = total_sales + ? WHERE id = ?",
+                                    (total, total, cash_register_id)
+                                )
+                        logger.info(f"Firebase: Venta #{sale_id} insertada localmente (${total:.2f}, {payment_type}).")
+                    except Exception as e:
+                        logger.error(f"Firebase: Error insertando venta remota #{sale_id}: {e}")
+                    self.refresh_all_views()
+
+                QTimer.singleShot(0, _do_insert_sale)
+
+            fb.start_sales_listener(on_new_sale)
+
+            # 3. Listener de PERFILES DE FACTURACIÓN desde la web
+            fb.start_perfiles_listener(self.db)
+
+            # 4. Listener de CLIENTES DE FACTURACIÓN desde la web
+            fb.start_clientes_listener(self.db)
+
+            # 5. Listener de EMISOR ACTIVO HOY desde la web
+            fb.start_emisor_activo_listener(self.db)
+
+            logger.info("Listeners de sincronizacion en tiempo real activados (thread-safe).")
         except Exception as e:
-            logger.error(f"Error checking cash register status: {e}")
+            logger.warning(f"No se pudo activar listeners de sincronizacion: {e}")
+
+
+    def check_cash_register_status(self):
+        pass  # No mostrar popup: la caja se abre manualmente desde la pestaña Caja
 
     def on_tab_changed(self, index):
         current_widget = self.tabs.currentWidget()
         if hasattr(current_widget, 'refresh_data'):
             current_widget.refresh_data()
+
+    # ── Slots para eventos de caja remotos (thread-safe via señales Qt) ──
+    def _on_caja_open_slot(self, reg_id):
+        logger.info(f"Firebase: Caja #{reg_id} abierta remotamente → refrescando.")
+        self.refresh_all_views()
+
+    def _on_caja_close_slot(self, session_id):
+        logger.info(f"Firebase: Cierre remoto detectado (sesión {session_id}).")
+        try:
+            current = self.cash_register.get_current()
+            if current:
+                sid = session_id or now_ar().strftime('%Y-%m-%d')
+                self.db.execute_update(
+                    "UPDATE cash_register SET status='closed', closing_date=?, notes=? WHERE id=?",
+                    (now_ar().isoformat(), 'Cerrado remotamente', current['id'])
+                )
+                try:
+                    from pos_system.models.cash_register import CashRegister as _CR
+                    from pos_system.utils.firebase_sync import get_firebase_sync
+                    rep = _CR(self.db).get_closing_report(current['id'])
+                    rep['session_id'] = sid
+                    fb2 = get_firebase_sync()
+                    if fb2:
+                        fb2.sync_cash_closing(rep, session_id=sid)
+                        logger.info(f"Firebase: Cierre #{current['id']} subido (sesión {sid}).")
+                except Exception as e2:
+                    logger.error(f"Firebase: Error subiendo cierre: {e2}")
+        except Exception as e:
+            logger.error(f"Firebase: Error cerrando caja local: {e}")
+        self.refresh_all_views()
 
     def refresh_all_views(self):
         for view in [self.products_view, self.sales_view, self.cash_view,
@@ -444,6 +634,60 @@ class MainWindow(QMainWindow):
 
         self.update_status_bar()
         self._check_low_stock_badge()
+
+    def _refresh_autostart_btn(self):
+        """Actualiza el texto y estilo del botón de autostart según el estado actual."""
+        if not hasattr(self, '_autostart_btn'):
+            return
+        try:
+            from pos_system.utils.autostart import is_autostart_enabled
+            enabled = is_autostart_enabled()
+        except Exception:
+            enabled = False
+
+        if enabled:
+            self._autostart_btn.setText('Inicio Auto: ON')
+            self._autostart_btn.setStyleSheet('''
+                QPushButton {
+                    background: #d1e7dd; border: 1.5px solid #198754;
+                    border-radius: 6px; padding: 4px 10px;
+                    color: #0f5132; font-size: 11px; font-weight: bold;
+                }
+                QPushButton:hover { background: #badbcc; }
+            ''')
+        else:
+            self._autostart_btn.setText('Inicio Auto: OFF')
+            self._autostart_btn.setStyleSheet('''
+                QPushButton {
+                    background: #f8f9fa; border: 1px solid #dee2e6;
+                    border-radius: 6px; padding: 4px 10px;
+                    color: #6c757d; font-size: 11px;
+                }
+                QPushButton:hover { background: #e9ecef; }
+            ''')
+
+    def _toggle_autostart(self):
+        """Habilita o deshabilita el inicio automático con Windows."""
+        try:
+            from pos_system.utils.autostart import is_autostart_enabled, set_autostart
+            currently = is_autostart_enabled()
+            ok = set_autostart(not currently)
+            if ok:
+                estado = 'habilitado' if not currently else 'deshabilitado'
+                QMessageBox.information(
+                    self, 'Inicio Automático',
+                    f'El inicio automático al encender la PC fue {estado}.'
+                )
+                self._refresh_autostart_btn()
+            else:
+                QMessageBox.warning(
+                    self, 'Inicio Automático',
+                    'No se pudo modificar el inicio automático.\n'
+                    'Verificá que la app tenga permisos para escribir en el registro.'
+                )
+        except Exception as e:
+            logger.error(f"Toggle autostart error: {e}")
+            QMessageBox.warning(self, 'Error', f'No se pudo cambiar el inicio automático:\n{e}')
 
     def _logout(self):
         """Cerrar sesión y mostrar login nuevamente"""
@@ -468,16 +712,22 @@ class MainWindow(QMainWindow):
         self.timer.stop()
         self.stock_timer.stop()
 
-        # Relanzar login
-        from pos_system.ui.login_dialog import LoginDialog
+        # Reabrir con selección de turno (sin pantalla de login)
         from pos_system.database.db_manager import DatabaseManager
-        db = DatabaseManager()
-        login = LoginDialog(db)
-        if login.exec_() == LoginDialog.Accepted:
-            new_user = login.logged_user
-            new_window = MainWindow(current_user=new_user)
-            new_window.show()
-
+        from pos_system.models.user import User as _User
+        _db = DatabaseManager()
+        _um  = _User(_db)
+        _um.ensure_default_admin()
+        _admins = _db.execute_query(
+            "SELECT * FROM users WHERE role='admin' AND is_active=1 LIMIT 1"
+        )
+        if _admins:
+            new_user = _admins[0]
+        else:
+            new_user = {'id': 0, 'username': 'admin', 'role': 'admin',
+                        'full_name': 'Administrador', 'is_active': 1}
+        new_window = MainWindow(current_user=new_user)
+        new_window.show()
         self.close()
 
     def _do_cloud_sync(self, full_history=False):
@@ -581,14 +831,15 @@ class MainWindow(QMainWindow):
                         def _fb_full_sync():
                             try:
                                 firedb = fb.db
-                                # Ventas — batch de hasta 500
+                                from pos_system.utils.firebase_sync import _month_name, _get_pc_id
+                                pc_id = _get_pc_id()
+                                # Ventas — batch de hasta 500, ID compuesto para no pisar otras PCs
                                 batch = firedb.batch()
                                 count = 0
                                 for s in all_sales:
                                     sale_id = str(s.get('id') or s.get('sale_id', ''))
                                     if not sale_id:
                                         continue
-                                    from pos_system.utils.firebase_sync import _month_name
                                     created_at = fb._parse_dt(s.get('created_at'))
                                     items = s.get('items') or []
                                     productos_str = ', '.join(
@@ -597,9 +848,11 @@ class MainWindow(QMainWindow):
                                     )
                                     if len(items) > 3:
                                         productos_str += f' (+{len(items)-3} más)'
-                                    ref = firedb.collection('ventas').document(sale_id)
+                                    fb_doc_id = f"{pc_id}_{sale_id}"
+                                    ref = firedb.collection('ventas').document(fb_doc_id)
                                     batch.set(ref, {
                                         'sale_id':       int(sale_id),
+                                        'pc_id':         pc_id,
                                         'created_at':    created_at,
                                         'payment_type':  s.get('payment_type', ''),
                                         'total_amount':  float(s.get('total_amount', 0) or 0),
@@ -711,13 +964,12 @@ class MainWindow(QMainWindow):
     def _apply_turno_tab_visibility(self, turno_role: str):
         """
         Muestra u oculta las pestañas de admin según el rol del turno activo.
-        - turno_role == 'cajero' → ocultar Productos, Fiscal, Cajeros
+        - turno_role == 'cajero' → ocultar Productos, Cajeros
         - turno_role == 'admin' o None (nombre libre) → mostrar todo
         """
         admin_views = [
             (self.cash_view,       'Caja'),
             (self.products_view,   'Productos'),
-            (self.fiscal_view,     'Fiscal'),
             (self.users_view,      'Cajeros'),
         ]
         show_admin_tabs = (turno_role != 'cajero')
@@ -815,66 +1067,142 @@ class MainWindow(QMainWindow):
         threading.Thread(target=_do_with_callback, daemon=True).start()
 
     def _check_for_updates(self):
-        """Verifica si hay una nueva versión disponible en GitHub Releases."""
+        """Verifica si hay una nueva versión disponible y lanza auto-update."""
         try:
             from pos_system.config import APP_VERSION, GITHUB_REPO
             from pos_system.utils.updater import check_for_updates
-            from PyQt5.QtCore import QMetaObject, Qt, Q_ARG
 
             def on_result(has_update, info):
-                if has_update:
-                    version = info.get('latest_version', '')
+                if has_update and info.get('download_url'):
                     self._update_info = info
-                    # Actualizar UI desde el hilo principal
-                    QTimer.singleShot(0, lambda: self._show_update_btn(version))
+                    QTimer.singleShot(0, lambda: self._auto_start_download(info))
 
             check_for_updates(APP_VERSION, GITHUB_REPO, callback=on_result)
         except Exception as e:
             logger.debug(f"Error verificando actualizaciones: {e}")
 
-    def _show_update_btn(self, version: str):
-        """Muestra el botón de actualización en el header (llamado desde hilo principal)."""
-        if hasattr(self, 'update_btn'):
-            self.update_btn.setText(f'🔔 v{version} disponible')
-            self.update_btn.setVisible(True)
-            self.update_btn.setToolTip(
-                f'Nueva versión v{version} disponible.\n'
-                'Click para ver y descargar la actualización.'
-            )
+    def _auto_start_download(self, info: dict):
+        """Inicia la descarga e instalación automática en background."""
+        import sys
+        from pos_system.utils.updater import download_and_apply_update
 
-    def _on_update_clicked(self):
-        """Muestra diálogo con info de la actualización y opción de descargar."""
-        info = getattr(self, '_update_info', {})
-        version = info.get('latest_version', '?')
-        release_url = info.get('release_url', '')
+        version = info.get('latest_version', '')
         download_url = info.get('download_url', '')
-        notes = info.get('release_notes', '') or ''
+        app_dir = str(Path(sys.executable).parent)
 
-        from pos_system.config import APP_VERSION
-        notes_preview = notes[:400] + ('...' if len(notes) > 400 else '')
+        self.update_btn.setText(f'⬇ Descargando v{version}...')
+        self.update_btn.setVisible(True)
 
-        msg = QMessageBox(self)
-        msg.setWindowTitle('Actualización disponible')
-        msg.setIcon(QMessageBox.Information)
-        msg.setText(
-            f'<b>Nueva versión v{version} disponible</b><br>'
-            f'Versión actual: v{APP_VERSION}'
-        )
-        if notes_preview:
-            msg.setInformativeText(notes_preview)
+        def on_progress(stage):
+            labels = {
+                'downloading': f'⬇ Descargando v{version}...',
+                'extracting':  f'📦 Preparando v{version}...',
+                'applying':    f'✓ Instalando v{version}...',
+            }
+            text = labels.get(stage, stage)
+            QTimer.singleShot(0, lambda: self.update_btn.setText(text))
 
-        btn_download = msg.addButton('⬇️ Descargar', QMessageBox.AcceptRole)
-        btn_web      = msg.addButton('🌐 Ver en GitHub', QMessageBox.HelpRole)
-        msg.addButton('Más tarde', QMessageBox.RejectRole)
+        def on_done(success):
+            self._sig_update_ready.emit(success)
 
-        msg.exec_()
+        download_and_apply_update(download_url, app_dir,
+                                  on_progress=on_progress, on_done=on_done)
 
-        clicked = msg.clickedButton()
-        from pos_system.utils.updater import download_and_open, open_release_page
-        if clicked == btn_download and download_url:
-            download_and_open(download_url)
-        elif clicked == btn_web and release_url:
-            open_release_page(release_url)
+    def _on_update_ready(self, success: bool):
+        """Llamado desde hilo principal cuando el update está listo para aplicarse."""
+        if success:
+            self.update_btn.setText('✓ Reiniciando...')
+            QTimer.singleShot(800, QApplication.instance().quit)
+        else:
+            self.update_btn.setText('⚠ Error al actualizar')
+
+    def _poll_sync_trigger(self):
+        """Corre cada 60s — detecta si el admin disparó un sync desde otra PC."""
+        def _check():
+            try:
+                from pos_system.utils.firebase_sync import get_firebase_sync, _get_pc_id
+                fb = get_firebase_sync()
+                if not fb or not fb.enabled:
+                    return
+                trigger = fb.read_sync_trigger()
+                if not trigger:
+                    return
+                ts  = trigger.get('timestamp', '')
+                pc  = trigger.get('pc_id', '')
+                cmd = trigger.get('command', 'upload')
+                # Si somos la PC que originó el trigger, solo actualizar el timestamp conocido
+                if pc == _get_pc_id():
+                    self._last_sync_trigger_ts = ts
+                    return
+                # Ignorar si ya procesamos este timestamp
+                if ts == self._last_sync_trigger_ts:
+                    return
+                # Primera vez que corremos (arranque de la app): marcar el trigger actual
+                # como visto sin procesarlo. Evita re-ejecutar syncs de sesiones anteriores.
+                if self._last_sync_trigger_ts is None:
+                    self._last_sync_trigger_ts = ts
+                    logger.debug(f"_poll_sync_trigger: trigger previo ignorado al inicio ({ts})")
+                    return
+                self._last_sync_trigger_ts = ts
+                self._sig_remote_sync.emit(cmd, pc)
+            except Exception as e:
+                logger.debug(f"_poll_sync_trigger: {e}")
+        import threading
+        threading.Thread(target=_check, daemon=True).start()
+
+    def _on_remote_sync_detected(self, command: str, remote_pc: str):
+        """El admin disparó un sync — ejecutar silenciosamente el mismo comando."""
+        from pos_system.ui.components import Toast
+        from pos_system.ui.sync_progress_dialog import SyncWorker, DownloadWorker
+
+        # Evitar iniciar un segundo sync si ya hay uno corriendo
+        if getattr(self, '_silent_sync_worker', None) and self._silent_sync_worker.isRunning():
+            logger.debug(f"_on_remote_sync_detected: sync ya en curso, ignorando trigger de {remote_pc}")
+            return
+
+        if command == 'upload':
+            Toast.info(self, f'Sincronización iniciada por {remote_pc} — subiendo datos...')
+            worker = SyncWorker(self, full_history=True, write_trigger=False)
+        else:
+            Toast.info(self, f'Sincronización iniciada por {remote_pc} — descargando datos...')
+            worker = DownloadWorker(main_window=self, write_trigger=False)
+
+        worker.finished.connect(lambda ok, msg: self._on_silent_sync_done(ok, command, remote_pc))
+        worker.start()
+        self._silent_sync_worker = worker  # evitar GC
+
+    def _on_silent_sync_done(self, success: bool, command: str, remote_pc: str):
+        from pos_system.ui.components import Toast
+        accion = 'subida' if command == 'upload' else 'descarga'
+        if success:
+            self.refresh_all_views()
+            self._check_low_stock_badge()
+            Toast.success(self, f'Sincronización ({accion}) completada')
+        else:
+            Toast.error(self, f'Error en sincronización automática ({accion})')
+        self._silent_sync_worker = None
+
+    def _start_delta_product_sync(self):
+        """Lanza el delta sync de productos en background (sin bloquear la UI)."""
+        try:
+            from pos_system.utils.firebase_sync import get_firebase_sync
+            fb = get_firebase_sync()
+            if not fb or not fb.enabled:
+                return
+            logger.debug("Delta sync de productos: iniciando en background...")
+            fb.delta_sync_products_startup(
+                local_db=self.db,
+                on_done=lambda n: self._sig_delta_sync_done.emit(n),
+            )
+        except Exception as e:
+            logger.debug(f"Delta sync productos: no iniciado ({e})")
+
+    def _on_delta_sync_done(self, n_updated: int):
+        """Slot ejecutado en hilo principal cuando el delta sync termina."""
+        if n_updated > 0:
+            self.products_view.refresh_data()
+            Toast.info(self, f'{n_updated} producto{"s" if n_updated != 1 else ""} actualizado{"s" if n_updated != 1 else ""} desde Firebase')
+            logger.info(f"Delta sync: {n_updated} productos aplicados a la vista.")
 
     def closeEvent(self, event):
         try:

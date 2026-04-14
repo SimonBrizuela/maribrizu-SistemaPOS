@@ -1,11 +1,12 @@
 import sys
+import math
+import re
 import logging
 from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtCore import Qt
 
-from pos_system.config import APP_NAME, ORGANIZATION, APP_VERSION
+from pos_system.config import APP_NAME, ORGANIZATION, APP_VERSION, DATABASE_PATH
 from pos_system.ui.main_window import MainWindow
-from pos_system.ui.login_dialog import LoginDialog
 from pos_system.database.db_manager import DatabaseManager
 from pos_system.utils.logger import setup_logger
 
@@ -38,7 +39,7 @@ def _init_google_sheets():
         logger.error(f"Google Sheets: Error al inicializar: {e}")
 
 
-def _init_firebase():
+def _init_firebase(db=None):
     """
     Inicializa la sincronización con Firebase Firestore.
     Requiere firebase_key.json en la raíz del proyecto.
@@ -48,6 +49,23 @@ def _init_firebase():
         sync = init_firebase_sync()
         if sync:
             logger.info("Firebase: Sincronización activa.")
+            # Sincronizar cajeros: sube los locales y descarga los de Firebase
+            if db:
+                try:
+                    # Primero subir los locales (para que la PC admin los publique)
+                    sync.sync_users(db)
+                    # Luego descargar (para recibir cajeros de otras PCs)
+                    count = sync.download_users(db)
+                    logger.info(f"Firebase: {count} cajeros sincronizados al iniciar.")
+                    # Listener en tiempo real para actualizaciones futuras
+                    sync.start_users_listener(db)
+                    # Sincronizar caja compartida al arrancar (el listener real se activa en MainWindow)
+                    try:
+                        sync.ensure_local_register(db)
+                    except Exception as e:
+                        logger.warning(f"Firebase: No se pudo sincronizar caja: {e}")
+                except Exception as e:
+                    logger.warning(f"Firebase: No se pudieron sincronizar cajeros: {e}")
         else:
             logger.info("Firebase: Sync desactivado (sin firebase_key.json o firebase-admin no instalado).")
     except Exception as e:
@@ -56,9 +74,10 @@ def _init_firebase():
 
 def _sync_inventory_from_firebase(db):
     """
-    Descarga el inventario completo desde Firestore y lo aplica a la BD local.
-    Esto garantiza que el POS siempre tenga los datos actualizados al iniciar,
-    incluyendo productos, precios, stock, rubros y códigos de barra cargados desde la web.
+    Descarga el catálogo desde Firestore y lo aplica a la BD local.
+    Antes de descargar los 12.000+ productos, verifica si el catálogo cambió
+    desde el último sync leyendo config/catalogo_meta (1 sola lectura Firestore).
+    Si no hubo cambios → sale sin leer nada más.
     """
     try:
         from pos_system.utils.firebase_sync import get_firebase_sync
@@ -66,7 +85,32 @@ def _sync_inventory_from_firebase(db):
         if not fb:
             return
 
-        logger.info("Firebase: Descargando catalogo desde Firestore...")
+        # ── Verificar si el catálogo cambió desde el último sync (1 lectura) ──
+        from pos_system.config import DATA_DIR
+        sync_file = DATA_DIR / "last_catalog_sync.txt"
+
+        local_epoch = 0.0
+        if sync_file.exists():
+            try:
+                local_epoch = float(sync_file.read_text(encoding='utf-8').strip())
+            except Exception:
+                local_epoch = 0.0
+
+        try:
+            meta_doc = fb.db.collection('config').document('catalogo_meta').get()
+            if meta_doc.exists:
+                meta = meta_doc.to_dict() or {}
+                fb_ts = meta.get('last_updated')
+                if fb_ts is not None:
+                    fb_epoch = fb_ts.timestamp() if hasattr(fb_ts, 'timestamp') else 0.0
+                    if fb_epoch > 0 and fb_epoch <= local_epoch:
+                        logger.info("Firebase: Catálogo sin cambios — sync omitido.")
+                        return
+        except Exception as e:
+            logger.debug(f"Firebase: No se pudo leer catalogo_meta: {e}")
+            # Si falla la lectura del meta, continuar con el sync completo
+
+        logger.info("Firebase: Descargando catálogo desde Firestore...")
 
         # El catalogo real esta en la coleccion 'catalogo'
         # Con 6000+ productos usamos paginacion para no saturar la memoria
@@ -93,13 +137,31 @@ def _sync_inventory_from_firebase(db):
                 firebase_id = doc.id  # ID único del documento en Firebase
                 pos_id      = p.get('pos_id')  # ID numérico único asignado por el sistema
                 nombre    = str(p.get('nombre') or '').strip()
-                precio    = float(p.get('precio_venta') or p.get('precio') or 0)
-                stock     = int(p.get('stock') or 0)
-                costo     = float(p.get('costo') or 0)
+
+                def _safe_float(v):
+                    try:
+                        f = float(v) if v is not None else 0.0
+                        return 0.0 if math.isnan(f) or math.isinf(f) else f
+                    except (ValueError, TypeError):
+                        return 0.0
+
+                def _safe_int(v):
+                    try:
+                        f = float(v) if v is not None else 0.0
+                        return 0 if math.isnan(f) or math.isinf(f) else int(f)
+                    except (ValueError, TypeError):
+                        return 0
+
+                precio    = _safe_float(p.get('precio_venta') or p.get('precio'))
+                stock     = max(0, _safe_int(p.get('stock')))  # stock nunca negativo
+                costo     = _safe_float(p.get('costo'))
                 categoria = str(p.get('categoria') or '').strip()
                 rubro     = str(p.get('rubro') or '').strip()
-                # cod_barra es el EAN/UPC; codigo es el código interno
-                barcode   = str(p.get('cod_barra') or p.get('codigo') or '').strip()
+                # cod_barra es el EAN/UPC; codigo es el código interno (no usar como barcode)
+                barcode   = str(p.get('cod_barra') or '').strip()
+                # descartar barcodes con caracteres inválidos
+                if barcode and (not re.match(r'^[A-Za-z0-9\-_]+$', barcode) or len(barcode) < 3):
+                    barcode = ''
                 estado    = str(p.get('estado') or 'activo').lower()
                 marca     = str(p.get('marca') or '').strip()
 
@@ -165,13 +227,20 @@ def _sync_inventory_from_firebase(db):
 
             except (ValidationError, Exception) as e:
                 errores += 1
-                logger.debug(f"Firebase catalogo '{p.get('nombre','?')}': {e}")
+                logger.warning(f"Firebase catalogo '{p.get('nombre','?')}': {e}")
 
         logger.info(
             f"Firebase: Inventario sincronizado — "
             f"{creados} creados, {actualizados} actualizados, {errores} errores "
             f"(de {total_fb} productos en Firestore)"
         )
+
+        # Guardar timestamp del sync exitoso para el próximo arranque
+        try:
+            import time
+            sync_file.write_text(str(time.time()), encoding='utf-8')
+        except Exception:
+            pass
 
     except Exception as e:
         logger.error(f"Firebase: Error descargando inventario inicial: {e}")
@@ -210,7 +279,7 @@ def main():
         logger.info("=" * 60)
 
         # Inicializar base de datos
-        db = DatabaseManager()
+        db = DatabaseManager(str(DATABASE_PATH))
         logger.info("Initializing database...")
         db.initialize_database()
 
@@ -220,7 +289,7 @@ def main():
 
         # Inicializar Firebase Firestore (no bloquea si falla)
         logger.info("Initializing Firebase sync...")
-        _init_firebase()
+        _init_firebase(db)
 
         # Sincronizar inventario desde Firebase en background (no bloquea la apertura)
         import threading
@@ -243,15 +312,31 @@ def main():
         if os.path.exists(logo_path):
             app.setWindowIcon(QIcon(logo_path))
 
-        # Mostrar login
-        logger.info("Showing login dialog...")
-        login = LoginDialog(db)
-        if login.exec_() != LoginDialog.Accepted:
-            logger.info("Login cancelled — application exit")
-            sys.exit(0)
+        # Auto-login como admin (sin pantalla de login)
+        logger.info("Auto-login: buscando usuario admin...")
+        from pos_system.models.user import User
+        _user_model = User(db)
+        _user_model.ensure_default_admin()
+        _admins = db.execute_query(
+            "SELECT * FROM users WHERE role='admin' AND is_active=1 LIMIT 1"
+        )
+        if _admins:
+            logged_user = _admins[0]
+        else:
+            logged_user = {
+                'id': 0, 'username': 'admin', 'role': 'admin',
+                'full_name': 'Administrador', 'is_active': 1,
+            }
+        logger.info(f"Auto-login: {logged_user.get('username')} (role: {logged_user.get('role')})")
 
-        logged_user = login.logged_user
-        logger.info(f"Authenticated as: {logged_user['username']} (role: {logged_user['role']})")
+        # Habilitar autostart por defecto si aún no está configurado
+        try:
+            from pos_system.utils.autostart import is_autostart_enabled, set_autostart
+            if not is_autostart_enabled():
+                set_autostart(True)
+                logger.info("Autostart habilitado por defecto.")
+        except Exception as e:
+            logger.warning(f"No se pudo habilitar autostart por defecto: {e}")
 
         # Abrir ventana principal con el usuario autenticado
         logger.info("Loading main window...")

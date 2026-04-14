@@ -135,3 +135,8 @@ class User:
         """Desactiva un usuario (no elimina físicamente)"""
         self.db.execute_update("UPDATE users SET is_active = 0 WHERE id = ?", (user_id,))
         return True
+
+    def hard_delete(self, user_id: int) -> bool:
+        """Elimina físicamente un usuario de la base de datos."""
+        self.db.execute_update("DELETE FROM users WHERE id = ?", (user_id,))
+        return True

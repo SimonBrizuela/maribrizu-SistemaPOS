@@ -2,10 +2,11 @@ import { collection, getDocs, query, orderBy, where } from 'firebase/firestore';
 import { getCached } from '../cache.js';
 
 export async function renderCierres(container, db) {
+  // TTL corto: la caja abierta es crítica y debe reflejarse casi en tiempo real
   const todos = await getCached('cierres:caja', async () => {
     const snap = await getDocs(query(collection(db, 'cierres_caja'), orderBy('fecha_apertura', 'desc')));
     return snap.docs.map(d => ({ id: d.id, ...d.data() }));
-  });
+  }, { ttl: 30 * 1000 });
 
   // Separar cajas abiertas (sin fecha_cierre) de las cerradas
   const cajasAbiertas = todos.filter(c => !c.fecha_cierre || c.fecha_cierre === null || c.fecha_cierre === '');
@@ -20,14 +21,20 @@ export async function renderCierres(container, db) {
     );
     const fechaAperturaDate = toDate(fechaAperturaRaw);
 
-    // Leer ventas desde Firebase y filtrar las que ocurrieron después de la apertura
+    // Leer ventas desde Firebase y filtrar las que ocurrieron después de la apertura.
+    // Se resta un buffer de 5 min a fechaAperturaDate para absorber el race condition
+    // donde el sync de una venta corre antes que el sync de la apertura de caja.
+    const BUFFER_MS = 5 * 60 * 1000;
+    const fechaLimite = fechaAperturaDate
+      ? new Date(fechaAperturaDate.getTime() - BUFFER_MS)
+      : null;
     const ventasSnap = await getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc')));
     let totalEfectivo = 0, totalTransferencia = 0, totalTransacciones = 0;
     for (const doc of ventasSnap.docs) {
       const v = doc.data();
       const vDate = toDate(v.created_at);
-      if (!vDate || !fechaAperturaDate) continue;
-      if (vDate < fechaAperturaDate) continue;
+      if (!vDate) continue;
+      if (fechaLimite && vDate < fechaLimite) continue;
       const monto = parseFloat(v.total_amount || 0);
       if (v.payment_type === 'cash') totalEfectivo += monto;
       else if (v.payment_type === 'transfer') totalTransferencia += monto;
@@ -446,16 +453,21 @@ function fila(label, valor, color = '#1e293b', bold = false) {
   `;
 }
 
+// Maneja: Timestamp live (.toDate), Timestamp de localStorage ({ seconds, nanoseconds }), ISO string
 function toDate(val) {
   if (!val) return null;
-  if (val?.toDate) return val.toDate();
+  if (typeof val.toDate === 'function') return val.toDate();
+  if (typeof val === 'object' && val.seconds !== undefined)
+    return new Date(val.seconds * 1000 + Math.floor((val.nanoseconds || 0) / 1e6));
   return new Date(val);
 }
 
 // Para display: compensar naive hora AR guardada como UTC → sumar 3h
 function parseArDate(val) {
   if (!val) return null;
-  if (val?.toDate) return new Date(val.toDate().getTime() + 3 * 60 * 60 * 1000);
+  if (typeof val.toDate === 'function') return new Date(val.toDate().getTime() + 3 * 60 * 60 * 1000);
+  if (typeof val === 'object' && val.seconds !== undefined)
+    return new Date(val.seconds * 1000 + Math.floor((val.nanoseconds || 0) / 1e6) + 3 * 60 * 60 * 1000);
   return new Date(val);
 }
 

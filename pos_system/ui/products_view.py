@@ -6,6 +6,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QPixmap, QColor
 from datetime import datetime
+from pos_system.utils.firebase_sync import now_ar
 import os
 
 from pos_system.models.product import Product

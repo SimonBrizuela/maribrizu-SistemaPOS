@@ -3,7 +3,10 @@ import os
 from datetime import datetime
 
 class ImageHandler:
-    def __init__(self, base_path='pos_system/assets/images'):
+    def __init__(self, base_path=None):
+        if base_path is None:
+            from pos_system.config import IMAGES_DIR
+            base_path = str(IMAGES_DIR)
         self.base_path = base_path
         os.makedirs(base_path, exist_ok=True)
         
