@@ -49,18 +49,24 @@ def check_for_updates(current_version: str, repo: str, callback=None):
             release_url = data.get('html_url', '')
             release_notes = data.get('body', '')
 
-            # Buscar asset: ZIP portable primero, luego .exe
+            # Buscar asset: installer .exe primero, luego .zip portable
             download_url = None
+            asset_type = None
             for asset in data.get('assets', []):
                 name = asset.get('name', '').lower()
-                if name.endswith('.zip'):
+                if name.endswith('.exe') and 'setup' in name:
                     download_url = asset.get('browser_download_url')
+                    asset_type = 'installer'
                     break
             if not download_url:
                 for asset in data.get('assets', []):
-                    if asset.get('name', '').endswith('.exe'):
+                    name = asset.get('name', '').lower()
+                    if name.endswith('.zip'):
                         download_url = asset.get('browser_download_url')
+                        asset_type = 'zip'
                         break
+
+            _update_cache['asset_type'] = asset_type
 
             has_update = _version_tuple(tag) > _version_tuple(current_version)
 
@@ -92,65 +98,77 @@ def check_for_updates(current_version: str, repo: str, callback=None):
 def download_and_apply_update(download_url: str, app_dir: str,
                                on_progress=None, on_done=None):
     """
-    Descarga el ZIP, lo extrae en una carpeta temporal y escribe un .bat
-    que (después de que la app se cierre) reemplaza los archivos y la reinicia.
+    Si el asset es un installer .exe: lo descarga y lo corre con /VERYSILENT.
+    Si es un .zip: extrae y aplica via .bat.
 
     on_progress(stage): 'downloading' | 'extracting' | 'applying'
     on_done(success: bool)
     """
+    is_installer = download_url.lower().endswith('.exe')
+
     def _run():
         temp_dir = None
         try:
-            # 1. Descargar ZIP
             temp_dir = Path(tempfile.mkdtemp(prefix='spos_upd_'))
-            zip_path = temp_dir / 'update.zip'
 
             if on_progress:
                 on_progress('downloading')
 
-            urllib.request.urlretrieve(download_url, zip_path)
+            if is_installer:
+                # ── Installer .exe ────────────────────────────────────────
+                installer_path = temp_dir / 'SistemaPOS_Setup.exe'
+                urllib.request.urlretrieve(download_url, installer_path)
 
-            # 2. Extraer
-            if on_progress:
-                on_progress('extracting')
+                if on_progress:
+                    on_progress('applying')
 
-            extract_dir = temp_dir / 'extracted'
-            extract_dir.mkdir()
+                import subprocess
+                subprocess.Popen(
+                    [str(installer_path),
+                     '/VERYSILENT', '/NORESTART',
+                     '/CLOSEAPPLICATIONS', '/FORCECLOSEAPPLICATIONS'],
+                    creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
+                    close_fds=True,
+                )
+            else:
+                # ── ZIP portable ──────────────────────────────────────────
+                zip_path = temp_dir / 'update.zip'
+                urllib.request.urlretrieve(download_url, zip_path)
 
-            with zipfile.ZipFile(zip_path, 'r') as zf:
-                zf.extractall(extract_dir)
+                if on_progress:
+                    on_progress('extracting')
 
-            zip_path.unlink()  # liberar espacio
+                extract_dir = temp_dir / 'extracted'
+                extract_dir.mkdir()
+                with zipfile.ZipFile(zip_path, 'r') as zf:
+                    zf.extractall(extract_dir)
+                zip_path.unlink()
 
-            # El ZIP contiene una carpeta raíz (SistemaPOS/) adentro
-            inner_dirs = [d for d in extract_dir.iterdir() if d.is_dir()]
-            new_files_dir = inner_dirs[0] if inner_dirs else extract_dir
+                inner_dirs = [d for d in extract_dir.iterdir() if d.is_dir()]
+                new_files_dir = inner_dirs[0] if inner_dirs else extract_dir
+                app_dir_path = Path(app_dir)
+                app_exe = app_dir_path / 'SistemaPOS.exe'
 
-            app_dir_path = Path(app_dir)
-            app_exe = app_dir_path / 'SistemaPOS.exe'
+                bat_path = Path(tempfile.gettempdir()) / 'spos_update.bat'
+                bat_content = (
+                    '@echo off\r\n'
+                    'timeout /t 4 /nobreak >nul\r\n'
+                    f'xcopy /E /I /Y "{new_files_dir}\\*" "{app_dir_path}\\"\r\n'
+                    f'start "" "{app_exe}"\r\n'
+                    f'rd /s /q "{temp_dir}"\r\n'
+                    'del "%~f0"\r\n'
+                )
+                bat_path.write_text(bat_content, encoding='utf-8')
 
-            # 3. Escribir .bat en %TEMP% (FUERA de temp_dir para poder borrarlo)
-            bat_path = Path(tempfile.gettempdir()) / 'spos_update.bat'
-            bat_content = (
-                '@echo off\r\n'
-                'timeout /t 4 /nobreak >nul\r\n'
-                f'xcopy /E /I /Y "{new_files_dir}\\*" "{app_dir_path}\\"\r\n'
-                f'start "" "{app_exe}"\r\n'
-                f'rd /s /q "{temp_dir}"\r\n'
-                'del "%~f0"\r\n'
-            )
-            bat_path.write_text(bat_content, encoding='utf-8')
+                if on_progress:
+                    on_progress('applying')
 
-            if on_progress:
-                on_progress('applying')
-
-            # 4. Lanzar .bat desacoplado y salir
-            import subprocess
-            subprocess.Popen(
-                ['cmd', '/c', str(bat_path)],
-                creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
-                close_fds=True,
-            )
+                import subprocess
+                subprocess.Popen(
+                    ['cmd', '/c', str(bat_path)],
+                    creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NO_WINDOW,
+                    close_fds=True,
+                )
 
             if on_done:
                 on_done(True)

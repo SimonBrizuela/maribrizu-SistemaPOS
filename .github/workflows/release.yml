@@ -33,20 +33,30 @@ jobs:
         run: |
           $env:FIREBASE_KEY | Out-File -FilePath firebase_key.json -Encoding utf8 -NoNewline
 
-      - name: Patch APP_VERSION in config.py
+      - name: Patch APP_VERSION
         shell: pwsh
         run: |
           $tag = "${{ github.ref_name }}" -replace '^v', ''
           (Get-Content pos_system/config.py) -replace 'APP_VERSION\s*=\s*"[^"]*"', "APP_VERSION = `"$tag`"" | Set-Content pos_system/config.py
-          Write-Host "APP_VERSION patched to $tag"
+          (Get-Content SistemaPOS_installer.iss) -replace 'APP_VERSION_PLACEHOLDER', $tag | Set-Content SistemaPOS_installer.iss
+          Write-Host "Patched version to $tag"
 
-      - name: Build portable
+      - name: Build portable (PyInstaller)
         run: python build_app.py
+
+      - name: Build installer (Inno Setup)
+        shell: pwsh
+        run: |
+          $iscc = "C:\Program Files (x86)\Inno Setup 6\ISCC.exe"
+          & $iscc SistemaPOS_installer.iss
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: SistemaPOS_Portable.zip
+          files: |
+            installer_output/SistemaPOS_Setup.exe
+            SistemaPOS_Portable.zip
           generate_release_notes: true
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
