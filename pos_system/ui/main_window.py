@@ -33,6 +33,8 @@ class MainWindow(QMainWindow):
     _sig_remote_sync = pyqtSignal(str, str)  # (command, pc_id)
     # Señal thread-safe: auto-update terminó (éxito/fallo)
     _sig_update_ready = pyqtSignal(bool)
+    # Señal thread-safe: iniciar descarga de update desde hilo principal
+    _sig_start_download = pyqtSignal(object)
     # Señal thread-safe: delta sync de productos al arranque terminó
     _sig_delta_sync_done = pyqtSignal(int)  # n_updated
 
@@ -171,6 +173,7 @@ class MainWindow(QMainWindow):
         self._last_sync_trigger_ts = None
         self._sig_remote_sync.connect(self._on_remote_sync_detected)
         self._sig_update_ready.connect(self._on_update_ready)
+        self._sig_start_download.connect(self._auto_start_download)
         self._remote_sync_poller = QTimer()
         self._remote_sync_poller.timeout.connect(self._poll_sync_trigger)
         self._remote_sync_poller.start(60_000)  # cada 60 segundos
@@ -1075,7 +1078,7 @@ class MainWindow(QMainWindow):
             def on_result(has_update, info):
                 if has_update and info.get('download_url'):
                     self._update_info = info
-                    QTimer.singleShot(0, lambda: self._auto_start_download(info))
+                    self._sig_start_download.emit(info)
 
             check_for_updates(APP_VERSION, GITHUB_REPO, callback=on_result)
         except Exception as e:

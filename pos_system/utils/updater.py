@@ -135,6 +135,7 @@ def download_and_apply_update(download_url: str, app_dir: str,
         temp_dir = None
         try:
             temp_dir = Path(tempfile.mkdtemp(prefix='spos_upd_'))
+            logger.info(f"Updater: iniciando descarga en {temp_dir}")
 
             if on_progress:
                 on_progress('downloading')
@@ -199,7 +200,8 @@ def download_and_apply_update(download_url: str, app_dir: str,
                 on_done(True)
 
         except Exception as e:
-            logger.warning(f'Updater: error al descargar/aplicar update: {e}')
+            import traceback
+            logger.warning(f'Updater: error al descargar/aplicar update: {e}\n{traceback.format_exc()}')
             if on_done:
                 on_done(False)
 
