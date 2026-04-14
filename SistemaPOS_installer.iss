@@ -41,7 +41,7 @@ Name: "{group}\Desinstalar Sistema POS"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\Sistema POS"; Filename: "{app}\SistemaPOS.exe"; Tasks: desktopicon
 
 [Run]
-Filename: "{app}\SistemaPOS.exe"; Description: "Iniciar Sistema POS"; Flags: nowait postinstall skipifsilent
+Filename: "{app}\SistemaPOS.exe"; Description: "Iniciar Sistema POS"; Flags: nowait postinstall
 
 [UninstallDelete]
 Type: filesandordirs; Name: "{app}"
