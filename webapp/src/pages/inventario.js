@@ -1,4 +1,4 @@
-import { collection, getDocs, query, orderBy, doc, updateDoc, getDoc } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, doc, updateDoc, getDoc, serverTimestamp } from 'firebase/firestore';
 import { invalidateCacheByPrefix } from '../cache.js';
 
 // Mapa de subcategorías por rubro cargado desde Firebase sub_categories
@@ -45,7 +45,6 @@ function getCatsDelRubro(rubro, base) {
 }
 
 function fmt(n) { return Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
-function today() { return new Date().toLocaleDateString('es-AR'); }
 
 // Rubros se cargan dinámicamente desde Firebase config/rubros
 let RUBROS = ['ACCESORIOS','JUGUETERÍA','LENCERÍA','LIBRERÍA','MERCERÍA',
@@ -413,7 +412,7 @@ export async function renderInventario(container, db) {
     const valor = parseInt(nuevoStock);
     if (isNaN(valor) || valor < 0) { alert('Stock inválido'); return; }
     try {
-      await updateDoc(doc(db, 'catalogo', docId), { stock: valor, ultima_actualizacion: today() });
+      await updateDoc(doc(db, 'catalogo', docId), { stock: valor, ultima_actualizacion: serverTimestamp() });
       invalidateCacheByPrefix('catalogo');
       const idx = prods.findIndex(x => x.doc_id === docId);
       if (idx !== -1) {

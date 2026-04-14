@@ -20,9 +20,6 @@ function parseNum(str) {
   return parseFloat(String(str).replace(/\./g, '').replace(',', '.')) || 0;
 }
 
-function today() {
-  return new Date().toLocaleDateString('es-AR');
-}
 
 // ── Parsear CSV de librería ───────────────────────────────────────────────────
 // ── Normalización de categorías ───────────────────────────────────────────────
@@ -256,7 +253,7 @@ function parseCatalogoCSV(text) {
       estado: costo === 0 ? 'sin_precio' : 'activo',
       duplicado: false,
       margen_original,
-      ultima_actualizacion: today(),
+      ultima_actualizacion: serverTimestamp(),
       historial_precios: [],
     };
 
@@ -956,7 +953,7 @@ export async function renderCatalogo(container, db) {
           btnRedondearTodos.innerHTML = '<span class="material-icons" style="font-size:16px;animation:spin 0.8s linear infinite">refresh</span> Redondeando...';
           try {
             const BATCH = 500;
-            const ts = new Date().toLocaleDateString('es-AR');
+            const ts = serverTimestamp();
             for (let i = 0; i < filtrados.length; i += BATCH) {
               const batch = writeBatch(db);
               filtrados.slice(i, i + BATCH).forEach(p => {
@@ -1219,7 +1216,7 @@ export async function renderCatalogo(container, db) {
         precio_venta:         nuevoPrecio,
         stock:                nuevoStock,
         estado:               nuevoCosto === 0 ? 'sin_precio' : 'activo',
-        ultima_actualizacion: today(),
+        ultima_actualizacion: serverTimestamp(),
       };
 
       try {
@@ -1230,7 +1227,7 @@ export async function renderCatalogo(container, db) {
         // Sincronizar con inventario para que el POS reciba el precio actualizado
         try {
           const invDocId = String(prod.id || prod.doc_id);
-          const invUpdate = { ultima_actualizacion: today(), nombre: prod.nombre || '' };
+          const invUpdate = { ultima_actualizacion: serverTimestamp(), nombre: prod.nombre || '' };
           if (nuevoPrecio !== undefined) invUpdate.precio = nuevoPrecio;
           if (nuevoStock !== undefined) invUpdate.stock = nuevoStock;
           if (nuevoCosto !== undefined) invUpdate.costo = nuevoCosto;
@@ -1284,7 +1281,7 @@ export async function renderCatalogo(container, db) {
     const guardar = async () => {
       let nuevo = parseFloat(input.value) || 0;
       if (field === 'stock') nuevo = Math.max(0, Math.round(nuevo));
-      const update = { [field]: nuevo, ultima_actualizacion: today() };
+      const update = { [field]: nuevo, ultima_actualizacion: serverTimestamp() };
       if (field === 'costo') update.estado = nuevo === 0 ? 'sin_precio' : 'activo';
       try {
         await updateDoc(doc(db, 'catalogo', id), update);
@@ -1294,7 +1291,7 @@ export async function renderCatalogo(container, db) {
         // inventario usa el ID numérico del producto (campo 'id'), no el doc_id del catálogo.
         if (field === 'stock' || field === 'precio_venta' || field === 'costo') {
           try {
-            const invUpdate = { ultima_actualizacion: today() };
+            const invUpdate = { ultima_actualizacion: serverTimestamp() };
             if (field === 'stock') invUpdate.stock = nuevo;
             if (field === 'precio_venta') invUpdate.precio = nuevo;
             if (field === 'costo') invUpdate.costo = nuevo;
@@ -1634,7 +1631,7 @@ export async function renderCatalogo(container, db) {
               await updateDoc(doc(db, 'catalogo', p.doc_id), {
                 costo: p.costo,
                 estado: p.costo === 0 ? 'sin_precio' : 'activo',
-                ultima_actualizacion: today()
+                ultima_actualizacion: serverTimestamp()
               });
             }
           }
@@ -1743,7 +1740,7 @@ export async function renderCatalogo(container, db) {
       try {
         await updateDoc(doc(db, 'catalogo', p.doc_id), {
           precio_venta: nuevoPrecio,
-          ultima_actualizacion: today()
+          ultima_actualizacion: serverTimestamp()
         });
         _touchCatalogoMeta(db).catch(() => {});
         // Sincronizar con inventario para que el POS reciba el precio actualizado
@@ -1751,7 +1748,7 @@ export async function renderCatalogo(container, db) {
           const invDocId = String(p.id || p.doc_id);
           await setDoc(doc(db, 'inventario', invDocId), {
             precio: nuevoPrecio, nombre: p.nombre || '', id: parseInt(invDocId) || invDocId,
-            ultima_actualizacion: today()
+            ultima_actualizacion: serverTimestamp()
           }, { merge: true });
         } catch(e2) { console.warn('No se pudo actualizar inventario:', e2.message); }
         // Update local array
@@ -1903,7 +1900,7 @@ export async function renderCatalogo(container, db) {
       try {
         await updateDoc(doc(db, 'catalogo', p.doc_id), {
           precio_venta: nuevoPrecio,
-          ultima_actualizacion: today()
+          ultima_actualizacion: serverTimestamp()
         });
         invalidateCacheByPrefix('catalogo');
         _touchCatalogoMeta(db).catch(() => {});
@@ -1912,7 +1909,7 @@ export async function renderCatalogo(container, db) {
           const invDocId = String(p.id || p.doc_id);
           await setDoc(doc(db, 'inventario', invDocId), {
             precio: nuevoPrecio, nombre: p.nombre || '', id: parseInt(invDocId) || invDocId,
-            ultima_actualizacion: today()
+            ultima_actualizacion: serverTimestamp()
           }, { merge: true });
         } catch(e2) { console.warn('No se pudo actualizar inventario:', e2.message); }
         const idx = allProductos.findIndex(x => x.doc_id === p.doc_id);
@@ -2157,7 +2154,7 @@ export async function renderCatalogo(container, db) {
         estado: costo === 0 ? 'sin_precio' : 'activo',
         duplicado: false,
         pos_id: nextPosId,
-        ultima_actualizacion: today(),
+        ultima_actualizacion: serverTimestamp(),
         historial_precios: [],
       };
 
@@ -2483,13 +2480,13 @@ export async function renderCatalogo(container, db) {
         for (const p of chunk) {
           batch.update(doc(db, 'catalogo', p.doc_id), {
             precio_venta: p.nuevo_precio,
-            ultima_actualizacion: today()
+            ultima_actualizacion: serverTimestamp()
           });
           // Sincronizar con inventario para que el POS reciba el precio actualizado
           const invDocId = String(p.id || p.doc_id);
           batchInv.set(doc(db, 'inventario', invDocId), {
             precio: p.nuevo_precio, nombre: p.nombre || '', id: parseInt(invDocId) || invDocId,
-            ultima_actualizacion: today()
+            ultima_actualizacion: serverTimestamp()
           }, { merge: true });
         }
         await batch.commit();
