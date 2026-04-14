@@ -226,11 +226,23 @@ class DownloadWorker(QThread):
                 elif nombre.lower() in local_by_name:
                     local_id, local_ts_num = local_by_name[nombre.lower()]
 
-                # ── Actualizar solo si hubo cambios (comparar timestamps) ──
+                # ── Actualizar solo si los datos realmente cambiaron ─────
                 if local_id is not None:
-                    # Si Firebase tiene timestamp y es igual o anterior al local → sin cambios
-                    if fb_ts_num > 0.0 and local_ts_num > 0.0 and fb_ts_num <= local_ts_num:
+                    local_data = local_data_by_id.get(local_id, {})
+                    datos_iguales = (
+                        abs(float(local_data.get('price') or 0) - precio) < 0.01
+                        and int(local_data.get('stock') or 0) == stock
+                        and str(local_data.get('name') or '').strip() == nombre
+                        and str(local_data.get('barcode') or '') == (barcode or '')
+                    )
+                    if datos_iguales:
                         productos_sin_cambios += 1
+                        # Actualizar firebase_id si faltaba
+                        if firebase_id and not local_data.get('firebase_id'):
+                            db.execute_update(
+                                "UPDATE products SET firebase_id = ? WHERE id = ?",
+                                (firebase_id, local_id)
+                            )
                     else:
                         if fb_ts:
                             db.execute_update("""
