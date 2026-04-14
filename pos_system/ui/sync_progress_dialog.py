@@ -244,25 +244,33 @@ class DownloadWorker(QThread):
                                 (firebase_id, local_id)
                             )
                     else:
-                        if fb_ts:
-                            db.execute_update("""
-                                UPDATE products SET
-                                    name = ?, price = ?, cost = ?, stock = ?,
-                                    category = ?, barcode = ?, discount_value = ?,
-                                    firebase_id = ?, rubro = ?, updated_at = ?
-                                WHERE id = ?
-                            """, (nombre, precio, costo, stock, cat, barcode, desc,
-                                  firebase_id, rubro, fb_ts, local_id))
-                        else:
-                            db.execute_update("""
-                                UPDATE products SET
-                                    name = ?, price = ?, cost = ?, stock = ?,
-                                    category = ?, barcode = ?, discount_value = ?,
-                                    firebase_id = ?, rubro = ?,
-                                    updated_at = CURRENT_TIMESTAMP
-                                WHERE id = ?
-                            """, (nombre, precio, costo, stock, cat, barcode, desc,
-                                  firebase_id, rubro, local_id))
+                        def _do_update(bc):
+                            if fb_ts:
+                                db.execute_update("""
+                                    UPDATE products SET
+                                        name = ?, price = ?, cost = ?, stock = ?,
+                                        category = ?, barcode = ?, discount_value = ?,
+                                        firebase_id = ?, rubro = ?, updated_at = ?
+                                    WHERE id = ?
+                                """, (nombre, precio, costo, stock, cat, bc, desc,
+                                      firebase_id, rubro, fb_ts, local_id))
+                            else:
+                                db.execute_update("""
+                                    UPDATE products SET
+                                        name = ?, price = ?, cost = ?, stock = ?,
+                                        category = ?, barcode = ?, discount_value = ?,
+                                        firebase_id = ?, rubro = ?,
+                                        updated_at = CURRENT_TIMESTAMP
+                                    WHERE id = ?
+                                """, (nombre, precio, costo, stock, cat, bc, desc,
+                                      firebase_id, rubro, local_id))
+                        try:
+                            _do_update(barcode)
+                        except Exception as e:
+                            if 'UNIQUE' in str(e) and 'barcode' in str(e):
+                                # Barcode duplicado en otro producto — actualizar sin barcode
+                                _do_update(None)
+                            # otros errores se ignoran silenciosamente
                         productos_actualizados += 1
                         new_ts = fb_ts or '9999-99-99'
                         local_by_firebase_id[firebase_id] = (local_id, new_ts)
