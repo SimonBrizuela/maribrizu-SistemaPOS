@@ -95,6 +95,31 @@ def check_for_updates(current_version: str, repo: str, callback=None):
     threading.Thread(target=_check, daemon=True).start()
 
 
+def _chunked_download(url: str, dest: Path, on_progress=None):
+    """Descarga un archivo en chunks con timeout de socket. Loguea progreso cada 10 MB."""
+    import socket
+    CHUNK = 1024 * 64   # 64 KB
+    LOG_EVERY = 1024 * 1024 * 10  # log cada 10 MB
+
+    req = urllib.request.Request(url, headers={'User-Agent': 'SistemaPOS-Updater'})
+    with urllib.request.urlopen(req, timeout=30) as resp:
+        total = int(resp.headers.get('Content-Length') or 0)
+        downloaded = 0
+        last_logged = 0
+        with open(dest, 'wb') as fh:
+            while True:
+                chunk = resp.read(CHUNK)
+                if not chunk:
+                    break
+                fh.write(chunk)
+                downloaded += len(chunk)
+                if downloaded - last_logged >= LOG_EVERY:
+                    pct = f"{downloaded/total*100:.0f}%" if total else f"{downloaded//1024//1024} MB"
+                    logger.info(f"Updater: descargando... {pct}")
+                    last_logged = downloaded
+    logger.info(f"Updater: descarga completa ({downloaded//1024//1024} MB)")
+
+
 def download_and_apply_update(download_url: str, app_dir: str,
                                on_progress=None, on_done=None):
     """
@@ -117,7 +142,7 @@ def download_and_apply_update(download_url: str, app_dir: str,
             if is_installer:
                 # ── Installer .exe ────────────────────────────────────────
                 installer_path = temp_dir / 'SistemaPOS_Setup.exe'
-                urllib.request.urlretrieve(download_url, installer_path)
+                _chunked_download(download_url, installer_path, on_progress)
 
                 if on_progress:
                     on_progress('applying')
@@ -133,7 +158,7 @@ def download_and_apply_update(download_url: str, app_dir: str,
             else:
                 # ── ZIP portable ──────────────────────────────────────────
                 zip_path = temp_dir / 'update.zip'
-                urllib.request.urlretrieve(download_url, zip_path)
+                _chunked_download(download_url, zip_path, on_progress)
 
                 if on_progress:
                     on_progress('extracting')
