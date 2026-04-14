@@ -9,7 +9,7 @@ import zipfile
 import urllib.request
 from pathlib import Path
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('__main__')
 
 _update_cache = {
     'checked': False,
