@@ -362,10 +362,25 @@ class DownloadWorker(QThread):
                 sql_set = ', '.join(updates)
 
                 if target_id:
-                    db.execute_update(
-                        f"UPDATE products SET {sql_set} WHERE id = ?",
-                        tuple(vals) + (target_id,)
-                    )
+                    try:
+                        db.execute_update(
+                            f"UPDATE products SET {sql_set} WHERE id = ?",
+                            tuple(vals) + (target_id,)
+                        )
+                    except Exception as e_upd:
+                        if 'UNIQUE' in str(e_upd) and 'barcode' in str(e_upd):
+                            # Reintentar sin barcode
+                            vals_sin_bc = [v for v, u in zip(vals, updates[:-1]) if 'barcode' not in u]
+                            updates_sin_bc = [u for u in updates if 'barcode' not in u]
+                            if updates_sin_bc:
+                                sql_sin_bc = ', '.join(updates_sin_bc)
+                                try:
+                                    db.execute_update(
+                                        f"UPDATE products SET {sql_sin_bc} WHERE id = ?",
+                                        tuple(vals_sin_bc) + (target_id,)
+                                    )
+                                except Exception:
+                                    pass
                     precios_actualizados += 1
                 else:
                     # Crear si no existe y tiene precio
