@@ -209,7 +209,14 @@ def _sync_inventory_from_firebase(db):
                             upd['cost'] = costo
                         if rubro:
                             upd['rubro'] = rubro
-                        product_model.update(local['id'], **upd)
+                        try:
+                            product_model.update(local['id'], **upd)
+                        except Exception as e_upd:
+                            if 'UNIQUE' in str(e_upd) and 'barcode' in str(e_upd):
+                                upd.pop('barcode', None)
+                                product_model.update(local['id'], **upd)
+                            else:
+                                raise
                         actualizados += 1
                 else:
                     product_model.create({
