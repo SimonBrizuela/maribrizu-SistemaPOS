@@ -25,7 +25,9 @@ class DatabaseManager:
     def _setup_connection(self, conn):
         """Configura la conexión SQLite con timezone local y otras opciones."""
         conn.row_factory = sqlite3.Row
+        conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA foreign_keys = ON")
+        conn.execute("PRAGMA busy_timeout = 5000")
         # Registrar función para hora de Argentina (UTC-3), reemplaza CURRENT_TIMESTAMP que usa UTC
         from datetime import datetime as _dt, timezone as _tz, timedelta as _td
         _TZ_AR = _tz(_td(hours=-3))
