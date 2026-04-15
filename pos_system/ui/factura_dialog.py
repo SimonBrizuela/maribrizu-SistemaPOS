@@ -6,11 +6,16 @@ luego genera el PDF con generate_factura_afip().
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel,
     QPushButton, QLineEdit, QComboBox, QFrame, QMessageBox,
-    QGroupBox, QDoubleSpinBox, QScrollArea, QWidget, QApplication
+    QGroupBox, QDoubleSpinBox, QScrollArea, QWidget, QApplication,
+    QPlainTextEdit, QTableWidget, QTableWidgetItem, QHeaderView,
+    QAbstractItemView
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
 from datetime import datetime
+import os
+import platform
+import subprocess
 from pos_system.utils.firebase_sync import now_ar
 
 
@@ -27,13 +32,14 @@ class FacturaDialog(QDialog):
     """
 
     def __init__(self, parent=None, sale: dict = None, auto_virtual: bool = False,
-                 perfil: dict = None, cliente_data: dict = None):
+                 perfil: dict = None, cliente_data: dict = None, notas: str = ''):
         super().__init__(parent)
         self.sale = sale or {}
         self.auto_virtual = auto_virtual
         self.perfil = perfil
         self.cliente_data = cliente_data
         self.pdf_path = None
+        self._notas_prefill = notas
         self._setup_emisor_data()
         self.init_ui()
         if perfil:
@@ -42,6 +48,8 @@ class FacturaDialog(QDialog):
             self._prefill_virtual()
         if cliente_data:
             self._prefill_cliente(cliente_data)
+        if self._notas_prefill:
+            self.notas_input.setPlainText(self._notas_prefill)
 
     def _setup_emisor_data(self):
         """Carga datos del emisor desde config."""
@@ -119,6 +127,55 @@ class FacturaDialog(QDialog):
         main.setSpacing(10)
         main.setContentsMargins(16, 12, 16, 12)
 
+        # ── Items de la venta ────────────────────────────────────────────
+        sale_items = self.sale.get('items', [])
+        if sale_items:
+            items_group = QGroupBox(f'Items ({len(sale_items)})')
+            items_group.setFont(QFont('Segoe UI', 9, QFont.Bold))
+            ig_layout = QVBoxLayout(items_group)
+            ig_layout.setContentsMargins(8, 6, 8, 6)
+            ig_layout.setSpacing(2)
+
+            itbl = QTableWidget()
+            itbl.setColumnCount(4)
+            itbl.setHorizontalHeaderLabels(['Descripcion', 'Cant.', 'Precio', 'Subtotal'])
+            itbl.setRowCount(len(sale_items))
+            itbl.verticalHeader().setVisible(False)
+            itbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            itbl.setSelectionMode(QAbstractItemView.NoSelection)
+            itbl.setFocusPolicy(Qt.NoFocus)
+            itbl.setFont(QFont('Segoe UI', 9))
+            itbl.horizontalHeader().setFont(QFont('Segoe UI', 9, QFont.Bold))
+            itbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+            itbl.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+            itbl.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+            itbl.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
+            itbl.verticalHeader().setDefaultSectionSize(26)
+            itbl.setStyleSheet('''
+                QTableWidget { border: 1px solid #dee2e6; border-radius: 4px; }
+                QTableWidget::item { padding: 2px 4px; }
+                QHeaderView::section { background: #f8f9fa; padding: 3px; border: none; border-bottom: 1px solid #dee2e6; }
+            ''')
+
+            for row, it in enumerate(sale_items):
+                name = str(it.get('product_name') or it.get('descripcion') or it.get('name', ''))
+                cant = it.get('quantity', 1)
+                price = float(it.get('unit_price', 0))
+                subtotal = float(it.get('subtotal', 0))
+                itbl.setItem(row, 0, QTableWidgetItem(name))
+                itbl.setItem(row, 1, QTableWidgetItem(str(cant)))
+                pi = QTableWidgetItem(f'${price:,.2f}')
+                pi.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                itbl.setItem(row, 2, pi)
+                si = QTableWidgetItem(f'${subtotal:,.2f}')
+                si.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                itbl.setItem(row, 3, si)
+
+            table_h = 24 + 26 * min(len(sale_items), 5) + 4
+            itbl.setFixedHeight(table_h)
+            ig_layout.addWidget(itbl)
+            main.addWidget(items_group)
+
         # ── Tipo de comprobante ───────────────────────────────────────────
         tipo_group = QGroupBox('Comprobante')
         tipo_group.setFont(QFont('Segoe UI', 9, QFont.Bold))
@@ -135,7 +192,9 @@ class FacturaDialog(QDialog):
         tipo_layout.addRow('Modalidad:', self.modalidad_input)
 
         payment_type = self.sale.get('payment_type', 'cash')
-        pago_text = 'Transferencia' if payment_type == 'transfer' else 'Efectivo'
+        pago_text = self.sale.get('payment_subtype') or (
+            'Transferencia' if payment_type == 'transfer' else 'Efectivo'
+        )
         self.pago_input = QLineEdit(pago_text)
         self.pago_input.setFont(QFont('Segoe UI', 10))
         tipo_layout.addRow('Forma de pago:', self.pago_input)
@@ -206,6 +265,21 @@ class FacturaDialog(QDialog):
 
         main.addWidget(afip_group)
 
+        # ── Observaciones ─────────────────────────────────────────────────
+        notas_group = QGroupBox('Observaciones (opcional)')
+        notas_group.setFont(QFont('Segoe UI', 9, QFont.Bold))
+        notas_layout = QVBoxLayout(notas_group)
+        notas_layout.setContentsMargins(8, 6, 8, 8)
+        self.notas_input = QPlainTextEdit()
+        self.notas_input.setFont(QFont('Segoe UI', 9))
+        self.notas_input.setPlaceholderText('Aclaraciones o condiciones para incluir en la factura...')
+        self.notas_input.setMaximumHeight(64)
+        self.notas_input.setStyleSheet(
+            'QPlainTextEdit { border: 1px solid #ced4da; border-radius: 4px; padding: 4px; }'
+        )
+        notas_layout.addWidget(self.notas_input)
+        main.addWidget(notas_group)
+
         # Badge CAE
         if self.emisor.get('cert_path') and self.emisor.get('key_path'):
             badge = QLabel('CAE automatico — se solicitara a AFIP al generar')
@@ -243,6 +317,21 @@ class FacturaDialog(QDialog):
         cancel_btn.setFont(QFont('Segoe UI', 10))
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(cancel_btn)
+
+        preview_btn = QPushButton('Vista previa')
+        preview_btn.setMinimumHeight(40)
+        preview_btn.setFont(QFont('Segoe UI', 10))
+        preview_btn.setToolTip('Generar PDF de vista previa sin guardar')
+        preview_btn.setStyleSheet('''
+            QPushButton {
+                background: #f8f9fa; color: #495057;
+                border: 1px solid #ced4da; border-radius: 8px;
+                padding: 0 10px;
+            }
+            QPushButton:hover { background: #e9ecef; }
+        ''')
+        preview_btn.clicked.connect(self._preview_factura)
+        btn_row.addWidget(preview_btn)
 
         emit_btn = QPushButton('Generar Factura PDF')
         emit_btn.setMinimumHeight(44)
@@ -299,7 +388,12 @@ class FacturaDialog(QDialog):
     def _prefill_virtual(self):
         """Pre-rellena para pago virtual: Tipo B, Consumidor Final."""
         self.tipo_combo.setCurrentText('FAC. ELEC. B')
-        self.pago_input.setText('Transferencia')
+        # Respetar el subtype si fue seleccionado (T. DEBITO, T. CREDITO, etc.)
+        subtype = self.sale.get('payment_subtype', '')
+        if subtype and subtype != 'Efectivo':
+            self.pago_input.setText(subtype)
+        else:
+            self.pago_input.setText('Transferencia')
         self.cliente_input.setText('CONSUMIDOR FINAL')
         self.cuit_cliente_input.clear()
 
@@ -307,6 +401,68 @@ class FacturaDialog(QDialog):
         """Calcula IVA 21% incluido sobre el total."""
         total = float(self.sale.get('total_amount', 0))
         self.iva_spin.setValue(round(total - total / 1.21, 2))
+
+    def _build_items_factura(self):
+        """Devuelve la lista de items formateada para el PDF."""
+        total = float(self.sale.get('total_amount', 0))
+        items = []
+        for it in self.sale.get('items', []):
+            items.append({
+                'cantidad':    it.get('quantity', 1),
+                'descripcion': it.get('product_name', 'Producto'),
+                'iva':         0.0,
+                'precio':      float(it.get('unit_price', 0)),
+                'importe':     float(it.get('subtotal', 0)),
+            })
+        if not items:
+            items = [{'cantidad': 1, 'descripcion': 'Venta general', 'iva': 0.0, 'precio': total, 'importe': total}]
+        return items
+
+    def _preview_factura(self):
+        """Genera un PDF de vista previa sin guardar en la base de datos."""
+        from pos_system.utils.pdf_generator import PDFGenerator
+
+        tipo = self.tipo_combo.currentText()
+        factura = {
+            'cuit':               self.emisor.get('cuit', ''),
+            'razon_social':       self.emisor.get('razon_social', ''),
+            'domicilio':          self.emisor.get('domicilio', ''),
+            'localidad':          self.emisor.get('localidad', ''),
+            'telefono':           self.emisor.get('telefono', ''),
+            'ing_brutos':         self.emisor.get('ing_brutos', ''),
+            'inicio_actividades': self.emisor.get('inicio_actividades', ''),
+            'condicion_iva':      self.emisor.get('condicion_iva', 'Monotributista'),
+            'tipo_comprobante':   tipo,
+            'punto_venta':        self.emisor.get('punto_venta', 1),
+            'nro_comprobante':    self._get_next_nro_comprobante(tipo),
+            'fecha':              now_ar().strftime('%d/%m/%Y'),
+            'turno':              str(self.sale.get('id', '')).zfill(5),
+            'pago':               self.pago_input.text().strip(),
+            'modalidad':          self.modalidad_input.text().strip(),
+            'cliente':            self.cliente_input.text().strip() or 'CONSUMIDOR FINAL',
+            'cuit_receptor':      self.cuit_cliente_input.text().strip(),
+            'domicilio_receptor': self.domicilio_cliente_input.text().strip(),
+            'condicion_iva_receptor': self.condicion_iva_cliente.currentText(),
+            'items':              self._build_items_factura(),
+            'total':              float(self.sale.get('total_amount', 0)),
+            'iva_contenido':      self.iva_spin.value(),
+            'otros_impuestos':    0.0,
+            'cae':                self.cae_input.text().strip(),
+            'vto_cae':            self.vto_cae_input.text().strip(),
+            'notas':              self.notas_input.toPlainText().strip(),
+            'nombre_perfil':      self.emisor.get('nombre_perfil', self.emisor.get('razon_social', '')),
+        }
+
+        try:
+            pdf_path = PDFGenerator().generate_factura_afip_a4(factura)
+            if platform.system() == 'Windows':
+                os.startfile(pdf_path)
+            elif platform.system() == 'Darwin':
+                subprocess.Popen(['open', pdf_path])
+            else:
+                subprocess.Popen(['xdg-open', pdf_path])
+        except Exception as e:
+            QMessageBox.warning(self, 'Vista previa', f'No se pudo generar la vista previa:\n{e}')
 
     def auto_emit(self):
         """
@@ -397,24 +553,6 @@ class FacturaDialog(QDialog):
                 if resp != QMessageBox.Yes:
                     return
 
-        items_factura = []
-        for it in self.sale.get('items', []):
-            items_factura.append({
-                'cantidad':    it.get('quantity', 1),
-                'descripcion': it.get('product_name', 'Producto'),
-                'iva':         0.0,  # Monotributo: sin IVA discriminado
-                'precio':      float(it.get('unit_price', 0)),
-                'importe':     float(it.get('subtotal', 0)),
-            })
-        if not items_factura:
-            items_factura = [{
-                'cantidad':    1,
-                'descripcion': 'Venta general',
-                'iva':         0.0,
-                'precio':      total,
-                'importe':     total,
-            }]
-
         nombre_perfil = self.emisor.get('nombre_perfil', self.emisor.get('razon_social', ''))
 
         factura = {
@@ -441,7 +579,7 @@ class FacturaDialog(QDialog):
             'domicilio_receptor':    dom_cliente,
             'condicion_iva_receptor': cond_iva_cliente,
             # Items
-            'items':              items_factura,
+            'items':              self._build_items_factura(),
             # Totales
             'total':              total,
             'iva_contenido':      iva,
@@ -449,6 +587,8 @@ class FacturaDialog(QDialog):
             # AFIP
             'cae':                cae,
             'vto_cae':            vto_cae,
+            # Observaciones
+            'notas':              self.notas_input.toPlainText().strip(),
             # Perfil emisor (para resumen webapp)
             'nombre_perfil':      nombre_perfil,
         }

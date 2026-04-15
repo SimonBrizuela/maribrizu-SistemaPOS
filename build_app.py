@@ -109,19 +109,25 @@ def main():
 
     print(f"  OK Carpeta certs (se puebla automáticamente desde Firebase)")
     
-    # Crear ZIP final
+    # Crear ZIP final (sin firebase_key.json para evitar deteccion por Google)
     print("\n[5/5] Creando archivo ZIP...")
-    zip_name = f"SistemaPOS_Portable"
+    zip_name = "SistemaPOS_Portable"
     zip_path = project_root / f"{zip_name}.zip"
-    
+
     if zip_path.exists():
         zip_path.unlink()
-    
-    shutil.make_archive(
-        str(project_root / zip_name),
-        'zip',
-        dist_dir
-    )
+
+    import zipfile as _zipfile
+    EXCLUDE_FILES = {'firebase_key.json'}
+    with _zipfile.ZipFile(str(zip_path), 'w', _zipfile.ZIP_DEFLATED) as zf:
+        for root_path, dirs, files in os.walk(str(dist_dir)):
+            for fname in files:
+                if fname in EXCLUDE_FILES:
+                    print(f"  SKIP {fname} (no incluido en ZIP)")
+                    continue
+                full = os.path.join(root_path, fname)
+                arcname = os.path.relpath(full, str(dist_dir))
+                zf.write(full, arcname)
     
     print(f"\n{'='*60}")
     print(f"  BUILD COMPLETADO CON EXITO")

@@ -140,7 +140,7 @@ class ProductSearchDialog(QDialog):
     def _init_ui(self, initial_text=''):
         self._search_timer = QTimer(self)
         self._search_timer.setSingleShot(True)
-        self._search_timer.setInterval(280)
+        self._search_timer.setInterval(180)
         self._search_timer.timeout.connect(self._do_search)
         self._pending_text = ''
 
@@ -2121,13 +2121,17 @@ class SalesView(QWidget):
         total = sum(item['subtotal'] for item in self.cart)
 
         # Abrir dialogo de pago
-        dialog = PaymentDialog(self, total=total)
+        dialog = PaymentDialog(self, total=total, cart=self.cart)
         if dialog.exec_() != QDialog.Accepted:
             return
 
         payment_type = dialog.payment_type
         cash_received = dialog.cash_received
         change_given = dialog.change_given
+        selected_profile = dialog.selected_profile
+        selected_cliente = dialog.selected_cliente
+        payment_subtype = dialog.payment_subtype
+        nota_factura = dialog.nota_factura
 
         # Resolver nombre del cajero de turno
         turno_nombre = (
@@ -2137,13 +2141,14 @@ class SalesView(QWidget):
         )
 
         sale_data = {
-            'total_amount':  total,
-            'payment_type':  payment_type,
-            'cash_received': cash_received,
-            'change_given':  change_given,
-            'items':         self.cart,
-            'user_id':       self.current_user.get('id'),
-            'turno_nombre':  turno_nombre,
+            'total_amount':    total,
+            'payment_type':    payment_type,
+            'payment_subtype': payment_subtype,
+            'cash_received':   cash_received,
+            'change_given':    change_given,
+            'items':           self.cart,
+            'user_id':         self.current_user.get('id'),
+            'turno_nombre':    turno_nombre,
         }
 
         try:
@@ -2160,27 +2165,16 @@ class SalesView(QWidget):
                 sale['cajero']       = turno_nombre
                 self._upload_sale_to_firebase(sale)
 
-                # ── Preguntar si desea factura ARCA ─────────────────────────────
-                from pos_system.ui.arca_perfil_dialog import ArcoPerfilDialog
-                arca_dlg = ArcoPerfilDialog(self, total=total)
-                arca_dlg.exec_()
-
-                if arca_dlg.facturar and arca_dlg.selected_profile:
-                    perfil = arca_dlg.selected_profile
-                    cliente_data = arca_dlg.selected_cliente
+                # ── Factura ARCA si el usuario eligió un perfil en el cobro ──────
+                if selected_profile:
                     from pos_system.ui.factura_dialog import FacturaDialog
                     auto_virt = (payment_type == 'transfer')
                     fac_dlg = FacturaDialog(
                         self, sale=sale, auto_virtual=auto_virt,
-                        perfil=perfil, cliente_data=cliente_data
+                        perfil=selected_profile, cliente_data=selected_cliente,
+                        notas=nota_factura
                     )
-                    if cliente_data:
-                        # Tiene cliente específico → mostrar dialog para confirmar
-                        accepted = fac_dlg.exec_() == QDialog.Accepted
-                    else:
-                        # Sin cliente → Consumidor Final, generar directo sin dialog
-                        fac_dlg.auto_emit()
-                        accepted = fac_dlg.pdf_path is not None
+                    accepted = fac_dlg.exec_() == QDialog.Accepted
 
                     if accepted and fac_dlg.pdf_path:
                         resp = QMessageBox.question(
@@ -2249,27 +2243,52 @@ class SalesView(QWidget):
 class PaymentDialog(QDialog):
     """Dialogo de cobro: seleccion de pago, monto y teclado numerico"""
 
-    def __init__(self, parent=None, total: float = 0.0):
+    def __init__(self, parent=None, total: float = 0.0, cart=None):
         super().__init__(parent)
         self.total = total
+        self.cart = cart or []
         self.payment_type = 'cash'
         self.cash_received = 0.0
         self.change_given = 0.0
-        self._raw_amount = ""   # valor sin comas, para parsear
+        self._raw_amount = ""
+        self.selected_profile = None
+        self.selected_cliente = None
+        self.payment_subtype = 'Efectivo'
+        self.nota_factura = ''
+        self._profiles = []
+        self._profile_btns = []
+        self._no_factura_btn = None
+        self._subtype_btns = {}
+        self._subtype_row_widget = None
+        self._load_profiles()
         self.setWindowTitle('Cobrar')
-        self.setFixedWidth(520)
         self.setModal(True)
-        self.init_ui()
-        self.adjustSize()
-        # Centrar en pantalla
         from PyQt5.QtWidgets import QApplication
-        screen = QApplication.primaryScreen().geometry()
+        self._avail = QApplication.primaryScreen().availableGeometry()
+        self.init_ui()
+        w = max(520, min(680, int(self._avail.width() * 0.58)))
+        self.setFixedWidth(w)
+        self.adjustSize()
         self.move(
-            screen.center().x() - self.width() // 2,
-            screen.center().y() - self.height() // 2
+            self._avail.center().x() - self.width() // 2,
+            max(self._avail.top() + 5, self._avail.center().y() - self.height() // 2)
         )
 
     def init_ui(self):
+        # Escala dinámica: todo el contenido se ajusta al espacio disponible
+        # Reservamos ~70px para la barra de botones + ~32px para la barra de título
+        avail_h = getattr(self, '_avail', QApplication.primaryScreen().availableGeometry()).height()
+        content_h = avail_h - 102
+        # Base de diseño: 440px de contenido (con sub-tipos ocultos)
+        _sc = max(0.72, min(1.0, content_h / 440))
+        def _h(base): return max(int(base * _sc), int(base * 0.72))
+        _np   = _h(38)   # numpad button
+        _pay  = _h(34)   # efectivo/transferencia
+        _sub  = _h(30)   # sub-tipo
+        _prf  = _h(30)   # perfil ARCA
+        _inp  = _h(40)   # amount input
+        _sp   = max(4, _h(6))  # spacing
+
         self.setStyleSheet('''
             QDialog { background: #f8f9fa; }
             QLabel#total_label { font-size: 20px; font-weight: bold; color: #198754; }
@@ -2310,9 +2329,15 @@ class PaymentDialog(QDialog):
             QLineEdit#amount_input:focus { border-color: #0d6efd; }
         ''')
 
-        main = QVBoxLayout(self)
-        main.setContentsMargins(14, 12, 14, 12)
-        main.setSpacing(8)
+        # Layout exterior: contenido + barra fija de botones
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        _content_w = QWidget()
+        main = QVBoxLayout(_content_w)
+        main.setContentsMargins(14, max(4, _h(8)), 14, 4)
+        main.setSpacing(_sp)
 
         # ── Fila superior: total ──
         total_row = QHBoxLayout()
@@ -2330,71 +2355,176 @@ class PaymentDialog(QDialog):
         sep = QFrame(); sep.setFrameShape(QFrame.HLine); sep.setStyleSheet('color:#dee2e6;')
         main.addWidget(sep)
 
+        # ── Items del carrito ──
+        if self.cart:
+            items_tbl = QTableWidget()
+            items_tbl.setColumnCount(3)
+            items_tbl.setHorizontalHeaderLabels(['Producto', 'Cant.', 'Subtotal'])
+            items_tbl.setRowCount(len(self.cart))
+            items_tbl.verticalHeader().setVisible(False)
+            items_tbl.setEditTriggers(QAbstractItemView.NoEditTriggers)
+            items_tbl.setSelectionMode(QAbstractItemView.NoSelection)
+            items_tbl.setFocusPolicy(Qt.NoFocus)
+            items_tbl.setFont(QFont('Segoe UI', 9))
+            items_tbl.horizontalHeader().setFont(QFont('Segoe UI', 9, QFont.Bold))
+            items_tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+            items_tbl.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
+            items_tbl.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
+            items_tbl.verticalHeader().setDefaultSectionSize(24)
+            items_tbl.setStyleSheet('''
+                QTableWidget { border: 1px solid #dee2e6; border-radius: 6px; background: white; }
+                QTableWidget::item { padding: 2px 6px; }
+                QHeaderView::section { background: #f8f9fa; padding: 3px; border: none; border-bottom: 1px solid #dee2e6; }
+            ''')
+            for row, it in enumerate(self.cart):
+                name = str(it.get('product_name') or it.get('name', ''))
+                qty = it.get('quantity', 1)
+                sub = float(it.get('subtotal', 0))
+                items_tbl.setItem(row, 0, QTableWidgetItem(name))
+                q_item = QTableWidgetItem(str(qty))
+                q_item.setTextAlignment(Qt.AlignCenter)
+                items_tbl.setItem(row, 1, q_item)
+                s_item = QTableWidgetItem(f'${sub:,.2f}')
+                s_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                items_tbl.setItem(row, 2, s_item)
+            max_visible = min(len(self.cart), 2)
+            row_h = max(18, _h(22))
+            items_tbl.verticalHeader().setDefaultSectionSize(row_h)
+            items_tbl.setFixedHeight(22 + row_h * max_visible + 2)
+            main.addWidget(items_tbl)
+
         # ── Botones forma de pago ──
         pay_row = QHBoxLayout(); pay_row.setSpacing(8)
         self.btn_cash = QPushButton('💵  Efectivo')
         self.btn_cash.setObjectName('btn_cash'); self.btn_cash.setCheckable(True)
-        self.btn_cash.setChecked(True); self.btn_cash.setMinimumHeight(38)
+        self.btn_cash.setChecked(True); self.btn_cash.setMinimumHeight(_pay)
         self.btn_cash.setFont(QFont('Segoe UI', 11, QFont.Bold))
         self.btn_cash.clicked.connect(lambda: self._set_payment('cash'))
         pay_row.addWidget(self.btn_cash)
 
         self.btn_transfer = QPushButton('📲  Transferencia')
         self.btn_transfer.setObjectName('btn_transfer'); self.btn_transfer.setCheckable(True)
-        self.btn_transfer.setMinimumHeight(38)
+        self.btn_transfer.setMinimumHeight(_pay)
         self.btn_transfer.setFont(QFont('Segoe UI', 11, QFont.Bold))
         self.btn_transfer.clicked.connect(lambda: self._set_payment('transfer'))
         pay_row.addWidget(self.btn_transfer)
         main.addLayout(pay_row)
 
+        # ── Sub-tipo de pago electrónico (visible solo con Transferencia) ──
+        self._subtype_row_widget = QWidget()
+        subtype_row = QHBoxLayout(self._subtype_row_widget)
+        subtype_row.setContentsMargins(0, 0, 0, 0)
+        subtype_row.setSpacing(6)
+
+        for label, key in [('T. Débito', 'T. DEBITO'), ('T. Crédito', 'T. CREDITO'), ('Transferencia', 'Transferencia')]:
+            sb = QPushButton(label)
+            sb.setCheckable(True)
+            sb.setMinimumHeight(_sub)
+            sb.setFont(QFont('Segoe UI', 9, QFont.Bold))
+            sb.setStyleSheet('''
+                QPushButton { background:#e7f3ff; color:#0d6efd; border:1.5px solid #b6d4fe; border-radius:6px; padding:0 12px; }
+                QPushButton:hover { background:#cfe2ff; }
+                QPushButton:checked { background:#0d6efd; color:white; border-color:#0d6efd; }
+            ''')
+            sb.clicked.connect(lambda _, k=key, b=sb: self._set_subtype(k, b))
+            subtype_row.addWidget(sb)
+            self._subtype_btns[key] = sb
+
+        subtype_row.addStretch()
+        self._subtype_row_widget.setVisible(False)
+        main.addWidget(self._subtype_row_widget)
+
         # ── Layout horizontal: izquierda (datos) | derecha (numpad) ──
         h_layout = QHBoxLayout(); h_layout.setSpacing(12)
 
-        # Panel izquierdo: monto + vuelto
-        self.cash_panel = QWidget()
-        left = QVBoxLayout(self.cash_panel); left.setContentsMargins(0,0,0,0); left.setSpacing(8)
+        # ── Columna izquierda: pago + acciones ────────────────────────────
+        left_col = QWidget()
+        left = QVBoxLayout(left_col); left.setContentsMargins(0, 0, 0, 0); left.setSpacing(_sp)
 
+        # Panel efectivo
+        self.cash_panel = QWidget()
+        cp = QVBoxLayout(self.cash_panel); cp.setContentsMargins(0, 0, 0, 0); cp.setSpacing(_sp)
         lbl_paga = QLabel('Cliente paga con:')
         lbl_paga.setFont(QFont('Segoe UI', 10, QFont.Bold))
         lbl_paga.setStyleSheet('color:#495057;')
-        left.addWidget(lbl_paga)
-
+        cp.addWidget(lbl_paga)
         self.amount_input = QLineEdit()
         self.amount_input.setObjectName('amount_input')
         self.amount_input.setPlaceholderText('0.00')
         self.amount_input.setAlignment(Qt.AlignRight)
-        self.amount_input.setMinimumHeight(44)
+        self.amount_input.setMinimumHeight(_inp)
         self.amount_input.setFont(QFont('Segoe UI', 20, QFont.Bold))
-        self.amount_input.setReadOnly(True)  # Solo numpad/teclado vía keyPressEvent
-        # No conectar textChanged — actualizamos manualmente para evitar parsear comas
-        left.addWidget(self.amount_input)
-
-        # Vuelto
+        self.amount_input.setReadOnly(True)
+        cp.addWidget(self.amount_input)
         change_frame = QFrame()
         change_frame.setStyleSheet('QFrame{background:#f0fdf4;border:2px solid #86efac;border-radius:8px;}')
-        ci = QHBoxLayout(change_frame); ci.setContentsMargins(12,8,12,8)
+        ci = QHBoxLayout(change_frame); ci.setContentsMargins(12, 6, 12, 6)
         lbl_vuelto = QLabel('Vuelto:')
         lbl_vuelto.setFont(QFont('Segoe UI', 10, QFont.Bold))
         lbl_vuelto.setStyleSheet('color:#166534;background:transparent;border:none;')
         ci.addWidget(lbl_vuelto); ci.addStretch()
         self.change_lbl = QLabel('$0.00')
-        self.change_lbl.setFont(QFont('Segoe UI', 18, QFont.Bold))
+        self.change_lbl.setFont(QFont('Segoe UI', 16, QFont.Bold))
         self.change_lbl.setStyleSheet('color:#16a34a;background:transparent;border:none;')
         ci.addWidget(self.change_lbl)
-        left.addWidget(change_frame)
-        left.addStretch()
-        h_layout.addWidget(self.cash_panel, 1)
+        cp.addWidget(change_frame)
+        left.addWidget(self.cash_panel)
 
-        # Panel virtual
+        # Panel transferencia
         self.transfer_panel = QWidget()
-        tl = QVBoxLayout(self.transfer_panel); tl.setContentsMargins(0,0,0,0)
+        tl = QVBoxLayout(self.transfer_panel); tl.setContentsMargins(0, 0, 0, 0)
         info = QLabel('El cliente realiza la\ntransferencia o pago virtual.')
         info.setFont(QFont('Segoe UI', 10))
         info.setStyleSheet('background:#e7f3ff;color:#0d6efd;border:1px solid #b6d4fe;border-radius:8px;padding:12px;')
         info.setAlignment(Qt.AlignCenter); info.setWordWrap(True)
-        tl.addWidget(info); tl.addStretch()
+        tl.addWidget(info)
         self.transfer_panel.setVisible(False)
-        h_layout.addWidget(self.transfer_panel, 1)
+        left.addWidget(self.transfer_panel)
+
+        left.addStretch(1)
+
+        # ── COBRAR ────────────────────────────────────────────────────────
+        self.facturar_btn = QPushButton('COBRAR')
+        self.facturar_btn.setObjectName('btn_facturar')
+        self.facturar_btn.setMinimumHeight(_h(50))
+        self.facturar_btn.setFont(QFont('Segoe UI', 14, QFont.Bold))
+        self.facturar_btn.clicked.connect(self._confirm)
+        left.addWidget(self.facturar_btn)
+
+        # ── Ver factura (solo si hay perfiles ARCA) ───────────────────────
+        if self._profiles:
+            self._preview_btn = QPushButton('Ver factura')
+            self._preview_btn.setMinimumHeight(_h(32))
+            self._preview_btn.setFont(QFont('Segoe UI', 10))
+            self._preview_btn.setToolTip('Vista previa del PDF (seleccioná un perfil ARCA primero)')
+            self._preview_btn.setStyleSheet('''
+                QPushButton { background:#f0f4ff; color:#0d6efd; border:1.5px solid #b6d4fe; border-radius:8px; padding:0 10px; }
+                QPushButton:hover { background:#dbeafe; }
+            ''')
+            self._preview_btn.clicked.connect(self._preview_invoice)
+            left.addWidget(self._preview_btn)
+
+        # ── Añadir nota a la factura ──────────────────────────────────────
+        self._nota_btn = QPushButton('+ Añadir nota a la factura')
+        self._nota_btn.setMinimumHeight(_h(26))
+        self._nota_btn.setFont(QFont('Segoe UI', 9))
+        self._nota_btn.setCheckable(True)
+        self._nota_btn.setStyleSheet('''
+            QPushButton { background:transparent; color:#6c757d; border:none; text-align:left; padding:0 2px; }
+            QPushButton:hover { color:#343a40; }
+            QPushButton:checked { color:#198754; font-weight:bold; }
+        ''')
+        self._nota_btn.clicked.connect(self._toggle_nota)
+        left.addWidget(self._nota_btn)
+
+        self._nota_input = QLineEdit()
+        self._nota_input.setPlaceholderText('Observaciones para la factura...')
+        self._nota_input.setFont(QFont('Segoe UI', 9))
+        self._nota_input.setMinimumHeight(_h(30))
+        self._nota_input.setVisible(False)
+        left.addWidget(self._nota_input)
+
+        h_layout.addWidget(left_col, 1)
 
         # Numpad (derecha)
         numpad_widget = QWidget()
@@ -2407,24 +2537,203 @@ class PaymentDialog(QDialog):
         ]
         for text, row, col in buttons:
             btn = QPushButton(text); btn.setObjectName('numpad_btn')
-            btn.setFont(QFont('Segoe UI', 15, QFont.Bold)); btn.setFixedHeight(44)
+            btn.setFont(QFont('Segoe UI', 14, QFont.Bold)); btn.setFixedHeight(_np)
             btn.clicked.connect(lambda _, t=text: self._numpad_press(t))
             numpad.addWidget(btn, row, col); numpad.setColumnStretch(col, 1)
         del_btn = QPushButton('⌫ Borrar'); del_btn.setObjectName('btn_clear')
-        del_btn.setFont(QFont('Segoe UI', 11, QFont.Bold)); del_btn.setFixedHeight(40)
+        del_btn.setFont(QFont('Segoe UI', 11, QFont.Bold)); del_btn.setFixedHeight(_np)
         del_btn.clicked.connect(self._numpad_delete)
         numpad.addWidget(del_btn, 4, 0, 1, 3)
-        h_layout.addWidget(numpad_widget, 1)
 
+        # ── Columna derecha: numpad + ARCA (apilados) ─────────────────────
+        right_col = QWidget()
+        right_layout = QVBoxLayout(right_col)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(6)
+        right_layout.addWidget(numpad_widget)
+
+        if self._profiles:
+            arca_sep = QFrame()
+            arca_sep.setFrameShape(QFrame.HLine)
+            arca_sep.setStyleSheet('color:#dee2e6; max-height:1px;')
+            right_layout.addWidget(arca_sep)
+
+            arca_lbl = QLabel('Facturar en ARCA:')
+            arca_lbl.setFont(QFont('Segoe UI', 9, QFont.Bold))
+            arca_lbl.setStyleSheet('color:#495057;')
+            right_layout.addWidget(arca_lbl)
+
+            profiles_w = QWidget()
+            profiles_row = QHBoxLayout(profiles_w)
+            profiles_row.setContentsMargins(0, 0, 0, 0)
+            profiles_row.setSpacing(5)
+
+            _colors = [('#0d6efd','#0b5ed7'),('#6f42c1','#5a32a3'),
+                       ('#d63384','#ab296a'),('#fd7e14','#dc6502'),('#20c997','#1aa179')]
+
+            for i, p in enumerate(self._profiles):
+                bg, hv = _colors[i % len(_colors)]
+                pb = QPushButton(p['nombre'])
+                pb.setCheckable(True)
+                pb.setMinimumHeight(_prf)
+                pb.setFont(QFont('Segoe UI', 9, QFont.Bold))
+                pb.setStyleSheet(f'''
+                    QPushButton {{ background:{bg}; color:white; border:none; border-radius:7px; padding:0 8px; }}
+                    QPushButton:hover {{ background:{hv}; }}
+                    QPushButton:checked {{ border:3px solid #ffd600; }}
+                ''')
+                pb.clicked.connect(lambda _, perf=p, b=pb: self._select_profile(perf, b))
+                profiles_row.addWidget(pb)
+                self._profile_btns.append(pb)
+
+            no_btn = QPushButton('Sin factura')
+            no_btn.setCheckable(True)
+            no_btn.setChecked(True)
+            no_btn.setMinimumHeight(_prf)
+            no_btn.setFont(QFont('Segoe UI', 9))
+            no_btn.setStyleSheet('''
+                QPushButton { background:#f8f9fa; color:#6c757d; border:1.5px solid #dee2e6; border-radius:7px; padding:0 8px; }
+                QPushButton:hover { background:#e9ecef; }
+                QPushButton:checked { border:2px solid #adb5bd; background:#e9ecef; color:#343a40; }
+            ''')
+            no_btn.clicked.connect(lambda: self._select_profile(None, no_btn))
+            self._no_factura_btn = no_btn
+            self._profile_btns.append(no_btn)
+            profiles_row.addWidget(no_btn)
+            right_layout.addWidget(profiles_w)
+
+            self._cliente_btn = QPushButton('Sin cliente  (Consumidor Final)')
+            self._cliente_btn.setMinimumHeight(max(22, _h(26)))
+            self._cliente_btn.setFont(QFont('Segoe UI', 8))
+            self._cliente_btn.setCursor(Qt.PointingHandCursor)
+            self._cliente_btn.setStyleSheet('''
+                QPushButton { background:#f8f9fa; color:#6c757d; border:1px dashed #adb5bd; border-radius:5px; text-align:left; padding:0 8px; }
+                QPushButton:hover { background:#e9ecef; border-style:solid; }
+            ''')
+            self._cliente_btn.clicked.connect(self._open_client_selector)
+            right_layout.addWidget(self._cliente_btn)
+
+        right_layout.addStretch()
+        h_layout.addWidget(right_col, 1)
         main.addLayout(h_layout)
 
-        # ── Botón Cobrar ──
-        self.facturar_btn = QPushButton('✔  COBRAR')
-        self.facturar_btn.setObjectName('btn_facturar')
-        self.facturar_btn.setMinimumHeight(50)
-        self.facturar_btn.setFont(QFont('Segoe UI', 14, QFont.Bold))
-        self.facturar_btn.clicked.connect(self._confirm)
-        main.addWidget(self.facturar_btn)
+        outer.addWidget(_content_w)
+
+    def _load_profiles(self):
+        try:
+            from pos_system.database.db_manager import DatabaseManager
+            self._profiles = DatabaseManager().execute_query(
+                "SELECT * FROM perfiles_facturacion WHERE activo=1 ORDER BY nombre ASC"
+            ) or []
+        except Exception:
+            self._profiles = []
+
+    def _select_profile(self, perfil, clicked_btn):
+        self.selected_profile = perfil
+        for b in self._profile_btns:
+            b.setChecked(False)
+        clicked_btn.setChecked(True)
+
+    def _open_client_selector(self):
+        if self.selected_cliente:
+            from PyQt5.QtWidgets import QMenu
+            menu = QMenu(self)
+            menu.addAction('Cambiar cliente...', self._choose_cliente)
+            menu.addAction('Quitar cliente  (Consumidor Final)', self._clear_cliente)
+            menu.exec_(self._cliente_btn.mapToGlobal(
+                self._cliente_btn.rect().bottomLeft()
+            ))
+        else:
+            self._choose_cliente()
+
+    def _choose_cliente(self):
+        from pos_system.ui.cliente_perfil_dialog import ClientePerfilDialog
+        dlg = ClientePerfilDialog(self)
+        if dlg.exec_() == QDialog.Accepted and dlg.selected_cliente:
+            self.selected_cliente = dlg.selected_cliente
+            nombre = dlg.selected_cliente.get('nombre', '')
+            cuit = dlg.selected_cliente.get('cuit', '')
+            self._cliente_btn.setText(f'{nombre}{"  —  CUIT: " + cuit if cuit else ""}')
+            self._cliente_btn.setStyleSheet('''
+                QPushButton { background:#e7f3ff; color:#0d6efd; border:1px solid #b6d4fe; border-radius:6px; text-align:left; padding:0 10px; }
+                QPushButton:hover { background:#cfe2ff; }
+            ''')
+
+    def _clear_cliente(self):
+        self.selected_cliente = None
+        self._cliente_btn.setText('Sin cliente  (Consumidor Final)')
+        self._cliente_btn.setStyleSheet('''
+            QPushButton { background:#f8f9fa; color:#6c757d; border:1px dashed #adb5bd; border-radius:5px; text-align:left; padding:0 8px; }
+            QPushButton:hover { background:#e9ecef; border-style:solid; }
+        ''')
+
+    def _preview_invoice(self):
+        if not self.selected_profile:
+            QMessageBox.information(self, 'Vista previa',
+                'Selecciona un perfil ARCA para ver la vista previa.')
+            return
+        import os, platform as _pl, subprocess as _sp
+        from pos_system.utils.pdf_generator import PDFGenerator
+        from pos_system.utils.firebase_sync import now_ar
+
+        perfil = self.selected_profile
+        total = self.total
+        items_factura = [
+            {'cantidad': it.get('quantity', 1),
+             'descripcion': it.get('product_name', 'Producto'),
+             'iva': 0.0,
+             'precio': float(it.get('unit_price', 0)),
+             'importe': float(it.get('subtotal', 0))}
+            for it in self.cart
+        ] or [{'cantidad': 1, 'descripcion': 'Venta general', 'iva': 0.0, 'precio': total, 'importe': total}]
+
+        cond_iva_rec = 'Consumidor Final'
+        if self.selected_cliente:
+            cond_iva_rec = self.selected_cliente.get('condicion_iva', 'Consumidor Final')
+
+        tipo = 'FAC. ELEC. A' if cond_iva_rec == 'Responsable Inscripto' else (
+               'FAC. ELEC. B' if self.payment_type == 'transfer' else 'FAC. ELEC. C')
+
+        factura = {
+            'cuit': perfil.get('cuit', ''),
+            'razon_social': perfil.get('razon_social') or perfil.get('nombre', ''),
+            'domicilio': perfil.get('domicilio', ''),
+            'localidad': perfil.get('localidad', ''),
+            'telefono': '',
+            'ing_brutos': perfil.get('ing_brutos', ''),
+            'inicio_actividades': perfil.get('inicio_actividades', ''),
+            'condicion_iva': perfil.get('condicion_iva', 'Monotributista'),
+            'tipo_comprobante': tipo,
+            'punto_venta': perfil.get('punto_venta', 1),
+            'nro_comprobante': 1,
+            'fecha': now_ar().strftime('%d/%m/%Y'),
+            'turno': '00000',
+            'pago': self.payment_subtype,
+            'modalidad': 'LOCAL',
+            'cliente': (self.selected_cliente or {}).get('razon_social') or
+                       (self.selected_cliente or {}).get('nombre', 'CONSUMIDOR FINAL') if self.selected_cliente else 'CONSUMIDOR FINAL',
+            'cuit_receptor': (self.selected_cliente or {}).get('cuit', ''),
+            'domicilio_receptor': (self.selected_cliente or {}).get('domicilio', ''),
+            'condicion_iva_receptor': cond_iva_rec,
+            'items': items_factura,
+            'total': total,
+            'iva_contenido': 0.0,
+            'otros_impuestos': 0.0,
+            'cae': '',
+            'vto_cae': '',
+            'notas': self._nota_input.text().strip() if hasattr(self, '_nota_input') else '',
+            'nombre_perfil': perfil.get('nombre', ''),
+        }
+        try:
+            pdf_path = PDFGenerator().generate_factura_afip_a4(factura)
+            if _pl.system() == 'Windows':
+                os.startfile(pdf_path)
+            elif _pl.system() == 'Darwin':
+                _sp.Popen(['open', pdf_path])
+            else:
+                _sp.Popen(['xdg-open', pdf_path])
+        except Exception as e:
+            QMessageBox.warning(self, 'Vista previa', f'Error generando vista previa:\n{e}')
 
     def keyPressEvent(self, event):
         """Permite ingresar montos con el teclado numérico físico."""
@@ -2469,11 +2778,25 @@ class PaymentDialog(QDialog):
             self.btn_transfer.setChecked(False)
             self.cash_panel.setVisible(True)
             self.transfer_panel.setVisible(False)
+            self.payment_subtype = 'Efectivo'
+            if self._subtype_row_widget:
+                self._subtype_row_widget.setVisible(False)
         else:
             self.btn_cash.setChecked(False)
             self.btn_transfer.setChecked(True)
             self.cash_panel.setVisible(False)
             self.transfer_panel.setVisible(True)
+            if self._subtype_row_widget:
+                self._subtype_row_widget.setVisible(True)
+            # Default: T. Débito
+            self._set_subtype('T. DEBITO', self._subtype_btns.get('T. DEBITO'))
+
+    def _set_subtype(self, key, btn):
+        self.payment_subtype = key
+        for b in self._subtype_btns.values():
+            b.setChecked(False)
+        if btn:
+            btn.setChecked(True)
 
     @staticmethod
     def _fmt_input(raw: str) -> str:
@@ -2519,6 +2842,16 @@ class PaymentDialog(QDialog):
             self.change_lbl.setStyleSheet('color: #dc3545; font-size: 18px; font-weight: bold; background: transparent; border: none;')
             self.change_lbl.parent().setStyleSheet('QFrame { background: #fff5f5; border: 2px solid #fca5a5; border-radius: 10px; }')
 
+    def _toggle_nota(self, checked):
+        self._nota_input.setVisible(checked)
+        if checked:
+            self._nota_btn.setText('- Quitar nota')
+            self._nota_input.setFocus()
+        else:
+            self._nota_btn.setText('+ Añadir nota a la factura')
+            self._nota_input.clear()
+        self.adjustSize()
+
     def _confirm(self):
         if self.payment_type == 'cash':
             try:
@@ -2534,4 +2867,5 @@ class PaymentDialog(QDialog):
         else:
             self.cash_received = 0.0
             self.change_given = 0.0
+        self.nota_factura = self._nota_input.text().strip() if hasattr(self, '_nota_input') else ''
         self.accept()

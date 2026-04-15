@@ -1358,7 +1358,26 @@ class PDFGenerator:
             ('LEFTPADDING',  (0,0),(-1,-1), 6),
         ]))
         story.append(transp_tbl)
-        story.append(Spacer(1, 5*mm))
+        story.append(Spacer(1, 4*mm))
+
+        # ── OBSERVACIONES (si las hay) ────────────────────────────────────────
+        notas_txt = factura.get('notas', '').strip()
+        if notas_txt:
+            sN = S('NO', fontSize=7.5, fontName='Helvetica', alignment=TA_LEFT, leading=10)
+            notas_tbl = Table(
+                [[Paragraph(f'<b>Observaciones:</b> {notas_txt}', sN)]],
+                colWidths=[CONTENT_W],
+            )
+            notas_tbl.setStyle(TableStyle([
+                ('BOX',          (0,0),(-1,-1), 0.5, colors.HexColor('#aaaaaa')),
+                ('BACKGROUND',   (0,0),(-1,-1), colors.HexColor('#fffef5')),
+                ('TOPPADDING',   (0,0),(-1,-1), 5),
+                ('BOTTOMPADDING',(0,0),(-1,-1), 5),
+                ('LEFTPADDING',  (0,0),(-1,-1), 6),
+                ('RIGHTPADDING', (0,0),(-1,-1), 6),
+            ]))
+            story.append(notas_tbl)
+            story.append(Spacer(1, 4*mm))
 
         # ── PIE: QR + LOGO AFIP + CAE ────────────────────────────────────────
         vto_raw = factura.get('vto_cae', '')
