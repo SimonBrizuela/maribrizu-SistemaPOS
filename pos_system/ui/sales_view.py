@@ -2107,6 +2107,7 @@ class SalesView(QWidget):
                 self.update_cart_display()
 
     def complete_sale(self):
+        from PyQt5.QtWidgets import QMessageBox
         if not self.cart:
             QMessageBox.warning(self, 'Carrito vacio', 'Agregue productos al carrito antes de facturar')
             return
@@ -2145,7 +2146,6 @@ class SalesView(QWidget):
             'turno_nombre':  turno_nombre,
         }
 
-        from PyQt5.QtWidgets import QMessageBox
         try:
             sale_id = self.sale_model.create(sale_data)
             if sale_id:
