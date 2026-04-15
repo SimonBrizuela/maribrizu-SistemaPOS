@@ -220,16 +220,6 @@ class CashView(QWidget):
         
     def refresh_data(self):
         current_register = self.cash_register_model.get_current()
-        if not current_register:
-            # Fallback: si Firebase tiene una caja abierta, crearla localmente
-            try:
-                from pos_system.utils.firebase_sync import get_firebase_sync
-                fb = get_firebase_sync()
-                if fb:
-                    fb.ensure_local_register(self.db)
-                    current_register = self.cash_register_model.get_current()
-            except Exception:
-                pass
         
         if current_register:
             # Caja abierta

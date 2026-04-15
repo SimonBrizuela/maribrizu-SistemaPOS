@@ -6,7 +6,8 @@ quién está trabajando en el turno actual (puede ser un cajero diferente).
 import logging
 from PyQt5.QtWidgets import (QDialog, QVBoxLayout, QHBoxLayout, QLabel,
                              QLineEdit, QPushButton, QListWidget, QListWidgetItem,
-                             QFrame, QApplication, QSizePolicy, QMessageBox)
+                             QFrame, QApplication, QSizePolicy, QMessageBox,
+                             QScrollArea, QWidget)
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont
 
@@ -35,16 +36,16 @@ class TurnoDialog(QDialog):
         )
         self.turno_role = current_user.get('turno_role', 'admin')  # rol del turno activo
         self._cajeros_data = {}  # nombre -> role
-        self.setWindowTitle('¿Quién está en el turno?')
+        self.setWindowTitle('Quién está en el turno')
         self.setModal(True)
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
-        # Tamaño adaptable
+        # Tamaño adaptable a la pantalla disponible
         screen = QApplication.primaryScreen().availableGeometry()
-        w = max(380, min(460, int(screen.width() * 0.32)))
-        h = max(420, min(540, int(screen.height() * 0.58)))
+        w = max(340, min(440, int(screen.width() * 0.30)))
+        h = max(360, min(520, int(screen.height() * 0.60)))
         self.resize(w, h)
-        self.setMinimumSize(340, 380)
+        self.setMinimumSize(300, 320)
 
         # Centrar
         self.move(
@@ -62,84 +63,88 @@ class TurnoDialog(QDialog):
         self._timer.start()
 
     def _init_ui(self):
+        screen = QApplication.primaryScreen().availableGeometry()
+        small = screen.height() < 700
+
         self.setStyleSheet('''
             QDialog { background: #f8f9fa; }
+            QScrollArea { background: transparent; border: none; }
+            QWidget#scrollContent { background: transparent; }
             QLabel#title {
-                font-size: 16px; font-weight: bold; color: #1e293b;
+                font-size: 15px; font-weight: bold; color: #1e293b;
             }
             QLabel#subtitle {
-                font-size: 11px; color: #64748b;
+                font-size: 10px; color: #64748b;
             }
             QListWidget {
                 border: 1.5px solid #dee2e6;
                 border-radius: 8px;
                 background: white;
-                font-size: 13px;
-                padding: 4px;
+                font-size: 12px;
+                padding: 2px;
             }
             QListWidget::item {
-                padding: 10px 14px;
-                border-radius: 6px;
-                margin: 2px 2px;
+                padding: 8px 12px;
+                border-radius: 5px;
+                margin: 1px 2px;
                 color: #212529;
             }
-            QListWidget::item:selected {
-                background: #0d6efd;
-                color: white;
-            }
-            QListWidget::item:hover:!selected {
-                background: #e8f0fe;
-            }
+            QListWidget::item:selected { background: #0d6efd; color: white; }
+            QListWidget::item:hover:!selected { background: #e8f0fe; }
             QLineEdit {
                 border: 1.5px solid #ced4da;
                 border-radius: 6px;
-                padding: 8px 12px;
-                font-size: 13px;
+                padding: 6px 10px;
+                font-size: 12px;
                 background: white;
                 color: #212529;
             }
             QLineEdit:focus { border-color: #ffc107; }
             QPushButton#confirmBtn {
-                background: #198754;
-                border: none;
-                border-radius: 8px;
-                padding: 10px 24px;
-                color: white;
-                font-size: 13px;
-                font-weight: bold;
+                background: #198754; border: none; border-radius: 7px;
+                padding: 9px 20px; color: white; font-size: 12px; font-weight: bold;
             }
             QPushButton#confirmBtn:hover { background: #157347; }
             QPushButton#skipBtn {
-                background: #f8f9fa;
-                border: 1px solid #dee2e6;
-                border-radius: 8px;
-                padding: 10px 20px;
-                color: #495057;
-                font-size: 13px;
+                background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 7px;
+                padding: 9px 16px; color: #495057; font-size: 12px;
             }
             QPushButton#skipBtn:hover { background: #e9ecef; }
         ''')
 
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(22, 20, 22, 20)
-        layout.setSpacing(14)
+        # Layout externo: scroll + botones fijos abajo
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
 
-        # ── Ícono + título ───────────────────────────────────────────────
-        title_lbl = QLabel('¿Quién está en el turno?')
+        # Área scrolleable
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        content = QWidget()
+        content.setObjectName('scrollContent')
+        layout = QVBoxLayout(content)
+        margin = 14 if small else 18
+        layout.setContentsMargins(margin, margin, margin, 8)
+        layout.setSpacing(10 if small else 12)
+
+        # ── Título ──────────────────────────────────────────────────────
+        title_lbl = QLabel('Quien esta en el turno')
         title_lbl.setObjectName('title')
         title_lbl.setAlignment(Qt.AlignCenter)
         layout.addWidget(title_lbl)
 
         subtitle_lbl = QLabel(
-            'Seleccioná un cajero de la lista o escribí el nombre.\n'
-            'Las ventas de este turno quedarán registradas a su nombre.'
+            'Selecciona un cajero de la lista o escribe el nombre.\n'
+            'Las ventas de este turno quedaran registradas a su nombre.'
         )
         subtitle_lbl.setObjectName('subtitle')
         subtitle_lbl.setAlignment(Qt.AlignCenter)
         subtitle_lbl.setWordWrap(True)
         layout.addWidget(subtitle_lbl)
 
-        # ── Separador ───────────────────────────────────────────────────
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
         sep.setStyleSheet('color: #e9ecef;')
@@ -147,55 +152,62 @@ class TurnoDialog(QDialog):
 
         # ── Lista de cajeros ─────────────────────────────────────────────
         list_lbl = QLabel('Cajeros registrados:')
-        list_lbl.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        list_lbl.setFont(QFont('Segoe UI', 9, QFont.Bold))
         list_lbl.setStyleSheet('color: #495057;')
         layout.addWidget(list_lbl)
 
         self.cajeros_list = QListWidget()
-        self.cajeros_list.setMaximumHeight(180)
+        list_h = 130 if small else 160
+        self.cajeros_list.setMaximumHeight(list_h)
         self.cajeros_list.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         self.cajeros_list.itemClicked.connect(self._on_list_click)
         self.cajeros_list.itemDoubleClicked.connect(self._on_list_double_click)
         layout.addWidget(self.cajeros_list)
 
         # ── Nombre libre ─────────────────────────────────────────────────
-        libre_lbl = QLabel('O escribí el nombre del turno:')
-        libre_lbl.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        libre_lbl = QLabel('O escribe el nombre del turno:')
+        libre_lbl.setFont(QFont('Segoe UI', 9, QFont.Bold))
         libre_lbl.setStyleSheet('color: #495057;')
         layout.addWidget(libre_lbl)
 
         self.nombre_input = QLineEdit()
-        self.nombre_input.setPlaceholderText('Ej: Carlos, María, Turno Noche...')
+        self.nombre_input.setPlaceholderText('Ej: Carlos, Maria, Turno Noche...')
         self.nombre_input.setText(self.turno_nombre)
-        self.nombre_input.setMinimumHeight(40)
+        self.nombre_input.setMinimumHeight(36)
         self.nombre_input.returnPressed.connect(self._confirm)
         self.nombre_input.textChanged.connect(lambda _: self._reset_timer())
         layout.addWidget(self.nombre_input)
 
-        # ── Countdown ─────────────────────────────────────────────────────
-        self._countdown_lbl = QLabel(f'Se seleccionará automáticamente en {AUTOSELECT_SECONDS}s...')
-        self._countdown_lbl.setStyleSheet('color: #6c757d; font-size: 10px;')
+        # ── Countdown ────────────────────────────────────────────────────
+        self._countdown_lbl = QLabel(f'Se seleccionara automaticamente en {AUTOSELECT_SECONDS}s...')
+        self._countdown_lbl.setStyleSheet('color: #6c757d; font-size: 9px;')
         self._countdown_lbl.setAlignment(Qt.AlignCenter)
         layout.addWidget(self._countdown_lbl)
 
-        # ── Botones ───────────────────────────────────────────────────────
-        btn_row = QHBoxLayout()
+        scroll.setWidget(content)
+        outer.addWidget(scroll, 1)
+
+        # ── Botones (fijos abajo, fuera del scroll) ───────────────────────
+        btn_bar = QWidget()
+        btn_bar.setStyleSheet('background: #f8f9fa; border-top: 1px solid #e9ecef;')
+        btn_row = QHBoxLayout(btn_bar)
+        btn_row.setContentsMargins(14, 10, 14, 10)
         btn_row.setSpacing(10)
 
         skip_btn = QPushButton('Omitir')
         skip_btn.setObjectName('skipBtn')
-        skip_btn.setMinimumHeight(42)
+        skip_btn.setMinimumHeight(38)
         skip_btn.clicked.connect(self._skip)
         btn_row.addWidget(skip_btn)
 
         confirm_btn = QPushButton('Confirmar Turno')
         confirm_btn.setObjectName('confirmBtn')
-        confirm_btn.setMinimumHeight(42)
+        confirm_btn.setMinimumHeight(38)
         confirm_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         confirm_btn.clicked.connect(self._confirm)
         btn_row.addWidget(confirm_btn, 2)
 
-        layout.addLayout(btn_row)
+        outer.addWidget(btn_bar)
 
     def _load_cajeros(self):
         """Carga la lista de cajeros activos desde la base de datos."""

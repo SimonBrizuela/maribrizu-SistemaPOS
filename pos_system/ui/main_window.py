@@ -413,7 +413,7 @@ class MainWindow(QMainWindow):
         return header
 
     def update_status_bar(self):
-        now = datetime.now()
+        now = now_ar()
         date_time = now.strftime('%d/%m/%Y %H:%M:%S')
 
         try:

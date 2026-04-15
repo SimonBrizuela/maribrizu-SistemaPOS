@@ -969,6 +969,7 @@ class SalesView(QWidget):
         self.cart_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Fixed)
         self.cart_table.setColumnWidth(5, 34)
         self.cart_table.setFocusPolicy(Qt.NoFocus)
+        self.cart_table.cellClicked.connect(self._on_cart_cell_clicked)
         cart_left.addWidget(self.cart_table, 1)
 
         # Aviso de promoción cercana
@@ -1869,12 +1870,15 @@ class SalesView(QWidget):
             qty_spin.valueChanged.connect(lambda v, r=row: self.update_quantity(r, v))
             self.cart_table.setCellWidget(row, 3, qty_spin)
 
-            # Col 4: Subtotal
+            # Col 4: Subtotal (clickeable para editar precio)
             subtotal_item = QTableWidgetItem(f'${item["subtotal"]:,.0f}')
             subtotal_item.setTextAlignment(Qt.AlignCenter)
             subtotal_item.setFont(QFont('Segoe UI', 10, QFont.Bold))
+            subtotal_item.setToolTip('Clic para editar el precio')
             if has_discount:
                 subtotal_item.setForeground(QColor('#dc3545'))
+            else:
+                subtotal_item.setForeground(QColor('#0d6efd'))
             self.cart_table.setItem(row, 4, subtotal_item)
 
             # Col 5: Botón quitar
@@ -2030,7 +2034,67 @@ class SalesView(QWidget):
         if row < len(self.cart):
             del self.cart[row]
             self.update_cart_display()
-            
+
+    def _on_cart_cell_clicked(self, row, col):
+        """Click en col 4 (Subtotal) o col 2 (Precio) abre dialog para editar el precio unitario."""
+        if col not in (2, 4):
+            return
+        if row >= len(self.cart):
+            return
+        item = self.cart[row]
+        current_price = item['unit_price']
+
+        dialog = QDialog(self)
+        dialog.setWindowTitle('Editar precio')
+        dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        dialog.setFixedWidth(300)
+        layout = QVBoxLayout(dialog)
+        layout.setSpacing(12)
+        layout.setContentsMargins(16, 16, 16, 16)
+
+        lbl = QLabel(f'<b>{item["product_name"]}</b><br>'
+                     f'<span style="color:#6c757d;font-size:11px;">Precio actual: ${current_price:,.0f}</span>')
+        lbl.setWordWrap(True)
+        layout.addWidget(lbl)
+
+        price_spin = QDoubleSpinBox()
+        price_spin.setMinimum(0)
+        price_spin.setMaximum(99_999_999)
+        price_spin.setDecimals(0)
+        price_spin.setSingleStep(100)
+        price_spin.setValue(current_price)
+        price_spin.setPrefix('$ ')
+        price_spin.setFont(QFont('Segoe UI', 13, QFont.Bold))
+        price_spin.setMinimumHeight(44)
+        price_spin.setStyleSheet('QDoubleSpinBox { border: 2px solid #0d6efd; border-radius: 6px; padding: 4px 8px; }')
+        price_spin.selectAll()
+        layout.addWidget(price_spin)
+
+        btn_row = QHBoxLayout()
+        cancel_btn = QPushButton('Cancelar')
+        cancel_btn.setObjectName('btnSecondary')
+        cancel_btn.clicked.connect(dialog.reject)
+        ok_btn = QPushButton('Aplicar')
+        ok_btn.setObjectName('btnPrimary')
+        ok_btn.setDefault(True)
+        ok_btn.clicked.connect(dialog.accept)
+        btn_row.addWidget(cancel_btn)
+        btn_row.addWidget(ok_btn)
+        layout.addLayout(btn_row)
+
+        if dialog.exec_() == QDialog.Accepted:
+            new_price = price_spin.value()
+            if new_price != current_price:
+                item['unit_price'] = new_price
+                item['original_price'] = item.get('original_price', current_price)
+                item['discount_amount'] = 0
+                item['discount_type'] = None
+                item['discount_value'] = 0
+                item['promo_id'] = None
+                item['promo_label'] = ''
+                item['subtotal'] = round(item['quantity'] * new_price, 2)
+                self.update_cart_display()
+
     def clear_cart(self):
         if self.cart:
             reply = QMessageBox.question(
