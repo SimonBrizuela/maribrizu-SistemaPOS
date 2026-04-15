@@ -2174,10 +2174,18 @@ class SalesView(QWidget):
                         self, sale=sale, auto_virtual=auto_virt,
                         perfil=perfil, cliente_data=cliente_data
                     )
-                    if fac_dlg.exec_() == QDialog.Accepted and fac_dlg.pdf_path:
+                    if cliente_data:
+                        # Tiene cliente específico → mostrar dialog para confirmar
+                        accepted = fac_dlg.exec_() == QDialog.Accepted
+                    else:
+                        # Sin cliente → Consumidor Final, generar directo sin dialog
+                        fac_dlg.auto_emit()
+                        accepted = fac_dlg.pdf_path is not None
+
+                    if accepted and fac_dlg.pdf_path:
                         resp = QMessageBox.question(
                             self, 'Imprimir',
-                            '¿Desea abrir/imprimir la factura?',
+                            'Desea abrir/imprimir la factura?',
                             QMessageBox.Yes | QMessageBox.No,
                             QMessageBox.Yes
                         )

@@ -6,7 +6,7 @@ luego genera el PDF con generate_factura_afip().
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QFormLayout, QLabel,
     QPushButton, QLineEdit, QComboBox, QFrame, QMessageBox,
-    QGroupBox, QDoubleSpinBox
+    QGroupBox, QDoubleSpinBox, QScrollArea, QWidget, QApplication
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont
@@ -22,14 +22,17 @@ class FacturaDialog(QDialog):
         sale: dict con los datos de la venta (items, total, payment_type, etc.)
         auto_virtual: Si True, pre-completa como transferencia → Tipo B, Consumidor Final
         parent: widget padre
+        perfil: dict con datos del perfil ARCA seleccionado
+        cliente_data: dict con datos del cliente receptor
     """
 
-    def __init__(self, parent=None, sale: dict = None, auto_virtual: bool = False, perfil: dict = None, cliente_data: dict = None):
+    def __init__(self, parent=None, sale: dict = None, auto_virtual: bool = False,
+                 perfil: dict = None, cliente_data: dict = None):
         super().__init__(parent)
         self.sale = sale or {}
         self.auto_virtual = auto_virtual
-        self.perfil = perfil  # dict con datos del perfil ARCA seleccionado
-        self.cliente_data = cliente_data  # dict con datos del cliente receptor
+        self.perfil = perfil
+        self.cliente_data = cliente_data
         self.pdf_path = None
         self._setup_emisor_data()
         self.init_ui()
@@ -68,36 +71,59 @@ class FacturaDialog(QDialog):
             }
 
     def init_ui(self):
-        self.setWindowTitle('Emitir Factura Electrónica AFIP')
-        self.setMinimumWidth(520)
+        self.setWindowTitle('Emitir Factura Electronica AFIP')
         self.setModal(True)
+        self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
 
-        main = QVBoxLayout(self)
-        main.setSpacing(12)
-        main.setContentsMargins(16, 16, 16, 16)
+        # Tamaño adaptable a la pantalla
+        screen = QApplication.primaryScreen().availableGeometry()
+        w = max(480, min(560, int(screen.width() * 0.38)))
+        h = max(420, min(680, int(screen.height() * 0.82)))
+        self.resize(w, h)
+        self.setMinimumSize(420, 380)
 
-        # ── Título ────────────────────────────────────────────────────────────
-        title = QLabel('Factura Electrónica AFIP')
-        title.setFont(QFont('Segoe UI', 14, QFont.Bold))
-        title.setStyleSheet('color: #0d6efd;')
-        main.addWidget(title)
+        # Layout externo: scroll + botones fijos abajo
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # ── Encabezado fijo ───────────────────────────────────────────────
+        header_w = QWidget()
+        header_w.setStyleSheet('background: #f8f9fa; border-bottom: 1px solid #dee2e6;')
+        header_lay = QVBoxLayout(header_w)
+        header_lay.setContentsMargins(16, 12, 16, 10)
+        header_lay.setSpacing(2)
+
+        title = QLabel('Factura Electronica AFIP')
+        title.setFont(QFont('Segoe UI', 13, QFont.Bold))
+        title.setStyleSheet('color: #0d6efd; background: transparent;')
+        header_lay.addWidget(title)
 
         total = self.sale.get('total_amount', 0)
-        total_lbl = QLabel(f'Total de la venta: <b>${total:.2f}</b>')
-        total_lbl.setFont(QFont('Segoe UI', 11))
+        total_lbl = QLabel(f'Total de la venta: <b>${total:,.2f}</b>')
+        total_lbl.setFont(QFont('Segoe UI', 10))
         total_lbl.setTextFormat(Qt.RichText)
-        main.addWidget(total_lbl)
+        total_lbl.setStyleSheet('background: transparent;')
+        header_lay.addWidget(total_lbl)
 
-        sep = QFrame()
-        sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet('color: #dee2e6;')
-        main.addWidget(sep)
+        outer.addWidget(header_w)
 
-        # ── Tipo de comprobante ───────────────────────────────────────────────
+        # ── Área scrolleable ──────────────────────────────────────────────
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        content = QWidget()
+        main = QVBoxLayout(content)
+        main.setSpacing(10)
+        main.setContentsMargins(16, 12, 16, 12)
+
+        # ── Tipo de comprobante ───────────────────────────────────────────
         tipo_group = QGroupBox('Comprobante')
-        tipo_group.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        tipo_group.setFont(QFont('Segoe UI', 9, QFont.Bold))
         tipo_layout = QFormLayout(tipo_group)
-        tipo_layout.setSpacing(8)
+        tipo_layout.setSpacing(6)
 
         self.tipo_combo = QComboBox()
         self.tipo_combo.setFont(QFont('Segoe UI', 10))
@@ -116,20 +142,20 @@ class FacturaDialog(QDialog):
 
         main.addWidget(tipo_group)
 
-        # ── Datos del cliente ─────────────────────────────────────────────────
+        # ── Datos del cliente ─────────────────────────────────────────────
         cliente_group = QGroupBox('Datos del Cliente')
-        cliente_group.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        cliente_group.setFont(QFont('Segoe UI', 9, QFont.Bold))
         cliente_layout = QFormLayout(cliente_group)
-        cliente_layout.setSpacing(8)
+        cliente_layout.setSpacing(6)
 
         self.cliente_input = QLineEdit('CONSUMIDOR FINAL')
         self.cliente_input.setFont(QFont('Segoe UI', 10))
-        self.cliente_input.setPlaceholderText('Nombre o Razón Social')
+        self.cliente_input.setPlaceholderText('Nombre o Razon Social')
         cliente_layout.addRow('Cliente:', self.cliente_input)
 
         self.cuit_cliente_input = QLineEdit('')
         self.cuit_cliente_input.setFont(QFont('Segoe UI', 10))
-        self.cuit_cliente_input.setPlaceholderText('Ej: 20123456789 (vacío = Consumidor Final)')
+        self.cuit_cliente_input.setPlaceholderText('Ej: 20123456789 (vacio = Consumidor Final)')
         cliente_layout.addRow('CUIT Cliente:', self.cuit_cliente_input)
 
         self.domicilio_cliente_input = QLineEdit('')
@@ -142,19 +168,19 @@ class FacturaDialog(QDialog):
         self.condicion_iva_cliente.addItems([
             'Consumidor Final', 'Responsable Inscripto', 'Monotributista', 'Exento'
         ])
-        cliente_layout.addRow('Condición IVA:', self.condicion_iva_cliente)
+        cliente_layout.addRow('Condicion IVA:', self.condicion_iva_cliente)
 
         main.addWidget(cliente_group)
 
-        # ── Datos AFIP (CAE - completar cuando se integre WSFE) ──────────────
+        # ── Datos AFIP (CAE) ──────────────────────────────────────────────
         afip_group = QGroupBox('Datos AFIP (CAE)')
-        afip_group.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        afip_group.setFont(QFont('Segoe UI', 9, QFont.Bold))
         afip_layout = QFormLayout(afip_group)
-        afip_layout.setSpacing(8)
+        afip_layout.setSpacing(6)
 
         self.cae_input = QLineEdit('')
         self.cae_input.setFont(QFont('Segoe UI', 10))
-        self.cae_input.setPlaceholderText('CAE otorgado por AFIP (dejar vacío si aún no disponible)')
+        self.cae_input.setPlaceholderText('CAE otorgado por AFIP (dejar vacio si no disponible)')
         afip_layout.addRow('CAE:', self.cae_input)
 
         self.vto_cae_input = QLineEdit('')
@@ -162,16 +188,14 @@ class FacturaDialog(QDialog):
         self.vto_cae_input.setPlaceholderText('AAAAMMDD — Ej: 20260412')
         afip_layout.addRow('Vto. CAE:', self.vto_cae_input)
 
-        # IVA contenido (calculado automáticamente si es 21%)
         iva_row = QHBoxLayout()
         self.iva_spin = QDoubleSpinBox()
         self.iva_spin.setFont(QFont('Segoe UI', 10))
         self.iva_spin.setMinimum(0)
         self.iva_spin.setMaximum(999999)
         self.iva_spin.setDecimals(2)
-        # Auto-calcular IVA 21% incluido
         total_val = float(self.sale.get('total_amount', 0))
-        self.iva_spin.setValue(round(total_val - total_val / 1.21, 2))
+        self.iva_spin.setValue(0.0)  # Monotributo: IVA = 0
         iva_row.addWidget(self.iva_spin)
         iva_auto_btn = QPushButton('21%')
         iva_auto_btn.setFixedWidth(48)
@@ -182,29 +206,35 @@ class FacturaDialog(QDialog):
 
         main.addWidget(afip_group)
 
-        # Indicador automático vs manual para CAE
+        # Badge CAE
         if self.emisor.get('cert_path') and self.emisor.get('key_path'):
-            afip_badge = QLabel('✔  CAE automático — se solicitará a AFIP al generar')
-            afip_badge.setStyleSheet(
+            badge = QLabel('CAE automatico — se solicitara a AFIP al generar')
+            badge.setStyleSheet(
                 'background:#e7f3ff; color:#0d6efd; border:1px solid #b6d4fe;'
-                'border-radius:6px; padding:6px 10px; font-size:11px;'
+                'border-radius:6px; padding:6px 10px; font-size:10px;'
             )
-            main.addWidget(afip_badge)
+            main.addWidget(badge)
         elif not self.emisor.get('cuit'):
-            warn = QLabel('Configure los datos del emisor en la pestana Fiscal → Configuración AFIP')
-            warn.setStyleSheet('color: #dc3545; font-size: 11px; padding: 4px;')
+            warn = QLabel('Configure los datos del emisor en Fiscal → Configuracion AFIP')
+            warn.setStyleSheet('color: #dc3545; font-size: 10px; padding: 4px;')
             warn.setWordWrap(True)
             main.addWidget(warn)
         else:
-            manual_badge = QLabel('ⓘ  Sin certificado — ingresá el CAE manualmente si lo tenés')
-            manual_badge.setStyleSheet(
+            badge = QLabel('Sin certificado — ingresa el CAE manualmente si lo tenes')
+            badge.setStyleSheet(
                 'background:#fff3cd; color:#856404; border:1px solid #ffecb5;'
-                'border-radius:6px; padding:6px 10px; font-size:11px;'
+                'border-radius:6px; padding:6px 10px; font-size:10px;'
             )
-            main.addWidget(manual_badge)
+            main.addWidget(badge)
 
-        # ── Botones ───────────────────────────────────────────────────────────
-        btn_row = QHBoxLayout()
+        scroll.setWidget(content)
+        outer.addWidget(scroll, 1)
+
+        # ── Botones fijos abajo ───────────────────────────────────────────
+        btn_bar = QWidget()
+        btn_bar.setStyleSheet('background: #f8f9fa; border-top: 1px solid #dee2e6;')
+        btn_row = QHBoxLayout(btn_bar)
+        btn_row.setContentsMargins(16, 10, 16, 10)
         btn_row.setSpacing(8)
 
         cancel_btn = QPushButton('Cancelar')
@@ -227,7 +257,7 @@ class FacturaDialog(QDialog):
         emit_btn.clicked.connect(self._emit_factura)
         btn_row.addWidget(emit_btn, 2)
 
-        main.addLayout(btn_row)
+        outer.addWidget(btn_bar)
 
     def _prefill_perfil(self, perfil: dict):
         """Usa los datos del perfil como EMISOR (reemplaza config AFIP global)."""
@@ -244,6 +274,7 @@ class FacturaDialog(QDialog):
             'cert_path':          perfil.get('cert_path', ''),
             'key_path':           perfil.get('key_path', ''),
             'produccion':         bool(perfil.get('produccion', 0)),
+            'nombre_perfil':      perfil.get('nombre', ''),
         }
 
     def _prefill_cliente(self, cliente: dict):
@@ -262,7 +293,6 @@ class FacturaDialog(QDialog):
             idx = self.condicion_iva_cliente.findText(cond_iva)
             if idx >= 0:
                 self.condicion_iva_cliente.setCurrentIndex(idx)
-        # Sugerir Tipo A si es Responsable Inscripto
         if cond_iva == 'Responsable Inscripto':
             self.tipo_combo.setCurrentText('FAC. ELEC. A')
 
@@ -277,6 +307,21 @@ class FacturaDialog(QDialog):
         """Calcula IVA 21% incluido sobre el total."""
         total = float(self.sale.get('total_amount', 0))
         self.iva_spin.setValue(round(total - total / 1.21, 2))
+
+    def auto_emit(self):
+        """
+        Genera la factura como Consumidor Final sin mostrar el dialog.
+        Pre-configura tipo C (Monotributo) y llama directamente a _emit_factura.
+        """
+        # Para monotributo: Factura C, Consumidor Final, sin IVA
+        self.tipo_combo.setCurrentText('FAC. ELEC. C')
+        self.cliente_input.setText('CONSUMIDOR FINAL')
+        self.cuit_cliente_input.clear()
+        self.condicion_iva_cliente.setCurrentIndex(0)  # Consumidor Final
+        self.iva_spin.setValue(0.0)
+        payment_type = self.sale.get('payment_type', 'cash')
+        self.pago_input.setText('Transferencia' if payment_type == 'transfer' else 'Efectivo')
+        self._emit_factura()
 
     def _get_next_nro_comprobante(self, tipo: str) -> int:
         """Obtiene el próximo número de comprobante para el tipo dado."""
@@ -308,7 +353,7 @@ class FacturaDialog(QDialog):
         iva = self.iva_spin.value()
         nro = self._get_next_nro_comprobante(tipo)
 
-        # ── Intentar CAE automático si el perfil tiene certificados ─────────
+        # ── Intentar CAE automático si el perfil tiene certificados ─────
         cert_path = self.emisor.get('cert_path', '')
         key_path  = self.emisor.get('key_path', '')
         if cert_path and key_path and not cae:
@@ -334,32 +379,30 @@ class FacturaDialog(QDialog):
                 )
                 cae     = str(resultado['cae'])
                 vto_cae = str(resultado['vto_cae'])
-                # Mostrar en el formulario
                 self.cae_input.setText(cae)
                 self.vto_cae_input.setText(vto_cae)
             except ImportError:
                 QMessageBox.warning(
                     self, 'Dependencia faltante',
-                    'Para CAE automático instalá: pip install zeep pyOpenSSL\n\n'
-                    'Se generará la factura sin CAE.'
+                    'Para CAE automatico instala: pip install zeep pyOpenSSL\n\n'
+                    'Se generara la factura sin CAE.'
                 )
             except Exception as e:
                 resp = QMessageBox.question(
                     self, 'Error AFIP',
                     f'No se pudo obtener el CAE de AFIP:\n{e}\n\n'
-                    '¿Generar igualmente la factura sin CAE?',
+                    'Generar igualmente la factura sin CAE?',
                     QMessageBox.Yes | QMessageBox.No, QMessageBox.No
                 )
                 if resp != QMessageBox.Yes:
                     return
 
-        # Construir items de factura desde los items de la venta
         items_factura = []
         for it in self.sale.get('items', []):
             items_factura.append({
                 'cantidad':    it.get('quantity', 1),
                 'descripcion': it.get('product_name', 'Producto'),
-                'iva':         21.0,
+                'iva':         0.0,  # Monotributo: sin IVA discriminado
                 'precio':      float(it.get('unit_price', 0)),
                 'importe':     float(it.get('subtotal', 0)),
             })
@@ -367,10 +410,12 @@ class FacturaDialog(QDialog):
             items_factura = [{
                 'cantidad':    1,
                 'descripcion': 'Venta general',
-                'iva':         21.0,
+                'iva':         0.0,
                 'precio':      total,
                 'importe':     total,
             }]
+
+        nombre_perfil = self.emisor.get('nombre_perfil', self.emisor.get('razon_social', ''))
 
         factura = {
             # Emisor
@@ -381,12 +426,12 @@ class FacturaDialog(QDialog):
             'telefono':           self.emisor.get('telefono', ''),
             'ing_brutos':         self.emisor.get('ing_brutos', ''),
             'inicio_actividades': self.emisor.get('inicio_actividades', ''),
-            'condicion_iva':      self.emisor.get('condicion_iva', 'Resp. Inscripto'),
+            'condicion_iva':      self.emisor.get('condicion_iva', 'Monotributista'),
             # Comprobante
             'tipo_comprobante':   tipo,
             'punto_venta':        self.emisor.get('punto_venta', 1),
             'nro_comprobante':    nro,
-            'fecha':              datetime.now().strftime('%d/%m/%Y %I:%M:%S %p'),
+            'fecha':              now_ar().strftime('%d/%m/%Y %I:%M:%S %p'),
             'turno':              str(self.sale.get('id', '')).zfill(5),
             'pago':               self.pago_input.text().strip(),
             'modalidad':          self.modalidad_input.text().strip(),
@@ -404,13 +449,15 @@ class FacturaDialog(QDialog):
             # AFIP
             'cae':                cae,
             'vto_cae':            vto_cae,
+            # Perfil emisor (para resumen webapp)
+            'nombre_perfil':      nombre_perfil,
         }
 
         try:
             gen = PDFGenerator()
             self.pdf_path = gen.generate_factura_afip_a4(factura)
 
-            # Guardar en tabla facturas
+            # Guardar en tabla facturas local
             db = DatabaseManager()
             db.execute_update(
                 """INSERT INTO facturas
@@ -423,7 +470,7 @@ class FacturaDialog(QDialog):
                     tipo,
                     self.emisor.get('punto_venta', 1),
                     nro,
-                    datetime.now().isoformat(),
+                    now_ar().isoformat(),
                     cliente,
                     cuit_cliente,
                     cae,
@@ -434,6 +481,22 @@ class FacturaDialog(QDialog):
                     self.pdf_path,
                 )
             )
+
+            # Sincronizar a Firebase para verlo en la webapp
+            try:
+                from pos_system.utils.firebase_sync import get_firebase_sync, now_ar_iso
+                fb = get_firebase_sync()
+                if fb and fb.enabled:
+                    import threading
+                    factura_fb = dict(factura)
+                    factura_fb['sale_id'] = self.sale.get('id')
+                    factura_fb['created_at'] = now_ar_iso()
+                    threading.Thread(
+                        target=lambda: fb.sync_factura(factura_fb), daemon=True
+                    ).start()
+            except Exception:
+                pass
+
             self.accept()
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'Error al generar la factura:\n{str(e)}')

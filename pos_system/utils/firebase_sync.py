@@ -1218,6 +1218,23 @@ class FirebaseSync:
             logger.error(f"Firebase: Error en ensure_local_register: {e}")
             return None
 
+    def sync_factura(self, factura: dict) -> None:
+        """Sube una factura emitida desde el POS a Firestore (colección 'facturas')."""
+        if not self.enabled:
+            return
+        try:
+            import json
+            # Convertir items a algo serializable
+            data = {k: v for k, v in factura.items() if not callable(v)}
+            # Firestore no soporta floats que sean NaN/Inf
+            data['total'] = float(data.get('total', 0) or 0)
+            data['iva_contenido'] = float(data.get('iva_contenido', 0) or 0)
+            data['fuente'] = 'pos'
+            self.db.collection('facturas').add(data)
+            logger.info(f"Firebase: Factura subida — {data.get('tipo_comprobante')} ${data.get('total')}")
+        except Exception as e:
+            logger.warning(f"Firebase: Error subiendo factura: {e}")
+
     def start_register_listener(self, db_manager, on_open: Callable = None, on_close: Callable = None):
         """
         Escucha cambios en 'caja_activa/current' en tiempo real.
