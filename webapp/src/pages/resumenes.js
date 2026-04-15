@@ -129,7 +129,7 @@ export async function renderResumenes(container, db) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `resumenes_mensuales_${new Date().toISOString().slice(0,10)}.csv`;
+    a.download = `resumenes_mensuales_${new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' })}.csv`;
     a.click();
     URL.revokeObjectURL(url);
   });
@@ -170,7 +170,7 @@ export async function renderResumenes(container, db) {
         ventasPorMes[mesKey].push({ ...v, _dt: dt });
       });
 
-      const ahora = new Date().toLocaleString('es-AR');
+      const ahora = new Date().toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' });
       const totalGeneral2 = meses.reduce((a, m) => a + (m.total || 0), 0);
       const totalVentas2  = meses.reduce((a, m) => a + (m.num_ventas || 0), 0);
       const periodoStr = meses.length > 0
@@ -349,7 +349,7 @@ export async function renderResumenes(container, db) {
             const items  = itemsPorVenta[String(saleId)] || [];
             const dt     = v._dt;
             const fecha  = dt.toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' });
-            const hora   = dt.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' });
+            const hora   = dt.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/Argentina/Buenos_Aires' });
             const esCash = v.payment_type === 'cash';
             const pago   = esCash ? 'Efectivo' : 'Transferencia';
             const cajero = v.cajero || v.username || '-';

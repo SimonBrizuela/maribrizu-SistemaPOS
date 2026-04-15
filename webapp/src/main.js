@@ -148,7 +148,7 @@ function setStatus(state) {
 
 function updateLastTime() {
   const el = document.getElementById('lastUpdate');
-  if (el) el.textContent = 'Actualizado: ' + new Date().toLocaleTimeString('es-AR');
+  if (el) el.textContent = 'Actualizado: ' + new Date().toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour12: false });
 }
 
 // ── Helpers mobile ──

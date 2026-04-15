@@ -35,7 +35,7 @@ export function openSaleModal(venta, db) {
             </div>
             <div class="detail-item">
               <span class="detail-label">Hora</span>
-              <span class="detail-value">${dt.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' })}</span>
+              <span class="detail-value">${dt.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/Argentina/Buenos_Aires' })}</span>
             </div>
             <div class="detail-item">
               <span class="detail-label">Cajero</span>

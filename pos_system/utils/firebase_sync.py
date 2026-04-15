@@ -288,22 +288,37 @@ class FirebaseSync:
 
     def _parse_dt(self, val):
         if isinstance(val, datetime):
-            return val
-        if not val:
+            dt = val
+        elif not val:
             return now_ar()
-        s = str(val)
-        # fromisoformat maneja "2026-04-13T10:44:30.123456-03:00" correctamente (Python 3.7+)
-        # Preserva el tiempo REAL en vez de usar now_ar() al momento del sync (evita race condition)
-        try:
-            return datetime.fromisoformat(s)
-        except ValueError:
-            pass
-        for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%dT%H:%M:%S', '%d/%m/%Y %H:%M'):
+        else:
+            s = str(val)
+            dt = None
             try:
-                return datetime.strptime(s, fmt)
+                dt = datetime.fromisoformat(s)
             except ValueError:
                 pass
-        return now_ar()
+            if dt is None:
+                for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%dT%H:%M:%S', '%d/%m/%Y %H:%M'):
+                    try:
+                        dt = datetime.strptime(s, fmt)
+                        break
+                    except ValueError:
+                        pass
+            if dt is None:
+                return now_ar()
+        # Asegurarse de que el datetime tenga timezone AR para que Firestore lo guarde como UTC correcto
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=_TZ_AR)
+        else:
+            dt = dt.astimezone(_TZ_AR)
+        return dt
+
+    def _to_ar_str(self, val) -> str:
+        """Convierte un valor de fecha a string AR para guardar en SQLite."""
+        dt = self._parse_dt(val)
+        # astimezone(_TZ_AR) ya garantiza hora local AR; strftime sin tzinfo para SQLite
+        return dt.astimezone(_TZ_AR).strftime('%Y-%m-%d %H:%M:%S')
 
     # ══════════════════════════════════════════════════
     #  VENTAS
@@ -1169,8 +1184,7 @@ class FirebaseSync:
                 return None
 
             # Normalizar fecha para SQLite (puede venir como Timestamp de Firestore o string)
-            opening_date = self._parse_dt(data.get('opening_date', now_ar_iso()))
-            opening_date_str = opening_date.strftime('%Y-%m-%d %H:%M:%S')
+            opening_date_str = self._to_ar_str(data.get('opening_date', now_ar_iso()))
             initial  = float(data.get('initial_amount') or 0)
             notes    = data.get('notes', '') or ''
 

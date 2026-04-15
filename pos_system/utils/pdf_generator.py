@@ -5,8 +5,19 @@ from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
 from reportlab.lib import colors
 from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT, TA_JUSTIFY
 from reportlab.pdfgen import canvas
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 import os
+
+_TZ_AR = timezone(timedelta(hours=-3))
+
+def _parse_ar(s):
+    try:
+        dt = datetime.fromisoformat(str(s))
+    except (ValueError, TypeError):
+        return datetime.now(_TZ_AR).replace(tzinfo=None)
+    if dt.tzinfo is not None:
+        return dt.astimezone(_TZ_AR).replace(tzinfo=None)
+    return dt
 import io
 import json
 import base64
@@ -137,7 +148,7 @@ class PDFGenerator:
         story.append(Spacer(1, 2*mm))
 
         # ── Datos de la venta ────────────────────────────────────────────────
-        sale_date = datetime.fromisoformat(sale['created_at'])
+        sale_date = _parse_ar(sale['created_at'])
         payment_text = 'Efectivo' if sale['payment_type'] == 'cash' else 'Transferencia'
 
         info_data = [
@@ -351,7 +362,7 @@ class PDFGenerator:
         story.append(Spacer(1, 3*mm))
         
         # Información
-        withdrawal_date = datetime.fromisoformat(withdrawal['created_at'])
+        withdrawal_date = _parse_ar(withdrawal['created_at'])
         story.append(Paragraph(f'<b>Fecha:</b> {withdrawal_date.strftime("%d/%m/%Y %H:%M")}', normal_style))
         story.append(Spacer(1, 3*mm))
         
@@ -419,8 +430,8 @@ class PDFGenerator:
         story.append(Spacer(1, 10))
         
         # Información general
-        opening_date = datetime.fromisoformat(report['opening_date'])
-        closing_date = datetime.fromisoformat(report['closing_date']) if report['closing_date'] else datetime.now()
+        opening_date = _parse_ar(report['opening_date'])
+        closing_date = _parse_ar(report['closing_date']) if report['closing_date'] else datetime.now(_TZ_AR).replace(tzinfo=None)
         
         info_data = [
             ['Caja #:', str(report['id'])],
@@ -652,8 +663,8 @@ class PDFGenerator:
         story.append(Spacer(1, 3*mm))
         
         # Información de caja
-        opening_date = datetime.fromisoformat(report['opening_date'])
-        closing_date = datetime.fromisoformat(report['closing_date']) if report['closing_date'] else datetime.now()
+        opening_date = _parse_ar(report['opening_date'])
+        closing_date = _parse_ar(report['closing_date']) if report['closing_date'] else datetime.now(_TZ_AR).replace(tzinfo=None)
         
         story.append(Paragraph(f'<b>Caja #:</b> {report["id"]}', normal_style))
         story.append(Paragraph(f'<b>Apertura:</b> {opening_date.strftime("%d/%m/%Y %H:%M")}', normal_style))

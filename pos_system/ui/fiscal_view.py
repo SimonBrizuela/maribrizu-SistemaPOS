@@ -9,8 +9,19 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QColor
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pos_system.utils.firebase_sync import now_ar
+
+_TZ_AR = timezone(timedelta(hours=-3))
+
+def _parse_ar(s):
+    try:
+        dt = datetime.fromisoformat(str(s))
+    except (ValueError, TypeError):
+        return datetime.now(_TZ_AR).replace(tzinfo=None)
+    if dt.tzinfo is not None:
+        return dt.astimezone(_TZ_AR).replace(tzinfo=None)
+    return dt
 
 
 class FiscalView(QWidget):
@@ -704,7 +715,7 @@ class FiscalView(QWidget):
             for i, r in enumerate(rows):
                 fecha_str = ''
                 try:
-                    fecha_str = datetime.fromisoformat(r['created_at']).strftime('%d/%m/%Y %H:%M')
+                    fecha_str = _parse_ar(r['created_at']).strftime('%d/%m/%Y %H:%M')
                 except Exception:
                     fecha_str = r.get('created_at', '')
 

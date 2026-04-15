@@ -462,12 +462,12 @@ function toDate(val) {
   return new Date(val);
 }
 
-// Para display: compensar naive hora AR guardada como UTC → sumar 3h
+// Fechas guardadas por Python con timezone AR → Firestore las almacena como UTC correcto → no necesita compensación
 function parseArDate(val) {
   if (!val) return null;
-  if (typeof val.toDate === 'function') return new Date(val.toDate().getTime() + 3 * 60 * 60 * 1000);
+  if (typeof val.toDate === 'function') return val.toDate();
   if (typeof val === 'object' && val.seconds !== undefined)
-    return new Date(val.seconds * 1000 + Math.floor((val.nanoseconds || 0) / 1e6) + 3 * 60 * 60 * 1000);
+    return new Date(val.seconds * 1000 + Math.floor((val.nanoseconds || 0) / 1e6));
   return new Date(val);
 }
 
@@ -478,5 +478,5 @@ function fmt(n) {
 function fmtDT(d) {
   if (!d || isNaN(d)) return '-';
   const opts = { timeZone: 'America/Argentina/Buenos_Aires' };
-  return d.toLocaleDateString('es-AR', opts) + ' ' + d.toLocaleTimeString('es-AR', { ...opts, hour: '2-digit', minute: '2-digit' });
+  return d.toLocaleDateString('es-AR', opts) + ' ' + d.toLocaleTimeString('es-AR', { ...opts, hour: '2-digit', minute: '2-digit', hour12: false });
 }

@@ -498,7 +498,7 @@ async function emitirFactura(container, db, emisor, conAfip) {
       cae,
       vto_cae:           vtoCae,
       con_afip:          conAfip,
-      created_at:        new Date().toISOString(),
+      created_at:        new Date().toLocaleString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }).replace(' ', 'T'),
     });
   } catch (e) {
     console.warn('No se pudo guardar en Firestore:', e.message);
@@ -913,7 +913,7 @@ function normalizeData(d) {
 }
 
 function todayISO() {
-  return new Date().toISOString().slice(0, 10);
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
 }
 
 // ── Resumen por emisor ────────────────────────────────────────────────────────

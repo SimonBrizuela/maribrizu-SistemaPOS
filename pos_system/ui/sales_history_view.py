@@ -5,8 +5,19 @@ import logging
 import os
 import platform
 import subprocess
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from pos_system.utils.firebase_sync import now_ar
+
+_TZ_AR = timezone(timedelta(hours=-3))
+
+def _parse_ar(s):
+    try:
+        dt = datetime.fromisoformat(str(s))
+    except (ValueError, TypeError):
+        return datetime.now(_TZ_AR).replace(tzinfo=None)
+    if dt.tzinfo is not None:
+        return dt.astimezone(_TZ_AR).replace(tzinfo=None)
+    return dt
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
                              QTableWidgetItem, QPushButton, QLabel, QComboBox,
                              QDialog, QFormLayout, QMessageBox, QHeaderView,
@@ -247,7 +258,7 @@ class SalesHistoryView(QWidget):
             self.sales_table.setItem(row, 0, id_item)
 
             try:
-                dt = datetime.fromisoformat(sale['created_at'])
+                dt = _parse_ar(sale['created_at'])
                 date_str = dt.strftime('%d/%m/%Y %H:%M:%S')
             except Exception:
                 date_str = sale['created_at']

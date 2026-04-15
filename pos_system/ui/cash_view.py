@@ -5,8 +5,20 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
 from pos_system.ui.components import PriceInput
 from PyQt5.QtCore import Qt, QUrl
 from PyQt5.QtGui import QFont, QDesktopServices
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 from pos_system.utils.firebase_sync import now_ar
+
+_TZ_AR = timezone(timedelta(hours=-3))
+
+def _parse_ar(s: str) -> datetime:
+    """Parsea un string de fecha de SQLite y lo devuelve como datetime naive en hora AR."""
+    try:
+        dt = datetime.fromisoformat(s)
+    except (ValueError, TypeError):
+        return datetime.now(_TZ_AR).replace(tzinfo=None)
+    if dt.tzinfo is not None:
+        return dt.astimezone(_TZ_AR).replace(tzinfo=None)
+    return dt
 import os
 import subprocess
 import platform
@@ -227,7 +239,7 @@ class CashView(QWidget):
             self.withdrawal_btn.setEnabled(True)
             self.close_btn.setEnabled(True)
             
-            opening_date = datetime.fromisoformat(current_register['opening_date'])
+            opening_date = _parse_ar(current_register['opening_date'])
             self.status_label.setText(
                 f"<b>Estado:</b> <span style='color: #27ae60;'>CAJA ABIERTA</span><br>"
                 f"<b>Fecha de Apertura:</b> {opening_date.strftime('%d/%m/%Y %H:%M:%S')}<br>"
@@ -250,7 +262,7 @@ class CashView(QWidget):
             self.withdrawals_table.setRowCount(len(withdrawals))
             
             for row, withdrawal in enumerate(withdrawals):
-                created_at = datetime.fromisoformat(withdrawal['created_at'])
+                created_at = _parse_ar(withdrawal['created_at'])
                 self.withdrawals_table.setItem(row, 0, 
                     QTableWidgetItem(created_at.strftime('%H:%M:%S')))
                 self.withdrawals_table.setItem(row, 1, 
@@ -276,12 +288,12 @@ class CashView(QWidget):
         self.history_table.setRowCount(len(history))
         
         for row, register in enumerate(history):
-            opening_date = datetime.fromisoformat(register['opening_date'])
+            opening_date = _parse_ar(register['opening_date'])
             self.history_table.setItem(row, 0, 
                 QTableWidgetItem(opening_date.strftime('%d/%m/%Y %H:%M')))
             
             if register['closing_date']:
-                closing_date = datetime.fromisoformat(register['closing_date'])
+                closing_date = _parse_ar(register['closing_date'])
                 self.history_table.setItem(row, 1, 
                     QTableWidgetItem(closing_date.strftime('%d/%m/%Y %H:%M')))
             else:

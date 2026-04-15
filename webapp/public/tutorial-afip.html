@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Activar Facturación Electrónica</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif;
+      background: #f5f5f5; color: #222; font-size: 15px; line-height: 1.6;
+      padding: 20px 14px;
+    }
+    .page { max-width: 680px; margin: 0 auto; }
+
+    h1 { font-size: 22px; font-weight: 700; margin-bottom: 6px; }
+    .subtitulo { color: #666; font-size: 14px; margin-bottom: 28px; }
+
+    .bloque {
+      background: white; border: 1px solid #ddd; border-radius: 10px;
+      padding: 22px 24px; margin-bottom: 16px;
+    }
+    .bloque-titulo {
+      font-size: 16px; font-weight: 700; margin-bottom: 14px;
+      display: flex; align-items: center; gap: 10px;
+    }
+    .bloque-titulo .n {
+      background: #1a3a6b; color: white; border-radius: 50%;
+      width: 26px; height: 26px; display: flex; align-items: center;
+      justify-content: center; font-size: 13px; flex-shrink: 0;
+    }
+
+    p { margin-bottom: 10px; color: #333; }
+    p:last-child { margin-bottom: 0; }
+
+    ul, ol { padding-left: 20px; margin-bottom: 10px; }
+    li { margin-bottom: 6px; color: #333; }
+
+    .nota {
+      background: #fffbeb; border: 1px solid #f0c040; border-radius: 8px;
+      padding: 11px 14px; font-size: 13px; color: #7a5800; margin-top: 12px;
+    }
+    .importante {
+      background: #fff0f0; border: 1px solid #f5a0a0; border-radius: 8px;
+      padding: 11px 14px; font-size: 13px; color: #b00; margin-top: 12px;
+    }
+
+    table { width: 100%; border-collapse: collapse; margin-top: 10px; font-size: 14px; }
+    th { text-align: left; padding: 9px 12px; background: #f0f0f0; font-size: 12px;
+         text-transform: uppercase; letter-spacing: .4px; color: #666;
+         border-bottom: 2px solid #ddd; }
+    td { padding: 11px 12px; border-bottom: 1px solid #eee; vertical-align: top; }
+    td:first-child { font-weight: 600; white-space: nowrap; width: 180px; }
+    .ej { color: #888; font-size: 13px; font-style: italic; display: block; margin-top: 2px; }
+
+    .fin {
+      text-align: center; padding: 24px 0 8px; color: #888; font-size: 13px;
+    }
+    .btn-print {
+      display: inline-block; margin-top: 12px; padding: 10px 24px;
+      background: #1a3a6b; color: white; border: none; border-radius: 8px;
+      font-size: 14px; cursor: pointer; font-weight: 600;
+    }
+
+    @media print {
+      body { background: white; padding: 0; }
+      .btn-print { display: none; }
+    }
+  </style>
+</head>
+<body>
+<div class="page">
+
+  <h1>Activar la facturación electrónica</h1>
+  <p class="subtitulo">Seguí estos pasos para que puedas empezar a emitir facturas desde el sistema.</p>
+
+  <!-- PASO 1 -->
+  <div class="bloque">
+    <div class="bloque-titulo"><div class="n">1</div> Dar de alta el Punto de Venta en AFIP</div>
+    <p>Ingresá a <strong>afip.gob.ar</strong> con tu Clave Fiscal y buscá el servicio <strong>"Administración de Puntos de Venta y Domicilios"</strong>.</p>
+    <p>Creá un nuevo punto de venta eligiendo el sistema <strong>RECE para aplicativo o web service</strong>. Anotá el número que te asigna (por ejemplo: 1, 2, etc.).</p>
+    <div class="nota">
+      Tiene que ser el tipo <strong>RECE / Web Service</strong>, no el Facturador Online. Si no encontrás el servicio en tu menú, primero tenés que habilitarlo desde "Administrador de Relaciones de Clave Fiscal".
+    </div>
+  </div>
+
+  <!-- PASO 2 -->
+  <div class="bloque">
+    <div class="bloque-titulo"><div class="n">2</div> Datos para generar el certificado</div>
+    <p>Para este paso no necesitás hacer nada técnico, solo pasarme los siguientes datos y yo me encargo:</p>
+
+    <table>
+      <thead><tr><th>Dato</th><th>Detalle</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>CUIT</td>
+          <td>Sin guiones.<span class="ej">Ej: 20123456789</span></td>
+        </tr>
+        <tr>
+          <td>Razón Social</td>
+          <td>Nombre legal tal como figura en AFIP.<span class="ej">Ej: Librería El Lápiz SRL</span></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <!-- PASO 3 -->
+  <div class="bloque">
+    <div class="bloque-titulo"><div class="n">3</div> Obtener el certificado digital en AFIP</div>
+    <p>Ingresá al servicio <strong>"Administración de Certificados Digitales"</strong> en AFIP.</p>
+    <p>Hacé click en <strong>Nueva solicitud</strong> y cargá el archivo <code style="background:#f0f0f0;padding:1px 6px;border-radius:4px;font-size:13px">.csr</code> que yo te voy a generar y mandar.</p>
+    <p>AFIP te devuelve un archivo <strong>.crt</strong> — guardalo y mandámelo.</p>
+    <p>Por último, en <strong>"Administrador de Relaciones de Clave Fiscal"</strong> agregá la relación para los servicios <strong>wsfe</strong> y <strong>wsaa</strong>. Eso le da permiso al certificado para emitir facturas.</p>
+    <div class="nota">
+      El certificado dura 2 años. Cuando venza solo repetís este paso.
+    </div>
+  </div>
+
+  <!-- PASO 4 -->
+  <div class="bloque">
+    <div class="bloque-titulo"><div class="n">4</div> Datos del negocio para las facturas</div>
+    <p>Estos datos aparecen impresos en cada factura. Completá los que correspondan:</p>
+
+    <table>
+      <thead><tr><th>Dato</th><th>Detalle</th></tr></thead>
+      <tbody>
+        <tr><td>CUIT</td><td>Sin guiones.<span class="ej">Ej: 20123456789</span></td></tr>
+        <tr><td>Razón Social</td><td><span class="ej">Ej: Librería El Lápiz SRL</span></td></tr>
+        <tr><td>Domicilio comercial</td><td><span class="ej">Ej: Av. Colón 1234</span></td></tr>
+        <tr><td>Localidad</td><td><span class="ej">Ej: Córdoba (5000) - Córdoba</span></td></tr>
+        <tr><td>Teléfono</td><td><span class="ej">Ej: 351 123-4567</span></td></tr>
+        <tr><td>Ingresos Brutos</td><td>Número de inscripción provincial.<span class="ej">Ej: 123456789</span></td></tr>
+        <tr><td>Inicio de actividades</td><td><span class="ej">Ej: 01/03/2018</span></td></tr>
+        <tr><td>Condición IVA</td><td><span class="ej">Responsable Inscripto / Monotributista / Exento</span></td></tr>
+        <tr><td>Número de punto de venta</td><td>El que diste de alta en el Paso 1.<span class="ej">Ej: 1</span></td></tr>
+      </tbody>
+    </table>
+
+    <div class="importante">
+      El archivo <strong>.crt</strong> y la <strong>clave privada</strong> son confidenciales. Mandámelos por un canal seguro, no por WhatsApp ni email abierto.
+    </div>
+  </div>
+
+  <div class="fin">
+    <p>Con todo esto configurado el sistema queda listo para emitir facturas electrónicas reales.</p>
+    <br>
+    <button class="btn-print" onclick="window.print()">Imprimir / Guardar PDF</button>
+  </div>
+
+</div>
+</body>
+</html>

@@ -167,15 +167,14 @@ export async function renderDashboard(container, db) {
 function todayAR() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
 }
-// Compensar: created_at fue guardado como naive hora AR → Firestore lo trata como UTC → sumar 3h
 // Maneja tres formas: Timestamp live (.toDate), Timestamp de localStorage ({ seconds, nanoseconds }), ISO string
 function parseArDate(raw) {
   if (!raw) return new Date(NaN);
-  if (typeof raw.toDate === 'function') return new Date(raw.toDate().getTime() + 3 * 60 * 60 * 1000);
+  if (typeof raw.toDate === 'function') return raw.toDate();
   if (typeof raw === 'object' && raw.seconds !== undefined)
-    return new Date(raw.seconds * 1000 + Math.floor((raw.nanoseconds || 0) / 1e6) + 3 * 60 * 60 * 1000);
+    return new Date(raw.seconds * 1000 + Math.floor((raw.nanoseconds || 0) / 1e6));
   return new Date(raw);
 }
 function fmt(n) { return Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
 function fmtDate(d) { return d.toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' }); }
-function fmtTime(d) { return d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', timeZone: 'America/Argentina/Buenos_Aires' }); }
+function fmtTime(d) { return d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/Argentina/Buenos_Aires' }); }

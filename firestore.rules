@@ -96,6 +96,46 @@ service cloud.firestore {
       allow write: if true;
     }
 
+    // ── PERFILES ARCA ─────────────────────────────────────────────────────────
+    // La web crea/edita perfiles de emisores. El POS los sincroniza en tiempo real
+    // y escribe los certificados (.crt/.key) automáticamente en cada PC.
+    match /perfiles_facturacion/{docId} {
+      allow read, write: if true;
+    }
+
+    // ── PERFILES DE CLIENTES ──────────────────────────────────────────────────
+    // La web y el POS crean/editan clientes para facturación electrónica.
+    match /clientes_facturacion/{docId} {
+      allow read, write: if true;
+    }
+
+    // ── CAJEROS ───────────────────────────────────────────────────────────────
+    // El POS sincroniza cajeros en tiempo real. La web los lee para mostrar turnos.
+    match /cajeros/{docId} {
+      allow read, write: if true;
+    }
+
+    // ── CAJA ACTIVA ───────────────────────────────────────────────────────────
+    // Estado de la caja en tiempo real (abierta/cerrada).
+    match /caja_activa/{docId} {
+      allow read, write: if true;
+    }
+
+    // ── CONTROL TOTAL (gastos y config) ───────────────────────────────────────
+    match /gastos/{gastoId} {
+      allow read, write: if true;
+    }
+    match /control_config/{docId} {
+      allow read, write: if true;
+    }
+
+    // ── FACTURAS ELECTRÓNICAS ─────────────────────────────────────────────────
+    // El POS sube facturas generadas (FAC. ELEC. A/B/C) con sync_factura().
+    // La webapp las lee en la pestaña Resumen de Facturas.
+    match /facturas/{facturaId} {
+      allow read, write: if true;
+    }
+
     // ── BLOQUEAR TODO LO DEMÁS ────────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;

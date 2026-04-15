@@ -1,0 +1,203 @@
+                                                                                                                   > Osea yo lo que quiero, es que apenas se abra la app, detecte solo los productos que tuvieron cambios y los              descargue/actualice depende de lo que se le agrego. Despues cuando un admin pone descargar datos manualmente, y abra    esa cosa visual de la descarga, solo tambien descargue las cosas actualizadas/detecte lo que se cambio y evite          descargar todo el catalogo porque es tardio, solo si detecta lo nuevo y descarga lo nuevo seria lo mejor creo
+● La idea es correcta. El problema actual:
+  - Arranque: baja todos los docs de Firebase aunque solo haya 10 cambios
+  - Diálogo manual: igual, baja los 12.000+ siempre
+
+  La solución es usar una query de Firestore con filtro de timestamp: where('ultima_actualizacion', '>=', last_sync).
+  Así Firestore devuelve solo los docs modificados desde el último sync.
+                                                                                                                          Déjame revisar los dos lugares clave antes de tocar:
+                                                                                                                          Read 2 files (ctrl+o to expand)
+
+● Necesito ver el PASO 4 del diálogo y el método de Firebase para productos_remotos:
+
+  Searched for 2 patterns, read 2 files (ctrl+o to expand)
+
+● Tengo todo lo que necesito. Los cambios son en 3 lugares:
+
+  1. main.py — query delta al arrancar
+  2. sync_progress_dialog.py — query delta en PASO 3 y guardar timestamp al final
+  3. firebase_sync.py — agregar filtro de época a download_precios_actualizados
+
+  Empiezo:
+                                                                                                                        ● Update(main.py)
+  ⎿  Added 22 lines, removed 6 lines
+      112
+      113          logger.info("Firebase: Descargando catálogo desde Firestore...")
+      114
+      115 -        # El catalogo real esta en la coleccion 'catalogo'
+      116 -        # Con 6000+ productos usamos paginacion para no saturar la memoria                                         115          from pos_system.models.product import Product
+      116          from pos_system.utils.validators import ValidationError                                                    117 +        import datetime as _dt, time as _time
+      118          product_model = Product(db)
+      119
+      120          actualizados = 0
+      121          creados = 0
+      122          errores = 0
+      124 -        total_fb = 0
+      123
+      126 -        # Traer todos los docs de una vez con stream() — Firestore lo maneja eficientemente
+      127 -        all_docs = list(fb.db.collection('catalogo').stream())
+      124 +        # Delta sync: solo productos modificados desde el último sync
+      125 +        try:
+      126 +            if local_epoch > 0:
+      127 +                last_dt = _dt.datetime.fromtimestamp(local_epoch, tz=_dt.timezone.utc)
+      128 +                all_docs = list(
+      129 +                    fb.db.collection('catalogo')
+      130 +                      .where('ultima_actualizacion', '>=', last_dt)
+      131 +                      .stream()
+      132 +                )
+      133 +                logger.info(f"Firebase: {len(all_docs)} productos modificados desde el último sync.")
+      134 +            else:
+      135 +                all_docs = list(fb.db.collection('catalogo').stream())
+      136 +                logger.info(f"Firebase: {len(all_docs)} productos en catálogo (sync completo).")
+      137 +        except Exception as e_query:
+      138 +            logger.warning(f"Firebase: delta query falló ({e_query}), usando sync completo.")
+      139 +            all_docs = list(fb.db.collection('catalogo').stream())
+      140 +
+      141          total_fb = len(all_docs)
+      129 -        logger.info(f"Firebase: {total_fb} productos encontrados en catalogo.")
+      142 +        if total_fb == 0:
+      143 +            logger.info("Firebase: Sin productos modificados — nada que actualizar.")
+      144 +            sync_file.write_text(str(_time.time()), encoding='utf-8')
+      145 +            return
+      146
+      147          for doc in all_docs:
+      148              p = doc.to_dict()
+
+● Ahora quitar el import time duplicado que ya estaba al final de la función:
+
+● Update(main.py)
+  ⎿  Added 1 line, removed 2 lines
+      260
+      261          # Guardar timestamp del sync exitoso para el próximo arranque
+      262          try:
+      263 -            import time
+      264 -            sync_file.write_text(str(time.time()), encoding='utf-8')
+      263 +            sync_file.write_text(str(_time.time()), encoding='utf-8')
+      264          except Exception:                                                                                          265              pass
+      266
+● Ahora el diálogo — PASO 3:
+
+● Update(pos_system\ui\sync_progress_dialog.py)
+  ⎿  Added 35 lines, removed 8 lines
+      164              productos_actualizados = 0
+      165              productos_sin_cambios  = 0
+      166
+      167 -            # Descargar desde 'catalogo' (tiene precio_venta correcto) en lugar de 'inventario'
+      167 +            # Leer timestamp del último sync para hacer delta query
+      168 +            from pos_system.config import DATA_DIR
+      169 +            import datetime as _dt, time as _time                                                                  170 +            _sync_file = DATA_DIR / "last_catalog_sync.txt"
+      171 +            _local_epoch = 0.0                                                                                     172              try:
+      169 -                all_docs = list(fb.db.collection('catalogo').stream())
+      173 +                if _sync_file.exists():
+      174 +                    _local_epoch = float(_sync_file.read_text(encoding='utf-8').strip())
+      175 +            except Exception:
+      176 +                pass
+      177 +
+      178 +            # Delta sync: solo docs modificados desde el último sync
+      179 +            try:
+      180 +                if _local_epoch > 0:
+      181 +                    _last_dt = _dt.datetime.fromtimestamp(_local_epoch, tz=_dt.timezone.utc)
+      182 +                    all_docs = list(
+      183 +                        fb.db.collection('catalogo')
+      184 +                          .where('ultima_actualizacion', '>=', _last_dt)
+      185 +                          .stream()
+      186 +                    )
+      187 +                    self.log_message.emit(
+      188 +                        f'Delta sync: {len(all_docs)} productos modificados desde el último sync.', 'i
+          +nfo')
+      189 +                else:
+      190 +                    all_docs = list(fb.db.collection('catalogo').stream())
+      191 +                    self.log_message.emit(
+      192 +                        f'Sync completo: {len(all_docs)} productos en catálogo Firebase.', 'info')
+      193                  productos_fb = []
+      194                  for d in all_docs:
+      195                      data = d.to_dict()
+      196                      if data:
+      174 -                        data['doc_id'] = d.id  # Guardar el ID del documento de Firebase
+      197 +                        data['doc_id'] = d.id
+      198                          productos_fb.append(data)
+      176 -                self.log_message.emit(f'{len(productos_fb)} productos encontrados en catálogo Firebase
+          -.', 'info')
+      199              except Exception as e_cat:
+      178 -                self.log_message.emit(f'Error leyendo catálogo, usando inventario: {e_cat}', 'warn')
+      179 -                productos_fb = fb.download_products(
+      180 -                    progress_cb=lambda cur, tot, msg: self.pct_detail.emit(cur, max(tot, 1), msg)
+      181 -                )
+      200 +                self.log_message.emit(f'Error leyendo catálogo, usando sync completo: {e_cat}', 'warn'
+          +)
+      201 +                _local_epoch = 0.0
+      202 +                all_docs = list(fb.db.collection('catalogo').stream())
+      203 +                productos_fb = []
+      204 +                for d in all_docs:
+      205 +                    data = d.to_dict()
+      206 +                    if data:
+      207 +                        data['doc_id'] = d.id
+      208 +                        productos_fb.append(data)
+      209
+      210              total_fb = len(productos_fb)
+      211              for i, p in enumerate(productos_fb):
+
+● Ahora guardar el timestamp después de que PASO 3 y PASO 4 completan — busco el bloque FINALIZAR:
+
+  Read 1 file (ctrl+o to expand)
+
+● Update(pos_system\ui\sync_progress_dialog.py)
+  ⎿  Added 6 lines
+      432                  self.log_message.emit(
+      433                      'ℹ️ No hay datos en "productos_remotos"', 'warn')
+      434
+      435 +            # Guardar timestamp del sync para delta en próximos arranques/syncs
+      436 +            try:
+      437 +                _sync_file.write_text(str(_time.time()), encoding='utf-8')
+      438 +            except Exception:                                                                                      439 +                pass
+      440 +                                                                                                                   441              # ── FINALIZAR ────────────────────────────────────────────────
+      442              step = self.TOTAL_STEPS
+      443              self.progress.emit(step, self.TOTAL_STEPS)
+
+● Ahora firebase_sync.py — agregar filtro al método de productos_remotos:
+
+● Update(pos_system\utils\firebase_sync.py)
+  ⎿  Added 11 lines, removed 2 lines
+      887              logger.error(f"Firebase: Error descargando rubros: {e}")
+      888              return []
+      889
+      890 -    def download_precios_actualizados(self, progress_cb=None) -> list:
+      890 +    def download_precios_actualizados(self, progress_cb=None, since_epoch=0.0) -> list:
+      891          """
+      892          Descarga la colección 'productos_remotos' (precios y datos actualizados desde la web).                     893 +        Si since_epoch > 0, solo descarga docs modificados desde esa fecha (delta sync).
+      894          Retorna lista de dicts con datos actualizados.                                                             895          """
+      896          if not self.enabled:
+      897              return []
+      898          try:
+      899              col = self.db.collection('productos_remotos')
+      899 -            docs = list(col.stream())
+      900 +            if since_epoch > 0:
+      901 +                import datetime
+      902 +                last_dt = datetime.datetime.fromtimestamp(since_epoch, tz=datetime.timezone.utc)
+      903 +                try:
+      904 +                    docs = list(col.where('ultima_actualizacion', '>=', last_dt).stream())
+      905 +                except Exception:
+      906 +                    docs = list(col.stream())
+      907 +            else:
+      908 +                docs = list(col.stream())
+      909              total = len(docs)
+      910              productos = []
+      911              for i, doc in enumerate(docs):
+
+● Y en el diálogo pasar _local_epoch al método:
+
+● Update(pos_system\ui\sync_progress_dialog.py)
+  ⎿  Added 2 lines, removed 1 line
+      335              self.progress.emit(step, self.TOTAL_STEPS)
+      336
+      337              remotos = fb.download_precios_actualizados(
+      338 -                progress_cb=lambda cur, tot, msg: self.pct_detail.emit(cur, max(tot, 1), msg)
+      338 +                progress_cb=lambda cur, tot, msg: self.pct_detail.emit(cur, max(tot, 1), msg),
+      339 +                since_epoch=_local_epoch,
+      340              )                                                                                                      341              precios_actualizados = 0
+      342              precios_sin_cambios  = 0
+● Bash(cd "C:\Users\brizu\3D Objects\workana\Mari" && git add main.py pos_system/ui/sync_progress_dialog.py                   pos_system/utils/firebase_sync.py && git diff --cached --st…)
+  ⎿   main.py                               | 31 +++++++++++++++------
+      pos_system/ui/sync_progress_dialog.py | 52 +++++++++++++++++++++++++++++------
+      pos_system/utils/firebase_sync.py     | 13 +++++++--
+      3 files changed, 77 insertions(+), 19 deletions(-)
