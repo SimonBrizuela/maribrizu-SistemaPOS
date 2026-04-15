@@ -73,55 +73,62 @@ def now_ar_iso() -> str:
 logger = logging.getLogger(__name__)
 
 # ── Singleton ──
+import threading
 _sync_instance: Optional["FirebaseSync"] = None
+_sync_lock = threading.Lock()
 
 def get_firebase_sync() -> Optional["FirebaseSync"]:
     return _sync_instance
 
 def init_firebase_sync() -> Optional["FirebaseSync"]:
     global _sync_instance
-    try:
-        import firebase_admin
-        from firebase_admin import credentials, firestore
-        import os
-
-        # Verificar si ya está inicializado
-        try:
-            firebase_admin.get_app()
-        except ValueError:
-            # Buscar service account key en varias ubicaciones
-            import sys
-            exe_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.join(os.path.dirname(__file__), '..', '..')
-            candidates = [
-                os.path.join(exe_dir, 'firebase_key.json'),
-                os.path.join(exe_dir, '_internal', 'firebase_key.json'),
-                os.path.join(os.path.dirname(__file__), '..', '..', 'firebase_key.json'),
-                'firebase_key.json',
-            ]
-            key_path = None
-            for c in candidates:
-                if os.path.exists(c):
-                    key_path = c
-                    break
-            if key_path:
-                cred = credentials.Certificate(key_path)
-                firebase_admin.initialize_app(cred)
-                logger.info("Firebase: Inicializado con service account key.")
-            else:
-                logger.warning("Firebase: No se encontró firebase_key.json. Sync desactivado.")
-                return None
-
-        db = firestore.client()
-        _sync_instance = FirebaseSync(db)
-        logger.info("Firebase: Sync inicializado correctamente.")
+    if _sync_instance is not None:
         return _sync_instance
+    with _sync_lock:
+        if _sync_instance is not None:
+            return _sync_instance
+        try:
+            import firebase_admin
+            from firebase_admin import credentials, firestore
+            import os
 
-    except ImportError:
-        logger.warning("Firebase: firebase-admin no instalado. Ejecutar: pip install firebase-admin")
-        return None
-    except Exception as e:
-        logger.error(f"Firebase: Error inicializando: {e}")
-        return None
+            # Verificar si ya está inicializado
+            try:
+                firebase_admin.get_app()
+            except ValueError:
+                # Buscar service account key en varias ubicaciones
+                import sys
+                exe_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.join(os.path.dirname(__file__), '..', '..')
+                candidates = [
+                    os.path.join(exe_dir, 'firebase_key.json'),
+                    os.path.join(exe_dir, '_internal', 'firebase_key.json'),
+                    os.path.join(os.path.dirname(__file__), '..', '..', 'firebase_key.json'),
+                    'firebase_key.json',
+                ]
+                key_path = None
+                for c in candidates:
+                    if os.path.exists(c):
+                        key_path = c
+                        break
+                if key_path:
+                    cred = credentials.Certificate(key_path)
+                    firebase_admin.initialize_app(cred)
+                    logger.info("Firebase: Inicializado con service account key.")
+                else:
+                    logger.warning("Firebase: No se encontró firebase_key.json. Sync desactivado.")
+                    return None
+
+            db = firestore.client()
+            _sync_instance = FirebaseSync(db)
+            logger.info("Firebase: Sync inicializado correctamente.")
+            return _sync_instance
+
+        except ImportError:
+            logger.warning("Firebase: firebase-admin no instalado. Ejecutar: pip install firebase-admin")
+            return None
+        except Exception as e:
+            logger.error(f"Firebase: Error inicializando: {e}")
+            return None
 
 
 class FirebaseSync:
