@@ -410,6 +410,12 @@ class MainWindow(QMainWindow):
                 return
             self._listeners_started = True
 
+            # Firebase listo: mostrar botones que se ocultaron durante la inicialización
+            if hasattr(self, 'cloud_btn'):
+                self.cloud_btn.setVisible(True)
+            if hasattr(self, 'promos_btn'):
+                self.promos_btn.setVisible(True)
+
             # IMPORTANTE: estos callbacks corren en hilo de Firebase (background).
             # Usar señales Qt (pyqtSignal) para comunicación cross-thread → thread-safe.
 
