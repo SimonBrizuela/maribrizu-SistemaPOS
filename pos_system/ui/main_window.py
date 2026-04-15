@@ -49,6 +49,7 @@ class MainWindow(QMainWindow):
         # Se inicializa en _prompt_turno() si el usuario es admin
         if 'turno_nombre' not in self.current_user:
             self.current_user['turno_nombre'] = self.current_user.get('full_name') or self.current_user.get('username', '')
+        self._listeners_started = False
         self.init_ui()
         # Después de construir la UI, preguntar quién está en el turno (solo admins)
         from PyQt5.QtCore import QTimer as _QT
@@ -398,11 +399,16 @@ class MainWindow(QMainWindow):
 
     def _start_realtime_sync_listeners(self):
         """Inicia listeners de sincronizacion en tiempo real para ventas y cierres de caja."""
+        if self._listeners_started:
+            return
         try:
             from pos_system.utils.firebase_sync import get_firebase_sync
             fb = get_firebase_sync()
             if not fb:
+                # Firebase todavía inicializando en background — reintentar en 2s
+                QTimer.singleShot(2000, self._start_realtime_sync_listeners)
                 return
+            self._listeners_started = True
 
             # IMPORTANTE: estos callbacks corren en hilo de Firebase (background).
             # Usar señales Qt (pyqtSignal) para comunicación cross-thread → thread-safe.

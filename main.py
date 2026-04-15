@@ -300,26 +300,12 @@ def main():
         logger.info(f"Starting {APP_NAME} v{APP_VERSION}")
         logger.info("=" * 60)
 
-        # Inicializar base de datos
+        # 1. Base de datos local (rápido, sin red)
         db = DatabaseManager(str(DATABASE_PATH))
         logger.info("Initializing database...")
         db.initialize_database()
 
-        # Inicializar Google Sheets (no bloquea si falla)
-        logger.info("Initializing Google Sheets sync...")
-        _init_google_sheets()
-
-        # Inicializar Firebase Firestore (no bloquea si falla)
-        logger.info("Initializing Firebase sync...")
-        _init_firebase(db)
-
-        # Sincronizar inventario desde Firebase en background (no bloquea la apertura)
-        import threading
-        logger.info("Syncing inventory from Firebase (background)...")
-        t = threading.Thread(target=_sync_inventory_from_firebase, args=(db,), daemon=True)
-        t.start()
-
-        # Crear aplicación Qt
+        # 2. Crear la app Qt inmediatamente (la ventana aparece lo antes posible)
         logger.info("Creating application...")
         app = QApplication(sys.argv)
         app.setApplicationName(APP_NAME)
@@ -327,14 +313,13 @@ def main():
         app.setAttribute(Qt.AA_EnableHighDpiScaling, True)
         app.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
-        # Ícono de la aplicación
         from PyQt5.QtGui import QIcon
         import os
         logo_path = os.path.join(os.path.dirname(__file__), 'pos_system', 'assets', 'images', 'logo.png')
         if os.path.exists(logo_path):
             app.setWindowIcon(QIcon(logo_path))
 
-        # Auto-login como admin (sin pantalla de login)
+        # 3. Auto-login desde BD local (sin red)
         logger.info("Auto-login: buscando usuario admin...")
         from pos_system.models.user import User
         _user_model = User(db)
@@ -351,7 +336,26 @@ def main():
             }
         logger.info(f"Auto-login: {logged_user.get('username')} (role: {logged_user.get('role')})")
 
-        # Habilitar autostart por defecto si aún no está configurado
+        # 4. Mostrar ventana principal inmediatamente
+        logger.info("Loading main window...")
+        window = MainWindow(current_user=logged_user)
+        window.show()
+        logger.info("Application started successfully")
+
+        # 5. Firebase + inventario en background (no bloquea la UI)
+        import threading
+
+        def _background_init():
+            logger.info("Background: Initializing Google Sheets sync...")
+            _init_google_sheets()
+            logger.info("Background: Initializing Firebase sync...")
+            _init_firebase(db)
+            logger.info("Background: Syncing inventory from Firebase...")
+            _sync_inventory_from_firebase(db)
+
+        threading.Thread(target=_background_init, daemon=True).start()
+
+        # 6. Autostart (registro local, no bloquea)
         try:
             from pos_system.utils.autostart import is_autostart_enabled, set_autostart
             if not is_autostart_enabled():
@@ -360,12 +364,6 @@ def main():
         except Exception as e:
             logger.warning(f"No se pudo habilitar autostart por defecto: {e}")
 
-        # Abrir ventana principal con el usuario autenticado
-        logger.info("Loading main window...")
-        window = MainWindow(current_user=logged_user)
-        window.show()
-
-        logger.info("Application started successfully")
         sys.exit(app.exec_())
 
     except Exception as e:
