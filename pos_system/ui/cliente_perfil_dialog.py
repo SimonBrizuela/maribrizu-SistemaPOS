@@ -260,10 +260,10 @@ class ClientePerfilDialog(QDialog):
         main.addLayout(btn_row)
 
     def _buscar_cuit_afip(self):
-        """Consulta datos del CUIT en el padrón público de AFIP y autocompleta el formulario."""
+        """Consulta datos del CUIT en cuitonline.com (padrón AFIP) y autocompleta el formulario."""
         cuit_raw = self.cuit_input.text().strip().replace('-', '').replace(' ', '')
         if len(cuit_raw) < 10:
-            QMessageBox.warning(self, 'CUIT incompleto', 'Ingresa un CUIT de 11 dígitos.')
+            QMessageBox.warning(self, 'CUIT incompleto', 'Ingresa un CUIT de 11 digitos.')
             return
 
         self._buscar_btn.setEnabled(False)
@@ -272,46 +272,47 @@ class ClientePerfilDialog(QDialog):
 
         try:
             import urllib.request
-            import json
-            url = f'https://afip.tangofactu.com/v2/personas/{cuit_raw}'
-            req = urllib.request.Request(url, headers={'User-Agent': 'SistemaPOS/1.0'})
-            with urllib.request.urlopen(req, timeout=8) as resp:
-                data = json.loads(resp.read().decode('utf-8'))
+            import re
+            import html as htmllib
 
-            # Extraer datos del response
-            dg = data.get('datosGenerales', {})
-            nombre = dg.get('razonSocial') or (
-                f"{dg.get('apellido', '')} {dg.get('nombre', '')}".strip()
-            )
-            domicilio_data = dg.get('domicilioFiscal', {})
-            calle = domicilio_data.get('direccion', '')
-            localidad = domicilio_data.get('localidad', '') or domicilio_data.get('descripcionProvincia', '')
-            domicilio = f'{calle}, {localidad}'.strip(', ')
+            url = f'https://www.cuitonline.com/search.php?q={cuit_raw}'
+            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+            raw = urllib.request.urlopen(req, timeout=10).read().decode('utf-8', errors='replace')
 
-            # Determinar condición IVA
-            actividades = dg.get('actividadPrincipal', {})
-            es_monotributo = bool(data.get('datosMonotributo'))
-            es_ri = bool(data.get('datosRegimenGeneral'))
-            if es_monotributo:
+            # Nombre desde el h2.denominacion
+            m_nombre = re.search(r'<h2[^>]*class="denominacion"[^>]*>([^<]+)</h2>', raw)
+            nombre = htmllib.unescape(m_nombre.group(1).strip()) if m_nombre else ''
+
+            # Condicion IVA
+            m_iva = re.search(r'IVA:&nbsp;([^<&\n]+)', raw)
+            iva_raw = m_iva.group(1).strip() if m_iva else ''
+            iva_l = iva_raw.lower()
+            if 'monotributo' in iva_l or 'monotrib' in iva_l:
                 cond_iva = 'Monotributista'
-            elif es_ri:
+            elif 'inscripto' in iva_l:
                 cond_iva = 'Responsable Inscripto'
+            elif 'exento' in iva_l:
+                cond_iva = 'Exento'
             else:
                 cond_iva = 'Consumidor Final'
 
+            if not nombre:
+                QMessageBox.warning(
+                    self, 'No encontrado',
+                    f'No se encontraron datos para el CUIT {cuit_raw}.\nVerifica que sea correcto.'
+                )
+                return
+
             # Rellenar formulario
-            if nombre:
-                self.nombre_input.setText(nombre)
-            if domicilio:
-                self.domicilio_input.setText(domicilio)
+            self.nombre_input.setText(nombre)
             idx = self.condicion_combo.findText(cond_iva)
             if idx >= 0:
                 self.condicion_combo.setCurrentIndex(idx)
 
         except Exception as e:
             QMessageBox.warning(
-                self, 'No se pudo consultar AFIP',
-                f'Verificá la conexión a internet e intentá de nuevo.\n\nDetalle: {e}'
+                self, 'No se pudo consultar',
+                f'Verifica la conexion a internet e intenta de nuevo.\n\nDetalle: {e}'
             )
         finally:
             self._buscar_btn.setEnabled(True)
