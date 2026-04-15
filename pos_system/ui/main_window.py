@@ -205,116 +205,102 @@ class MainWindow(QMainWindow):
             logger.warning(f"Error cargando estilos: {e}")
 
     def create_header(self):
-        from pos_system.config import APP_NAME, APP_VERSION
+        from pos_system.config import APP_VERSION
 
-        # ── Detectar tamaño de pantalla para ajustar el header ──────────
         screen = QApplication.primaryScreen().availableGeometry()
-        small_screen = screen.width() < 1200   # Pantallas pequeñas (< 1200px)
-        title_font_size  = 13 if small_screen else 17
-        sub_font_size    = 8  if small_screen else 9
-        btn_font_size    = 8  if small_screen else 9
-        btn_padding      = '5px 10px' if small_screen else '6px 16px'
-        header_max_h     = 42 if small_screen else 48
+        sw = screen.width()
+        # Tres niveles: grande ≥1400, normal ≥1100, pequeño <1100
+        if sw >= 1400:
+            fs = 10; pad = '5px 14px'; h = 46; sp = 8
+        elif sw >= 1100:
+            fs = 9;  pad = '4px 10px'; h = 42; sp = 6
+        else:
+            fs = 8;  pad = '3px 8px';  h = 38; sp = 5
+
+        def _btn_style(bg, hover, color='white', border='none'):
+            return f'''QPushButton {{
+                background:{bg}; border:{border}; border-radius:6px;
+                padding:{pad}; color:{color}; font-size:{fs}px; font-weight:bold;
+            }} QPushButton:hover {{ background:{hover}; }}
+            QPushButton:pressed {{ background:{hover}; }}
+            QPushButton:disabled {{ background:#adb5bd; color:#f8f9fa; }}'''
 
         header = QWidget()
-        header.setObjectName("headerWidget")
+        header.setObjectName('headerWidget')
         header.setStyleSheet('''
             QWidget#headerWidget {
-                background: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                    stop:0 #ffffff, stop:1 #f8f9fa);
-                border-radius: 10px;
-                border: 1px solid #e1e4e8;
+                background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #ffffff,stop:1 #f8f9fa);
+                border-radius: 8px; border: 1px solid #e1e4e8;
             }
         ''')
-        header.setMaximumHeight(header_max_h)
-        header_layout = QHBoxLayout(header)
-        header_layout.setContentsMargins(16, 4, 16, 4)
-        header_layout.setSpacing(10)
+        header.setFixedHeight(h)
 
-        header_layout.addStretch()
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(12, 0, 12, 0)
+        hl.setSpacing(sp)
 
-        # ── Info del usuario activo ───────────────────────────────────────
+        hl.addStretch()
+
         user_role = self.current_user.get('role', '')
-        role_label_text = 'Administrador' if user_role == 'admin' else 'Cajero'
-        user_container = QVBoxLayout()
-        user_container.setSpacing(1)
+        full_name = self.current_user.get('full_name', 'Usuario')
+        role_txt  = 'Admin' if user_role == 'admin' else 'Cajero'
+        color_role = '#0d6efd' if user_role == 'admin' else '#198754'
 
-        user_name_label = QLabel(self.current_user.get('full_name', 'Usuario'))
-        user_name_label.setFont(QFont('Segoe UI', 10, QFont.Bold))
-        user_name_label.setStyleSheet('color: #212529; background: transparent;')
+        # ── Usuario (una sola línea en pantallas pequeñas) ────────────────
+        if sw < 1100:
+            # Pantalla chica: solo nombre + rol en un label
+            user_lbl = QLabel(f'<b style="color:#212529">{full_name}</b>'
+                              f' <span style="color:{color_role};font-size:{fs-1}px">({role_txt})</span>')
+            user_lbl.setTextFormat(Qt.RichText)
+            user_lbl.setStyleSheet('background:transparent;')
+            hl.addWidget(user_lbl)
+        else:
+            user_container = QVBoxLayout()
+            user_container.setSpacing(0)
+            n_lbl = QLabel(full_name)
+            n_lbl.setFont(QFont('Segoe UI', fs, QFont.Bold))
+            n_lbl.setStyleSheet('color:#212529; background:transparent;')
+            r_lbl = QLabel(role_txt)
+            r_lbl.setFont(QFont('Segoe UI', fs - 1))
+            r_lbl.setStyleSheet(f'color:{color_role}; background:transparent;')
+            user_container.addWidget(n_lbl)
+            user_container.addWidget(r_lbl)
+            hl.addLayout(user_container)
 
-        role_label = QLabel(role_label_text)
-        role_label.setFont(QFont('Segoe UI', sub_font_size))
-        color = '#0d6efd' if user_role == 'admin' else '#198754'
-        role_label.setStyleSheet(f'color: {color}; background: transparent;')
-
-        user_container.addWidget(user_name_label)
-        user_container.addWidget(role_label)
-        header_layout.addLayout(user_container)
-
-        # ── Label de turno activo (clickeable para cambiar si es admin) ──
+        # ── Turno (solo admin) ────────────────────────────────────────────
         self._turno_lbl = None
         if user_role == 'admin':
-            turno_nombre = self.current_user.get('turno_nombre') or self.current_user.get('full_name', '')
+            turno_nombre = self.current_user.get('turno_nombre') or full_name
             self._turno_lbl = QPushButton(f'Turno: {turno_nombre}')
             self._turno_lbl.setStyleSheet(f'''
                 QPushButton {{
-                    background: #fff3cd;
-                    border: 1.5px solid #ffc107;
-                    border-radius: 6px;
-                    padding: {btn_padding};
-                    color: #856404;
-                    font-size: {btn_font_size + 1}px;
-                    font-weight: bold;
+                    background:#fff3cd; border:1.5px solid #ffc107; border-radius:6px;
+                    padding:{pad}; color:#856404; font-size:{fs}px; font-weight:bold;
                 }}
-                QPushButton:hover {{
-                    background: #ffe69c;
-                    border-color: #e0a800;
-                }}
+                QPushButton:hover {{ background:#ffe69c; border-color:#e0a800; }}
             ''')
-            self._turno_lbl.setFont(QFont('Segoe UI', btn_font_size, QFont.Bold))
+            self._turno_lbl.setFont(QFont('Segoe UI', fs, QFont.Bold))
             self._turno_lbl.setToolTip('Click para cambiar el cajero de turno')
             self._turno_lbl.clicked.connect(self._prompt_turno)
-            header_layout.addWidget(self._turno_lbl)
+            hl.addWidget(self._turno_lbl)
         else:
-            # Cajero: mostrar su nombre como etiqueta fija (no clickeable)
             cajero_nombre = self.current_user.get('full_name') or self.current_user.get('username', '')
-            cajero_lbl = QLabel(f'{cajero_nombre}')
+            cajero_lbl = QLabel(cajero_nombre)
             cajero_lbl.setStyleSheet(f'''
-                background: #d1e7dd;
-                border: 1.5px solid #198754;
-                border-radius: 6px;
-                padding: {btn_padding};
-                color: #0f5132;
-                font-size: {btn_font_size + 1}px;
-                font-weight: bold;
+                background:#d1e7dd; border:1.5px solid #198754; border-radius:6px;
+                padding:{pad}; color:#0f5132; font-size:{fs}px; font-weight:bold;
             ''')
-            cajero_lbl.setFont(QFont('Segoe UI', btn_font_size, QFont.Bold))
-            cajero_lbl.setToolTip('Cajero activo')
-            header_layout.addWidget(cajero_lbl)
+            cajero_lbl.setFont(QFont('Segoe UI', fs, QFont.Bold))
+            hl.addWidget(cajero_lbl)
 
-        # ── Botón Promociones (descarga en tiempo real desde Firebase) ───
-        self.promos_btn = QPushButton('Promociones')
-        self.promos_btn.setStyleSheet(f'''
-            QPushButton {{
-                background: #198754;
-                border: none;
-                border-radius: 6px;
-                padding: {btn_padding};
-                color: white;
-                font-size: {btn_font_size + 1}px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{ background: #157347; }}
-            QPushButton:pressed {{ background: #146c43; }}
-            QPushButton:disabled {{ background: #6c757d; color: #ced4da; }}
-        ''')
-        self.promos_btn.setFont(QFont('Segoe UI', btn_font_size, QFont.Bold))
-        self.promos_btn.setToolTip('Sincronizar promociones desde Firebase en tiempo real')
+        # ── Promociones ───────────────────────────────────────────────────
+        promo_txt = 'Promos' if sw < 1200 else 'Promociones'
+        self.promos_btn = QPushButton(promo_txt)
+        self.promos_btn.setStyleSheet(_btn_style('#198754', '#157347'))
+        self.promos_btn.setFont(QFont('Segoe UI', fs, QFont.Bold))
+        self.promos_btn.setToolTip('Sincronizar promociones desde Firebase')
         self.promos_btn.clicked.connect(self._sync_promos_now)
-        header_layout.addWidget(self.promos_btn)
-
-        # Mostrar solo si Firebase está disponible
+        hl.addWidget(self.promos_btn)
         try:
             from pos_system.utils.firebase_sync import get_firebase_sync as _gfs
             _fb = _gfs()
@@ -322,35 +308,14 @@ class MainWindow(QMainWindow):
         except Exception:
             self.promos_btn.setVisible(False)
 
-        # ── Botón Sincronizar con la Nube (abre menú Subir/Descargar) ────
-        self.cloud_btn = QPushButton('Sincronizar')
-        self.cloud_btn.setStyleSheet(f'''
-            QPushButton {{
-                background: #0d6efd;
-                border: none;
-                border-radius: 6px;
-                padding: {btn_padding};
-                color: white;
-                font-size: {btn_font_size + 2}px;
-                font-weight: bold;
-            }}
-            QPushButton:hover {{ background: #0b5ed7; }}
-            QPushButton:pressed {{ background: #0a58ca; }}
-            QPushButton:disabled {{
-                background: #6c757d;
-                color: #ced4da;
-            }}
-        ''')
-        self.cloud_btn.setFont(QFont('Segoe UI', btn_font_size, QFont.Bold))
-        self.cloud_btn.setToolTip(
-            'Sincronizar con Firebase:\n'
-            '• Subir Datos → ventas, cierres, inventario → nube\n'
-            '• Descargar Datos → productos, precios, rubros → este POS'
-        )
+        # ── Sincronizar ───────────────────────────────────────────────────
+        sync_txt = 'Sync' if sw < 1100 else 'Sincronizar'
+        self.cloud_btn = QPushButton(sync_txt)
+        self.cloud_btn.setStyleSheet(_btn_style('#0d6efd', '#0b5ed7'))
+        self.cloud_btn.setFont(QFont('Segoe UI', fs, QFont.Bold))
+        self.cloud_btn.setToolTip('Sincronizar con Firebase (Subir / Descargar datos)')
         self.cloud_btn.clicked.connect(self._open_cloud_menu)
-        header_layout.addWidget(self.cloud_btn)
-
-        # Mostrar botón si Firebase está disponible
+        hl.addWidget(self.cloud_btn)
         try:
             from pos_system.utils.firebase_sync import get_firebase_sync
             fb = get_firebase_sync()
@@ -358,57 +323,37 @@ class MainWindow(QMainWindow):
         except Exception:
             self.cloud_btn.setVisible(True)
 
-        # ── Indicador de actualización (oculto por defecto, no clickeable) ─
-        self.update_btn = QPushButton('⬇ Descargando actualización...')
-        self.update_btn.setStyleSheet(f'''
-            QPushButton {{
-                background: #fff3cd;
-                border: 1.5px solid #ffc107;
-                border-radius: 6px;
-                padding: {btn_padding};
-                color: #856404;
-                font-size: {btn_font_size}px;
-                font-weight: bold;
-            }}
-            QPushButton:disabled {{ background: #fff3cd; color: #856404; }}
-        ''')
-        self.update_btn.setFont(QFont('Segoe UI', btn_font_size, QFont.Bold))
+        # ── Actualización (oculto por defecto) ────────────────────────────
+        self.update_btn = QPushButton('Actualizando...')
+        self.update_btn.setStyleSheet(_btn_style('#fff3cd', '#ffe69c', color='#856404', border='1.5px solid #ffc107'))
+        self.update_btn.setFont(QFont('Segoe UI', fs, QFont.Bold))
         self.update_btn.setEnabled(False)
         self.update_btn.setVisible(False)
-        header_layout.addWidget(self.update_btn)
+        hl.addWidget(self.update_btn)
 
-        # ── Botón Inicio Automático (solo admin) ──────────────────────────
+        # ── Auto-inicio (solo admin) ──────────────────────────────────────
         if user_role == 'admin':
             self._autostart_btn = QPushButton()
-            self._autostart_btn.setFont(QFont('Segoe UI', btn_font_size))
-            self._autostart_btn.setMinimumHeight(30)
+            self._autostart_btn.setFont(QFont('Segoe UI', fs))
             self._autostart_btn.clicked.connect(self._toggle_autostart)
-            self._autostart_btn.setToolTip(
-                'Habilitar o deshabilitar que la app se abra automáticamente al encender la PC'
-            )
-            header_layout.addWidget(self._autostart_btn)
+            self._autostart_btn.setToolTip('Inicio automatico al encender la PC')
+            hl.addWidget(self._autostart_btn)
             self._refresh_autostart_btn()
 
-        # ── Botón logout ──────────────────────────────────────────────────
-        logout_btn = QPushButton('Cerrar Sesión')
+        # ── Cerrar sesión ─────────────────────────────────────────────────
+        logout_txt = 'Salir' if sw < 1100 else 'Cerrar Sesion'
+        logout_btn = QPushButton(logout_txt)
         logout_btn.setStyleSheet(f'''
             QPushButton {{
-                background: #f8f9fa;
-                border: 1px solid #dee2e6;
-                border-radius: 6px;
-                padding: {btn_padding};
-                color: #495057;
-                font-size: {btn_font_size + 2}px;
+                background:#f8f9fa; border:1px solid #dee2e6; border-radius:6px;
+                padding:{pad}; color:#495057; font-size:{fs}px;
             }}
-            QPushButton:hover {{
-                background: #e9ecef;
-                border-color: #adb5bd;
-            }}
+            QPushButton:hover {{ background:#e9ecef; border-color:#adb5bd; }}
         ''')
-        logout_btn.setFont(QFont('Segoe UI', btn_font_size))
+        logout_btn.setFont(QFont('Segoe UI', fs))
         logout_btn.clicked.connect(self._logout)
-        logout_btn.setToolTip('Cerrar sesión (Ctrl+L)')
-        header_layout.addWidget(logout_btn)
+        logout_btn.setToolTip('Cerrar sesion (Ctrl+L)')
+        hl.addWidget(logout_btn)
 
         return header
 
@@ -649,22 +594,22 @@ class MainWindow(QMainWindow):
             enabled = False
 
         if enabled:
-            self._autostart_btn.setText('Inicio Auto: ON')
+            self._autostart_btn.setText('Auto: ON')
             self._autostart_btn.setStyleSheet('''
                 QPushButton {
                     background: #d1e7dd; border: 1.5px solid #198754;
-                    border-radius: 6px; padding: 4px 10px;
-                    color: #0f5132; font-size: 11px; font-weight: bold;
+                    border-radius: 6px; padding: 3px 10px;
+                    color: #0f5132; font-size: 10px; font-weight: bold;
                 }
                 QPushButton:hover { background: #badbcc; }
             ''')
         else:
-            self._autostart_btn.setText('Inicio Auto: OFF')
+            self._autostart_btn.setText('Auto: OFF')
             self._autostart_btn.setStyleSheet('''
                 QPushButton {
                     background: #f8f9fa; border: 1px solid #dee2e6;
-                    border-radius: 6px; padding: 4px 10px;
-                    color: #6c757d; font-size: 11px;
+                    border-radius: 6px; padding: 3px 10px;
+                    color: #6c757d; font-size: 10px;
                 }
                 QPushButton:hover { background: #e9ecef; }
             ''')
