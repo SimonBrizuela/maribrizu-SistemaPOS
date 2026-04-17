@@ -588,6 +588,7 @@ class FiscalView(QWidget):
             ('Domicilio:',         'domicilio',        'Ej: Av. Colón 123'),
             ('Localidad:',         'localidad',        'Ej: CÓRDOBA (5000) - CÓRDOBA'),
             ('Teléfono:',          'telefono',         'Ej: 3511234567'),
+            ('Email:',             'email',            'Ej: info@tuempresa.com'),
             ('Ing. Brutos:',       'ing_brutos',       'Número de Ingresos Brutos'),
             ('Inicio de Act.:',    'inicio_actividades','Ej: 01/01/2020'),
             ('Condición IVA:',     'condicion_iva',    'Ej: Responsable Inscripto'),
@@ -654,7 +655,8 @@ class FiscalView(QWidget):
             field_map = {
                 'afip_cuit': 'cuit', 'afip_razon_social': 'razon_social',
                 'afip_domicilio': 'domicilio', 'afip_localidad': 'localidad',
-                'afip_telefono': 'telefono', 'afip_ing_brutos': 'ing_brutos',
+                'afip_telefono': 'telefono', 'afip_email': 'email',
+                'afip_ing_brutos': 'ing_brutos',
                 'afip_inicio_actividades': 'inicio_actividades',
                 'afip_condicion_iva': 'condicion_iva', 'afip_punto_venta': 'punto_venta',
                 'afip_cert_path': 'cert_path', 'afip_key_path': 'key_path',
@@ -678,7 +680,8 @@ class FiscalView(QWidget):
             field_map = {
                 'cuit': 'afip_cuit', 'razon_social': 'afip_razon_social',
                 'domicilio': 'afip_domicilio', 'localidad': 'afip_localidad',
-                'telefono': 'afip_telefono', 'ing_brutos': 'afip_ing_brutos',
+                'telefono': 'afip_telefono', 'email': 'afip_email',
+                'ing_brutos': 'afip_ing_brutos',
                 'inicio_actividades': 'afip_inicio_actividades',
                 'condicion_iva': 'afip_condicion_iva', 'punto_venta': 'afip_punto_venta',
                 'cert_path': 'afip_cert_path', 'key_path': 'afip_key_path',
@@ -800,6 +803,21 @@ class FiscalView(QWidget):
         self.p_localidad_input = QLineEdit()
         self.p_localidad_input.setFont(QFont('Segoe UI', 10))
         form.addRow('Localidad:', self.p_localidad_input)
+
+        self.p_telefono_input = QLineEdit()
+        self.p_telefono_input.setPlaceholderText('Ej: 3511234567')
+        self.p_telefono_input.setFont(QFont('Segoe UI', 10))
+        form.addRow('Telefono:', self.p_telefono_input)
+
+        self.p_ing_brutos_input = QLineEdit()
+        self.p_ing_brutos_input.setPlaceholderText('Numero Ing. Brutos')
+        self.p_ing_brutos_input.setFont(QFont('Segoe UI', 10))
+        form.addRow('Ing. Brutos:', self.p_ing_brutos_input)
+
+        self.p_inicio_act_input = QLineEdit()
+        self.p_inicio_act_input.setPlaceholderText('Ej: 01/01/2020')
+        self.p_inicio_act_input.setFont(QFont('Segoe UI', 10))
+        form.addRow('Inicio de Act.:', self.p_inicio_act_input)
 
         self.p_cond_combo = QComboBox()
         self.p_cond_combo.setFont(QFont('Segoe UI', 10))
@@ -940,6 +958,7 @@ class FiscalView(QWidget):
                 db.execute_update(
                     """UPDATE perfiles_facturacion SET
                        nombre=?, razon_social=?, cuit=?, domicilio=?, localidad=?,
+                       telefono=?, ing_brutos=?, inicio_actividades=?,
                        condicion_iva=?, punto_venta=?, cert_path=?, key_path=?,
                        produccion=?, updated_at=(SELECT localtime_now())
                        WHERE id=?""",
@@ -949,6 +968,9 @@ class FiscalView(QWidget):
                         cuit,
                         self.p_domicilio_input.text().strip(),
                         self.p_localidad_input.text().strip(),
+                        self.p_telefono_input.text().strip(),
+                        self.p_ing_brutos_input.text().strip(),
+                        self.p_inicio_act_input.text().strip(),
                         self.p_cond_combo.currentText(),
                         int(self.p_pv_input.text().strip() or 1),
                         self.p_cert_input.text().strip(),
@@ -961,14 +983,18 @@ class FiscalView(QWidget):
                 db.execute_update(
                     """INSERT INTO perfiles_facturacion
                        (nombre, razon_social, cuit, domicilio, localidad,
+                        telefono, ing_brutos, inicio_actividades,
                         condicion_iva, punto_venta, cert_path, key_path, produccion)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (
                         nombre,
                         self.p_razon_input.text().strip() or nombre,
                         cuit,
                         self.p_domicilio_input.text().strip(),
                         self.p_localidad_input.text().strip(),
+                        self.p_telefono_input.text().strip(),
+                        self.p_ing_brutos_input.text().strip(),
+                        self.p_inicio_act_input.text().strip(),
                         self.p_cond_combo.currentText(),
                         int(self.p_pv_input.text().strip() or 1),
                         self.p_cert_input.text().strip(),
@@ -988,6 +1014,9 @@ class FiscalView(QWidget):
         self.p_cuit_input.setText(row.get('cuit', ''))
         self.p_domicilio_input.setText(row.get('domicilio', ''))
         self.p_localidad_input.setText(row.get('localidad', ''))
+        self.p_telefono_input.setText(row.get('telefono', ''))
+        self.p_ing_brutos_input.setText(row.get('ing_brutos', ''))
+        self.p_inicio_act_input.setText(row.get('inicio_actividades', ''))
         idx = self.p_cond_combo.findText(row.get('condicion_iva', 'Monotributista'))
         if idx >= 0:
             self.p_cond_combo.setCurrentIndex(idx)
@@ -1021,6 +1050,9 @@ class FiscalView(QWidget):
         self.p_cuit_input.clear()
         self.p_domicilio_input.clear()
         self.p_localidad_input.clear()
+        self.p_telefono_input.clear()
+        self.p_ing_brutos_input.clear()
+        self.p_inicio_act_input.clear()
         self.p_cond_combo.setCurrentIndex(0)
         self.p_pv_input.setText('1')
         self.p_cert_input.clear()

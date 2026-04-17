@@ -52,28 +52,29 @@ class FacturaDialog(QDialog):
             self.notas_input.setPlainText(self._notas_prefill)
 
     def _setup_emisor_data(self):
-        """Carga datos del emisor desde config."""
+        """Carga datos del emisor desde la tabla config de la base de datos."""
         try:
-            from pos_system.config import (
-                AFIP_CUIT, AFIP_RAZON_SOCIAL, AFIP_DOMICILIO, AFIP_LOCALIDAD,
-                AFIP_TELEFONO, AFIP_ING_BRUTOS, AFIP_INICIO_ACT,
-                AFIP_CONDICION_IVA, AFIP_PUNTO_VENTA
-            )
+            from pos_system.database.db_manager import DatabaseManager
+            db = DatabaseManager()
+            def cfg(key, default=''):
+                res = db.execute_query("SELECT value FROM config WHERE key=?", (key,))
+                return (res[0]['value'] or default) if res and res[0]['value'] else default
             self.emisor = {
-                'cuit':             AFIP_CUIT,
-                'razon_social':     AFIP_RAZON_SOCIAL,
-                'domicilio':        AFIP_DOMICILIO,
-                'localidad':        AFIP_LOCALIDAD,
-                'telefono':         AFIP_TELEFONO,
-                'ing_brutos':       AFIP_ING_BRUTOS,
-                'inicio_actividades': AFIP_INICIO_ACT,
-                'condicion_iva':    AFIP_CONDICION_IVA,
-                'punto_venta':      AFIP_PUNTO_VENTA,
+                'cuit':               cfg('afip_cuit'),
+                'razon_social':       cfg('afip_razon_social'),
+                'domicilio':          cfg('afip_domicilio'),
+                'localidad':          cfg('afip_localidad'),
+                'telefono':           cfg('afip_telefono'),
+                'email':              cfg('afip_email'),
+                'ing_brutos':         cfg('afip_ing_brutos'),
+                'inicio_actividades': cfg('afip_inicio_actividades'),
+                'condicion_iva':      cfg('afip_condicion_iva', 'Resp. Inscripto'),
+                'punto_venta':        int(cfg('afip_punto_venta', '1') or '1'),
             }
         except Exception:
             self.emisor = {
                 'cuit': '', 'razon_social': '', 'domicilio': '',
-                'localidad': '', 'telefono': '', 'ing_brutos': '',
+                'localidad': '', 'telefono': '', 'email': '', 'ing_brutos': '',
                 'inicio_actividades': '', 'condicion_iva': 'Resp. Inscripto',
                 'punto_venta': 1,
             }
@@ -349,15 +350,18 @@ class FacturaDialog(QDialog):
         outer.addWidget(btn_bar)
 
     def _prefill_perfil(self, perfil: dict):
-        """Usa los datos del perfil como EMISOR (reemplaza config AFIP global)."""
+        """Usa los datos del perfil como EMISOR. Para campos vacios en el perfil
+        usa los valores del config global (self.emisor ya cargado por _setup_emisor_data)."""
+        global_emisor = self.emisor
         self.emisor = {
-            'cuit':               perfil.get('cuit', ''),
-            'razon_social':       perfil.get('razon_social') or perfil.get('nombre', ''),
-            'domicilio':          perfil.get('domicilio', ''),
-            'localidad':          perfil.get('localidad', ''),
-            'telefono':           '',
-            'ing_brutos':         perfil.get('ing_brutos', ''),
-            'inicio_actividades': perfil.get('inicio_actividades', ''),
+            'cuit':               perfil.get('cuit', '') or global_emisor.get('cuit', ''),
+            'razon_social':       perfil.get('razon_social') or perfil.get('nombre', '') or global_emisor.get('razon_social', ''),
+            'domicilio':          perfil.get('domicilio', '') or global_emisor.get('domicilio', ''),
+            'localidad':          perfil.get('localidad', '') or global_emisor.get('localidad', ''),
+            'telefono':           perfil.get('telefono', '') or global_emisor.get('telefono', ''),
+            'email':              perfil.get('email', '') or global_emisor.get('email', ''),
+            'ing_brutos':         perfil.get('ing_brutos', '') or global_emisor.get('ing_brutos', ''),
+            'inicio_actividades': perfil.get('inicio_actividades', '') or global_emisor.get('inicio_actividades', ''),
             'condicion_iva':      perfil.get('condicion_iva', 'Monotributista'),
             'punto_venta':        perfil.get('punto_venta', 1),
             'cert_path':          perfil.get('cert_path', ''),
@@ -423,18 +427,21 @@ class FacturaDialog(QDialog):
         from pos_system.utils.pdf_generator import PDFGenerator
 
         tipo = self.tipo_combo.currentText()
+        nro_prev = self._get_next_nro_comprobante(tipo)
+        pv_prev = self.emisor.get('punto_venta', 1)
         factura = {
             'cuit':               self.emisor.get('cuit', ''),
             'razon_social':       self.emisor.get('razon_social', ''),
             'domicilio':          self.emisor.get('domicilio', ''),
             'localidad':          self.emisor.get('localidad', ''),
             'telefono':           self.emisor.get('telefono', ''),
+            'email':              self.emisor.get('email', ''),
             'ing_brutos':         self.emisor.get('ing_brutos', ''),
             'inicio_actividades': self.emisor.get('inicio_actividades', ''),
             'condicion_iva':      self.emisor.get('condicion_iva', 'Monotributista'),
             'tipo_comprobante':   tipo,
-            'punto_venta':        self.emisor.get('punto_venta', 1),
-            'nro_comprobante':    self._get_next_nro_comprobante(tipo),
+            'punto_venta':        pv_prev,
+            'nro_comprobante':    nro_prev,
             'fecha':              now_ar().strftime('%d/%m/%Y'),
             'turno':              str(self.sale.get('id', '')).zfill(5),
             'pago':               self.pago_input.text().strip(),
@@ -451,6 +458,7 @@ class FacturaDialog(QDialog):
             'vto_cae':            self.vto_cae_input.text().strip(),
             'notas':              self.notas_input.toPlainText().strip(),
             'nombre_perfil':      self.emisor.get('nombre_perfil', self.emisor.get('razon_social', '')),
+            'remito':             f'X-{str(pv_prev).zfill(5)}-{str(nro_prev).zfill(8)}',
         }
 
         try:
@@ -521,14 +529,24 @@ class FacturaDialog(QDialog):
                     key_path=key_path,
                     produccion=bool(self.emisor.get('produccion', False)),
                 )
-                neto, iva_calc = calcular_iva_neto(total, 21.0)
+                # FAC C (Monotributista): no hay IVA discriminado, todo va en ImpTotConc
+                if tipo == 'FAC. ELEC. C':
+                    importe_neto = 0.0
+                    importe_iva_send = 0.0
+                    importe_otros_send = total
+                else:
+                    neto, iva_calc = calcular_iva_neto(total, 21.0)
+                    importe_neto = neto
+                    importe_iva_send = iva if iva > 0 else iva_calc
+                    importe_otros_send = 0.0
                 resultado = afip.solicitar_cae(
                     tipo_comprobante=tipo,
                     punto_venta=int(self.emisor.get('punto_venta', 1)),
                     nro_comprobante=nro,
                     importe_total=total,
-                    importe_neto_gravado=neto,
-                    importe_iva=iva if iva > 0 else iva_calc,
+                    importe_neto_gravado=importe_neto,
+                    importe_iva=importe_iva_send,
+                    importe_otros=importe_otros_send,
                     concepto=1,
                     cuit_receptor=cuit_cliente or None,
                     condicion_iva_receptor=cond_iva_cliente,
@@ -555,6 +573,7 @@ class FacturaDialog(QDialog):
 
         nombre_perfil = self.emisor.get('nombre_perfil', self.emisor.get('razon_social', ''))
 
+        pv = self.emisor.get('punto_venta', 1)
         factura = {
             # Emisor
             'cuit':               self.emisor.get('cuit', ''),
@@ -562,12 +581,13 @@ class FacturaDialog(QDialog):
             'domicilio':          self.emisor.get('domicilio', ''),
             'localidad':          self.emisor.get('localidad', ''),
             'telefono':           self.emisor.get('telefono', ''),
+            'email':              self.emisor.get('email', ''),
             'ing_brutos':         self.emisor.get('ing_brutos', ''),
             'inicio_actividades': self.emisor.get('inicio_actividades', ''),
             'condicion_iva':      self.emisor.get('condicion_iva', 'Monotributista'),
             # Comprobante
             'tipo_comprobante':   tipo,
-            'punto_venta':        self.emisor.get('punto_venta', 1),
+            'punto_venta':        pv,
             'nro_comprobante':    nro,
             'fecha':              now_ar().strftime('%d/%m/%Y %I:%M:%S %p'),
             'turno':              str(self.sale.get('id', '')).zfill(5),
@@ -591,6 +611,8 @@ class FacturaDialog(QDialog):
             'notas':              self.notas_input.toPlainText().strip(),
             # Perfil emisor (para resumen webapp)
             'nombre_perfil':      nombre_perfil,
+            # Remito conectado
+            'remito':             f'X-{str(pv).zfill(5)}-{str(nro).zfill(8)}',
         }
 
         try:

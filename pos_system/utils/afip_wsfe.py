@@ -134,9 +134,12 @@ class AfipWsfe:
         wsaa_url = WSAA_URL_PROD if self.produccion else WSAA_URL_HOMO
 
         # Generar TRA (Ticket de Requerimiento de Acceso)
-        gen_time  = (now - timedelta(minutes=10)).strftime('%Y-%m-%dT%H:%M:%S+00:00')
-        exp_time  = (now + timedelta(hours=12)).strftime('%Y-%m-%dT%H:%M:%S+00:00')
-        unique_id = hashlib.md5(f'{now.timestamp()}'.encode()).hexdigest()[:8]
+        # uniqueId debe ser entero (xsd:long), generationTime/expirationTime en hora local AR
+        _TZ_AR = timezone(timedelta(hours=-3))
+        now_ar  = now.astimezone(_TZ_AR)
+        gen_time  = (now_ar - timedelta(minutes=10)).strftime('%Y-%m-%dT%H:%M:%S-03:00')
+        exp_time  = (now_ar + timedelta(hours=12)).strftime('%Y-%m-%dT%H:%M:%S-03:00')
+        unique_id = int(now.timestamp())
 
         tra_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
 <loginTicketRequest version="1.0">
@@ -155,20 +158,6 @@ class AfipWsfe:
             with open(self.key_path, 'rb') as f:
                 key_data = f.read()
 
-            cert = self._crypto.load_certificate(self._crypto.FILETYPE_PEM, cert_data)
-            key  = self._crypto.load_privatekey(self._crypto.FILETYPE_PEM, key_data)
-
-            pkcs7 = self._crypto.PKCS7Type
-            bio_in = self._crypto.X509.from_cryptography  # just checking availability
-
-            # Usar sign method
-            from OpenSSL.crypto import sign, PKCS12, dump_certificate, FILETYPE_ASN1
-            from OpenSSL.crypto import load_pkcs12
-
-            # Firmar TRA → CMS/PKCS#7 en base64
-            signed = self._crypto.sign(key, tra_xml.encode('utf-8'), 'sha256')
-            # AFIP espera un CMS firmado — usar SMIME
-            from OpenSSL.crypto import X509, load_certificate, FILETYPE_PEM
             smime_buf = self._sign_tra_smime(tra_xml, cert_data, key_data)
 
         except Exception as e:
@@ -201,75 +190,24 @@ class AfipWsfe:
         return token, sign
 
     def _sign_tra_smime(self, tra_xml: str, cert_pem: bytes, key_pem: bytes) -> str:
-        """Firma el TRA usando S/MIME (PKCS#7) y devuelve el CMS en base64."""
-        try:
-            from cryptography.hazmat.primitives.serialization import (
-                load_pem_private_key, Encoding, NoEncryption
-            )
-            from cryptography.hazmat.primitives import hashes
-            from cryptography.x509 import load_pem_x509_certificate
-            from cryptography.hazmat.primitives.asymmetric import padding as asym_padding
-            from cryptography.hazmat.backends import default_backend
-            import email.mime.text
-            import smime  # pip install smime — fallback below
-        except ImportError:
-            pass
+        """Firma el TRA usando PKCS#7 y devuelve el CMS en base64."""
+        import base64
+        from cryptography.hazmat.primitives.serialization import load_pem_private_key, Encoding
+        from cryptography.hazmat.primitives.serialization.pkcs7 import PKCS7SignatureBuilder, PKCS7Options
+        from cryptography.hazmat.primitives import hashes
+        from cryptography.x509 import load_pem_x509_certificate
 
-        # Método simple con OpenSSL via subprocess si zeep/cryptography no alcanza
-        # Usamos la librería M2Crypto si disponible, sino subprocess openssl
-        try:
-            import M2Crypto
-            from M2Crypto import SMIME, BIO, X509, EVP
-            signer = SMIME.SMIME()
-            # Cargar cert y key
-            bio_cert = BIO.MemoryBuffer(cert_pem)
-            bio_key  = BIO.MemoryBuffer(key_pem)
-            signer.load_key_bio(bio_key, bio_cert)
-            bio_data = BIO.MemoryBuffer(tra_xml.encode('utf-8'))
-            pkcs7 = signer.sign(bio_data, flags=SMIME.PKCS7_DETACHED)
-            bio_out = BIO.MemoryBuffer()
-            signer.write(bio_out, pkcs7)
-            cms_raw = bio_out.read()
-            # Extraer solo el contenido base64 entre los delimitadores
-            lines = cms_raw.decode('utf-8', errors='ignore').splitlines()
-            b64_lines = []
-            in_body = False
-            for line in lines:
-                if line.strip() == '':
-                    in_body = True
-                    continue
-                if in_body and not line.startswith('--') and not line.startswith('Content'):
-                    b64_lines.append(line)
-            return ''.join(b64_lines)
-        except ImportError:
-            pass
+        cert = load_pem_x509_certificate(cert_pem)
+        key  = load_pem_private_key(key_pem, password=None)
+        data = tra_xml.encode('utf-8')
 
-        # Fallback: subprocess openssl smime
-        import subprocess, tempfile
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.xml') as f:
-            f.write(tra_xml.encode('utf-8'))
-            tra_path = f.name
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pem') as f:
-            f.write(cert_pem)
-            cert_tmp = f.name
-        with tempfile.NamedTemporaryFile(delete=False, suffix='.pem') as f:
-            f.write(key_pem)
-            key_tmp = f.name
-        try:
-            result = subprocess.run(
-                ['openssl', 'smime', '-sign', '-signer', cert_tmp,
-                 '-inkey', key_tmp, '-in', tra_path, '-nodetach', '-outform', 'PEM'],
-                capture_output=True, check=True
-            )
-            cms_pem = result.stdout.decode()
-            # Extraer base64
-            lines = cms_pem.splitlines()
-            b64 = ''.join(l for l in lines if not l.startswith('-----'))
-            return b64
-        finally:
-            for p in [tra_path, cert_tmp, key_tmp]:
-                try: os.unlink(p)
-                except: pass
+        signed_der = (
+            PKCS7SignatureBuilder()
+            .set_data(data)
+            .add_signer(cert, key, hashes.SHA256())
+            .sign(Encoding.DER, [PKCS7Options.Binary])
+        )
+        return base64.b64encode(signed_der).decode()
 
     # ── WSFE ──────────────────────────────────────────────────────────────────
 
@@ -347,7 +285,7 @@ class AfipWsfe:
             'CbteHasta':     nro_comprobante,
             'CbteFch':       fecha_comprobante,
             'ImpTotal':      round(importe_total, 2),
-            'ImpTotConc':    0,
+            'ImpTotConc':    round(importe_otros, 2),
             'ImpNeto':       round(importe_neto_gravado, 2),
             'ImpOpEx':       round(importe_op_exentas, 2),
             'ImpTrib':       round(importe_trib, 2),

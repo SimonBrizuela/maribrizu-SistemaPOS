@@ -499,14 +499,14 @@ class FirebaseSync:
                         on_done(0)
                     return
 
-                # 4. Mapa local: firebase_id → (local_id, updated_at)
+                # 4. Mapa local: firebase_id → (local_id, updated_at, barcode)
                 rows = local_db.execute_query(
-                    "SELECT id, firebase_id, updated_at FROM products"
+                    "SELECT id, firebase_id, updated_at, barcode FROM products"
                 ) or []
                 local_by_firebase_id = {}
                 for r in rows:
                     if r.get('firebase_id'):
-                        local_by_firebase_id[str(r['firebase_id'])] = (r['id'], r.get('updated_at') or '')
+                        local_by_firebase_id[str(r['firebase_id'])] = (r['id'], r.get('updated_at') or '', r.get('barcode') or '')
 
                 # 5. Aplicar solo diffs
                 for doc in docs:
@@ -532,8 +532,13 @@ class FirebaseSync:
                     entry = local_by_firebase_id.get(firebase_id)
 
                     if entry is None:
-                        # Producto nuevo
+                        # Producto nuevo — liberar barcode si lo tiene otro producto
                         try:
+                            if barcode:
+                                local_db.execute_update(
+                                    "UPDATE products SET barcode = NULL WHERE barcode = ?",
+                                    (barcode,)
+                                )
                             local_db.execute_update(
                                 """INSERT OR IGNORE INTO products
                                    (name, category, price, cost, stock, barcode,
@@ -548,10 +553,15 @@ class FirebaseSync:
                             logger.warning(f"Delta sync: error INSERT {firebase_id}: {e}")
 
                     else:
-                        local_id, local_ts = entry
-                        if fb_ts and fb_ts != local_ts:
-                            # Producto modificado
+                        local_id, local_ts, local_barcode = entry
+                        if fb_ts and (fb_ts != local_ts or (barcode or '') != local_barcode):
+                            # Producto modificado — liberar barcode si lo tiene otro producto
                             try:
+                                if barcode:
+                                    local_db.execute_update(
+                                        "UPDATE products SET barcode = NULL WHERE barcode = ? AND id != ?",
+                                        (barcode, local_id)
+                                    )
                                 local_db.execute_update(
                                     """UPDATE products
                                        SET name=?, category=?, price=?, cost=?, stock=?,

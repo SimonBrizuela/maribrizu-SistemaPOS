@@ -1073,11 +1073,13 @@ class PDFGenerator:
 
         # -- Columna izquierda: logo + razon social + datos emisor --
         razon = factura.get('razon_social', '').upper()
-        domicilio_emisor = factura.get('domicilio', '')
-        localidad_emisor = factura.get('localidad', '')
-        cuit_emisor      = factura.get('cuit', '')
-        ing_brutos       = factura.get('ing_brutos', '')
-        inicio_act       = factura.get('inicio_actividades', '')
+        domicilio_emisor  = factura.get('domicilio', '')
+        localidad_emisor  = factura.get('localidad', '')
+        cuit_emisor       = factura.get('cuit', '')
+        ing_brutos        = factura.get('ing_brutos', '')
+        inicio_act        = factura.get('inicio_actividades', '')
+        telefono_emisor   = factura.get('telefono', '')
+        email_emisor      = factura.get('email', '')
 
         sE_name = S('EN', fontSize=11, fontName='Helvetica-Bold', alignment=TA_LEFT, spaceAfter=2, leading=13)
         sE_lbl  = S('EL', fontSize=7.5, fontName='Helvetica-Bold', alignment=TA_LEFT, spaceAfter=0, leading=10)
@@ -1091,6 +1093,10 @@ class PDFGenerator:
             Paragraph(localidad_emisor, sE_val),
             Paragraph(f'Condicion frente al IVA: {condicion_iva_emisor}', sE_iva),
         ]
+        if telefono_emisor:
+            emisor_content.append(Paragraph(f'<b>Tel:</b> {telefono_emisor}', sE_val))
+        if email_emisor:
+            emisor_content.append(Paragraph(email_emisor, sE_val))
 
         # -- Columna central: letra grande + COD --
         sL_letra = S('LL', fontSize=36, fontName='Helvetica-Bold', alignment=TA_CENTER, spaceAfter=0, leading=40)
@@ -1119,8 +1125,8 @@ class PDFGenerator:
             Paragraph(f'<b>Fecha de Emision:</b> {fecha_comp}', sD_lbl),
             Spacer(1, 2*mm),
             Paragraph(f'<b>CUIT:</b> {cuit_emisor}', sD_val),
-            Paragraph(f'<b>Ingresos Brutos:</b> {ing_brutos}', sD_val),
-            Paragraph(f'<b>Fecha de Inicio de Actividades:</b> {inicio_act}', sD_val),
+            Paragraph(f'<b>Ing. Brutos:</b> {ing_brutos}', sD_val),
+            Paragraph(f'<b>Inicio Act.:</b> {inicio_act}', sD_val),
         ]
 
         header_tbl = Table(
@@ -1176,13 +1182,28 @@ class PDFGenerator:
             ('BOTTOMPADDING', (0,0),(-1,-1), 3),
         ]))
 
-        receptor_outer = Table(
-            [[receptor_row1], [receptor_row2]],
-            colWidths=[CONTENT_W],
-        )
+        remito_val = factura.get('remito', '')
+        receptor_rows = [[receptor_row1], [receptor_row2]]
+        if remito_val:
+            receptor_row3_data = [
+                [Paragraph(f'<b>Remito:</b> {remito_val}', sR_val),
+                 Paragraph('', sR_val)],
+            ]
+            receptor_row3 = Table(receptor_row3_data, colWidths=[CONTENT_W * 0.55, CONTENT_W * 0.45])
+            receptor_row3.setStyle(TableStyle([
+                ('LEFTPADDING',   (0,0),(-1,-1), 4),
+                ('RIGHTPADDING',  (0,0),(-1,-1), 4),
+                ('TOPPADDING',    (0,0),(-1,-1), 3),
+                ('BOTTOMPADDING', (0,0),(-1,-1), 3),
+            ]))
+            receptor_rows.append([receptor_row3])
+
+        receptor_outer = Table(receptor_rows, colWidths=[CONTENT_W])
+        separator_styles = [('LINEBELOW', (0, i), (-1, i), 0.4, colors.HexColor('#aaaaaa'))
+                            for i in range(len(receptor_rows) - 1)]
         receptor_outer.setStyle(TableStyle([
             ('BOX',           (0,0),(-1,-1), 0.8, colors.black),
-            ('LINEBELOW',     (0,0),(-1,0),  0.4, colors.HexColor('#aaaaaa')),
+            *separator_styles,
             ('TOPPADDING',    (0,0),(-1,-1), 0),
             ('BOTTOMPADDING', (0,0),(-1,-1), 0),
             ('LEFTPADDING',   (0,0),(-1,-1), 0),

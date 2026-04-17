@@ -8,9 +8,8 @@ export function openSaleModal(venta, db) {
   // Eliminar modal previo si existe
   document.querySelector('.modal-overlay')?.remove();
 
-  // created_at fue guardado como naive hora AR → Firestore lo trata como UTC → sumar 3h
-  const _rawDt = venta.created_at?.toDate ? venta.created_at.toDate() : new Date(venta.created_at);
-  const dt = new Date(_rawDt.getTime() + 3 * 60 * 60 * 1000);
+  // created_at se guarda con timezone AR (-03:00) → Firestore lo almacena como UTC correcto → no necesita compensación
+  const dt = venta.created_at?.toDate ? venta.created_at.toDate() : new Date(venta.created_at);
   const esEfectivo = venta.payment_type === 'cash';
   const saleId = venta.sale_id || venta.id;
 

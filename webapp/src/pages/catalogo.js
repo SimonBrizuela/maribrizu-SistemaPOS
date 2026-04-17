@@ -2041,6 +2041,10 @@ export async function renderCatalogo(container, db) {
               <input id="np_costo" type="number" placeholder="0.00" min="0" step="0.01" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:var(--surface);color:var(--text)" />
             </div>
             <div style="display:flex;flex-direction:column;gap:4px">
+              <label style="font-size:13px;font-weight:600">% Margen</label>
+              <input id="np_margen_pct" type="number" placeholder="Ej: 80" min="0" step="1" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:var(--surface);color:var(--text);font-weight:700;color:#7b1fa2" />
+            </div>
+            <div style="display:flex;flex-direction:column;gap:4px">
               <label style="font-size:13px;font-weight:600">Precio de Venta *</label>
               <input id="np_precio" type="number" placeholder="0.00" min="0" step="0.01" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:var(--surface);color:var(--text)" />
             </div>
@@ -2070,10 +2074,9 @@ export async function renderCatalogo(container, db) {
       wrap.style.display = e.target.value === '__nueva__' ? 'flex' : 'none';
     });
 
-    // Preview margen en tiempo real
+    // Preview y cálculo de margen en tiempo real
     const sugerirRedondo = (costo, precio) => {
       if (!costo || costo <= 0) return '';
-      // Buscar el número redondo más cercano (50, 100, 500, 1000) hacia arriba
       const bases = [1, 5, 10, 50, 100, 200, 500, 1000, 2000, 5000];
       const base = bases.find(b => precio < b * 20 && b >= Math.max(1, precio * 0.02)) || 100;
       const redondoArriba = Math.ceil(precio / base) * base;
@@ -2083,27 +2086,57 @@ export async function renderCatalogo(container, db) {
       const pctCandidato = ((candidato - costo) / costo * 100).toFixed(1);
       const diff = candidato - precio;
       const signo = diff > 0 ? '+' : '';
-      return `<span style="font-size:11px;color:#7b1fa2;font-style:italic">💡 Con ${pctCandidato}% el precio queda en $${fmt(candidato)} (${signo}$${fmt(diff)})</span>`;
+      return `<span style="font-size:11px;color:#7b1fa2;font-style:italic">Con ${pctCandidato}% el precio queda en $${fmt(candidato)} (${signo}$${fmt(diff)})</span>`;
     };
 
-    const calcMargen = () => {
-      const costo  = parseFloat(document.getElementById('np_costo').value) || 0;
-      const precio = parseFloat(document.getElementById('np_precio').value) || 0;
-      const margenEl = document.getElementById('np_margen');
+    let _actualizandoDesdeMargen = false;
+    let _actualizandoDesde = null;
+
+    const actualizarPreview = (costo, precio) => {
+      const margenEl  = document.getElementById('np_margen');
       const margenVal = document.getElementById('np_margen_val');
       if (costo > 0 && precio > 0) {
-        const pct = ((precio - costo) / costo * 100).toFixed(1);
+        const pct      = ((precio - costo) / costo * 100).toFixed(1);
         const ganancia = precio - costo;
         const sugerencia = sugerirRedondo(costo, precio);
         margenVal.innerHTML = `${pct}% ($${fmt(ganancia)} por unidad)${sugerencia ? '<br>' + sugerencia : ''}`;
-        margenVal.style.color = pct >= 0 ? 'var(--success)' : 'var(--danger)';
+        margenVal.style.color = parseFloat(pct) >= 0 ? 'var(--success)' : 'var(--danger)';
         margenEl.style.display = 'block';
       } else {
         margenEl.style.display = 'none';
       }
     };
-    document.getElementById('np_costo').addEventListener('input', calcMargen);
-    document.getElementById('np_precio').addEventListener('input', calcMargen);
+
+    // Costo o margen% → calcula precio
+    const onCostoOMargen = () => {
+      if (_actualizandoDesde === 'precio') return;
+      const costo = parseFloat(document.getElementById('np_costo').value) || 0;
+      const pct   = parseFloat(document.getElementById('np_margen_pct').value);
+      if (costo > 0 && !isNaN(pct)) {
+        _actualizandoDesde = 'margen';
+        document.getElementById('np_precio').value = (costo * (1 + pct / 100)).toFixed(2);
+        _actualizandoDesde = null;
+      }
+      const precio = parseFloat(document.getElementById('np_precio').value) || 0;
+      actualizarPreview(costo, precio);
+    };
+
+    // Precio → calcula margen%
+    const onPrecio = () => {
+      if (_actualizandoDesde === 'margen') return;
+      const costo  = parseFloat(document.getElementById('np_costo').value) || 0;
+      const precio = parseFloat(document.getElementById('np_precio').value) || 0;
+      if (costo > 0 && precio > 0) {
+        _actualizandoDesde = 'precio';
+        document.getElementById('np_margen_pct').value = ((precio - costo) / costo * 100).toFixed(1);
+        _actualizandoDesde = null;
+      }
+      actualizarPreview(costo, precio);
+    };
+
+    document.getElementById('np_costo').addEventListener('input', onCostoOMargen);
+    document.getElementById('np_margen_pct').addEventListener('input', onCostoOMargen);
+    document.getElementById('np_precio').addEventListener('input', onPrecio);
 
     // Guardar
     document.getElementById('np_guardar').addEventListener('click', async () => {
@@ -2164,18 +2197,24 @@ export async function renderCatalogo(container, db) {
         await setDoc(doc(db, 'catalogo', codigo), nuevo);
         invalidateCacheByPrefix('catalogo');
         _touchCatalogoMeta(db).catch(() => {});
-        await cargarDatos();
+
+        // Agregar al array local sin re-fetchear Firestore
+        const nuevoLocal = { ...nuevo, ultima_actualizacion: new Date() };
+        allProductos.push(nuevoLocal);
+        allProductos.sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
+        filtrados = [...allProductos];
         renderStats();
+
         msgEl.innerHTML = `<div style="padding:12px;background:#f0fdf4;border-radius:8px;color:#166534">Producto <b>${nombre}</b> guardado correctamente.</div>`;
         // Limpiar formulario
-        ['np_nombre','np_codigo','np_barra','np_prov','np_marca','np_costo','np_precio','np_stock'].forEach(id => {
+        ['np_nombre','np_codigo','np_barra','np_prov','np_marca','np_costo','np_precio','np_stock','np_margen_pct'].forEach(id => {
           const el = document.getElementById(id);
           if (el) el.value = '';
         });
         document.getElementById('np_cat').value = '';
         document.getElementById('np_margen').style.display = 'none';
       } catch(e) {
-        msgEl.innerHTML = `<div style="padding:10px;background:#fef2f2;border-radius:8px;color:#dc2626">Error: Error: ${e.message}</div>`;
+        msgEl.innerHTML = `<div style="padding:10px;background:#fef2f2;border-radius:8px;color:#dc2626">Error: ${e.message}</div>`;
       }
       btn.disabled = false; btn.textContent = 'Guardar Producto';
     });
