@@ -428,9 +428,10 @@ class ProductsView(QWidget):
             pat_norm = f'%{normalize(w)}%'
             clauses.append(
                 "(UPPER(name) LIKE ? OR UPPER(barcode) LIKE ? OR UPPER(description) LIKE ? OR UPPER(category) LIKE ?"
+                " OR UPPER(firebase_id) LIKE ?"
                 " OR UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(name,'Á','A'),'É','E'),'Í','I'),'Ó','O'),'Ú','U'),'Ü','U'),'Ñ','N')) LIKE ?)"
             )
-            params.extend([pat, pat, pat, pat, pat_norm])
+            params.extend([pat, pat, pat, pat, pat, pat_norm])
 
         return ' AND '.join(clauses), params
 

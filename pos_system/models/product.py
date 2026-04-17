@@ -92,9 +92,9 @@ class Product:
         params = []
         
         if search:
-            query += " AND (name LIKE ? OR barcode LIKE ? OR description LIKE ?)"
+            query += " AND (name LIKE ? OR barcode LIKE ? OR description LIKE ? OR firebase_id LIKE ?)"
             search_term = f"%{search}%"
-            params.extend([search_term, search_term, search_term])
+            params.extend([search_term, search_term, search_term, search_term])
         
         if category:
             query += " AND category = ?"
