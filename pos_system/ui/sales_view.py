@@ -413,8 +413,8 @@ class ProductSearchDialog(QDialog):
                 words = [w for w in text.split() if w]
                 for w in words:
                     pat = f'%{w.upper()}%'
-                    clauses.append("(UPPER(name) LIKE ? OR UPPER(barcode) LIKE ?)")
-                    params.extend([pat, pat])
+                    clauses.append("(UPPER(name) LIKE ? OR UPPER(barcode) LIKE ? OR UPPER(firebase_id) LIKE ?)")
+                    params.extend([pat, pat, pat])
 
             if not clauses:
                 self._show_hint()
