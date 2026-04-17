@@ -1099,8 +1099,14 @@ class SalesView(QWidget):
         self.barcode_field.clear()
         self._hide_suggestions()
 
-        # Buscar primero por código exacto
+        # Buscar por barcode o código interno (exacto)
         product = self.product_model.get_by_barcode(code)
+        if not product:
+            rows = self.db.execute_query(
+                "SELECT * FROM products WHERE UPPER(firebase_id) = UPPER(?) LIMIT 1",
+                (code,)
+            )
+            product = rows[0] if rows else None
 
         # Si no hay coincidencia exacta, intentar búsqueda parcial
         if not product:
@@ -1172,9 +1178,10 @@ class SalesView(QWidget):
             # Esto permite que "lapiz" encuentre "LÁPIZ" y viceversa
             clauses.append(
                 "(UPPER(name) LIKE ? OR UPPER(barcode) LIKE ? OR UPPER(description) LIKE ? OR UPPER(category) LIKE ?"
+                " OR UPPER(firebase_id) LIKE ?"
                 " OR UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(name,'Á','A'),'É','E'),'Í','I'),'Ó','O'),'Ú','U'),'Ü','U'),'Ñ','N')) LIKE ?)"
             )
-            params.extend([pat, pat, pat, pat, pat_norm])
+            params.extend([pat, pat, pat, pat, pat, pat_norm])
         where = ' AND '.join(clauses)
         query = f"""SELECT * FROM products WHERE {where}
                     ORDER BY is_favorite DESC, name ASC LIMIT {limit}"""
@@ -1633,8 +1640,14 @@ class SalesView(QWidget):
 
         self._hide_suggestions()
 
-        # Buscar por código de barras primero (exacto)
+        # Buscar por código de barras o código interno (exacto)
         product = self.product_model.get_by_barcode(search_text)
+        if not product:
+            rows = self.db.execute_query(
+                "SELECT * FROM products WHERE UPPER(firebase_id) = UPPER(?) LIMIT 1",
+                (search_text,)
+            )
+            product = rows[0] if rows else None
 
         if product:
             # Código exacto encontrado — agregar al carrito de una
