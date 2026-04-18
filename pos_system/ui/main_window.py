@@ -28,7 +28,7 @@ class MainWindow(QMainWindow):
     cloud_sync_info  = pyqtSignal(str)     # toast info  (thread-safe)
     # Señales thread-safe para eventos de caja desde Firebase
     _sig_caja_open  = pyqtSignal(int)      # reg_id abierto remotamente
-    _sig_caja_close = pyqtSignal(str)      # session_id cerrado remotamente
+    _sig_caja_close = pyqtSignal(str, int) # (session_id, register_id) cerrado remotamente
     # Señal thread-safe: admin de otra PC disparó sync → 'upload' o 'download'
     _sig_remote_sync = pyqtSignal(str, str)  # (command, pc_id)
     # Señal thread-safe: auto-update terminó (éxito/fallo)
@@ -429,8 +429,12 @@ class MainWindow(QMainWindow):
             def on_register_open(reg_id):
                 self._sig_caja_open.emit(int(reg_id))
 
-            def on_register_close(session_id=''):
-                self._sig_caja_close.emit(session_id or '')
+            def on_register_close(session_id='', register_id=None):
+                try:
+                    rid = int(register_id) if register_id else 0
+                except Exception:
+                    rid = 0
+                self._sig_caja_close.emit(session_id or '', rid)
 
             fb.start_register_listener(self.db, on_open=on_register_open, on_close=on_register_close)
 
@@ -479,18 +483,37 @@ class MainWindow(QMainWindow):
                         if existing:
                             self.refresh_all_views()
                             return
-                        # Caja activa local (ya sincronizada por start_register_listener)
+                        # Caja a la que pertenece la venta: preferir la de la venta remota,
+                        # sino la caja local activa (fallback).
+                        remote_reg_id = _sale.get('cash_register_id')
+                        try:
+                            remote_reg_id = int(remote_reg_id) if remote_reg_id else None
+                        except Exception:
+                            remote_reg_id = None
                         current = self.cash_register.get_current()
-                        cash_register_id = current['id'] if current else None
-                        # Parsear fecha
+                        local_open_id = current['id'] if current else None
+                        cash_register_id = remote_reg_id or local_open_id
+                        # Parsear fecha: convertir siempre a hora AR para matchear ventas locales
                         created_at_raw = _sale.get('created_at')
                         if hasattr(created_at_raw, 'timestamp'):
-                            from datetime import timezone as _tz
+                            from datetime import timezone as _tz, timedelta as _td
+                            _ar = _tz(_td(hours=-3))
                             created_at = datetime.fromtimestamp(
                                 created_at_raw.timestamp(), tz=_tz.utc
-                            ).strftime('%Y-%m-%d %H:%M:%S')
+                            ).astimezone(_ar).strftime('%Y-%m-%d %H:%M:%S')
                         elif isinstance(created_at_raw, str):
-                            created_at = created_at_raw[:19].replace('T', ' ')
+                            # ISO con offset (ej. '2026-04-18T10:30:00-03:00') → hora AR
+                            try:
+                                _s = created_at_raw.replace('Z', '+00:00')
+                                _dt = datetime.fromisoformat(_s)
+                                if _dt.tzinfo is not None:
+                                    from datetime import timezone as _tz, timedelta as _td
+                                    _ar = _tz(_td(hours=-3))
+                                    created_at = _dt.astimezone(_ar).strftime('%Y-%m-%d %H:%M:%S')
+                                else:
+                                    created_at = _dt.strftime('%Y-%m-%d %H:%M:%S')
+                            except Exception:
+                                created_at = created_at_raw[:19].replace('T', ' ')
                         else:
                             created_at = now_ar().strftime('%Y-%m-%d %H:%M:%S')
                         total        = float(_sale.get('total_amount', 0) or 0)
@@ -508,8 +531,12 @@ class MainWindow(QMainWindow):
                              created_at, cash_register_id, cajero,
                              'Sincronizado desde otra PC')
                         )
-                        # Actualizar totales de la caja con esta venta remota
-                        if cash_register_id:
+                        # Solo actualizar totales de la caja si la venta pertenece
+                        # a la caja local actualmente ABIERTA (evita sumar ventas
+                        # de cajas viejas o de otras PCs a la caja local nueva).
+                        if (cash_register_id
+                                and local_open_id
+                                and cash_register_id == local_open_id):
                             if payment_type == 'cash':
                                 self.db.execute_update(
                                     "UPDATE cash_register SET cash_sales = cash_sales + ?, total_sales = total_sales + ? WHERE id = ?",
@@ -556,27 +583,44 @@ class MainWindow(QMainWindow):
         logger.info(f"Firebase: Caja #{reg_id} abierta remotamente → refrescando.")
         self.refresh_all_views()
 
-    def _on_caja_close_slot(self, session_id):
-        logger.info(f"Firebase: Cierre remoto detectado (sesión {session_id}).")
+    def _on_caja_close_slot(self, session_id, register_id=0):
+        logger.info(
+            f"Firebase: Cierre remoto detectado (sesión {session_id}, caja #{register_id})."
+        )
         try:
             current = self.cash_register.get_current()
-            if current:
-                sid = session_id or now_ar().strftime('%Y-%m-%d')
-                self.db.execute_update(
-                    "UPDATE cash_register SET status='closed', closing_date=?, notes=? WHERE id=?",
-                    (now_ar().isoformat(), 'Cerrado remotamente', current['id'])
+            if not current:
+                # No hay caja abierta localmente — nada que cerrar
+                self.refresh_all_views()
+                return
+
+            # Si el evento trae register_id, SOLO cerrar si matchea la caja local abierta.
+            # Evita que un 'closed' stale en caja_activa/current cierre una caja
+            # recién abierta en otra PC.
+            if register_id and int(register_id) != int(current['id']):
+                logger.info(
+                    f"Firebase: Cierre remoto ignorado — corresponde a caja #{register_id}, "
+                    f"pero la caja local abierta es #{current['id']}."
                 )
-                try:
-                    from pos_system.models.cash_register import CashRegister as _CR
-                    from pos_system.utils.firebase_sync import get_firebase_sync
-                    rep = _CR(self.db).get_closing_report(current['id'])
-                    rep['session_id'] = sid
-                    fb2 = get_firebase_sync()
-                    if fb2:
-                        fb2.sync_cash_closing(rep, session_id=sid)
-                        logger.info(f"Firebase: Cierre #{current['id']} subido (sesión {sid}).")
-                except Exception as e2:
-                    logger.error(f"Firebase: Error subiendo cierre: {e2}")
+                self.refresh_all_views()
+                return
+
+            sid = session_id or now_ar().strftime('%Y-%m-%d')
+            self.db.execute_update(
+                "UPDATE cash_register SET status='closed', closing_date=?, notes=? WHERE id=?",
+                (now_ar().isoformat(), 'Cerrado remotamente', current['id'])
+            )
+            try:
+                from pos_system.models.cash_register import CashRegister as _CR
+                from pos_system.utils.firebase_sync import get_firebase_sync
+                rep = _CR(self.db).get_closing_report(current['id'])
+                rep['session_id'] = sid
+                fb2 = get_firebase_sync()
+                if fb2:
+                    fb2.sync_cash_closing(rep, session_id=sid)
+                    logger.info(f"Firebase: Cierre #{current['id']} subido (sesión {sid}).")
+            except Exception as e2:
+                logger.error(f"Firebase: Error subiendo cierre: {e2}")
         except Exception as e:
             logger.error(f"Firebase: Error cerrando caja local: {e}")
         self.refresh_all_views()
@@ -811,17 +855,18 @@ class MainWindow(QMainWindow):
                                     fb_doc_id = f"{pc_id}_{sale_id}"
                                     ref = firedb.collection('ventas').document(fb_doc_id)
                                     batch.set(ref, {
-                                        'sale_id':       int(sale_id),
-                                        'pc_id':         pc_id,
-                                        'created_at':    created_at,
-                                        'payment_type':  s.get('payment_type', ''),
-                                        'total_amount':  float(s.get('total_amount', 0) or 0),
-                                        'cash_received': float(s.get('cash_received', 0) or 0),
-                                        'change_given':  float(s.get('change_given', 0) or 0),
-                                        'items_count':   len(items) if items else int(s.get('items_count', 0) or 0),
-                                        'productos':     productos_str,
-                                        'username':      s.get('username') or str(s.get('user_id', '')),
-                                        'discount':      float(s.get('discount', 0) or 0),
+                                        'sale_id':          int(sale_id),
+                                        'pc_id':            pc_id,
+                                        'created_at':       created_at,
+                                        'payment_type':     s.get('payment_type', ''),
+                                        'total_amount':     float(s.get('total_amount', 0) or 0),
+                                        'cash_received':    float(s.get('cash_received', 0) or 0),
+                                        'change_given':     float(s.get('change_given', 0) or 0),
+                                        'items_count':      len(items) if items else int(s.get('items_count', 0) or 0),
+                                        'productos':        productos_str,
+                                        'username':         s.get('username') or str(s.get('user_id', '')),
+                                        'discount':         float(s.get('discount', 0) or 0),
+                                        'cash_register_id': int(s.get('cash_register_id') or 0) or None,
                                     })
                                     count += 1
                                     if count % 500 == 0:

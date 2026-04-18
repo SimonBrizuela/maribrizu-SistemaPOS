@@ -359,18 +359,19 @@ class FirebaseSync:
                 pc_id  = _get_pc_id()
                 fb_doc_id = f"{pc_id}_{sale_id}"   # único por PC → no pisan ventas de otras PCs
                 doc = {
-                    'sale_id':       int(sale_id),
-                    'pc_id':         pc_id,
-                    'created_at':    created_at,
-                    'payment_type':  sale.get('payment_type', ''),
-                    'total_amount':  float(sale.get('total_amount', 0) or 0),
-                    'cash_received': float(sale.get('cash_received', 0) or 0),
-                    'change_given':  float(sale.get('change_given', 0) or 0),
-                    'items_count':   len(items) if items else int(sale.get('items_count', 0) or 0),
-                    'productos':     productos_str,
-                    'username':      cajero,
-                    'cajero':        cajero,
-                    'discount':      float(sale.get('discount', 0) or 0),
+                    'sale_id':          int(sale_id),
+                    'pc_id':            pc_id,
+                    'created_at':       created_at,
+                    'payment_type':     sale.get('payment_type', ''),
+                    'total_amount':     float(sale.get('total_amount', 0) or 0),
+                    'cash_received':    float(sale.get('cash_received', 0) or 0),
+                    'change_given':     float(sale.get('change_given', 0) or 0),
+                    'items_count':      len(items) if items else int(sale.get('items_count', 0) or 0),
+                    'productos':        productos_str,
+                    'username':         cajero,
+                    'cajero':           cajero,
+                    'discount':         float(sale.get('discount', 0) or 0),
+                    'cash_register_id': int(sale.get('cash_register_id') or 0) or None,
                 }
                 self.db.collection('ventas').document(fb_doc_id).set(doc, merge=True)
                 logger.debug(f"Firebase: Venta #{sale_id} ({pc_id}) sincronizada.")
@@ -1120,22 +1121,32 @@ class FirebaseSync:
                 logger.error(f"Firebase: Error subiendo apertura de caja: {e}")
         self._run(_do)
 
-    def sync_close_register(self, session_id: str = None):
+    def sync_close_register(self, session_id: str = None, register_id: int = None):
         """
         Marca la caja activa como cerrada en Firestore.
         Llamar cuando el admin cierra la caja.
+        Incluye register_id para que otras PCs cierren solo la caja correcta.
         """
         if not self.enabled:
             return
         _sid = session_id or now_ar().strftime('%Y-%m-%d')
+        _rid = None
+        try:
+            _rid = int(register_id) if register_id else None
+        except Exception:
+            _rid = None
         def _do():
             try:
-                self.db.collection('caja_activa').document('current').set({
+                payload = {
                     'status':     'closed',
                     'session_id': _sid,
                     'updated_at': now_ar_iso(),
-                }, merge=True)
-                logger.info("Firebase: Caja marcada como cerrada.")
+                }
+                if _rid:
+                    payload['id'] = _rid
+                    payload['register_id'] = _rid
+                self.db.collection('caja_activa').document('current').set(payload, merge=True)
+                logger.info(f"Firebase: Caja #{_rid} marcada como cerrada.")
             except Exception as e:
                 logger.error(f"Firebase: Error cerrando caja en Firebase: {e}")
         self._run(_do)
@@ -1215,12 +1226,14 @@ class FirebaseSync:
                 if row['status'] == 'open':
                     logger.info(f"Firebase: Caja #{remote_id} ya está abierta localmente.")
                     return remote_id
-                # Existe pero cerrada → solo actualizar estado, sin tocar las ventas asociadas
-                db_manager.execute_update(
-                    "UPDATE cash_register SET status='open', initial_amount=?, opening_date=?, notes=? WHERE id=?",
-                    (initial, opening_date_str, notes, remote_id)
+                # Existe pero localmente cerrada: NO re-abrir automáticamente.
+                # El estado local es la fuente de verdad del cierre (evita que
+                # datos stale en 'caja_activa/current' revivan cajas cerradas).
+                logger.info(
+                    f"Firebase: Caja #{remote_id} figura abierta en Firebase pero está cerrada localmente. "
+                    "Se mantiene cerrada (no se reabre)."
                 )
-                logger.info(f"Firebase: Caja #{remote_id} actualizada a 'open' localmente.")
+                return None
             else:
                 # No existe → insertar nueva (sin OR REPLACE para no violar FK)
                 db_manager.execute_update(
@@ -1284,7 +1297,10 @@ class FirebaseSync:
                         on_open(reg_id)  # emite señal Qt (thread-safe)
                 elif status == 'closed':
                     if on_close:
-                        on_close(data.get('session_id', ''))
+                        # Pasar register_id si vino en el payload; el handler decide
+                        # si cierra la caja local (solo si matchea el id).
+                        reg_id = data.get('register_id') or data.get('id')
+                        on_close(data.get('session_id', ''), reg_id)
         try:
             ref = self.db.collection('caja_activa').document('current')
             watcher = ref.on_snapshot(_watch)

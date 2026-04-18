@@ -164,7 +164,8 @@ class Sale:
             query += " AND payment_type = ?"
             params.append(payment_type)
         
-        query += " ORDER BY created_at DESC"
+        # Orden estable: desempate por id para ventas con el mismo timestamp.
+        query += " ORDER BY created_at DESC, id DESC"
         return self.db.execute_query(query, tuple(params))
     
     def get_today_sales(self) -> List[Dict]:

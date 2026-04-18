@@ -429,7 +429,10 @@ class CashView(QWidget):
                     if fb:
                         session_id = now_ar().strftime('%Y-%m-%d')
                         closing_report['session_id'] = session_id
-                        fb.sync_close_register(session_id=session_id)
+                        fb.sync_close_register(
+                            session_id=session_id,
+                            register_id=current_register['id'],
+                        )
                         fb.sync_cash_closing(closing_report, session_id=session_id)
                 except Exception:
                     pass
