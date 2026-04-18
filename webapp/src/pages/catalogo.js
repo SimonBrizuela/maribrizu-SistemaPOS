@@ -330,6 +330,19 @@ async function _touchCatalogoMeta(db) {
   } catch(e) { /* silently ignore */ }
 }
 
+/**
+ * Registra un "tombstone" de producto eliminado en catalogo_deleted/{id}.
+ * El POS consulta esta colección filtrando por deleted_at > last_sync
+ * para eliminar solo los productos borrados desde el último sync.
+ */
+export async function _registerCatalogoDeleted(db, docId) {
+  try {
+    await setDoc(doc(db, 'catalogo_deleted', docId), {
+      deleted_at: serverTimestamp(),
+    });
+  } catch(e) { /* silently ignore */ }
+}
+
 export async function renderCatalogo(container, db) {
   // Estado local
   let allProductos = [];
@@ -932,6 +945,7 @@ export async function renderCatalogo(container, db) {
         if (!confirm('¿Eliminar este producto del catálogo?')) return;
         const id = btn.dataset.id;
         await deleteDoc(doc(db, 'catalogo', id));
+        await _registerCatalogoDeleted(db, id);
         invalidateCacheByPrefix('catalogo');
         _touchCatalogoMeta(db).catch(() => {});
         allProductos = allProductos.filter(p => p.doc_id !== id);

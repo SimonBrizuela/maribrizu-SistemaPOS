@@ -11,6 +11,7 @@ import {
   collection, getDocs, doc, updateDoc, deleteDoc, writeBatch, serverTimestamp,
 } from 'firebase/firestore';
 import { invalidateCacheByPrefix } from '../cache.js';
+import { _registerCatalogoDeleted } from './catalogo.js';
 
 function fmt(n) {
   return Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -379,6 +380,7 @@ export async function renderArticulosUnicos(container, db) {
     if (!confirm(`¿Eliminar "${p.nombre}"?\nEsta acción no se puede deshacer.`)) return;
     try {
       await deleteDoc(doc(db, 'catalogo', p._id));
+      await _registerCatalogoDeleted(db, p._id);
       invalidateCacheByPrefix('catalogo');
       items.splice(ii, 1);
       renderGrupos(document.getElementById('searchVariantes').value);

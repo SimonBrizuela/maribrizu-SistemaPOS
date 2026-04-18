@@ -220,8 +220,8 @@ class ProductSearchDialog(QDialog):
 
         # Tabla de resultados
         self.table = QTableWidget()
-        self.table.setColumnCount(5)
-        self.table.setHorizontalHeaderLabels(['Producto', 'Código', 'Categoría', 'Precio', 'Stock'])
+        self.table.setColumnCount(4)
+        self.table.setHorizontalHeaderLabels(['Producto', 'Código', 'Precio', 'Stock'])
         self.table.verticalHeader().setVisible(False)
         self.table.setSelectionBehavior(QTableWidget.SelectRows)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -232,7 +232,6 @@ class ProductSearchDialog(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.table.setStyleSheet('''
             QTableWidget { border: 1.5px solid #e2e8f0; border-radius: 8px; gridline-color: #f1f5f9; }
             QTableWidget::item { padding: 6px; }
@@ -377,7 +376,7 @@ class ProductSearchDialog(QDialog):
 
     def _show_hint(self):
         self.table.setRowCount(1)
-        self.table.setSpan(0, 0, 1, 5)
+        self.table.setSpan(0, 0, 1, 4)
         item = QTableWidgetItem('Escribí para buscar productos...')
         item.setTextAlignment(Qt.AlignCenter)
         item.setForeground(QColor('#94a3b8'))
@@ -434,16 +433,15 @@ class ProductSearchDialog(QDialog):
             name_item.setData(Qt.UserRole, p)  # guardar datos en el item de nombre
             self.table.setItem(row, 0, name_item)
             self.table.setItem(row, 1, QTableWidgetItem(str(p.get('barcode', '') or '')))
-            self.table.setItem(row, 2, QTableWidgetItem(str(p.get('category', '') or '')))
             price_item = QTableWidgetItem(f"${float(p.get('price', 0)):,.2f}")
             price_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.table.setItem(row, 3, price_item)
+            self.table.setItem(row, 2, price_item)
             stock = p.get('stock', 0)
             stock_item = QTableWidgetItem(str(stock if stock is not None else 0))
             stock_item.setTextAlignment(Qt.AlignCenter)
             if stock is not None and stock <= 0:
                 stock_item.setForeground(QColor('#dc3545'))
-            self.table.setItem(row, 4, stock_item)
+            self.table.setItem(row, 3, stock_item)
 
         n = len(results)
         self.result_count_lbl.setText(f'{n} resultado{"s" if n != 1 else ""} encontrado{"s" if n != 1 else ""}')

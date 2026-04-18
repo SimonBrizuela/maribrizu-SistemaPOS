@@ -67,6 +67,14 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // ── TOMBSTONES DE CATÁLOGO ────────────────────────────────────────────────
+    // Cuando se borra un producto en la webapp se escribe un doc aquí con
+    // deleted_at = serverTimestamp(). El POS consulta estos tombstones
+    // filtrando por deleted_at > last_sync y borra solo los matches locales.
+    match /catalogo_deleted/{productoId} {
+      allow read, write: if true;
+    }
+
     // ── RUBROS ────────────────────────────────────────────────────────────────
     // Colección maestra de rubros y sub-rubros.
     // El POS tiene un listener en tiempo real sobre esta colección.

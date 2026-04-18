@@ -328,6 +328,82 @@ class DownloadWorker(QThread):
                 f'{productos_actualizados} actualizados · '
                 f'(total Firebase: {total_fb})', 'ok')
 
+            # ── PASO 3.5: Aplicar tombstones de productos eliminados ─────
+            # La webapp escribe un doc en catalogo_deleted/{id} con deleted_at
+            # al borrar un producto. Acá consultamos solo los tombstones nuevos
+            # desde el último sync → O(borrados) en lugar de O(catálogo).
+            productos_eliminados = 0
+            productos_no_borrables = 0
+            try:
+                self.log_message.emit(
+                    'Aplicando eliminaciones pendientes...', 'info')
+
+                if _local_epoch > 0:
+                    since_dt = _dt.datetime.fromtimestamp(
+                        _local_epoch, tz=_dt.timezone.utc)
+                    deleted_docs = list(
+                        fb.db.collection('catalogo_deleted')
+                          .where('deleted_at', '>', since_dt)
+                          .stream()
+                    )
+                else:
+                    # Primer sync: traer todos los tombstones conocidos
+                    deleted_docs = list(
+                        fb.db.collection('catalogo_deleted').stream()
+                    )
+
+                fb_deleted_ids = {str(d.id) for d in deleted_docs}
+
+                if fb_deleted_ids:
+                    # Borrar solo los productos locales cuyo firebase_id
+                    # aparece en los tombstones → un SELECT y un DELETE.
+                    ids_list = list(fb_deleted_ids)
+                    CHUNK = 500  # SQLite tiene límite de vars por query
+                    rows_to_delete = []
+                    for i in range(0, len(ids_list), CHUNK):
+                        chunk = ids_list[i:i + CHUNK]
+                        placeholders = ','.join(['?'] * len(chunk))
+                        rows = db.execute_query(
+                            f"SELECT id, name, firebase_id FROM products "
+                            f"WHERE firebase_id IN ({placeholders})",
+                            tuple(chunk)
+                        ) or []
+                        rows_to_delete.extend(rows)
+
+                    for r in rows_to_delete:
+                        try:
+                            db.execute_update(
+                                "DELETE FROM products WHERE id = ?",
+                                (r['id'],)
+                            )
+                            productos_eliminados += 1
+                        except Exception as e:
+                            productos_no_borrables += 1
+                            logger.debug(
+                                f"No se pudo borrar producto "
+                                f"{r['id']} ({r.get('name')}): {e}"
+                            )
+
+                    if productos_eliminados:
+                        self.log_message.emit(
+                            f'{productos_eliminados} productos eliminados '
+                            f'(borrados en Firebase).', 'ok')
+                    if productos_no_borrables:
+                        self.log_message.emit(
+                            f'{productos_no_borrables} productos quedaron '
+                            f'locales por tener ventas asociadas.', 'warn')
+                    if not rows_to_delete:
+                        self.log_message.emit(
+                            f'{len(fb_deleted_ids)} tombstone(s) sin match '
+                            f'local (ya estaban borrados).', 'info')
+                else:
+                    self.log_message.emit(
+                        'No hay productos eliminados desde el último sync.',
+                        'info')
+            except Exception as e:
+                self.log_message.emit(
+                    f'Error aplicando eliminaciones: {e}', 'warn')
+
             # ── PASO 4: Precios remotos — solo novedades ──────────────────
             step = 3
             self.step_changed.emit('Aplicando precios y datos actualizados...')
@@ -449,6 +525,7 @@ class DownloadWorker(QThread):
                 f'{rubros_nuevos} rubros nuevos · '
                 f'{productos_nuevos} productos nuevos · '
                 f'{productos_actualizados + precios_actualizados} actualizados · '
+                f'{productos_eliminados} eliminados · '
                 f'{productos_sin_cambios + precios_sin_cambios} ya estaban al día'
             )
             self.log_message.emit('', 'info')
