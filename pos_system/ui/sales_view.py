@@ -512,6 +512,9 @@ class SalesView(QWidget):
         self._all_products = []          # cache local de productos
         # Cache de promociones de Firebase (actualizadas en tiempo real)
         self._firebase_promos = []
+        # Historial de búsquedas (expira 4 min): lista de (termino, timestamp)
+        self._search_history = []
+        self._history_popup = None
         self.init_ui()
         self._start_firebase_listener()
         self.inventory_updated.connect(self.refresh_data)
@@ -731,6 +734,8 @@ class SalesView(QWidget):
         # Tipeo manual → sugerencias en tiempo real
         self.barcode_field.textChanged.connect(self._on_search_text_changed)
         self.barcode_field.returnPressed.connect(self.search_product)
+        # Historial de búsquedas: mostrar popup al recibir foco con campo vacío
+        self.barcode_field.installEventFilter(self)
         search_row.addWidget(self.barcode_field, 1)
 
         search_btn = QPushButton('Buscar')
@@ -1057,21 +1062,106 @@ class SalesView(QWidget):
 
     def _open_search_dialog(self):
         """Abre el diálogo de búsqueda ampliada de productos."""
+        initial_text = self.barcode_field.text().strip()
+        if initial_text:
+            self._add_to_search_history(initial_text)
+        self._open_search_dialog_with_text(initial_text)
+
+    def _open_search_dialog_with_text(self, text: str):
+        """Abre (o reusa) el diálogo ampliado con un texto inicial dado."""
         if hasattr(self, '_search_dialog') and self._search_dialog:
+            if text:
+                self._search_dialog.search_input.setText(text)
             self._search_dialog.activateWindow()
             self._search_dialog.raise_()
             return
-        initial_text = self.barcode_field.text().strip()
         rubro = getattr(self, '_selected_category', None)
         subcat = getattr(self, '_selected_subcategory', None)
         dlg = ProductSearchDialog(
-            parent=self, db=self.db, initial_text=initial_text,
+            parent=self, db=self.db, initial_text=text or '',
             rubro=rubro, subcategory=subcat, cart=list(self.cart)
         )
         dlg.product_selected.connect(self._on_product_selected_from_dialog)
         self._search_dialog = dlg
         dlg.exec_()
         self._search_dialog = None
+
+    # ── Historial de búsquedas (expira en 4 min) ──
+    def eventFilter(self, obj, event):
+        from PyQt5.QtCore import QEvent
+        if obj is getattr(self, 'barcode_field', None):
+            # Mostrar SOLO al clickear sobre el campo de búsqueda
+            if event.type() == QEvent.MouseButtonPress:
+                self._show_history_popup()
+            elif event.type() == QEvent.FocusOut:
+                # Cerrar el popup al perder foco; delay corto para permitir click en un ítem
+                QTimer.singleShot(120, self._hide_history_popup)
+            elif event.type() == QEvent.KeyPress:
+                if event.key() == Qt.Key_Escape:
+                    self._hide_history_popup()
+        return super().eventFilter(obj, event)
+
+    def _prune_search_history(self):
+        import time
+        cutoff = time.time() - 240  # 4 minutos
+        self._search_history = [(t, ts) for (t, ts) in self._search_history if ts >= cutoff]
+
+    def _add_to_search_history(self, text: str):
+        import time
+        text = (text or '').strip()
+        if len(text) < 2:
+            return
+        self._prune_search_history()
+        lower = text.lower()
+        self._search_history = [(t, ts) for (t, ts) in self._search_history if t.lower() != lower]
+        self._search_history.insert(0, (text, time.time()))
+        self._search_history = self._search_history[:6]
+
+    def _show_history_popup(self):
+        self._prune_search_history()
+        if not self._search_history or self.barcode_field.text().strip():
+            return
+        if self._history_popup is None:
+            self._history_popup = QListWidget(self)
+            self._history_popup.setFocusPolicy(Qt.NoFocus)
+            self._history_popup.setFrameShape(QFrame.NoFrame)
+            self._history_popup.setStyleSheet('''
+                QListWidget {
+                    background: white;
+                    border: 1.5px solid #ced4da;
+                    border-radius: 6px;
+                    padding: 4px;
+                    font-size: 12px;
+                    outline: none;
+                }
+                QListWidget::item { padding: 6px 10px; border-radius: 4px; color: #495057; }
+                QListWidget::item:hover { background: #eef2ff; color: #4338ca; }
+                QListWidget::item:selected { background: #e0e7ff; color: #3730a3; }
+            ''')
+            self._history_popup.itemClicked.connect(self._on_history_item_clicked)
+        self._history_popup.clear()
+        for term, _ts in self._search_history:
+            item = QListWidgetItem(f'Recientes:  {term}')
+            item.setData(Qt.UserRole, term)
+            self._history_popup.addItem(item)
+        top_left = self.barcode_field.mapTo(self, self.barcode_field.rect().bottomLeft())
+        w = max(220, self.barcode_field.width())
+        h = min(30 * len(self._search_history) + 16, 220)
+        self._history_popup.setGeometry(top_left.x(), top_left.y() + 2, w, h)
+        self._history_popup.raise_()
+        self._history_popup.show()
+
+    def _hide_history_popup(self):
+        if self._history_popup and self._history_popup.isVisible():
+            self._history_popup.hide()
+
+    def _on_history_item_clicked(self, item):
+        term = item.data(Qt.UserRole)
+        self._hide_history_popup()
+        if not term:
+            return
+        self._add_to_search_history(term)
+        self._open_search_dialog_with_text(term)
 
     def _on_product_selected_from_dialog(self, product: dict):
         """Agrega al carrito el producto seleccionado desde el diálogo ampliado."""
@@ -1188,6 +1278,8 @@ class SalesView(QWidget):
     def _on_search_text_changed(self, text: str):
         """Tipeo manual — buscar en BD, mostrar sugerencias Y auto-abrir diálogo ampliado."""
         text = text.strip()
+        # Ocultar popup de historial apenas el usuario empieza a escribir
+        self._hide_history_popup()
         if len(text) < 1:
             self._hide_suggestions()
             # Si hay un rubro/favoritos activos, mantener esa vista; si no, limpiar
@@ -1221,24 +1313,11 @@ class SalesView(QWidget):
 
     def _auto_open_search_dialog(self):
         """Abre el diálogo de búsqueda ampliada si no está ya abierto."""
-        if hasattr(self, '_search_dialog') and self._search_dialog:
-            text = self.barcode_field.text().strip()
-            if text:
-                self._search_dialog.search_input.setText(text)
-            return
         text = self.barcode_field.text().strip()
         if len(text) < 2:
             return
-        rubro = getattr(self, '_selected_category', None)
-        subcat = getattr(self, '_selected_subcategory', None)
-        dlg = ProductSearchDialog(
-            parent=self, db=self.db, initial_text=text,
-            rubro=rubro, subcategory=subcat, cart=list(self.cart)
-        )
-        dlg.product_selected.connect(self._on_product_selected_from_dialog)
-        self._search_dialog = dlg
-        dlg.exec_()
-        self._search_dialog = None
+        self._add_to_search_history(text)
+        self._open_search_dialog_with_text(text)
 
     def _hide_suggestions(self):
         """Compatibilidad — ya no hay dropdown de sugerencias."""
@@ -1637,6 +1716,7 @@ class SalesView(QWidget):
             return
 
         self._hide_suggestions()
+        self._hide_history_popup()
 
         # Buscar por código de barras o código interno (exacto)
         product = self.product_model.get_by_barcode(search_text)
@@ -1653,27 +1733,13 @@ class SalesView(QWidget):
             self.barcode_field.clear()
             return
 
-        # Búsqueda fuzzy multi-palabra — mostrar resultados en la tabla
-        try:
-            query, params = self._build_fuzzy_query(search_text, limit=50)
-            results = self.db.execute_query(query, params) if query else []
-        except Exception:
-            results = []
-
-        if not results:
-            QMessageBox.warning(self, 'Sin resultados',
-                                f'No se encontro ningun producto con: {search_text}')
-            return
-
-        if len(results) == 1:
-            # Un solo resultado — agregar directo al carrito
-            self.add_to_cart(results[0])
-            self.barcode_field.clear()
-        else:
-            # Mostrar resultados en la tabla para que el usuario elija
-            self._all_products = results
-            self._populate_products_table(results)
-            self.barcode_field.clear()
+        # Sin match exacto → abrir diálogo ampliado instantáneo con el texto
+        # (cancela el timer de auto-apertura para evitar doble ventana)
+        if hasattr(self, '_auto_open_timer'):
+            self._auto_open_timer.stop()
+        self._add_to_search_history(search_text)
+        self.barcode_field.clear()
+        self._open_search_dialog_with_text(search_text)
             
     def add_to_cart_from_table(self):
         selected_row = self.products_table.currentRow()
