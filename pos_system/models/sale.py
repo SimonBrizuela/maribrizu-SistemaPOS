@@ -97,8 +97,7 @@ class Sale:
             from pos_system.utils.firebase_sync import get_firebase_sync
             fb = get_firebase_sync()
             if fb:
-                now = datetime.now() if hasattr(datetime, 'now') else __import__('datetime').datetime.now()
-                # Get all sales for this month
+                now = now_ar()
                 month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
                 month_sales = self.get_all(
                     start_date=month_start.strftime('%Y-%m-%d 00:00:00'),
@@ -263,15 +262,15 @@ class Sale:
     
     def get_today_sales(self) -> List[Dict]:
         """Obtiene las ventas del día actual"""
-        today = datetime.now().strftime("%Y-%m-%d")
+        today = now_ar().strftime("%Y-%m-%d")
         return self.get_all(start_date=f"{today} 00:00:00", end_date=f"{today} 23:59:59")
-    
+
     def get_sales_summary(self, start_date: str = None, end_date: str = None) -> Dict:
         """Obtiene resumen de ventas"""
         if not start_date:
-            start_date = datetime.now().strftime("%Y-%m-%d") + " 00:00:00"
+            start_date = now_ar().strftime("%Y-%m-%d") + " 00:00:00"
         if not end_date:
-            end_date = datetime.now().strftime("%Y-%m-%d") + " 23:59:59"
+            end_date = now_ar().strftime("%Y-%m-%d") + " 23:59:59"
             
         query = """
             SELECT 
@@ -331,7 +330,7 @@ class Sale:
     def get_sales_by_hour(self, date: str = None) -> List[Dict]:
         """Obtiene las ventas agrupadas por hora"""
         if not date:
-            date = datetime.now().strftime("%Y-%m-%d")
+            date = now_ar().strftime("%Y-%m-%d")
         
         query = """
             SELECT 

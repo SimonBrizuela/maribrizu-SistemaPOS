@@ -78,6 +78,7 @@ class FacturaDialog(QDialog):
         self.cliente_data = cliente_data
         self.pdf_path = None
         self._notas_prefill = notas
+        self.es_varios_2 = bool((sale or {}).get('is_varios_2'))
         self._setup_emisor_data()
         self.init_ui()
         if perfil:
@@ -703,8 +704,8 @@ class FacturaDialog(QDialog):
                 """INSERT INTO facturas
                    (sale_id, tipo_comprobante, punto_venta, nro_comprobante, fecha,
                     cliente, cuit_cliente, cae, vto_cae, total, iva_contenido,
-                    otros_impuestos, pdf_path)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    otros_impuestos, pdf_path, es_varios_2)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     self.sale.get('id'),
                     tipo,
@@ -719,6 +720,7 @@ class FacturaDialog(QDialog):
                     iva,
                     0.0,
                     self.pdf_path,
+                    1 if self.es_varios_2 else 0,
                 )
             )
 
@@ -731,6 +733,7 @@ class FacturaDialog(QDialog):
                     factura_fb = dict(factura)
                     factura_fb['sale_id'] = self.sale.get('id')
                     factura_fb['created_at'] = now_ar_iso()
+                    factura_fb['es_varios_2'] = bool(self.es_varios_2)
                     threading.Thread(
                         target=lambda: fb.sync_factura(factura_fb), daemon=True
                     ).start()

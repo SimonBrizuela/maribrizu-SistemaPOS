@@ -22,13 +22,10 @@ from pos_system.utils.pdf_generator import PDFGenerator
 class CartQuantitySpinBox(QSpinBox):
     """QSpinBox para cantidad de items del carrito.
 
-    Diferencias vs QSpinBox estándar:
-      - keyboardTracking = False → valueChanged sólo dispara al confirmar
-        (Enter/Tab/perder foco/botones), evitando que el rebuild de la tabla
-        interrumpa el tipeo.
-      - Rueda del mouse INVERTIDA: scroll hacia abajo = aumenta cantidad
-        (1, 2, 3, 4, 5…), scroll hacia arriba = disminuye. Pedido explícito
-        del usuario para sumar items "rodando" la rueda hacia abajo.
+    - keyboardTracking=False: valueChanged solo dispara al confirmar.
+    - Rueda del mouse deshabilitada: el scroll se delega al padre para
+      permitir desplazar la ventana sin alterar la cantidad por accidente.
+      Para cambiar cantidad: tipear, flechas del teclado o botones +/-.
     """
 
     def __init__(self, parent=None):
@@ -37,22 +34,7 @@ class CartQuantitySpinBox(QSpinBox):
         self.setFocusPolicy(Qt.StrongFocus)
 
     def wheelEvent(self, event):
-        # Ignorar si no tiene foco: evita cambios accidentales al scrollear
-        # la tabla/lista de productos.
-        if not self.hasFocus():
-            event.ignore()
-            return
-        delta = event.angleDelta().y()
-        if delta == 0:
-            event.ignore()
-            return
-        steps = abs(delta) // 120 or 1
-        # Invertido: wheel hacia abajo (delta < 0) → +steps
-        if delta < 0:
-            self.setValue(self.value() + steps)
-        else:
-            self.setValue(self.value() - steps)
-        event.accept()
+        event.ignore()
 
 
 class BarcodeScanner(QLineEdit):
@@ -798,6 +780,29 @@ class SalesView(QWidget):
         ''')
         varios_btn.clicked.connect(self._add_varios_item)
         search_row.addWidget(varios_btn)
+
+        # Botón "Varios 2" — SOLO FACTURA AFIP (no afecta caja, historial ni ventas)
+        # Solo visible para Administrador.
+        if (self.current_user or {}).get('role') == 'admin':
+            varios2_btn = QPushButton('Varios 2')
+            varios2_btn.setMinimumHeight(40)
+            varios2_btn.setMinimumWidth(90)
+            varios2_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
+            varios2_btn.setToolTip(
+                'Item solo para facturar a AFIP — NO suma a caja, historial ni ventas.\n'
+                'Al cobrar se emite factura directa sin registrar la venta.\n'
+                'No se puede mezclar con items normales en el mismo carrito.'
+            )
+            varios2_btn.setStyleSheet('''
+                QPushButton {
+                    background: #7c3aed; color: white;
+                    border: none; border-radius: 6px; padding: 4px 14px;
+                }
+                QPushButton:hover { background: #6d28d9; }
+                QPushButton:pressed { background: #5b21b6; }
+            ''')
+            varios2_btn.clicked.connect(self._add_varios_2_item)
+            search_row.addWidget(varios2_btn)
 
         layout.addLayout(search_row)
 
@@ -1894,6 +1899,16 @@ class SalesView(QWidget):
         }
 
     def add_to_cart(self, product):
+        # Si el carrito tiene Varios 2, bloquear: son exclusivos (no se registran como venta).
+        if any(it.get('is_varios_2') for it in self.cart):
+            QMessageBox.warning(
+                self, 'Carrito en modo Varios 2',
+                'El carrito tiene items "Varios 2" (solo factura AFIP).\n'
+                'No se pueden mezclar con productos normales.\n\n'
+                'Cobrá los Varios 2 primero o limpiá el carrito.'
+            )
+            return
+
         stock = product['stock']
         # Stock -1 = servicio/ilimitado (sin control de stock)
         is_unlimited = (stock is None or stock == -1)
@@ -2267,6 +2282,11 @@ class SalesView(QWidget):
             QMessageBox.warning(self, 'Carrito vacio', 'Agregue productos al carrito antes de facturar')
             return
 
+        # Modo Varios 2: todos los items son is_varios_2 → flujo exclusivo factura AFIP
+        if all(it.get('is_varios_2') for it in self.cart):
+            self._emit_factura_varios_2()
+            return
+
         current_register = self.cash_register_model.get_current()
         if not current_register:
             QMessageBox.warning(self, 'Caja cerrada',
@@ -2433,6 +2453,13 @@ class SalesView(QWidget):
 
     # ── Item "Varios" (producto libre con observación opcional) ──
     def _add_varios_item(self):
+        if any(it.get('is_varios_2') for it in self.cart):
+            QMessageBox.warning(
+                self, 'Carrito en modo Varios 2',
+                'El carrito tiene items "Varios 2" (solo factura AFIP).\n'
+                'No se pueden mezclar con items normales.'
+            )
+            return
         dlg = VariosItemDialog(self)
         if dlg.exec_() != QDialog.Accepted:
             return
@@ -2495,6 +2522,123 @@ class SalesView(QWidget):
             except Exception as _e:
                 import logging as _log
                 _log.getLogger(__name__).warning(f"No se pudo guardar observación Varios: {_e}")
+
+    # ── Item "Varios 2" (SOLO factura AFIP, no afecta caja/ventas/historial) ──
+    def _add_varios_2_item(self):
+        # No mezclar con items normales: si hay algo que no es varios_2, avisar.
+        has_normal = any(not it.get('is_varios_2') for it in self.cart)
+        if has_normal:
+            QMessageBox.warning(
+                self, 'Varios 2 exclusivo',
+                'El carrito tiene items normales.\n\n'
+                '"Varios 2" emite factura AFIP directa y no registra venta,\n'
+                'por eso no se puede mezclar con items que sí se venden.\n\n'
+                'Cobrá primero los items actuales o limpiá el carrito.'
+            )
+            return
+
+        from PyQt5.QtWidgets import QInputDialog
+        unit_price, ok = QInputDialog.getDouble(
+            self, 'Varios 2 — Solo Factura AFIP',
+            'Monto a facturar:', 0.0, 0.0, 99999999.0, 2
+        )
+        if not ok or unit_price <= 0:
+            return
+
+        cart_item = {
+            'product_id':      0,
+            'product_name':    'Varios 2',
+            'quantity':        1,
+            'unit_price':      float(unit_price),
+            'original_price':  float(unit_price),
+            'discount_type':   None,
+            'discount_value':  0,
+            'discount_amount': 0,
+            'promo_id':        None,
+            'promo_label':     '',
+            'subtotal':        round(float(unit_price), 2),
+            'max_stock':       9999,
+            'category':        'Varios 2',
+            'is_varios_2':     True,
+        }
+        self.cart.append(cart_item)
+        self.update_cart_display()
+
+    def _emit_factura_varios_2(self):
+        """Flujo exclusivo para items Varios 2: factura AFIP directa,
+        sin crear venta, sin tocar caja/historial/control total."""
+        from PyQt5.QtWidgets import QMessageBox, QInputDialog
+        from pos_system.ui.factura_dialog import FacturaDialog
+        from pos_system.ui.cliente_perfil_dialog import ClientePerfilDialog
+
+        # Cargar perfiles ARCA activos
+        perfiles = self.db.execute_query(
+            "SELECT * FROM perfiles_facturacion WHERE activo=1 ORDER BY nombre ASC"
+        ) or []
+        if not perfiles:
+            QMessageBox.warning(
+                self, 'Sin perfil ARCA',
+                'No hay perfiles de facturación cargados.\n'
+                'Creá uno en Fiscal → Perfiles ARCA.'
+            )
+            return
+
+        if len(perfiles) == 1:
+            perfil = perfiles[0]
+        else:
+            nombres = [f"{p['nombre']} — CUIT {p.get('cuit', '')}" for p in perfiles]
+            choice, ok = QInputDialog.getItem(
+                self, 'Perfil ARCA',
+                'Seleccioná el emisor para facturar:',
+                nombres, 0, False
+            )
+            if not ok:
+                return
+            perfil = perfiles[nombres.index(choice)]
+
+        # Cliente opcional (por defecto Consumidor Final)
+        cliente_data = None
+        reply = QMessageBox.question(
+            self, 'Cliente',
+            '¿Facturar a Consumidor Final?\n(No = elegir cliente cargado)',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+        )
+        if reply == QMessageBox.No:
+            dlg_cli = ClientePerfilDialog(self)
+            if dlg_cli.exec_() == QDialog.Accepted and dlg_cli.selected_cliente:
+                cliente_data = dlg_cli.selected_cliente
+
+        total = sum(it['subtotal'] for it in self.cart)
+        synthetic_sale = {
+            'id':            None,
+            'items':         list(self.cart),
+            'total_amount':  total,
+            'payment_type':  'cash',
+            'payment_subtype': 'Efectivo',
+            'is_varios_2':   True,
+        }
+
+        fac_dlg = FacturaDialog(
+            self, sale=synthetic_sale, auto_virtual=False,
+            perfil=perfil, cliente_data=cliente_data, notas=''
+        )
+        fac_dlg.es_varios_2 = True
+        accepted = fac_dlg.exec_() == QDialog.Accepted
+
+        if accepted and fac_dlg.pdf_path:
+            resp = QMessageBox.question(
+                self, 'Factura emitida',
+                f'Factura Varios 2 emitida por ${total:,.2f}\n'
+                '(no se registró venta ni movimiento de caja).\n\n'
+                '¿Abrir el PDF?',
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+            )
+            if resp == QMessageBox.Yes:
+                self.open_pdf(fac_dlg.pdf_path)
+
+            self.cart = []
+            self.update_cart_display()
+            self.reset_category_filter()
 
 
 class PaymentDialog(QDialog):

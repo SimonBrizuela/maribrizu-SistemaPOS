@@ -344,6 +344,11 @@ class DatabaseManager:
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_facturas_sale ON facturas(sale_id)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_facturas_fecha ON facturas(created_at)")
+            # Marca facturas emitidas por items "Varios 2" (no afectan caja/historial/ventas)
+            try:
+                cursor.execute("ALTER TABLE facturas ADD COLUMN es_varios_2 INTEGER DEFAULT 0")
+            except Exception:
+                pass
 
             # Tabla de perfiles de facturación ARCA (emisores / dueños)
             # Cada perfil es una persona/entidad con su propio CUIT y cuenta ARCA

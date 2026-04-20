@@ -878,10 +878,22 @@ class ProductDialog(QDialog):
         self.stock_max_input.setToolTip('Stock máximo / ideal para reposición. Solo informativo.')
         layout.addRow('Stock máximo (ideal):', self.stock_max_input)
 
+        barcode_row = QHBoxLayout()
         self.barcode_input = QLineEdit()
         self.barcode_input.setFont(QFont('Arial', 10))
-        layout.addRow('Código de Barras:', self.barcode_input)
-        
+        barcode_row.addWidget(self.barcode_input, 1)
+
+        self._gen_codes_btn = QPushButton('Generar código + barra')
+        self._gen_codes_btn.setObjectName('btnSecondary')
+        self._gen_codes_btn.setToolTip(
+            'Genera un código interno (AUTO-N) y un código de barras (POSN) únicos '
+            'que no colisionen con otros productos.'
+        )
+        self._gen_codes_btn.clicked.connect(self._on_generate_codes)
+        barcode_row.addWidget(self._gen_codes_btn)
+
+        layout.addRow('Código de Barras:', barcode_row)
+
         self.category_input = QComboBox()
         self.category_input.setEditable(True)
         self.category_input.setFont(QFont('Arial', 10))
@@ -1036,12 +1048,40 @@ class ProductDialog(QDialog):
             pixmap = QPixmap(file_path)
             self.image_label.setPixmap(pixmap.scaled(150, 150, Qt.KeepAspectRatio))
             
+    def _on_generate_codes(self):
+        from pos_system.utils.code_generator import generate_unique_codes
+        try:
+            codigo, barcode = generate_unique_codes(self.db)
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'No se pudieron generar códigos: {e}')
+            return
+        self.barcode_input.setText(barcode)
+        self._generated_codigo_interno = codigo
+        QMessageBox.information(
+            self, 'Códigos generados',
+            f'Código interno: {codigo}\nCódigo de barras: {barcode}\n\n'
+            'Se asignarán al guardar.'
+        )
+
     def save_product(self):
         # Validar campos
         if not self.name_input.text():
             QMessageBox.warning(self, 'Error', 'El nombre es obligatorio')
             return
-            
+
+        # Auto-generar códigos si faltan y es un producto nuevo
+        from pos_system.utils.code_generator import generate_unique_codes
+        barcode_val = self.barcode_input.text().strip()
+        firebase_id_val = getattr(self, '_generated_codigo_interno', None)
+        if not self.product and not barcode_val:
+            try:
+                auto_codigo, auto_barcode = generate_unique_codes(self.db)
+                barcode_val = auto_barcode
+                firebase_id_val = firebase_id_val or auto_codigo
+                self.barcode_input.setText(auto_barcode)
+            except Exception:
+                pass
+
         # Preparar datos
         dtype = self.discount_type_combo.currentData() or None
         dval  = self.discount_value_spin.value() if dtype else 0.0
@@ -1051,13 +1091,15 @@ class ProductDialog(QDialog):
             'price': self.price_input.value(),
             'cost': self.cost_input.value(),
             'stock': self.stock_input.value(),
-            'barcode': self.barcode_input.text() or None,
+            'barcode': barcode_val or None,
             'category': self.category_input.currentText() or None,
             'discount_type': dtype,
             'discount_value': dval,
             'stock_min': self.stock_min_input.value() or None,
             'stock_max': self.stock_max_input.value() or None,
         }
+        if not self.product and firebase_id_val:
+            product_data['firebase_id'] = firebase_id_val
         
         # Guardar imagen si hay una nueva
         if self.image_path and (not self.product or self.image_path != self.product.get('image_path')):

@@ -229,7 +229,7 @@ function parseCatalogoCSV(text) {
     // Saltar productos vacíos o marcados como *
     if (!nombre || nombre === '*' || nombre === '') continue;
 
-    const codigo = (cols[idx.codigo] || '').trim();
+    const codigo = limpiarCodigo(cols[idx.codigo]);
     const costo = parseNum(cols[idx.costo]);
     const costoNeo = parseNum(cols[idx.costoNeo]);
     const precioVenta = costoNeo > 0 ? costoNeo : costo;
@@ -241,7 +241,7 @@ function parseCatalogoCSV(text) {
     const producto = {
       codigo,
       nombre: nombre.toUpperCase(),
-      cod_barra: (cols[idx.codBarra] || '').trim(),
+      cod_barra: limpiarCodigo(cols[idx.codBarra]),
       rubro:     idx.rubro >= 0 ? (cols[idx.rubro] || '').toUpperCase().trim() : '',
       categoria: normalizarCategoria(cols[idx.subRubro] || ''),
       proveedor: (cols[idx.proveedor] || 'SIN PROVEEDOR').trim(),
@@ -289,6 +289,199 @@ async function subirCatalogoFirebase(db, productos, onProgress) {
   _touchCatalogoMeta(db).catch(() => {});
 }
 
+// ── Limpia códigos: quita espacios internos y caracteres invisibles ───────────
+function limpiarCodigo(s) {
+  return (s || '').toString().replace(/\s+/g, '').trim();
+}
+
+// ── Generador de códigos internos y de barras únicos ──────────────────────────
+// Patrón:
+//   - codigo (interno): AUTO-{n}
+//   - cod_barra: POS{n}
+// Escanea `productosExistentes` (allProductos) para encontrar el próximo n libre.
+function _maxNumericoPorPrefijo(productos, campo, regex) {
+  let max = 0;
+  for (const p of productos) {
+    const v = (p?.[campo] || '').toString().trim();
+    const m = regex.exec(v);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      if (!isNaN(n) && n > max) max = n;
+    }
+  }
+  return max;
+}
+
+function generarCodigosUnicos(productosExistentes, pendientesNuevos = []) {
+  // Incluir los pendientes para no colisionar entre sí en una misma sesión
+  const pool = [...productosExistentes, ...pendientesNuevos];
+  const maxAuto = _maxNumericoPorPrefijo(pool, 'codigo', /^AUTO-(\d+)$/);
+  const maxPos  = _maxNumericoPorPrefijo(pool, 'cod_barra', /^POS(\d+)$/);
+  let candAuto = maxAuto + 1;
+  let candPos  = maxPos + 1;
+  const existeAuto = new Set(pool.map(p => (p?.codigo || '').toString().trim()));
+  const existePos  = new Set(pool.map(p => (p?.cod_barra || '').toString().trim()));
+  while (existeAuto.has(`AUTO-${candAuto}`)) candAuto++;
+  while (existePos.has(`POS${candPos}`)) candPos++;
+  return { codigo: `AUTO-${candAuto}`, cod_barra: `POS${candPos}` };
+}
+
+// ── Parser flexible de CSV de proveedor ───────────────────────────────────────
+// Soporta formatos variados:
+//   - Producto, Codigo, Costo (Montenegro estándar)
+//   - Tipo de producto, Marca, Modelo, Descripción, Publico, Revendedor (Sellos Sanchez)
+//   - Columnas con variantes de acentos, mayúsculas, etc.
+// Detecta filas de sección (todo en mayúscula sin precio) y las usa como categoría.
+function _norm(s) {
+  return (s || '').toString().toUpperCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '').trim();
+}
+
+// Parsea números tolerando símbolos ($, espacios) y ambos formatos:
+//   "2,500.00" (US: coma miles, punto decimal)
+//   "2.500,00" (AR/ES: punto miles, coma decimal)
+//   "2500", "2500.00", "2,50"
+function parseMoneyFlexible(s) {
+  if (!s) return 0;
+  let c = String(s).replace(/[\$€£¥]/g, '').replace(/\s+/g, '').trim();
+  if (!c || c === '*' || c === '-') return 0;
+  const hasComma = c.includes(',');
+  const hasDot = c.includes('.');
+  if (hasComma && hasDot) {
+    if (c.lastIndexOf(',') > c.lastIndexOf('.')) {
+      c = c.replace(/\./g, '').replace(',', '.');
+    } else {
+      c = c.replace(/,/g, '');
+    }
+  } else if (hasComma) {
+    const parts = c.split(',');
+    if (parts.length === 2 && parts[1].length === 3) {
+      c = c.replace(/,/g, '');
+    } else {
+      c = c.replace(',', '.');
+    }
+  }
+  const n = parseFloat(c);
+  return isNaN(n) ? 0 : n;
+}
+
+function parseProveedorFlexible(text) {
+  const lines = text.split(/\r?\n/);
+  let headerIdx = -1;
+  let headers = [];
+
+  // Buscar la primer fila que tenga al menos una columna identificable como nombre
+  for (let i = 0; i < Math.min(lines.length, 8); i++) {
+    const cand = parseCSVLine(lines[i]);
+    if (!cand.length) continue;
+    const normed = cand.map(_norm);
+    const hasName = normed.some(h =>
+      ['PRODUCTO', 'NOMBRE', 'DESCRIPCION', 'ARTICULO', 'ITEM'].includes(h)
+    );
+    if (hasName) {
+      headerIdx = i;
+      headers = cand;
+      break;
+    }
+  }
+  if (headerIdx < 0) return [];
+
+  const normed = headers.map(_norm);
+  const findCol = (opts) => normed.findIndex(h => opts.includes(h));
+  const findColContains = (opts) => normed.findIndex(h => opts.some(o => h.includes(o)));
+
+  const idxNombre    = findCol(['PRODUCTO', 'NOMBRE', 'DESCRIPCION', 'ARTICULO', 'ITEM']);
+  const idxDescExtra = findColContains(['DESCRIPCION', 'DETALLE']);
+  const idxTipo      = findColContains(['TIPO DE PRODUCTO', 'TIPO', 'RUBRO', 'CATEGORIA']);
+  const idxModelo    = findCol(['MODELO', 'CODIGO', 'COD', 'COD PRODUCTO', 'COD. PRODUCTO']);
+  const idxBarra     = findCol(['COD BARRA', 'CODBARRA', 'COD_BARRA', 'CODIGO DE BARRAS', 'EAN']);
+  const idxMarca     = findCol(['MARCA']);
+  const idxSubRubro  = findCol(['SUB RUBRO', 'SUB_RUBRO', 'SUBRUBRO', 'CATEGORIA']);
+  const idxCosto     = findCol(['COSTO', 'PRECIO', 'PRECIO COSTO', 'REVENDEDOR', 'REVENTA', 'MAYORISTA']);
+  const idxVenta     = findCol(['PUBLICO', 'PRECIO PUBLICO', 'VENTA', 'PRECIO VENTA', 'PRECIO FINAL']);
+
+  const result = [];
+  const seen = new Map();
+  let currentSection = '';
+
+  for (let i = headerIdx + 1; i < lines.length; i++) {
+    const raw = lines[i];
+    if (!raw || !raw.trim()) continue;
+    const cols = parseCSVLine(raw);
+
+    const nombreBase = idxNombre >= 0 ? (cols[idxNombre] || '').trim() : '';
+    const descExtra  = idxDescExtra >= 0 && idxDescExtra !== idxNombre ? (cols[idxDescExtra] || '').trim() : '';
+    const modelo     = idxModelo >= 0 ? (cols[idxModelo] || '').trim() : '';
+
+    const costo = idxCosto >= 0 ? parseMoneyFlexible(cols[idxCosto]) : 0;
+    const venta = idxVenta >= 0 ? parseMoneyFlexible(cols[idxVenta]) : 0;
+
+    // Fila de sección: un solo campo con valor, sin precios → actualizar sección
+    const nonEmptyCount = cols.filter(c => (c || '').trim()).length;
+    if (nonEmptyCount === 1 && costo === 0 && venta === 0) {
+      const sec = cols.find(c => (c || '').trim()) || '';
+      if (sec && !/\d/.test(sec)) {
+        currentSection = sec.trim().toUpperCase();
+        continue;
+      }
+    }
+
+    // Sin nombre ni descripción → skip
+    if (!nombreBase && !descExtra && !modelo) continue;
+
+    // Sin precios → skip (probablemente header secundario o nota)
+    if (costo === 0 && venta === 0) continue;
+
+    // Armar nombre: prioridad descripción > nombre base, anteponiendo tipo y modelo si existen
+    const tipo = idxTipo >= 0 ? (cols[idxTipo] || '').trim() : '';
+    let nombreFinal;
+    if (descExtra && nombreBase) {
+      nombreFinal = `${nombreBase} ${descExtra}`.trim();
+    } else {
+      nombreFinal = descExtra || nombreBase;
+    }
+    if (modelo && !nombreFinal.toUpperCase().includes(modelo.toUpperCase())) {
+      nombreFinal = `${nombreFinal} ${modelo}`.trim();
+    }
+    if (tipo && !nombreFinal.toUpperCase().includes(tipo.toUpperCase())) {
+      nombreFinal = `${tipo} ${nombreFinal}`.trim();
+    }
+    nombreFinal = nombreFinal.toUpperCase().replace(/\s+/g, ' ').trim();
+    if (!nombreFinal || nombreFinal === '*') continue;
+
+    const key = slugify(nombreFinal);
+    if (seen.has(key)) continue;
+    seen.set(key, result.length);
+
+    const costoFinal = costo > 0 ? costo : venta;
+    const precioVenta = venta > 0 ? venta : costo;
+
+    result.push({
+      codigo:       limpiarCodigo(modelo),
+      nombre:       nombreFinal,
+      cod_barra:    idxBarra >= 0 ? limpiarCodigo(cols[idxBarra]) : '',
+      rubro:        currentSection || (tipo.toUpperCase()) || '',
+      categoria:    normalizarCategoria(
+                      (idxSubRubro >= 0 ? cols[idxSubRubro] : '') || currentSection || tipo
+                    ),
+      proveedor:    'SIN PROVEEDOR',
+      marca:        idxMarca >= 0 ? (cols[idxMarca] || 'SIN MARCA').toUpperCase().trim() : 'SIN MARCA',
+      moneda:       'PESOS',
+      costo:        costoFinal,
+      precio_venta: precioVenta,
+      stock:        0,
+      estado:       costoFinal === 0 ? 'sin_precio' : 'activo',
+      duplicado:    false,
+      margen_original: costoFinal > 0 && precioVenta > 0
+        ? Math.round(((precioVenta - costoFinal) / costoFinal) * 100)
+        : 0,
+      ultima_actualizacion: serverTimestamp(),
+      historial_precios: [],
+    });
+  }
+
+  return result;
+}
+
 // ── Parsear CSV de proveedor (Montenegro) ─────────────────────────────────────
 function parseProveedorCSV(text) {
   const lines = text.split(/\r?\n/).filter(l => l.trim());
@@ -306,9 +499,9 @@ function parseProveedorCSV(text) {
     const nombre = (cols[idxNombre >= 0 ? idxNombre : 1] || '').trim();
     if (!nombre || nombre === '*') continue;
     result.push({
-      codigo:    idxCod >= 0 ? (cols[idxCod] || '').trim() : '',
+      codigo:    idxCod >= 0 ? limpiarCodigo(cols[idxCod]) : '',
       nombre:    nombre.toUpperCase(),
-      cod_barra: idxBarra >= 0 ? (cols[idxBarra] || '').trim() : '',
+      cod_barra: idxBarra >= 0 ? limpiarCodigo(cols[idxBarra]) : '',
       costo:     idxCosto >= 0 ? parseNum(cols[idxCosto]) : 0,
       categoria: normalizarCategoria(cols[idxSubRubro >= 0 ? idxSubRubro : -1] || ''),
     });
@@ -1237,8 +1430,8 @@ export async function renderCatalogo(container, db) {
       const nuevoSubRubro = (overlay.querySelector('#ed_subrubro').value || '').trim().toUpperCase();
       const nuevaMarca    = (overlay.querySelector('#ed_marca').value || '').trim().toUpperCase() || 'SIN MARCA';
       const nuevoProv     = (overlay.querySelector('#ed_proveedor').value || '').trim() || 'SIN PROVEEDOR';
-      const nuevoCodigo   = (overlay.querySelector('#ed_codigo').value || '').trim();
-      const barraRaw      = (overlay.querySelector('#ed_barra').value || '').trim();
+      const nuevoCodigo   = limpiarCodigo(overlay.querySelector('#ed_codigo').value);
+      const barraRaw      = limpiarCodigo(overlay.querySelector('#ed_barra').value);
       const nuevoBarra    = /^[A-Za-z0-9\-_]{3,50}$/.test(barraRaw) ? barraRaw : '';
       const nuevoCosto    = parseFloat(inCosto.value) || 0;
       const nuevoPrecio   = parseFloat(inPrecio.value) || 0;
@@ -1841,7 +2034,7 @@ export async function renderCatalogo(container, db) {
   // ── Tab Actualizar Proveedor ──
   function renderTabProveedor(tc) {
     tc.innerHTML = `
-      <div class="table-card" style="max-width:700px">
+      <div class="table-card" style="max-width:100%;width:100%">
         <div class="table-card-header"><h3>Comparar con Lista de Proveedor</h3></div>
         <div style="padding:20px;display:flex;flex-direction:column;gap:16px">
           <p style="color:var(--text-muted);font-size:14px;margin:0">
@@ -1878,7 +2071,18 @@ export async function renderCatalogo(container, db) {
       result.innerHTML = `<div style="text-align:center;padding:20px;color:var(--text-muted)">Comparando...</div>`;
       try {
         const text = await file.text();
-        const provProductos = parseCatalogoCSV(text);
+        // Intentar primero el parser estándar; si trae 0, usar el flexible
+        let provProductos = parseCatalogoCSV(text);
+        if (!provProductos.length) {
+          provProductos = parseProveedorFlexible(text);
+        }
+        if (!provProductos.length) {
+          result.innerHTML = `<div style="padding:14px;background:#fef2f2;border-radius:8px;color:#991b1b">
+            No se pudieron leer productos del CSV. Revisá que el archivo tenga columnas como
+            <b>Producto</b>/<b>Descripción</b> y <b>Costo</b>/<b>Precio</b>/<b>Publico</b>.
+          </div>`;
+          return;
+        }
         const provMap = new Map();
         provProductos.forEach(p => provMap.set(slugify(p.nombre), p));
 
@@ -1894,21 +2098,29 @@ export async function renderCatalogo(container, db) {
             nuevos.push(p);
           } else {
             const cat = catMap.get(key);
-            if (Math.abs((cat.costo || 0) - (p.costo || 0)) > 0.01) {
-              cambioPrecio.push({ ...p, costo_anterior: cat.costo, doc_id: cat.doc_id });
+            const costoCambio = Math.abs((cat.costo || 0) - (p.costo || 0)) > 0.01;
+            const ventaCambio = Math.abs((cat.precio_venta || 0) - (p.precio_venta || 0)) > 0.01 && (p.precio_venta || 0) > 0;
+            if (costoCambio || ventaCambio) {
+              cambioPrecio.push({
+                ...p,
+                costo_anterior: cat.costo || 0,
+                precio_venta_anterior: cat.precio_venta || 0,
+                doc_id: cat.doc_id,
+              });
             } else {
               sinCambio.push(p);
             }
           }
         });
 
-        const yaNoEstan = [];
+        // "Coincidencias": productos del catálogo cuyo nombre aparece en la lista del proveedor.
+        // Solo estos se pueden borrar (opcional). No se tocan productos que no estén en la lista.
+        const coincidencias = [];
         allProductos.forEach(p => {
-          if (!provMap.has(slugify(p.nombre))) yaNoEstan.push(p);
+          if (provMap.has(slugify(p.nombre))) coincidencias.push(p);
         });
 
-        // Cambios pendientes de aprobación
-        let pendientes = { nuevos: [...nuevos], cambioPrecio: [...cambioPrecio], yaNoEstan: [...yaNoEstan] };
+        let pendientes = { nuevos: [...nuevos], cambioPrecio: [...cambioPrecio], coincidencias: [...coincidencias] };
 
         result.innerHTML = `
           <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:16px">
@@ -1921,8 +2133,8 @@ export async function renderCatalogo(container, db) {
               <div style="font-size:12px;color:#92400e">Precios cambiaron</div>
             </div>
             <div style="flex:1;min-width:120px;padding:12px;background:#fef2f2;border-radius:8px;border:1px solid #fca5a5;text-align:center">
-              <div style="font-size:24px;font-weight:700;color:#991b1b">${yaNoEstan.length}</div>
-              <div style="font-size:12px;color:#dc2626">Ya no están</div>
+              <div style="font-size:24px;font-weight:700;color:#991b1b">${coincidencias.length}</div>
+              <div style="font-size:12px;color:#dc2626">Coincidencias en catálogo</div>
             </div>
             <div style="flex:1;min-width:120px;padding:12px;background:var(--surface);border-radius:8px;border:1px solid var(--border);text-align:center">
               <div style="font-size:24px;font-weight:700">${sinCambio.length}</div>
@@ -1932,15 +2144,36 @@ export async function renderCatalogo(container, db) {
 
           ${nuevos.length > 0 ? `
           <div class="table-card" style="margin-bottom:12px">
-            <div class="table-card-header" style="padding:12px 16px">
-              <h4 style="margin:0">Productos nuevos del proveedor</h4>
+            <div class="table-card-header" style="padding:12px 16px;display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+              <h4 style="margin:0;flex:1;min-width:200px">Productos nuevos del proveedor</h4>
+              <button id="btnGenCodigosTodos" style="padding:6px 12px;background:#6366f1;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px">Generar códigos a todos</button>
               <button id="btnAprobarNuevos" style="padding:6px 14px;background:var(--primary);color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px">✓ Agregar todos (${nuevos.length})</button>
             </div>
-            <div class="table-wrap"><table>
-              <thead><tr><th>Nombre</th><th>Costo</th><th>Categoría</th></tr></thead>
-              <tbody>${nuevos.slice(0,20).map(p => `<tr><td>${p.nombre}</td><td>$${fmt(p.costo)}</td><td>${p.categoria}</td></tr>`).join('')}
-              ${nuevos.length > 20 ? `<tr><td colspan="3" style="text-align:center;color:var(--text-muted);font-size:12px">... y ${nuevos.length-20} más</td></tr>` : ''}
-              </tbody>
+            <div class="table-wrap" style="max-height:500px;overflow:auto"><table style="min-width:1200px;table-layout:fixed">
+              <thead style="position:sticky;top:0;background:var(--surface);z-index:1"><tr>
+                <th style="min-width:420px;white-space:nowrap">Nombre</th>
+                <th style="width:100px;white-space:nowrap">Costo</th>
+                <th style="width:110px;white-space:nowrap">Precio venta</th>
+                <th style="min-width:160px;white-space:nowrap">Categoría</th>
+                <th style="width:110px;white-space:nowrap">Código</th>
+                <th style="width:110px;white-space:nowrap">Cód. barra</th>
+                <th style="width:95px;white-space:nowrap">Acciones</th>
+              </tr></thead>
+              <tbody id="nuevosTbody">${nuevos.map((p, i) => `
+                <tr data-idx="${i}">
+                  <td><input class="nv_nom" data-idx="${i}" type="text" value="${(p.nombre || '').replace(/"/g,'&quot;')}" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--surface);color:var(--text);box-sizing:border-box" /></td>
+                  <td><input class="nv_cos" data-idx="${i}" type="number" min="0" step="0.01" value="${p.costo || 0}" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--surface);color:var(--text);box-sizing:border-box" /></td>
+                  <td><input class="nv_pv"  data-idx="${i}" type="number" min="0" step="0.01" value="${p.precio_venta || 0}" style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--surface);color:var(--text);box-sizing:border-box" /></td>
+                  <td>
+                    <select class="nv_cat" data-idx="${i}" style="width:100%;padding:5px 6px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--surface);color:var(--text);box-sizing:border-box">
+                      ${[...new Set([p.categoria, ...allProductos.map(x => x.categoria)])].filter(Boolean).sort().map(c => `<option value="${c}"${c === p.categoria ? ' selected' : ''}>${c}</option>`).join('')}
+                    </select>
+                  </td>
+                  <td><input class="nv_cod" data-idx="${i}" type="text" value="${(p.codigo || '').replace(/"/g,'&quot;')}" placeholder="AUTO-..." style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--surface);color:var(--text);box-sizing:border-box" /></td>
+                  <td><input class="nv_bar" data-idx="${i}" type="text" value="${(p.cod_barra || '').replace(/"/g,'&quot;')}" placeholder="POS..." style="width:100%;padding:5px 8px;border:1px solid var(--border);border-radius:4px;font-size:12px;background:var(--surface);color:var(--text);box-sizing:border-box" /></td>
+                  <td><button class="nv_gen" data-idx="${i}" style="padding:5px 10px;background:#6366f1;color:#fff;border:none;border-radius:4px;cursor:pointer;font-size:11px;white-space:nowrap;width:100%">Generar</button></td>
+                </tr>
+              `).join('')}</tbody>
             </table></div>
           </div>` : ''}
 
@@ -1950,38 +2183,130 @@ export async function renderCatalogo(container, db) {
               <h4 style="margin:0">Productos con cambio de precio</h4>
               <button id="btnAprobarPrecios" style="padding:6px 14px;background:#d97706;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px">✓ Actualizar todos (${cambioPrecio.length})</button>
             </div>
-            <div class="table-wrap"><table>
-              <thead><tr><th>Nombre</th><th>Costo anterior</th><th>Nuevo costo</th><th>Diferencia</th></tr></thead>
-              <tbody>${cambioPrecio.slice(0,20).map(p => {
-                const diff = p.costo - p.costo_anterior;
+            <div class="table-wrap" style="max-height:500px;overflow:auto"><table style="min-width:900px">
+              <thead style="position:sticky;top:0;background:var(--surface);z-index:1"><tr>
+                <th style="min-width:280px">Nombre</th>
+                <th style="white-space:nowrap">Costo anterior</th>
+                <th style="white-space:nowrap">Nuevo costo</th>
+                <th style="white-space:nowrap">P. venta anterior</th>
+                <th style="white-space:nowrap">Nuevo p. venta</th>
+                <th style="white-space:nowrap">Diferencia</th>
+              </tr></thead>
+              <tbody>${cambioPrecio.map(p => {
+                const diff = (p.costo || 0) - (p.costo_anterior || 0);
                 const color = diff > 0 ? '#dc2626' : '#16a34a';
                 const sign = diff > 0 ? '+' : '';
-                return `<tr><td>${p.nombre}</td><td>$${fmt(p.costo_anterior)}</td><td>$${fmt(p.costo)}</td><td style="color:${color};font-weight:700">${sign}$${fmt(diff)}</td></tr>`;
-              }).join('')}
-              ${cambioPrecio.length > 20 ? `<tr><td colspan="4" style="text-align:center;color:var(--text-muted);font-size:12px">... y ${cambioPrecio.length-20} más</td></tr>` : ''}
-              </tbody>
+                const diffVenta = (p.precio_venta || 0) - (p.precio_venta_anterior || 0);
+                const colorVenta = diffVenta > 0 ? '#dc2626' : '#16a34a';
+                const signVenta = diffVenta > 0 ? '+' : '';
+                return `<tr>
+                  <td>${p.nombre}</td>
+                  <td>$${fmt(p.costo_anterior)}</td>
+                  <td>$${fmt(p.costo)}</td>
+                  <td>$${fmt(p.precio_venta_anterior)}</td>
+                  <td style="color:${colorVenta};font-weight:700">$${fmt(p.precio_venta)}${diffVenta !== 0 ? ` (${signVenta}$${fmt(diffVenta)})` : ''}</td>
+                  <td style="color:${color};font-weight:700">${sign}$${fmt(diff)}</td>
+                </tr>`;
+              }).join('')}</tbody>
             </table></div>
           </div>` : ''}
 
-          ${yaNoEstan.length > 0 ? `
+          ${coincidencias.length > 0 ? `
           <div class="table-card" style="margin-bottom:12px">
             <div class="table-card-header" style="padding:12px 16px">
-              <h4 style="margin:0">Productos que ya no están en la lista del proveedor</h4>
+              <h4 style="margin:0">Coincidencias en el catálogo (según nombres del proveedor)</h4>
+              <button id="btnBorrarCoinc" style="padding:6px 14px;background:#dc2626;color:#fff;border:none;border-radius:6px;cursor:pointer;font-size:13px">Borrar seleccionados</button>
             </div>
-            <div class="table-wrap"><table>
-              <thead><tr><th>Nombre</th><th>Costo actual</th><th>Categoría</th></tr></thead>
-              <tbody>${yaNoEstan.slice(0,20).map(p => `<tr style="opacity:0.7"><td>${p.nombre}</td><td>$${fmt(p.costo)}</td><td>${p.categoria}</td></tr>`).join('')}
-              ${yaNoEstan.length > 20 ? `<tr><td colspan="3" style="text-align:center;color:var(--text-muted);font-size:12px">... y ${yaNoEstan.length-20} más</td></tr>` : ''}
-              </tbody>
+            <div class="table-wrap" style="max-height:500px;overflow:auto"><table style="min-width:800px">
+              <thead style="position:sticky;top:0;background:var(--surface);z-index:1"><tr>
+                <th style="width:32px"><input type="checkbox" id="coincSelAll" /></th>
+                <th style="min-width:280px">Nombre</th>
+                <th style="white-space:nowrap">Costo actual</th>
+                <th style="white-space:nowrap">Precio venta</th>
+                <th style="min-width:160px">Categoría</th>
+              </tr></thead>
+              <tbody>${coincidencias.map((p, i) => `<tr>
+                <td><input type="checkbox" class="coincChk" data-idx="${i}" /></td>
+                <td>${p.nombre}</td>
+                <td>$${fmt(p.costo)}</td>
+                <td>$${fmt(p.precio_venta)}</td>
+                <td>${p.categoria}</td>
+              </tr>`).join('')}</tbody>
             </table></div>
           </div>` : ''}
 
           <div id="applyMsg"></div>
         `;
 
+        // Edición inline de filas nuevas: sincronizar input → pendientes.nuevos
+        const _bindInput = (cls, prop, transform) => {
+          document.querySelectorAll(`.${cls}`).forEach(el => {
+            el.addEventListener('input', e => {
+              const idx = parseInt(e.target.dataset.idx);
+              if (isNaN(idx) || !pendientes.nuevos[idx]) return;
+              pendientes.nuevos[idx][prop] = transform ? transform(e.target.value) : e.target.value;
+            });
+            el.addEventListener('change', e => {
+              const idx = parseInt(e.target.dataset.idx);
+              if (isNaN(idx) || !pendientes.nuevos[idx]) return;
+              pendientes.nuevos[idx][prop] = transform ? transform(e.target.value) : e.target.value;
+            });
+          });
+        };
+        _bindInput('nv_nom', 'nombre', v => (v || '').toUpperCase().trim());
+        _bindInput('nv_cod', 'codigo', v => limpiarCodigo(v));
+        _bindInput('nv_bar', 'cod_barra', v => limpiarCodigo(v));
+        _bindInput('nv_cos', 'costo', v => parseFloat(v) || 0);
+        _bindInput('nv_pv',  'precio_venta', v => parseFloat(v) || 0);
+        _bindInput('nv_cat', 'categoria', v => v);
+
+        // Generar código + barra para una fila
+        document.querySelectorAll('.nv_gen').forEach(btn => {
+          btn.addEventListener('click', () => {
+            const idx = parseInt(btn.dataset.idx);
+            if (isNaN(idx) || !pendientes.nuevos[idx]) return;
+            // Excluir la fila actual del pool de colisiones para permitir regenerar
+            const poolPend = pendientes.nuevos.filter((_, i) => i !== idx);
+            const { codigo, cod_barra } = generarCodigosUnicos(allProductos, poolPend);
+            pendientes.nuevos[idx].codigo = codigo;
+            pendientes.nuevos[idx].cod_barra = cod_barra;
+            const codInput = document.querySelector(`.nv_cod[data-idx="${idx}"]`);
+            const barInput = document.querySelector(`.nv_bar[data-idx="${idx}"]`);
+            if (codInput) codInput.value = codigo;
+            if (barInput) barInput.value = cod_barra;
+          });
+        });
+
+        // Generar códigos a todas las filas que no tengan
+        document.getElementById('btnGenCodigosTodos')?.addEventListener('click', () => {
+          const poolPend = [];
+          pendientes.nuevos.forEach((p, idx) => {
+            const tieneCod = (p.codigo || '').toString().trim();
+            const tieneBar = (p.cod_barra || '').toString().trim();
+            if (tieneCod && tieneBar) { poolPend.push(p); return; }
+            const { codigo, cod_barra } = generarCodigosUnicos(allProductos, poolPend);
+            if (!tieneCod) p.codigo = codigo;
+            if (!tieneBar) p.cod_barra = cod_barra;
+            poolPend.push(p);
+            const codInput = document.querySelector(`.nv_cod[data-idx="${idx}"]`);
+            const barInput = document.querySelector(`.nv_bar[data-idx="${idx}"]`);
+            if (codInput && !tieneCod) codInput.value = p.codigo;
+            if (barInput && !tieneBar) barInput.value = p.cod_barra;
+          });
+        });
+
         document.getElementById('btnAprobarNuevos')?.addEventListener('click', async () => {
           const btn = document.getElementById('btnAprobarNuevos');
           btn.disabled = true; btn.textContent = 'Agregando...';
+          // Asegurar que todos tengan código (sino, subirCatalogoFirebase puede colisionar con slugify)
+          const poolPend = [];
+          pendientes.nuevos.forEach(p => {
+            if (!(p.codigo || '').toString().trim()) {
+              const { codigo } = generarCodigosUnicos(allProductos, poolPend);
+              p.codigo = codigo;
+            }
+            poolPend.push(p);
+          });
           await subirCatalogoFirebase(db, pendientes.nuevos, null);
           invalidateCache('catalogo:all');
           await cargarDatos();
@@ -1995,11 +2320,13 @@ export async function renderCatalogo(container, db) {
           btn.disabled = true; btn.textContent = 'Actualizando...';
           for (const p of pendientes.cambioPrecio) {
             if (p.doc_id) {
-              await updateDoc(doc(db, 'catalogo', p.doc_id), {
-                costo: p.costo,
-                estado: p.costo === 0 ? 'sin_precio' : 'activo',
+              const update = {
+                costo: p.costo || 0,
+                estado: (p.costo || 0) === 0 ? 'sin_precio' : 'activo',
                 ultima_actualizacion: serverTimestamp()
-              });
+              };
+              if ((p.precio_venta || 0) > 0) update.precio_venta = p.precio_venta;
+              await updateDoc(doc(db, 'catalogo', p.doc_id), update);
             }
           }
           _touchCatalogoMeta(db).catch(() => {});
@@ -2008,6 +2335,41 @@ export async function renderCatalogo(container, db) {
           renderStats();
           document.getElementById('applyMsg').innerHTML = `<div style="padding:10px;background:#fefce8;border-radius:8px;color:#854d0e">${pendientes.cambioPrecio.length} precios actualizados.</div>`;
           btn.textContent = '✓ Hecho';
+        });
+
+        document.getElementById('coincSelAll')?.addEventListener('change', (e) => {
+          document.querySelectorAll('.coincChk').forEach(cb => { cb.checked = e.target.checked; });
+        });
+
+        document.getElementById('btnBorrarCoinc')?.addEventListener('click', async () => {
+          const checks = [...document.querySelectorAll('.coincChk:checked')];
+          if (!checks.length) {
+            alert('No hay productos seleccionados para borrar.');
+            return;
+          }
+          if (!confirm(`Borrar ${checks.length} producto(s) del catálogo? Esta acción no se puede deshacer.`)) {
+            return;
+          }
+          const btn = document.getElementById('btnBorrarCoinc');
+          btn.disabled = true; btn.textContent = 'Borrando...';
+          let borrados = 0;
+          for (const cb of checks) {
+            const idx = parseInt(cb.dataset.idx);
+            const p = pendientes.coincidencias[idx];
+            if (p && p.doc_id) {
+              try {
+                await _registerCatalogoDeleted(db, p.doc_id);
+                await deleteDoc(doc(db, 'catalogo', p.doc_id));
+                borrados++;
+              } catch (e) { console.error('Borrando', p.doc_id, e); }
+            }
+          }
+          _touchCatalogoMeta(db).catch(() => {});
+          invalidateCache('catalogo:all');
+          await cargarDatos();
+          renderStats();
+          document.getElementById('applyMsg').innerHTML = `<div style="padding:10px;background:#fef2f2;border-radius:8px;color:#991b1b">${borrados} producto(s) borrado(s) del catálogo.</div>`;
+          btn.textContent = 'Listo';
         });
 
       } catch(e) {
@@ -2431,7 +2793,10 @@ export async function renderCatalogo(container, db) {
             </div>
             <div style="display:flex;flex-direction:column;gap:4px">
               <label style="font-size:13px;font-weight:600">Código interno</label>
-              <input id="np_codigo" type="text" placeholder="Ej: 300001" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:var(--surface);color:var(--text)" />
+              <div style="display:flex;gap:6px">
+                <input id="np_codigo" type="text" placeholder="Ej: 300001" style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:var(--surface);color:var(--text)" />
+                <button id="np_gen_codes" type="button" title="Generar código + código de barras únicos" style="padding:0 10px;background:#6366f1;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:12px;white-space:nowrap">Generar</button>
+              </div>
             </div>
             <div style="display:flex;flex-direction:column;gap:4px">
               <label style="font-size:13px;font-weight:600">Código de barras</label>
@@ -2560,6 +2925,13 @@ export async function renderCatalogo(container, db) {
     document.getElementById('np_margen_pct').addEventListener('input', onCostoOMargen);
     document.getElementById('np_precio').addEventListener('input', onPrecio);
 
+    // Generar código interno + código de barras únicos
+    document.getElementById('np_gen_codes')?.addEventListener('click', () => {
+      const { codigo, cod_barra } = generarCodigosUnicos(allProductos);
+      document.getElementById('np_codigo').value = codigo;
+      document.getElementById('np_barra').value  = cod_barra;
+    });
+
     // Guardar
     document.getElementById('np_guardar').addEventListener('click', async () => {
       const nombre = document.getElementById('np_nombre').value.trim().toUpperCase();
@@ -2573,7 +2945,7 @@ export async function renderCatalogo(container, db) {
       if (!nombre) { msgEl.innerHTML = `<div style="padding:10px;background:#fef2f2;border-radius:8px;color:#dc2626">Error: El nombre es obligatorio.</div>`; return; }
       if (!categoria || categoria === '') { msgEl.innerHTML = `<div style="padding:10px;background:#fef2f2;border-radius:8px;color:#dc2626">Error: Seleccioná una categoría.</div>`; return; }
 
-      const codigo = document.getElementById('np_codigo').value.trim() || slugify(nombre);
+      const codigo = limpiarCodigo(document.getElementById('np_codigo').value) || slugify(nombre);
 
       // Obtener el próximo pos_id único consultando el config
       let nextPosId = Date.now(); // fallback: timestamp como ID único
@@ -2591,7 +2963,7 @@ export async function renderCatalogo(container, db) {
         console.warn('No se pudo obtener pos_id_counter:', e.message);
       }
 
-      const barraRawNuevo = document.getElementById('np_barra').value.trim();
+      const barraRawNuevo = limpiarCodigo(document.getElementById('np_barra').value);
       const codBarraNuevo = /^[A-Za-z0-9\-_]{3,50}$/.test(barraRawNuevo) ? barraRawNuevo : '';
 
       const nuevo = {
@@ -3290,6 +3662,25 @@ export async function renderCatalogo(container, db) {
           </div>
         </div>
 
+        <!-- Mantenimiento -->
+        <div class="table-card">
+          <div class="table-card-header"><h3>Mantenimiento</h3></div>
+          <div style="padding:16px;display:flex;flex-direction:column;gap:12px">
+            <div style="display:flex;flex-direction:column;gap:6px">
+              <div style="font-size:14px;font-weight:600">Limpiar códigos con espacios</div>
+              <p style="font-size:12px;color:var(--text-muted);margin:0">
+                Busca productos con código interno o código de barras que tengan espacios y los corrige en Firebase.
+              </p>
+              <div style="display:flex;gap:8px;align-items:center">
+                <button id="cfg_scan_espacios" style="padding:8px 14px;background:#1877f2;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-size:13px">Escanear</button>
+                <button id="cfg_fix_espacios" disabled style="padding:8px 14px;background:#d97706;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-size:13px;opacity:0.5">Corregir todos</button>
+                <span id="cfg_scan_info" style="font-size:12px;color:var(--text-muted)"></span>
+              </div>
+              <div id="cfg_scan_list"></div>
+            </div>
+          </div>
+        </div>
+
         <div id="cfg_msg"></div>
       </div>
     `;
@@ -3317,6 +3708,74 @@ export async function renderCatalogo(container, db) {
       if (!val) return;
       document.getElementById('cfg_msg').innerHTML = `<div style="padding:10px;background:#e8f5e9;border-radius:8px;color:#2e7d32;font-size:13px">Marca "<b>${val}</b>" lista para usar al crear productos.</div>`;
       document.getElementById('cfg_nueva_marca').value = '';
+    });
+
+    // ── Mantenimiento: limpiar códigos con espacios ──
+    let _conEspacios = [];
+    document.getElementById('cfg_scan_espacios')?.addEventListener('click', () => {
+      _conEspacios = allProductos.filter(p => {
+        const cod = (p.codigo || '').toString();
+        const bar = (p.cod_barra || '').toString();
+        return /\s/.test(cod) || /\s/.test(bar);
+      });
+      const info   = document.getElementById('cfg_scan_info');
+      const listEl = document.getElementById('cfg_scan_list');
+      const btnFix = document.getElementById('cfg_fix_espacios');
+      info.textContent = `${_conEspacios.length} productos con espacios`;
+      if (!_conEspacios.length) {
+        listEl.innerHTML = `<div style="padding:10px;background:#f0fdf4;border-radius:8px;color:#166534;font-size:12px;margin-top:8px">No hay productos con espacios en los códigos.</div>`;
+        btnFix.disabled = true; btnFix.style.opacity = '0.5';
+        return;
+      }
+      btnFix.disabled = false; btnFix.style.opacity = '1';
+      const rows = _conEspacios.slice(0, 50).map(p => {
+        const cod = (p.codigo || '').toString();
+        const bar = (p.cod_barra || '').toString();
+        return `<tr>
+          <td style="padding:4px 8px;font-size:12px">${p.nombre}</td>
+          <td style="padding:4px 8px;font-size:12px;font-family:monospace">${cod.replace(/ /g, '·')}</td>
+          <td style="padding:4px 8px;font-size:12px;font-family:monospace">${bar.replace(/ /g, '·')}</td>
+        </tr>`;
+      }).join('');
+      listEl.innerHTML = `
+        <div style="max-height:260px;overflow:auto;border:1px solid var(--border);border-radius:6px;margin-top:8px">
+          <table style="width:100%;border-collapse:collapse">
+            <thead style="position:sticky;top:0;background:var(--surface);z-index:1">
+              <tr><th style="padding:6px 8px;text-align:left;font-size:11px">Nombre</th><th style="padding:6px 8px;text-align:left;font-size:11px">Código</th><th style="padding:6px 8px;text-align:left;font-size:11px">Cód. barra</th></tr>
+            </thead>
+            <tbody>${rows}</tbody>
+          </table>
+        </div>
+        ${_conEspacios.length > 50 ? `<div style="font-size:11px;color:var(--text-muted);margin-top:4px">Mostrando primeros 50 de ${_conEspacios.length}</div>` : ''}
+      `;
+    });
+
+    document.getElementById('cfg_fix_espacios')?.addEventListener('click', async () => {
+      if (!_conEspacios.length) return;
+      if (!confirm(`Corregir ${_conEspacios.length} producto(s)? Se eliminarán los espacios de los códigos.`)) return;
+      const btn  = document.getElementById('cfg_fix_espacios');
+      const info = document.getElementById('cfg_scan_info');
+      btn.disabled = true; btn.textContent = 'Corrigiendo...';
+      let fixed = 0;
+      for (const p of _conEspacios) {
+        if (!p.doc_id) continue;
+        const newCod = limpiarCodigo(p.codigo);
+        const newBar = limpiarCodigo(p.cod_barra);
+        const update = { ultima_actualizacion: serverTimestamp() };
+        if (newCod !== (p.codigo || '')) update.codigo = newCod;
+        if (newBar !== (p.cod_barra || '')) update.cod_barra = newBar;
+        try {
+          await updateDoc(doc(db, 'catalogo', p.doc_id), update);
+          p.codigo = newCod;
+          p.cod_barra = newBar;
+          fixed++;
+        } catch(e) { console.error('fix código', p.doc_id, e); }
+      }
+      _touchCatalogoMeta(db).catch(() => {});
+      invalidateCache('catalogo:all');
+      info.textContent = `${fixed} productos corregidos`;
+      btn.textContent = '✓ Hecho';
+      document.getElementById('cfg_scan_list').innerHTML = `<div style="padding:10px;background:#f0fdf4;border-radius:8px;color:#166534;font-size:12px;margin-top:8px">${fixed} productos actualizados en Firebase.</div>`;
     });
   }
 

@@ -507,11 +507,52 @@ class FiscalView(QWidget):
         action_row.addStretch()
         layout.addLayout(action_row)
 
+        # ── Panel de totales ────────────────────────────────────────────────
+        totales_row = QHBoxLayout()
+        totales_row.setSpacing(10)
+
+        def _totbox(color_bg, color_txt):
+            box = QFrame()
+            box.setStyleSheet(
+                f'background:{color_bg}; border:1px solid {color_txt}; '
+                'border-radius:8px; padding:10px 14px;'
+            )
+            v = QVBoxLayout(box)
+            v.setContentsMargins(10, 8, 10, 8)
+            v.setSpacing(2)
+            title = QLabel()
+            title.setFont(QFont('Segoe UI', 9, QFont.Bold))
+            title.setStyleSheet(f'color:{color_txt}; background:transparent; border:none;')
+            value = QLabel('$0.00')
+            value.setFont(QFont('Segoe UI', 14, QFont.Bold))
+            value.setStyleSheet(f'color:{color_txt}; background:transparent; border:none;')
+            v.addWidget(title)
+            v.addWidget(value)
+            return box, title, value
+
+        box_total, self.t_total_title, self.t_total_value = _totbox('#e7f3ff', '#084298')
+        self.t_total_title.setText('Total facturado')
+        totales_row.addWidget(box_total)
+
+        box_v2, self.t_v2_title, self.t_v2_value = _totbox('#f3e8ff', '#5b21b6')
+        self.t_v2_title.setText('Varios 2 facturado')
+        totales_row.addWidget(box_v2)
+
+        box_reg, self.t_reg_title, self.t_reg_value = _totbox('#d1e7dd', '#0a3622')
+        self.t_reg_title.setText('Facturas regulares')
+        totales_row.addWidget(box_reg)
+
+        box_cnt, self.t_cnt_title, self.t_cnt_value = _totbox('#fff3cd', '#664d03')
+        self.t_cnt_title.setText('Cant. total / Varios 2')
+        totales_row.addWidget(box_cnt)
+
+        layout.addLayout(totales_row)
+
         # Tabla
         self.h_table = QTableWidget()
-        self.h_table.setColumnCount(8)
+        self.h_table.setColumnCount(9)
         self.h_table.setHorizontalHeaderLabels(
-            ['#', 'Tipo', 'Nro.', 'Fecha', 'Cliente', 'CAE', 'Total', 'PDF']
+            ['#', 'Tipo', 'Nro.', 'Fecha', 'Cliente', 'CAE', 'Total', 'PDF', 'Origen']
         )
         self.h_table.verticalHeader().setVisible(False)
         self.h_table.setEditTriggers(QTableWidget.NoEditTriggers)
@@ -526,6 +567,7 @@ class FiscalView(QWidget):
         hh.setSectionResizeMode(5, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(6, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(7, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(8, QHeaderView.ResizeToContents)
         layout.addWidget(self.h_table)
 
         # Botón reimprimir
@@ -715,6 +757,10 @@ class FiscalView(QWidget):
                 "SELECT * FROM facturas ORDER BY created_at DESC LIMIT 500"
             )
             self.h_table.setRowCount(len(rows))
+            total_all = 0.0
+            total_v2 = 0.0
+            total_reg = 0.0
+            count_v2 = 0
             for i, r in enumerate(rows):
                 fecha_str = ''
                 try:
@@ -724,6 +770,14 @@ class FiscalView(QWidget):
 
                 cae_short = str(r.get('cae', ''))[:14] if r.get('cae') else '—'
                 has_cae = bool(r.get('cae'))
+                es_v2 = bool(r.get('es_varios_2'))
+                tot = float(r.get('total', 0) or 0)
+                total_all += tot
+                if es_v2:
+                    total_v2 += tot
+                    count_v2 += 1
+                else:
+                    total_reg += tot
 
                 self.h_table.setItem(i, 0, QTableWidgetItem(str(r['id'])))
                 self.h_table.setItem(i, 1, QTableWidgetItem(r.get('tipo_comprobante', '')))
@@ -737,7 +791,7 @@ class FiscalView(QWidget):
                 else:
                     cae_item.setForeground(QColor('#dc3545'))
                 self.h_table.setItem(i, 5, cae_item)
-                self.h_table.setItem(i, 6, QTableWidgetItem(f'${float(r.get("total", 0)):.2f}'))
+                self.h_table.setItem(i, 6, QTableWidgetItem(f'${tot:,.2f}'))
 
                 pdf_item = QTableWidgetItem('Abrir' if r.get('pdf_path') else '—')
                 pdf_item.setData(Qt.UserRole, r.get('pdf_path'))
@@ -745,7 +799,18 @@ class FiscalView(QWidget):
                     pdf_item.setForeground(QColor('#0d6efd'))
                 self.h_table.setItem(i, 7, pdf_item)
 
-        except Exception as e:
+                origen_item = QTableWidgetItem('Varios 2' if es_v2 else 'Venta/Manual')
+                if es_v2:
+                    origen_item.setForeground(QColor('#5b21b6'))
+                    origen_item.setFont(QFont('Segoe UI', 9, QFont.Bold))
+                self.h_table.setItem(i, 8, origen_item)
+
+            # Actualizar panel de totales
+            self.t_total_value.setText(f'${total_all:,.2f}')
+            self.t_v2_value.setText(f'${total_v2:,.2f}')
+            self.t_reg_value.setText(f'${total_reg:,.2f}')
+            self.t_cnt_value.setText(f'{len(rows)}  /  {count_v2}')
+        except Exception:
             pass
 
     def _on_tab_changed(self, index):
