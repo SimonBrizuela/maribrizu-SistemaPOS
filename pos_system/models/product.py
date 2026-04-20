@@ -63,10 +63,10 @@ class Product:
             raise ValidationError(error)
         
         query = """
-            INSERT INTO products (name, description, price, cost, stock, barcode, category, image_path, firebase_id, rubro)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            INSERT INTO products (name, description, price, cost, stock, barcode, category, image_path, firebase_id, rubro, stock_min, stock_max)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """
-        
+
         try:
             product_id = self.db.execute_update(query, (
                 name,
@@ -79,6 +79,8 @@ class Product:
                 product_data.get('image_path'),
                 product_data.get('firebase_id') or None,
                 product_data.get('rubro') or None,
+                product_data.get('stock_min') or None,
+                product_data.get('stock_max') or None,
             ))
             logger.info(f"Product created: {name} (ID: {product_id})")
             return product_id
@@ -88,7 +90,8 @@ class Product:
     
     def get_all(self, search: str = None, category: str = None, favorites_only: bool = False) -> List[Dict]:
         """Obtiene todos los productos con filtros opcionales"""
-        query = "SELECT * FROM products WHERE 1=1"
+        # Excluir el producto sentinel "Varios" (id=0) del catálogo
+        query = "SELECT * FROM products WHERE id != 0"
         params = []
         
         if search:
@@ -177,7 +180,7 @@ class Product:
         if 'description' in kwargs:
             kwargs['description'] = sanitize_string(kwargs['description'], 500)
         
-        allowed_fields = ['name', 'description', 'price', 'cost', 'stock', 'barcode', 'category', 'image_path', 'is_favorite', 'discount_type', 'discount_value', 'firebase_id', 'rubro']
+        allowed_fields = ['name', 'description', 'price', 'cost', 'stock', 'barcode', 'category', 'image_path', 'is_favorite', 'discount_type', 'discount_value', 'firebase_id', 'rubro', 'stock_min', 'stock_max']
         updates = []
         params = []
         
@@ -230,11 +233,22 @@ class Product:
     
     def get_categories(self) -> List[str]:
         """Obtiene todas las categorías únicas"""
-        query = "SELECT DISTINCT category FROM products WHERE category IS NOT NULL AND category != '' ORDER BY category"
+        query = ("SELECT DISTINCT category FROM products "
+                 "WHERE id != 0 AND category IS NOT NULL AND category != '' "
+                 "  AND category != '__sistema__' ORDER BY category")
         results = self.db.execute_query(query)
         return [r['category'] for r in results]
-    
+
     def get_low_stock(self, threshold: int = 5) -> List[Dict]:
-        """Obtiene productos con stock bajo"""
-        query = "SELECT * FROM products WHERE stock <= ? ORDER BY stock ASC"
+        """Obtiene productos con stock bajo (excluye sentinel y servicios).
+
+        Si el producto tiene stock_min configurado, se usa ese umbral
+        individual. Si no, se usa `threshold` global.
+        """
+        query = (
+            "SELECT * FROM products "
+            "WHERE id != 0 AND stock >= 0 "
+            "  AND stock <= COALESCE(stock_min, ?) "
+            "ORDER BY stock ASC, name ASC"
+        )
         return self.db.execute_query(query, (threshold,))

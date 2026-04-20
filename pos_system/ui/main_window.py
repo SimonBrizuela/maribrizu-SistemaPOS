@@ -14,6 +14,7 @@ from pos_system.ui.products_view import ProductsView
 from pos_system.ui.sales_view import SalesView
 from pos_system.ui.cash_view import CashView
 from pos_system.ui.sales_history_view import SalesHistoryView
+from pos_system.ui.observations_view import ObservationsView
 from pos_system.ui.components import MessageBox, Toast
 from pos_system.models.cash_register import CashRegister
 from pos_system.models.product import Product
@@ -37,6 +38,8 @@ class MainWindow(QMainWindow):
     _sig_start_download = pyqtSignal(object)
     # Señal thread-safe: delta sync de productos al arranque terminó
     _sig_delta_sync_done = pyqtSignal(int)  # n_updated
+    # Señal thread-safe: listener de stock detectó cambios → refrescar UI
+    _sig_stock_refresh = pyqtSignal()
 
     def __init__(self, current_user: dict = None):
         super().__init__()
@@ -98,6 +101,7 @@ class MainWindow(QMainWindow):
         self.sales_view = SalesView(self, current_user=self.current_user)
         self.cash_view = CashView(self, current_user=self.current_user)
         self.history_view = SalesHistoryView(self)
+        self.observations_view = ObservationsView(self, current_user=self.current_user)
 
         # Vista de promociones (solo lectura) — visible para todos
         from pos_system.ui.promos_readonly_view import PromosReadOnlyView
@@ -123,6 +127,7 @@ class MainWindow(QMainWindow):
         if is_admin:
             self.tabs.addTab(self.cash_view, 'Caja')
         self.tabs.addTab(self.promos_readonly_view, '🏷️ Promociones')
+        self.tabs.addTab(self.observations_view, 'Observaciones')
 
         # Pestañas adicionales solo para admin
         if is_admin:
@@ -166,9 +171,9 @@ class MainWindow(QMainWindow):
         self.check_cash_register_status()
         self._check_low_stock_badge()
 
-        # Verificar actualizaciones en segundo plano (30s de retraso para no entorpecer el inicio)
-        from PyQt5.QtCore import QTimer as _QT2
-        _QT2.singleShot(8000, self._check_for_updates)
+        # Auto-update deshabilitado localmente (cambios WIP no publicados)
+        # from PyQt5.QtCore import QTimer as _QT2
+        # _QT2.singleShot(8000, self._check_for_updates)
 
         # Poller de sync remoto: detecta comando del admin → sube o descarga en silencio
         self._last_sync_trigger_ts = None
@@ -565,6 +570,23 @@ class MainWindow(QMainWindow):
             # 5. Listener de EMISOR ACTIVO HOY desde la web
             fb.start_emisor_activo_listener(self.db)
 
+            # 6. Listener de STOCK (inventario) en tiempo real.
+            # Cuando otra PC vende o la web edita, Firebase dispara el snapshot
+            # y sincronizamos la SQLite local. Refresca la UI en el main thread.
+            self._sig_stock_refresh.connect(self._on_stock_refresh_slot)
+            def _on_stock_refresh():
+                self._sig_stock_refresh.emit()
+            fb.start_stock_sync_listener(self.db, on_refresh=_on_stock_refresh)
+
+            # 7. Listener de OBSERVACIONES en tiempo real (compartidas entre PCs).
+            def _on_obs_change():
+                try:
+                    if hasattr(self, 'observations_view') and self.observations_view is not None:
+                        self.observations_view.refresh_requested.emit()
+                except Exception as e:
+                    logger.warning(f"Obs refresh emit: {e}")
+            fb.start_observations_listener(self.db, on_change=_on_obs_change)
+
             logger.info("Listeners de sincronizacion en tiempo real activados (thread-safe).")
         except Exception as e:
             logger.warning(f"No se pudo activar listeners de sincronizacion: {e}")
@@ -582,6 +604,23 @@ class MainWindow(QMainWindow):
     def _on_caja_open_slot(self, reg_id):
         logger.info(f"Firebase: Caja #{reg_id} abierta remotamente → refrescando.")
         self.refresh_all_views()
+
+    def _on_stock_refresh_slot(self):
+        """Firebase reportó cambios de stock — refrescar vistas de productos/ventas."""
+        try:
+            if self.products_view is not None:
+                self.products_view.refresh_data()
+        except Exception as e:
+            logger.warning(f"Stock refresh: products_view: {e}")
+        try:
+            if self.sales_view is not None:
+                self.sales_view.refresh_data()
+        except Exception as e:
+            logger.warning(f"Stock refresh: sales_view: {e}")
+        try:
+            self._check_low_stock_badge()
+        except Exception:
+            pass
 
     def _on_caja_close_slot(self, session_id, register_id=0):
         logger.info(

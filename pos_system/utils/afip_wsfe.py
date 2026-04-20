@@ -18,6 +18,7 @@ Configuración en la pestaña Fiscal > Configuración AFIP:
 """
 
 import os
+import ssl
 import base64
 import hashlib
 import io
@@ -25,6 +26,35 @@ import logging
 from datetime import datetime, timezone, timedelta
 
 logger = logging.getLogger(__name__)
+
+
+def _make_afip_session():
+    """
+    Sesión requests con SECLEVEL=1. AFIP usa parámetros Diffie-Hellman de 1024 bits
+    que OpenSSL 3.x rechaza por defecto ([SSL: DH_KEY_TOO_SMALL]).
+    """
+    from requests import Session
+    from requests.adapters import HTTPAdapter
+    from urllib3.util.ssl_ import create_urllib3_context
+
+    class _AfipSSLAdapter(HTTPAdapter):
+        def init_poolmanager(self, *args, **kwargs):
+            ctx = create_urllib3_context(ciphers='DEFAULT:@SECLEVEL=1')
+            ctx.check_hostname = True
+            ctx.verify_mode = ssl.CERT_REQUIRED
+            kwargs['ssl_context'] = ctx
+            return super().init_poolmanager(*args, **kwargs)
+
+        def proxy_manager_for(self, *args, **kwargs):
+            ctx = create_urllib3_context(ciphers='DEFAULT:@SECLEVEL=1')
+            ctx.check_hostname = True
+            ctx.verify_mode = ssl.CERT_REQUIRED
+            kwargs['ssl_context'] = ctx
+            return super().proxy_manager_for(*args, **kwargs)
+
+    s = Session()
+    s.mount('https://', _AfipSSLAdapter())
+    return s
 
 # ── URLs AFIP ─────────────────────────────────────────────────────────────────
 WSAA_URL_HOMO = 'https://wsaahomo.afip.gov.ar/ws/services/LoginCms?wsdl'
@@ -165,7 +195,9 @@ class AfipWsfe:
 
         # Llamar WSAA
         try:
-            client = self._zeep.Client(wsdl=wsaa_url)
+            from zeep.transports import Transport
+            transport = Transport(session=_make_afip_session(), timeout=30)
+            client = self._zeep.Client(wsdl=wsaa_url, transport=transport)
             response = client.service.loginCms(in0=smime_buf)
         except Exception as e:
             raise AFIPAuthError(f'Error en WSAA: {e}')
@@ -212,8 +244,10 @@ class AfipWsfe:
     # ── WSFE ──────────────────────────────────────────────────────────────────
 
     def _get_wsfe_client(self):
+        from zeep.transports import Transport
         wsfe_url = WSFE_URL_PROD if self.produccion else WSFE_URL_HOMO
-        return self._zeep.Client(wsdl=wsfe_url)
+        transport = Transport(session=_make_afip_session(), timeout=30)
+        return self._zeep.Client(wsdl=wsfe_url, transport=transport)
 
     def ultimo_comprobante(self, tipo_comprobante: str, punto_venta: int) -> int:
         """Devuelve el último número de comprobante emitido para este tipo y punto de venta."""

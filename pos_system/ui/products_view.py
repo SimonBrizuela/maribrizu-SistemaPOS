@@ -177,6 +177,12 @@ class ProductsView(QWidget):
         low_stock_btn.clicked.connect(self.show_low_stock)
         buttons_layout.addWidget(low_stock_btn)
 
+        print_missing_btn = QPushButton('Imprimir faltantes')
+        print_missing_btn.setObjectName('btnSecondary')
+        print_missing_btn.setToolTip('Genera un PDF con los productos con stock bajo')
+        print_missing_btn.clicked.connect(self.print_low_stock)
+        buttons_layout.addWidget(print_missing_btn)
+
         refresh_btn = QPushButton('Actualizar')
         refresh_btn.setObjectName('btnSecondary')
         refresh_btn.clicked.connect(self.refresh_data)
@@ -191,8 +197,13 @@ class ProductsView(QWidget):
             'Imagen', 'ID', 'Nombre', 'Categoria', 'Precio', 'Descuento', 'Costo', 'Stock', 'Cod. Barras', 'Fav.'
         ])
         self.products_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.products_table.setSelectionMode(QTableWidget.SingleSelection)
+        self.products_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.products_table.setAlternatingRowColors(True)
-        self.products_table.doubleClicked.connect(self.edit_product)
+        # Doble-click abre edición sólo si hay exactamente una fila seleccionada —
+        # evita abrir el diálogo de edición por accidente durante una selección
+        # múltiple o drag (ej. seleccionar todo de golpe).
+        self.products_table.doubleClicked.connect(self._on_product_double_clicked)
         from PyQt5.QtWidgets import QHeaderView as QHV4
         hh = self.products_table.horizontalHeader()
         hh.setSectionResizeMode(0, QHV4.Fixed)
@@ -486,8 +497,10 @@ class ProductsView(QWidget):
             else:
                 where = ""
                 params = []
+            # Excluir el producto sentinel "Varios" (id=0) del listado
+            id_filter = " WHERE id != 0" if not where else " AND id != 0"
             products = self.db.execute_query(
-                f"SELECT * FROM products{where} ORDER BY name LIMIT 300",
+                f"SELECT * FROM products{where}{id_filter} ORDER BY name LIMIT 300",
                 tuple(params)
             )
 
@@ -565,6 +578,17 @@ class ProductsView(QWidget):
             if main_window:
                 main_window.refresh_all_views()
                 
+    def _on_product_double_clicked(self, index):
+        """Doble-click en la tabla: sólo abre edición si hay una fila seleccionada.
+        Previene abrir el diálogo por accidente durante selecciones múltiples."""
+        sel_rows = {ix.row() for ix in self.products_table.selectionModel().selectedRows()}
+        if len(sel_rows) > 1:
+            return
+        # Asegurar que el click estuvo sobre una fila válida
+        if index is None or not index.isValid():
+            return
+        self.edit_product()
+
     def edit_product(self):
         selected_row = self.products_table.currentRow()
         if selected_row < 0:
@@ -653,6 +677,40 @@ class ProductsView(QWidget):
                     main_window._check_low_stock_badge()
             except Exception as e:
                 QMessageBox.critical(self, 'Error', f'No se pudo ajustar el stock: {e}')
+
+    def print_low_stock(self):
+        """Genera y abre un PDF con los productos faltantes (stock bajo)."""
+        import os, platform, subprocess
+        threshold = 10
+        try:
+            products = self.product_model.get_low_stock(threshold=threshold)
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'No se pudo obtener el stock: {e}')
+            return
+
+        try:
+            from pos_system.utils.pdf_generator import PDFGenerator
+            pdf = PDFGenerator()
+            filepath = pdf.generate_low_stock_report(products, threshold=threshold)
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'No se pudo generar el PDF: {e}')
+            return
+
+        try:
+            if platform.system() == 'Windows':
+                os.startfile(filepath)
+            elif platform.system() == 'Darwin':
+                subprocess.run(['open', filepath])
+            else:
+                subprocess.run(['xdg-open', filepath])
+        except Exception as e:
+            QMessageBox.warning(self, 'PDF generado',
+                f'PDF guardado en:\n{filepath}\n\nNo se pudo abrir automáticamente: {e}')
+            return
+
+        if not products:
+            QMessageBox.information(self, 'Sin faltantes',
+                'No hay productos con stock bajo.\nSe generó un PDF vacío de todos modos.')
 
     def show_low_stock(self):
         """Filtra y muestra solo productos con stock bajo"""
@@ -793,8 +851,33 @@ class ProductDialog(QDialog):
         self.stock_input = QSpinBox()
         self.stock_input.setMaximum(999999)
         self.stock_input.setFont(QFont('Arial', 10))
-        layout.addRow('Stock:', self.stock_input)
-        
+        layout.addRow('Stock actual:', self.stock_input)
+
+        # ── Alertas de stock ──
+        alert_title = QLabel('Alertas de stock (opcional)')
+        alert_title.setFont(QFont('Arial', 9, QFont.Bold))
+        alert_title.setStyleSheet('color:#f59e0b;')
+        layout.addRow(alert_title)
+
+        self.stock_min_input = QSpinBox()
+        self.stock_min_input.setMinimum(0)
+        self.stock_min_input.setMaximum(999999)
+        self.stock_min_input.setFont(QFont('Arial', 10))
+        self.stock_min_input.setSpecialValueText('(sin alerta)')
+        self.stock_min_input.setToolTip(
+            'Si el stock baja a este número o menos, el producto aparecerá como faltante.\n'
+            'Dejalo en 0 para usar el umbral general.'
+        )
+        layout.addRow('Stock mínimo (avisar):', self.stock_min_input)
+
+        self.stock_max_input = QSpinBox()
+        self.stock_max_input.setMinimum(0)
+        self.stock_max_input.setMaximum(999999)
+        self.stock_max_input.setFont(QFont('Arial', 10))
+        self.stock_max_input.setSpecialValueText('(sin tope)')
+        self.stock_max_input.setToolTip('Stock máximo / ideal para reposición. Solo informativo.')
+        layout.addRow('Stock máximo (ideal):', self.stock_max_input)
+
         self.barcode_input = QLineEdit()
         self.barcode_input.setFont(QFont('Arial', 10))
         layout.addRow('Código de Barras:', self.barcode_input)
@@ -918,6 +1001,10 @@ class ProductDialog(QDialog):
         self.price_input.setValue(self.product['price'])
         self.cost_input.setValue(self.product['cost'])
         self.stock_input.setValue(self.product['stock'])
+        smin = self.product.get('stock_min')
+        self.stock_min_input.setValue(int(smin) if smin is not None else 0)
+        smax = self.product.get('stock_max')
+        self.stock_max_input.setValue(int(smax) if smax is not None else 0)
         self.barcode_input.setText(self.product['barcode'] or '')
         self.category_input.setCurrentText(self.product['category'] or '')
 
@@ -968,6 +1055,8 @@ class ProductDialog(QDialog):
             'category': self.category_input.currentText() or None,
             'discount_type': dtype,
             'discount_value': dval,
+            'stock_min': self.stock_min_input.value() or None,
+            'stock_max': self.stock_max_input.value() or None,
         }
         
         # Guardar imagen si hay una nueva

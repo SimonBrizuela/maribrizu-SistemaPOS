@@ -1,11 +1,38 @@
-import { collection, getDocs, query, orderBy } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import { getCached } from '../cache.js';
+import { getFechaInicio, getFechaInicioDate, fechaDMYtoYMD, parseArDate } from '../config.js';
 
 export async function renderProductos(container, db) {
-  const productos = await getCached('productos:mas_vendidos', async () => {
-    const snap = await getDocs(query(collection(db, 'productos_mas_vendidos'), orderBy('total_vendido', 'desc')));
+  const fechaInicioStr = await getFechaInicio(db);
+  const fechaInicio = await getFechaInicioDate(db);
+
+  // El ranking se recalcula desde `ventas_por_dia` filtradas por fecha_inicio,
+  // porque `productos_mas_vendidos` es un agregado histórico que incluye datos viejos.
+  const itemsVentas = await getCached('productos:items_rich', async () => {
+    const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('fecha', 'desc'), limit(5000)));
     return snap.docs.map(d => d.data());
-  });
+  }, { ttl: 5 * 60 * 1000, memOnly: true });
+
+  const mapa = {};
+  for (const it of itemsVentas) {
+    if (it.deleted === true) continue;
+    if (fechaDMYtoYMD(it.fecha) < fechaInicioStr) continue;
+    const nombre = it.producto || it.product_name || '-';
+    if (!mapa[nombre]) {
+      mapa[nombre] = {
+        nombre,
+        categoria: it.categoria || 'Sin categoría',
+        total_vendido: 0,
+        ingresos: 0,
+        ultima_venta: '',
+      };
+    }
+    mapa[nombre].total_vendido += Number(it.cantidad || it.quantity || 0);
+    mapa[nombre].ingresos      += Number(it.subtotal || 0);
+    const f = it.fecha || '';
+    if (f > mapa[nombre].ultima_venta) mapa[nombre].ultima_venta = f;
+  }
+  const productos = Object.values(mapa).sort((a, b) => b.total_vendido - a.total_vendido);
 
   const totalUnidades = productos.reduce((s, p) => s + (p.total_vendido || 0), 0);
   const totalIngresos = productos.reduce((s, p) => s + (p.ingresos || 0), 0);

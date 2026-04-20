@@ -113,12 +113,32 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE products ADD COLUMN rubro TEXT DEFAULT NULL")
             except Exception:
                 pass
+            # Alertas de stock personalizables por producto (item 7)
+            try:
+                cursor.execute("ALTER TABLE products ADD COLUMN stock_min INTEGER DEFAULT NULL")
+            except Exception:
+                pass
+            try:
+                cursor.execute("ALTER TABLE products ADD COLUMN stock_max INTEGER DEFAULT NULL")
+            except Exception:
+                pass
             # Índice para búsqueda rápida por firebase_id
             try:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_firebase_id ON products(firebase_id)")
             except Exception:
                 pass
-            
+
+            # Producto sentinel para items "Varios" (product_id=0, stock ilimitado,
+            # categoría "__sistema__" — no se muestra en el catálogo)
+            try:
+                cursor.execute("""
+                    INSERT OR IGNORE INTO products
+                        (id, name, price, stock, category, is_favorite)
+                    VALUES (0, 'Varios', 0, -1, '__sistema__', 0)
+                """)
+            except Exception:
+                pass
+
             # Tabla de ventas
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS sales (
@@ -368,6 +388,26 @@ class DatabaseManager:
                 )
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_clientes_activo ON clientes_facturacion(activo)")
+
+            # Tabla de observaciones (notas compartidas entre cajeros)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS observations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    firebase_id TEXT UNIQUE DEFAULT '',
+                    text TEXT NOT NULL,
+                    context TEXT NOT NULL DEFAULT 'general',
+                    sale_id INTEGER DEFAULT NULL,
+                    sale_item_id INTEGER DEFAULT NULL,
+                    created_by_id INTEGER DEFAULT NULL,
+                    created_by_name TEXT DEFAULT '',
+                    pc_id TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT (localtime_now()),
+                    deleted INTEGER NOT NULL DEFAULT 0
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_observations_created ON observations(created_at)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_observations_context ON observations(context)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_observations_sale ON observations(sale_id)")
 
             # Índices para mejorar el rendimiento
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(created_at)")

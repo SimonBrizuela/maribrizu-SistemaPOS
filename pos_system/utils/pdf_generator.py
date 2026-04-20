@@ -584,10 +584,122 @@ class PDFGenerator:
         
         # Construir PDF con header y footer
         doc.build(story, onFirstPage=self.draw_header, onLaterPages=self.draw_header)
-        
+
         return filepath
-        
-    
+
+    def generate_low_stock_report(self, products, threshold=None):
+        """Generar PDF con el listado de productos con stock bajo (faltantes).
+
+        products : lista de dicts con keys: name, stock, stock_min, category,
+                   rubro, barcode. Debe venir ya filtrada por el caller.
+        threshold: valor opcional para mostrar en el encabezado.
+        """
+        timestamp = datetime.now(_TZ_AR).strftime('%Y%m%d_%H%M%S')
+        filename  = f'faltantes_{timestamp}.pdf'
+        filepath  = os.path.join(self.output_dir, filename)
+
+        doc = SimpleDocTemplate(
+            filepath, pagesize=letter,
+            topMargin=80, bottomMargin=60, leftMargin=40, rightMargin=40
+        )
+        story = []
+
+        # Título
+        title_style = ParagraphStyle(
+            'FaltTitle', parent=self.styles['Heading1'],
+            fontSize=20, textColor=colors.HexColor('#dc2626'),
+            spaceAfter=8, alignment=TA_CENTER, fontName='Helvetica-Bold'
+        )
+        story.append(Paragraph('PRODUCTOS FALTANTES', title_style))
+
+        subtitle_style = ParagraphStyle(
+            'FaltSub', parent=self.styles['Normal'],
+            fontSize=10, textColor=colors.HexColor('#475569'),
+            alignment=TA_CENTER, spaceAfter=16
+        )
+        when = datetime.now(_TZ_AR).strftime('%d/%m/%Y %H:%M')
+        thr_txt = f" · Umbral: stock ≤ {int(threshold)}" if threshold is not None else ''
+        story.append(Paragraph(f"Generado el {when}{thr_txt} · {len(products)} producto(s)",
+                               subtitle_style))
+
+        if not products:
+            empty_style = ParagraphStyle(
+                'Empty', parent=self.styles['Normal'],
+                fontSize=12, alignment=TA_CENTER, spaceBefore=40,
+                textColor=colors.HexColor('#16a34a'),
+            )
+            story.append(Paragraph('No hay productos con stock bajo.', empty_style))
+            doc.build(story, onFirstPage=self.draw_header, onLaterPages=self.draw_header)
+            return filepath
+
+        # Encabezados + filas
+        header_row = ['#', 'Producto', 'Código', 'Categoría', 'Rubro', 'Mín.', 'Stock']
+        data = [header_row]
+        for i, p in enumerate(products, 1):
+            name     = str(p.get('name') or '').strip()
+            barcode  = str(p.get('barcode') or '').strip() or '—'
+            category = str(p.get('category') or '').strip() or '—'
+            rubro    = str(p.get('rubro') or '').strip() or '—'
+            stock    = p.get('stock')
+            stock_t  = '—' if stock is None else str(int(stock))
+            s_min    = p.get('stock_min')
+            min_t    = '—' if s_min in (None, '') else str(int(s_min))
+            data.append([
+                str(i),
+                Paragraph(name or '—', self.styles['Normal']),
+                barcode,
+                category,
+                rubro,
+                min_t,
+                stock_t,
+            ])
+
+        tbl = Table(
+            data,
+            colWidths=[0.4*inch, 2.6*inch, 1.1*inch, 1.2*inch, 1.0*inch, 0.5*inch, 0.6*inch],
+            repeatRows=1,
+        )
+        style_rows = [
+            ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#1f2937')),
+            ('TEXTCOLOR',  (0, 0), (-1, 0), colors.white),
+            ('FONTNAME',   (0, 0), (-1, 0), 'Helvetica-Bold'),
+            ('FONTSIZE',   (0, 0), (-1, 0), 10),
+            ('ALIGN',      (0, 0), (-1, 0), 'CENTER'),
+            ('VALIGN',     (0, 0), (-1, -1), 'MIDDLE'),
+            ('FONTSIZE',   (0, 1), (-1, -1), 9),
+            ('GRID',       (0, 0), (-1, -1), 0.5, colors.HexColor('#cbd5e1')),
+            ('ROWBACKGROUNDS', (0, 1), (-1, -1),
+                [colors.white, colors.HexColor('#f8fafc')]),
+            ('ALIGN', (0, 1), (0, -1), 'CENTER'),   # #
+            ('ALIGN', (2, 1), (2, -1), 'CENTER'),   # Código
+            ('ALIGN', (5, 1), (6, -1), 'CENTER'),   # Mín / Stock
+        ]
+        # Stock == 0 → fila roja; 0 < stock <= umbral → ámbar
+        for idx, p in enumerate(products, start=1):
+            try:
+                s = int(p.get('stock') or 0)
+            except Exception:
+                s = 0
+            if s <= 0:
+                style_rows.append(('BACKGROUND', (0, idx), (-1, idx),
+                                   colors.HexColor('#fee2e2')))
+                style_rows.append(('TEXTCOLOR', (6, idx), (6, idx),
+                                   colors.HexColor('#b91c1c')))
+                style_rows.append(('FONTNAME', (6, idx), (6, idx), 'Helvetica-Bold'))
+            else:
+                style_rows.append(('BACKGROUND', (0, idx), (-1, idx),
+                                   colors.HexColor('#fef3c7')))
+                style_rows.append(('TEXTCOLOR', (6, idx), (6, idx),
+                                   colors.HexColor('#b45309')))
+                style_rows.append(('FONTNAME', (6, idx), (6, idx), 'Helvetica-Bold'))
+
+        tbl.setStyle(TableStyle(style_rows))
+        story.append(tbl)
+
+        doc.build(story, onFirstPage=self.draw_header, onLaterPages=self.draw_header)
+        return filepath
+
+
     def generate_cash_closing_ticket(self, report):
         """Generar ticket de cierre de caja estilo térmico"""
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -1119,12 +1231,14 @@ class PDFGenerator:
         sD_lbl   = S('DL', fontSize=7.5, fontName='Helvetica-Bold', alignment=TA_LEFT, spaceAfter=1, leading=10)
         sD_val   = S('DV', fontSize=7.5, fontName='Helvetica', alignment=TA_LEFT, spaceAfter=1, leading=10)
 
+        nombre_perfil_emisor = factura.get('nombre_perfil', '') or razon
         datos_content = [
             Paragraph(nombre_comp, sD_title),
             Paragraph(f'<b>Compr. Nro:</b> {comp_nro_full}', sD_lbl),
             Paragraph(f'<b>Fecha de Emision:</b> {fecha_comp}', sD_lbl),
             Spacer(1, 2*mm),
             Paragraph(f'<b>CUIT:</b> {cuit_emisor}', sD_val),
+            Paragraph(f'<b>Emisor:</b> {nombre_perfil_emisor}', sD_val),
             Paragraph(f'<b>Ing. Brutos:</b> {ing_brutos}', sD_val),
             Paragraph(f'<b>Inicio Act.:</b> {inicio_act}', sD_val),
         ]

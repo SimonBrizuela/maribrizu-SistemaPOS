@@ -10,13 +10,51 @@ from PyQt5.QtWidgets import (
     QPlainTextEdit, QTableWidget, QTableWidgetItem, QHeaderView,
     QAbstractItemView
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QThread, pyqtSignal
 from PyQt5.QtGui import QFont
 from datetime import datetime
 import os
 import platform
 import subprocess
 from pos_system.utils.firebase_sync import now_ar
+
+
+class _CaeWorker(QThread):
+    """Worker que consulta ultimo_comprobante y solicita_cae en background."""
+    ok = pyqtSignal(dict)
+    fail = pyqtSignal(str)
+
+    def __init__(self, afip, tipo, pv, total, neto, iva_send, otros_send, cuit_rec, cond_iva_rec):
+        super().__init__()
+        self.afip = afip
+        self.tipo = tipo
+        self.pv = pv
+        self.total = total
+        self.neto = neto
+        self.iva_send = iva_send
+        self.otros_send = otros_send
+        self.cuit_rec = cuit_rec
+        self.cond_iva_rec = cond_iva_rec
+
+    def run(self):
+        try:
+            ult = self.afip.ultimo_comprobante(self.tipo, self.pv)
+            nro = int(ult) + 1
+            res = self.afip.solicitar_cae(
+                tipo_comprobante=self.tipo,
+                punto_venta=self.pv,
+                nro_comprobante=nro,
+                importe_total=self.total,
+                importe_neto_gravado=self.neto,
+                importe_iva=self.iva_send,
+                importe_otros=self.otros_send,
+                concepto=1,
+                cuit_receptor=self.cuit_rec,
+                condicion_iva_receptor=self.cond_iva_rec,
+            )
+            self.ok.emit(res)
+        except Exception as e:
+            self.fail.emit(str(e))
 
 
 class FacturaDialog(QDialog):
@@ -369,6 +407,12 @@ class FacturaDialog(QDialog):
             'produccion':         bool(perfil.get('produccion', 0)),
             'nombre_perfil':      perfil.get('nombre', ''),
         }
+        # Monotributista → FAC. ELEC. C por defecto
+        if str(self.emisor.get('condicion_iva', '')).lower().startswith('monotrib'):
+            try:
+                self.tipo_combo.setCurrentText('FAC. ELEC. C')
+            except Exception:
+                pass
 
     def _prefill_cliente(self, cliente: dict):
         """Pre-rellena los datos del receptor con el cliente seleccionado."""
@@ -390,8 +434,10 @@ class FacturaDialog(QDialog):
             self.tipo_combo.setCurrentText('FAC. ELEC. A')
 
     def _prefill_virtual(self):
-        """Pre-rellena para pago virtual: Tipo B, Consumidor Final."""
-        self.tipo_combo.setCurrentText('FAC. ELEC. B')
+        """Pre-rellena para pago virtual: Monotributista→C, resto→B; Consumidor Final."""
+        cond = str(self.emisor.get('condicion_iva', '')).lower()
+        tipo_default = 'FAC. ELEC. C' if cond.startswith('monotrib') else 'FAC. ELEC. B'
+        self.tipo_combo.setCurrentText(tipo_default)
         # Respetar el subtype si fue seleccionado (T. DEBITO, T. CREDITO, etc.)
         subtype = self.sale.get('payment_subtype', '')
         if subtype and subtype != 'Efectivo':
@@ -502,7 +548,95 @@ class FacturaDialog(QDialog):
             return 1
 
     def _emit_factura(self):
-        """Genera el PDF. Si el perfil tiene cert+key, solicita CAE a AFIP automáticamente."""
+        """Genera el PDF. Si el perfil tiene cert+key, solicita CAE a AFIP en background."""
+        cae = self.cae_input.text().strip()
+        cert_path = self.emisor.get('cert_path', '')
+        key_path  = self.emisor.get('key_path', '')
+
+        # Si ya hay CAE manual o no hay certs, ir directo al PDF
+        if cae or not (cert_path and key_path):
+            self._do_generate_pdf(cae, self.vto_cae_input.text().strip(), nro_from_afip=None)
+            return
+
+        # Con certs: pedir CAE en thread (consulta nro a AFIP también)
+        try:
+            from pos_system.utils.afip_wsfe import AfipWsfe, calcular_iva_neto
+        except ImportError:
+            QMessageBox.warning(
+                self, 'Dependencia faltante',
+                'Para CAE automatico instala: pip install zeep pyOpenSSL\n\n'
+                'Se generara la factura sin CAE.'
+            )
+            self._do_generate_pdf('', '', nro_from_afip=None)
+            return
+
+        tipo = self.tipo_combo.currentText()
+        total = float(self.sale.get('total_amount', 0))
+        iva = self.iva_spin.value()
+        cuit_cliente = self.cuit_cliente_input.text().strip()
+        cond_iva_cliente = self.condicion_iva_cliente.currentText()
+
+        if tipo == 'FAC. ELEC. C':
+            neto = total; iva_send = 0.0; otros_send = 0.0
+        else:
+            n, iva_calc = calcular_iva_neto(total, 21.0)
+            neto = n; iva_send = iva if iva > 0 else iva_calc; otros_send = 0.0
+
+        try:
+            afip = AfipWsfe(
+                cuit=self.emisor.get('cuit', ''),
+                cert_path=cert_path,
+                key_path=key_path,
+                produccion=bool(self.emisor.get('produccion', False)),
+            )
+        except Exception as e:
+            QMessageBox.critical(self, 'Error AFIP', f'No se pudo inicializar AFIP:\n{e}')
+            return
+
+        # Dialog de progreso modal
+        prog = QDialog(self)
+        prog.setWindowTitle('Solicitando CAE')
+        prog.setModal(True)
+        prog.setFixedSize(320, 110)
+        prog.setWindowFlags(prog.windowFlags() & ~Qt.WindowContextHelpButtonHint & ~Qt.WindowCloseButtonHint)
+        pl = QVBoxLayout(prog)
+        pl.addWidget(QLabel('Conectando con AFIP, por favor esperá...'))
+        pb_lbl = QLabel('')
+        pb_lbl.setStyleSheet('color:#6c757d;font-size:11px;')
+        pl.addWidget(pb_lbl)
+
+        worker = _CaeWorker(
+            afip, tipo, int(self.emisor.get('punto_venta', 1)),
+            total, neto, iva_send, otros_send,
+            cuit_cliente or None, cond_iva_cliente,
+        )
+        self._cae_worker = worker  # evitar GC
+
+        def _ok(res):
+            prog.accept()
+            self.cae_input.setText(str(res['cae']))
+            self.vto_cae_input.setText(str(res['vto_cae']))
+            self._do_generate_pdf(str(res['cae']), str(res['vto_cae']),
+                                  nro_from_afip=int(res['nro_comprobante']))
+
+        def _fail(msg):
+            prog.accept()
+            resp = QMessageBox.question(
+                self, 'Error AFIP',
+                f'No se pudo obtener el CAE de AFIP:\n{msg}\n\n'
+                'Generar igualmente la factura sin CAE?',
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            if resp == QMessageBox.Yes:
+                self._do_generate_pdf('', '', nro_from_afip=None)
+
+        worker.ok.connect(_ok)
+        worker.fail.connect(_fail)
+        worker.start()
+        prog.exec_()
+
+    def _do_generate_pdf(self, cae: str, vto_cae: str, nro_from_afip=None):
+        """Genera el PDF, guarda la factura en DB y sincroniza a Firebase."""
         from pos_system.utils.pdf_generator import PDFGenerator
         from pos_system.database.db_manager import DatabaseManager
 
@@ -511,65 +645,9 @@ class FacturaDialog(QDialog):
         cuit_cliente = self.cuit_cliente_input.text().strip()
         dom_cliente = self.domicilio_cliente_input.text().strip()
         cond_iva_cliente = self.condicion_iva_cliente.currentText()
-        cae = self.cae_input.text().strip()
-        vto_cae = self.vto_cae_input.text().strip()
         total = float(self.sale.get('total_amount', 0))
         iva = self.iva_spin.value()
-        nro = self._get_next_nro_comprobante(tipo)
-
-        # ── Intentar CAE automático si el perfil tiene certificados ─────
-        cert_path = self.emisor.get('cert_path', '')
-        key_path  = self.emisor.get('key_path', '')
-        if cert_path and key_path and not cae:
-            try:
-                from pos_system.utils.afip_wsfe import AfipWsfe, AFIPError, calcular_iva_neto
-                afip = AfipWsfe(
-                    cuit=self.emisor.get('cuit', ''),
-                    cert_path=cert_path,
-                    key_path=key_path,
-                    produccion=bool(self.emisor.get('produccion', False)),
-                )
-                # FAC C (Monotributista): no hay IVA discriminado, todo va en ImpTotConc
-                if tipo == 'FAC. ELEC. C':
-                    importe_neto = 0.0
-                    importe_iva_send = 0.0
-                    importe_otros_send = total
-                else:
-                    neto, iva_calc = calcular_iva_neto(total, 21.0)
-                    importe_neto = neto
-                    importe_iva_send = iva if iva > 0 else iva_calc
-                    importe_otros_send = 0.0
-                resultado = afip.solicitar_cae(
-                    tipo_comprobante=tipo,
-                    punto_venta=int(self.emisor.get('punto_venta', 1)),
-                    nro_comprobante=nro,
-                    importe_total=total,
-                    importe_neto_gravado=importe_neto,
-                    importe_iva=importe_iva_send,
-                    importe_otros=importe_otros_send,
-                    concepto=1,
-                    cuit_receptor=cuit_cliente or None,
-                    condicion_iva_receptor=cond_iva_cliente,
-                )
-                cae     = str(resultado['cae'])
-                vto_cae = str(resultado['vto_cae'])
-                self.cae_input.setText(cae)
-                self.vto_cae_input.setText(vto_cae)
-            except ImportError:
-                QMessageBox.warning(
-                    self, 'Dependencia faltante',
-                    'Para CAE automatico instala: pip install zeep pyOpenSSL\n\n'
-                    'Se generara la factura sin CAE.'
-                )
-            except Exception as e:
-                resp = QMessageBox.question(
-                    self, 'Error AFIP',
-                    f'No se pudo obtener el CAE de AFIP:\n{e}\n\n'
-                    'Generar igualmente la factura sin CAE?',
-                    QMessageBox.Yes | QMessageBox.No, QMessageBox.No
-                )
-                if resp != QMessageBox.Yes:
-                    return
+        nro = int(nro_from_afip) if nro_from_afip else self._get_next_nro_comprobante(tipo)
 
         nombre_perfil = self.emisor.get('nombre_perfil', self.emisor.get('razon_social', ''))
 

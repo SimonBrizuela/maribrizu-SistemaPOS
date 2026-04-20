@@ -1,12 +1,17 @@
 import { collection, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import { openSaleModal } from '../components/modal.js';
 import { getCached } from '../cache.js';
+import { getFechaInicioDate } from '../config.js';
+import { getSaleNumberMap, displayNumForVenta } from '../sale_numbers.js';
 
 export async function renderDashboard(container, db) {
   // Obtener ventas de hoy (medianoche en hora Argentina)
   const hoy = new Date(todayAR() + 'T00:00:00-03:00');
+  const fechaInicio = await getFechaInicioDate(db);
+  const fechaInicioStr = fechaInicio.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+  const saleNumMap = await getSaleNumberMap(db);
 
-  const [ventas, catalogo, topProds, historial] = await Promise.all([
+  const [ventasRaw, catalogo, topProds, historialRaw] = await Promise.all([
     // Ventas: TTL 1 min (se ven datos de hoy, queremos relativamente fresco)
     getCached('dashboard:ventas', async () => {
       const snap = await getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc'), limit(500)));
@@ -24,10 +29,24 @@ export async function renderDashboard(container, db) {
     }, { ttl: 3 * 60 * 1000 }),
     // Historial diario: TTL 3 min
     getCached('dashboard:historial', async () => {
-      const snap = await getDocs(query(collection(db, 'historial_diario'), orderBy('fecha', 'desc'), limit(7)));
+      const snap = await getDocs(query(collection(db, 'historial_diario'), orderBy('fecha', 'desc'), limit(30)));
       return snap.docs.map(d => d.data());
     }, { ttl: 3 * 60 * 1000 }),
   ]);
+
+  // Filtrar todo antes de fecha_inicio y ventas eliminadas
+  const ventas = ventasRaw.filter(v => {
+    if (v.deleted === true) return false;
+    const dt = parseArDate(v.created_at);
+    return dt >= fechaInicio;
+  });
+  const historial = historialRaw.filter(h => {
+    // h.fecha puede venir "DD/MM/YYYY" o "YYYY-MM-DD"
+    const f = (h.fecha || '').includes('/')
+      ? h.fecha.split('/').reverse().join('-')
+      : h.fecha;
+    return f >= fechaInicioStr;
+  }).slice(0, 7);
 
   // Stats de hoy (en hora Argentina)
   const ventasHoy = ventas.filter(v => {
@@ -117,7 +136,7 @@ export async function renderDashboard(container, db) {
               const esEfectivo = v.payment_type === 'cash';
               const tieneDescuento = (v.discount || 0) > 0;
               return `<tr class="clickable-row" data-idx="${i}" title="Click para ver detalle">
-                <td><b>#${v.sale_id || v.id || '-'}</b></td>
+                <td><b>#${displayNumForVenta(v, saleNumMap)}</b></td>
                 <td>${fmtDate(dt)}</td>
                 <td>${fmtTime(dt)}</td>
                 <td><b>$${fmt(v.total_amount)}</b>${tieneDescuento ? ` <span class="badge badge-orange" style="font-size:10px">-$${fmt(v.discount)}</span>` : ''}</td>

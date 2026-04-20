@@ -111,6 +111,99 @@ class Sale:
         
         return sale_id
     
+    def update(self, sale_id: int, payment_type: Optional[str] = None,
+               items_updates: Optional[List[Dict]] = None) -> Optional[Dict]:
+        """Edita una venta existente: tipo de pago y/o precios unitarios de items.
+
+        items_updates: lista de {'id': sale_item_id, 'unit_price': nuevo_precio}
+        Recalcula subtotales e total_amount, y ajusta la caja (cash_register) para
+        reflejar los cambios. Todo en una transacción atómica.
+
+        Retorna la venta actualizada (con items) o None si no existe.
+        """
+        sale = self.get_by_id(sale_id)
+        if not sale:
+            return None
+        if payment_type is not None and payment_type not in ('cash', 'transfer'):
+            raise ValueError(f"Tipo de pago inválido: {payment_type}")
+
+        old_total    = float(sale.get('total_amount', 0) or 0)
+        old_ptype    = sale.get('payment_type')
+        register_id  = sale.get('cash_register_id')
+        new_ptype    = payment_type if payment_type is not None else old_ptype
+
+        with self.db.get_connection() as conn:
+            cursor = conn.cursor()
+
+            # 1. Actualizar items si hay cambios de precio
+            if items_updates:
+                for upd in items_updates:
+                    item_id   = upd.get('id')
+                    new_price = upd.get('unit_price')
+                    if item_id is None or new_price is None:
+                        continue
+                    cursor.execute(
+                        "SELECT quantity, discount_amount FROM sale_items WHERE id = ? AND sale_id = ?",
+                        (int(item_id), sale_id)
+                    )
+                    row = cursor.fetchone()
+                    if not row:
+                        continue
+                    qty        = int(row[0] if row[0] is not None else 1)
+                    disc_amt   = float(row[1] or 0)
+                    new_price  = float(new_price)
+                    new_sub    = max(0.0, new_price * qty - disc_amt)
+                    cursor.execute(
+                        "UPDATE sale_items SET unit_price = ?, subtotal = ? WHERE id = ?",
+                        (new_price, new_sub, int(item_id))
+                    )
+
+            # 2. Recalcular total desde items actualizados
+            cursor.execute(
+                "SELECT COALESCE(SUM(subtotal), 0) FROM sale_items WHERE sale_id = ?",
+                (sale_id,)
+            )
+            new_total = float(cursor.fetchone()[0] or 0)
+
+            # 3. Actualizar venta (total + tipo de pago)
+            cursor.execute(
+                "UPDATE sales SET total_amount = ?, payment_type = ? WHERE id = ?",
+                (new_total, new_ptype, sale_id)
+            )
+
+            # 4. Ajustar caja registradora: revertir el aporte viejo y sumar el nuevo.
+            #    Se hace aunque la caja esté cerrada — get_closing_report lee la tabla
+            #    cash_register, así que queda consistente en Firebase al re-sincronizar.
+            if register_id:
+                # Revertir venta vieja
+                if old_ptype == 'cash':
+                    cursor.execute(
+                        "UPDATE cash_register SET cash_sales = cash_sales - ?, total_sales = total_sales - ? WHERE id = ?",
+                        (old_total, old_total, register_id)
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE cash_register SET transfer_sales = transfer_sales - ?, total_sales = total_sales - ? WHERE id = ?",
+                        (old_total, old_total, register_id)
+                    )
+                # Sumar venta nueva
+                if new_ptype == 'cash':
+                    cursor.execute(
+                        "UPDATE cash_register SET cash_sales = cash_sales + ?, total_sales = total_sales + ? WHERE id = ?",
+                        (new_total, new_total, register_id)
+                    )
+                else:
+                    cursor.execute(
+                        "UPDATE cash_register SET transfer_sales = transfer_sales + ?, total_sales = total_sales + ? WHERE id = ?",
+                        (new_total, new_total, register_id)
+                    )
+
+        logger.info(
+            f"Venta #{sale_id} actualizada: total ${old_total:.2f}→${new_total:.2f}, "
+            f"pago {old_ptype}→{new_ptype}"
+        )
+        return self.get_by_id(sale_id)
+
     def _update_cash_register(self, cash_register_id: int, amount: float, payment_type: str):
         """Actualiza los totales de la caja registradora (método legacy, usar transacción en create())"""
         if payment_type == 'cash':

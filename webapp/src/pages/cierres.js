@@ -1,12 +1,42 @@
-import { collection, getDocs, query, orderBy, where } from 'firebase/firestore';
-import { getCached } from '../cache.js';
+import { collection, getDocs, query, orderBy, where, doc, updateDoc } from 'firebase/firestore';
+import { getCached, invalidateCache } from '../cache.js';
+import { getFechaInicioDate } from '../config.js';
 
 export async function renderCierres(container, db) {
-  // TTL corto: la caja abierta es crítica y debe reflejarse casi en tiempo real
-  const todos = await getCached('cierres:caja', async () => {
-    const snap = await getDocs(query(collection(db, 'cierres_caja'), orderBy('fecha_apertura', 'desc')));
-    return snap.docs.map(d => ({ id: d.id, ...d.data() }));
-  }, { ttl: 30 * 1000 });
+  const fechaInicio = await getFechaInicioDate(db);
+
+  // TTL corto: la caja abierta es crítica y debe reflejarse casi en tiempo real.
+  // Catálogo + gastos se usan en el modal de cierre para calcular rentabilidad.
+  const [todosRaw, catalogo, gastosAll] = await Promise.all([
+    getCached('cierres:caja', async () => {
+      const snap = await getDocs(query(collection(db, 'cierres_caja'), orderBy('fecha_apertura', 'desc')));
+      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    }, { ttl: 30 * 1000 }),
+    getCached('catalogo:all', async () => {
+      const snap = await getDocs(collection(db, 'catalogo'));
+      return snap.docs.map(d => d.data());
+    }, { ttl: 10 * 60 * 1000, memOnly: true }),
+    getCached('gastos:all', async () => {
+      const snap = await getDocs(query(collection(db, 'gastos'), orderBy('created_at', 'desc')));
+      return snap.docs.map(d => d.data());
+    }, { ttl: 60 * 1000 }),
+  ]);
+
+  // Índice catálogo por nombre (para obtener costo al calcular CMV del turno)
+  const catByName = {};
+  for (const p of catalogo) {
+    const key = (p.nombre || '').toUpperCase().trim();
+    if (key) catByName[key] = p;
+  }
+
+  // Ocultar cierres cerrados anteriores a fecha_inicio.
+  // Las cajas abiertas se muestran siempre (para poder cerrarlas aunque sean viejas).
+  const todos = todosRaw.filter(c => {
+    const estaAbierta = !c.fecha_cierre || c.fecha_cierre === '';
+    if (estaAbierta) return true;
+    const d = toDate(c.fecha_apertura);
+    return d && d >= fechaInicio;
+  });
 
   // Separar cajas abiertas (sin fecha_cierre) de las cerradas
   const cajasAbiertas = todos.filter(c => !c.fecha_cierre || c.fecha_cierre === null || c.fecha_cierre === '');
@@ -21,17 +51,26 @@ export async function renderCierres(container, db) {
     );
     const fechaAperturaDate = toDate(fechaAperturaRaw);
 
-    // Leer ventas desde Firebase y filtrar las que ocurrieron después de la apertura.
-    // Se resta un buffer de 5 min a fechaAperturaDate para absorber el race condition
-    // donde el sync de una venta corre antes que el sync de la apertura de caja.
+    // "Ventas en curso" debe reflejar SOLO las ventas del día de hoy (hora AR).
+    // Si la caja quedó abierta varios días, los totales previos ya se ven en
+    // Historial Diario → no los acumulamos acá.
+    const _todayStr   = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+    const inicioHoyAR = new Date(_todayStr + 'T00:00:00-03:00');
     const BUFFER_MS = 5 * 60 * 1000;
-    const fechaLimite = fechaAperturaDate
-      ? new Date(fechaAperturaDate.getTime() - BUFFER_MS)
-      : null;
+    let fechaLimite = inicioHoyAR;
+    // Si la caja se abrió HOY más tarde, usar la hora de apertura (con buffer)
+    // para no sumar ventas anteriores a esa apertura puntual.
+    if (fechaAperturaDate && fechaAperturaDate > inicioHoyAR) {
+      fechaLimite = new Date(fechaAperturaDate.getTime() - BUFFER_MS);
+    }
+    if (fechaInicio && fechaLimite < fechaInicio) {
+      fechaLimite = fechaInicio;
+    }
     const ventasSnap = await getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc')));
     let totalEfectivo = 0, totalTransferencia = 0, totalTransacciones = 0;
     for (const doc of ventasSnap.docs) {
       const v = doc.data();
+      if (v.deleted === true) continue;
       const vDate = toDate(v.created_at);
       if (!vDate) continue;
       if (fechaLimite && vDate < fechaLimite) continue;
@@ -81,11 +120,13 @@ export async function renderCierres(container, db) {
         monto_final:         0,
         productos_vendidos:  [],
         retiros:             [],
+        pendiente_conteo:    false,
         _docs:               [],
       };
     }
     const s = sesionesMap[key];
     s._docs.push(c);
+    if (c.pendiente_conteo === true) s.pendiente_conteo = true;
     if (c.cajero && !s.cajero.includes(c.cajero)) s.cajero.push(c.cajero);
     if (c.pc_id  && !s.pcs.includes(c.pc_id))    s.pcs.push(c.pc_id);
     s.total_ventas        += (c.total_ventas        || 0);
@@ -252,8 +293,9 @@ export async function renderCierres(container, db) {
                   const cierre   = parseArDate(c.fecha_cierre);
                   const retiros  = c.total_retiros || 0;
                   const pcLabel  = c.pcs.length > 1 ? ` <span style="font-size:10px;color:var(--text-muted)">(${c.pcs.length} PCs)</span>` : '';
-                  return `<tr class="clickable-row" data-idx="${i}" style="cursor:pointer" title="Ver detalle del cierre">
-                    <td><b>${c.session_id || '-'}</b>${pcLabel}</td>
+                  const pendBadge = c.pendiente_conteo ? ` <span style="background:#fef3c7;color:#92400e;font-size:9px;padding:2px 7px;border-radius:6px;font-weight:800;letter-spacing:.3px;border:1px solid #fcd34d">PENDIENTE</span>` : '';
+                  return `<tr class="clickable-row" data-idx="${i}" style="cursor:pointer" title="${c.pendiente_conteo ? 'Cierre pendiente de conteo — click para cargar' : 'Ver detalle del cierre'}">
+                    <td><b>${c.session_id || '-'}</b>${pcLabel}${pendBadge}</td>
                     <td>${fmtDT(apertura)}</td>
                     <td class="cie-col-cierre">${fmtDT(cierre)}</td>
                     <td style="text-align:center"><span class="badge badge-blue">${c.total_transacciones || 0}</span></td>
@@ -277,14 +319,14 @@ export async function renderCierres(container, db) {
   container.querySelectorAll('.clickable-row').forEach(row => {
     row.addEventListener('click', () => {
       const idx = parseInt(row.dataset.idx);
-      openCierreModal(sesiones[idx]);
+      openCierreModal(sesiones[idx], catByName, gastosAll, db, () => renderCierres(container, db));
     });
     row.addEventListener('mouseenter', () => row.style.background = 'var(--bg)');
     row.addEventListener('mouseleave', () => row.style.background = '');
   });
 }
 
-function openCierreModal(c) {
+function openCierreModal(c, catByName, gastosAll, db, onSaved) {
   document.querySelector('.modal-overlay')?.remove();
 
   const apertura  = parseArDate(c.fecha_apertura);
@@ -297,140 +339,351 @@ function openCierreModal(c) {
   const esperado  = c.monto_esperado || (inicial + efectivo - retiros);
   const final_amt = c.monto_final || 0;
   const diff      = final_amt - esperado;
-  const productos = c.productos_vendidos || [];
+  const numVentas = c.total_transacciones || 0;
+  const ticketPromedio = numVentas > 0 ? total / numVentas : 0;
+  const productosRaw  = c.productos_vendidos || [];
   const retiros_lista = c.retiros || [];
 
   // Calcular duración del turno
   let duracion = '-';
+  let duracionMins = 0;
   if (apertura && cierre && !isNaN(apertura) && !isNaN(cierre)) {
-    const mins = Math.round((cierre - apertura) / 60000);
-    const hrs  = Math.floor(mins / 60);
-    const min  = mins % 60;
+    duracionMins = Math.round((cierre - apertura) / 60000);
+    const hrs  = Math.floor(duracionMins / 60);
+    const min  = duracionMins % 60;
     duracion = hrs > 0 ? `${hrs}h ${min}m` : `${min}m`;
   }
+  const ventasPorHora = duracionMins > 0 ? (numVentas / (duracionMins / 60)) : 0;
+
+  // ── Rentabilidad del turno (misma lógica que Control Total) ────────────
+  // Cruza cada producto vendido con el catálogo para obtener su costo.
+  // Lo que no tiene costo cargado queda fuera del CMV y se avisa aparte.
+  let cmv = 0, ingresoConCosto = 0, ingresoSinCosto = 0, itemsSinCosto = 0;
+  const productos = productosRaw.map(p => {
+    const nombre    = (p.product_name || p.nombre || '').toUpperCase().trim();
+    const cat       = (catByName || {})[nombre];
+    const cantidad  = Number(p.total_quantity || p.cantidad || 0);
+    const ingreso   = Number(p.total_amount || p.total || 0);
+    const costoUnit = Number(cat?.costo || 0);
+    const costoTot  = costoUnit * cantidad;
+    if (costoUnit > 0) {
+      cmv             += costoTot;
+      ingresoConCosto += ingreso;
+    } else {
+      ingresoSinCosto += ingreso;
+      if (cantidad > 0) itemsSinCosto++;
+    }
+    return {
+      ...p,
+      _nombre:     p.product_name || p.nombre || '-',
+      _cantidad:   cantidad,
+      _ingreso:    ingreso,
+      _costoUnit:  costoUnit,
+      _costoTot:   costoTot,
+      _ganancia:   costoUnit > 0 ? ingreso - costoTot : null,
+      _margenPct:  costoUnit > 0 && ingreso > 0 ? ((ingreso - costoTot) / ingreso) * 100 : null,
+    };
+  }).sort((a, b) => b._ingreso - a._ingreso);
+
+  // Gastos registrados en el rango apertura→cierre del turno
+  let gastosTurno = [];
+  if (apertura && cierre && !isNaN(apertura) && !isNaN(cierre)) {
+    const aperturaStr = apertura.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+    const cierreStr   = cierre.toLocaleDateString('en-CA',   { timeZone: 'America/Argentina/Buenos_Aires' });
+    gastosTurno = (gastosAll || []).filter(g => (g.fecha || '') >= aperturaStr && (g.fecha || '') <= cierreStr);
+  }
+  const gastoTotal    = gastosTurno.reduce((s, g) => s + Number(g.monto || 0), 0);
+  const gananciaBruta = ingresoConCosto - cmv;
+  const gananciaNeta  = gananciaBruta - gastoTotal;
+  const margenPct     = ingresoConCosto > 0 ? (gananciaBruta / ingresoConCosto) * 100 : 0;
+  const pctConCosto   = total > 0 ? (ingresoConCosto / total) * 100 : 0;
+
+  // Salud del turno segun margen
+  let salud = { color: '#64748b', bg: '#f1f5f9', label: 'S/D', icon: 'help_outline' };
+  if (ingresoConCosto > 0) {
+    if (margenPct >= 40)      salud = { color: '#047857', bg: '#d1fae5', label: 'Excelente', icon: 'trending_up' };
+    else if (margenPct >= 25) salud = { color: '#15803d', bg: '#dcfce7', label: 'Bueno',     icon: 'check_circle' };
+    else if (margenPct >= 10) salud = { color: '#b45309', bg: '#fef3c7', label: 'Bajo',      icon: 'warning' };
+    else                      salud = { color: '#b91c1c', bg: '#fee2e2', label: 'Critico',   icon: 'error' };
+  }
+
+  // Top 3 productos por ingreso
+  const top3 = productos.slice(0, 3);
 
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
-    <div class="modal" id="cierreModal" style="max-width:680px">
-      <div class="modal-header" style="background:linear-gradient(135deg,#1e293b,#334155);color:white;border-radius:12px 12px 0 0">
-        <div style="display:flex;align-items:center;gap:10px">
-          <span class="material-icons" style="color:#94a3b8">lock_clock</span>
-          <div>
-            <h3 style="color:white;margin:0">Cierre ${c.session_id || c.register_id || '-'}${c.pcs && c.pcs.length > 1 ? ` (${c.pcs.length} PCs)` : ''}</h3>
-            <div style="font-size:11px;color:#94a3b8;margin-top:2px">${c.cajero || 'Sin cajero'} · Duración: ${duracion}</div>
+    <div class="modal" id="cierreModal" style="max-width:760px">
+      <!-- Header con gradiente + metadatos -->
+      <div class="modal-header" style="background:linear-gradient(135deg,#0f172a,#1e293b,#334155);color:white;border-radius:12px 12px 0 0;padding:18px 24px">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+          <div style="display:flex;align-items:center;gap:14px">
+            <div style="width:44px;height:44px;border-radius:12px;background:rgba(255,255,255,0.1);display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,0.15)">
+              <span class="material-icons" style="color:#cbd5e1">receipt_long</span>
+            </div>
+            <div>
+              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+                <h3 style="color:white;margin:0;font-size:18px">Cierre #${c.session_id || c.register_id || '-'}</h3>
+                ${c.pcs && c.pcs.length > 1 ? `<span style="background:rgba(148,163,184,0.25);color:#e2e8f0;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600">${c.pcs.length} PCs</span>` : ''}
+                <span style="background:${salud.bg};color:${salud.color};font-size:10px;padding:3px 10px;border-radius:10px;font-weight:700;display:inline-flex;align-items:center;gap:4px">
+                  <span class="material-icons" style="font-size:12px">${salud.icon}</span>${salud.label}
+                </span>
+              </div>
+              <div style="font-size:12px;color:#94a3b8;margin-top:4px">${c.cajero || 'Sin cajero'} · ${duracion} de operacion · ${numVentas} ${numVentas === 1 ? 'venta' : 'ventas'}</div>
+            </div>
+          </div>
+          <button class="modal-close" style="color:white;background:rgba(255,255,255,0.1);border-radius:8px;width:32px;height:32px;display:flex;align-items:center;justify-content:center"><span class="material-icons">close</span></button>
+        </div>
+
+        <!-- KPIs destacados -->
+        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px">
+          <div style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:10px 12px">
+            <div style="font-size:10px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Total vendido</div>
+            <div style="font-size:18px;font-weight:800;color:#fff;margin-top:3px">$${fmt(total)}</div>
+          </div>
+          <div style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:10px 12px">
+            <div style="font-size:10px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Ticket promedio</div>
+            <div style="font-size:18px;font-weight:800;color:#fff;margin-top:3px">$${fmt(ticketPromedio)}</div>
+          </div>
+          <div style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:10px 12px">
+            <div style="font-size:10px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Margen</div>
+            <div style="font-size:18px;font-weight:800;color:${ingresoConCosto > 0 ? (margenPct >= 25 ? '#34d399' : margenPct >= 10 ? '#fbbf24' : '#f87171') : '#94a3b8'};margin-top:3px">${ingresoConCosto > 0 ? margenPct.toFixed(1) + '%' : '—'}</div>
+          </div>
+          <div style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:10px 12px">
+            <div style="font-size:10px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Ganancia neta</div>
+            <div style="font-size:18px;font-weight:800;color:${gananciaNeta >= 0 ? '#34d399' : '#f87171'};margin-top:3px">${gananciaNeta >= 0 ? '$' : '-$'}${fmt(Math.abs(gananciaNeta))}</div>
           </div>
         </div>
-        <button class="modal-close" style="color:white"><span class="material-icons">close</span></button>
       </div>
 
-      <div class="modal-body" style="padding:20px">
+      <div class="modal-body" style="padding:22px 24px">
 
-        <!-- Fechas -->
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:20px">
-          <div style="background:#f8fafc;border-radius:10px;padding:12px 16px;border-left:3px solid #0d6efd">
-            <div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Apertura</div>
-            <div style="font-size:14px;font-weight:700;color:#1e293b;margin-top:4px">${fmtDT(apertura)}</div>
+        ${c.pendiente_conteo ? `
+        <!-- Banner: cierre pendiente de conteo -->
+        <div id="pendiente-banner" style="background:linear-gradient(135deg,#fef3c7,#fde68a);border:1.5px solid #f59e0b;border-radius:12px;padding:14px 18px;margin-bottom:18px">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+            <div style="display:flex;align-items:center;gap:10px">
+              <span class="material-icons" style="color:#b45309">pending_actions</span>
+              <div>
+                <div style="font-size:13px;font-weight:800;color:#92400e">Cierre pendiente de conteo</div>
+                <div style="font-size:11px;color:#a16207;margin-top:2px">Cargá el efectivo real contado para finalizar el cierre.</div>
+              </div>
+            </div>
+            <button id="btn-cargar-conteo" style="background:#d97706;color:white;border:none;border-radius:8px;padding:9px 16px;font-weight:700;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:6px">
+              <span class="material-icons" style="font-size:16px">payments</span>Cargar efectivo contado
+            </button>
           </div>
-          <div style="background:#f8fafc;border-radius:10px;padding:12px 16px;border-left:3px solid #198754">
-            <div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Cierre</div>
-            <div style="font-size:14px;font-weight:700;color:#1e293b;margin-top:4px">${fmtDT(cierre)}</div>
+          <div id="conteo-form" style="display:none;margin-top:12px;padding-top:12px;border-top:1px dashed #f59e0b">
+            <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap">
+              <div style="flex:1;min-width:180px">
+                <label style="font-size:11px;color:#92400e;font-weight:700;display:block;margin-bottom:4px">Efectivo contado ($)</label>
+                <input type="number" step="0.01" id="input-conteo" placeholder="0.00" value="${esperado.toFixed(2)}" style="width:100%;padding:10px 12px;font-size:14px;border:2px solid #d97706;border-radius:8px;outline:none;font-family:inherit">
+                <div style="font-size:10px;color:#a16207;margin-top:4px">Esperado: $${fmt(esperado)}</div>
+              </div>
+              <button id="btn-guardar-conteo" style="background:#15803d;color:white;border:none;border-radius:8px;padding:10px 18px;font-weight:700;font-size:13px;cursor:pointer">Guardar</button>
+              <button id="btn-cancelar-conteo" style="background:#e5e7eb;color:#374151;border:none;border-radius:8px;padding:10px 18px;font-weight:700;font-size:13px;cursor:pointer">Cancelar</button>
+            </div>
+          </div>
+        </div>
+        ` : ''}
+
+        <!-- Linea temporal del turno -->
+        <div style="background:#f8fafc;border-radius:12px;padding:14px 18px;margin-bottom:22px;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
+          <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:180px">
+            <div style="width:10px;height:10px;border-radius:50%;background:#0d6efd"></div>
+            <div>
+              <div style="font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Apertura</div>
+              <div style="font-size:13px;font-weight:700;color:#1e293b">${fmtDT(apertura)}</div>
+            </div>
+          </div>
+          <div style="flex:2;min-width:120px;display:flex;align-items:center;gap:8px;justify-content:center">
+            <div style="flex:1;height:2px;background:linear-gradient(90deg,#0d6efd,#198754);border-radius:2px"></div>
+            <div style="font-size:11px;color:#475569;font-weight:600;white-space:nowrap">${duracion}${ventasPorHora > 0 ? ` · ${ventasPorHora.toFixed(1)} v/h` : ''}</div>
+            <div style="flex:1;height:2px;background:linear-gradient(90deg,#0d6efd,#198754);border-radius:2px"></div>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:180px;justify-content:flex-end">
+            <div style="text-align:right">
+              <div style="font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Cierre</div>
+              <div style="font-size:13px;font-weight:700;color:#1e293b">${fmtDT(cierre)}</div>
+            </div>
+            <div style="width:10px;height:10px;border-radius:50%;background:#198754"></div>
           </div>
         </div>
 
-        <!-- Resumen financiero -->
-        <div style="margin-bottom:20px">
-          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#64748b;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid #e2e8f0">💰 Resumen Financiero</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-            ${fila('Monto Inicial de Caja', `$${fmt(inicial)}`, '#475569')}
-            ${fila('Ventas en Efectivo', `+$${fmt(efectivo)}`, '#198754')}
-            ${fila('Ventas por Transferencia', `$${fmt(transf)}`, '#0d6efd')}
-            ${retiros > 0 ? fila('Retiros de Caja', `-$${fmt(retiros)}`, '#dc3545') : ''}
-            ${fila('Efectivo Esperado en Caja', `$${fmt(esperado)}`, '#1e293b', true)}
-            ${final_amt > 0 ? fila('Efectivo Contado', `$${fmt(final_amt)}`, '#1e293b', true) : ''}
+        <!-- Ventas por tipo de pago -->
+        <div style="margin-bottom:22px">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#64748b;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid #e2e8f0">Ventas por tipo de pago</div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px">
+            <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center">
+              <div>
+                <div style="font-size:11px;color:#166534;font-weight:700">Efectivo</div>
+                <div style="font-size:11px;color:#64748b;margin-top:2px">${c.num_ventas_efectivo || 0} ${(c.num_ventas_efectivo || 0) === 1 ? 'venta' : 'ventas'}${total > 0 ? ` · ${Math.round((efectivo/total)*100)}%` : ''}</div>
+              </div>
+              <div style="font-size:18px;font-weight:800;color:#198754">$${fmt(efectivo)}</div>
+            </div>
+            <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px 14px;display:flex;justify-content:space-between;align-items:center">
+              <div>
+                <div style="font-size:11px;color:#1e40af;font-weight:700">Transferencia</div>
+                <div style="font-size:11px;color:#64748b;margin-top:2px">${c.num_ventas_transferencia || 0} ${(c.num_ventas_transferencia || 0) === 1 ? 'venta' : 'ventas'}${total > 0 ? ` · ${Math.round((transf/total)*100)}%` : ''}</div>
+              </div>
+              <div style="font-size:18px;font-weight:800;color:#0d6efd">$${fmt(transf)}</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Rentabilidad del turno -->
+        <div style="margin-bottom:22px">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#64748b;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid #e2e8f0">Rentabilidad del turno</div>
+          <div style="background:#fafbfc;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px">
+              <div>
+                <div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Ingreso c/costo</div>
+                <div style="font-size:16px;font-weight:700;color:#1e293b;margin-top:3px">$${fmt(ingresoConCosto)}</div>
+                <div style="font-size:10px;color:#94a3b8">${Math.round(pctConCosto)}% del total</div>
+              </div>
+              <div>
+                <div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Costo (CMV)</div>
+                <div style="font-size:16px;font-weight:700;color:#c2410c;margin-top:3px">-$${fmt(cmv)}</div>
+                <div style="font-size:10px;color:#94a3b8">costo de los productos</div>
+              </div>
+              <div>
+                <div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Ganancia bruta</div>
+                <div style="font-size:16px;font-weight:700;color:${gananciaBruta>=0?'#15803d':'#b91c1c'};margin-top:3px">$${fmt(gananciaBruta)}</div>
+                <div style="font-size:10px;color:#94a3b8">margen ${margenPct.toFixed(1)}%</div>
+              </div>
+            </div>
+            <div style="border-top:1px dashed #cbd5e1;margin:12px 0 10px"></div>
+            <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+              <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
+                <span style="font-size:12px;color:#475569">Bruta <b style="color:${gananciaBruta>=0?'#15803d':'#b91c1c'}">$${fmt(gananciaBruta)}</b></span>
+                ${gastoTotal > 0 ? `<span style="font-size:12px;color:#475569">− Gastos <b style="color:#dc2626">$${fmt(gastoTotal)}</b></span>` : ''}
+                <span style="font-size:12px;color:#475569">=</span>
+              </div>
+              <div style="background:${gananciaNeta>=0?'#ecfdf5':'#fef2f2'};border:2px solid ${gananciaNeta>=0?'#10b981':'#ef4444'};border-radius:10px;padding:8px 14px;display:flex;align-items:center;gap:8px">
+                <span style="font-size:10px;font-weight:700;color:${gananciaNeta>=0?'#047857':'#991b1b'};text-transform:uppercase;letter-spacing:.4px">Ganancia neta</span>
+                <span style="font-size:17px;font-weight:800;color:${gananciaNeta>=0?'#047857':'#b91c1c'}">${gananciaNeta>=0?'$':'-$'}${fmt(Math.abs(gananciaNeta))}</span>
+              </div>
+            </div>
+          </div>
+          ${itemsSinCosto > 0 ? `
+          <div style="background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:8px 12px;display:flex;align-items:center;gap:8px;font-size:12px;color:#92400e;margin-top:10px">
+            <span class="material-icons" style="font-size:16px;color:#d97706">warning</span>
+            <span><b>${itemsSinCosto}</b> producto${itemsSinCosto===1?'':'s'} sin costo cargado ($${fmt(ingresoSinCosto)} en ventas). Cargalos en Control Total para mejorar el calculo.</span>
+          </div>` : ''}
+        </div>
+
+        <!-- Resumen de efectivo -->
+        <div style="margin-bottom:22px">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#64748b;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid #e2e8f0">Resumen de efectivo</div>
+          <div style="background:#fafbfc;border:1px solid #e2e8f0;border-radius:12px;padding:14px 16px">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 20px">
+              ${lineaEf('Monto inicial', `$${fmt(inicial)}`, '#475569')}
+              ${lineaEf('+ Ventas efectivo', `$${fmt(efectivo)}`, '#198754')}
+              ${retiros > 0 ? lineaEf('− Retiros', `$${fmt(retiros)}`, '#dc3545') : ''}
+              ${lineaEf('= Efectivo esperado', `$${fmt(esperado)}`, '#1e293b', true)}
+            </div>
             ${final_amt > 0 ? `
-              <div style="grid-column:1/-1;background:${diff >= 0 ? '#f0fdf4' : '#fef2f2'};border:1px solid ${diff >= 0 ? '#bbf7d0' : '#fecaca'};border-radius:8px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center">
-                <span style="font-weight:600;color:${diff >= 0 ? '#166534' : '#991b1b'};font-size:13px">
-                  ${diff >= 0 ? '✅ Sobrante' : '⚠️ Faltante'}
-                </span>
-                <span style="font-weight:700;font-size:15px;color:${diff >= 0 ? '#198754' : '#dc3545'}">
-                  ${diff >= 0 ? '+' : '-'}$${fmt(Math.abs(diff))}
-                </span>
+              <div style="border-top:1px dashed #cbd5e1;margin:12px 0 10px"></div>
+              <div style="display:flex;justify-content:space-between;align-items:center;gap:12px">
+                <div>
+                  <div style="font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.4px">Efectivo contado</div>
+                  <div style="font-size:16px;font-weight:700;color:#1e293b">$${fmt(final_amt)}</div>
+                </div>
+                <div style="background:${diff >= 0 ? '#f0fdf4' : '#fef2f2'};border:1px solid ${diff >= 0 ? '#bbf7d0' : '#fecaca'};border-radius:10px;padding:8px 14px;display:flex;align-items:center;gap:8px">
+                  <span class="material-icons" style="font-size:16px;color:${diff >= 0 ? '#15803d' : '#b91c1c'}">${diff >= 0 ? 'check_circle' : 'error'}</span>
+                  <div>
+                    <div style="font-size:10px;font-weight:700;color:${diff >= 0 ? '#15803d' : '#b91c1c'};text-transform:uppercase">${diff === 0 ? 'Exacto' : diff > 0 ? 'Sobrante' : 'Faltante'}</div>
+                    <div style="font-size:14px;font-weight:800;color:${diff >= 0 ? '#15803d' : '#b91c1c'}">${diff === 0 ? '$0,00' : (diff > 0 ? '+' : '-') + '$' + fmt(Math.abs(diff))}</div>
+                  </div>
+                </div>
               </div>
             ` : ''}
           </div>
         </div>
 
-        <!-- Ventas por tipo de pago -->
-        <div style="margin-bottom:20px">
-          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#64748b;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid #e2e8f0">🧾 Ventas por Tipo de Pago</div>
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-            <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:10px;padding:12px;text-align:center">
-              <div style="font-size:11px;color:#166534;font-weight:600">💵 Efectivo</div>
-              <div style="font-size:18px;font-weight:700;color:#198754;margin-top:4px">$${fmt(efectivo)}</div>
-              <div style="font-size:12px;color:#64748b">${c.num_ventas_efectivo || 0} ventas</div>
-            </div>
-            <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:10px;padding:12px;text-align:center">
-              <div style="font-size:11px;color:#1e40af;font-weight:600">🏦 Transferencia</div>
-              <div style="font-size:18px;font-weight:700;color:#0d6efd;margin-top:4px">$${fmt(transf)}</div>
-              <div style="font-size:12px;color:#64748b">${c.num_ventas_transferencia || 0} ventas</div>
-            </div>
-            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;text-align:center">
-              <div style="font-size:11px;color:#475569;font-weight:600">📊 Total</div>
-              <div style="font-size:18px;font-weight:700;color:#1e293b;margin-top:4px">$${fmt(total)}</div>
-              <div style="font-size:12px;color:#64748b">${c.total_transacciones || 0} ventas</div>
-            </div>
-          </div>
-        </div>
-
         <!-- Productos vendidos -->
         ${productos.length > 0 ? `
-        <div style="margin-bottom:20px">
-          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#64748b;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid #e2e8f0">📦 Productos Vendidos en el Turno</div>
-          <div style="max-height:200px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:8px">
-            <table style="width:100%;border-collapse:collapse;font-size:13px">
+        <div style="margin-bottom:22px">
+          <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid #e2e8f0">
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#64748b">Productos vendidos <span style="color:#94a3b8;font-weight:600">(${productos.length})</span></div>
+            <div style="font-size:11px;color:#94a3b8">Ordenados por ingreso</div>
+          </div>
+          ${top3.length > 0 ? `
+          <div style="display:grid;grid-template-columns:repeat(${Math.min(top3.length,3)},1fr);gap:8px;margin-bottom:10px">
+            ${top3.map((p, i) => {
+              const medal = ['#fbbf24','#94a3b8','#d97706'][i];
+              return `
+              <div style="background:#fafbfc;border:1px solid #e2e8f0;border-left:3px solid ${medal};border-radius:8px;padding:8px 12px">
+                <div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.4px">#${i+1} mas vendido</div>
+                <div style="font-size:12px;font-weight:700;color:#1e293b;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${p._nombre}">${p._nombre}</div>
+                <div style="font-size:11px;color:#475569;margin-top:2px">${p._cantidad} u. · <b style="color:#198754">$${fmt(p._ingreso)}</b></div>
+              </div>`;
+            }).join('')}
+          </div>` : ''}
+          <div style="max-height:280px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:10px">
+            <table style="width:100%;border-collapse:collapse;font-size:12.5px">
               <thead>
-                <tr style="background:#f8fafc;position:sticky;top:0">
-                  <th style="padding:8px 12px;text-align:left;font-weight:600;color:#475569;border-bottom:1px solid #e2e8f0">Producto</th>
-                  <th style="padding:8px 12px;text-align:center;font-weight:600;color:#475569;border-bottom:1px solid #e2e8f0">Cant.</th>
-                  <th style="padding:8px 12px;text-align:right;font-weight:600;color:#475569;border-bottom:1px solid #e2e8f0">Total</th>
+                <tr style="background:#f8fafc;position:sticky;top:0;z-index:1">
+                  <th style="padding:9px 10px;text-align:left;font-weight:700;color:#475569;border-bottom:1px solid #e2e8f0">Producto</th>
+                  <th style="padding:9px 10px;text-align:center;font-weight:700;color:#475569;border-bottom:1px solid #e2e8f0">Cant.</th>
+                  <th style="padding:9px 10px;text-align:right;font-weight:700;color:#475569;border-bottom:1px solid #e2e8f0">Ingreso</th>
+                  <th style="padding:9px 10px;text-align:right;font-weight:700;color:#475569;border-bottom:1px solid #e2e8f0">Costo</th>
+                  <th style="padding:9px 10px;text-align:right;font-weight:700;color:#475569;border-bottom:1px solid #e2e8f0">Ganancia</th>
                 </tr>
               </thead>
               <tbody>
-                ${productos.map((p, i) => `
+                ${productos.map((p, i) => {
+                  const sinCosto = p._costoUnit === 0;
+                  return `
                   <tr style="background:${i % 2 === 0 ? 'white' : '#f8fafc'}">
-                    <td style="padding:8px 12px;color:#1e293b;font-weight:500">${p.product_name || p.nombre || '-'}</td>
-                    <td style="padding:8px 12px;text-align:center;color:#475569">${p.total_quantity || p.cantidad || 0}</td>
-                    <td style="padding:8px 12px;text-align:right;font-weight:600;color:#198754">$${fmt(p.total_amount || p.total || 0)}</td>
-                  </tr>
-                `).join('')}
+                    <td style="padding:8px 10px;color:#1e293b;font-weight:500">${p._nombre}</td>
+                    <td style="padding:8px 10px;text-align:center;color:#475569">${p._cantidad}</td>
+                    <td style="padding:8px 10px;text-align:right;font-weight:700;color:#198754">$${fmt(p._ingreso)}</td>
+                    <td style="padding:8px 10px;text-align:right;color:${sinCosto?'#d97706':'#64748b'};${sinCosto?'font-style:italic':''}">
+                      ${sinCosto ? '—' : '$'+fmt(p._costoTot)}
+                    </td>
+                    <td style="padding:8px 10px;text-align:right;font-weight:700;color:${sinCosto?'#94a3b8':(p._ganancia>=0?'#15803d':'#b91c1c')}">
+                      ${sinCosto ? '<span title="sin costo cargado">s/c</span>' : `$${fmt(p._ganancia)}${p._margenPct!=null?` <span style="font-size:10px;color:#94a3b8;font-weight:600">(${p._margenPct.toFixed(0)}%)</span>`:''}`}
+                    </td>
+                  </tr>`;
+                }).join('')}
               </tbody>
             </table>
           </div>
         </div>
         ` : ''}
 
-        <!-- Retiros -->
-        ${retiros_lista.length > 0 ? `
-        <div style="margin-bottom:20px">
-          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#64748b;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid #e2e8f0">💸 Retiros de Caja</div>
-          ${retiros_lista.map(r => `
-            <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;margin-bottom:6px">
-              <div>
-                <div style="font-size:12px;font-weight:600;color:#991b1b">${r.reason || r.motivo || 'Retiro'}</div>
-                <div style="font-size:11px;color:#64748b">${r.created_at ? fmtDT(parseArDate(r.created_at)) : ''}</div>
+        <!-- Gastos + Retiros (side by side si ambos existen) -->
+        ${(gastosTurno.length > 0 || retiros_lista.length > 0) ? `
+        <div style="display:grid;grid-template-columns:${(gastosTurno.length > 0 && retiros_lista.length > 0) ? '1fr 1fr' : '1fr'};gap:16px;margin-bottom:22px">
+          ${gastosTurno.length > 0 ? `
+          <div>
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#64748b;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid #e2e8f0">Gastos del turno <span style="color:#94a3b8;font-weight:600">(${gastosTurno.length})</span></div>
+            ${gastosTurno.map(g => `
+              <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;margin-bottom:6px">
+                <div style="min-width:0;flex:1">
+                  <div style="font-size:12px;font-weight:600;color:#991b1b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${g.descripcion || '-'}</div>
+                  <div style="font-size:10px;color:#64748b">${g.fecha || ''}${g.tipo ? ' · ' + g.tipo : ''}</div>
+                </div>
+                <div style="font-size:14px;font-weight:700;color:#dc3545;white-space:nowrap;margin-left:8px">-$${fmt(g.monto)}</div>
               </div>
-              <div style="font-size:15px;font-weight:700;color:#dc3545">-$${fmt(r.amount || r.monto || 0)}</div>
-            </div>
-          `).join('')}
+            `).join('')}
+          </div>` : ''}
+          ${retiros_lista.length > 0 ? `
+          <div>
+            <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:#64748b;margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid #e2e8f0">Retiros de caja <span style="color:#94a3b8;font-weight:600">(${retiros_lista.length})</span></div>
+            ${retiros_lista.map(r => `
+              <div style="display:flex;justify-content:space-between;align-items:center;padding:8px 12px;background:#fef2f2;border:1px solid #fecaca;border-radius:8px;margin-bottom:6px">
+                <div style="min-width:0;flex:1">
+                  <div style="font-size:12px;font-weight:600;color:#991b1b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${r.reason || r.motivo || 'Retiro'}</div>
+                  <div style="font-size:10px;color:#64748b">${r.created_at ? fmtDT(parseArDate(r.created_at)) : ''}</div>
+                </div>
+                <div style="font-size:14px;font-weight:700;color:#dc3545;white-space:nowrap;margin-left:8px">-$${fmt(r.amount || r.monto || 0)}</div>
+              </div>
+            `).join('')}
+          </div>` : ''}
         </div>
         ` : ''}
-
-        <!-- Total final -->
-        <div style="background:linear-gradient(135deg,#1e293b,#334155);border-radius:10px;padding:16px 20px;display:flex;justify-content:space-between;align-items:center">
-          <span style="color:#94a3b8;font-size:13px;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Total del Turno</span>
-          <span style="color:white;font-size:24px;font-weight:700">$${fmt(total)}</span>
-        </div>
 
       </div>
     </div>
@@ -442,13 +695,59 @@ function openCierreModal(c) {
   document.addEventListener('keydown', function esc(e) {
     if (e.key === 'Escape') { overlay.remove(); document.removeEventListener('keydown', esc); }
   });
+
+  // Wire-up: cargar efectivo contado (solo si pendiente_conteo)
+  const btnCargar = overlay.querySelector('#btn-cargar-conteo');
+  if (btnCargar && db) {
+    const formEl = overlay.querySelector('#conteo-form');
+    const inputEl = overlay.querySelector('#input-conteo');
+    btnCargar.addEventListener('click', () => {
+      formEl.style.display = 'block';
+      btnCargar.style.display = 'none';
+      inputEl.focus();
+      inputEl.select();
+    });
+    overlay.querySelector('#btn-cancelar-conteo').addEventListener('click', () => {
+      formEl.style.display = 'none';
+      btnCargar.style.display = 'flex';
+    });
+    const btnGuardar = overlay.querySelector('#btn-guardar-conteo');
+    const guardar = async () => {
+      const val = parseFloat(inputEl.value);
+      if (isNaN(val) || val < 0) { inputEl.focus(); return; }
+      btnGuardar.disabled = true; btnGuardar.textContent = 'Guardando...';
+      try {
+        const docs = c._docs || [];
+        const diferencia = val - esperado;
+        const nowIso = new Date().toISOString();
+        for (let i = 0; i < docs.length; i++) {
+          const d = docs[i];
+          if (!d.id) continue;
+          await updateDoc(doc(db, 'cierres_caja', d.id), {
+            monto_final:      i === 0 ? val : 0,
+            diferencia:       i === 0 ? diferencia : 0,
+            pendiente_conteo: false,
+            updated_at:       nowIso,
+          });
+        }
+        invalidateCache('cierres:caja');
+        overlay.remove();
+        if (typeof onSaved === 'function') onSaved();
+      } catch (e) {
+        btnGuardar.disabled = false; btnGuardar.textContent = 'Guardar';
+        alert('Error al guardar: ' + (e?.message || e));
+      }
+    };
+    btnGuardar.addEventListener('click', guardar);
+    inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') guardar(); });
+  }
 }
 
-function fila(label, valor, color = '#1e293b', bold = false) {
+function lineaEf(label, valor, color = '#1e293b', bold = false) {
   return `
-    <div style="background:#f8fafc;border-radius:8px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center">
-      <span style="font-size:12px;color:#64748b">${label}</span>
-      <span style="font-size:13px;font-weight:${bold ? '700' : '600'};color:${color}">${valor}</span>
+    <div style="display:flex;justify-content:space-between;align-items:center;${bold ? 'padding-top:6px;border-top:1px dashed #e2e8f0;' : ''}">
+      <span style="font-size:12px;color:#64748b;${bold ? 'font-weight:700;color:#475569' : ''}">${label}</span>
+      <span style="font-size:${bold ? '14px' : '13px'};font-weight:${bold ? '800' : '600'};color:${color}">${valor}</span>
     </div>
   `;
 }

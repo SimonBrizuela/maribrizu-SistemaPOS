@@ -170,6 +170,78 @@ class FirebaseSync:
         except Exception as e:
             logger.error(f"Firebase: No se pudo iniciar listener de inventario: {e}")
 
+    def start_stock_sync_listener(self, db_manager, on_refresh: Optional[Callable] = None):
+        """Listener en tiempo real de 'inventario': cada vez que cambia el stock
+        en Firebase (venta de otra PC, edición desde la web, etc.), actualiza la
+        SQLite local. Sólo procesa los docs que cambian (added/modified) y
+        evita overwrites innecesarios comparando valores.
+
+        db_manager : DatabaseManager (SQLite)
+        on_refresh : callable() — se invoca si hubo cambios reales (para refrescar UI)
+        """
+        if not self.enabled:
+            return
+
+        def _watch(col_snapshot, changes, read_time):
+            try:
+                from google.cloud.firestore_v1.watch import ChangeType
+                changed_any = False
+                for change in changes:
+                    if change.type == ChangeType.REMOVED:
+                        continue
+                    d = change.document.to_dict() or {}
+                    pid = d.get('id')
+                    if pid is None:
+                        try:
+                            pid = int(change.document.id)
+                        except Exception:
+                            continue
+                    try:
+                        pid = int(pid)
+                    except Exception:
+                        continue
+                    nuevo_stock = d.get('stock')
+                    if nuevo_stock is None:
+                        continue
+                    try:
+                        nuevo_stock = int(nuevo_stock)
+                    except Exception:
+                        continue
+                    try:
+                        rows = db_manager.execute_query(
+                            "SELECT stock FROM products WHERE id = ?", (pid,)
+                        )
+                    except Exception:
+                        rows = []
+                    if not rows:
+                        continue
+                    stock_local = int(rows[0].get('stock') or 0)
+                    if stock_local == nuevo_stock:
+                        continue
+                    try:
+                        db_manager.execute_update(
+                            "UPDATE products SET stock = ?, updated_at = ? WHERE id = ?",
+                            (nuevo_stock, now_ar().strftime('%Y-%m-%d %H:%M:%S'), pid)
+                        )
+                        changed_any = True
+                    except Exception as e:
+                        logger.warning(f"Firebase stock listener: error UPDATE pid={pid}: {e}")
+                if changed_any and on_refresh:
+                    try:
+                        on_refresh()
+                    except Exception as e:
+                        logger.warning(f"Firebase stock listener: on_refresh() falló: {e}")
+            except Exception as e:
+                logger.error(f"Firebase: error en listener de stock: {e}")
+
+        try:
+            col_ref = self.db.collection('inventario')
+            watcher = col_ref.on_snapshot(_watch)
+            self._listeners.append(watcher)
+            logger.info("Firebase: Listener de stock (inventario) en tiempo real activado.")
+        except Exception as e:
+            logger.error(f"Firebase: No se pudo iniciar listener de stock: {e}")
+
     def start_products_remote_listener(self, on_change: Callable):
         """
         Escucha la colección 'productos_remotos' donde la web puede crear/modificar
@@ -444,6 +516,185 @@ class FirebaseSync:
                 logger.error(f"Firebase: Error sincronizando inventario: {e}")
         self._run(_do)
 
+    # ══════════════════════════════════════════════════
+    #  OBSERVACIONES (notas compartidas entre cajeros)
+    # ══════════════════════════════════════════════════
+    def sync_observation(self, local_id: int, data: dict, db_manager=None):
+        """Crea/actualiza una observación en Firestore.
+        Si aún no tiene firebase_id en SQLite, genera uno y lo persiste.
+        """
+        if not self.enabled or not local_id:
+            return
+
+        def _do():
+            try:
+                payload = {
+                    'text':              str(data.get('text') or ''),
+                    'context':           str(data.get('context') or 'general'),
+                    'sale_id':           data.get('sale_id'),
+                    'sale_item_id':      data.get('sale_item_id'),
+                    'created_by_id':     data.get('created_by_id'),
+                    'created_by_name':   str(data.get('created_by_name') or ''),
+                    'pc_id':             str(data.get('pc_id') or _get_pc_id()),
+                    'created_at':        str(data.get('created_at') or now_ar().strftime('%Y-%m-%dT%H:%M:%S')),
+                    'deleted':           bool(data.get('deleted') or False),
+                    'local_id':          int(local_id),
+                }
+                fid = str(data.get('firebase_id') or '').strip()
+                col = self.db.collection('observaciones')
+                if fid:
+                    col.document(fid).set(payload, merge=True)
+                else:
+                    ref = col.document()
+                    ref.set(payload)
+                    fid = ref.id
+                    if db_manager is not None:
+                        try:
+                            db_manager.execute_update(
+                                "UPDATE observations SET firebase_id = ? WHERE id = ?",
+                                (fid, int(local_id))
+                            )
+                        except Exception as e:
+                            logger.warning(f"Firebase obs: persistir firebase_id local: {e}")
+
+                try:
+                    self.db.collection('config').document('observaciones_meta').set(
+                        {'last_updated': now_ar().strftime('%Y-%m-%dT%H:%M:%S')}, merge=True
+                    )
+                except Exception:
+                    pass
+
+                logger.info(f"Firebase: observación #{local_id} sincronizada ({fid}).")
+            except Exception as e:
+                logger.error(f"Firebase: Error al sincronizar observación: {e}")
+
+        self._run(_do)
+
+    def start_observations_listener(self, db_manager, on_change: Optional[Callable] = None):
+        """Listener en tiempo real de la colección 'observaciones' — espeja a SQLite.
+        on_change() se llama si hubo cambios que la UI deba refrescar.
+        """
+        if not self.enabled:
+            return
+
+        from pos_system.models.observation import Observation as _Obs
+        obs_model = _Obs(db_manager)
+
+        def _watch(col_snapshot, changes, read_time):
+            try:
+                from google.cloud.firestore_v1.watch import ChangeType
+                changed = False
+                for change in changes:
+                    fid = change.document.id
+                    if change.type == ChangeType.REMOVED:
+                        try:
+                            db_manager.execute_update(
+                                "UPDATE observations SET deleted = 1 WHERE firebase_id = ?",
+                                (fid,)
+                            )
+                            changed = True
+                        except Exception as e:
+                            logger.warning(f"Firebase obs listener REMOVED: {e}")
+                        continue
+                    d = change.document.to_dict() or {}
+                    try:
+                        obs_model.upsert_from_firebase(fid, d)
+                        changed = True
+                    except Exception as e:
+                        logger.warning(f"Firebase obs listener upsert: {e}")
+
+                if changed and on_change:
+                    try:
+                        on_change()
+                    except Exception as e:
+                        logger.warning(f"Firebase obs listener on_change: {e}")
+            except Exception as e:
+                logger.error(f"Firebase: error en listener de observaciones: {e}")
+
+        try:
+            col_ref = self.db.collection('observaciones')
+            watcher = col_ref.on_snapshot(_watch)
+            self._listeners.append(watcher)
+            logger.info("Firebase: Listener de observaciones en tiempo real activado.")
+        except Exception as e:
+            logger.error(f"Firebase: No se pudo iniciar listener de observaciones: {e}")
+
+    def sync_stock_after_sale(self, items: list, db_manager):
+        """Descuenta el stock en Firebase (catalogo + inventario) de forma ATÓMICA
+        usando firestore.Increment(-quantity). Esto evita race conditions cuando
+        dos PCs venden el mismo producto simultáneamente: Firebase reconcilia los
+        decrementos y queda como fuente de verdad. Los productos con stock=-1
+        (servicio/ilimitado) NO se descuentan.
+        """
+        if not self.enabled or not items:
+            return
+
+        def _do():
+            try:
+                from firebase_admin import firestore as _fs
+                now_str = now_ar().strftime('%Y-%m-%dT%H:%M:%S')
+                batch = self.db.batch()
+                updated = 0
+
+                for it in items:
+                    pid = it.get('product_id')
+                    qty = int(it.get('quantity') or 0)
+                    if not pid or qty <= 0:
+                        continue
+                    try:
+                        rows = db_manager.execute_query(
+                            "SELECT id, firebase_id, stock FROM products WHERE id = ?",
+                            (int(pid),)
+                        )
+                    except Exception:
+                        rows = []
+                    if not rows:
+                        continue
+                    row = rows[0]
+                    # Servicio/ilimitado: no tocar el stock en Firebase
+                    if int(row.get('stock') or 0) == -1:
+                        continue
+                    firebase_id = str(row.get('firebase_id') or '').strip()
+
+                    # Inventario (doc_id = id numérico local) — decremento atómico
+                    inv_ref = self.db.collection('inventario').document(str(pid))
+                    batch.set(inv_ref, {
+                        'stock': _fs.Increment(-qty),
+                        'ultima_actualizacion': now_str,
+                    }, merge=True)
+
+                    # Catalogo (doc_id = firebase_id) — decremento atómico
+                    if firebase_id:
+                        cat_ref = self.db.collection('catalogo').document(firebase_id)
+                        batch.set(cat_ref, {
+                            'stock': _fs.Increment(-qty),
+                            'ultima_actualizacion': now_str,
+                        }, merge=True)
+
+                    updated += 1
+
+                if updated == 0:
+                    return
+
+                batch.commit()
+
+                # Tocar metadatos para que las otras PCs detecten el cambio en delta_sync
+                try:
+                    self.db.collection('config').document('inventario_meta').set(
+                        {'last_updated': now_str}, merge=True
+                    )
+                    self.db.collection('config').document('catalogo_meta').set(
+                        {'last_updated': now_str}, merge=True
+                    )
+                except Exception:
+                    pass
+
+                logger.info(f"Firebase: stock decrementado atómicamente para {updated} producto(s) tras venta.")
+            except Exception as e:
+                logger.error(f"Firebase: Error actualizando stock post-venta: {e}")
+
+        self._run(_do)
+
     def delta_sync_products_startup(self, local_db, on_done=None):
         """
         Al arrancar el POS, detecta en segundo plano si hay productos nuevos o
@@ -485,32 +736,37 @@ class FirebaseSync:
                 meta = meta_doc.to_dict() or {}
                 firebase_ts = str(meta.get('last_updated', '') or '')
 
-                if firebase_ts and firebase_ts <= last_local_ts:
-                    logger.info(f"Delta sync: inventario al día ({firebase_ts}).")
-                    if on_done:
-                        on_done(0)
-                    return
+                inventario_al_dia = bool(firebase_ts and firebase_ts <= last_local_ts)
+                if inventario_al_dia:
+                    logger.info(f"Delta sync: inventario al día ({firebase_ts}) — solo se reconciliarán borrados.")
+                else:
+                    logger.info(f"Delta sync: cambios detectados (Firebase: {firebase_ts}, local: {last_local_ts})")
 
-                logger.info(f"Delta sync: cambios detectados (Firebase: {firebase_ts}, local: {last_local_ts})")
-
-                # 3. Descargar colección completa de catálogo
+                # 3. Descargar colección completa de catálogo (necesario para reconciliar borrados)
                 docs = list(self.db.collection('catalogo').stream())
                 if not docs:
                     if on_done:
                         on_done(0)
                     return
 
-                # 4. Mapa local: firebase_id → (local_id, updated_at, barcode)
+                # 4. Mapa local: firebase_id → (local_id, updated_at, barcode, stock_min, stock_max)
                 rows = local_db.execute_query(
-                    "SELECT id, firebase_id, updated_at, barcode FROM products"
+                    "SELECT id, firebase_id, updated_at, barcode, stock_min, stock_max FROM products"
                 ) or []
                 local_by_firebase_id = {}
                 for r in rows:
                     if r.get('firebase_id'):
-                        local_by_firebase_id[str(r['firebase_id'])] = (r['id'], r.get('updated_at') or '', r.get('barcode') or '')
+                        local_by_firebase_id[str(r['firebase_id'])] = (
+                            r['id'], r.get('updated_at') or '', r.get('barcode') or '',
+                            r.get('stock_min'), r.get('stock_max')
+                        )
 
-                # 5. Aplicar solo diffs
-                for doc in docs:
+                # 5. Aplicar solo diffs (si hay cambios detectados por timestamp)
+                if inventario_al_dia:
+                    docs_for_diff = []
+                else:
+                    docs_for_diff = docs
+                for doc in docs_for_diff:
                     d = doc.to_dict() or {}
                     firebase_id = doc.id
                     nombre = str(d.get('nombre') or d.get('name') or '').strip()
@@ -529,6 +785,10 @@ class FirebaseSync:
                     rubro  = str(d.get('rubro') or '').strip() or None
                     barcode = str(d.get('cod_barra') or d.get('barcode') or '').strip() or None
                     desc   = float(d.get('descuento') or 0)
+                    raw_smin = d.get('stock_min')
+                    raw_smax = d.get('stock_max')
+                    stock_min = int(raw_smin) if raw_smin not in (None, '', False) else None
+                    stock_max = int(raw_smax) if raw_smax not in (None, '', False) else None
 
                     entry = local_by_firebase_id.get(firebase_id)
 
@@ -544,18 +804,20 @@ class FirebaseSync:
                                 """INSERT OR IGNORE INTO products
                                    (name, category, price, cost, stock, barcode,
                                     discount_value, firebase_id, rubro,
+                                    stock_min, stock_max,
                                     created_at, updated_at)
-                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)""",
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)""",
                                 (nombre, categ, precio, costo, stock, barcode,
-                                 desc, firebase_id, rubro, fb_ts)
+                                 desc, firebase_id, rubro, stock_min, stock_max, fb_ts)
                             )
                             n_updated += 1
                         except Exception as e:
                             logger.warning(f"Delta sync: error INSERT {firebase_id}: {e}")
 
                     else:
-                        local_id, local_ts, local_barcode = entry
-                        if fb_ts and (fb_ts != local_ts or (barcode or '') != local_barcode):
+                        local_id, local_ts, local_barcode, local_smin, local_smax = entry
+                        alerts_changed = (stock_min != local_smin) or (stock_max != local_smax)
+                        if fb_ts and (fb_ts != local_ts or (barcode or '') != local_barcode or alerts_changed):
                             # Producto modificado — liberar barcode si lo tiene otro producto
                             try:
                                 if barcode:
@@ -566,16 +828,52 @@ class FirebaseSync:
                                 local_db.execute_update(
                                     """UPDATE products
                                        SET name=?, category=?, price=?, cost=?, stock=?,
-                                           barcode=?, discount_value=?, rubro=?, updated_at=?
+                                           barcode=?, discount_value=?, rubro=?,
+                                           stock_min=?, stock_max=?, updated_at=?
                                        WHERE id=?""",
                                     (nombre, categ, precio, costo, stock,
-                                     barcode, desc, rubro, fb_ts, local_id)
+                                     barcode, desc, rubro, stock_min, stock_max, fb_ts, local_id)
                                 )
                                 n_updated += 1
                             except Exception as e:
                                 logger.warning(f"Delta sync: error UPDATE {firebase_id}: {e}")
 
-                # 6. Guardar timestamp del sync exitoso
+                # 6. Reconciliación: borrar locales con firebase_id que ya no están en Firestore.
+                # Productos sin firebase_id (creados localmente sin sync) no se tocan.
+                # Productos con ventas asociadas (FK a sale_items) se marcan stock=0 y
+                # firebase_id=NULL para que queden fuera del catálogo pero conserven el
+                # histórico de ventas. Ese comportamiento replica al full sync.
+                try:
+                    firestore_ids = {doc.id for doc in docs}
+                    stale = [
+                        (lid, fid) for fid, (lid, *_) in local_by_firebase_id.items()
+                        if fid not in firestore_ids and lid != 0
+                    ]
+                    deleted = 0
+                    softdeleted = 0
+                    for lid, fid in stale:
+                        try:
+                            local_db.execute_update("DELETE FROM products WHERE id=?", (lid,))
+                            deleted += 1
+                        except Exception as _e:
+                            # Probablemente FK: hay ventas apuntando a este producto.
+                            try:
+                                local_db.execute_update(
+                                    "UPDATE products SET stock=0, firebase_id=NULL WHERE id=?",
+                                    (lid,)
+                                )
+                                softdeleted += 1
+                            except Exception as _e2:
+                                logger.debug(f"Delta sync: no se pudo limpiar producto {lid}: {_e2}")
+                    if deleted or softdeleted:
+                        logger.info(
+                            f"Delta sync: {deleted} productos eliminados, "
+                            f"{softdeleted} conservados (con ventas) y marcados stock=0."
+                        )
+                except Exception as e:
+                    logger.warning(f"Delta sync: error en reconciliación de borrados: {e}")
+
+                # 7. Guardar timestamp del sync exitoso
                 now_str = now_ar().strftime('%Y-%m-%dT%H:%M:%S')
                 sync_file.write_text(now_str, encoding="utf-8")
                 logger.info(f"Delta sync: {n_updated} productos actualizados.")
@@ -741,6 +1039,83 @@ class FirebaseSync:
                 logger.debug(f"Firebase: Detalle de venta #{sale_id} ({len(items)} items) sincronizado.")
             except Exception as e:
                 logger.error(f"Firebase: Error sincronizando detalle de venta: {e}")
+        self._run(_do)
+
+    def resync_sale_after_edit(self, sale_id: int, db_manager):
+        """Resincroniza a Firebase todo lo derivado de una venta que fue editada:
+        venta, detalle por día, historial diario, resumen mensual y — si la
+        caja asociada ya está cerrada — el cierre de caja.
+
+        Se llama después de `Sale.update(...)` para propagar los cambios a la
+        webapp y a todas las PCs.
+        """
+        if not self.enabled or not sale_id:
+            return
+
+        def _do():
+            try:
+                from pos_system.models.sale import Sale as _Sale
+                from pos_system.models.cash_register import CashRegister as _CR
+
+                sale = _Sale(db_manager).get_by_id(int(sale_id))
+                if not sale:
+                    logger.warning(f"resync_sale_after_edit: venta #{sale_id} no encontrada")
+                    return
+
+                # 1. Venta (colección 'ventas')
+                self.sync_sale(sale)
+
+                # 2. Detalle por día (colección 'ventas_por_dia')
+                self.sync_sale_detail_by_day(sale, db_manager=db_manager)
+
+                # 3. Historial diario del día de la venta
+                dt = self._parse_dt(sale.get('created_at'))
+                day_str = dt.strftime('%Y-%m-%d')
+                day_sales = db_manager.execute_query(
+                    "SELECT * FROM sales WHERE date(created_at) = ?", (day_str,)
+                ) or []
+                self.sync_daily_summary(day_sales, date=dt)
+
+                # 4. Resumen mensual
+                month_start = dt.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+                month_sales = _Sale(db_manager).get_all(
+                    start_date=month_start.strftime('%Y-%m-%d 00:00:00'),
+                    end_date=dt.strftime('%Y-%m-%d 23:59:59')
+                )
+                # Adjuntar items para el top de productos del resumen mensual
+                for s in month_sales:
+                    if 'items' not in s:
+                        s['items'] = db_manager.execute_query(
+                            "SELECT * FROM sale_items WHERE sale_id = ?", (s.get('id'),)
+                        ) or []
+                self.sync_monthly_summary(dt.year, dt.month, month_sales, db_manager=db_manager)
+
+                # 5. Si la caja asociada está cerrada, re-sincronizar el cierre
+                reg_id = sale.get('cash_register_id')
+                if reg_id:
+                    reg_rows = db_manager.execute_query(
+                        "SELECT status, notes FROM cash_register WHERE id = ?", (int(reg_id),)
+                    ) or []
+                    if reg_rows and str(reg_rows[0].get('status') or '').lower() == 'closed':
+                        try:
+                            rep = _CR(db_manager).get_closing_report(int(reg_id))
+                            if rep:
+                                # Intentar preservar session_id del doc existente si aplica
+                                sid = None
+                                try:
+                                    notes = reg_rows[0].get('notes') or ''
+                                    if 'session=' in notes:
+                                        sid = notes.split('session=', 1)[1].split()[0].strip()
+                                except Exception:
+                                    sid = None
+                                self.sync_cash_closing(rep, session_id=sid)
+                        except Exception as _ce:
+                            logger.warning(f"resync_sale_after_edit: cierre: {_ce}")
+
+                logger.info(f"Firebase: venta #{sale_id} resincronizada tras edición.")
+            except Exception as e:
+                logger.error(f"Firebase: Error en resync_sale_after_edit: {e}")
+
         self._run(_do)
 
     # ══════════════════════════════════════════════════

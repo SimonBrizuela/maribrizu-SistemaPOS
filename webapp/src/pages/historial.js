@@ -1,104 +1,215 @@
 import { collection, getDocs, query, orderBy, where } from 'firebase/firestore';
 import { openSaleModal } from '../components/modal.js';
 import { getCached } from '../cache.js';
+import { getFechaInicio, fechaDMYtoYMD } from '../config.js';
+import { getSaleNumberMap, displayNumForItem } from '../sale_numbers.js';
 
 export async function renderHistorial(container, db) {
-  const [historial, ventasDia] = await Promise.all([
+  const fechaInicioStr = await getFechaInicio(db);
+
+  const [historialRaw, ventasDiaRaw, saleNumMap] = await Promise.all([
     getCached('historial:diario', async () => {
       const snap = await getDocs(query(collection(db, 'historial_diario'), orderBy('fecha', 'desc')));
       return snap.docs.map(d => d.data());
     }),
-    getCached('historial:ventas_dia', async () => {
+    // v2: incluye _pc_id extraído del doc.id (evita colisiones de num_venta entre PCs)
+    getCached('historial:ventas_dia:v2', async () => {
       const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('fecha', 'desc')));
-      return snap.docs.map(d => d.data());
+      return snap.docs.map(d => {
+        const data  = d.data();
+        const parts = d.id.split('_');
+        const pcId  = parts.length >= 3 ? parts.slice(0, -2).join('_') : '';
+        return { ...data, _pc_id: pcId };
+      });
     }),
+    getSaleNumberMap(db),
   ]);
 
+  // Ocultar todo lo anterior a fecha_inicio (fechas vienen "DD/MM/YYYY") y lo eliminado
+  const historial  = historialRaw.filter(h => fechaDMYtoYMD(h.fecha) >= fechaInicioStr);
+  const ventasDia  = ventasDiaRaw.filter(v => v.deleted !== true && fechaDMYtoYMD(v.fecha) >= fechaInicioStr);
+
   container.innerHTML = `
-    <!-- Historial Diario -->
+    <!-- Resumen por Día -->
     <div class="table-card" style="margin-bottom:24px">
       <div class="table-card-header">
-        <h3>📅 Resumen por Día</h3>
+        <h3>Resumen por Día</h3>
+        <span style="font-size:12px;color:var(--text-muted)">${historial.length} ${historial.length === 1 ? 'día' : 'días'}</span>
       </div>
       <div class="table-wrap">
         <table>
           <thead><tr>
-            <th>Fecha</th><th class="hist-col-mes">Mes</th><th># Ventas</th>
-            <th>Total</th><th class="hist-col-efectivo">Efectivo</th><th class="hist-col-transferencia">Transferencia</th><th class="hist-col-ticket">Ticket Promedio</th>
+            <th>Fecha</th>
+            <th style="text-align:center"># Ventas</th>
+            <th style="text-align:right">Total</th>
+            <th class="hist-col-efectivo" style="text-align:right">Efectivo</th>
+            <th class="hist-col-transferencia" style="text-align:right">Transferencia</th>
+            <th class="hist-col-ticket" style="text-align:right">Ticket Promedio</th>
           </tr></thead>
           <tbody>
             ${historial.map(h => `<tr>
-              <td><b>${h.fecha || '-'}</b></td>
-              <td class="hist-col-mes"><span class="badge badge-blue">${h.mes || '-'}</span></td>
-              <td style="text-align:center">${h.num_ventas || 0}</td>
-              <td><b style="color:var(--success)">$${fmt(h.total)}</b></td>
-              <td class="hist-col-efectivo">$${fmt(h.efectivo)}</td>
-              <td class="hist-col-transferencia">$${fmt(h.transferencia)}</td>
-              <td class="hist-col-ticket">$${fmt(h.ticket_promedio)}</td>
-            </tr>`).join('') || `<tr><td colspan="7" style="text-align:center;padding:40px;color:var(--text-muted)">Sin datos</td></tr>`}
+              <td>
+                <div style="font-weight:600">${h.fecha || '-'}</div>
+                <div style="font-size:11px;color:var(--text-muted);text-transform:capitalize">${h.mes || ''}</div>
+              </td>
+              <td style="text-align:center"><b>${h.num_ventas || 0}</b></td>
+              <td style="text-align:right"><b style="color:var(--success);font-size:14px">$${fmt(h.total)}</b></td>
+              <td class="hist-col-efectivo" style="text-align:right;color:#2e7d32">$${fmt(h.efectivo)}</td>
+              <td class="hist-col-transferencia" style="text-align:right;color:#1565c0">$${fmt(h.transferencia)}</td>
+              <td class="hist-col-ticket" style="text-align:right;color:var(--text-muted)">$${fmt(h.ticket_promedio)}</td>
+            </tr>`).join('') || `<tr><td colspan="6" style="text-align:center;padding:40px;color:var(--text-muted)">Sin datos</td></tr>`}
           </tbody>
         </table>
       </div>
     </div>
 
-    <!-- Detalle por producto del día -->
+    <!-- Detalle por día (agrupado) -->
     <div class="table-card">
       <div class="table-card-header">
-        <h3>🛒 Detalle de Productos Vendidos por Día</h3>
+        <h3>Detalle de Productos Vendidos por Día</h3>
         <div class="filter-bar" style="margin:0">
           <input type="date" id="filtroDia" />
           <input type="text" id="filtroProducto" placeholder="Producto..." style="width:160px" />
         </div>
       </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr>
-            <th>Fecha</th><th class="hist-col-hora">Hora</th><th># Venta</th><th>Producto</th>
-            <th class="hist-col-categoria">Categoría</th><th>Cant.</th><th class="hist-col-precio">Precio Unit.</th><th>Subtotal</th><th>Tipo Pago</th><th class="hist-col-cajero">Cajero</th>
-          </tr></thead>
-          <tbody id="ventasDiaBody"></tbody>
-        </table>
-      </div>
+      <div id="ventasDiaContainer" class="day-groups"></div>
     </div>
   `;
 
   function renderVentasDia(data) {
-    const tbody = document.getElementById('ventasDiaBody');
+    const cont = document.getElementById('ventasDiaContainer');
     if (!data.length) {
-      tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text-muted)">Sin datos para mostrar</td></tr>`;
+      cont.innerHTML = `<div style="text-align:center;padding:40px;color:var(--text-muted)">Sin datos para mostrar</div>`;
       return;
     }
-    tbody.innerHTML = data.map((v, i) => {
-      const esTransf = (v.tipo_pago || '') === 'Transferencia';
-      return `<tr class="clickable-row" data-idx="${i}" data-ventaid="${v.num_venta || ''}" style="${esTransf ? 'background:#f3f8ff' : ''}" title="Click para ver venta completa">
-        <td><b>${v.fecha || '-'}</b></td>
-        <td class="hist-col-hora" style="color:var(--text-muted)">${v.hora || '-'}</td>
-        <td style="text-align:center"><b>#${v.num_venta || '-'}</b></td>
-        <td><b>${v.producto || '-'}</b></td>
-        <td class="hist-col-categoria"><span class="badge badge-gray">${v.categoria || '-'}</span></td>
-        <td style="text-align:center">${v.cantidad || '-'}</td>
-        <td class="hist-col-precio">$${fmt(v.precio_unitario)}</td>
-        <td><b>$${fmt(v.subtotal)}</b></td>
-        <td><span class="badge ${esTransf ? 'badge-blue' : 'badge-green'}">${v.tipo_pago || '-'}</span></td>
-        <td class="hist-col-cajero"><b>${v.cajero || '-'}</b></td>
-      </tr>`;
+
+    // Agrupar por fecha preservando orden (Firebase ya viene desc)
+    const groups = [];
+    const idxByDate = {};
+    for (const v of data) {
+      const key = v.fecha || 'Sin fecha';
+      if (!(key in idxByDate)) {
+        idxByDate[key] = groups.length;
+        groups.push({ fecha: key, rows: [] });
+      }
+      groups[idxByDate[key]].rows.push(v);
+    }
+
+    // Dentro de cada día: ordenar por (# global asc, hora asc, producto).
+    // Así los items de la misma venta quedan juntos y las ventas siguen
+    // el orden cronológico real (venta #1 arriba, #N abajo).
+    for (const g of groups) {
+      g.rows.sort((a, b) => {
+        const numA = displayNumForItem(a, saleNumMap);
+        const numB = displayNumForItem(b, saleNumMap);
+        if (numA !== numB) return Number(numA) - Number(numB);
+        const horaA = a.hora || '';
+        const horaB = b.hora || '';
+        if (horaA !== horaB) return horaA.localeCompare(horaB);
+        return (a.producto || '').localeCompare(b.producto || '');
+      });
+    }
+
+    cont.innerHTML = groups.map((g, idx) => {
+      const rows = g.rows;
+      const totalDay = rows.reduce((s, r) => s + Number(r.subtotal || 0), 0);
+      const totalQty = rows.reduce((s, r) => s + Number(r.cantidad || 0), 0);
+      const efectivoMonto = rows.filter(r => (r.tipo_pago || '') !== 'Transferencia')
+                                .reduce((s, r) => s + Number(r.subtotal || 0), 0);
+      const transfMonto   = rows.filter(r => (r.tipo_pago || '') === 'Transferencia')
+                                .reduce((s, r) => s + Number(r.subtotal || 0), 0);
+      // Contar ventas únicas por (pc_id, num_venta) — un mismo num_venta en dos PCs son 2 ventas distintas
+      const numVentas = new Set(rows.map(r => `${r._pc_id || ''}|${r.num_venta}`)).size;
+      const expanded = idx === 0 ? ' expanded' : '';
+
+      const productRows = rows.map(v => {
+        const esTransf = (v.tipo_pago || '') === 'Transferencia';
+        const numGlobal = displayNumForItem(v, saleNumMap);
+        return `<tr class="clickable-row" data-ventaid="${v.num_venta || ''}" data-pcid="${v._pc_id || ''}" title="Ver venta completa">
+          <td class="dpt-hora">${v.hora || '-'}</td>
+          <td class="dpt-venta"><b>#${numGlobal}</b></td>
+          <td class="dpt-prod"><b>${v.producto || '-'}</b></td>
+          <td class="dpt-cant">${v.cantidad || '-'}</td>
+          <td class="dpt-precio">$${fmt(v.precio_unitario)}</td>
+          <td class="dpt-sub"><b>$${fmt(v.subtotal)}</b></td>
+          <td class="dpt-pago"><span class="badge ${esTransf ? 'badge-blue' : 'badge-green'}">${v.tipo_pago || '-'}</span></td>
+          <td class="dpt-cajero">${v.cajero || '-'}</td>
+        </tr>`;
+      }).join('');
+
+      return `
+        <div class="day-group${expanded}">
+          <div class="day-group-header">
+            <div class="dgh-left">
+              <span class="material-icons dgh-caret">chevron_right</span>
+              <div>
+                <div class="dgh-date">${g.fecha}</div>
+                <div class="dgh-meta">${numVentas} ${numVentas === 1 ? 'venta' : 'ventas'} · ${rows.length} productos · ${totalQty} ${totalQty === 1 ? 'unidad' : 'unidades'}</div>
+              </div>
+            </div>
+            <div class="dgh-stats">
+              <div class="dgh-stat efectivo">
+                <span class="dgh-stat-label">Efectivo</span>
+                <span class="dgh-stat-val">$${fmt(efectivoMonto)}</span>
+              </div>
+              <div class="dgh-stat transf">
+                <span class="dgh-stat-label">Transferencia</span>
+                <span class="dgh-stat-val">$${fmt(transfMonto)}</span>
+              </div>
+              <div class="dgh-stat total">
+                <span class="dgh-stat-label">Total</span>
+                <span class="dgh-stat-val">$${fmt(totalDay)}</span>
+              </div>
+            </div>
+          </div>
+          <div class="day-group-body">
+            <div class="table-wrap">
+              <table class="dpt-table">
+                <thead><tr>
+                  <th class="dpt-hora">Hora</th>
+                  <th class="dpt-venta">Venta</th>
+                  <th class="dpt-prod">Producto</th>
+                  <th class="dpt-cant">Cant.</th>
+                  <th class="dpt-precio">Precio</th>
+                  <th class="dpt-sub">Subtotal</th>
+                  <th class="dpt-pago">Pago</th>
+                  <th class="dpt-cajero">Cajero</th>
+                </tr></thead>
+                <tbody>${productRows}</tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      `;
     }).join('');
 
-    // Click en fila → abrir venta relacionada desde coleccion ventas
-    tbody.querySelectorAll('.clickable-row').forEach(row => {
-      row.addEventListener('click', async () => {
+    // Toggle al clickear header
+    cont.querySelectorAll('.day-group-header').forEach(header => {
+      header.addEventListener('click', () => {
+        header.parentElement.classList.toggle('expanded');
+      });
+    });
+
+    // Click en fila → abrir venta (desambigua por pc_id cuando hay colisión entre PCs)
+    cont.querySelectorAll('.clickable-row').forEach(row => {
+      row.addEventListener('click', async (e) => {
+        e.stopPropagation();
         const ventaId = row.dataset.ventaid;
+        const pcId    = row.dataset.pcid || '';
         if (!ventaId) return;
+        const pickByPc = (docs) => {
+          if (!pcId) return docs[0];
+          return docs.find(d => (d.data().pc_id || '') === pcId) || docs[0];
+        };
         try {
-          // Buscar la venta por sale_id
           const snap = await getDocs(query(collection(db, 'ventas'), where('sale_id', '==', parseInt(ventaId))));
           if (!snap.empty) {
-            openSaleModal(snap.docs[0].data(), db);
+            openSaleModal(pickByPc(snap.docs).data(), db);
           } else {
             const snap2 = await getDocs(query(collection(db, 'ventas'), where('sale_id', '==', ventaId)));
-            if (!snap2.empty) openSaleModal(snap2.docs[0].data(), db);
+            if (!snap2.empty) openSaleModal(pickByPc(snap2.docs).data(), db);
           }
-        } catch(e) { console.error(e); }
+        } catch (err) { console.error(err); }
       });
     });
   }

@@ -350,6 +350,13 @@ export async function renderCatalogo(container, db) {
   let currentPage = 1;
   const PER_PAGE = 50;
 
+  // Inventario: velocidad de venta (lazy-load cuando se abre la pestaña o el banner)
+  let ventasProd = null;      // { 'NOMBRE': { u30, u7 } }
+  let invEstadoFiltro = '';   // filtro de estado activo en tab Inventario
+  let invMovFiltro = '';
+  let invNombreFiltro = '';
+  let invCatFiltro = '';
+
   // Rubros disponibles — persistidos en Firebase config
   // Los nuevos rubros se cargan dinámicamente desde config/rubros en Firebase
   const RUBROS_DEFAULT = [
@@ -435,6 +442,9 @@ export async function renderCatalogo(container, db) {
           <span id="rubroCount" style="margin-left:auto;font-size:12px;color:#65676b"></span>
         </div>
 
+        <!-- BANNER CRÍTICOS (visible en todas las pestañas) -->
+        <div id="invBanner"></div>
+
         <!-- STATS -->
         <div class="cards-grid" id="statsGrid" style="margin-bottom:4px"></div>
 
@@ -442,6 +452,9 @@ export async function renderCatalogo(container, db) {
         <div style="display:flex;gap:0;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;background:#fff;border-radius:10px;border:1px solid #e4e6eb;padding:3px;">
           <button class="tab-btn nav-pill active" data-tab="catalogo" style="display:flex;align-items:center;gap:6px;padding:7px 14px;border-radius:8px;border:none;background:#1877f2;color:#fff;cursor:pointer;font-family:inherit;font-size:13px;font-weight:600;white-space:nowrap;transition:all 0.2s;flex-shrink:0">
             <span class="material-icons" style="font-size:16px">inventory_2</span>Catálogo
+          </button>
+          <button class="tab-btn nav-pill" data-tab="inventario" style="display:flex;align-items:center;gap:6px;padding:7px 14px;border-radius:8px;border:none;background:none;color:#65676b;cursor:pointer;font-family:inherit;font-size:13px;font-weight:500;white-space:nowrap;transition:all 0.2s;flex-shrink:0">
+            <span class="material-icons" style="font-size:16px">insights</span>Inventario
           </button>
           <button class="tab-btn nav-pill" data-tab="importar" style="display:flex;align-items:center;gap:6px;padding:7px 14px;border-radius:8px;border:none;background:none;color:#65676b;cursor:pointer;font-family:inherit;font-size:13px;font-weight:500;white-space:nowrap;transition:all 0.2s;flex-shrink:0">
             <span class="material-icons" style="font-size:16px">upload_file</span>Importar
@@ -705,11 +718,15 @@ export async function renderCatalogo(container, db) {
       card.addEventListener('mouseleave', () => { card.style.transform = ''; card.style.boxShadow = ''; });
       card.addEventListener('click', () => activarFiltroEstado(card.dataset.filtro));
     });
+
+    // Banner de alertas (solo si ya tenemos velocidad cargada)
+    renderBannerCriticos();
   }
 
   function renderTab(tab) {
     const tc = document.getElementById('tabContent');
     if (tab === 'catalogo') renderTabCatalogo(tc);
+    else if (tab === 'inventario') renderTabInventario(tc);
     else if (tab === 'importar') renderTabImportar(tc);
     else if (tab === 'proveedor') renderTabProveedor(tc);
     else if (tab === 'nuevo') renderTabNuevo(tc);
@@ -1122,17 +1139,29 @@ export async function renderCatalogo(container, db) {
             </div>
           </div>
 
-          <!-- Stock -->
-          <div style="display:grid;grid-template-columns:120px 1fr;gap:12px;align-items:end">
+          <!-- Stock + Alertas -->
+          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;align-items:end">
             <div>
               <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:6px">STOCK</label>
               <input id="ed_stock" type="number" step="1" min="-1" value="${prod.stock ?? 0}" style="width:100%;padding:10px 12px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit" />
             </div>
-            <div style="padding-bottom:2px;color:#65676b;font-size:12px">
-              <span style="background:#f0f2f5;border-radius:6px;padding:8px 12px;display:block">
-                💡 <b>-1</b> = servicio/ilimitado &nbsp;|&nbsp; <b>0</b> = agotado &nbsp;|&nbsp; <b>&gt;0</b> = disponible
-              </span>
+            <div>
+              <label style="font-size:11px;font-weight:700;color:#b45309;letter-spacing:0.5px;display:block;margin-bottom:6px">STOCK MÍN. (avisar)</label>
+              <input id="ed_stock_min" type="number" step="1" min="0" placeholder="Sin alerta"
+                     value="${prod.stock_min ?? ''}"
+                     style="width:100%;padding:10px 12px;border:1.5px solid #ffe082;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit;background:#fffef7" />
             </div>
+            <div>
+              <label style="font-size:11px;font-weight:700;color:#b45309;letter-spacing:0.5px;display:block;margin-bottom:6px">STOCK MÁX. (ideal)</label>
+              <input id="ed_stock_max" type="number" step="1" min="0" placeholder="Sin tope"
+                     value="${prod.stock_max ?? ''}"
+                     style="width:100%;padding:10px 12px;border:1.5px solid #ffe082;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit;background:#fffef7" />
+            </div>
+          </div>
+          <div style="color:#65676b;font-size:12px;margin-top:-8px">
+            <span style="background:#f0f2f5;border-radius:6px;padding:8px 12px;display:block">
+              💡 <b>STOCK -1</b> = servicio/ilimitado &nbsp;|&nbsp; <b>0</b> = agotado &nbsp;|&nbsp; <b>&gt;0</b> = disponible. Dejá MÍN/MÁX vacío para desactivar alerta.
+            </span>
           </div>
 
         </div>
@@ -1214,9 +1243,18 @@ export async function renderCatalogo(container, db) {
       const nuevoCosto    = parseFloat(inCosto.value) || 0;
       const nuevoPrecio   = parseFloat(inPrecio.value) || 0;
       const nuevoStock    = Math.max(0, parseInt(overlay.querySelector('#ed_stock').value) || 0);
+      const rawSMin       = overlay.querySelector('#ed_stock_min').value.trim();
+      const rawSMax       = overlay.querySelector('#ed_stock_max').value.trim();
+      const nuevoStockMin = rawSMin === '' ? null : Math.max(0, parseInt(rawSMin) || 0);
+      const nuevoStockMax = rawSMax === '' ? null : Math.max(0, parseInt(rawSMax) || 0);
 
       if (!nuevoNombre) { alert('El nombre no puede estar vacío'); btn.disabled = false; btn.innerHTML = '<span class="material-icons" style="font-size:16px">save</span>Guardar cambios'; return; }
       if (barraRaw && !nuevoBarra) { alert('El código de barras solo puede tener letras, números, guiones y guiones bajos (mínimo 3 caracteres).'); btn.disabled = false; btn.innerHTML = '<span class="material-icons" style="font-size:16px">save</span>Guardar cambios'; return; }
+      if (nuevoStockMin !== null && nuevoStockMax !== null && nuevoStockMax > 0 && nuevoStockMax < nuevoStockMin) {
+        alert('El stock máximo no puede ser menor al mínimo.');
+        btn.disabled = false; btn.innerHTML = '<span class="material-icons" style="font-size:16px">save</span>Guardar cambios';
+        return;
+      }
 
       const update = {
         nombre:               nuevoNombre,
@@ -1229,6 +1267,8 @@ export async function renderCatalogo(container, db) {
         costo:                nuevoCosto,
         precio_venta:         nuevoPrecio,
         stock:                nuevoStock,
+        stock_min:            nuevoStockMin,
+        stock_max:            nuevoStockMax,
         estado:               nuevoCosto === 0 ? 'sin_precio' : 'activo',
         ultima_actualizacion: serverTimestamp(),
       };
@@ -1334,6 +1374,319 @@ export async function renderCatalogo(container, db) {
       if (e.key === 'Enter') input.blur();
       if (e.key === 'Escape') { renderTabla(); }
     });
+  }
+
+  // ══════════════════════════════════════════════════════════════════
+  // ── Inventario integrado: velocidad + estado + tab ──
+  // ══════════════════════════════════════════════════════════════════
+  async function cargarVelocidadVentas() {
+    if (ventasProd) return ventasProd;
+    ventasProd = await getCached('inventario:velocidad', async () => {
+      const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('fecha', 'desc'), limit(5000))).catch(() => ({ docs: [] }));
+      const map = {};
+      const hace30 = new Date(); hace30.setDate(hace30.getDate() - 30);
+      const hace7  = new Date(); hace7.setDate(hace7.getDate() - 7);
+      snap.docs.forEach(d => {
+        const v = d.data();
+        const nombre = (v.producto || '').toUpperCase().trim();
+        if (!nombre) return;
+        if (!map[nombre]) map[nombre] = { u30: 0, u7: 0 };
+        const parts = (v.fecha || '').split('/');
+        let fechaV = null;
+        if (parts.length === 3) fechaV = new Date(`${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}`);
+        if (fechaV && fechaV >= hace30) {
+          map[nombre].u30 += (v.cantidad || 1);
+          if (fechaV >= hace7) map[nombre].u7 += (v.cantidad || 1);
+        }
+      });
+      return map;
+    }, { ttl: 5 * 60 * 1000, memOnly: true });
+    return ventasProd;
+  }
+
+  function calcularEstadoInv(p) {
+    const stock = p.stock || 0;
+    const nombre = (p.nombre || '').toUpperCase().trim();
+    const vData = ventasProd?.[nombre];
+    const u30 = vData?.u30 || 0;
+    const velocidadDiaria = u30 / 30;
+
+    if (stock === 0) return { label: 'Agotado', key: 'agotado', cls: 'badge-red', color: '#c62828', dias: 0, velocidad: velocidadDiaria, pct: 0 };
+
+    if (velocidadDiaria > 0) {
+      const dias = Math.floor(stock / velocidadDiaria);
+      const pct  = Math.min(100, Math.round((dias / 30) * 100));
+      if (dias <= 3)  return { label: `Crítico (${dias}d)`,  key: 'critico',  cls: 'badge-red',    color: '#c62828', dias, velocidad: velocidadDiaria, pct };
+      if (dias <= 10) return { label: `Bajo (${dias}d)`,     key: 'bajo',     cls: 'badge-orange', color: '#f57c00', dias, velocidad: velocidadDiaria, pct };
+      if (dias <= 20) return { label: `Regular (${dias}d)`,  key: 'regular',  cls: 'badge-orange', color: '#e65100', dias, velocidad: velocidadDiaria, pct };
+      return                 { label: `OK (${dias}d)`,        key: 'ok',       cls: 'badge-green',  color: '#2e7d32', dias, velocidad: velocidadDiaria, pct };
+    }
+    if (stock <= 2)  return { label: 'Crítico', key: 'critico', cls: 'badge-red',    color: '#c62828', dias: null, velocidad: 0, pct: 10 };
+    if (stock <= 5)  return { label: 'Bajo',    key: 'bajo',    cls: 'badge-orange', color: '#f57c00', dias: null, velocidad: 0, pct: 40 };
+    if (stock <= 15) return { label: 'Regular', key: 'regular', cls: 'badge-orange', color: '#e65100', dias: null, velocidad: 0, pct: 65 };
+    return                 { label: 'OK',       key: 'ok',      cls: 'badge-green',  color: '#2e7d32', dias: null, velocidad: 0, pct: 100 };
+  }
+
+  function renderBannerCriticos() {
+    const host = document.getElementById('invBanner');
+    if (!host) return;
+    if (!ventasProd) { host.innerHTML = ''; return; }
+    const base = getBaseRubro();
+    const lista = base.map(p => ({ ...p, _estado: calcularEstadoInv(p) }));
+    const agotados = lista.filter(p => p._estado.key === 'agotado').length;
+    const criticos = lista.filter(p => p._estado.key === 'critico').length;
+    if (agotados + criticos === 0) { host.innerHTML = ''; return; }
+
+    host.innerHTML = `
+      <div class="inv-banner">
+        <span class="material-icons" style="color:#c62828">notification_important</span>
+        <div class="inv-banner-body">
+          <b>${agotados + criticos} productos requieren atención</b>
+          <span class="inv-banner-sub">${agotados} agotados · ${criticos} críticos${rubroActivo !== 'TODOS' ? ` · ${rubroActivo}` : ''}</span>
+        </div>
+        <button class="inv-banner-btn" id="invBannerBtn">
+          <span class="material-icons" style="font-size:16px">visibility</span> Ver inventario
+        </button>
+      </div>
+    `;
+    document.getElementById('invBannerBtn')?.addEventListener('click', () => {
+      const btn = document.querySelector('.tab-btn[data-tab="inventario"]');
+      if (btn) btn.click();
+    });
+  }
+
+  // ── Tab Inventario ──
+  async function renderTabInventario(tc) {
+    tc.innerHTML = `<div class="loader"><div class="spinner"></div><span>Analizando inventario...</span></div>`;
+    await cargarVelocidadVentas();
+
+    const base = getBaseRubro();
+    const lista = base.map(p => ({ ...p, _estado: calcularEstadoInv(p) }));
+
+    const total     = lista.length;
+    const ok        = lista.filter(p => p._estado.key === 'ok').length;
+    const bajos     = lista.filter(p => p._estado.key === 'bajo' || p._estado.key === 'regular').length;
+    const criticos  = lista.filter(p => p._estado.key === 'critico').length;
+    const agotados  = lista.filter(p => p._estado.key === 'agotado').length;
+    const conVentas = lista.filter(p => p._estado.velocidad > 0).length;
+
+    const alertas = lista
+      .filter(p => p._estado.key === 'critico' || p._estado.key === 'agotado')
+      .sort((a,b) => (a._estado.dias ?? 0) - (b._estado.dias ?? 0))
+      .slice(0, 5);
+
+    const cats = [...new Set(base.map(p => p.categoria || '').filter(Boolean))].sort();
+
+    const cs = 'cursor:pointer;transition:transform 0.15s,box-shadow 0.15s';
+
+    tc.innerHTML = `
+      <div style="display:flex;flex-direction:column;gap:16px">
+        <div class="cards-grid" id="invStatsGrid">
+          <div class="card stat-card inv-stat" data-filtro="" style="${cs}" title="Ver todos"><div class="icon-wrap bg-blue"><span class="material-icons">inventory_2</span></div><div class="label">Total</div><div class="value">${total}</div></div>
+          <div class="card stat-card inv-stat" data-filtro="ok" style="${cs}"><div class="icon-wrap bg-green"><span class="material-icons">check_circle</span></div><div class="label">Stock OK</div><div class="value">${ok}</div></div>
+          <div class="card stat-card inv-stat" data-filtro="bajo" style="${cs}"><div class="icon-wrap bg-orange"><span class="material-icons">warning</span></div><div class="label">Stock Bajo</div><div class="value">${bajos}</div></div>
+          <div class="card stat-card inv-stat" data-filtro="critico" style="${cs}"><div class="icon-wrap bg-red"><span class="material-icons">error</span></div><div class="label">Críticos</div><div class="value">${criticos}</div></div>
+          <div class="card stat-card inv-stat" data-filtro="agotado" style="${cs}"><div class="icon-wrap" style="background:#424242"><span class="material-icons">remove_shopping_cart</span></div><div class="label">Agotados</div><div class="value">${agotados}</div></div>
+          <div class="card stat-card inv-stat" data-filtro="con" style="${cs}"><div class="icon-wrap" style="background:#7b1fa2"><span class="material-icons">trending_up</span></div><div class="label">En movimiento</div><div class="value">${conVentas}</div></div>
+        </div>
+
+        <div id="invAlertasHost">
+          ${alertas.length ? `
+            <div style="background:#fff3f3;border:1px solid #ef9a9a;border-radius:12px;padding:14px">
+              <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+                <span class="material-icons" style="color:#c62828;font-size:18px">notification_important</span>
+                <b style="font-size:13px;color:#c62828">Requieren atención inmediata</b>
+              </div>
+              <div style="display:flex;flex-direction:column;gap:6px">
+                ${alertas.map(p => `
+                  <div style="display:flex;align-items:center;justify-content:space-between;background:#fff;border-radius:8px;padding:8px 12px;border:1px solid #ef9a9a">
+                    <div>
+                      <div style="font-weight:700;font-size:13px">${p.nombre}</div>
+                      <div style="font-size:11px;color:#65676b">${p.rubro || p.categoria || '-'} · Stock: <b style="color:#c62828">${p.stock || 0}</b></div>
+                    </div>
+                    <div style="text-align:right">
+                      <span class="badge badge-red">${p._estado.label}</span>
+                      ${p._estado.velocidad > 0 ? `<div style="font-size:11px;color:#65676b;margin-top:2px">${p._estado.velocidad.toFixed(1)} u/día</div>` : ''}
+                    </div>
+                  </div>`).join('')}
+              </div>
+            </div>` : ''}
+        </div>
+
+        <div class="filter-bar" style="flex-wrap:wrap;gap:8px">
+          <input type="text" id="invFiltroNombre" placeholder="Buscar producto..." style="min-width:200px;flex:1" value="${invNombreFiltro}" />
+          <select id="invFiltroCat">
+            <option value="">Todas las categorías</option>
+            ${cats.map(c => `<option value="${c}" ${invCatFiltro===c?'selected':''}>${c}</option>`).join('')}
+          </select>
+          <select id="invFiltroEstado">
+            <option value="">Todos los estados</option>
+            <option value="ok" ${invEstadoFiltro==='ok'?'selected':''}>OK</option>
+            <option value="regular" ${invEstadoFiltro==='regular'?'selected':''}>Regular</option>
+            <option value="bajo" ${invEstadoFiltro==='bajo'?'selected':''}>Bajo</option>
+            <option value="critico" ${invEstadoFiltro==='critico'?'selected':''}>Crítico</option>
+            <option value="agotado" ${invEstadoFiltro==='agotado'?'selected':''}>Agotado</option>
+          </select>
+          <select id="invFiltroMov">
+            <option value="">Todo</option>
+            <option value="con" ${invMovFiltro==='con'?'selected':''}>Con movimiento</option>
+            <option value="sin" ${invMovFiltro==='sin'?'selected':''}>Sin movimiento</option>
+          </select>
+        </div>
+
+        <div class="table-card">
+          <div class="table-card-header">
+            <h3>Inventario Inteligente${rubroActivo !== 'TODOS' ? ' — ' + rubroActivo.charAt(0) + rubroActivo.slice(1).toLowerCase() : ''}</h3>
+            <span id="invCount" style="color:var(--text-muted);font-size:13px"></span>
+          </div>
+          <div class="table-wrap">
+            <table>
+              <thead><tr>
+                <th>Producto</th>
+                <th class="inv-col-categoria">Categoría</th>
+                <th class="inv-col-rubro">Rubro</th>
+                <th style="text-align:center">Stock</th>
+                <th class="inv-col-dias" style="text-align:center">Días</th>
+                <th class="inv-col-cobertura">Cobertura</th>
+                <th class="inv-col-velocidad" style="text-align:center">Vel./día</th>
+                <th>Estado</th>
+                <th style="text-align:right">Precio</th>
+                <th>Acciones</th>
+              </tr></thead>
+              <tbody id="invBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    `;
+
+    // Clicks en stat-cards
+    tc.querySelectorAll('.inv-stat').forEach(card => {
+      card.addEventListener('mouseenter', () => { card.style.transform='translateY(-3px)'; card.style.boxShadow='0 6px 20px rgba(0,0,0,0.1)'; });
+      card.addEventListener('mouseleave', () => { card.style.transform=''; card.style.boxShadow=''; });
+      card.addEventListener('click', () => {
+        const f = card.dataset.filtro;
+        const selE = document.getElementById('invFiltroEstado');
+        const selM = document.getElementById('invFiltroMov');
+        if (f === 'con') { if (selE) selE.value=''; if (selM) selM.value='con'; invEstadoFiltro=''; invMovFiltro='con'; }
+        else             { if (selE) selE.value=f; if (selM) selM.value=''; invEstadoFiltro=f; invMovFiltro=''; }
+        applyInvFilters(lista);
+        document.querySelector('.table-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    });
+
+    ['invFiltroNombre','invFiltroCat','invFiltroEstado','invFiltroMov'].forEach(id => {
+      document.getElementById(id)?.addEventListener('input', () => {
+        invNombreFiltro = document.getElementById('invFiltroNombre')?.value || '';
+        invCatFiltro    = document.getElementById('invFiltroCat')?.value || '';
+        invEstadoFiltro = document.getElementById('invFiltroEstado')?.value || '';
+        invMovFiltro    = document.getElementById('invFiltroMov')?.value || '';
+        applyInvFilters(lista);
+      });
+    });
+
+    applyInvFilters(lista);
+  }
+
+  function applyInvFilters(lista) {
+    let data = [...lista];
+    if (invNombreFiltro) {
+      const words = invNombreFiltro.toLowerCase().split(/\s+/).filter(Boolean);
+      data = data.filter(p => {
+        const hay = `${p.nombre||''} ${p.categoria||''} ${p.rubro||''} ${p.codigo||''} ${p.cod_barra||''}`.toLowerCase();
+        return words.every(w => hay.includes(w));
+      });
+    }
+    if (invCatFiltro)     data = data.filter(p => (p.categoria || 'Sin categoría') === invCatFiltro);
+    if (invEstadoFiltro)  data = data.filter(p => p._estado.key === invEstadoFiltro);
+    if (invMovFiltro === 'con') data = data.filter(p => p._estado.velocidad > 0);
+    if (invMovFiltro === 'sin') data = data.filter(p => p._estado.velocidad === 0);
+
+    data.sort((a,b) => {
+      const orden = { agotado:0, critico:1, bajo:2, regular:3, ok:4 };
+      return (orden[a._estado.key] ?? 5) - (orden[b._estado.key] ?? 5);
+    });
+
+    renderInvRows(data);
+  }
+
+  function renderInvRows(data) {
+    const tbody = document.getElementById('invBody');
+    const countEl = document.getElementById('invCount');
+    if (!tbody) return;
+    if (countEl) countEl.textContent = `${data.length} productos`;
+    if (!data.length) {
+      tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text-muted)">Sin productos</td></tr>`;
+      return;
+    }
+    tbody.innerHTML = data.map(p => {
+      const stock = p.stock || 0;
+      const e = p._estado;
+      const bgRow = e.key === 'agotado' ? 'background:#fff8f8' : e.key === 'critico' ? 'background:#fff3f3' : '';
+      const pct = e.pct || 0;
+      const barColor = pct <= 20 ? '#c62828' : pct <= 50 ? '#f57c00' : '#2e7d32';
+      const barHtml = `
+        <div style="display:flex;align-items:center;gap:6px">
+          <div style="flex:1;background:#e4e6eb;border-radius:99px;height:6px;overflow:hidden;min-width:50px">
+            <div style="width:${pct}%;height:100%;background:${barColor};border-radius:99px"></div>
+          </div>
+          <span style="font-size:11px;font-weight:700;color:${barColor};width:30px">${pct}%</span>
+        </div>`;
+      const diasTxt = e.dias !== null && e.dias !== undefined
+        ? `<b style="color:${e.color}">${e.dias}d</b>`
+        : `<span style="color:#bbb;font-size:11px">—</span>`;
+      const velTxt = e.velocidad > 0
+        ? `<span style="font-size:12px;color:#7b1fa2;font-weight:600">${e.velocidad.toFixed(2)}</span>`
+        : `<span style="font-size:11px;color:#bbb">—</span>`;
+
+      return `<tr style="${bgRow}">
+        <td><b style="font-size:13px">${p.nombre || '-'}</b><br><span style="color:#65676b;font-size:10px">${p.cod_barra || ''}</span></td>
+        <td class="inv-col-categoria"><span class="badge badge-gray">${p.categoria || '-'}</span></td>
+        <td class="inv-col-rubro" style="font-size:11px;color:#65676b">${p.rubro || '-'}</td>
+        <td style="text-align:center;font-weight:800;font-size:16px;color:${stock===0?'#c62828':stock<=3?'#f57c00':'#1c1e21'}">
+          <span class="inv-stock-val" data-id="${p.doc_id}" style="cursor:pointer;border-bottom:1px dashed #ccc" title="Click para editar">${stock}</span>
+        </td>
+        <td class="inv-col-dias" style="text-align:center">${diasTxt}</td>
+        <td class="inv-col-cobertura">${barHtml}</td>
+        <td class="inv-col-velocidad" style="text-align:center">${velTxt}</td>
+        <td><span class="badge ${e.cls}">${e.label}</span></td>
+        <td style="text-align:right;color:#2e7d32;font-weight:600">$${fmt(p.precio_venta || p.precio || 0)}</td>
+        <td>
+          <button class="inv-btn-edit" data-id="${p.doc_id}" style="background:none;border:none;cursor:pointer;color:#1877f2;padding:4px" title="Editar producto">
+            <span class="material-icons" style="font-size:16px">edit</span>
+          </button>
+        </td>
+      </tr>`;
+    }).join('');
+
+    tbody.querySelectorAll('.inv-btn-edit').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const p = allProductos.find(x => x.doc_id === btn.dataset.id);
+        if (p) abrirEditorCompleto(p);
+      });
+    });
+    tbody.querySelectorAll('.inv-stock-val').forEach(cell => {
+      cell.addEventListener('click', () => editarStockInv(cell.dataset.id));
+    });
+  }
+
+  async function editarStockInv(docId) {
+    const p = allProductos.find(x => x.doc_id === docId);
+    if (!p) return;
+    const nuevo = prompt(`Stock actual de "${p.nombre}": ${p.stock || 0}\n\nIngresá el nuevo stock:`);
+    if (nuevo === null) return;
+    const valor = parseInt(nuevo);
+    if (isNaN(valor) || valor < 0) { alert('Stock inválido'); return; }
+    try {
+      await updateDoc(doc(db, 'catalogo', docId), { stock: valor, ultima_actualizacion: serverTimestamp() });
+      invalidateCacheByPrefix('catalogo');
+      p.stock = valor;
+      renderTabInventario(document.getElementById('tabContent'));
+      renderStats();
+      renderBannerCriticos();
+    } catch(e) {
+      alert('Error al guardar: ' + e.message);
+    }
   }
 
   // ── Tab Importar CSV ──
@@ -1849,6 +2202,27 @@ export async function renderCatalogo(container, db) {
         <div style="text-align:center;padding:20px;color:#65676b">Buscando ventas...</div>
       </div>
 
+      <!-- Alertas de stock -->
+      <div style="margin-top:12px;background:#fff8e1;border-radius:12px;padding:14px;border:1px solid #ffe082">
+        <div style="font-size:13px;font-weight:700;color:#b45309;margin-bottom:10px">Alertas de stock</div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+          <div style="display:flex;flex-direction:column;gap:4px">
+            <label style="font-size:11px;font-weight:600;color:#65676b">STOCK MÍNIMO (avisar)</label>
+            <input id="det_stock_min" type="number" min="0" step="1" placeholder="Sin alerta"
+                   value="${p.stock_min ?? ''}"
+                   style="width:130px;padding:8px 12px;border:1px solid #ffe082;border-radius:8px;font-size:14px;font-weight:700;color:#b45309;background:#fff" />
+          </div>
+          <div style="display:flex;flex-direction:column;gap:4px">
+            <label style="font-size:11px;font-weight:600;color:#65676b">STOCK MÁXIMO (ideal)</label>
+            <input id="det_stock_max" type="number" min="0" step="1" placeholder="Sin tope"
+                   value="${p.stock_max ?? ''}"
+                   style="width:130px;padding:8px 12px;border:1px solid #ffe082;border-radius:8px;font-size:14px;font-weight:700;color:#b45309;background:#fff" />
+          </div>
+          <button id="det_guardar_stock_alert" style="padding:8px 16px;background:#f59e0b;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-size:13px">Guardar alertas</button>
+        </div>
+        <div id="det_stock_alert_msg" style="margin-top:8px;font-size:12px;color:#65676b">Dejá vacío para desactivar el aviso. El POS usa estos valores para avisarte cuando un producto baja del mínimo.</div>
+      </div>
+
       <!-- Edición de precio por margen -->
       <div style="margin-top:12px;background:#f0f2f5;border-radius:12px;padding:14px;border:1px solid #e4e6eb">
         <div style="font-size:13px;font-weight:700;color:#1c1e21;margin-bottom:10px">Editar precio por margen</div>
@@ -1905,6 +2279,40 @@ export async function renderCatalogo(container, db) {
         detPct.value = Math.round(((precio - p.costo) / p.costo) * 100);
         sugerirEnDetalle(precio);
       }
+    });
+
+    document.getElementById('det_guardar_stock_alert').addEventListener('click', async () => {
+      const btn = document.getElementById('det_guardar_stock_alert');
+      const msg = document.getElementById('det_stock_alert_msg');
+      const rawMin = document.getElementById('det_stock_min').value.trim();
+      const rawMax = document.getElementById('det_stock_max').value.trim();
+      const sMin = rawMin === '' ? null : Math.max(0, parseInt(rawMin) || 0);
+      const sMax = rawMax === '' ? null : Math.max(0, parseInt(rawMax) || 0);
+      if (sMin !== null && sMax !== null && sMax > 0 && sMax < sMin) {
+        msg.innerHTML = `<span style="color:#c62828">El máximo no puede ser menor al mínimo.</span>`;
+        return;
+      }
+      btn.disabled = true; btn.textContent = 'Guardando...';
+      try {
+        await updateDoc(doc(db, 'catalogo', p.doc_id), {
+          stock_min: sMin,
+          stock_max: sMax,
+          ultima_actualizacion: serverTimestamp()
+        });
+        invalidateCacheByPrefix('catalogo');
+        _touchCatalogoMeta(db).catch(() => {});
+        const idx = allProductos.findIndex(x => x.doc_id === p.doc_id);
+        if (idx !== -1) {
+          allProductos[idx].stock_min = sMin;
+          allProductos[idx].stock_max = sMax;
+        }
+        p.stock_min = sMin;
+        p.stock_max = sMax;
+        msg.innerHTML = `<span style="color:#2e7d32">Alertas guardadas ${sMin !== null ? `· mín ${sMin}` : ''} ${sMax !== null ? `· máx ${sMax}` : ''}</span>`;
+      } catch(e) {
+        msg.innerHTML = `<span style="color:#c62828">Error: ${e.message}</span>`;
+      }
+      btn.disabled = false; btn.textContent = 'Guardar alertas';
     });
 
     document.getElementById('det_guardar_precio').addEventListener('click', async () => {
@@ -2920,6 +3328,8 @@ export async function renderCatalogo(container, db) {
     await cargarDatos();
     renderStats();
     renderTab('catalogo');
+    // Banner de alertas: velocity en background → al completar, dibuja banner
+    cargarVelocidadVentas().then(() => renderBannerCriticos()).catch(() => {});
   } catch(e) {
     const tc = document.getElementById('tabContent');
     if (tc) tc.innerHTML = `<div style="padding:20px;color:var(--danger)">Error: Error cargando catálogo: ${e.message}<br><br><i>Si el catálogo está vacío, usá la pestaña "Importar CSV" para cargar los productos.</i></div>`;

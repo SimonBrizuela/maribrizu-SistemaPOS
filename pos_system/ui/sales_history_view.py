@@ -21,7 +21,8 @@ def _parse_ar(s):
 from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
                              QTableWidgetItem, QPushButton, QLabel, QComboBox,
                              QDialog, QFormLayout, QMessageBox, QHeaderView,
-                             QDateEdit, QFrame, QSplitter, QGroupBox, QScrollArea)
+                             QDateEdit, QFrame, QSplitter, QGroupBox, QScrollArea,
+                             QDialogButtonBox, QDoubleSpinBox)
 from PyQt5.QtCore import Qt, QDate
 from PyQt5.QtGui import QFont, QColor
 
@@ -180,6 +181,19 @@ class SalesHistoryView(QWidget):
         detail_header.addWidget(detail_title)
         detail_header.addStretch()
 
+        self.edit_btn = QPushButton('Editar Venta')
+        self.edit_btn.setObjectName('btnSecondary')
+        self.edit_btn.setEnabled(False)
+        self.edit_btn.setCursor(Qt.PointingHandCursor)
+        self.edit_btn.setStyleSheet('''
+            QPushButton { background:#f59e0b; color:white; border:none;
+                          border-radius:6px; padding:6px 14px; font-weight:bold; }
+            QPushButton:hover { background:#d97706; }
+            QPushButton:disabled { background:#e5e7eb; color:#9ca3af; }
+        ''')
+        self.edit_btn.clicked.connect(self._edit_current_sale)
+        detail_header.addWidget(self.edit_btn)
+
         self.reprint_btn = QPushButton('Reimprimir Ticket')
         self.reprint_btn.setObjectName('btnSecondary')
         self.reprint_btn.setEnabled(False)
@@ -317,6 +331,7 @@ class SalesHistoryView(QWidget):
         # Limpiar detalle
         self.detail_table.setRowCount(0)
         self.reprint_btn.setEnabled(False)
+        self.edit_btn.setEnabled(False)
         self._current_sale_id = None
 
     def _on_selection_changed(self):
@@ -384,6 +399,57 @@ class SalesHistoryView(QWidget):
             self.detail_table.setItem(r, 5, sub_item)
 
         self.reprint_btn.setEnabled(True)
+        self.edit_btn.setEnabled(True)
+
+    def _edit_current_sale(self):
+        if not self._current_sale_id:
+            return
+        sale = self.sale_model.get_by_id(self._current_sale_id)
+        if not sale:
+            QMessageBox.warning(self, 'Venta', 'No se encontró la venta seleccionada.')
+            return
+        dlg = EditSaleDialog(self, sale=sale)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+
+        try:
+            updated = self.sale_model.update(
+                sale_id=self._current_sale_id,
+                payment_type=dlg.new_payment_type,
+                items_updates=dlg.items_updates,
+            )
+            if not updated:
+                QMessageBox.critical(self, 'Error', 'No se pudo actualizar la venta.')
+                return
+        except Exception as e:
+            QMessageBox.critical(self, 'Error', f'Error al actualizar la venta:\n{e}')
+            return
+
+        # Resync a Firebase (venta + detalle + historial + mensual + cierre)
+        try:
+            from pos_system.utils.firebase_sync import get_firebase_sync
+            fb = get_firebase_sync()
+            if fb:
+                fb.resync_sale_after_edit(self._current_sale_id, self.db)
+        except Exception as e:
+            logger.warning(f"Firebase resync tras edición: {e}")
+
+        # Refrescar UI local
+        self.refresh_data()
+        # Refrescar otras vistas (cash_view, dashboard, etc.)
+        try:
+            w = self.parent()
+            while w is not None and not hasattr(w, 'refresh_all_views'):
+                w = w.parent()
+            if w is not None:
+                w.refresh_all_views()
+        except Exception:
+            pass
+
+        QMessageBox.information(self, 'Venta actualizada',
+            f"Venta #{self._current_sale_id} actualizada.\n"
+            f"Nuevo total: ${updated['total_amount']:.2f}\n"
+            f"Pago: {'Efectivo' if updated['payment_type'] == 'cash' else 'Transferencia'}")
 
     def _reprint_ticket(self):
         if not self._current_sale_id:
@@ -396,3 +462,140 @@ class SalesHistoryView(QWidget):
             self.open_pdf(pdf_path)
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'No se pudo generar el ticket: {e}')
+
+
+class EditSaleDialog(QDialog):
+    """Editar método de pago y precios unitarios de una venta existente."""
+
+    def __init__(self, parent=None, sale=None):
+        super().__init__(parent)
+        self.sale = sale or {}
+        self.items = list(self.sale.get('items') or [])
+        self._spins = {}
+        self._subtotal_labels = {}
+        self.new_payment_type = str(self.sale.get('payment_type') or 'cash')
+        self.items_updates = []
+
+        self.setWindowTitle(f"Editar venta #{self.sale.get('id', '')}")
+        self.setMinimumSize(640, 520)
+        self._build_ui()
+        self._recalc_total()
+
+    def _build_ui(self):
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(12)
+
+        header = QLabel(f"Venta #{self.sale.get('id', '')}  -  {self.sale.get('created_at', '')}")
+        header.setFont(QFont('Segoe UI', 11, QFont.Bold))
+        header.setStyleSheet('color: #1e293b;')
+        layout.addWidget(header)
+
+        pay_group = QGroupBox('Método de pago')
+        pay_layout = QHBoxLayout(pay_group)
+        pay_layout.setContentsMargins(10, 8, 10, 8)
+        self.pay_combo = QComboBox()
+        self.pay_combo.addItem('Efectivo', 'cash')
+        self.pay_combo.addItem('Transferencia', 'transfer')
+        idx = 0 if self.new_payment_type == 'cash' else 1
+        self.pay_combo.setCurrentIndex(idx)
+        self.pay_combo.currentIndexChanged.connect(self._on_payment_changed)
+        pay_layout.addWidget(QLabel('Pago:'))
+        pay_layout.addWidget(self.pay_combo)
+        pay_layout.addStretch()
+        layout.addWidget(pay_group)
+
+        items_group = QGroupBox(f"Items ({len(self.items)})")
+        ig_layout = QVBoxLayout(items_group)
+        ig_layout.setContentsMargins(10, 8, 10, 8)
+
+        self.table = QTableWidget()
+        self.table.setColumnCount(5)
+        self.table.setHorizontalHeaderLabels(['Producto', 'Cant.', 'Precio unit.', 'Desc.', 'Subtotal'])
+        self.table.setRowCount(len(self.items))
+        self.table.verticalHeader().setVisible(False)
+        self.table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.table.setSelectionMode(QTableWidget.NoSelection)
+        hdr = self.table.horizontalHeader()
+        hdr.setSectionResizeMode(0, QHeaderView.Stretch)
+        hdr.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+
+        for row, it in enumerate(self.items):
+            name_item = QTableWidgetItem(str(it.get('product_name') or ''))
+            name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(row, 0, name_item)
+
+            qty = int(it.get('quantity') or 0)
+            qty_item = QTableWidgetItem(str(qty))
+            qty_item.setTextAlignment(Qt.AlignCenter)
+            qty_item.setFlags(qty_item.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(row, 1, qty_item)
+
+            spin = QDoubleSpinBox()
+            spin.setDecimals(2)
+            spin.setRange(0.0, 9_999_999.99)
+            spin.setSingleStep(100.0)
+            spin.setValue(float(it.get('unit_price') or 0))
+            spin.setPrefix('$ ')
+            spin.valueChanged.connect(self._recalc_total)
+            self._spins[int(it.get('id'))] = spin
+            self.table.setCellWidget(row, 2, spin)
+
+            disc = float(it.get('discount_amount') or 0)
+            disc_item = QTableWidgetItem(f"${disc:.2f}" if disc else '-')
+            disc_item.setTextAlignment(Qt.AlignCenter)
+            disc_item.setFlags(disc_item.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(row, 3, disc_item)
+
+            sub_lbl = QTableWidgetItem(f"${float(it.get('subtotal') or 0):.2f}")
+            sub_lbl.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            sub_lbl.setFlags(sub_lbl.flags() & ~Qt.ItemIsEditable)
+            self.table.setItem(row, 4, sub_lbl)
+            self._subtotal_labels[int(it.get('id'))] = (row, float(it.get('discount_amount') or 0), qty)
+
+        ig_layout.addWidget(self.table)
+        layout.addWidget(items_group, stretch=1)
+
+        total_row = QHBoxLayout()
+        total_row.addStretch()
+        total_row.addWidget(QLabel('Total:'))
+        self.total_lbl = QLabel('$0.00')
+        self.total_lbl.setFont(QFont('Segoe UI', 13, QFont.Bold))
+        self.total_lbl.setStyleSheet('color: #0f172a;')
+        total_row.addWidget(self.total_lbl)
+        layout.addLayout(total_row)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
+        btns.button(QDialogButtonBox.Save).setText('Guardar')
+        btns.button(QDialogButtonBox.Cancel).setText('Cancelar')
+        btns.accepted.connect(self._on_accept)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+    def _on_payment_changed(self, _idx):
+        self.new_payment_type = str(self.pay_combo.currentData() or 'cash')
+
+    def _recalc_total(self):
+        total = 0.0
+        for iid, spin in self._spins.items():
+            row, disc, qty = self._subtotal_labels[iid]
+            sub = float(spin.value()) * qty - disc
+            if sub < 0:
+                sub = 0.0
+            self.table.item(row, 4).setText(f"${sub:.2f}")
+            total += sub
+        self.total_lbl.setText(f"${total:.2f}")
+
+    def _on_accept(self):
+        updates = []
+        for it in self.items:
+            iid = int(it.get('id'))
+            new_price = float(self._spins[iid].value())
+            old_price = float(it.get('unit_price') or 0)
+            if abs(new_price - old_price) > 0.005:
+                updates.append({'id': iid, 'unit_price': new_price})
+        self.items_updates = updates
+        self.accept()

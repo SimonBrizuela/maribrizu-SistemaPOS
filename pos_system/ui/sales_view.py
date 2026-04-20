@@ -3,9 +3,10 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
                              QComboBox, QMessageBox, QSpinBox, QDoubleSpinBox,
                              QDialog, QFormLayout, QSplitter, QFrame, QGridLayout,
                              QSizePolicy, QListWidget, QListWidgetItem, QAbstractItemView,
-                             QHeaderView, QApplication, QScrollArea, QInputDialog)
+                             QHeaderView, QApplication, QScrollArea, QInputDialog,
+                             QTextEdit, QDialogButtonBox)
 from PyQt5.QtCore import Qt, QSize, QTimer, pyqtSignal, QThread
-from PyQt5.QtGui import QFont, QColor, QKeySequence
+from PyQt5.QtGui import QFont, QColor, QKeySequence, QIntValidator
 from datetime import datetime
 import os
 import subprocess
@@ -16,6 +17,42 @@ from pos_system.models.sale import Sale
 from pos_system.models.cash_register import CashRegister
 from pos_system.models.promotion import Promotion
 from pos_system.utils.pdf_generator import PDFGenerator
+
+
+class CartQuantitySpinBox(QSpinBox):
+    """QSpinBox para cantidad de items del carrito.
+
+    Diferencias vs QSpinBox estándar:
+      - keyboardTracking = False → valueChanged sólo dispara al confirmar
+        (Enter/Tab/perder foco/botones), evitando que el rebuild de la tabla
+        interrumpa el tipeo.
+      - Rueda del mouse INVERTIDA: scroll hacia abajo = aumenta cantidad
+        (1, 2, 3, 4, 5…), scroll hacia arriba = disminuye. Pedido explícito
+        del usuario para sumar items "rodando" la rueda hacia abajo.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setKeyboardTracking(False)
+        self.setFocusPolicy(Qt.StrongFocus)
+
+    def wheelEvent(self, event):
+        # Ignorar si no tiene foco: evita cambios accidentales al scrollear
+        # la tabla/lista de productos.
+        if not self.hasFocus():
+            event.ignore()
+            return
+        delta = event.angleDelta().y()
+        if delta == 0:
+            event.ignore()
+            return
+        steps = abs(delta) // 120 or 1
+        # Invertido: wheel hacia abajo (delta < 0) → +steps
+        if delta < 0:
+            self.setValue(self.value() + steps)
+        else:
+            self.setValue(self.value() - steps)
+        event.accept()
 
 
 class BarcodeScanner(QLineEdit):
@@ -744,6 +781,23 @@ class SalesView(QWidget):
         search_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
         search_btn.clicked.connect(self.search_product)
         search_row.addWidget(search_btn)
+
+        # Botón "Varios" — producto libre con nombre/precio/observación opcional
+        varios_btn = QPushButton('Varios')
+        varios_btn.setMinimumHeight(40)
+        varios_btn.setMinimumWidth(90)
+        varios_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        varios_btn.setToolTip('Agregar producto genérico (sin código) con observación opcional')
+        varios_btn.setStyleSheet('''
+            QPushButton {
+                background: #f59e0b; color: white;
+                border: none; border-radius: 6px; padding: 4px 14px;
+            }
+            QPushButton:hover { background: #d97706; }
+            QPushButton:pressed { background: #b45309; }
+        ''')
+        varios_btn.clicked.connect(self._add_varios_item)
+        search_row.addWidget(varios_btn)
 
         layout.addLayout(search_row)
 
@@ -1927,8 +1981,8 @@ class SalesView(QWidget):
                 price_item.setForeground(QColor('#dc3545'))
             self.cart_table.setItem(row, 2, price_item)
 
-            # Col 3: Cantidad (SpinBox)
-            qty_spin = QSpinBox()
+            # Col 3: Cantidad (SpinBox con keyboardTracking=False y wheel invertido)
+            qty_spin = CartQuantitySpinBox()
             qty_spin.setMinimum(1)
             max_stock = item.get('max_stock', 0)
             qty_spin.setMaximum(max_stock if max_stock > 0 else 9999)
@@ -2106,6 +2160,13 @@ class SalesView(QWidget):
                 pass
             item['subtotal'] = round(quantity * item['unit_price'], 2)
             self.update_cart_display()
+            # Tras rebuild, devolver foco al spinbox para que siga el scroll
+            try:
+                w = self.cart_table.cellWidget(row, 3)
+                if isinstance(w, CartQuantitySpinBox):
+                    w.setFocus(Qt.OtherFocusReason)
+            except Exception:
+                pass
             
     def remove_from_cart(self, row):
         if row < len(self.cart):
@@ -2147,6 +2208,16 @@ class SalesView(QWidget):
         price_spin.selectAll()
         layout.addWidget(price_spin)
 
+        obs_lbl = QLabel('Observación (opcional):')
+        obs_lbl.setStyleSheet('color:#495057;font-size:11px;margin-top:4px')
+        layout.addWidget(obs_lbl)
+        obs_input = QTextEdit()
+        obs_input.setPlainText(item.get('observation', '') or '')
+        obs_input.setPlaceholderText('Ej: detalle, aclaración, nota del producto...')
+        obs_input.setMaximumHeight(64)
+        obs_input.setStyleSheet('QTextEdit { border: 1px solid #ced4da; border-radius: 6px; padding: 4px 6px; }')
+        layout.addWidget(obs_input)
+
         btn_row = QHBoxLayout()
         cancel_btn = QPushButton('Cancelar')
         cancel_btn.setObjectName('btnSecondary')
@@ -2161,6 +2232,8 @@ class SalesView(QWidget):
 
         if dialog.exec_() == QDialog.Accepted:
             new_price = price_spin.value()
+            new_obs = obs_input.toPlainText().strip()
+            changed = False
             if new_price != current_price:
                 item['unit_price'] = new_price
                 item['original_price'] = item.get('original_price', current_price)
@@ -2170,6 +2243,11 @@ class SalesView(QWidget):
                 item['promo_id'] = None
                 item['promo_label'] = ''
                 item['subtotal'] = round(item['quantity'] * new_price, 2)
+                changed = True
+            if new_obs != (item.get('observation', '') or ''):
+                item['observation'] = new_obs
+                changed = True
+            if changed:
                 self.update_cart_display()
 
     def clear_cart(self):
@@ -2235,6 +2313,38 @@ class SalesView(QWidget):
                 # Generación de ticket desactivada temporalmente
                 pdf_path = None
                 # pdf_path = self.pdf_generator.generate_sale_ticket(sale)
+
+                # ── Persistir observaciones de items editadas desde el carrito ──
+                try:
+                    items_with_obs = [it for it in self.cart if (it.get('observation') or '').strip()]
+                    if items_with_obs:
+                        from pos_system.models.observation import Observation
+                        from pos_system.utils.firebase_sync import get_firebase_sync, now_ar, _get_pc_id
+                        obs_model = Observation(self.db)
+                        u = self.current_user or {}
+                        uname = u.get('full_name') or u.get('username') or 'Cajero'
+                        pc = _get_pc_id()
+                        created_at = now_ar().strftime('%Y-%m-%d %H:%M:%S')
+                        fb = get_firebase_sync()
+                        for it in items_with_obs:
+                            text = f"[{it.get('product_name', 'Item')}] {it['observation'].strip()}"
+                            obs_id = obs_model.create(
+                                text=text, context='sale',
+                                sale_id=sale_id, sale_item_id=None,
+                                created_by_id=u.get('id'),
+                                created_by_name=str(uname), pc_id=pc
+                            )
+                            if fb:
+                                fb.sync_observation(obs_id, {
+                                    'text': text, 'context': 'sale',
+                                    'sale_id': sale_id,
+                                    'created_by_id': u.get('id'),
+                                    'created_by_name': str(uname),
+                                    'pc_id': pc, 'created_at': created_at,
+                                }, db_manager=self.db)
+                except Exception as _e:
+                    import logging as _log
+                    _log.getLogger(__name__).warning(f"No se pudieron guardar observaciones de items: {_e}")
 
                 # ── Firebase: subir venta automáticamente si hay caja abierta ──
                 sale['username']     = turno_nombre
@@ -2307,6 +2417,11 @@ class SalesView(QWidget):
 
                 fb.sync_sale(sale_with_caja)
                 fb.sync_sale_detail_by_day(sale_with_caja, db_manager=self.db)
+                # Propagar stock actualizado (ya descontado en SQLite) a Firebase
+                try:
+                    fb.sync_stock_after_sale(sale_with_caja.get('items') or [], self.db)
+                except Exception as _se:
+                    _log.getLogger(__name__).warning(f"Firebase stock post-venta: {_se}")
                 _log.getLogger(__name__).info(
                     f"Firebase: Venta #{sale.get('id')} subida (caja #{caja.get('id')})."
                 )
@@ -2315,6 +2430,71 @@ class SalesView(QWidget):
                 logging.getLogger(__name__).warning(f"Firebase upload venta: {e}")
 
         threading.Thread(target=_do, daemon=True).start()
+
+    # ── Item "Varios" (producto libre con observación opcional) ──
+    def _add_varios_item(self):
+        dlg = VariosItemDialog(self)
+        if dlg.exec_() != QDialog.Accepted:
+            return
+
+        name       = dlg.product_name
+        unit_price = dlg.unit_price
+        qty        = dlg.qty
+        obs_text   = dlg.observation
+
+        # Agregar al carrito como item "suelto" (product_id = None).
+        # El back-end maneja este item en la venta; el stock no se toca porque
+        # no hay product_id en productos/inventario.
+        cart_item = {
+            'product_id':      0,  # sentinel "Varios" (ver db_manager.py)
+            'product_name':    name,
+            'quantity':        qty,
+            'unit_price':      float(unit_price),
+            'original_price':  float(unit_price),
+            'discount_type':   None,
+            'discount_value':  0,
+            'discount_amount': 0,
+            'promo_id':        None,
+            'promo_label':     '',
+            'subtotal':        round(float(unit_price) * qty, 2),
+            'max_stock':       9999,
+            'category':        'Varios',
+            'is_varios':       True,
+            'pending_observation': obs_text,
+        }
+        self.cart.append(cart_item)
+        self.update_cart_display()
+
+        if obs_text:
+            try:
+                from pos_system.models.observation import Observation
+                from pos_system.utils.firebase_sync import get_firebase_sync, now_ar, _get_pc_id
+                obs = Observation(self.db)
+                u = self.current_user or {}
+                uname = u.get('full_name') or u.get('username') or 'Cajero'
+                pc = _get_pc_id()
+                created_at = now_ar().strftime('%Y-%m-%d %H:%M:%S')
+                obs_id = obs.create(
+                    text=f"[Varios] {name}: {obs_text}",
+                    context='sale',
+                    sale_id=None, sale_item_id=None,
+                    created_by_id=u.get('id'),
+                    created_by_name=str(uname), pc_id=pc
+                )
+                fb = get_firebase_sync()
+                if fb:
+                    fb.sync_observation(obs_id, {
+                        'text': f"[Varios] {name}: {obs_text}",
+                        'context': 'sale',
+                        'created_by_id': u.get('id'),
+                        'created_by_name': str(uname),
+                        'pc_id': pc,
+                        'created_at': created_at,
+                    }, db_manager=self.db)
+                cart_item['observation_local_id'] = obs_id
+            except Exception as _e:
+                import logging as _log
+                _log.getLogger(__name__).warning(f"No se pudo guardar observación Varios: {_e}")
 
 
 class PaymentDialog(QDialog):
@@ -2945,4 +3125,114 @@ class PaymentDialog(QDialog):
             self.cash_received = 0.0
             self.change_given = 0.0
         self.nota_factura = self._nota_input.text().strip() if hasattr(self, '_nota_input') else ''
+        self.accept()
+
+
+class VariosItemDialog(QDialog):
+    """Diálogo para agregar un item 'Varios' al carrito con observación opcional."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle('Agregar Varios')
+        self.setMinimumSize(460, 320)
+
+        self.product_name = ''
+        self.unit_price   = 0.0
+        self.qty          = 1
+        self.observation  = ''
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(10)
+
+        title = QLabel('Item genérico')
+        title.setFont(QFont('Segoe UI', 13, QFont.Bold))
+        title.setStyleSheet('color: #1e293b;')
+        layout.addWidget(title)
+
+        form = QFormLayout()
+        form.setSpacing(8)
+
+        self.name_input = QLineEdit()
+        self.name_input.setFont(QFont('Segoe UI', 11))
+        self.name_input.setPlaceholderText('Ej: Cuaderno rayado A4')
+        form.addRow('Descripción:', self.name_input)
+
+        self.price_input = QLineEdit()
+        self.price_input.setPlaceholderText('Precio')
+        self.price_input.setValidator(QIntValidator(0, 9_999_999, self))
+        self.price_input.setFont(QFont('Segoe UI', 11))
+        form.addRow('Precio unitario:', self.price_input)
+
+        self.qty_input = CartQuantitySpinBox()
+        self.qty_input.setRange(1, 9999)
+        self.qty_input.setValue(1)
+        self.qty_input.setFont(QFont('Segoe UI', 11))
+        form.addRow('Cantidad:', self.qty_input)
+
+        layout.addLayout(form)
+
+        # Toggle observación (ícono lápiz)
+        obs_row = QHBoxLayout()
+        self.obs_toggle_btn = QPushButton('✏ Agregar observación')
+        self.obs_toggle_btn.setCheckable(True)
+        self.obs_toggle_btn.setCursor(Qt.PointingHandCursor)
+        self.obs_toggle_btn.setStyleSheet('''
+            QPushButton { background: #f1f5f9; color: #1e293b;
+                          border: 1px solid #cbd5e1; padding: 6px 12px;
+                          border-radius: 6px; font-size: 10pt; }
+            QPushButton:checked { background: #fef3c7; border-color: #f59e0b;
+                                  color: #b45309; }
+            QPushButton:hover { background: #e2e8f0; }
+        ''')
+        self.obs_toggle_btn.clicked.connect(self._toggle_obs)
+        obs_row.addWidget(self.obs_toggle_btn)
+        obs_row.addStretch()
+        layout.addLayout(obs_row)
+
+        self.obs_edit = QTextEdit()
+        self.obs_edit.setFont(QFont('Segoe UI', 10))
+        self.obs_edit.setPlaceholderText('Ej: falta producto en stock, pedir al proveedor…')
+        self.obs_edit.setFixedHeight(80)
+        self.obs_edit.setVisible(False)
+        layout.addWidget(self.obs_edit)
+
+        btns = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        btns.button(QDialogButtonBox.Ok).setText('Agregar al carrito')
+        btns.button(QDialogButtonBox.Cancel).setText('Cancelar')
+        btns.accepted.connect(self._on_ok)
+        btns.rejected.connect(self.reject)
+        layout.addWidget(btns)
+
+        self.name_input.setFocus()
+
+    def _toggle_obs(self):
+        checked = self.obs_toggle_btn.isChecked()
+        self.obs_edit.setVisible(checked)
+        self.obs_toggle_btn.setText('✏ Quitar observación' if checked else '✏ Agregar observación')
+        if checked:
+            self.obs_edit.setFocus()
+        self.adjustSize()
+
+    def _on_ok(self):
+        name = self.name_input.text().strip()
+        if not name:
+            QMessageBox.warning(self, 'Varios', 'Ingresá una descripción.')
+            self.name_input.setFocus()
+            return
+        try:
+            price = float(self.price_input.text().strip() or 0)
+        except ValueError:
+            price = 0.0
+        if price <= 0:
+            QMessageBox.warning(self, 'Varios', 'El precio debe ser mayor a cero.')
+            self.price_input.setFocus()
+            return
+        self.product_name = name
+        self.unit_price   = price
+        self.qty          = int(self.qty_input.value())
+        if self.obs_toggle_btn.isChecked():
+            self.observation = self.obs_edit.toPlainText().strip()
+        else:
+            self.observation = ''
         self.accept()

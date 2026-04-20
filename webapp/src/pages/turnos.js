@@ -1,5 +1,6 @@
 import { collection, getDocs, query, orderBy, limit, where } from 'firebase/firestore';
 import { openSaleModal } from '../components/modal.js';
+import { getSaleNumberMap, displayNumForVenta } from '../sale_numbers.js';
 
 /**
  * Página: Resumen por Turno / Cajero
@@ -11,11 +12,12 @@ export async function renderTurnos(container, db) {
     <div class="spinner"></div><p>Cargando datos de turnos...</p>
   </div>`;
 
-  // Cargar ventas (últimas 1000 para cubrir varios días)
-  const snap = await getDocs(
-    query(collection(db, 'ventas'), orderBy('created_at', 'desc'), limit(1000))
-  );
-  const ventas = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+  // Cargar ventas (últimas 1000 para cubrir varios días) + mapa de numeración global
+  const [snap, saleNumMap] = await Promise.all([
+    getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc'), limit(1000))),
+    getSaleNumberMap(db),
+  ]);
+  const ventas = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(v => v.deleted !== true);
 
   // Rango de fechas por defecto: hoy en hora Argentina
   const hoy = new Date(todayAR() + 'T00:00:00-03:00');
@@ -215,7 +217,7 @@ export async function renderTurnos(container, db) {
       const dt = parseArDate(v.created_at);
       const esEfectivo = v.payment_type === 'cash';
       return `<tr class="clickable-row" data-idx="${i}" style="cursor:pointer">
-        <td><b>#${v.sale_id || v.id || '-'}</b></td>
+        <td><b>#${displayNumForVenta(v, saleNumMap)}</b></td>
         <td>${fmtDate(dt)}</td>
         <td style="color:var(--text-muted)">${fmtTime(dt)}</td>
         <td style="max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12px;color:var(--text-muted)">${v.productos || '—'}</td>

@@ -486,6 +486,96 @@ tbody td { padding: 12px 16px; color: var(--text); }
 .clickable-row { cursor: pointer; }
 .clickable-row:hover { background: #f0f4ff !important; }
 
+/* ── HISTORIAL: grupos colapsables por día ── */
+.day-groups { display: flex; flex-direction: column; }
+
+.day-group {
+  border-bottom: 1px solid var(--border);
+}
+.day-group:last-child { border-bottom: none; }
+
+.day-group-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 20px;
+  cursor: pointer;
+  transition: background 0.15s;
+  user-select: none;
+}
+.day-group-header:hover { background: #f7f8fc; }
+
+.dgh-left { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.dgh-caret {
+  font-size: 22px !important;
+  color: var(--text-muted);
+  transition: transform 0.2s ease;
+}
+.day-group.expanded .dgh-caret { transform: rotate(90deg); }
+
+.dgh-date { font-size: 15px; font-weight: 700; color: var(--text); }
+.dgh-meta { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+.dgh-stats { display: flex; gap: 20px; align-items: center; }
+.dgh-stat { display: flex; flex-direction: column; align-items: flex-end; gap: 2px; }
+.dgh-stat-label {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.dgh-stat-val { font-size: 14px; font-weight: 700; white-space: nowrap; }
+.dgh-stat.efectivo .dgh-stat-val { color: #2e7d32; }
+.dgh-stat.transf .dgh-stat-val   { color: #1565c0; }
+.dgh-stat.total .dgh-stat-val    { color: var(--text); font-size: 16px; }
+
+.day-group-body {
+  max-height: 0;
+  overflow: hidden;
+  transition: max-height 0.25s ease;
+  background: #fafbfc;
+}
+.day-group.expanded .day-group-body {
+  max-height: 2000px;
+  transition: max-height 0.4s ease;
+}
+
+.dpt-table { font-size: 13px; }
+.dpt-table thead tr { background: transparent; }
+.dpt-table thead th {
+  padding: 8px 12px;
+  font-size: 10px;
+  color: var(--text-muted);
+}
+.dpt-table tbody td { padding: 9px 12px; }
+.dpt-table tbody tr:last-child { border-bottom: none; }
+
+.dpt-hora   { color: var(--text-muted); white-space: nowrap; }
+.dpt-venta  { text-align: center; white-space: nowrap; }
+.dpt-prod   { min-width: 200px; }
+.dpt-cant   { text-align: center; }
+.dpt-precio { text-align: right; color: var(--text-muted); white-space: nowrap; }
+.dpt-sub    { text-align: right; white-space: nowrap; }
+.dpt-pago   { white-space: nowrap; }
+.dpt-cajero { white-space: nowrap; color: var(--text-muted); }
+
+/* Responsive: stats apilados en mobile */
+@media (max-width: 768px) {
+  .day-group-header { flex-direction: column; align-items: flex-start; padding: 12px 14px; gap: 10px; }
+  .dgh-stats { width: 100%; justify-content: space-between; gap: 8px; }
+  .dgh-stat { align-items: flex-start; }
+  .dgh-stat-val { font-size: 13px; }
+  .dgh-stat.total .dgh-stat-val { font-size: 14px; }
+  .dpt-table { font-size: 12px; }
+  .dpt-cajero, .dpt-precio { display: none; }
+}
+
+@media (max-width: 1024px) and (min-width: 769px) {
+  .dpt-cajero, .dpt-precio { display: none; }
+}
+
 /* ── OCULTAR COLUMNAS SEGÚN PANTALLA (INVENTARIO) ── */
 @media (max-width: 1280px) and (min-width: 769px) {
   .inv-col-velocidad { display: none !important; }
@@ -1365,6 +1455,126 @@ body {
   .ct-cuentas-row { grid-template-columns: 1fr; }
   .ct-gasto-form { flex-direction: column; }
   .ct-gasto-form input, .ct-gasto-form select, .ct-gasto-form button { width: 100%; }
+}
+
+/* ── Catálogo: banner de productos críticos ─────────────────────────────── */
+.inv-banner {
+  display: flex; align-items: center; gap: 12px;
+  background: #fff3f3; border: 1px solid #ef9a9a; border-radius: var(--radius);
+  padding: 12px 16px; box-shadow: var(--shadow); flex-wrap: wrap;
+}
+.inv-banner-body {
+  flex: 1; display: flex; flex-direction: column; gap: 2px; min-width: 200px;
+  font-size: 13px; color: var(--text);
+}
+.inv-banner-sub { font-size: 11px; color: var(--text-muted); font-weight: 500; }
+.inv-banner-btn {
+  display: flex; align-items: center; gap: 5px;
+  padding: 7px 14px; background: #fff; color: #c62828;
+  border: 1px solid #ef9a9a; border-radius: 8px; cursor: pointer;
+  font-size: 13px; font-weight: 700; font-family: inherit;
+  transition: all 0.15s;
+}
+.inv-banner-btn:hover { background: #ffebee; }
+
+/* ── Control Total: línea de totales reales ─────────────────────────────── */
+.ct-totales-reales {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  background: var(--card-bg); border-radius: 10px; padding: 10px 14px;
+  box-shadow: var(--shadow); font-size: 13px; color: var(--text-muted);
+}
+.ct-chip-warn {
+  background: #fff3e0; color: #e65100; border: 1px solid #ffcc80;
+  border-radius: 99px; padding: 2px 10px; font-size: 11px; font-weight: 700;
+}
+
+/* ── Control Total: banners de alerta ─────────────────────────────────── */
+.ct-alert {
+  border-radius: var(--radius); padding: 14px 16px; box-shadow: var(--shadow);
+}
+.ct-alert-warn { background: #fff8e1; border: 1px solid #ffcc80; }
+.ct-alert-loss { background: #ffebee; border: 1px solid #ef9a9a; }
+.ct-alert-header {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+}
+.ct-alert-header > div:nth-child(2) { flex: 1; min-width: 200px; }
+.ct-alert-title { font-size: 14px; font-weight: 700; color: var(--text); }
+.ct-alert-sub   { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.ct-alert-btn {
+  display: flex; align-items: center; gap: 5px;
+  padding: 8px 14px; border: 1px solid #ffb74d; border-radius: 8px;
+  background: #fff; color: #e65100; cursor: pointer;
+  font-size: 13px; font-weight: 700; font-family: inherit;
+  transition: all 0.15s;
+}
+.ct-alert-btn:hover { background: #fff3e0; }
+
+/* ── Control Total: modal de costos / pérdidas ─────────────────────────── */
+.ct-modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,0.5);
+  display: flex; justify-content: center; align-items: center;
+  z-index: 10000; padding: 20px; animation: ct-fadein 0.15s ease-out;
+}
+@keyframes ct-fadein { from { opacity: 0; } to { opacity: 1; } }
+.ct-modal {
+  background: #fff; border-radius: var(--radius); box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+  width: 100%; max-width: 860px; max-height: 90vh;
+  display: flex; flex-direction: column;
+}
+.ct-modal-header {
+  display: flex; align-items: center; gap: 10px;
+  padding: 16px 20px; border-bottom: 1px solid var(--border);
+}
+.ct-modal-header h3 { flex: 1; font-size: 16px; font-weight: 700; }
+.ct-modal-close {
+  background: none; border: none; cursor: pointer; color: var(--text-muted);
+  padding: 4px; border-radius: 6px;
+}
+.ct-modal-close:hover { background: var(--bg); color: var(--text); }
+.ct-modal-desc {
+  padding: 12px 20px; font-size: 13px; color: var(--text-muted);
+  background: var(--bg); border-bottom: 1px solid var(--border);
+}
+.ct-modal-body { overflow-y: auto; padding: 0; flex: 1; }
+.ct-modal-footer {
+  display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  padding: 14px 20px; border-top: 1px solid var(--border); flex-wrap: wrap;
+}
+.ct-btn-primary {
+  display: flex; align-items: center; gap: 6px;
+  padding: 8px 16px; background: var(--primary); color: #fff;
+  border: none; border-radius: 8px; cursor: pointer;
+  font-size: 13px; font-weight: 700; font-family: inherit;
+}
+.ct-btn-primary:hover { background: var(--primary-dark); }
+
+.ct-costos-table { width: 100%; border-collapse: collapse; }
+.ct-costos-table th {
+  text-align: left; padding: 10px 12px; font-size: 11px; text-transform: uppercase;
+  color: var(--text-muted); border-bottom: 2px solid var(--border);
+  position: sticky; top: 0; background: #fff; z-index: 1;
+}
+.ct-costos-table td {
+  padding: 10px 12px; border-bottom: 1px solid var(--border); font-size: 13px;
+}
+.ct-costos-table tr:hover td { background: var(--bg); }
+
+.ct-save-costo {
+  background: var(--primary); color: #fff; border: none;
+  padding: 6px 10px; border-radius: 6px; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.ct-save-costo:disabled { background: #cfd8dc; cursor: not-allowed; }
+.ct-save-costo:hover:not(:disabled) { background: var(--primary-dark); }
+
+.ct-costo-input:focus {
+  outline: none; border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(24,119,242,.1);
+}
+
+@media (max-width: 700px) {
+  .ct-modal { max-height: 100vh; border-radius: 0; }
+  .ct-costos-table th, .ct-costos-table td { padding: 8px 6px; font-size: 12px; }
 }
 
 /* ── Resumen facturación ───────────────────────────────── */

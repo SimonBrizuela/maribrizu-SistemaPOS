@@ -5,7 +5,6 @@ import { renderDashboard } from './pages/dashboard.js';
 import { renderControlTotal } from './pages/control_total.js';
 import { renderVentas } from './pages/ventas.js';
 import { renderProductos } from './pages/productos.js';
-import { renderInventario } from './pages/inventario.js';
 import { renderHistorial } from './pages/historial.js';
 import { renderCierres } from './pages/cierres.js';
 import { renderResumenes } from './pages/resumenes.js';
@@ -16,6 +15,7 @@ import { renderPromociones } from './pages/promociones.js';
 import { renderFacturas } from './pages/facturas.js';
 import { renderPerfiles } from './pages/perfiles.js';
 import { renderClientes } from './pages/clientes.js';
+import { renderObservaciones } from './pages/observaciones.js';
 import { renderLogin } from './pages/login.js';
 import { isLoggedIn, getSession, logout } from './auth.js';
 
@@ -29,7 +29,6 @@ const pages = {
   control_total:   { title: 'Control Total',            render: renderControlTotal,     cacheKey: null },
   ventas:          { title: 'Ventas',                  render: renderVentas,           cacheKey: 'ventas:lista' },
   productos:       { title: 'Productos Más Vendidos',  render: renderProductos,        cacheKey: 'productos:mas_vendidos' },
-  inventario:      { title: 'Inventario',              render: renderInventario,       cacheKey: null },
   historial:       { title: 'Historial Diario',        render: renderHistorial,        cacheKey: 'historial:diario' },
   cierres:         { title: 'Cierres de Caja',         render: renderCierres,          cacheKey: 'cierres:caja' },
   resumenes:       { title: 'Resúmenes Mensuales',     render: renderResumenes,        cacheKey: 'resumenes:mensuales' },
@@ -40,6 +39,7 @@ const pages = {
   facturas:        { title: 'Facturación AFIP',        render: renderFacturas,         cacheKey: null },
   perfiles:        { title: 'Perfiles ARCA',           render: renderPerfiles,         cacheKey: null },
   clientes:        { title: 'Perfiles de Clientes',    render: renderClientes,         cacheKey: null },
+  observaciones:   { title: 'Observaciones',           render: renderObservaciones,    cacheKey: null },
 };
 
 // ── Navegación ──

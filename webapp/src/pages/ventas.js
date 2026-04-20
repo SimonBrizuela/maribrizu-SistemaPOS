@@ -1,10 +1,15 @@
-import { collection, getDocs, query, orderBy, limit, where } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, limit, where, updateDoc, doc, writeBatch, serverTimestamp } from 'firebase/firestore';
 import { openSaleModal } from '../components/modal.js';
-import { getCached } from '../cache.js';
+import { getCached, invalidateCache } from '../cache.js';
+import { getFechaInicioDate } from '../config.js';
+import { getSaleNumberMap, displayNumForVenta } from '../sale_numbers.js';
 
 export async function renderVentas(container, db) {
+  const fechaInicio = await getFechaInicioDate(db);
+  const saleNumMap  = await getSaleNumberMap(db);
+
   // Cargar ventas e items en paralelo, con cache en memoria
-  const [ventas, itemsPorVenta] = await Promise.all([
+  const [ventasRaw, itemsPorVenta] = await Promise.all([
     getCached('ventas:lista', async () => {
       const snap = await getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc'), limit(500)));
       return snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -14,7 +19,10 @@ export async function renderVentas(container, db) {
       const map = {};
       snap.docs.forEach(d => {
         const data = d.data();
-        const key = String(data.num_venta);
+        if (data.deleted === true) return;
+        const parts = d.id.split('_');
+        const pcId  = parts.length >= 3 ? parts.slice(0, -2).join('_') : '';
+        const key   = pcId ? `${pcId}_${data.num_venta}` : String(data.num_venta);
         if (!map[key]) map[key] = [];
         const nombre = data.producto || data.product_name || '';
         const cant   = data.cantidad || data.quantity || 1;
@@ -24,9 +32,13 @@ export async function renderVentas(container, db) {
     })
   ]);
 
+  // Ocultar ventas anteriores a fecha_inicio y las marcadas como borradas
+  const ventas = ventasRaw.filter(v => v.deleted !== true && parseArDate(v.created_at) >= fechaInicio);
+
   // Enriquecer cada venta con sus productos
   ventas.forEach(v => {
-    const key = String(v.sale_id || v.id);
+    const saleId = v.sale_id || v.id;
+    const key = v.pc_id ? `${v.pc_id}_${saleId}` : String(saleId);
     v._productosTexto = (itemsPorVenta[key] || []).join(', ');
   });
 
@@ -51,7 +63,7 @@ export async function renderVentas(container, db) {
           <thead><tr>
             <th>#</th><th>Fecha</th><th class="vta-col-hora">Hora</th><th class="vta-col-productos">Productos</th>
             <th class="vta-col-items">Items</th><th>Total</th><th class="vta-col-efectivo">Efectivo</th><th class="vta-col-cambio">Cambio</th>
-            <th>Tipo Pago</th><th>Cajero</th>
+            <th>Tipo Pago</th><th>Cajero</th><th></th>
           </tr></thead>
           <tbody id="ventasBody"></tbody>
         </table>
@@ -63,7 +75,7 @@ export async function renderVentas(container, db) {
     const tbody = document.getElementById('ventasBody');
     document.getElementById('ventasCount').textContent = data.length + ' ventas — click en una fila para ver el detalle';
     if (!data.length) {
-      tbody.innerHTML = `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text-muted)">Sin ventas para mostrar</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text-muted)">Sin ventas para mostrar</td></tr>`;
       return;
     }
     tbody.innerHTML = data.map((v, i) => {
@@ -71,7 +83,7 @@ export async function renderVentas(container, db) {
       const esEfectivo = v.payment_type === 'cash';
       const tieneDescuento = (v.discount || 0) > 0;
       return `<tr class="clickable-row" data-idx="${i}" title="Click para ver detalle">
-        <td><b>#${v.sale_id || v.id || '-'}</b></td>
+        <td><b>#${displayNumForVenta(v, saleNumMap)}</b></td>
         <td>${fmtDate(dt)}</td>
         <td class="vta-col-hora">${fmtTime(dt)}</td>
         <td class="vta-col-productos" style="max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap" title="${v._productosTexto || 'Click para ver detalle'}">
@@ -88,16 +100,85 @@ export async function renderVentas(container, db) {
           ${tieneDescuento ? `<span class="badge badge-orange" style="margin-left:4px">🏷️ -$${fmt(v.discount)}</span>` : ''}
         </td>
         <td><b>${v.cajero || v.username || v.user_id || '-'}</b></td>
+        <td style="text-align:center">
+          <button class="btn-delete-venta" data-idx="${i}" title="Eliminar venta"
+            style="background:transparent;border:none;cursor:pointer;font-size:16px;color:#dc3545;padding:4px 8px;border-radius:4px"
+            onmouseover="this.style.background='#fee'" onmouseout="this.style.background='transparent'">🗑️</button>
+        </td>
       </tr>`;
     }).join('');
 
     // Eventos click en filas
     tbody.querySelectorAll('.clickable-row').forEach(row => {
-      row.addEventListener('click', () => {
+      row.addEventListener('click', (e) => {
+        if (e.target.closest('.btn-delete-venta')) return;
         const idx = parseInt(row.dataset.idx);
         openSaleModal(data[idx], db);
       });
     });
+
+    // Eventos click en botones eliminar
+    tbody.querySelectorAll('.btn-delete-venta').forEach(btn => {
+      btn.addEventListener('click', async (e) => {
+        e.stopPropagation();
+        const idx = parseInt(btn.dataset.idx);
+        const venta = data[idx];
+        await handleDeleteVenta(venta, saleNumMap);
+      });
+    });
+  }
+
+  async function handleDeleteVenta(venta, numMap) {
+    const numMostrado = displayNumForVenta(venta, numMap);
+    const total = fmt(venta.total_amount);
+    const ok = confirm(
+      `¿Eliminar la venta #${numMostrado} por $${total}?\n\n` +
+      `Esta acción la removerá del historial, dashboard, cierres, control total y resúmenes.\n` +
+      `No se puede deshacer fácilmente.`
+    );
+    if (!ok) return;
+
+    try {
+      await updateDoc(doc(db, 'ventas', venta.id), {
+        deleted: true,
+        deleted_at: serverTimestamp()
+      });
+
+      // Marcar también los items correspondientes en ventas_por_dia
+      const saleId = venta.sale_id || venta.id;
+      const pcId = venta.pc_id || '';
+      try {
+        const itemsSnap = await getDocs(query(
+          collection(db, 'ventas_por_dia'),
+          where('num_venta', '==', Number(saleId))
+        ));
+        let docsToMark = itemsSnap.docs;
+        if (pcId) {
+          docsToMark = docsToMark.filter(d => d.id.startsWith(pcId + '_'));
+        }
+        if (docsToMark.length) {
+          const batch = writeBatch(db);
+          docsToMark.forEach(d => batch.update(d.ref, { deleted: true }));
+          await batch.commit();
+        }
+      } catch (err) {
+        console.warn('No se pudieron marcar items de ventas_por_dia:', err);
+      }
+
+      invalidateCache('ventas:lista');
+      invalidateCache('ventas:items');
+      invalidateCache('dashboard:ventas');
+      invalidateCache('cierres:ventas');
+      invalidateCache('control_total:ventas');
+      invalidateCache('control_total:items');
+
+      const idxOriginal = ventas.findIndex(v => v.id === venta.id);
+      if (idxOriginal >= 0) ventas.splice(idxOriginal, 1);
+      applyFilters();
+    } catch (err) {
+      console.error('Error eliminando venta:', err);
+      alert('Error al eliminar la venta: ' + (err.message || err));
+    }
   }
 
   function applyFilters() {

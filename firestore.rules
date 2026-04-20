@@ -144,6 +144,16 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // ── OBSERVACIONES ─────────────────────────────────────────────────────────
+    // Notas compartidas entre cajeros (POS + web) en tiempo real.
+    // Cualquier usuario puede crear/leer; el admin puede marcar deleted=true.
+    match /observaciones/{obsId} {
+      allow read, write: if true;
+    }
+    match /observaciones_meta/{docId} {
+      allow read, write: if true;
+    }
+
     // ── BLOQUEAR TODO LO DEMÁS ────────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;

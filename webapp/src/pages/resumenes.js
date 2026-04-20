@@ -1,12 +1,25 @@
 import { collection, getDocs, query, orderBy, where } from 'firebase/firestore';
 import { getCached } from '../cache.js';
+import { getFechaInicio } from '../config.js';
+import { getSaleNumberMap, displayNumForVenta } from '../sale_numbers.js';
 
 export async function renderResumenes(container, db) {
-  const meses = await getCached('resumenes:mensuales', async () => {
+  const fechaInicioStr = await getFechaInicio(db);
+  const [inicioYear, inicioMonth] = fechaInicioStr.split('-').map(Number);
+
+  const mesesRaw = await getCached('resumenes:mensuales', async () => {
     const snap = await getDocs(query(collection(db, 'resumenes_mensuales'), orderBy('anio', 'desc')));
     return snap.docs
       .map(d => ({ id: d.id, ...d.data() }))
       .sort((a, b) => b.anio - a.anio || b.mes_num - a.mes_num);
+  });
+
+  // Ocultar meses anteriores al de fecha_inicio
+  const meses = mesesRaw.filter(m => {
+    if (!m.anio || !m.mes_num) return false;
+    if (m.anio > inicioYear) return true;
+    if (m.anio < inicioYear) return false;
+    return m.mes_num >= inicioMonth;
   });
 
   // Totales generales
@@ -141,7 +154,7 @@ export async function renderResumenes(container, db) {
     btn.innerHTML = '<span class="material-icons" style="font-size:16px;vertical-align:middle">hourglass_top</span> Generando...';
 
     try {
-      const [ventas, ventasDia] = await Promise.all([
+      const [ventasRaw, ventasDiaRaw, saleNumMap] = await Promise.all([
         getCached('ventas:lista', async () => {
           const snap = await getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc')));
           return snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -149,15 +162,32 @@ export async function renderResumenes(container, db) {
         getCached('historial:ventas_dia', async () => {
           const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('fecha', 'desc')));
           return snap.docs.map(d => d.data());
-        })
+        }),
+        getSaleNumberMap(db),
       ]);
 
-      // Agrupar items por num_venta
+      const fechaInicio = new Date(fechaInicioStr + 'T00:00:00-03:00');
+      const ventas    = ventasRaw.filter(v => v.deleted !== true && parseArDate(v.created_at) >= fechaInicio);
+      const ventasDia = ventasDiaRaw.filter(v => {
+        if (v.deleted === true) return false;
+        const f = (v.fecha || '').split('/').reverse().join('-');
+        return f >= fechaInicioStr;
+      });
+
+      // Agrupar items por pc_id + num_venta (evita colisiones entre PCs con mismo contador local)
+      // ventasDiaRaw tiene doc.id disponible; ventasDia (ya filtrado) lo perdió, pero como solo
+      // se usa el saleId de v.sale_id de ventas, reconstruimos el map desde el snapshot crudo.
       const itemsPorVenta = {};
-      ventasDia.forEach(v => {
-        const key = String(v.num_venta);
+      const snapItems = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('fecha', 'desc')));
+      snapItems.docs.forEach(d => {
+        const data = d.data();
+        if (data.deleted === true) return;
+        if ((data.fecha || '').split('/').reverse().join('-') < fechaInicioStr) return;
+        const parts = d.id.split('_');
+        const pcId  = parts.length >= 3 ? parts.slice(0, -2).join('_') : '';
+        const key   = pcId ? `${pcId}_${data.num_venta}` : String(data.num_venta);
         if (!itemsPorVenta[key]) itemsPorVenta[key] = [];
-        itemsPorVenta[key].push(v);
+        itemsPorVenta[key].push(data);
       });
 
       // Agrupar ventas por mes
@@ -345,8 +375,10 @@ export async function renderResumenes(container, db) {
           </tr></thead><tbody>`;
 
           for (const v of ventasDelMes) {
-            const saleId = v.sale_id || v.id;
-            const items  = itemsPorVenta[String(saleId)] || [];
+            const saleId    = v.sale_id || v.id;
+            const numGlobal = displayNumForVenta(v, saleNumMap);
+            const key       = v.pc_id ? `${v.pc_id}_${saleId}` : String(saleId);
+            const items     = itemsPorVenta[key] || [];
             const dt     = v._dt;
             const fecha  = dt.toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' });
             const hora   = dt.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/Argentina/Buenos_Aires' });
@@ -357,7 +389,7 @@ export async function renderResumenes(container, db) {
             if (items.length > 0) {
               items.forEach((item, idx) => {
                 html += `<tr class="${idx===0?'vr':'ir'}">
-                  <td>${idx===0?`#${saleId}`:''}</td>
+                  <td>${idx===0?`#${numGlobal}`:''}</td>
                   <td>${idx===0?fecha:''}</td>
                   <td>${idx===0?hora:''}</td>
                   <td>${item.producto||item.product_name||'-'}</td>
@@ -370,12 +402,12 @@ export async function renderResumenes(container, db) {
                 </tr>`;
               });
               html += `<tr class="sr">
-                <td colspan="7" class="r">Subtotal venta #${saleId}</td>
+                <td colspan="7" class="r">Subtotal venta #${numGlobal}</td>
                 <td class="r">$${fmt(v.total_amount)}</td><td colspan="2"></td>
               </tr>`;
             } else {
               html += `<tr class="vr">
-                <td>#${saleId}</td><td>${fecha}</td><td>${hora}</td>
+                <td>#${numGlobal}</td><td>${fecha}</td><td>${hora}</td>
                 <td colspan="4" style="color:#aaa;font-style:italic;font-weight:400">Sin detalle de productos</td>
                 <td class="r">$${fmt(v.total_amount)}</td>
                 <td><span class="${esCash?'ef':'tr2'}">${pago}</span></td><td>${cajero}</td>

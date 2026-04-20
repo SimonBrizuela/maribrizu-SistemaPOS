@@ -3,8 +3,9 @@
  * Muestra todos los items, descuentos, pagos y datos del ticket
  */
 import { collection, getDocs, query, where } from 'firebase/firestore';
+import { getSaleNumberMap, displayNumForVenta } from '../sale_numbers.js';
 
-export function openSaleModal(venta, db) {
+export async function openSaleModal(venta, db) {
   // Eliminar modal previo si existe
   document.querySelector('.modal-overlay')?.remove();
 
@@ -12,6 +13,8 @@ export function openSaleModal(venta, db) {
   const dt = venta.created_at?.toDate ? venta.created_at.toDate() : new Date(venta.created_at);
   const esEfectivo = venta.payment_type === 'cash';
   const saleId = venta.sale_id || venta.id;
+  const saleNumMap = await getSaleNumberMap(db);
+  const numDisplay = displayNumForVenta(venta, saleNumMap);
 
   // Crear overlay
   const overlay = document.createElement('div');
@@ -19,7 +22,7 @@ export function openSaleModal(venta, db) {
   overlay.innerHTML = `
     <div class="modal" id="saleModal">
       <div class="modal-header">
-        <h3>🧾 Venta #${saleId}</h3>
+        <h3>🧾 Venta #${numDisplay}</h3>
         <button class="modal-close"><span class="material-icons">close</span></button>
       </div>
       <div class="modal-body">
