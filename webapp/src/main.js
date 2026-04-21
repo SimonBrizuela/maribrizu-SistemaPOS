@@ -42,6 +42,13 @@ const pages = {
   observaciones:   { title: 'Observaciones',           render: renderObservaciones,    cacheKey: null },
 };
 
+// Páginas con tablas que suelen necesitar scroll horizontal en mobile
+const PAGES_CON_TABLA_ANCHA = new Set([
+  'catalogo', 'historial', 'ventas', 'cierres', 'resumenes',
+  'productos', 'articulos_unicos', 'clientes', 'observaciones',
+  'facturas', 'perfiles', 'turnos'
+]);
+
 // ── Navegación ──
 function navigate(page) {
   currentPage = page;
@@ -55,6 +62,9 @@ function navigate(page) {
     l.classList.toggle('active', l.dataset.page === page);
   });
   document.getElementById('pageTitle').textContent = pages[page].title;
+  // Refresh hint solo en páginas con tabla ancha (y solo mobile por CSS)
+  const hint = document.querySelector('.refresh-hint');
+  if (hint) hint.classList.toggle('show', PAGES_CON_TABLA_ANCHA.has(page));
   // Abrir el grupo que contiene la página activa
   openGroupForPage(page);
   window.scrollTo({ top: 0, behavior: 'smooth' });

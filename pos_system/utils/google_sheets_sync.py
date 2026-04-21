@@ -31,6 +31,15 @@ from urllib.error import URLError, HTTPError
 
 logger = logging.getLogger(__name__)
 
+
+def _fmt_qty(q):
+    """Formatea cantidades: 1.0 -> '1', 0.3 -> '0.3', 2.55 -> '2.55'."""
+    q = float(q or 0)
+    if q == int(q):
+        return str(int(q))
+    return f"{q:.2f}".rstrip('0').rstrip('.')
+
+
 MESES_ES = [
     "", "Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio",
     "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"
@@ -87,7 +96,7 @@ class GoogleSheetsSync:
             productos = " | ".join(
                 str(i.get("product_name") or i.get("name", "?")) for i in items
             )
-            cantidades = " | ".join(str(i.get("quantity", 1)) for i in items)
+            cantidades = " | ".join(_fmt_qty(i.get("quantity", 1)) for i in items)
             tipo_pago = "Efectivo" if sale.get("payment_type") == "cash" else "Transferencia"
 
             # Descuentos por ítem
@@ -306,7 +315,7 @@ class GoogleSheetsSync:
             for item in items:
                 name     = item.get("product_name") or item.get("name", "?")
                 cat      = item.get("category") or "Sin categoria"
-                qty      = int(item.get("quantity", 1))
+                qty      = float(item.get("quantity", 1) or 0)
                 price    = float(item.get("unit_price", 0) or 0)
                 subtotal = float(item.get("subtotal", 0) or 0)
 

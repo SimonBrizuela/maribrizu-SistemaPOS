@@ -562,6 +562,11 @@ class MainWindow(QMainWindow):
             fb.start_sales_listener(on_new_sale)
 
             # 3. Listener de PERFILES DE FACTURACIÓN desde la web
+            # Migración one-shot: refresca certs desde Firestore por si quedaron viejos.
+            try:
+                fb.force_refresh_certs_oneshot(self.db)
+            except Exception as _e:
+                logger.warning(f"Firebase: refresh oneshot de certs falló: {_e}")
             fb.start_perfiles_listener(self.db)
 
             # 4. Listener de CLIENTES DE FACTURACIÓN desde la web
@@ -885,8 +890,11 @@ class MainWindow(QMainWindow):
                                         continue
                                     created_at = fb._parse_dt(s.get('created_at'))
                                     items = s.get('items') or []
+                                    def _fmt_q(q):
+                                        q = float(q or 0)
+                                        return str(int(q)) if q == int(q) else f"{q:.2f}".rstrip('0').rstrip('.')
                                     productos_str = ', '.join(
-                                        f"{it.get('product_name', it.get('name','?'))} x{it.get('quantity',1)}"
+                                        f"{it.get('product_name', it.get('name','?'))} x{_fmt_q(it.get('quantity',1))}"
                                         for it in items[:3]
                                     )
                                     if len(items) > 3:

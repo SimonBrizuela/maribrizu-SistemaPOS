@@ -85,6 +85,10 @@ async function refreshDatos(container, db, periodo, config) {
       snap.docs.forEach(d => {
         const data = d.data();
         if (data.deleted === true) return;
+        // Varios 2 son facturas AFIP sin venta real: excluir si quedó alguno en legacy
+        const nombre = (data.producto || data.product_name || '').toUpperCase().trim();
+        const cat    = (data.categoria || '').toUpperCase().trim();
+        if (nombre === 'VARIOS 2' || cat === 'VARIOS 2' || data.is_varios_2 === true) return;
         // doc.id = "{pc_id}_{sale_id}_{idx}" → pc_id = todo menos las últimas 2 piezas.
         // Key compuesta pc_id+sale_id evita mezclar items de distintas PCs con mismo num_venta.
         const parts = d.id.split('_');
@@ -92,7 +96,7 @@ async function refreshDatos(container, db, periodo, config) {
         const key   = pcId ? `${pcId}_${data.num_venta}` : String(data.num_venta);
         if (!map[key]) map[key] = [];
         map[key].push({
-          nombre:          (data.producto || data.product_name || '').toUpperCase().trim(),
+          nombre,
           cantidad:        data.cantidad || data.quantity || 1,
           precio_unitario: data.precio_unitario || data.unit_price || 0,
           subtotal:        data.subtotal || 0,
@@ -114,9 +118,10 @@ async function refreshDatos(container, db, periodo, config) {
     if (key) catalogoPorNombre[key] = p;
   });
 
-  // Filtrar ventas por período y excluir eliminadas
+  // Filtrar ventas por período y excluir eliminadas + Varios 2 (no son ventas reales)
   const ventasPeriodo = ventas.filter(v => {
     if (v.deleted === true) return false;
+    if (v.is_varios_2 === true) return false;
     const fecha = parseArDate(v.created_at);
     return fecha >= desde;
   });
@@ -648,18 +653,18 @@ function buildSkeleton(periodo, config) {
       <form id="ct-config-form" style="display:none;gap:10px;align-items:flex-end;flex-wrap:wrap;background:var(--card-bg);padding:16px;border-radius:var(--radius);margin-bottom:16px;box-shadow:var(--shadow)">
         <div>
           <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Nombre Cuenta 1 (transferencia)</label>
-          <input id="cfg-cuenta1" type="text" value="${c1}" placeholder="Ej: Mercado Pago" style="padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;width:200px" />
+          <input id="cfg-cuenta1" type="text" value="${c1}" placeholder="Ej: Mercado Pago" style="padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;width:100%;max-width:220px;min-width:0" />
         </div>
         <div>
           <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Nombre Cuenta 2 (transferencia)</label>
-          <input id="cfg-cuenta2" type="text" value="${c2}" placeholder="Ej: Banco Galicia" style="padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;width:200px" />
+          <input id="cfg-cuenta2" type="text" value="${c2}" placeholder="Ej: Banco Galicia" style="padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;width:100%;max-width:220px;min-width:0" />
         </div>
         <div>
           <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px" title="Oculta todas las ventas, gastos e historial anteriores a esta fecha">
             Fecha de inicio real
             <span class="material-icons" style="font-size:13px;color:#65676b;vertical-align:middle">help_outline</span>
           </label>
-          <input id="cfg-fecha-inicio" type="date" value="${fi}" style="padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;width:160px" />
+          <input id="cfg-fecha-inicio" type="date" value="${fi}" style="padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;width:100%;max-width:200px;min-width:0" />
           <div style="font-size:11px;color:#65676b;margin-top:4px;max-width:220px">Todo lo anterior no se borra, solo se oculta.</div>
         </div>
         <button type="submit" class="btn-primary" style="padding:8px 20px;background:var(--primary);color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-size:14px">Guardar</button>

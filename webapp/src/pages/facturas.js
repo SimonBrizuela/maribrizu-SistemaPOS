@@ -532,7 +532,36 @@ async function loadHistorial(db, container) {
       return;
     }
 
+    // Totales por Punto de Venta (suma de 'total' agrupado por punto_venta)
+    const porPV = {};
+    rows.forEach(r => {
+      const pv = parseInt(r.punto_venta) || 1;
+      if (!porPV[pv]) porPV[pv] = { total: 0, count: 0 };
+      porPV[pv].total += Number(r.total || 0);
+      porPV[pv].count++;
+    });
+    const pvsOrdenados = Object.keys(porPV).map(n => parseInt(n)).sort((a, b) => a - b);
+    const totalGeneral = rows.reduce((s, r) => s + Number(r.total || 0), 0);
+
+    const resumenPV = `
+      <div class="fact-pv-resumen">
+        ${pvsOrdenados.map(pv => `
+          <div class="fact-pv-card">
+            <div class="fact-pv-label">PV ${pv}</div>
+            <div class="fact-pv-total">$${porPV[pv].total.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+            <div class="fact-pv-count">${porPV[pv].count} ${porPV[pv].count === 1 ? 'comprobante' : 'comprobantes'}</div>
+          </div>
+        `).join('')}
+        <div class="fact-pv-card fact-pv-total-general">
+          <div class="fact-pv-label">Total general</div>
+          <div class="fact-pv-total">$${totalGeneral.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
+          <div class="fact-pv-count">${rows.length} comprobantes</div>
+        </div>
+      </div>
+    `;
+
     el.innerHTML = `
+      ${resumenPV}
       <div class="table-wrapper">
         <table class="fact-table">
           <thead><tr>

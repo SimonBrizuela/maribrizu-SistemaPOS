@@ -592,11 +592,11 @@ export async function renderCatalogo(container, db) {
   };
 
   // Cargar datos de Firebase con loader (con cache compartido con dashboard)
-  async function cargarDatos() {
-    mostrarLoader('Conectando con la base de datos...');
+  async function cargarDatos({ silent = false } = {}) {
+    if (!silent) mostrarLoader('Conectando con la base de datos...');
     allProductos = await getCached('catalogo:all', async () => {
       const snap = await getDocs(query(collection(db, 'catalogo'), orderBy('nombre')));
-      actualizarLoader(`Procesando ${snap.docs.length} productos...`);
+      if (!silent) actualizarLoader(`Procesando ${snap.docs.length} productos...`);
       return snap.docs.map(d => ({ doc_id: d.id, ...d.data() }));
     }, { ttl: 10 * 60 * 1000, memOnly: true });
     filtrados = [...allProductos];
@@ -2007,7 +2007,7 @@ export async function renderCatalogo(container, db) {
 
         // Recargar datos locales (invalidar cache para ver los cambios)
         invalidateCache('catalogo:all');
-        await cargarDatos();
+        await cargarDatos({ silent: true });
         renderStats();
 
         result.style.display = 'block';
@@ -2297,44 +2297,69 @@ export async function renderCatalogo(container, db) {
 
         document.getElementById('btnAprobarNuevos')?.addEventListener('click', async () => {
           const btn = document.getElementById('btnAprobarNuevos');
+          const applyMsg = document.getElementById('applyMsg');
           btn.disabled = true; btn.textContent = 'Agregando...';
-          // Asegurar que todos tengan código (sino, subirCatalogoFirebase puede colisionar con slugify)
-          const poolPend = [];
-          pendientes.nuevos.forEach(p => {
-            if (!(p.codigo || '').toString().trim()) {
-              const { codigo } = generarCodigosUnicos(allProductos, poolPend);
-              p.codigo = codigo;
-            }
-            poolPend.push(p);
-          });
-          await subirCatalogoFirebase(db, pendientes.nuevos, null);
-          invalidateCache('catalogo:all');
-          await cargarDatos();
-          renderStats();
-          document.getElementById('applyMsg').innerHTML = `<div style="padding:10px;background:#f0fdf4;border-radius:8px;color:#166534">${pendientes.nuevos.length} productos nuevos agregados al catálogo.</div>`;
-          btn.textContent = '✓ Hecho';
+          try {
+            // Asegurar que todos tengan código (sino, subirCatalogoFirebase puede colisionar con slugify)
+            const poolPend = [];
+            pendientes.nuevos.forEach(p => {
+              if (!(p.codigo || '').toString().trim()) {
+                const { codigo } = generarCodigosUnicos(allProductos, poolPend);
+                p.codigo = codigo;
+              }
+              // Sanitizar: Firestore no permite '/' en doc IDs
+              p.codigo = (p.codigo || '').toString().replace(/\//g, '-').trim();
+              poolPend.push(p);
+            });
+            const total = pendientes.nuevos.length;
+            await subirCatalogoFirebase(db, pendientes.nuevos, (done) => {
+              btn.textContent = `Agregando ${done}/${total}...`;
+            });
+            invalidateCache('catalogo:all');
+            await cargarDatos({ silent: true });
+            renderStats();
+            if (applyMsg) applyMsg.innerHTML = `<div style="padding:10px;background:#f0fdf4;border-radius:8px;color:#166534">${total} productos nuevos agregados al catálogo.</div>`;
+            btn.textContent = '✓ Hecho';
+          } catch(err) {
+            console.error('Error agregando productos:', err);
+            if (applyMsg) applyMsg.innerHTML = `<div style="padding:10px;background:#fef2f2;border-radius:8px;color:#991b1b">Error agregando productos: ${err.message || err}</div>`;
+            btn.disabled = false;
+            btn.textContent = `✗ Reintentar (${pendientes.nuevos.length})`;
+          }
         });
 
         document.getElementById('btnAprobarPrecios')?.addEventListener('click', async () => {
           const btn = document.getElementById('btnAprobarPrecios');
+          const applyMsg = document.getElementById('applyMsg');
           btn.disabled = true; btn.textContent = 'Actualizando...';
-          for (const p of pendientes.cambioPrecio) {
-            if (p.doc_id) {
-              const update = {
-                costo: p.costo || 0,
-                estado: (p.costo || 0) === 0 ? 'sin_precio' : 'activo',
-                ultima_actualizacion: serverTimestamp()
-              };
-              if ((p.precio_venta || 0) > 0) update.precio_venta = p.precio_venta;
-              await updateDoc(doc(db, 'catalogo', p.doc_id), update);
+          try {
+            const total = pendientes.cambioPrecio.length;
+            let done = 0;
+            for (const p of pendientes.cambioPrecio) {
+              if (p.doc_id) {
+                const update = {
+                  costo: p.costo || 0,
+                  estado: (p.costo || 0) === 0 ? 'sin_precio' : 'activo',
+                  ultima_actualizacion: serverTimestamp()
+                };
+                if ((p.precio_venta || 0) > 0) update.precio_venta = p.precio_venta;
+                await updateDoc(doc(db, 'catalogo', p.doc_id), update);
+              }
+              done++;
+              if (done % 10 === 0) btn.textContent = `Actualizando ${done}/${total}...`;
             }
+            _touchCatalogoMeta(db).catch(() => {});
+            invalidateCache('catalogo:all');
+            await cargarDatos({ silent: true });
+            renderStats();
+            if (applyMsg) applyMsg.innerHTML = `<div style="padding:10px;background:#fefce8;border-radius:8px;color:#854d0e">${total} precios actualizados.</div>`;
+            btn.textContent = '✓ Hecho';
+          } catch(err) {
+            console.error('Error actualizando precios:', err);
+            if (applyMsg) applyMsg.innerHTML = `<div style="padding:10px;background:#fef2f2;border-radius:8px;color:#991b1b">Error actualizando precios: ${err.message || err}</div>`;
+            btn.disabled = false;
+            btn.textContent = `✗ Reintentar (${pendientes.cambioPrecio.length})`;
           }
-          _touchCatalogoMeta(db).catch(() => {});
-          invalidateCache('catalogo:all');
-          await cargarDatos();
-          renderStats();
-          document.getElementById('applyMsg').innerHTML = `<div style="padding:10px;background:#fefce8;border-radius:8px;color:#854d0e">${pendientes.cambioPrecio.length} precios actualizados.</div>`;
-          btn.textContent = '✓ Hecho';
         });
 
         document.getElementById('coincSelAll')?.addEventListener('change', (e) => {
@@ -2351,6 +2376,7 @@ export async function renderCatalogo(container, db) {
             return;
           }
           const btn = document.getElementById('btnBorrarCoinc');
+          const applyMsg = document.getElementById('applyMsg');
           btn.disabled = true; btn.textContent = 'Borrando...';
           let borrados = 0;
           for (const cb of checks) {
@@ -2366,9 +2392,11 @@ export async function renderCatalogo(container, db) {
           }
           _touchCatalogoMeta(db).catch(() => {});
           invalidateCache('catalogo:all');
-          await cargarDatos();
-          renderStats();
-          document.getElementById('applyMsg').innerHTML = `<div style="padding:10px;background:#fef2f2;border-radius:8px;color:#991b1b">${borrados} producto(s) borrado(s) del catálogo.</div>`;
+          try {
+            await cargarDatos({ silent: true });
+            renderStats();
+          } catch(e) { console.error('Recargando catalogo:', e); }
+          if (applyMsg) applyMsg.innerHTML = `<div style="padding:10px;background:#fef2f2;border-radius:8px;color:#991b1b">${borrados} producto(s) borrado(s) del catálogo.</div>`;
           btn.textContent = 'Listo';
         });
 

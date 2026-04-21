@@ -32,8 +32,10 @@ export async function renderVentas(container, db) {
     })
   ]);
 
-  // Ocultar ventas anteriores a fecha_inicio y las marcadas como borradas
-  const ventas = ventasRaw.filter(v => v.deleted !== true && parseArDate(v.created_at) >= fechaInicio);
+  // Ocultar ventas anteriores a fecha_inicio, borradas y Varios 2 (solo factura AFIP)
+  const ventas = ventasRaw.filter(v =>
+    v.deleted !== true && v.is_varios_2 !== true && parseArDate(v.created_at) >= fechaInicio
+  );
 
   // Enriquecer cada venta con sus productos
   ventas.forEach(v => {

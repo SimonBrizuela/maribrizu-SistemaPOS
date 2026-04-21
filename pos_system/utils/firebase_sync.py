@@ -19,6 +19,14 @@ _TZ_AR = timezone(timedelta(hours=-3))
 # Cache en memoria para no releer el archivo en cada llamada
 _PC_ID_CACHE: Optional[str] = None
 
+
+def _fmt_qty(q):
+    """Formatea cantidades: 1.0 -> '1', 0.3 -> '0.3', 2.55 -> '2.55'."""
+    q = float(q or 0)
+    if q == int(q):
+        return str(int(q))
+    return f"{q:.2f}".rstrip('0').rstrip('.')
+
 def _get_pc_id() -> str:
     """Identificador estable y único de la PC actual.
 
@@ -415,7 +423,7 @@ class FirebaseSync:
                 items = sale.get('items') or []
                 # Armar resumen de productos para mostrar en la web
                 productos_str = ', '.join(
-                    f"{it.get('product_name', it.get('name','?'))} x{it.get('quantity',1)}"
+                    f"{it.get('product_name', it.get('name','?'))} x{_fmt_qty(it.get('quantity',1))}"
                     for it in items[:3]
                 )
                 if len(items) > 3:
@@ -638,7 +646,7 @@ class FirebaseSync:
 
                 for it in items:
                     pid = it.get('product_id')
-                    qty = int(it.get('quantity') or 0)
+                    qty = float(it.get('quantity') or 0)
                     if not pid or qty <= 0:
                         continue
                     try:
@@ -1024,7 +1032,7 @@ class FirebaseSync:
                         'num_venta':      sale_id,
                         'producto':       item.get('product_name') or item.get('name', '?'),
                         'categoria':      item.get('category') or 'Sin categoría',
-                        'cantidad':       int(item.get('quantity', 1)),
+                        'cantidad':       float(item.get('quantity', 1) or 0),
                         'precio_unitario':float(item.get('unit_price', 0) or 0),
                         'subtotal':       float(item.get('subtotal', 0) or 0),
                         'tipo_pago':      tipo_pago,
@@ -1147,7 +1155,7 @@ class FirebaseSync:
                         name = item.get('product_name') or item.get('name', '?')
                         if name not in productos:
                             productos[name] = {'cantidad': 0, 'total': 0.0}
-                        productos[name]['cantidad'] += int(item.get('quantity', 1))
+                        productos[name]['cantidad'] += float(item.get('quantity', 1) or 0)
                         productos[name]['total'] += float(item.get('subtotal', 0) or 0)
                 top_productos = sorted(productos.items(), key=lambda x: x[1]['total'], reverse=True)[:10]
                 top_lista = [{'producto': k, 'cantidad': v['cantidad'], 'total': v['total']} for k, v in top_productos]
@@ -1200,7 +1208,7 @@ class FirebaseSync:
                 for p in (report.get('products') or []):
                     productos_lista.append({
                         'product_name': p.get('product_name') or p.get('nombre', '-'),
-                        'total_quantity': int(p.get('total_quantity') or p.get('cantidad', 0)),
+                        'total_quantity': float(p.get('total_quantity') or p.get('cantidad', 0) or 0),
                         'total_amount':   float(p.get('total_amount') or p.get('total', 0) or 0),
                     })
 
@@ -1840,9 +1848,12 @@ class FirebaseSync:
                 logger.error(f"Firebase: error sincronizando perfiles: {e}")
         self._run(_do)
 
-    def _escribir_cert_local(self, nombre_perfil: str, cert_b64: str, key_b64: str) -> tuple:
+    def _escribir_cert_local(self, nombre_perfil: str, cert_b64: str, key_b64: str,
+                              old_cert_path: str = '', old_key_path: str = '') -> tuple:
         """
         Decodifica los contenidos base64 del cert y key y los escribe en CERTS_DIR.
+        Si old_cert_path/old_key_path apuntan a archivos distintos de los nuevos,
+        los borra para no dejar certs viejos en disco.
         Retorna (cert_path, key_path) como strings, o ('', '') si falla.
         """
         import base64
@@ -1859,11 +1870,144 @@ class FirebaseSync:
             if key_b64:
                 key_path.write_bytes(base64.b64decode(key_b64))
 
+            # Borrar cert/key viejos del mismo perfil si apuntaban a otro archivo
+            from pathlib import Path as _Path
+            for old in (old_cert_path, old_key_path):
+                if not old:
+                    continue
+                try:
+                    op = _Path(old)
+                    # Solo borrar si está dentro de CERTS_DIR y es distinto del nuevo
+                    if op.resolve() == cert_path.resolve() or op.resolve() == key_path.resolve():
+                        continue
+                    if op.is_file() and str(op.parent.resolve()) == str(CERTS_DIR.resolve()):
+                        op.unlink()
+                        logger.info(f"Firebase: cert viejo borrado: {op.name}")
+                except Exception as _e:
+                    logger.warning(f"Firebase: no se pudo borrar cert viejo {old}: {_e}")
+
             logger.info(f"Firebase: cert/key escritos para perfil '{nombre_perfil}'")
             return str(cert_path), str(key_path)
         except Exception as e:
             logger.error(f"Firebase: error escribiendo cert local: {e}")
             return '', ''
+
+    def _cleanup_orphan_certs(self, db_manager) -> int:
+        """
+        Borra de CERTS_DIR todos los .crt/.key que no estén referenciados por
+        ningún perfil activo en la DB. Útil para limpiar certs viejos después
+        de una actualización de perfiles. Devuelve cantidad de archivos borrados.
+        """
+        try:
+            from pos_system.config import CERTS_DIR
+            from pathlib import Path as _Path
+            rows = db_manager.execute_query(
+                "SELECT cert_path, key_path FROM perfiles_facturacion WHERE activo=1"
+            ) or []
+            referenciados = set()
+            for r in rows:
+                for p in (r.get('cert_path'), r.get('key_path')):
+                    if p:
+                        try:
+                            referenciados.add(str(_Path(p).resolve()).lower())
+                        except Exception:
+                            referenciados.add(str(p).lower())
+
+            borrados = 0
+            for f in CERTS_DIR.glob('*'):
+                if f.suffix.lower() not in ('.crt', '.key'):
+                    continue
+                if str(f.resolve()).lower() in referenciados:
+                    continue
+                try:
+                    f.unlink()
+                    borrados += 1
+                    logger.info(f"Firebase: cert huérfano borrado: {f.name}")
+                except Exception as _e:
+                    logger.warning(f"Firebase: no se pudo borrar cert huérfano {f.name}: {_e}")
+            if borrados:
+                logger.info(f"Firebase: {borrados} cert/key huérfanos eliminados de CERTS_DIR.")
+            return borrados
+        except Exception as e:
+            logger.error(f"Firebase: error en cleanup_orphan_certs: {e}")
+            return 0
+
+    def force_refresh_certs_oneshot(self, db_manager) -> bool:
+        """
+        Migración one-shot: borra TODOS los .crt/.key de CERTS_DIR y los rearma
+        desde Firestore (colección perfiles_facturacion). Actualiza cert_path/
+        key_path en la SQLite local. Solo se ejecuta una vez (flag en DATA_DIR).
+
+        Sirve para resolver el caso en que la PC quedó con certs viejos con el
+        mismo nombre de archivo que los nuevos, y el listener no los sobreescribió.
+
+        Returns: True si se ejecutó, False si se salteó (ya corrió antes o falló).
+        """
+        if not self.enabled:
+            return False
+        try:
+            from pos_system.config import DATA_DIR, CERTS_DIR
+            flag_file = DATA_DIR / "certs_refreshed_v1.flag"
+            if flag_file.exists():
+                return False
+
+            logger.info("Firebase: ejecutando one-shot refresh de certificados...")
+
+            # 1. Borrar todos los .crt/.key existentes en CERTS_DIR
+            borrados = 0
+            for f in CERTS_DIR.glob('*'):
+                if f.suffix.lower() in ('.crt', '.key') and f.is_file():
+                    try:
+                        f.unlink()
+                        borrados += 1
+                    except Exception as _e:
+                        logger.warning(f"Firebase oneshot: no se pudo borrar {f.name}: {_e}")
+            logger.info(f"Firebase oneshot: {borrados} archivos .crt/.key borrados.")
+
+            # 2. Query one-shot a Firestore perfiles_facturacion activos
+            docs = self.db.collection('perfiles_facturacion').stream()
+            procesados = 0
+            for doc in docs:
+                d = doc.to_dict() or {}
+                if not d.get('activo', True):
+                    continue
+                nombre   = d.get('nombre', '')
+                cert_b64 = d.get('cert_content', '')
+                key_b64  = d.get('key_content', '')
+                fb_id    = doc.id
+
+                if not (cert_b64 or key_b64):
+                    logger.warning(f"Firebase oneshot: perfil '{nombre}' sin cert_content en Firestore, se saltea.")
+                    continue
+
+                cert_path, key_path = self._escribir_cert_local(nombre, cert_b64, key_b64)
+                if not cert_path:
+                    continue
+
+                # 3. Actualizar cert_path/key_path en SQLite
+                try:
+                    db_manager.execute_update(
+                        "UPDATE perfiles_facturacion SET cert_path=?, key_path=? WHERE firebase_id=?",
+                        (cert_path, key_path, str(fb_id))
+                    )
+                except Exception as _e:
+                    logger.warning(f"Firebase oneshot: error actualizando DB para '{nombre}': {_e}")
+                procesados += 1
+
+            # 4. Crear flag para no volver a correr
+            try:
+                flag_file.write_text(
+                    f"oneshot ejecutado: {now_ar().isoformat()} | procesados={procesados}",
+                    encoding='utf-8'
+                )
+            except Exception as _e:
+                logger.warning(f"Firebase oneshot: no se pudo crear flag: {_e}")
+
+            logger.info(f"Firebase oneshot: refresh completado, {procesados} perfiles reescritos.")
+            return True
+        except Exception as e:
+            logger.error(f"Firebase: error en force_refresh_certs_oneshot: {e}")
+            return False
 
     def start_perfiles_listener(self, db_manager, on_change: Callable = None):
         """
@@ -1879,17 +2023,23 @@ class FirebaseSync:
             cert_b64  = doc_data.get('cert_content', '')
             key_b64   = doc_data.get('key_content', '')
 
-            # Si vienen los archivos en base64, escribirlos localmente
+            fb_doc_id = doc_data.get('id') or doc_data.get('_docId', '')
+            existing = db_manager.execute_query(
+                "SELECT id, cert_path, key_path FROM perfiles_facturacion WHERE firebase_id=?",
+                (str(fb_doc_id),)
+            ) if fb_doc_id else []
+
+            old_cert = existing[0].get('cert_path', '') if existing else ''
+            old_key  = existing[0].get('key_path', '')  if existing else ''
+
+            # Si vienen los archivos en base64, escribirlos localmente (y borrar los viejos del mismo perfil)
             if cert_b64 or key_b64:
-                cert_path, key_path = self._escribir_cert_local(nombre, cert_b64, key_b64)
+                cert_path, key_path = self._escribir_cert_local(
+                    nombre, cert_b64, key_b64, old_cert, old_key
+                )
             else:
                 cert_path = doc_data.get('cert_path', '')
                 key_path  = doc_data.get('key_path', '')
-
-            fb_doc_id = doc_data.get('id') or doc_data.get('_docId', '')
-            existing = db_manager.execute_query(
-                "SELECT id FROM perfiles_facturacion WHERE firebase_id=?", (str(fb_doc_id),)
-            ) if fb_doc_id else []
 
             params_update = (
                 nombre,
@@ -1941,6 +2091,12 @@ class FirebaseSync:
                         continue
 
                     _upsert(doc_data)
+
+                # Limpiar certs huérfanos en CERTS_DIR (de perfiles renombrados/desactivados)
+                try:
+                    self._cleanup_orphan_certs(db_manager)
+                except Exception as _e:
+                    logger.warning(f"Firebase: cleanup de certs falló: {_e}")
 
                 logger.info("Firebase: perfiles de facturación sincronizados.")
                 if on_change:

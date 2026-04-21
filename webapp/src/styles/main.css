@@ -828,8 +828,8 @@ body {
     z-index: 199;
   }
 
-  .main-content { margin-left: 0; padding-bottom: 80px; }
-  .page-content { padding-bottom: 80px !important; }
+  .main-content { margin-left: 0; padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px)); }
+  .page-content { padding-bottom: calc(80px + env(safe-area-inset-bottom, 0px)) !important; }
   .menu-btn { display: flex; }
   .chart-section { grid-template-columns: 1fr; }
   .cards-grid { grid-template-columns: 1fr 1fr; }
@@ -844,9 +844,12 @@ body {
 
   /* Tablas scroll horizontal */
   .table-wrap { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  table { min-width: 400px; }
+  table { min-width: 360px; }
   thead th { padding: 10px 12px; }
   tbody td { padding: 10px 12px; }
+
+  /* Facturación: grid stack en mobile */
+  .fact-grid { grid-template-columns: 1fr !important; }
 
   /* Cards 2 columnas */
   .cards-grid { gap: 10px; }
@@ -950,7 +953,7 @@ body {
   color: var(--text-muted);
   display: none;
 }
-@media (max-width: 768px) { .refresh-hint { display: block; } }
+@media (max-width: 768px) { .refresh-hint.show { display: block; } }
 
 /* ── MOBILE CATÁLOGO ── */
 /* Tabs del catálogo: scroll horizontal suave en mobile */
@@ -1028,11 +1031,16 @@ body {
   .table-card-header h3 { font-size: 14px; }
 }
 
-/* ── BOTTOM NAV con 8 items: más compacto ── */
+/* ── BOTTOM NAV con 5 items: compacto y legible ── */
 @media (max-width: 768px) {
-  .bottom-nav-item span.label { font-size: 8px; }
+  .bottom-nav-item span.label { font-size: 10px; }
+  .bottom-nav-item .material-icons { font-size: 22px !important; }
+  .bottom-nav-item { padding: 6px 2px; min-height: 48px; justify-content: center; }
+}
+@media (max-width: 380px) {
+  .bottom-nav-item span.label { font-size: 9px; }
   .bottom-nav-item .material-icons { font-size: 20px !important; }
-  .bottom-nav-item { padding: 4px 2px; }
+  .cards-grid { grid-template-columns: 1fr 1fr !important; }
 }
 
 /* ── LEGIBILIDAD GENERAL EN MOBILE ── */
@@ -1272,6 +1280,28 @@ body {
 }
 .fact-warn .material-icons { font-size: 18px !important; color: #f59e0b; }
 
+/* Historial: resumen por punto de venta */
+.fact-pv-resumen {
+  display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 16px;
+}
+.fact-pv-card {
+  flex: 1; min-width: 160px;
+  background: #fff; border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.04);
+}
+.fact-pv-card.fact-pv-total-general {
+  background: #eef4ff; border-color: #c7d9fc;
+}
+.fact-pv-label {
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .5px; color: var(--text-muted); margin-bottom: 4px;
+}
+.fact-pv-total {
+  font-size: 20px; font-weight: 800; color: var(--text); line-height: 1.2;
+}
+.fact-pv-total-general .fact-pv-total { color: #1458c2; }
+.fact-pv-count { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+
 /* Historial tabla */
 .fact-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .fact-table th {
@@ -1328,6 +1358,28 @@ body {
 /* Ajuste grid con wrap */
 .fact-item-row {
   grid-template-columns: 1fr 70px 90px 90px 32px;
+}
+
+/* Mobile: apilar descripción arriba, otros inputs en fila */
+@media (max-width: 600px) {
+  .fact-items-header { display: none; }
+  .fact-item-row {
+    grid-template-columns: 1fr 1fr 1fr 32px;
+    grid-template-areas:
+      "desc desc desc del"
+      "cant precio imp del";
+    gap: 6px 6px;
+    padding: 8px; border: 1px solid var(--border);
+    border-radius: 8px; background: #fafbfc;
+  }
+  .fact-item-row > .fi-desc-wrap { grid-area: desc; }
+  .fact-item-row > .fi-cant      { grid-area: cant; }
+  .fact-item-row > .fi-precio    { grid-area: precio; }
+  .fact-item-row > .fi-importe   { grid-area: imp; }
+  .fact-item-row > .fi-del       { grid-area: del; align-self: start; }
+  .fact-item-row input { font-size: 14px; }
+  .fact-row { grid-template-columns: 1fr; gap: 4px; }
+  .fact-row label { font-size: 11px; }
 }
 
 

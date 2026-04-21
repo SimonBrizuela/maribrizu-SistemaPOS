@@ -27,7 +27,14 @@ export async function renderHistorial(container, db) {
 
   // Ocultar todo lo anterior a fecha_inicio (fechas vienen "DD/MM/YYYY") y lo eliminado
   const historial  = historialRaw.filter(h => fechaDMYtoYMD(h.fecha) >= fechaInicioStr);
-  const ventasDia  = ventasDiaRaw.filter(v => v.deleted !== true && fechaDMYtoYMD(v.fecha) >= fechaInicioStr);
+  const ventasDia  = ventasDiaRaw.filter(v => {
+    if (v.deleted === true) return false;
+    if (v.is_varios_2 === true) return false;
+    const nombre = (v.producto || v.product_name || '').toUpperCase().trim();
+    const cat    = (v.categoria || '').toUpperCase().trim();
+    if (nombre === 'VARIOS 2' || cat === 'VARIOS 2') return false;
+    return fechaDMYtoYMD(v.fecha) >= fechaInicioStr;
+  });
 
   container.innerHTML = `
     <!-- Resumen por Día -->

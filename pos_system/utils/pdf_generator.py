@@ -10,6 +10,13 @@ import os
 
 _TZ_AR = timezone(timedelta(hours=-3))
 
+def _fmt_qty(q):
+    """Formatea cantidades: 1.0 -> '1', 0.3 -> '0.3', 2.55 -> '2.55'."""
+    q = float(q or 0)
+    if q == int(q):
+        return str(int(q))
+    return f"{q:.2f}".rstrip('0').rstrip('.')
+
 def _parse_ar(s):
     try:
         dt = datetime.fromisoformat(str(s))
@@ -200,7 +207,7 @@ class PDFGenerator:
                 price_cell = f'${unit_price:.2f}'
 
             items_data.append([
-                str(item.get('quantity', 1)),
+                _fmt_qty(item.get('quantity', 1)),
                 prod_name,
                 price_cell,
                 f'${float(item.get("subtotal", 0)):.2f}'
@@ -547,7 +554,7 @@ class PDFGenerator:
             for product in report['products']:
                 products_data.append([
                     product['product_name'],
-                    str(product['total_quantity']),
+                    _fmt_qty(product['total_quantity']),
                     f"${product['total_amount']:.2f}"
                 ])
             
@@ -806,7 +813,7 @@ class PDFGenerator:
             for product in report['products']:
                 prod_name = product['product_name'][:25] + '...' if len(product['product_name']) > 25 else product['product_name']
                 story.append(Paragraph(f'{prod_name}', normal_style))
-                story.append(Paragraph(f'  {product["total_quantity"]} x ${product["total_amount"]/product["total_quantity"]:.2f} = ${product["total_amount"]:.2f}', normal_style))
+                story.append(Paragraph(f'  {_fmt_qty(product["total_quantity"])} x ${product["total_amount"]/product["total_quantity"]:.2f} = ${product["total_amount"]:.2f}', normal_style))
                 story.append(Spacer(1, 1*mm))
             
             story.append(Spacer(1, 2*mm))
@@ -1008,7 +1015,7 @@ class PDFGenerator:
         all_items = [['UNDS.', 'DESCRIPCION', 'IVA', 'PRECIO', 'IMPORTE']]
         for item in factura.get('items', []):
             all_items.append([
-                f'{float(item["cantidad"]):.2f}',
+                _fmt_qty(item["cantidad"]),
                 item['descripcion'][:18],
                 f'{float(item["iva"]):.0f}%',
                 f'{float(item["precio"]):,.2f}',

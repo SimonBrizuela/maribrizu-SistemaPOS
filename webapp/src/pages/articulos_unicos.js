@@ -146,7 +146,7 @@ export async function renderArticulosUnicos(container, db) {
 
       .search-variantes {
         padding:8px 14px; border:1.5px solid var(--border); border-radius:8px;
-        font-size:13px; width:280px;
+        font-size:13px; width:100%; max-width:280px; min-width:0;
       }
       .search-variantes:focus { border-color:var(--primary); outline:none; }
 
@@ -173,6 +173,19 @@ export async function renderArticulosUnicos(container, db) {
       .btn-del-var { background:#fee2e2; color:#dc3545; border:1px solid #fecaca;
                      border-radius:6px; padding:8px 14px; cursor:pointer; font-size:12px; font-weight:600; }
       .btn-del-var:hover { background:#fecaca; }
+
+      @media (max-width: 600px) {
+        .variante-row-header { display:none; }
+        .variante-row {
+          grid-template-columns: 1fr auto;
+          gap:4px 10px; padding:10px 12px;
+        }
+        .var-nombre { grid-column: 1 / -1; }
+        .var-precio::before { content:"$ "; color:var(--text-muted); font-weight:500; }
+        .var-stock::before { content:"Stock: "; color:var(--text-muted); font-weight:500; }
+        .var-rubro { grid-column: 1 / -1; font-size:11px; }
+        .btn-edit-var { grid-column: 2; grid-row: 2; }
+      }
     </style>
 
     <div class="variantes-header">

@@ -16,13 +16,16 @@ from datetime import datetime
 import os
 import platform
 import subprocess
+import logging
 from pos_system.utils.firebase_sync import now_ar
+
+logger = logging.getLogger(__name__)
 
 
 class _CaeWorker(QThread):
     """Worker que consulta ultimo_comprobante y solicita_cae en background."""
     ok = pyqtSignal(dict)
-    fail = pyqtSignal(str)
+    fail = pyqtSignal(object)   # emite la excepción completa (con traceback)
 
     def __init__(self, afip, tipo, pv, total, neto, iva_send, otros_send, cuit_rec, cond_iva_rec):
         super().__init__()
@@ -54,7 +57,7 @@ class _CaeWorker(QThread):
             )
             self.ok.emit(res)
         except Exception as e:
-            self.fail.emit(str(e))
+            self.fail.emit(e)
 
 
 class FacturaDialog(QDialog):
@@ -199,11 +202,12 @@ class FacturaDialog(QDialog):
 
             for row, it in enumerate(sale_items):
                 name = str(it.get('product_name') or it.get('descripcion') or it.get('name', ''))
-                cant = it.get('quantity', 1)
+                cant = float(it.get('quantity', 1) or 0)
+                cant_str = str(int(cant)) if cant == int(cant) else f"{cant:.2f}".rstrip('0').rstrip('.')
                 price = float(it.get('unit_price', 0))
                 subtotal = float(it.get('subtotal', 0))
                 itbl.setItem(row, 0, QTableWidgetItem(name))
-                itbl.setItem(row, 1, QTableWidgetItem(str(cant)))
+                itbl.setItem(row, 1, QTableWidgetItem(cant_str))
                 pi = QTableWidgetItem(f'${price:,.2f}')
                 pi.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 itbl.setItem(row, 2, pi)
@@ -459,7 +463,7 @@ class FacturaDialog(QDialog):
         items = []
         for it in self.sale.get('items', []):
             items.append({
-                'cantidad':    it.get('quantity', 1),
+                'cantidad':    float(it.get('quantity', 1) or 0),
                 'descripcion': it.get('product_name', 'Producto'),
                 'iva':         0.0,
                 'precio':      float(it.get('unit_price', 0)),
@@ -591,6 +595,18 @@ class FacturaDialog(QDialog):
                 produccion=bool(self.emisor.get('produccion', False)),
             )
         except Exception as e:
+            logger.exception('AFIP init error')
+            try:
+                from pos_system.utils.afip_error_reporter import report_afip_error
+                report_afip_error(e, {
+                    'etapa': 'init_AfipWsfe',
+                    'cuit_emisor': self.emisor.get('cuit', ''),
+                    'cert_path': cert_path,
+                    'key_path': key_path,
+                    'produccion': bool(self.emisor.get('produccion', False)),
+                })
+            except Exception:
+                pass
             QMessageBox.critical(self, 'Error AFIP', f'No se pudo inicializar AFIP:\n{e}')
             return
 
@@ -620,11 +636,28 @@ class FacturaDialog(QDialog):
             self._do_generate_pdf(str(res['cae']), str(res['vto_cae']),
                                   nro_from_afip=int(res['nro_comprobante']))
 
-        def _fail(msg):
+        def _fail(exc):
             prog.accept()
+            logger.error('AFIP CAE worker failed', exc_info=exc)
+            try:
+                from pos_system.utils.afip_error_reporter import report_afip_error
+                report_afip_error(exc, {
+                    'etapa': 'solicitar_cae',
+                    'tipo_comprobante': tipo,
+                    'punto_venta': self.emisor.get('punto_venta', 1),
+                    'cuit_emisor': self.emisor.get('cuit', ''),
+                    'cuit_receptor': cuit_cliente,
+                    'cond_iva_receptor': cond_iva_cliente,
+                    'total': total,
+                    'neto': neto,
+                    'iva': iva_send,
+                    'produccion': bool(self.emisor.get('produccion', False)),
+                })
+            except Exception:
+                pass
             resp = QMessageBox.question(
                 self, 'Error AFIP',
-                f'No se pudo obtener el CAE de AFIP:\n{msg}\n\n'
+                f'No se pudo obtener el CAE de AFIP:\n{exc}\n\n'
                 'Generar igualmente la factura sin CAE?',
                 QMessageBox.Yes | QMessageBox.No, QMessageBox.No
             )

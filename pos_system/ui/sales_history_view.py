@@ -10,6 +10,13 @@ from pos_system.utils.firebase_sync import now_ar
 
 _TZ_AR = timezone(timedelta(hours=-3))
 
+def _fmt_qty(q):
+    """Formatea cantidades: 1.0 -> '1', 0.3 -> '0.3', 2.55 -> '2.55'."""
+    q = float(q or 0)
+    if q == int(q):
+        return str(int(q))
+    return f"{q:.2f}".rstrip('0').rstrip('.')
+
 def _parse_ar(s):
     try:
         dt = datetime.fromisoformat(str(s))
@@ -373,7 +380,7 @@ class SalesHistoryView(QWidget):
                 price_item.setForeground(QColor('#198754'))  # verde si tiene descuento
             self.detail_table.setItem(r, 2, price_item)
             
-            qty_item = QTableWidgetItem(str(item['quantity']))
+            qty_item = QTableWidgetItem(_fmt_qty(item['quantity']))
             qty_item.setTextAlignment(Qt.AlignCenter)
             self.detail_table.setItem(r, 3, qty_item)
             
@@ -528,8 +535,8 @@ class EditSaleDialog(QDialog):
             name_item.setFlags(name_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(row, 0, name_item)
 
-            qty = int(it.get('quantity') or 0)
-            qty_item = QTableWidgetItem(str(qty))
+            qty = float(it.get('quantity') or 0)
+            qty_item = QTableWidgetItem(_fmt_qty(qty))
             qty_item.setTextAlignment(Qt.AlignCenter)
             qty_item.setFlags(qty_item.flags() & ~Qt.ItemIsEditable)
             self.table.setItem(row, 1, qty_item)

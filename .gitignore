@@ -7,6 +7,8 @@ backups/
 firebase_key.json
 *.key
 *.pem
+*.crt
+certs/
 
 # Logs
 pos_system.log
@@ -42,13 +44,21 @@ env/
 *.suo
 *.user
 
-# Reportes generados
+# Reportes generados (facturas, cierres, etc.) — datos de clientes reales
 pos_system/reports/*.pdf
+reports/
+*.pdf
 
 # Archivos temporales
 tmp_rovodev_*
 *.tmp
 *.bak
+
+# Flag local de migración one-shot de certs (solo dev; en cada PC queda en %APPDATA%)
+certs_refreshed_v1.flag
+
+# Backups puntuales
+certs_backup_*/
 
 # Node modules (webapp)
 webapp/node_modules/
@@ -60,8 +70,11 @@ multimedia.png
 "logo (2).png"
 webapp/2026-*.png
 webapp/undefined*.png
+*.jpeg
+*.jpg
 webapp/*.jpeg
 webapp/*.jpg
+WhatsApp Image *
 
 # CSVs de importación (datos locales)
 *.csv
@@ -71,6 +84,11 @@ PENDIENTES_SISTEMA_POS.txt
 PROGRESO_SISTEMA_POS.txt
 duplicados_reporte.txt
 productos_nuevos_hoja_principal.txt
+Cosas nuevas.txt
+
+# Estado de sincronización local (cada PC tiene su timestamp)
+last_catalog_sync.txt
+last_product_sync.txt
 
 # PDFs varios
 puntos-de-venta.pdf

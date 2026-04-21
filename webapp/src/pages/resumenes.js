@@ -167,9 +167,13 @@ export async function renderResumenes(container, db) {
       ]);
 
       const fechaInicio = new Date(fechaInicioStr + 'T00:00:00-03:00');
-      const ventas    = ventasRaw.filter(v => v.deleted !== true && parseArDate(v.created_at) >= fechaInicio);
+      const ventas    = ventasRaw.filter(v => v.deleted !== true && v.is_varios_2 !== true && parseArDate(v.created_at) >= fechaInicio);
       const ventasDia = ventasDiaRaw.filter(v => {
         if (v.deleted === true) return false;
+        if (v.is_varios_2 === true) return false;
+        const nombre = (v.producto || v.product_name || '').toUpperCase().trim();
+        const cat    = (v.categoria || '').toUpperCase().trim();
+        if (nombre === 'VARIOS 2' || cat === 'VARIOS 2') return false;
         const f = (v.fecha || '').split('/').reverse().join('-');
         return f >= fechaInicioStr;
       });
@@ -182,6 +186,9 @@ export async function renderResumenes(container, db) {
       snapItems.docs.forEach(d => {
         const data = d.data();
         if (data.deleted === true) return;
+        const nombre = (data.producto || data.product_name || '').toUpperCase().trim();
+        const cat    = (data.categoria || '').toUpperCase().trim();
+        if (nombre === 'VARIOS 2' || cat === 'VARIOS 2' || data.is_varios_2 === true) return;
         if ((data.fecha || '').split('/').reverse().join('-') < fechaInicioStr) return;
         const parts = d.id.split('_');
         const pcId  = parts.length >= 3 ? parts.slice(0, -2).join('_') : '';

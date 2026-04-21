@@ -71,6 +71,7 @@ export async function renderCierres(container, db) {
     for (const doc of ventasSnap.docs) {
       const v = doc.data();
       if (v.deleted === true) continue;
+      if (v.is_varios_2 === true) continue;
       const vDate = toDate(v.created_at);
       if (!vDate) continue;
       if (fechaLimite && vDate < fechaLimite) continue;

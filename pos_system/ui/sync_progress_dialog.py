@@ -628,8 +628,9 @@ class SyncWorker(QThread):
                     continue
                 created_at = fb._parse_dt(s.get('created_at'))
                 items = s.get('items') or []
+                from pos_system.utils.firebase_sync import _fmt_qty
                 productos_str = ', '.join(
-                    f"{it.get('product_name', it.get('name','?'))} x{it.get('quantity',1)}"
+                    f"{it.get('product_name', it.get('name','?'))} x{_fmt_qty(it.get('quantity',1))}"
                     for it in items[:3]
                 )
                 if len(items) > 3:

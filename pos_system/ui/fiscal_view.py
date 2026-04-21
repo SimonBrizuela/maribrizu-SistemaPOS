@@ -447,9 +447,38 @@ class FiscalView(QWidget):
             QMessageBox.critical(self, 'Dependencia faltante', str(e))
             return
         except AFIPError as e:
+            import logging
+            logging.getLogger(__name__).exception('AFIP error en fiscal_view')
+            try:
+                from pos_system.utils.afip_error_reporter import report_afip_error
+                report_afip_error(e, {
+                    'etapa': 'fiscal_view.solicitar_cae',
+                    'tipo_comprobante': tipo,
+                    'punto_venta': pto_venta,
+                    'nro': nro,
+                    'cuit_emisor': factura.get('cuit', ''),
+                    'cuit_receptor': cuit_cli,
+                    'total': factura.get('total'),
+                    'produccion': produccion,
+                })
+            except Exception:
+                pass
             QMessageBox.critical(self, 'Error AFIP', str(e))
             return
         except Exception as e:
+            import logging
+            logging.getLogger(__name__).exception('Error inesperado AFIP en fiscal_view')
+            try:
+                from pos_system.utils.afip_error_reporter import report_afip_error
+                report_afip_error(e, {
+                    'etapa': 'fiscal_view.inesperado',
+                    'tipo_comprobante': tipo,
+                    'punto_venta': pto_venta,
+                    'cuit_emisor': factura.get('cuit', ''),
+                    'produccion': produccion,
+                })
+            except Exception:
+                pass
             QMessageBox.critical(self, 'Error', f'Error inesperado al contactar AFIP:\n{str(e)}')
             return
 

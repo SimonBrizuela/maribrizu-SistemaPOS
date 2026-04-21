@@ -19,8 +19,16 @@ from pos_system.models.promotion import Promotion
 from pos_system.utils.pdf_generator import PDFGenerator
 
 
-class CartQuantitySpinBox(QSpinBox):
-    """QSpinBox para cantidad de items del carrito.
+def _fmt_qty(q):
+    """Formatea una cantidad eliminando ceros finales: 1.0 -> '1', 0.3 -> '0.3', 2.55 -> '2.55'."""
+    q = float(q or 0)
+    if q == int(q):
+        return str(int(q))
+    return f"{q:.2f}".rstrip('0').rstrip('.')
+
+
+class CartQuantitySpinBox(QDoubleSpinBox):
+    """QDoubleSpinBox para cantidad de items del carrito (acepta decimales: 0.1, 0.25, ...).
 
     - keyboardTracking=False: valueChanged solo dispara al confirmar.
     - Rueda del mouse deshabilitada: el scroll se delega al padre para
@@ -30,11 +38,33 @@ class CartQuantitySpinBox(QSpinBox):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setKeyboardTracking(False)
-        self.setFocusPolicy(Qt.StrongFocus)
+        # keyboardTracking=True → valueChanged dispara en cada tecla para que
+        # el subtotal se recalcule al instante mientras el cajero escribe.
+        self.setKeyboardTracking(True)
+        # StrongFocus + WheelFocus: el spinbox acepta foco por rueda también,
+        # así el primer scroll también incrementa (si no, el evento se iría al
+        # padre la primera vez). ClickFocus lo mantiene click-to-focus normal.
+        self.setFocusPolicy(Qt.WheelFocus)
+        self.setDecimals(2)
+        # Paso 1 → rueda/flechas suben de 1 en 1 (caso típico).
+        # Para decimales el cajero tipea "1,5" directamente.
+        self.setSingleStep(1.0)
 
     def wheelEvent(self, event):
-        event.ignore()
+        # Scrollea el valor sólo si la rueda es sobre este spinbox. Cuando
+        # llega al tope (min/max), super() no cambia el valor y el evento
+        # queda consumido — no se propaga a la lista de productos.
+        super().wheelEvent(event)
+
+    def textFromValue(self, value):
+        """Oculta ceros finales (1 en vez de 1,00) pero respeta el separador
+        decimal del locale (coma en español). Si devolvemos '1.5' con punto
+        en locale es_AR, el validador del spinbox rechaza y bloquea el foco."""
+        if value == int(value):
+            return str(int(value))
+        s = self.locale().toString(float(value), 'f', self.decimals())
+        dp = self.locale().decimalPoint()
+        return s.rstrip('0').rstrip(dp)
 
 
 class BarcodeScanner(QLineEdit):
@@ -362,7 +392,7 @@ class ProductSearchDialog(QDialog):
             self.cart_list.setItem(row, 0, name_item)
 
             # Columna combinada: "x2  $500"
-            detail_item = QTableWidgetItem(f'x{qty}  ${subtotal:,.0f}')
+            detail_item = QTableWidgetItem(f'x{_fmt_qty(qty)}  ${subtotal:,.0f}')
             detail_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             detail_item.setForeground(QColor('#6366f1'))
             self.cart_list.setItem(row, 1, detail_item)
@@ -1950,8 +1980,9 @@ class SalesView(QWidget):
         total = 0
 
         # Actualizar contador de items
-        total_items = sum(item['quantity'] for item in self.cart)
-        self.items_count_lbl.setText(f'{total_items} item{"s" if total_items != 1 else ""}')
+        total_items = sum(float(item['quantity']) for item in self.cart)
+        items_str = _fmt_qty(total_items)
+        self.items_count_lbl.setText(f'{items_str} item{"s" if total_items != 1 else ""}')
 
         for row, item in enumerate(self.cart):
             has_discount = item.get('discount_amount', 0) > 0
@@ -1996,12 +2027,14 @@ class SalesView(QWidget):
                 price_item.setForeground(QColor('#dc3545'))
             self.cart_table.setItem(row, 2, price_item)
 
-            # Col 3: Cantidad (SpinBox con keyboardTracking=False y wheel invertido)
+            # Col 3: Cantidad (DoubleSpinBox: acepta decimales, p.ej. 0.3 = fraccion)
             qty_spin = CartQuantitySpinBox()
-            qty_spin.setMinimum(1)
+            # Minimum=0 para permitir estados transitorios al tipear "0,5"
+            # (el 0 inicial). En update_quantity se ignoran valores <=0.
+            qty_spin.setMinimum(0.0)
             max_stock = item.get('max_stock', 0)
-            qty_spin.setMaximum(max_stock if max_stock > 0 else 9999)
-            qty_spin.setValue(item['quantity'])
+            qty_spin.setMaximum(float(max_stock) if max_stock and max_stock > 0 else 9999.0)
+            qty_spin.setValue(float(item['quantity']))
             qty_spin.setFixedHeight(32)
             qty_spin.setFont(QFont('Segoe UI', 10, QFont.Bold))
             qty_spin.setStyleSheet('''
@@ -2162,26 +2195,81 @@ class SalesView(QWidget):
             self._promo_hint_lbl.setVisible(False)
         
     def update_quantity(self, row, quantity):
-        if row < len(self.cart):
-            item = self.cart[row]
-            item['quantity'] = quantity
-            # Siempre recalcular precio — las promos de Firebase dependen de la cantidad
+        if row >= len(self.cart):
+            return
+        quantity = float(quantity)
+        if quantity <= 0:
+            # Estado transitorio mientras el usuario tipea (ej: escribió "0"
+            # antes del "0,5"). Ignoramos sin reconstruir para no matar el foco.
+            return
+        item = self.cart[row]
+        item['quantity'] = quantity
+        # Siempre recalcular precio — las promos de Firebase dependen de la cantidad
+        promo_changed = False
+        try:
+            product = self.product_model.get_by_id(item['product_id'])
+            if product:
+                old_unit = item.get('unit_price')
+                pricing = self._resolve_price_for_product(product, quantity)
+                item.update(pricing)
+                promo_changed = (pricing.get('unit_price') != old_unit)
+        except Exception:
+            pass
+        item['subtotal'] = round(quantity * item['unit_price'], 2)
+
+        # Si cambió una promo (activación/desactivación por cantidad), sí
+        # necesitamos rebuild para que se vea el badge de descuento. Si no,
+        # actualizamos sólo subtotal + total sin tocar el spinbox.
+        if promo_changed:
+            had_focus = False
             try:
-                product = self.product_model.get_by_id(item['product_id'])
-                if product:
-                    pricing = self._resolve_price_for_product(product, quantity)
-                    item.update(pricing)
+                old_w = self.cart_table.cellWidget(row, 3)
+                had_focus = bool(old_w and old_w.hasFocus())
             except Exception:
                 pass
-            item['subtotal'] = round(quantity * item['unit_price'], 2)
             self.update_cart_display()
-            # Tras rebuild, devolver foco al spinbox para que siga el scroll
-            try:
-                w = self.cart_table.cellWidget(row, 3)
-                if isinstance(w, CartQuantitySpinBox):
-                    w.setFocus(Qt.OtherFocusReason)
-            except Exception:
-                pass
+            if had_focus:
+                try:
+                    w = self.cart_table.cellWidget(row, 3)
+                    if isinstance(w, CartQuantitySpinBox):
+                        w.setFocus(Qt.OtherFocusReason)
+                except Exception:
+                    pass
+        else:
+            self._refresh_cart_totals(row)
+
+    def _refresh_cart_totals(self, row=None):
+        """Light update: sólo subtotal de la fila y total global.
+        NO reconstruye la tabla — preserva el spinbox con foco y texto intacto
+        mientras el cajero sigue tipeando."""
+        if row is not None and row < len(self.cart):
+            item = self.cart[row]
+            sub_it = self.cart_table.item(row, 4)
+            if sub_it:
+                sub_it.setText(f'${item["subtotal"]:,.0f}')
+        # Total y contador
+        total = sum(item['subtotal'] for item in self.cart)
+        total_items = sum(float(item['quantity']) for item in self.cart)
+        items_str = _fmt_qty(total_items)
+        self.items_count_lbl.setText(f'{items_str} item{"s" if total_items != 1 else ""}')
+        total_str = f'${total:,.2f}'
+        font_size = 24 if len(total_str) <= 10 else (20 if len(total_str) <= 13 else 17)
+        total_discount = sum(item.get('discount_amount', 0) for item in self.cart)
+        if total_discount > 0:
+            self.total_amount_label.setText(
+                f'<span style="font-size:12px;color:#6ee7b7;font-weight:normal;">'
+                f'Ahorro: ${total_discount:,.2f}</span><br>'
+                f'<b style="color:#4ade80;font-size:{font_size}px;">{total_str}</b>'
+            )
+            self.total_amount_label.setTextFormat(Qt.RichText)
+        else:
+            self.total_amount_label.setFont(QFont('Segoe UI', font_size, QFont.Bold))
+            self.total_amount_label.setText(total_str)
+            self.total_amount_label.setTextFormat(Qt.PlainText)
+        try:
+            self._update_change()
+        except Exception:
+            pass
             
     def remove_from_cart(self, row):
         if row < len(self.cart):
@@ -3309,7 +3397,7 @@ class VariosItemDialog(QDialog):
         form.addRow('Precio unitario:', self.price_input)
 
         self.qty_input = CartQuantitySpinBox()
-        self.qty_input.setRange(1, 9999)
+        self.qty_input.setRange(0.01, 9999)
         self.qty_input.setValue(1)
         self.qty_input.setFont(QFont('Segoe UI', 11))
         form.addRow('Cantidad:', self.qty_input)
@@ -3374,7 +3462,7 @@ class VariosItemDialog(QDialog):
             return
         self.product_name = name
         self.unit_price   = price
-        self.qty          = int(self.qty_input.value())
+        self.qty          = float(self.qty_input.value())
         if self.obs_toggle_btn.isChecked():
             self.observation = self.obs_edit.toPlainText().strip()
         else:

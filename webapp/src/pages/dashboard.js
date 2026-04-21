@@ -34,9 +34,10 @@ export async function renderDashboard(container, db) {
     }, { ttl: 3 * 60 * 1000 }),
   ]);
 
-  // Filtrar todo antes de fecha_inicio y ventas eliminadas
+  // Filtrar todo antes de fecha_inicio, ventas eliminadas y Varios 2 (solo factura AFIP)
   const ventas = ventasRaw.filter(v => {
     if (v.deleted === true) return false;
+    if (v.is_varios_2 === true) return false;
     const dt = parseArDate(v.created_at);
     return dt >= fechaInicio;
   });

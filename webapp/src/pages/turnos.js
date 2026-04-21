@@ -17,7 +17,7 @@ export async function renderTurnos(container, db) {
     getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc'), limit(1000))),
     getSaleNumberMap(db),
   ]);
-  const ventas = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(v => v.deleted !== true);
+  const ventas = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(v => v.deleted !== true && v.is_varios_2 !== true);
 
   // Rango de fechas por defecto: hoy en hora Argentina
   const hoy = new Date(todayAR() + 'T00:00:00-03:00');
@@ -45,8 +45,8 @@ export async function renderTurnos(container, db) {
     <div class="table-card">
       <div class="table-card-header">
         <h3>🧾 Ventas por Cajero — Detalle</h3>
-        <div style="display:flex;gap:8px;align-items:center">
-          <input type="text" id="filtroCajeroNombre" placeholder="Filtrar cajero..." style="width:160px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px" />
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;min-width:0">
+          <input type="text" id="filtroCajeroNombre" placeholder="Filtrar cajero..." style="flex:1;min-width:120px;max-width:200px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;font-size:13px" />
           <span id="ventasCount" style="color:var(--text-muted);font-size:13px"></span>
         </div>
       </div>
