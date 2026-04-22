@@ -129,6 +129,12 @@ def init_firebase_sync() -> Optional["FirebaseSync"]:
             db = firestore.client()
             _sync_instance = FirebaseSync(db)
             logger.info("Firebase: Sync inicializado correctamente.")
+            # Migracion automatica de cierres_caja al esquema compartido
+            # (idempotente — si no hay docs viejos, sale rapido).
+            try:
+                _sync_instance.migrate_cierres_caja_compartido_async()
+            except Exception as _e:
+                logger.warning(f"Firebase: error agendando migracion cierres_caja: {_e}")
             return _sync_instance
 
         except ImportError:
@@ -2245,6 +2251,119 @@ class FirebaseSync:
             logger.info("Firebase: Listener de clientes de facturación activado.")
         except Exception as e:
             logger.error(f"Firebase: No se pudo iniciar listener de clientes: {e}")
+
+    # ══════════════════════════════════════════════════
+    #  MIGRACION cierres_caja → esquema compartido
+    # ══════════════════════════════════════════════════
+    def migrate_cierres_caja_compartido_async(self):
+        """Lanza la migracion en background — no bloquea el startup."""
+        if not self.enabled:
+            return
+        threading.Thread(
+            target=self._migrate_cierres_caja_compartido,
+            daemon=True
+        ).start()
+
+    def _migrate_cierres_caja_compartido(self):
+        """Consolida docs viejos `cierres_caja/{pc_id}_{register_id}` (uno por PC)
+        en docs nuevos `cierres_caja/{register_id}` (uno compartido por caja).
+
+        Idempotente: si no hay docs viejos, sale silencioso. Si dos PCs corren
+        esto al mismo tiempo, las operaciones son seguras (set merge=True +
+        delete son idempotentes en Firestore).
+
+        Solo migra cajas ABIERTAS (sin fecha_cierre). Los cierres historicos
+        cerrados quedan intactos.
+        """
+        try:
+            from google.cloud.firestore_v1.base_query import FieldFilter
+            # Solo OPEN: fecha_cierre vacia. Filtramos en memoria por '_' en doc id.
+            try:
+                snap = list(self.db.collection('cierres_caja')
+                            .where(filter=FieldFilter('fecha_cierre', '==', '')).stream())
+            except Exception:
+                # fallback sin filtro server-side
+                snap = list(self.db.collection('cierres_caja').stream())
+                snap = [d for d in snap if not (d.to_dict() or {}).get('fecha_cierre')]
+
+            per_pc = []   # docs viejos formato {pc}_{rid}
+            shared = {}   # rid -> doc compartido ya existente
+            for d in snap:
+                data = d.to_dict() or {}
+                rid = data.get('register_id')
+                if rid is None:
+                    continue
+                if '_' in d.id:
+                    per_pc.append((d.id, data, rid))
+                else:
+                    shared[str(rid)] = (d.id, data)
+
+            if not per_pc:
+                return  # nada para migrar — exit rapido
+
+            grupos = {}
+            for doc_id, data, rid in per_pc:
+                grupos.setdefault(str(rid), []).append((doc_id, data))
+
+            logger.info(f"Firebase: migrando {len(grupos)} caja(s) abierta(s) "
+                        f"({len(per_pc)} doc(s) viejos) a esquema compartido...")
+
+            for rid, items in grupos.items():
+                # Base = doc compartido si existe, sino el primero per-PC
+                if rid in shared:
+                    consolidated = dict(shared[rid][1])
+                else:
+                    consolidated = dict(items[0][1])
+
+                ap_min = self._parse_dt(consolidated.get('fecha_apertura'))
+                cajeros = set()
+                if consolidated.get('cajero'):
+                    for c in str(consolidated['cajero']).split(','):
+                        c = c.strip()
+                        if c:
+                            cajeros.add(c)
+                retiros = list(consolidated.get('retiros') or [])
+                total_retiros = float(consolidated.get('total_retiros', 0) or 0)
+                monto_inicial = float(consolidated.get('monto_inicial', 0) or 0)
+
+                for doc_id, data in items:
+                    ap = self._parse_dt(data.get('fecha_apertura'))
+                    if ap and (not ap_min or ap < ap_min):
+                        ap_min = ap
+                        consolidated['fecha_apertura'] = data.get('fecha_apertura')
+                    if data.get('cajero'):
+                        for c in str(data['cajero']).split(','):
+                            c = c.strip()
+                            if c:
+                                cajeros.add(c)
+                    for r in (data.get('retiros') or []):
+                        retiros.append(r)
+                    total_retiros += float(data.get('total_retiros', 0) or 0)
+                    if not monto_inicial:
+                        monto_inicial = float(data.get('monto_inicial', 0) or 0)
+
+                consolidated['cajero'] = ', '.join(sorted(cajeros)) if cajeros else ''
+                consolidated['retiros'] = retiros
+                consolidated['total_retiros'] = total_retiros
+                consolidated['monto_inicial'] = monto_inicial
+                consolidated['register_id'] = int(rid)
+                consolidated['fecha_cierre'] = ''
+                consolidated.pop('pc_id', None)
+
+                # Escribir doc compartido (merge para no pisar campos)
+                self.db.collection('cierres_caja').document(rid).set(consolidated, merge=True)
+                # Borrar los per-PC
+                for doc_id, _ in items:
+                    try:
+                        self.db.collection('cierres_caja').document(doc_id).delete()
+                    except Exception:
+                        pass
+                logger.info(f"Firebase: caja #{rid} consolidada — borrados {len(items)} doc(s) viejo(s).")
+
+            logger.info("Firebase: migracion cierres_caja completada.")
+        except Exception as e:
+            # No es critico — el dedupe en el webapp ya maneja el caso transitorio.
+            logger.warning(f"Firebase: migracion cierres_caja falló (no crítico): {e}")
 
 
 def _month_name(dt: datetime) -> str:
