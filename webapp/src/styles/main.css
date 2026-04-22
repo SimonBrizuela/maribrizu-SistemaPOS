@@ -1,14 +1,21 @@
 :root {
-  --primary: #1877f2;
-  --primary-dark: #1458c2;
+  /* Marca: Librería Liceo — colores del logo (L·I·C·E·O) */
+  --brand-purple: #7b3fa6;
+  --brand-green:  #8ec63f;
+  --brand-orange: #f39c12;
+  --brand-cyan:   #29abca;
+  --brand-red:    #e63946;
+
+  --primary: #7b3fa6;
+  --primary-dark: #5e2d80;
   --secondary: #e65100;
   --success: #2e7d32;
   --warning: #f57c00;
   --danger: #c62828;
   --bg: #f0f2f5;
-  --sidebar-bg: #1a1a2e;
-  --sidebar-hover: #16213e;
-  --sidebar-active: #1877f2;
+  --sidebar-bg: #111111;
+  --sidebar-hover: #1f1628;
+  --sidebar-active: #7b3fa6;
   --card-bg: #ffffff;
   --text: #1c1e21;
   --text-muted: #65676b;
@@ -54,8 +61,18 @@ body {
   border-bottom: 1px solid rgba(255,255,255,0.08);
 }
 
-.sidebar-header h1 { font-size: 18px; font-weight: 700; white-space: nowrap; }
-.logo-icon { color: var(--primary); font-size: 28px !important; }
+.sidebar-header h1 { font-size: 18px; font-weight: 700; white-space: nowrap; letter-spacing: 0.5px; color: #fff; }
+.logo-icon { color: var(--brand-orange); font-size: 28px !important; }
+
+.sidebar-logo-img {
+  display: block;
+  width: 100%;
+  max-width: 200px;
+  height: auto;
+  margin: 0 auto;
+  user-select: none;
+  -webkit-user-drag: none;
+}
 
 .nav-links {
   list-style: none; padding: 8px 0; flex: 1;
@@ -835,7 +852,7 @@ body {
   .cards-grid { grid-template-columns: 1fr 1fr; }
 
   /* Topbar compacto */
-  .topbar { padding: 12px 16px; }
+  .topbar { padding: 12px 16px; gap: 10px; }
   .topbar h2 { font-size: 15px; }
   #lastUpdate { display: none; }
 
@@ -1191,7 +1208,7 @@ body {
   background: #fff; transition: border-color .2s; width: 100%;
 }
 .fact-row input:focus, .fact-row select:focus {
-  outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(24,119,242,.1);
+  outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px rgba(123,63,166,.15);
 }
 
 /* Items tabla */
@@ -1220,7 +1237,7 @@ body {
   padding: 7px 14px; border-radius: 8px; cursor: pointer;
   font-size: 13px; font-family: inherit; margin-top: 6px; transition: all .2s;
 }
-.fact-btn-add-item:hover { background: rgba(24,119,242,.06); }
+.fact-btn-add-item:hover { background: rgba(123,63,166,.08); }
 .fact-btn-add-item .material-icons { font-size: 16px !important; }
 
 /* Totales */
@@ -1299,7 +1316,7 @@ body {
 .fact-pv-total {
   font-size: 20px; font-weight: 800; color: var(--text); line-height: 1.2;
 }
-.fact-pv-total-general .fact-pv-total { color: #1458c2; }
+.fact-pv-total-general .fact-pv-total { color: var(--primary-dark); }
 .fact-pv-count { font-size: 11px; color: var(--text-muted); margin-top: 4px; }
 
 /* Historial tabla */
@@ -1336,7 +1353,7 @@ body {
 }
 .fi-desc-wrap .fi-desc:focus {
   outline: none; border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(24,119,242,.1);
+  box-shadow: 0 0 0 3px rgba(123,63,166,.15);
 }
 .fi-dropdown {
   position: absolute; top: calc(100% + 2px); left: 0; right: 0;
@@ -1435,6 +1452,49 @@ body {
   font-size: 24px; font-weight: 300; color: var(--text-muted);
   flex-shrink: 0; padding: 0 2px;
 }
+.ct-clickable {
+  cursor: pointer; transition: transform 0.12s ease, box-shadow 0.12s ease, background 0.12s ease;
+  position: relative;
+}
+.ct-clickable:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px rgba(0,0,0,0.08);
+  background: #fff;
+}
+.ct-clickable::after {
+  content: "expand_more"; font-family: "Material Icons";
+  position: absolute; top: 6px; right: 6px; font-size: 14px;
+  color: var(--text-muted); opacity: 0.5;
+}
+.ct-clickable:hover::after { opacity: 1; }
+
+/* Mini-stats chips dentro de modales */
+.ct-mini-stat {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 8px 12px; background: var(--bg); border-radius: 8px;
+  border: 1px solid var(--border); min-width: 100px;
+}
+
+/* Modal ganancia neta: breakdown vertical */
+.ct-neta-breakdown {
+  display: flex; flex-direction: column; gap: 6px;
+}
+.ct-neta-row {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 10px 14px; border-radius: 8px; background: var(--bg);
+}
+.ct-neta-row.ct-neta-sub { background: transparent; padding: 6px 14px; }
+.ct-neta-row.ct-neta-result { background: #f0f7ff; font-weight: 700; }
+.ct-neta-row.ct-neta-final { padding: 14px; border: 2px solid; border-color: inherit; }
+.ct-neta-lbl {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; color: var(--text);
+}
+.ct-neta-lbl .material-icons { font-size: 18px !important; }
+.ct-neta-val { font-size: 15px; font-weight: 700; color: var(--text); white-space: nowrap; }
+.ct-neta-sep {
+  height: 1px; background: var(--border); margin: 4px 8px;
+}
 
 /* Desglose por cuenta */
 .ct-cuentas-row {
@@ -1469,7 +1529,7 @@ body {
 .ct-gasto-form input:focus,
 .ct-gasto-form select:focus {
   outline: none; border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(24,119,242,.1);
+  box-shadow: 0 0 0 3px rgba(123,63,166,.15);
 }
 
 /* Gastos lista */
@@ -1621,7 +1681,7 @@ body {
 
 .ct-costo-input:focus {
   outline: none; border-color: var(--primary);
-  box-shadow: 0 0 0 3px rgba(24,119,242,.1);
+  box-shadow: 0 0 0 3px rgba(123,63,166,.15);
 }
 
 @media (max-width: 700px) {

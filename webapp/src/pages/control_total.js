@@ -3,7 +3,7 @@ import {
   query, orderBy, limit, serverTimestamp
 } from 'firebase/firestore';
 import { getCached, invalidateCacheByPrefix } from '../cache.js';
-import { getFechaInicioDate, saveControlConfig } from '../config.js';
+import { getFechaInicioDate, saveControlConfig, isVentaVarios2, isItemVarios2 } from '../config.js';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 function fmt(n) {
@@ -85,10 +85,8 @@ async function refreshDatos(container, db, periodo, config) {
       snap.docs.forEach(d => {
         const data = d.data();
         if (data.deleted === true) return;
-        // Varios 2 son facturas AFIP sin venta real: excluir si quedó alguno en legacy
+        if (isItemVarios2(data)) return;
         const nombre = (data.producto || data.product_name || '').toUpperCase().trim();
-        const cat    = (data.categoria || '').toUpperCase().trim();
-        if (nombre === 'VARIOS 2' || cat === 'VARIOS 2' || data.is_varios_2 === true) return;
         // doc.id = "{pc_id}_{sale_id}_{idx}" → pc_id = todo menos las últimas 2 piezas.
         // Key compuesta pc_id+sale_id evita mezclar items de distintas PCs con mismo num_venta.
         const parts = d.id.split('_');
@@ -121,7 +119,7 @@ async function refreshDatos(container, db, periodo, config) {
   // Filtrar ventas por período y excluir eliminadas + Varios 2 (no son ventas reales)
   const ventasPeriodo = ventas.filter(v => {
     if (v.deleted === true) return false;
-    if (v.is_varios_2 === true) return false;
+    if (isVentaVarios2(v)) return false;
     const fecha = parseArDate(v.created_at);
     return fecha >= desde;
   });
@@ -146,6 +144,7 @@ async function refreshDatos(container, db, periodo, config) {
   let montoPerdida = 0;
   const mapaSinCosto = {};   // { nombre: { cantidad, ingreso, doc_id, precio_venta } }
   const mapaPerdida  = {};   // { nombre: { cantidad, perdida, costo, precio, doc_id } }
+  const mapaConCosto = {};   // { nombre: { cantidad, ingreso, cmv, costoUnit, precioUnit } } para detalle por producto
 
   ventasPeriodo.forEach(v => {
     const saleId = v.sale_id || v.id;
@@ -160,6 +159,12 @@ async function refreshDatos(container, db, periodo, config) {
       if (costoUnit > 0) {
         cmv += costoItem;
         ingresoConCosto += ingresoItem;
+        if (!mapaConCosto[item.nombre]) {
+          mapaConCosto[item.nombre] = { cantidad: 0, ingreso: 0, cmv: 0, costoUnit, precioUnit: item.precio_unitario };
+        }
+        mapaConCosto[item.nombre].cantidad += item.cantidad;
+        mapaConCosto[item.nombre].ingreso  += ingresoItem;
+        mapaConCosto[item.nombre].cmv      += costoItem;
         if (ingresoItem > 0 && ingresoItem < costoItem) {
           const perdidaItem = costoItem - ingresoItem;
           itemsPerdida++;
@@ -221,35 +226,35 @@ async function refreshDatos(container, db, periodo, config) {
 
     statsEl.innerHTML = `
       <div class="ct-ecuacion">
-        <div class="ct-eq-bloque">
+        <div class="ct-eq-bloque ct-clickable" data-detalle="vendido" title="Ver detalle de productos vendidos con costo">
           <span class="material-icons ct-eq-icon" style="color:#1877f2">point_of_sale</span>
           <div class="ct-eq-num">$${fmt(ingresoConCosto)}</div>
           <div class="ct-eq-lbl">Vendiste con costo</div>
           <div class="ct-eq-sub">${subIngreso}</div>
         </div>
         <div class="ct-eq-op">−</div>
-        <div class="ct-eq-bloque">
+        <div class="ct-eq-bloque ct-clickable" data-detalle="costo" title="Ver detalle de costos">
           <span class="material-icons ct-eq-icon" style="color:#e65100">inventory_2</span>
           <div class="ct-eq-num">$${fmt(cmv)}</div>
           <div class="ct-eq-lbl">Lo que te costó</div>
           <div class="ct-eq-sub">${subCosto}</div>
         </div>
         <div class="ct-eq-op">=</div>
-        <div class="ct-eq-bloque">
+        <div class="ct-eq-bloque ct-clickable" data-detalle="bruta" title="Ver detalle de ganancia por producto">
           <span class="material-icons ct-eq-icon" style="color:#00695c">show_chart</span>
           <div class="ct-eq-num" style="color:${gananciaBruta>=0?'#00695c':'#c62828'}">$${fmt(gananciaBruta)}</div>
           <div class="ct-eq-lbl">Ganancia bruta</div>
           <div class="ct-eq-sub">${margen}% margen</div>
         </div>
         <div class="ct-eq-op">−</div>
-        <div class="ct-eq-bloque">
+        <div class="ct-eq-bloque ct-clickable" data-detalle="gastos" title="Ver detalle de gastos">
           <span class="material-icons ct-eq-icon" style="color:#c62828">receipt_long</span>
           <div class="ct-eq-num">$${fmt(gastoTotal)}</div>
           <div class="ct-eq-lbl">Gastos / Pagos</div>
           <div class="ct-eq-sub">${gastos.length} registros</div>
         </div>
         <div class="ct-eq-op">=</div>
-        <div class="ct-eq-bloque ct-eq-neta" style="background:${bgNeta};border-color:${colorNeta}">
+        <div class="ct-eq-bloque ct-eq-neta ct-clickable" data-detalle="neta" title="Ver resumen de cálculo" style="background:${bgNeta};border-color:${colorNeta}">
           <span class="material-icons ct-eq-icon" style="color:${colorNeta}">${iconNeta}</span>
           <div class="ct-eq-num" style="color:${colorNeta};font-size:26px;font-weight:900">$${fmt(gananciaNeta)}</div>
           <div class="ct-eq-lbl" style="color:${colorNeta};font-weight:700">Ganancia neta</div>
@@ -302,6 +307,17 @@ async function refreshDatos(container, db, periodo, config) {
         </div>
       </div>
     `;
+
+    // Click en bloques de la ecuación → modal con detalle
+    const detalleData = {
+      mapaConCosto, gastos,
+      ingresoConCosto, cmv, gananciaBruta, gastoTotal, gananciaNeta,
+      gastoEfectivo, gastoCuenta1, gastoCuenta2,
+      config, ventasCount: ventasPeriodo.length,
+    };
+    statsEl.querySelectorAll('.ct-clickable').forEach(el => {
+      el.addEventListener('click', () => abrirDetalleControl(el.dataset.detalle, detalleData));
+    });
   }
 
   // ── Banners de alerta: costos faltantes + pérdidas ──
@@ -400,6 +416,210 @@ function renderAlertas(container, db, mapaSinCosto, mapaPerdida, itemsSinCosto, 
 
   const btnPerdidas = el.querySelector('#ct-open-perdidas');
   if (btnPerdidas) btnPerdidas.addEventListener('click', () => abrirPanelPerdidas(db, perdidaList, onRefresh));
+}
+
+// ── Modal: detalle de los bloques de la ecuación ──────────────────────────────
+function abrirDetalleControl(tipo, data) {
+  const {
+    mapaConCosto, gastos,
+    ingresoConCosto, cmv, gananciaBruta, gastoTotal, gananciaNeta,
+    gastoEfectivo, gastoCuenta1, gastoCuenta2,
+    config, ventasCount,
+  } = data;
+
+  const c1 = config.cuenta1_nombre || 'Cuenta 1';
+  const c2 = config.cuenta2_nombre || 'Cuenta 2';
+  const tipoLabel = { efectivo: 'Efectivo', cuenta1: c1, cuenta2: c2 };
+
+  let titulo = '', icono = '', color = '', desc = '', body = '';
+  const productos = Object.entries(mapaConCosto);
+
+  if (tipo === 'vendido') {
+    titulo = 'Vendiste con costo';
+    icono  = 'point_of_sale';
+    color  = '#1877f2';
+    desc   = `Productos con costo conocido, ordenados por ingreso. Total: <b>$${fmt(ingresoConCosto)}</b> en ${ventasCount} ventas.`;
+    const lista = productos.sort((a, b) => b[1].ingreso - a[1].ingreso);
+    body = lista.length === 0
+      ? `<div class="empty-state" style="padding:32px"><span class="material-icons">info</span><p>Sin productos con costo cargado en el período</p></div>`
+      : `
+        <table class="ct-costos-table">
+          <thead><tr>
+            <th>Producto</th>
+            <th style="text-align:right">Vendidos</th>
+            <th style="text-align:right">Precio unit.</th>
+            <th style="text-align:right">Ingreso</th>
+            <th style="text-align:right">% del total</th>
+          </tr></thead>
+          <tbody>
+            ${lista.map(([nombre, d]) => `
+              <tr>
+                <td><b style="font-size:13px">${nombre}</b></td>
+                <td style="text-align:right">${d.cantidad}</td>
+                <td style="text-align:right">$${fmt(d.precioUnit)}</td>
+                <td style="text-align:right;font-weight:700">$${fmt(d.ingreso)}</td>
+                <td style="text-align:right;color:#65676b">${ingresoConCosto > 0 ? Math.round((d.ingreso / ingresoConCosto) * 100) : 0}%</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>`;
+  }
+  else if (tipo === 'costo') {
+    titulo = 'Lo que te costó (CMV)';
+    icono  = 'inventory_2';
+    color  = '#e65100';
+    desc   = `Costo de mercadería vendida por producto. Total: <b>$${fmt(cmv)}</b>.`;
+    const lista = productos.sort((a, b) => b[1].cmv - a[1].cmv);
+    body = lista.length === 0
+      ? `<div class="empty-state" style="padding:32px"><span class="material-icons">info</span><p>Sin costos registrados en el período</p></div>`
+      : `
+        <table class="ct-costos-table">
+          <thead><tr>
+            <th>Producto</th>
+            <th style="text-align:right">Vendidos</th>
+            <th style="text-align:right">Costo unit.</th>
+            <th style="text-align:right">Costo total</th>
+            <th style="text-align:right">% del total</th>
+          </tr></thead>
+          <tbody>
+            ${lista.map(([nombre, d]) => `
+              <tr>
+                <td><b style="font-size:13px">${nombre}</b></td>
+                <td style="text-align:right">${d.cantidad}</td>
+                <td style="text-align:right">$${fmt(d.costoUnit)}</td>
+                <td style="text-align:right;font-weight:700;color:#e65100">$${fmt(d.cmv)}</td>
+                <td style="text-align:right;color:#65676b">${cmv > 0 ? Math.round((d.cmv / cmv) * 100) : 0}%</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>`;
+  }
+  else if (tipo === 'bruta') {
+    titulo = 'Ganancia bruta por producto';
+    icono  = 'show_chart';
+    color  = '#00695c';
+    const margenTot = ingresoConCosto > 0 ? Math.round((gananciaBruta / ingresoConCosto) * 100) : 0;
+    desc   = `Ingreso − costo por producto. Total: <b style="color:${gananciaBruta>=0?'#00695c':'#c62828'}">$${fmt(gananciaBruta)}</b> (${margenTot}% margen).`;
+    const lista = productos
+      .map(([nombre, d]) => [nombre, { ...d, ganancia: d.ingreso - d.cmv, margen: d.ingreso > 0 ? (d.ingreso - d.cmv) / d.ingreso * 100 : 0 }])
+      .sort((a, b) => b[1].ganancia - a[1].ganancia);
+    body = lista.length === 0
+      ? `<div class="empty-state" style="padding:32px"><span class="material-icons">info</span><p>Sin datos suficientes para calcular ganancia</p></div>`
+      : `
+        <table class="ct-costos-table">
+          <thead><tr>
+            <th>Producto</th>
+            <th style="text-align:right">Ingreso</th>
+            <th style="text-align:right">Costo</th>
+            <th style="text-align:right">Ganancia</th>
+            <th style="text-align:right">Margen</th>
+          </tr></thead>
+          <tbody>
+            ${lista.map(([nombre, d]) => `
+              <tr>
+                <td><b style="font-size:13px">${nombre}</b></td>
+                <td style="text-align:right">$${fmt(d.ingreso)}</td>
+                <td style="text-align:right;color:#e65100">$${fmt(d.cmv)}</td>
+                <td style="text-align:right;font-weight:700;color:${d.ganancia>=0?'#00695c':'#c62828'}">$${fmt(d.ganancia)}</td>
+                <td style="text-align:right;color:${d.margen>=0?'#00695c':'#c62828'}">${Math.round(d.margen)}%</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>`;
+  }
+  else if (tipo === 'gastos') {
+    titulo = 'Gastos / Pagos del período';
+    icono  = 'receipt_long';
+    color  = '#c62828';
+    desc   = `Total descontado: <b style="color:#c62828">$${fmt(gastoTotal)}</b> en ${gastos.length} registros.`;
+    body = gastos.length === 0
+      ? `<div class="empty-state" style="padding:32px"><span class="material-icons">receipt_long</span><p>Sin gastos registrados en el período</p></div>`
+      : `
+        <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">
+          <div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">Efectivo</span><b style="color:#c62828">$${fmt(gastoEfectivo)}</b></div>
+          <div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">${c1}</span><b style="color:#c62828">$${fmt(gastoCuenta1)}</b></div>
+          <div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">${c2}</span><b style="color:#c62828">$${fmt(gastoCuenta2)}</b></div>
+        </div>
+        <table class="ct-costos-table">
+          <thead><tr>
+            <th>Fecha</th>
+            <th>Descripción</th>
+            <th>Tipo</th>
+            <th style="text-align:right">Monto</th>
+          </tr></thead>
+          <tbody>
+            ${gastos.map(g => `
+              <tr>
+                <td style="white-space:nowrap;color:#65676b">${g.fecha || ''}</td>
+                <td><b style="font-size:13px">${g.descripcion || '-'}</b></td>
+                <td><span class="badge ${g.tipo==='efectivo'?'badge-green':'badge-blue'}">${tipoLabel[g.tipo] || g.tipo}</span></td>
+                <td style="text-align:right;font-weight:700;color:#c62828">-$${fmt(g.monto)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>`;
+  }
+  else if (tipo === 'neta') {
+    titulo = 'Cómo se calcula la ganancia neta';
+    icono  = gananciaNeta >= 0 ? 'trending_up' : 'trending_down';
+    color  = gananciaNeta >= 0 ? '#1b5e20' : '#b71c1c';
+    desc   = `El resultado final del período, después de descontar costos y gastos.`;
+    const margenTot = ingresoConCosto > 0 ? Math.round((gananciaBruta / ingresoConCosto) * 100) : 0;
+    body = `
+      <div class="ct-neta-breakdown">
+        <div class="ct-neta-row">
+          <div class="ct-neta-lbl"><span class="material-icons" style="color:#1877f2">point_of_sale</span> Vendiste con costo</div>
+          <div class="ct-neta-val">+ $${fmt(ingresoConCosto)}</div>
+        </div>
+        <div class="ct-neta-row ct-neta-sub">
+          <div class="ct-neta-lbl"><span class="material-icons" style="color:#e65100">inventory_2</span> Lo que te costó</div>
+          <div class="ct-neta-val" style="color:#e65100">− $${fmt(cmv)}</div>
+        </div>
+        <div class="ct-neta-sep"></div>
+        <div class="ct-neta-row ct-neta-result">
+          <div class="ct-neta-lbl"><span class="material-icons" style="color:#00695c">show_chart</span> Ganancia bruta <span style="color:#65676b;font-weight:400;font-size:12px">(${margenTot}% margen)</span></div>
+          <div class="ct-neta-val" style="color:${gananciaBruta>=0?'#00695c':'#c62828'}">= $${fmt(gananciaBruta)}</div>
+        </div>
+        <div class="ct-neta-row ct-neta-sub">
+          <div class="ct-neta-lbl"><span class="material-icons" style="color:#c62828">receipt_long</span> Gastos / Pagos</div>
+          <div class="ct-neta-val" style="color:#c62828">− $${fmt(gastoTotal)}</div>
+        </div>
+        <div class="ct-neta-sep"></div>
+        <div class="ct-neta-row ct-neta-final" style="background:${gananciaNeta>=0?'#f1f8f1':'#fff5f5'}">
+          <div class="ct-neta-lbl"><span class="material-icons" style="color:${color}">${icono}</span> <b>Ganancia neta</b></div>
+          <div class="ct-neta-val" style="color:${color};font-size:22px;font-weight:900">$${fmt(gananciaNeta)}</div>
+        </div>
+      </div>
+      <div style="margin-top:16px;padding:12px;background:#f7f8fa;border-radius:8px;font-size:12px;color:#65676b;line-height:1.6">
+        <b>Nota:</b> la ganancia bruta solo considera productos con costo cargado. Ventas sin costo conocido no se descuentan acá — aparecen en el banner de alerta de arriba.
+      </div>`;
+  }
+  else {
+    return;
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'ct-modal-overlay';
+  overlay.innerHTML = `
+    <div class="ct-modal" role="dialog">
+      <div class="ct-modal-header">
+        <span class="material-icons" style="color:${color}">${icono}</span>
+        <h3>${titulo}</h3>
+        <button class="ct-modal-close" title="Cerrar"><span class="material-icons">close</span></button>
+      </div>
+      <div class="ct-modal-desc">${desc}</div>
+      <div class="ct-modal-body">${body}</div>
+      <div class="ct-modal-footer">
+        <button class="ct-btn-primary" id="ct-close-detalle">Cerrar</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const closeModal = () => overlay.remove();
+  overlay.querySelector('.ct-modal-close').addEventListener('click', closeModal);
+  overlay.querySelector('#ct-close-detalle').addEventListener('click', closeModal);
+  overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(); });
 }
 
 // ── Panel modal: cargar costos faltantes ──────────────────────────────────────

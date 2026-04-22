@@ -696,7 +696,8 @@ class SyncWorker(QThread):
             if caja_abierta:
                 try:
                     reg_id = str(caja_abierta['id'])
-                    fb_reg_id = f"{_pc_id}_{reg_id}"
+                    # Doc compartido por register_id → todas las PCs apuntan al mismo.
+                    fb_reg_id = reg_id
                     apertura = fb._parse_dt(caja_abierta.get('opening_date'))
                     # Obtener usuario que abrió la caja
                     cajero = ''

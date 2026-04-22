@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
                              QHeaderView, QApplication, QScrollArea, QInputDialog,
                              QTextEdit, QDialogButtonBox)
 from PyQt5.QtCore import Qt, QSize, QTimer, pyqtSignal, QThread
-from PyQt5.QtGui import QFont, QColor, QKeySequence, QIntValidator
+from PyQt5.QtGui import QFont, QColor, QKeySequence, QIntValidator, QValidator
 from datetime import datetime
 import os
 import subprocess
@@ -28,43 +28,73 @@ def _fmt_qty(q):
 
 
 class CartQuantitySpinBox(QDoubleSpinBox):
-    """QDoubleSpinBox para cantidad de items del carrito (acepta decimales: 0.1, 0.25, ...).
+    """Cantidad del carrito con convención de unidades según separador:
 
-    - keyboardTracking=False: valueChanged solo dispara al confirmar.
-    - Rueda del mouse deshabilitada: el scroll se delega al padre para
-      permitir desplazar la ventana sin alterar la cantidad por accidente.
-      Para cambiar cantidad: tipear, flechas del teclado o botones +/-.
+    - '2'     (sin separador) → 2 unidades (precio x 2)
+    - '1.'    o '1.5'         → metros     (precio x 1.0, x 1.5)
+    - '100,'  o '50,'         → centímetros (precio x 1.0, x 0.5)
+
+    El valor interno almacenado en el spinbox es siempre el multiplicador
+    final (unidades / metros equivalentes), así el cálculo de subtotal
+    sigue siendo quantity * unit_price sin tocar nada más.
     """
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        # keyboardTracking=True → valueChanged dispara en cada tecla para que
-        # el subtotal se recalcule al instante mientras el cajero escribe.
         self.setKeyboardTracking(True)
-        # StrongFocus + WheelFocus: el spinbox acepta foco por rueda también,
-        # así el primer scroll también incrementa (si no, el evento se iría al
-        # padre la primera vez). ClickFocus lo mantiene click-to-focus normal.
         self.setFocusPolicy(Qt.WheelFocus)
-        self.setDecimals(2)
-        # Paso 1 → rueda/flechas suben de 1 en 1 (caso típico).
-        # Para decimales el cajero tipea "1,5" directamente.
+        # 3 decimales para que '1,5' cm = 0.015 se almacene sin redondeo.
+        self.setDecimals(3)
         self.setSingleStep(1.0)
 
     def wheelEvent(self, event):
-        # Scrollea el valor sólo si la rueda es sobre este spinbox. Cuando
-        # llega al tope (min/max), super() no cambia el valor y el evento
-        # queda consumido — no se propaga a la lista de productos.
         super().wheelEvent(event)
 
+    def _parse(self, text):
+        """Convierte el texto del usuario al multiplicador final.
+        Devuelve None si el texto aún es incompleto/intermedio."""
+        t = (text or '').strip()
+        if not t or t in ('.', ','):
+            return None
+        if ',' in t:
+            try:
+                return float(t.replace(',', '.')) / 100.0
+            except ValueError:
+                return None
+        try:
+            return float(t)
+        except ValueError:
+            return None
+
+    def validate(self, text, pos):
+        t = (text or '').strip()
+        if not t:
+            return (QValidator.Intermediate, text, pos)
+        # Sólo dígitos + un único separador ',' o '.'
+        allowed = set('0123456789.,')
+        if not all(ch in allowed for ch in t):
+            return (QValidator.Invalid, text, pos)
+        if t.count(',') > 1 or t.count('.') > 1 or (',' in t and '.' in t):
+            return (QValidator.Invalid, text, pos)
+        if t in ('.', ','):
+            return (QValidator.Intermediate, text, pos)
+        val = self._parse(t)
+        if val is None:
+            return (QValidator.Intermediate, text, pos)
+        if val < self.minimum() - 1e-9 or val > self.maximum() + 1e-9:
+            return (QValidator.Invalid, text, pos)
+        return (QValidator.Acceptable, text, pos)
+
+    def valueFromText(self, text):
+        val = self._parse(text)
+        return val if val is not None else 0.0
+
     def textFromValue(self, value):
-        """Oculta ceros finales (1 en vez de 1,00) pero respeta el separador
-        decimal del locale (coma en español). Si devolvemos '1.5' con punto
-        en locale es_AR, el validador del spinbox rechaza y bloquea el foco."""
+        # Normalizado: enteros sin decimales, fracciones con punto.
         if value == int(value):
             return str(int(value))
-        s = self.locale().toString(float(value), 'f', self.decimals())
-        dp = self.locale().decimalPoint()
-        return s.rstrip('0').rstrip(dp)
+        s = f"{value:.{self.decimals()}f}".rstrip('0').rstrip('.')
+        return s
 
 
 class BarcodeScanner(QLineEdit):

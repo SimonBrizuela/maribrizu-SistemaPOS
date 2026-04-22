@@ -44,6 +44,32 @@ export function parseArDate(raw) {
   return new Date(raw);
 }
 
+/**
+ * Detecta si una venta (de la coleccion `ventas`) es una factura VARIOS 2 AFIP.
+ * Esas no son ventas reales — no suman a caja ni a historial.
+ * El flag is_varios_2 no siempre se sincroniza desde el POS, pero la string
+ * `productos` arranca con "VARIOS 2 x..." si lo es (no se mezclan con items normales).
+ */
+export function isVentaVarios2(v) {
+  if (!v) return false;
+  if (v.is_varios_2 === true) return true;
+  const prods = (v.productos || '').toUpperCase();
+  return prods.startsWith('VARIOS 2 X') || prods === 'VARIOS 2';
+}
+
+/**
+ * Detecta si un item (de `ventas_por_dia`) es VARIOS 2.
+ * Ahi cada item tiene su nombre en `producto` y rubro en `categoria`.
+ */
+export function isItemVarios2(v) {
+  if (!v) return false;
+  if (v.is_varios_2 === true) return true;
+  const nombre = (v.producto || v.product_name || '').toUpperCase().trim();
+  if (nombre === 'VARIOS 2' || nombre.startsWith('VARIOS 2 ')) return true;
+  const cat = (v.categoria || '').toUpperCase().trim();
+  return cat === 'VARIOS 2';
+}
+
 /** "DD/MM/YYYY" → "YYYY-MM-DD" para comparar con fecha_inicio */
 export function fechaDMYtoYMD(dmy) {
   if (!dmy || typeof dmy !== 'string') return '';

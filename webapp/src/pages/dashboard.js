@@ -1,7 +1,7 @@
 import { collection, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import { openSaleModal } from '../components/modal.js';
 import { getCached } from '../cache.js';
-import { getFechaInicioDate } from '../config.js';
+import { getFechaInicioDate, isVentaVarios2 } from '../config.js';
 import { getSaleNumberMap, displayNumForVenta } from '../sale_numbers.js';
 
 export async function renderDashboard(container, db) {
@@ -37,7 +37,7 @@ export async function renderDashboard(container, db) {
   // Filtrar todo antes de fecha_inicio, ventas eliminadas y Varios 2 (solo factura AFIP)
   const ventas = ventasRaw.filter(v => {
     if (v.deleted === true) return false;
-    if (v.is_varios_2 === true) return false;
+    if (isVentaVarios2(v)) return false;
     const dt = parseArDate(v.created_at);
     return dt >= fechaInicio;
   });

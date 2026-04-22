@@ -1,19 +1,18 @@
 import { collection, getDocs, query, orderBy, where } from 'firebase/firestore';
 import { openSaleModal } from '../components/modal.js';
 import { getCached } from '../cache.js';
-import { getFechaInicio, fechaDMYtoYMD } from '../config.js';
+import { getFechaInicio, fechaDMYtoYMD, isItemVarios2 } from '../config.js';
 import { getSaleNumberMap, displayNumForItem } from '../sale_numbers.js';
 
 export async function renderHistorial(container, db) {
   const fechaInicioStr = await getFechaInicio(db);
 
-  const [historialRaw, ventasDiaRaw, saleNumMap] = await Promise.all([
-    getCached('historial:diario', async () => {
-      const snap = await getDocs(query(collection(db, 'historial_diario'), orderBy('fecha', 'desc')));
-      return snap.docs.map(d => d.data());
-    }),
-    // v2: incluye _pc_id extraído del doc.id (evita colisiones de num_venta entre PCs)
-    getCached('historial:ventas_dia:v2', async () => {
+  // Fuente única: `ventas_por_dia`. Resumen y Detalle se derivan de ese mismo dataset
+  // → siempre consistentes entre sí y con Caja Abierta (TTL 60s, como dashboard/cierres).
+  // Antes se leía `historial_diario` aparte, pero ese snapshot lo genera el backend
+  // solo en full-sync / edición → quedaba stale y mostraba totales distintos.
+  const [ventasDiaRaw, saleNumMap] = await Promise.all([
+    getCached('historial:ventas_dia:v3', async () => {
       const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('fecha', 'desc')));
       return snap.docs.map(d => {
         const data  = d.data();
@@ -21,19 +20,46 @@ export async function renderHistorial(container, db) {
         const pcId  = parts.length >= 3 ? parts.slice(0, -2).join('_') : '';
         return { ...data, _pc_id: pcId };
       });
-    }),
+    }, { ttl: 60 * 1000 }),
     getSaleNumberMap(db),
   ]);
 
-  // Ocultar todo lo anterior a fecha_inicio (fechas vienen "DD/MM/YYYY") y lo eliminado
-  const historial  = historialRaw.filter(h => fechaDMYtoYMD(h.fecha) >= fechaInicioStr);
+  // Ocultar todo lo anterior a fecha_inicio (fechas vienen "DD/MM/YYYY") y lo eliminado.
+  // VARIOS 2 = item de factura AFIP, no es venta real → se excluye del total y del conteo.
   const ventasDia  = ventasDiaRaw.filter(v => {
     if (v.deleted === true) return false;
-    if (v.is_varios_2 === true) return false;
-    const nombre = (v.producto || v.product_name || '').toUpperCase().trim();
-    const cat    = (v.categoria || '').toUpperCase().trim();
-    if (nombre === 'VARIOS 2' || cat === 'VARIOS 2') return false;
+    if (isItemVarios2(v)) return false;
     return fechaDMYtoYMD(v.fecha) >= fechaInicioStr;
+  });
+
+  // Agregar "Resumen por Día" desde ventasDia (preserva orden desc ya que Firestore viene así)
+  const resumenMap = {};
+  const ordenFechas = [];
+  for (const v of ventasDia) {
+    const f = v.fecha || 'Sin fecha';
+    if (!(f in resumenMap)) {
+      resumenMap[f] = { fecha: f, total: 0, efectivo: 0, transferencia: 0, _ventas: new Set() };
+      ordenFechas.push(f);
+    }
+    const r = resumenMap[f];
+    const sub = Number(v.subtotal || 0);
+    r.total += sub;
+    if ((v.tipo_pago || '') === 'Transferencia') r.transferencia += sub;
+    else r.efectivo += sub;
+    r._ventas.add(`${v._pc_id || ''}|${v.num_venta}`);
+  }
+  const historial = ordenFechas.map(f => {
+    const r = resumenMap[f];
+    const n = r._ventas.size;
+    return {
+      fecha: f,
+      mes: mesDesdeFecha(f),
+      num_ventas: n,
+      total: r.total,
+      efectivo: r.efectivo,
+      transferencia: r.transferencia,
+      ticket_promedio: n > 0 ? r.total / n : 0,
+    };
   });
 
   container.innerHTML = `
@@ -238,3 +264,11 @@ export async function renderHistorial(container, db) {
 }
 
 function fmt(n) { return Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+
+// "DD/MM/YYYY" → "abril 2026"
+function mesDesdeFecha(f) {
+  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(f || '');
+  if (!m) return '';
+  const meses = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
+  return `${meses[parseInt(m[2],10)-1]} ${m[3]}`;
+}

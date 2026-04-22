@@ -747,6 +747,9 @@ function printFactura(data) {
                   justify-content: center; text-align: center; }
     .letra-grande { font-size: 36px; font-weight: bold; line-height: 1; }
     .cod-afip { font-size: 7px; font-weight: bold; margin-top: 2px; }
+    .fact-logo { display: block; max-width: 50mm; max-height: 22mm;
+                 width: auto; height: auto; object-fit: contain;
+                 margin-bottom: 6px; }
     .emisor-name { font-size: 12px; font-weight: bold; margin-bottom: 4px; }
     .row-lbl { font-weight: bold; font-size: 8px; }
     .row-val { font-size: 8px; margin-bottom: 2px; }
@@ -809,6 +812,7 @@ function printFactura(data) {
   <!-- HEADER 3 COLUMNAS -->
   <div class="hdr">
     <div class="hdr-col">
+      <img src="${window.location.origin}/factura-logo.png" alt="Libreria Liceo" class="fact-logo" onerror="this.style.display='none'"/>
       <div class="emisor-name">${emisor.razon_social || ''}</div>
       <div class="row-val"><span class="row-lbl">Razon Social:</span> ${emisor.razon_social || ''}</div>
       <div class="row-val"><span class="row-lbl">Domicilio Comercial:</span> ${emisor.domicilio || ''}</div>

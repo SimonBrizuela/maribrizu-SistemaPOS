@@ -1,46 +1,39 @@
 import { db } from './firebase.js';
 import { invalidateCacheByPrefix, peekCache } from './cache.js';
 import './styles/login.css';
-import { renderDashboard } from './pages/dashboard.js';
-import { renderControlTotal } from './pages/control_total.js';
-import { renderVentas } from './pages/ventas.js';
-import { renderProductos } from './pages/productos.js';
-import { renderHistorial } from './pages/historial.js';
-import { renderCierres } from './pages/cierres.js';
-import { renderResumenes } from './pages/resumenes.js';
-import { renderCatalogo } from './pages/catalogo.js';
-import { renderTurnos } from './pages/turnos.js';
-import { renderArticulosUnicos } from './pages/articulos_unicos.js';
-import { renderPromociones } from './pages/promociones.js';
-import { renderFacturas } from './pages/facturas.js';
-import { renderPerfiles } from './pages/perfiles.js';
-import { renderClientes } from './pages/clientes.js';
-import { renderObservaciones } from './pages/observaciones.js';
 import { renderLogin } from './pages/login.js';
 import { isLoggedIn, getSession, logout } from './auth.js';
 
 // ── Estado global ──
 let currentPage = 'dashboard';
 
-// Clave primaria de cache por página (para saber si hay datos cacheados antes de renderizar)
-// Páginas sin cacheKey siempre muestran el spinner al cargar.
+// Cada página se carga on-demand con dynamic import.
+// `cacheKey` permite saltarse el spinner si hay datos ya cacheados.
+// `loader` resuelve al módulo; la función render se toma de `render` en ese módulo.
 const pages = {
-  dashboard:       { title: 'Dashboard',               render: renderDashboard,       cacheKey: 'dashboard:ventas' },
-  control_total:   { title: 'Control Total',            render: renderControlTotal,     cacheKey: null },
-  ventas:          { title: 'Ventas',                  render: renderVentas,           cacheKey: 'ventas:lista' },
-  productos:       { title: 'Productos Más Vendidos',  render: renderProductos,        cacheKey: 'productos:mas_vendidos' },
-  historial:       { title: 'Historial Diario',        render: renderHistorial,        cacheKey: 'historial:diario' },
-  cierres:         { title: 'Cierres de Caja',         render: renderCierres,          cacheKey: 'cierres:caja' },
-  resumenes:       { title: 'Resúmenes Mensuales',     render: renderResumenes,        cacheKey: 'resumenes:mensuales' },
-  catalogo:        { title: 'Catálogo de Productos',   render: renderCatalogo,         cacheKey: null }, // memOnly, no aplica
-  turnos:          { title: 'Turnos / Cajeros',        render: renderTurnos,           cacheKey: null },
-  articulos_unicos:{ title: 'Artículos con Variantes', render: renderArticulosUnicos,  cacheKey: null },
-  promociones:     { title: 'Promociones',             render: renderPromociones,      cacheKey: null },
-  facturas:        { title: 'Facturación AFIP',        render: renderFacturas,         cacheKey: null },
-  perfiles:        { title: 'Perfiles ARCA',           render: renderPerfiles,         cacheKey: null },
-  clientes:        { title: 'Perfiles de Clientes',    render: renderClientes,         cacheKey: null },
-  observaciones:   { title: 'Observaciones',           render: renderObservaciones,    cacheKey: null },
+  dashboard:       { title: 'Dashboard',               loader: () => import('./pages/dashboard.js'),        render: 'renderDashboard',       cacheKey: 'dashboard:ventas' },
+  control_total:   { title: 'Control Total',           loader: () => import('./pages/control_total.js'),    render: 'renderControlTotal',    cacheKey: null },
+  ventas:          { title: 'Ventas',                  loader: () => import('./pages/ventas.js'),           render: 'renderVentas',          cacheKey: 'ventas:lista' },
+  productos:       { title: 'Productos Más Vendidos',  loader: () => import('./pages/productos.js'),        render: 'renderProductos',       cacheKey: 'productos:mas_vendidos' },
+  historial:       { title: 'Historial Diario',        loader: () => import('./pages/historial.js'),        render: 'renderHistorial',       cacheKey: 'historial:diario' },
+  cierres:         { title: 'Cierres de Caja',         loader: () => import('./pages/cierres.js'),          render: 'renderCierres',         cacheKey: 'cierres:caja' },
+  resumenes:       { title: 'Resúmenes Mensuales',     loader: () => import('./pages/resumenes.js'),        render: 'renderResumenes',       cacheKey: 'resumenes:mensuales' },
+  catalogo:        { title: 'Catálogo de Productos',   loader: () => import('./pages/catalogo.js'),         render: 'renderCatalogo',        cacheKey: null },
+  turnos:          { title: 'Turnos / Cajeros',        loader: () => import('./pages/turnos.js'),           render: 'renderTurnos',          cacheKey: null },
+  articulos_unicos:{ title: 'Artículos con Variantes', loader: () => import('./pages/articulos_unicos.js'), render: 'renderArticulosUnicos', cacheKey: null },
+  promociones:     { title: 'Promociones',             loader: () => import('./pages/promociones.js'),      render: 'renderPromociones',     cacheKey: null },
+  facturas:        { title: 'Facturación AFIP',        loader: () => import('./pages/facturas.js'),         render: 'renderFacturas',        cacheKey: null },
+  perfiles:        { title: 'Perfiles ARCA',           loader: () => import('./pages/perfiles.js'),         render: 'renderPerfiles',        cacheKey: null },
+  clientes:        { title: 'Perfiles de Clientes',    loader: () => import('./pages/clientes.js'),         render: 'renderClientes',        cacheKey: null },
+  observaciones:   { title: 'Observaciones',           loader: () => import('./pages/observaciones.js'),    render: 'renderObservaciones',   cacheKey: null },
 };
+
+// Caché de módulos ya descargados (evita repetir import() tras la primera carga)
+const pageModules = {};
+async function loadPageModule(page) {
+  if (!pageModules[page]) pageModules[page] = await pages[page].loader();
+  return pageModules[page];
+}
 
 // Páginas con tablas que suelen necesitar scroll horizontal en mobile
 const PAGES_CON_TABLA_ANCHA = new Set([
@@ -137,7 +130,9 @@ async function loadPage(page, forceRefresh = false) {
 
   setStatus('connecting');
   try {
-    await pages[page].render(content, db);
+    const mod = await loadPageModule(page);
+    const renderFn = mod[pages[page].render];
+    await renderFn(content, db);
     setStatus('online');
     updateLastTime();
   } catch (err) {
@@ -254,6 +249,11 @@ function initApp(session) {
   // Cargar última página visitada o dashboard
   const lastPage = localStorage.getItem('lastPage');
   navigate(lastPage && pages[lastPage] ? lastPage : 'dashboard');
+
+  // Prefetch en idle de las páginas más usadas (no bloquea la carga inicial)
+  const prefetch = ['ventas', 'historial', 'control_total', 'catalogo'];
+  const runIdle = window.requestIdleCallback || (cb => setTimeout(cb, 1500));
+  runIdle(() => { prefetch.forEach(p => { if (!pageModules[p]) loadPageModule(p).catch(() => {}); }); });
 }
 
 // ── Init ──

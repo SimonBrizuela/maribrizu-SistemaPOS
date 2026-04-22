@@ -15,9 +15,19 @@ export function renderLogin(onSuccess) {
   page.innerHTML = `
     <div class="login-card">
       <div class="login-logo">
-        <span class="material-icons">point_of_sale</span>
-        <h1>POS</h1>
-        <p>Panel de administración</p>
+        <div class="login-libreria">Librería</div>
+        <div class="login-tiles">
+          <div class="login-tile"><span>L</span></div>
+          <div class="login-tile"><span>I</span></div>
+          <div class="login-tile"><span>C</span></div>
+          <div class="login-tile"><span>E</span></div>
+          <div class="login-tile"><span>O</span></div>
+        </div>
+        <div class="login-tagline">
+          <span>Librería</span><span class="dot"></span>
+          <span>Mercería</span><span class="dot"></span>
+          <span>Regalería</span>
+        </div>
       </div>
 
       <form class="login-form" id="loginForm" autocomplete="off">
@@ -56,6 +66,17 @@ export function renderLogin(onSuccess) {
 
   document.body.appendChild(page);
 
+  // Idle wiggle: cada ~4.5s, una tile al azar hace un saltito
+  const wiggleInterval = setInterval(() => {
+    const tiles = page.querySelectorAll('.login-tile');
+    if (!tiles.length) return;
+    const t = tiles[Math.floor(Math.random() * tiles.length)];
+    t.classList.remove('wiggle');
+    void t.offsetWidth; // force reflow to restart animation
+    t.classList.add('wiggle');
+    setTimeout(() => t.classList.remove('wiggle'), 1000);
+  }, 4500);
+
   // Focus automático
   setTimeout(() => document.getElementById('loginUser').focus(), 100);
 
@@ -78,6 +99,7 @@ export function renderLogin(onSuccess) {
         btn.innerHTML = `<span class="material-icons" style="font-size:18px!important">check_circle</span> Bienvenido, ${session.display}!`;
         btn.style.background = '#2e7d32';
         setTimeout(() => {
+          clearInterval(wiggleInterval);
           page.remove();
           document.getElementById('app').style.display = 'flex';
           const bn = document.getElementById('bottomNav');

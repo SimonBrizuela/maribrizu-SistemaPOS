@@ -549,6 +549,8 @@ export async function renderCatalogo(container, db) {
   let invMovFiltro = '';
   let invNombreFiltro = '';
   let invCatFiltro = '';
+  let invListaActual = [];    // productos con estado (refresco progresivo)
+  const invExcluidos = new Set(); // doc_ids desmarcados en la lista de compras
 
   // Rubros disponibles — persistidos en Firebase config
   // Los nuevos rubros se cargan dinámicamente desde config/rubros en Firebase
@@ -1593,7 +1595,7 @@ export async function renderCatalogo(container, db) {
         }
       });
       return map;
-    }, { ttl: 5 * 60 * 1000, memOnly: true });
+    }, { ttl: 20 * 60 * 1000, memOnly: true });
     return ventasProd;
   }
 
@@ -1648,113 +1650,145 @@ export async function renderCatalogo(container, db) {
     });
   }
 
-  // ── Tab Inventario ──
+  // ── Tab Inventario (render progresivo) ──
   async function renderTabInventario(tc) {
-    tc.innerHTML = `<div class="loader"><div class="spinner"></div><span>Analizando inventario...</span></div>`;
-    await cargarVelocidadVentas();
+    const velocidadLista = !!ventasProd;
+
+    // Recalcular lista con estados según velocidad actual
+    function reconstruirLista() {
+      const base = getBaseRubro();
+      invListaActual = base.map(p => ({ ...p, _estado: calcularEstadoInv(p) }));
+    }
+
+    reconstruirLista();
 
     const base = getBaseRubro();
-    const lista = base.map(p => ({ ...p, _estado: calcularEstadoInv(p) }));
-
-    const total     = lista.length;
-    const ok        = lista.filter(p => p._estado.key === 'ok').length;
-    const bajos     = lista.filter(p => p._estado.key === 'bajo' || p._estado.key === 'regular').length;
-    const criticos  = lista.filter(p => p._estado.key === 'critico').length;
-    const agotados  = lista.filter(p => p._estado.key === 'agotado').length;
-    const conVentas = lista.filter(p => p._estado.velocidad > 0).length;
-
-    const alertas = lista
-      .filter(p => p._estado.key === 'critico' || p._estado.key === 'agotado')
-      .sort((a,b) => (a._estado.dias ?? 0) - (b._estado.dias ?? 0))
-      .slice(0, 5);
-
     const cats = [...new Set(base.map(p => p.categoria || '').filter(Boolean))].sort();
 
-    const cs = 'cursor:pointer;transition:transform 0.15s,box-shadow 0.15s';
-
     tc.innerHTML = `
-      <div style="display:flex;flex-direction:column;gap:16px">
-        <div class="cards-grid" id="invStatsGrid">
-          <div class="card stat-card inv-stat" data-filtro="" style="${cs}" title="Ver todos"><div class="icon-wrap bg-blue"><span class="material-icons">inventory_2</span></div><div class="label">Total</div><div class="value">${total}</div></div>
-          <div class="card stat-card inv-stat" data-filtro="ok" style="${cs}"><div class="icon-wrap bg-green"><span class="material-icons">check_circle</span></div><div class="label">Stock OK</div><div class="value">${ok}</div></div>
-          <div class="card stat-card inv-stat" data-filtro="bajo" style="${cs}"><div class="icon-wrap bg-orange"><span class="material-icons">warning</span></div><div class="label">Stock Bajo</div><div class="value">${bajos}</div></div>
-          <div class="card stat-card inv-stat" data-filtro="critico" style="${cs}"><div class="icon-wrap bg-red"><span class="material-icons">error</span></div><div class="label">Críticos</div><div class="value">${criticos}</div></div>
-          <div class="card stat-card inv-stat" data-filtro="agotado" style="${cs}"><div class="icon-wrap" style="background:#424242"><span class="material-icons">remove_shopping_cart</span></div><div class="label">Agotados</div><div class="value">${agotados}</div></div>
-          <div class="card stat-card inv-stat" data-filtro="con" style="${cs}"><div class="icon-wrap" style="background:#7b1fa2"><span class="material-icons">trending_up</span></div><div class="label">En movimiento</div><div class="value">${conVentas}</div></div>
+      <div style="display:flex;flex-direction:column;gap:14px">
+
+        <!-- A. ACCIÓN: LISTA DE COMPRAS -->
+        <div id="invListaCompras"></div>
+
+        <!-- B. RESUMEN (stats) -->
+        <div style="display:flex;flex-direction:column;gap:6px">
+          <div style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;padding:0 4px">RESUMEN DEL INVENTARIO</div>
+          <div class="cards-grid" id="invStatsGrid"></div>
         </div>
 
-        <div id="invAlertasHost">
-          ${alertas.length ? `
-            <div style="background:#fff3f3;border:1px solid #ef9a9a;border-radius:12px;padding:14px">
-              <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
-                <span class="material-icons" style="color:#c62828;font-size:18px">notification_important</span>
-                <b style="font-size:13px;color:#c62828">Requieren atención inmediata</b>
-              </div>
-              <div style="display:flex;flex-direction:column;gap:6px">
-                ${alertas.map(p => `
-                  <div style="display:flex;align-items:center;justify-content:space-between;background:#fff;border-radius:8px;padding:8px 12px;border:1px solid #ef9a9a">
-                    <div>
-                      <div style="font-weight:700;font-size:13px">${p.nombre}</div>
-                      <div style="font-size:11px;color:#65676b">${p.rubro || p.categoria || '-'} · Stock: <b style="color:#c62828">${p.stock || 0}</b></div>
-                    </div>
-                    <div style="text-align:right">
-                      <span class="badge badge-red">${p._estado.label}</span>
-                      ${p._estado.velocidad > 0 ? `<div style="font-size:11px;color:#65676b;margin-top:2px">${p._estado.velocidad.toFixed(1)} u/día</div>` : ''}
-                    </div>
-                  </div>`).join('')}
-              </div>
-            </div>` : ''}
-        </div>
+        <!-- Indicador de carga de velocidad -->
+        <div id="invVelLoading"></div>
 
-        <div class="filter-bar" style="flex-wrap:wrap;gap:8px">
-          <input type="text" id="invFiltroNombre" placeholder="Buscar producto..." style="min-width:200px;flex:1" value="${invNombreFiltro}" />
-          <select id="invFiltroCat">
-            <option value="">Todas las categorías</option>
-            ${cats.map(c => `<option value="${c}" ${invCatFiltro===c?'selected':''}>${c}</option>`).join('')}
-          </select>
-          <select id="invFiltroEstado">
-            <option value="">Todos los estados</option>
-            <option value="ok" ${invEstadoFiltro==='ok'?'selected':''}>OK</option>
-            <option value="regular" ${invEstadoFiltro==='regular'?'selected':''}>Regular</option>
-            <option value="bajo" ${invEstadoFiltro==='bajo'?'selected':''}>Bajo</option>
-            <option value="critico" ${invEstadoFiltro==='critico'?'selected':''}>Crítico</option>
-            <option value="agotado" ${invEstadoFiltro==='agotado'?'selected':''}>Agotado</option>
-          </select>
-          <select id="invFiltroMov">
-            <option value="">Todo</option>
-            <option value="con" ${invMovFiltro==='con'?'selected':''}>Con movimiento</option>
-            <option value="sin" ${invMovFiltro==='sin'?'selected':''}>Sin movimiento</option>
-          </select>
-        </div>
-
-        <div class="table-card">
-          <div class="table-card-header">
-            <h3>Inventario Inteligente${rubroActivo !== 'TODOS' ? ' — ' + rubroActivo.charAt(0) + rubroActivo.slice(1).toLowerCase() : ''}</h3>
-            <span id="invCount" style="color:var(--text-muted);font-size:13px"></span>
+        <!-- C. DETALLE: filtros + tabla -->
+        <div style="display:flex;flex-direction:column;gap:8px">
+          <div style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;padding:0 4px">DETALLE DE PRODUCTOS</div>
+          <div class="filter-bar" style="flex-wrap:wrap;gap:8px">
+            <input type="text" id="invFiltroNombre" placeholder="Buscar producto..." style="min-width:200px;flex:1" value="${invNombreFiltro}" />
+            <select id="invFiltroCat">
+              <option value="">Todas las categorías</option>
+              ${cats.map(c => `<option value="${c}" ${invCatFiltro===c?'selected':''}>${c}</option>`).join('')}
+            </select>
+            <select id="invFiltroEstado">
+              <option value="">Todos los estados</option>
+              <option value="ok" ${invEstadoFiltro==='ok'?'selected':''}>OK</option>
+              <option value="regular" ${invEstadoFiltro==='regular'?'selected':''}>Regular</option>
+              <option value="bajo" ${invEstadoFiltro==='bajo'?'selected':''}>Bajo</option>
+              <option value="critico" ${invEstadoFiltro==='critico'?'selected':''}>Crítico</option>
+              <option value="agotado" ${invEstadoFiltro==='agotado'?'selected':''}>Agotado</option>
+            </select>
+            <select id="invFiltroMov">
+              <option value="">Todo</option>
+              <option value="con" ${invMovFiltro==='con'?'selected':''}>Con movimiento</option>
+              <option value="sin" ${invMovFiltro==='sin'?'selected':''}>Sin movimiento</option>
+            </select>
           </div>
-          <div class="table-wrap">
-            <table>
-              <thead><tr>
-                <th>Producto</th>
-                <th class="inv-col-categoria">Categoría</th>
-                <th class="inv-col-rubro">Rubro</th>
-                <th style="text-align:center">Stock</th>
-                <th class="inv-col-dias" style="text-align:center">Días</th>
-                <th class="inv-col-cobertura">Cobertura</th>
-                <th class="inv-col-velocidad" style="text-align:center">Vel./día</th>
-                <th>Estado</th>
-                <th style="text-align:right">Precio</th>
-                <th>Acciones</th>
-              </tr></thead>
-              <tbody id="invBody"></tbody>
-            </table>
+
+          <div class="table-card">
+            <div class="table-card-header">
+              <h3>Inventario Inteligente${rubroActivo !== 'TODOS' ? ' — ' + rubroActivo.charAt(0) + rubroActivo.slice(1).toLowerCase() : ''}</h3>
+              <span id="invCount" style="color:var(--text-muted);font-size:13px"></span>
+            </div>
+            <div class="table-wrap">
+              <table>
+                <thead><tr>
+                  <th>Producto</th>
+                  <th class="inv-col-categoria">Categoría</th>
+                  <th class="inv-col-rubro">Rubro</th>
+                  <th style="text-align:center">Stock</th>
+                  <th class="inv-col-dias" style="text-align:center">Días</th>
+                  <th class="inv-col-cobertura">Cobertura</th>
+                  <th class="inv-col-velocidad" style="text-align:center">Vel./día</th>
+                  <th>Estado</th>
+                  <th style="text-align:right">Precio</th>
+                  <th>Acciones</th>
+                </tr></thead>
+                <tbody id="invBody"></tbody>
+              </table>
+            </div>
           </div>
         </div>
       </div>
     `;
 
-    // Clicks en stat-cards
-    tc.querySelectorAll('.inv-stat').forEach(card => {
+    // Si todavía no tenemos la velocidad, mostrar indicador no-bloqueante
+    if (!velocidadLista) {
+      const indic = document.getElementById('invVelLoading');
+      if (indic) indic.innerHTML = `
+        <div style="display:flex;align-items:center;gap:8px;padding:8px 14px;background:#e3f2fd;border:1px solid #90caf9;border-radius:8px;font-size:12px;color:#1565c0">
+          <div style="width:14px;height:14px;border:2px solid #90caf9;border-top-color:#1565c0;border-radius:50%;animation:spin 0.8s linear infinite"></div>
+          Calculando velocidad de ventas... (la tabla y la lista de compras se refrescan automáticamente)
+        </div>`;
+    }
+
+    renderInvStats();
+    renderListaCompras();
+
+    ['invFiltroNombre','invFiltroCat','invFiltroEstado','invFiltroMov'].forEach(id => {
+      document.getElementById(id)?.addEventListener('input', () => {
+        invNombreFiltro = document.getElementById('invFiltroNombre')?.value || '';
+        invCatFiltro    = document.getElementById('invFiltroCat')?.value || '';
+        invEstadoFiltro = document.getElementById('invFiltroEstado')?.value || '';
+        invMovFiltro    = document.getElementById('invFiltroMov')?.value || '';
+        applyInvFilters();
+      });
+    });
+
+    applyInvFilters();
+
+    // Si la velocidad no estaba precargada, la traemos en background y refrescamos
+    if (!velocidadLista) {
+      cargarVelocidadVentas().then(() => {
+        reconstruirLista();
+        const indic = document.getElementById('invVelLoading');
+        if (indic) indic.innerHTML = '';
+        renderInvStats();
+        renderListaCompras();
+        applyInvFilters();
+      });
+    }
+  }
+
+  function renderInvStats() {
+    const grid = document.getElementById('invStatsGrid');
+    if (!grid) return;
+    const total     = invListaActual.length;
+    const ok        = invListaActual.filter(p => p._estado.key === 'ok').length;
+    const bajos     = invListaActual.filter(p => p._estado.key === 'bajo' || p._estado.key === 'regular').length;
+    const criticos  = invListaActual.filter(p => p._estado.key === 'critico').length;
+    const agotados  = invListaActual.filter(p => p._estado.key === 'agotado').length;
+    const conVentas = invListaActual.filter(p => p._estado.velocidad > 0).length;
+    const cs = 'cursor:pointer;transition:transform 0.15s,box-shadow 0.15s';
+
+    grid.innerHTML = `
+      <div class="card stat-card inv-stat" data-filtro="" style="${cs}" title="Ver todos"><div class="icon-wrap bg-blue"><span class="material-icons">inventory_2</span></div><div class="label">Total</div><div class="value">${total}</div></div>
+      <div class="card stat-card inv-stat" data-filtro="ok" style="${cs}"><div class="icon-wrap bg-green"><span class="material-icons">check_circle</span></div><div class="label">Stock OK</div><div class="value">${ok}</div></div>
+      <div class="card stat-card inv-stat" data-filtro="bajo" style="${cs}"><div class="icon-wrap bg-orange"><span class="material-icons">warning</span></div><div class="label">Stock Bajo</div><div class="value">${bajos}</div></div>
+      <div class="card stat-card inv-stat" data-filtro="critico" style="${cs}"><div class="icon-wrap bg-red"><span class="material-icons">error</span></div><div class="label">Críticos</div><div class="value">${criticos}</div></div>
+      <div class="card stat-card inv-stat" data-filtro="agotado" style="${cs}"><div class="icon-wrap" style="background:#424242"><span class="material-icons">remove_shopping_cart</span></div><div class="label">Agotados</div><div class="value">${agotados}</div></div>
+      <div class="card stat-card inv-stat" data-filtro="con" style="${cs}"><div class="icon-wrap" style="background:#7b1fa2"><span class="material-icons">trending_up</span></div><div class="label">En movimiento</div><div class="value">${conVentas}</div></div>
+    `;
+    grid.querySelectorAll('.inv-stat').forEach(card => {
       card.addEventListener('mouseenter', () => { card.style.transform='translateY(-3px)'; card.style.boxShadow='0 6px 20px rgba(0,0,0,0.1)'; });
       card.addEventListener('mouseleave', () => { card.style.transform=''; card.style.boxShadow=''; });
       card.addEventListener('click', () => {
@@ -1763,26 +1797,317 @@ export async function renderCatalogo(container, db) {
         const selM = document.getElementById('invFiltroMov');
         if (f === 'con') { if (selE) selE.value=''; if (selM) selM.value='con'; invEstadoFiltro=''; invMovFiltro='con'; }
         else             { if (selE) selE.value=f; if (selM) selM.value=''; invEstadoFiltro=f; invMovFiltro=''; }
-        applyInvFilters(lista);
+        applyInvFilters();
         document.querySelector('.table-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
     });
-
-    ['invFiltroNombre','invFiltroCat','invFiltroEstado','invFiltroMov'].forEach(id => {
-      document.getElementById(id)?.addEventListener('input', () => {
-        invNombreFiltro = document.getElementById('invFiltroNombre')?.value || '';
-        invCatFiltro    = document.getElementById('invFiltroCat')?.value || '';
-        invEstadoFiltro = document.getElementById('invFiltroEstado')?.value || '';
-        invMovFiltro    = document.getElementById('invFiltroMov')?.value || '';
-        applyInvFilters(lista);
-      });
-    });
-
-    applyInvFilters(lista);
   }
 
-  function applyInvFilters(lista) {
-    let data = [...lista];
+  // Agrupa productos de la lista de compras por rubro (orden alfabético).
+  // Mantiene el orden de urgencia dentro de cada rubro.
+  function agruparPorRubroCompras(items) {
+    const mapa = {};
+    items.forEach(p => {
+      const r = (p.rubro || 'Sin rubro').toUpperCase();
+      if (!mapa[r]) mapa[r] = [];
+      mapa[r].push(p);
+    });
+    return Object.keys(mapa).sort((a, b) => {
+      if (a === 'SIN RUBRO') return 1;
+      if (b === 'SIN RUBRO') return -1;
+      return a.localeCompare(b);
+    }).map(r => ({ rubro: r, items: mapa[r] }));
+  }
+
+  // ── Lista de compras sugerida (agotados + críticos + bajos) ──
+  function renderListaCompras() {
+    const host = document.getElementById('invListaCompras');
+    if (!host) return;
+
+    const lista = invListaActual
+      .filter(p => p._estado.key === 'agotado' || p._estado.key === 'critico' || p._estado.key === 'bajo')
+      .sort((a, b) => {
+        const orden = { agotado: 0, critico: 1, bajo: 2 };
+        const diff = (orden[a._estado.key] ?? 9) - (orden[b._estado.key] ?? 9);
+        if (diff !== 0) return diff;
+        return (a._estado.dias ?? 999) - (b._estado.dias ?? 999);
+      });
+
+    if (!lista.length) {
+      host.innerHTML = `
+        <div style="background:#e8f5e9;border:1px solid #a5d6a7;border-radius:12px;padding:14px;display:flex;align-items:center;gap:10px">
+          <span class="material-icons" style="color:#2e7d32">task_alt</span>
+          <div>
+            <b style="font-size:13px;color:#2e7d32">Stock al día</b>
+            <div style="font-size:11px;color:#65676b">No hay productos para reponer${rubroActivo !== 'TODOS' ? ' en ' + rubroActivo.charAt(0)+rubroActivo.slice(1).toLowerCase() : ''}.</div>
+          </div>
+        </div>`;
+      return;
+    }
+
+    const seleccionados = lista.filter(p => !invExcluidos.has(p.doc_id));
+    const totCosto = seleccionados.reduce((s, p) => s + Number(p.costo || 0), 0);
+    const todosMarcados = seleccionados.length === lista.length;
+    const agot = lista.filter(p => p._estado.key === 'agotado').length;
+    const crit = lista.filter(p => p._estado.key === 'critico').length;
+    const baj  = lista.filter(p => p._estado.key === 'bajo').length;
+    const titulo = `Lista de compras${rubroActivo !== 'TODOS' ? ' — ' + rubroActivo.charAt(0) + rubroActivo.slice(1).toLowerCase() : ''}`;
+
+    host.innerHTML = `
+      <div style="background:#fff;border:1px solid #ffb74d;border-left:4px solid #f57c00;border-radius:12px;padding:14px;box-shadow:0 2px 8px rgba(0,0,0,0.04)">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:10px">
+          <div style="display:flex;align-items:center;gap:10px;min-width:220px">
+            <span class="material-icons" style="color:#f57c00;font-size:22px">shopping_cart</span>
+            <div>
+              <b style="font-size:14px;color:#1c1e21">${titulo}</b>
+              <div style="font-size:11px;color:#65676b">
+                ${lista.length} productos para reponer
+                ${agot?` · <b style="color:#c62828">${agot} agotados</b>`:''}
+                ${crit?` · <b style="color:#c62828">${crit} críticos</b>`:''}
+                ${baj?` · <b style="color:#f57c00">${baj} bajos</b>`:''}
+              </div>
+              <div style="font-size:11px;color:#65676b;margin-top:2px">Costo estimado seleccionado: <b style="color:#2e7d32">$${fmt(totCosto)}</b></div>
+            </div>
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button id="btnCopiarWsp" title="Copiar lista al portapapeles" style="display:flex;align-items:center;gap:5px;padding:7px 12px;background:#fff;color:#25D366;border:1.5px solid #25D366;border-radius:8px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit">
+              <span class="material-icons" style="font-size:16px">content_copy</span> WhatsApp
+            </button>
+            <button id="btnPdfCompras" title="Abrir vista imprimible / PDF" style="display:flex;align-items:center;gap:5px;padding:7px 12px;background:#c62828;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:12px;font-weight:700;font-family:inherit">
+              <span class="material-icons" style="font-size:16px">picture_as_pdf</span> Generar PDF
+            </button>
+          </div>
+        </div>
+
+        <div style="max-height:380px;overflow-y:auto;border:1px solid #f0f0f0;border-radius:8px">
+          <table style="width:100%;border-collapse:collapse;font-size:12px">
+            <thead style="background:#fafbfc;position:sticky;top:0;z-index:2">
+              <tr>
+                <th style="padding:8px 10px;text-align:center;width:36px"><input type="checkbox" id="invChkAll" ${todosMarcados?'checked':''} title="Marcar/desmarcar todos" /></th>
+                <th style="padding:8px 10px;text-align:left;font-size:11px;color:#65676b">Producto</th>
+                <th style="padding:8px 10px;text-align:center;font-size:11px;color:#65676b">Stock</th>
+                <th style="padding:8px 10px;text-align:center;font-size:11px;color:#65676b">Días</th>
+                <th style="padding:8px 10px;text-align:right;font-size:11px;color:#65676b">Costo un.</th>
+                <th style="padding:8px 10px;text-align:left;font-size:11px;color:#65676b">Estado</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${(() => {
+                const grupos = agruparPorRubroCompras(lista);
+                const mostrarHeaders = rubroActivo === 'TODOS' && grupos.length > 1;
+                return grupos.map(g => {
+                  const sub = g.items.filter(p => !invExcluidos.has(p.doc_id)).reduce((s, p) => s + Number(p.costo || 0), 0);
+                  const todosOn  = g.items.every(p => !invExcluidos.has(p.doc_id));
+                  const algunoOn = g.items.some(p => !invExcluidos.has(p.doc_id));
+                  const headerRow = mostrarHeaders ? `
+                    <tr class="inv-rubro-row" style="background:#eef4ff;border-top:2px solid #1877f2">
+                      <td style="padding:8px 10px;text-align:center"><input type="checkbox" class="inv-chk-rubro" data-rubro="${g.rubro}" ${todosOn?'checked':''} ${!todosOn && algunoOn ? 'data-indeterminate="1"' : ''} title="Marcar/desmarcar rubro" /></td>
+                      <td colspan="4" style="padding:8px 10px;font-size:12px;font-weight:800;color:#1877f2;letter-spacing:0.3px">
+                        ${g.rubro === 'SIN RUBRO' ? 'Sin rubro' : g.rubro.charAt(0) + g.rubro.slice(1).toLowerCase()}
+                        <span style="color:#65676b;font-weight:500;margin-left:6px">· ${g.items.length} ítem${g.items.length!==1?'s':''}</span>
+                      </td>
+                      <td style="padding:8px 10px;text-align:right;font-size:11px;color:#2e7d32;font-weight:700">$${fmt(sub)}</td>
+                    </tr>` : '';
+                  const itemRows = g.items.map(p => {
+                    const exc = invExcluidos.has(p.doc_id);
+                    const diasTxt = p._estado.dias !== null && p._estado.dias !== undefined
+                      ? `<b style="color:${p._estado.color}">${p._estado.dias}d</b>`
+                      : `<span style="color:#bbb">—</span>`;
+                    return `<tr style="border-top:1px solid #f0f0f0;${exc?'opacity:0.45;background:#fafafa':''}">
+                      <td style="padding:7px 10px;text-align:center"><input type="checkbox" class="inv-chk-item" data-id="${p.doc_id}" ${exc?'':'checked'} /></td>
+                      <td style="padding:7px 10px${mostrarHeaders?';padding-left:26px':''}">
+                        <b style="font-size:12px">${p.nombre || '-'}</b>
+                        <div style="font-size:10px;color:#65676b">${p.categoria || p.rubro || '-'}</div>
+                      </td>
+                      <td style="padding:7px 10px;text-align:center;font-weight:700;color:${(p.stock||0)===0?'#c62828':'#1c1e21'}">${p.stock || 0}</td>
+                      <td style="padding:7px 10px;text-align:center">${diasTxt}</td>
+                      <td style="padding:7px 10px;text-align:right;color:#1c1e21">$${fmt(p.costo || 0)}</td>
+                      <td style="padding:7px 10px"><span class="badge ${p._estado.cls}" style="font-size:10px">${p._estado.label}</span></td>
+                    </tr>`;
+                  }).join('');
+                  return headerRow + itemRows;
+                }).join('');
+              })()}
+            </tbody>
+          </table>
+        </div>
+      </div>`;
+
+    document.getElementById('invChkAll')?.addEventListener('change', (e) => {
+      if (e.target.checked) lista.forEach(p => invExcluidos.delete(p.doc_id));
+      else                  lista.forEach(p => invExcluidos.add(p.doc_id));
+      renderListaCompras();
+    });
+    host.querySelectorAll('.inv-chk-item').forEach(chk => {
+      chk.addEventListener('change', () => {
+        if (chk.checked) invExcluidos.delete(chk.dataset.id);
+        else             invExcluidos.add(chk.dataset.id);
+        renderListaCompras();
+      });
+    });
+    host.querySelectorAll('.inv-chk-rubro').forEach(chk => {
+      if (chk.dataset.indeterminate === '1') chk.indeterminate = true;
+      chk.addEventListener('change', () => {
+        const rubroKey = chk.dataset.rubro;
+        const itemsRubro = lista.filter(p => ((p.rubro || 'Sin rubro').toUpperCase()) === rubroKey);
+        if (chk.checked) itemsRubro.forEach(p => invExcluidos.delete(p.doc_id));
+        else             itemsRubro.forEach(p => invExcluidos.add(p.doc_id));
+        renderListaCompras();
+      });
+    });
+    document.getElementById('btnPdfCompras')?.addEventListener('click', () => generarPDFCompras(lista));
+    document.getElementById('btnCopiarWsp')?.addEventListener('click', () => copiarWhatsAppCompras(lista));
+  }
+
+  function generarPDFCompras(lista) {
+    const items = lista.filter(p => !invExcluidos.has(p.doc_id));
+    if (!items.length) { alert('No hay productos seleccionados.'); return; }
+    const totCosto = items.reduce((s, p) => s + Number(p.costo || 0), 0);
+    const fecha = new Date().toLocaleDateString('es-AR');
+    const rubroTxt = rubroActivo !== 'TODOS' ? ' — ' + rubroActivo.charAt(0) + rubroActivo.slice(1).toLowerCase() : '';
+
+    const grupos = agruparPorRubroCompras(items);
+    const agruparVisual = rubroActivo === 'TODOS' && grupos.length > 1;
+
+    let nroGlobal = 0;
+    const rows = grupos.map(g => {
+      const sub = g.items.reduce((s, p) => s + Number(p.costo || 0), 0);
+      const header = agruparVisual ? `
+        <tr class="rubro-header">
+          <td colspan="6">${g.rubro === 'SIN RUBRO' ? 'Sin rubro' : g.rubro.charAt(0)+g.rubro.slice(1).toLowerCase()} — ${g.items.length} ítem${g.items.length!==1?'s':''}</td>
+          <td class="r">$${fmt(sub)}</td>
+        </tr>` : '';
+      const itemRows = g.items.map(p => {
+        nroGlobal += 1;
+        return `
+          <tr>
+            <td>${nroGlobal}</td>
+            <td><b>${p.nombre || '-'}</b>${p.cod_barra ? `<div style="font-size:9px;color:#999">${p.cod_barra}</div>` : ''}</td>
+            <td>${p.rubro || p.categoria || '-'}</td>
+            <td class="c">${p.stock || 0}</td>
+            <td class="c">${p._estado.dias !== null && p._estado.dias !== undefined ? p._estado.dias + 'd' : '—'}</td>
+            <td class="${p._estado.key}">${p._estado.label}</td>
+            <td class="r">$${fmt(p.costo || 0)}</td>
+          </tr>`;
+      }).join('');
+      return header + itemRows;
+    }).join('');
+
+    const html = `<!DOCTYPE html>
+<html lang="es"><head><meta charset="UTF-8"><title>Lista de Compras ${fecha}</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 24px; color: #1c1e21; }
+  .header { border-bottom: 2px solid #1c1e21; padding-bottom: 12px; margin-bottom: 18px; display:flex; align-items:flex-end; justify-content:space-between; flex-wrap:wrap; gap:8px; }
+  h1 { margin: 0; font-size: 20px; }
+  .meta { font-size: 12px; color: #555; margin-top: 4px; }
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; padding: 8px 10px; background: #f0f2f5; border-bottom: 2px solid #1c1e21; font-size: 11px; text-transform: uppercase; }
+  td { padding: 7px 10px; border-bottom: 1px solid #e4e6eb; vertical-align: top; }
+  .c { text-align: center; }
+  .r { text-align: right; }
+  .agotado { color: #c62828; font-weight: 700; }
+  .critico { color: #c62828; font-weight: 600; }
+  .bajo    { color: #f57c00; font-weight: 600; }
+  .rubro-header td { background:#eef4ff; border-top:2px solid #1877f2; border-bottom:1px solid #90caf9; color:#1877f2; font-weight:800; font-size:12px; text-transform:uppercase; letter-spacing:0.4px; padding:8px 10px; }
+  .total-row td { border-top: 2px solid #1c1e21; border-bottom: none; font-weight: 700; padding-top: 12px; background:#fafafa; }
+  .footer { margin-top: 18px; font-size: 10px; color: #777; text-align: right; }
+  .no-print button { padding:10px 20px;background:#1877f2;color:#fff;border:none;border-radius:8px;font-size:14px;cursor:pointer;font-weight:700;font-family:inherit; }
+  @media print { body { padding: 12px; } .no-print { display: none; } }
+</style>
+</head><body>
+<div class="header">
+  <div>
+    <h1>Lista de Compras${rubroTxt}</h1>
+    <div class="meta">Generado el ${fecha} · ${items.length} producto${items.length !== 1 ? 's' : ''}</div>
+  </div>
+  <div class="meta">Libreria Liceo</div>
+</div>
+<table>
+  <thead>
+    <tr>
+      <th>#</th>
+      <th>Producto</th>
+      <th>Rubro</th>
+      <th class="c">Stock</th>
+      <th class="c">Días</th>
+      <th>Estado</th>
+      <th class="r">Costo un.</th>
+    </tr>
+  </thead>
+  <tbody>
+    ${rows}
+    <tr class="total-row">
+      <td colspan="6" class="r">Total costo estimado</td>
+      <td class="r">$${fmt(totCosto)}</td>
+    </tr>
+  </tbody>
+</table>
+<div class="footer">POS Dashboard · ${fecha}</div>
+<div class="no-print" style="margin-top:24px;text-align:center">
+  <button onclick="window.print()">Imprimir / Guardar como PDF</button>
+</div>
+<script>window.addEventListener('load', () => setTimeout(() => window.print(), 350));</script>
+</body></html>`;
+
+    const w = window.open('', '_blank');
+    if (!w) { alert('No se pudo abrir la ventana. Habilitá las pop-ups para este sitio.'); return; }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+  }
+
+  function copiarWhatsAppCompras(lista) {
+    const items = lista.filter(p => !invExcluidos.has(p.doc_id));
+    if (!items.length) { alert('No hay productos seleccionados.'); return; }
+    const rubroTxt = rubroActivo !== 'TODOS' ? ' (' + rubroActivo + ')' : '';
+    const fecha = new Date().toLocaleDateString('es-AR');
+    const totCosto = items.reduce((s, p) => s + Number(p.costo || 0), 0);
+    const grupos = agruparPorRubroCompras(items);
+    const agruparVisual = rubroActivo === 'TODOS' && grupos.length > 1;
+
+    let txt = `*Lista de Compras${rubroTxt}*\n${fecha}\n\n`;
+    let nro = 0;
+    grupos.forEach(g => {
+      if (agruparVisual) {
+        const nombreRubro = g.rubro === 'SIN RUBRO' ? 'Sin rubro' : g.rubro.charAt(0)+g.rubro.slice(1).toLowerCase();
+        const sub = g.items.reduce((s, p) => s + Number(p.costo || 0), 0);
+        txt += `▸ *${nombreRubro}*  _(${g.items.length} · $${fmt(sub)})_\n`;
+      }
+      g.items.forEach(p => {
+        nro += 1;
+        const dias = p._estado.dias !== null && p._estado.dias !== undefined ? ` · ${p._estado.dias}d` : '';
+        txt += `${nro}. *${p.nombre}*  (stock: ${p.stock || 0}${dias})  — $${fmt(p.costo || 0)}\n`;
+      });
+      if (agruparVisual) txt += '\n';
+    });
+    txt += `\n_Total costo estimado: $${fmt(totCosto)}_`;
+
+    const flash = (msg, ok = true) => {
+      const btn = document.getElementById('btnCopiarWsp');
+      if (!btn) return;
+      const orig = btn.innerHTML;
+      btn.innerHTML = `<span class="material-icons" style="font-size:16px">${ok?'check':'error'}</span> ${msg}`;
+      setTimeout(() => btn.innerHTML = orig, 1500);
+    };
+
+    if (navigator.clipboard?.writeText) {
+      navigator.clipboard.writeText(txt)
+        .then(() => flash('Copiado'))
+        .catch(() => {
+          const ta = document.createElement('textarea');
+          ta.value = txt; document.body.appendChild(ta); ta.select();
+          try { document.execCommand('copy'); flash('Copiado'); }
+          catch { flash('Error', false); prompt('Copiá manualmente:', txt); }
+          document.body.removeChild(ta);
+        });
+    } else {
+      prompt('Copiá manualmente:', txt);
+    }
+  }
+
+  function applyInvFilters() {
+    let data = [...invListaActual];
     if (invNombreFiltro) {
       const words = invNombreFiltro.toLowerCase().split(/\s+/).filter(Boolean);
       data = data.filter(p => {

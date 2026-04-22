@@ -7,8 +7,17 @@ from reportlab.lib.enums import TA_CENTER, TA_RIGHT, TA_LEFT, TA_JUSTIFY
 from reportlab.pdfgen import canvas
 from datetime import datetime, timezone, timedelta
 import os
+import sys
 
 _TZ_AR = timezone(timedelta(hours=-3))
+
+
+def _asset_path(name):
+    """Devuelve la ruta absoluta a un asset (dev o bundled con PyInstaller)."""
+    base = getattr(sys, '_MEIPASS', None)
+    if base:
+        return os.path.join(base, 'pos_system', 'assets', 'images', name)
+    return os.path.join(os.path.dirname(__file__), '..', 'assets', 'images', name)
 
 def _fmt_qty(q):
     """Formatea cantidades: 1.0 -> '1', 0.3 -> '0.3', 2.55 -> '2.55'."""
@@ -1205,7 +1214,21 @@ class PDFGenerator:
         sE_val  = S('EV', fontSize=7.5, fontName='Helvetica', alignment=TA_LEFT, spaceAfter=1, leading=10)
         sE_iva  = S('EI', fontSize=7.5, fontName='Helvetica-Bold', alignment=TA_LEFT, spaceAfter=0, leading=10)
 
-        emisor_content = [
+        emisor_content = []
+        # Logo arriba a la izquierda (si el archivo existe). Respeta aspect ratio
+        # original escalando por ancho objetivo.
+        _logo_p = _asset_path('factura_logo.png')
+        if os.path.exists(_logo_p):
+            try:
+                from reportlab.lib.utils import ImageReader
+                _iw, _ih = ImageReader(_logo_p).getSize()
+                _target_w = 45 * mm
+                _target_h = _target_w * (_ih / _iw) if _iw else 22 * mm
+                emisor_content.append(RLImage(_logo_p, width=_target_w, height=_target_h))
+                emisor_content.append(Spacer(1, 2 * mm))
+            except Exception:
+                pass
+        emisor_content += [
             Paragraph(razon, sE_name),
             Paragraph(f'<b>Razon Social:</b> {razon}', sE_val),
             Paragraph(f'<b>Domicilio Comercial:</b> {domicilio_emisor}', sE_val),

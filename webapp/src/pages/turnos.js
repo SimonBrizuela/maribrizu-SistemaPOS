@@ -1,6 +1,7 @@
 import { collection, getDocs, query, orderBy, limit, where } from 'firebase/firestore';
 import { openSaleModal } from '../components/modal.js';
 import { getSaleNumberMap, displayNumForVenta } from '../sale_numbers.js';
+import { isVentaVarios2 } from '../config.js';
 
 /**
  * Página: Resumen por Turno / Cajero
@@ -17,7 +18,7 @@ export async function renderTurnos(container, db) {
     getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc'), limit(1000))),
     getSaleNumberMap(db),
   ]);
-  const ventas = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(v => v.deleted !== true && v.is_varios_2 !== true);
+  const ventas = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(v => v.deleted !== true && !isVentaVarios2(v));
 
   // Rango de fechas por defecto: hoy en hora Argentina
   const hoy = new Date(todayAR() + 'T00:00:00-03:00');

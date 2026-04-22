@@ -1222,7 +1222,9 @@ class FirebaseSync:
                     })
 
                 pc_id = _get_pc_id()
-                fb_doc_id = f"{pc_id}_{register_id}"
+                # Doc id compartido = solo register_id. Las 5 PCs escriben al
+                # mismo doc (merge=True) → una sola caja en Firebase para todas.
+                fb_doc_id = str(register_id)
                 _session_id = session_id or report.get('session_id') or now_ar().strftime('%Y-%m-%d')
                 self.db.collection('cierres_caja').document(fb_doc_id).set({
                     'register_id':           int(register_id),
@@ -1453,7 +1455,8 @@ class FirebaseSync:
         """
         Sube la caja abierta a Firestore:
           - 'caja_activa/current': para sincronización entre PCs
-          - 'cierres_caja/{pc}_{id}': para que la webapp muestre "Caja Abierta"
+          - 'cierres_caja/{id}': doc compartido entre todas las PCs (merge=True),
+            así la webapp muestra UNA sola tarjeta "Caja Abierta".
         """
         if not self.enabled:
             return
@@ -1477,8 +1480,10 @@ class FirebaseSync:
 
                 # 2. Crear/actualizar doc en cierres_caja SIN fecha_cierre
                 #    → la webapp lo detecta como "caja abierta"
-                #    Al cerrar, sync_cash_closing sobreescribe este mismo doc con fecha_cierre
-                fb_doc_id = f"{pc_id}_{register_id}"
+                #    Doc id = solo register_id → todas las PCs escriben al
+                #    mismo doc (con merge=True). Al cerrar, sync_cash_closing
+                #    sobreescribe este mismo doc con fecha_cierre.
+                fb_doc_id = str(register_id)
                 self.db.collection('cierres_caja').document(fb_doc_id).set({
                     'register_id':             int(register_id) if register_id else 0,
                     'pc_id':                   pc_id,

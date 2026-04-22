@@ -1,6 +1,6 @@
-import { collection, getDocs, query, orderBy, where, doc, updateDoc } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, where, limit, doc, updateDoc } from 'firebase/firestore';
 import { getCached, invalidateCache } from '../cache.js';
-import { getFechaInicioDate } from '../config.js';
+import { getFechaInicioDate, isVentaVarios2 } from '../config.js';
 
 export async function renderCierres(container, db) {
   const fechaInicio = await getFechaInicioDate(db);
@@ -39,7 +39,18 @@ export async function renderCierres(container, db) {
   });
 
   // Separar cajas abiertas (sin fecha_cierre) de las cerradas
-  const cajasAbiertas = todos.filter(c => !c.fecha_cierre || c.fecha_cierre === null || c.fecha_cierre === '');
+  const cajasAbiertasRaw = todos.filter(c => !c.fecha_cierre || c.fecha_cierre === null || c.fecha_cierre === '');
+  // Deduplicar por register_id: hoy hay UN solo doc compartido por caja, pero
+  // pueden quedar docs viejos en formato "{pc_id}_{register_id}" del esquema
+  // anterior → si vemos el mismo register_id en varios docs, nos quedamos con uno.
+  const _seenReg = new Set();
+  const cajasAbiertas = [];
+  for (const c of cajasAbiertasRaw) {
+    const key = c.register_id != null ? String(c.register_id) : `_doc_${c.id}`;
+    if (_seenReg.has(key)) continue;
+    _seenReg.add(key);
+    cajasAbiertas.push(c);
+  }
   const cierres = todos.filter(c => c.fecha_cierre && c.fecha_cierre !== '');
 
   // Caja abierta consolidada: calcular totales desde la colección `ventas`
@@ -51,27 +62,36 @@ export async function renderCierres(container, db) {
     );
     const fechaAperturaDate = toDate(fechaAperturaRaw);
 
-    // "Ventas en curso" debe reflejar SOLO las ventas del día de hoy (hora AR).
-    // Si la caja quedó abierta varios días, los totales previos ya se ven en
-    // Historial Diario → no los acumulamos acá.
-    const _todayStr   = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
-    const inicioHoyAR = new Date(_todayStr + 'T00:00:00-03:00');
+    // "Ventas en curso" = ventas desde la apertura del turno (con buffer).
+    // Una caja que quedó abierta cruzando medianoche sigue siendo el mismo turno:
+    // hay que mostrar TODAS sus ventas, no cortarlas al inicio del día actual.
     const BUFFER_MS = 5 * 60 * 1000;
-    let fechaLimite = inicioHoyAR;
-    // Si la caja se abrió HOY más tarde, usar la hora de apertura (con buffer)
-    // para no sumar ventas anteriores a esa apertura puntual.
-    if (fechaAperturaDate && fechaAperturaDate > inicioHoyAR) {
-      fechaLimite = new Date(fechaAperturaDate.getTime() - BUFFER_MS);
-    }
-    if (fechaInicio && fechaLimite < fechaInicio) {
+    let fechaLimite = fechaAperturaDate ? new Date(fechaAperturaDate.getTime() - BUFFER_MS) : null;
+    if (fechaInicio && (!fechaLimite || fechaLimite < fechaInicio)) {
       fechaLimite = fechaInicio;
     }
-    const ventasSnap = await getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc')));
+    // Reutilizar cache compartido con dashboard/control_total (500 ventas recientes).
+    // Cubre holgadamente las ventas del día actual; TTL corto = datos casi en vivo.
+    const ventasCache = await getCached('dashboard:ventas', async () => {
+      const snap = await getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc'), limit(500)));
+      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    }, { ttl: 60 * 1000 });
+    // Sumar SOLO ventas pertenecientes a cajas actualmente abiertas. Si no filtramos
+    // por register_id, una caja vieja sin cerrar arrastra ventas de cajas ya cerradas
+    // (Historial 22/04 ≠ Caja Abierta porque ésta sumaba 20, 21 y 22).
+    const idsAbiertos = new Set(
+      cajasAbiertas
+        .map(c => (c.register_id != null ? String(c.register_id) : null))
+        .filter(Boolean)
+    );
     let totalEfectivo = 0, totalTransferencia = 0, totalTransacciones = 0;
-    for (const doc of ventasSnap.docs) {
-      const v = doc.data();
+    for (const v of ventasCache) {
       if (v.deleted === true) continue;
-      if (v.is_varios_2 === true) continue;
+      if (isVentaVarios2(v)) continue;
+      if (idsAbiertos.size > 0) {
+        const regId = v.cash_register_id != null ? String(v.cash_register_id) : '';
+        if (!idsAbiertos.has(regId)) continue;
+      }
       const vDate = toDate(v.created_at);
       if (!vDate) continue;
       if (fechaLimite && vDate < fechaLimite) continue;
