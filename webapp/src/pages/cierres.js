@@ -455,93 +455,16 @@ function openCerrarCajaModal(db, ctx, onDone) {
       const nowTs = Timestamp.fromDate(nowDate);
       const sessionId = nowDate.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
 
-      // ── 1. Calcular totales desde `ventas` filtrando por cash_register_id ──
-      // Leemos las 500 más recientes (cubre cualquier turno operativo).
-      // Si una caja viejísima necesitara más, habría que paginar — caso raro.
-      const ventasSnap = await getDocs(query(
-        collection(db, 'ventas'),
-        orderBy('created_at', 'desc'),
-        limit(500)
-      ));
-      const ventasCaja = ventasSnap.docs
-        .map(d => ({ id: d.id, ...d.data() }))
-        .filter(v => {
-          if (v.deleted === true) return false;
-          if (isVentaVarios2(v)) return false;
-          const reg = v.cash_register_id != null ? String(v.cash_register_id) : '';
-          return reg === String(registerId);
-        });
+      // 1. Calcular y escribir todos los stats al doc cierres_caja/{id}
+      await calcularYMergearStatsCaja(db, registerId, {
+        monto_inicial, cajero, retiros, total_retiros,
+        fecha_cierre: nowTs, session_id: sessionId,
+        pendiente_conteo: true, cerrado_desde: 'web', updated_at: nowIso,
+      });
 
-      let total_efectivo = 0, total_transferencia = 0;
-      let num_ventas_efectivo = 0, num_ventas_transferencia = 0;
-      const saleIds = new Set();
-      for (const v of ventasCaja) {
-        const monto = parseFloat(v.total_amount || 0);
-        if (v.payment_type === 'cash') {
-          total_efectivo += monto; num_ventas_efectivo++;
-        } else {
-          total_transferencia += monto; num_ventas_transferencia++;
-        }
-        const sid = v.sale_id || v.id;
-        saleIds.add(String(sid));
-      }
-      const total_ventas        = total_efectivo + total_transferencia;
-      const total_transacciones = ventasCaja.length;
-      const monto_esperado      = (parseFloat(monto_inicial) || 0) + total_efectivo - (parseFloat(total_retiros) || 0);
-
-      // ── Productos vendidos: cruzar ventas_por_dia por num_venta ──
-      // Solo cargamos los items necesarios para no traer 5000 docs si hay otra caja.
-      // Si no hay ventas, salteamos esta query.
-      const productosMap = {};
-      if (saleIds.size > 0 && saleIds.size <= 500) {
-        try {
-          const itemsSnap = await getDocs(query(
-            collection(db, 'ventas_por_dia'),
-            orderBy('num_venta', 'desc'),
-            limit(2000)
-          ));
-          for (const d of itemsSnap.docs) {
-            const it = d.data();
-            if (it.deleted === true) continue;
-            const nv = String(it.num_venta);
-            if (!saleIds.has(nv)) continue;
-            const nombre = (it.producto || it.product_name || '').trim();
-            if (!nombre) continue;
-            if (!productosMap[nombre]) productosMap[nombre] = { product_name: nombre, total_quantity: 0, total_amount: 0 };
-            productosMap[nombre].total_quantity += Number(it.cantidad || it.quantity || 0);
-            productosMap[nombre].total_amount   += Number(it.subtotal || 0);
-          }
-        } catch (_) { /* si falla, dejamos productos_vendidos vacío */ }
-      }
-      const productos_vendidos = Object.values(productosMap)
-        .sort((a, b) => b.total_amount - a.total_amount);
-
-      // ── 2. Escribir cierres_caja/{id} con TODOS los stats calculados ──
-      await setDoc(doc(db, 'cierres_caja', String(registerId)), {
-        register_id:               Number(registerId),
-        fecha_cierre:              nowTs,
-        session_id:                sessionId,
-        pendiente_conteo:          true,
-        monto_final:               0,
-        monto_inicial:             Number(monto_inicial) || 0,
-        monto_esperado:            monto_esperado,
-        total_ventas:              total_ventas,
-        total_efectivo:            total_efectivo,
-        total_transferencia:       total_transferencia,
-        total_transacciones:       total_transacciones,
-        num_ventas_efectivo:       num_ventas_efectivo,
-        num_ventas_transferencia:  num_ventas_transferencia,
-        total_retiros:             Number(total_retiros) || 0,
-        retiros:                   retiros || [],
-        productos_vendidos:        productos_vendidos,
-        cajero:                    cajero || '',
-        cerrado_desde:             'web',
-        updated_at:                nowIso,
-      }, { merge: true });
-
-      // ── 3. Marcar caja_activa/current como cerrada → dispara listeners desktop ──
-      // Las PCs que tengan la caja abierta local también van a recalcular y mergear,
-      // pero los stats principales ya están escritos por la web.
+      // 2. Marcar caja_activa/current como cerrada → dispara listeners desktop.
+      //    Las PCs con la caja abierta local también van a mergear su reporte,
+      //    pero los stats principales ya están escritos por la web.
       await setDoc(doc(db, 'caja_activa', 'current'), {
         status:      'closed',
         id:          Number(registerId),
@@ -557,6 +480,86 @@ function openCerrarCajaModal(db, ctx, onDone) {
       alert('Error al cerrar caja: ' + (e?.message || e));
     }
   });
+}
+
+// ─── Helper: calcular stats desde ventas + ventas_por_dia y mergear ───────
+// Usado al cerrar caja desde web Y al recalcular un cierre con stats vacíos.
+// extras: campos extra a mergear al doc (fecha_cierre, pendiente_conteo, etc.)
+async function calcularYMergearStatsCaja(db, registerId, extras = {}) {
+  // ── Ventas filtradas por cash_register_id ──
+  // 500 docs cubren turnos largos sin paginar. Si una caja gigantesca necesita
+  // más, habría que paginar — caso raro en operación normal.
+  const ventasSnap = await getDocs(query(
+    collection(db, 'ventas'),
+    orderBy('created_at', 'desc'),
+    limit(500)
+  ));
+  const ventasCaja = ventasSnap.docs
+    .map(d => ({ id: d.id, ...d.data() }))
+    .filter(v => {
+      if (v.deleted === true) return false;
+      if (isVentaVarios2(v)) return false;
+      const reg = v.cash_register_id != null ? String(v.cash_register_id) : '';
+      return reg === String(registerId);
+    });
+
+  let total_efectivo = 0, total_transferencia = 0;
+  let num_ventas_efectivo = 0, num_ventas_transferencia = 0;
+  const saleIds = new Set();
+  for (const v of ventasCaja) {
+    const monto = parseFloat(v.total_amount || 0);
+    if (v.payment_type === 'cash') { total_efectivo += monto; num_ventas_efectivo++; }
+    else                            { total_transferencia += monto; num_ventas_transferencia++; }
+    saleIds.add(String(v.sale_id || v.id));
+  }
+  const total_ventas        = total_efectivo + total_transferencia;
+  const total_transacciones = ventasCaja.length;
+  const monto_inicial = Number(extras.monto_inicial) || 0;
+  const total_retiros = Number(extras.total_retiros) || 0;
+  const monto_esperado = monto_inicial + total_efectivo - total_retiros;
+
+  // ── Productos vendidos: cruzar ventas_por_dia por num_venta ──
+  const productosMap = {};
+  if (saleIds.size > 0) {
+    try {
+      const itemsSnap = await getDocs(query(
+        collection(db, 'ventas_por_dia'),
+        orderBy('num_venta', 'desc'),
+        limit(2000)
+      ));
+      for (const d of itemsSnap.docs) {
+        const it = d.data();
+        if (it.deleted === true) continue;
+        if (!saleIds.has(String(it.num_venta))) continue;
+        const nombre = (it.producto || it.product_name || '').trim();
+        if (!nombre) continue;
+        if (!productosMap[nombre]) productosMap[nombre] = { product_name: nombre, total_quantity: 0, total_amount: 0 };
+        productosMap[nombre].total_quantity += Number(it.cantidad || it.quantity || 0);
+        productosMap[nombre].total_amount   += Number(it.subtotal || 0);
+      }
+    } catch (_) { /* si falla, productos_vendidos queda vacío */ }
+  }
+  const productos_vendidos = Object.values(productosMap).sort((a, b) => b.total_amount - a.total_amount);
+
+  // Mergear todos los campos calculados + cualquier extra que vino del caller
+  await setDoc(doc(db, 'cierres_caja', String(registerId)), {
+    register_id:               Number(registerId),
+    monto_inicial:             monto_inicial,
+    monto_esperado:            monto_esperado,
+    total_ventas:              total_ventas,
+    total_efectivo:            total_efectivo,
+    total_transferencia:       total_transferencia,
+    total_transacciones:       total_transacciones,
+    num_ventas_efectivo:       num_ventas_efectivo,
+    num_ventas_transferencia:  num_ventas_transferencia,
+    total_retiros:             total_retiros,
+    retiros:                   extras.retiros || [],
+    productos_vendidos:        productos_vendidos,
+    cajero:                    extras.cajero || '',
+    ...extras,
+  }, { merge: true });
+
+  return { total_ventas, total_efectivo, total_transferencia, total_transacciones };
 }
 
 // ─── Modal: Abrir caja desde web ──────────────────────────────────────────
@@ -842,12 +845,18 @@ function openCierreModal(c, catByName, gastosAll, db, onSaved) {
               <span class="material-icons" style="color:#b45309">pending_actions</span>
               <div>
                 <div style="font-size:13px;font-weight:800;color:#92400e">Cierre pendiente de conteo</div>
-                <div style="font-size:11px;color:#a16207;margin-top:2px">Cargá el efectivo real contado para finalizar el cierre.</div>
+                <div style="font-size:11px;color:#a16207;margin-top:2px">${total === 0 ? 'Stats vacíos: recalculá desde ventas y después cargá el efectivo contado.' : 'Cargá el efectivo real contado para finalizar el cierre.'}</div>
               </div>
             </div>
-            <button id="btn-cargar-conteo" style="background:#d97706;color:white;border:none;border-radius:8px;padding:9px 16px;font-weight:700;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:6px">
-              <span class="material-icons" style="font-size:16px">payments</span>Cargar efectivo contado
-            </button>
+            <div style="display:flex;gap:6px;flex-wrap:wrap">
+              ${total === 0 ? `
+              <button id="btn-recalc-stats" style="background:#475569;color:white;border:none;border-radius:8px;padding:9px 14px;font-weight:700;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:6px">
+                <span class="material-icons" style="font-size:16px">calculate</span>Recalcular stats
+              </button>` : ''}
+              <button id="btn-cargar-conteo" style="background:#d97706;color:white;border:none;border-radius:8px;padding:9px 16px;font-weight:700;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:6px">
+                <span class="material-icons" style="font-size:16px">payments</span>Cargar efectivo contado
+              </button>
+            </div>
           </div>
           <div id="conteo-form" style="display:none;margin-top:12px;padding-top:12px;border-top:1px dashed #f59e0b">
             <div style="display:flex;gap:8px;align-items:end;flex-wrap:wrap">
@@ -1116,6 +1125,40 @@ function openCierreModal(c, catByName, gastosAll, db, onSaved) {
     };
     btnGuardar.addEventListener('click', guardar);
     inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') guardar(); });
+  }
+
+  // Wire-up: recalcular stats (solo si total_ventas == 0 y pendiente_conteo)
+  const btnRecalc = overlay.querySelector('#btn-recalc-stats');
+  if (btnRecalc && db) {
+    btnRecalc.addEventListener('click', async () => {
+      if (!confirm('Esto va a recalcular ingreso, transferencia, transacciones y productos vendidos desde la colección ventas. ¿Continuar?')) return;
+      btnRecalc.disabled = true;
+      btnRecalc.innerHTML = '<span class="material-icons" style="font-size:16px">hourglass_empty</span>Recalculando...';
+      try {
+        // El register_id puede venir en c.register_id o en algun doc del session.
+        // Para sesiones agrupadas tomamos el primer doc con register_id.
+        const docCierre = (c._docs || []).find(d => d.register_id != null) || c;
+        const regId = docCierre.register_id;
+        if (!regId) throw new Error('No se encontró register_id en este cierre.');
+        const result = await calcularYMergearStatsCaja(db, regId, {
+          monto_inicial: docCierre.monto_inicial || 0,
+          cajero:        docCierre.cajero || '',
+          retiros:       docCierre.retiros || [],
+          total_retiros: docCierre.total_retiros || 0,
+          updated_at:    new Date().toISOString(),
+        });
+        invalidateCache('cierres:caja');
+        overlay.remove();
+        if (typeof onSaved === 'function') onSaved();
+        setTimeout(() => {
+          alert(`Stats recalculados: $${fmt(result.total_ventas)} en ${result.total_transacciones} ventas.`);
+        }, 200);
+      } catch (e) {
+        btnRecalc.disabled = false;
+        btnRecalc.innerHTML = '<span class="material-icons" style="font-size:16px">calculate</span>Recalcular stats';
+        alert('Error al recalcular: ' + (e?.message || e));
+      }
+    });
   }
 }
 
