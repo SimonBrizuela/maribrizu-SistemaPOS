@@ -445,13 +445,55 @@ class MainWindow(QMainWindow):
 
             # Si hay una caja abierta localmente, asegurarse de que Firebase la tenga.
             # Cubre el caso donde sync_open_register falló la vez anterior (red caída, etc.)
+            #
+            # IMPORTANTE: si la caja remota está EXPLÍCITAMENTE cerrada (status='closed')
+            # con el mismo id que la local, NO re-pushear como abierta — esto pasaría si la
+            # caja se cerró desde la web mientras esta PC estaba offline. En ese caso
+            # cerrar la caja local para reflejar el estado autorizado en Firebase.
             def _push_local_register_if_needed():
                 try:
                     local_reg = self.cash_register.get_current()
                     if not local_reg:
                         return
-                    remote = fb.get_active_register()
-                    if not remote or remote.get('id') != local_reg.get('id'):
+                    # Leer el doc raw (no get_active_register, que filtra por status='open')
+                    try:
+                        doc_snap = fb.db.collection('caja_activa').document('current').get()
+                        remote_doc = doc_snap.to_dict() if doc_snap.exists else None
+                    except Exception:
+                        remote_doc = None
+                    remote_status = (remote_doc or {}).get('status')
+                    remote_id = (remote_doc or {}).get('id') or (remote_doc or {}).get('register_id')
+
+                    # Caso A: remoto está cerrado con el mismo id → la cerraron desde otra
+                    # parte (web u otra PC) mientras esta PC estaba offline. Cerrar local.
+                    if remote_status == 'closed' and remote_id and int(remote_id) == int(local_reg['id']):
+                        from pos_system.utils.firebase_sync import now_ar as _now_ar
+                        self.db.execute_update(
+                            "UPDATE cash_register SET status='closed', closing_date=?, notes=? WHERE id=?",
+                            (_now_ar().isoformat(), 'Cerrado remotamente (offline)', local_reg['id'])
+                        )
+                        logger.info(f"Startup: Caja #{local_reg['id']} cerrada remotamente — actualizada en SQLite local.")
+                        # Re-mergear el reporte de cierre con datos locales
+                        try:
+                            from pos_system.models.cash_register import CashRegister as _CR
+                            rep = _CR(self.db).get_closing_report(local_reg['id'])
+                            sid = (remote_doc or {}).get('session_id') or _now_ar().strftime('%Y-%m-%d')
+                            rep['session_id'] = sid
+                            fb.sync_cash_closing(rep, session_id=sid)
+                            logger.info(f"Startup: Reporte de cierre #{local_reg['id']} mergeado a Firestore.")
+                        except Exception as e2:
+                            logger.error(f"Startup: Error mergeando reporte de cierre: {e2}")
+                        # Refrescar UI para que vea el cierre — desde main thread
+                        try:
+                            from PyQt5.QtCore import QTimer
+                            QTimer.singleShot(0, self.refresh_all_views)
+                        except Exception:
+                            pass
+                        return
+
+                    # Caso B: remoto vacío / sin id / id distinto → re-sincronizar como abierta
+                    # (cubre el caso original: sync_open_register falló y hay que reintentar)
+                    if not remote_doc or not remote_id or int(remote_id) != int(local_reg['id']):
                         reg_with_cajero = dict(local_reg)
                         reg_with_cajero['cajero'] = (
                             self.current_user.get('turno_nombre')
