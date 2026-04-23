@@ -491,9 +491,9 @@ class MainWindow(QMainWindow):
                             pass
                         return
 
-                    # Caso B: remoto vacío / sin id / id distinto → re-sincronizar como abierta
+                    # Caso B: remoto vacío o sin id → re-sincronizar como abierta
                     # (cubre el caso original: sync_open_register falló y hay que reintentar)
-                    if not remote_doc or not remote_id or int(remote_id) != int(local_reg['id']):
+                    if not remote_doc or not remote_id:
                         reg_with_cajero = dict(local_reg)
                         reg_with_cajero['cajero'] = (
                             self.current_user.get('turno_nombre')
@@ -502,6 +502,29 @@ class MainWindow(QMainWindow):
                         )
                         fb.sync_open_register(reg_with_cajero)
                         logger.info(f"Startup: Caja local #{local_reg['id']} re-sincronizada a Firebase.")
+                        return
+
+                    # Caso C: remoto abierto con OTRO id → otra caja ya se abrió (web
+                    # u otra PC). Adoptar la remota: cerrar la local vieja y dejar que
+                    # el listener de caja_activa abra la nueva localmente.
+                    if remote_status == 'open' and int(remote_id) != int(local_reg['id']):
+                        from pos_system.utils.firebase_sync import now_ar as _now_ar
+                        self.db.execute_update(
+                            "UPDATE cash_register SET status='closed', closing_date=?, notes=? WHERE id=?",
+                            (_now_ar().isoformat(),
+                             f'Cerrada en startup: remoto ya tenia #{remote_id} abierta',
+                             local_reg['id'])
+                        )
+                        logger.info(
+                            f"Startup: Caja local #{local_reg['id']} cerrada — "
+                            f"remoto tiene #{remote_id} abierta (nueva fuente de verdad)."
+                        )
+                        try:
+                            from PyQt5.QtCore import QTimer
+                            QTimer.singleShot(0, self.refresh_all_views)
+                        except Exception:
+                            pass
+                        return
                 except Exception as e:
                     logger.warning(f"Startup: No se pudo verificar caja en Firebase: {e}")
             threading.Thread(target=_push_local_register_if_needed, daemon=True).start()
