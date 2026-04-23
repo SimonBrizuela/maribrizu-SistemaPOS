@@ -323,6 +323,16 @@ async function refreshDatos(container, db, periodo, config) {
   // ── Banners de alerta: costos faltantes + pérdidas ──
   renderAlertas(container, db, mapaSinCosto, mapaPerdida, itemsSinCosto, montoPerdida, ingresoSinCosto, () => refreshDatos(container, db, periodo, config));
 
+  // ── Lista Ganancia (día/mes) — usa TODAS las ventas del cache, no el período del toolbar ──
+  // Filtramos solo eliminadas + Varios2; respeta fecha_inicio global.
+  const ventasParaLista = ventas.filter(v => {
+    if (v.deleted === true) return false;
+    if (isVentaVarios2(v)) return false;
+    const f = parseArDate(v.created_at);
+    return f >= fechaInicio;
+  });
+  renderListaGanancia(container, ventasParaLista, itemsMap, catalogoPorNombre);
+
   // ── Lista de gastos ──
   const gastosEl = container.querySelector('#ct-gastos-lista');
   if (gastosEl) {
@@ -850,6 +860,342 @@ function setupConfigCuentas(container, db, config) {
   });
 }
 
+// ── Lista Ganancia: agrega por día y por mes ──────────────────────────────────
+// Calcula ingreso, CMV y ganancia bruta por fecha. Click en una fila abre un
+// modal con el "detalle" (mejor producto, mejor categoría, hora pico, etc).
+// Los items VARIOS no tienen costo cargado → no contribuyen al CMV ni a la
+// ganancia bruta (se cuentan en ingreso total pero quedan marcados como s/c).
+function renderListaGanancia(container, ventas, itemsMap, catalogoPorNombre) {
+  const el = container.querySelector('#ct-ganancia-lista');
+  if (!el) return;
+
+  // ── Agregación por día (YYYY-MM-DD en zona AR) ──
+  const porDia = {};   // { '2026-04-23': {fecha, ingreso, cmv, ventas:[], items:[]} }
+  for (const v of ventas) {
+    const f = parseArDate(v.created_at);
+    if (isNaN(f)) continue;
+    const key = f.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+    if (!porDia[key]) porDia[key] = { fecha: key, ingreso: 0, cmv: 0, ingresoConCosto: 0, ventas: [], items: [] };
+    const d = porDia[key];
+    d.ingreso += (v.total_amount || 0);
+    d.ventas.push(v);
+
+    const saleId = v.sale_id || v.id;
+    const itemKey = v.pc_id ? `${v.pc_id}_${saleId}` : String(saleId);
+    const items = itemsMap[itemKey] || [];
+    for (const it of items) {
+      const cat = catalogoPorNombre[it.nombre];
+      const costoUnit = cat?.costo || 0;
+      const ingresoItem = it.subtotal || (it.precio_unitario * it.cantidad) || 0;
+      if (costoUnit > 0) {
+        d.cmv += costoUnit * it.cantidad;
+        d.ingresoConCosto += ingresoItem;
+      }
+      d.items.push({ ...it, costoUnit, categoria: cat?.categoria || null, hora: f.getHours() });
+    }
+  }
+  const dias = Object.values(porDia).sort((a, b) => b.fecha.localeCompare(a.fecha));
+
+  // ── Agregación por mes (YYYY-MM) ──
+  const porMes = {};
+  for (const d of dias) {
+    const k = d.fecha.slice(0, 7);
+    if (!porMes[k]) porMes[k] = { mes: k, ingreso: 0, cmv: 0, ingresoConCosto: 0, ventas: [], items: [], dias: [] };
+    porMes[k].ingreso         += d.ingreso;
+    porMes[k].cmv             += d.cmv;
+    porMes[k].ingresoConCosto += d.ingresoConCosto;
+    porMes[k].ventas.push(...d.ventas);
+    porMes[k].items.push(...d.items);
+    porMes[k].dias.push(d);
+  }
+  const meses = Object.values(porMes).sort((a, b) => b.mes.localeCompare(a.mes));
+
+  // Estado de la vista (día/mes) — persistido en localStorage
+  let vista = localStorage.getItem('ct:lg_vista') || 'dia';
+  const renderTabla = () => {
+    const data = vista === 'mes' ? meses : dias;
+    if (!data.length) {
+      el.innerHTML = `<div class="empty-state" style="padding:32px"><span class="material-icons">insights</span><p>Sin ventas en el rango configurado.</p></div>`;
+      return;
+    }
+
+    el.innerHTML = `
+      <div style="overflow-x:auto">
+        <table class="ct-costos-table" style="margin-top:6px">
+          <thead><tr>
+            <th>${vista === 'mes' ? 'Mes' : 'Día'}</th>
+            <th style="text-align:right">Ingreso</th>
+            <th style="text-align:right">CMV</th>
+            <th style="text-align:right">Ganancia bruta</th>
+            <th style="text-align:right">Margen</th>
+            <th style="text-align:right">Ventas</th>
+            <th style="text-align:center">Detalle</th>
+          </tr></thead>
+          <tbody>
+            ${data.map((row, i) => {
+              const ganancia = row.ingresoConCosto - row.cmv;
+              const margen = row.ingresoConCosto > 0 ? Math.round((ganancia / row.ingresoConCosto) * 100) : 0;
+              const labelFecha = vista === 'mes' ? formatMes(row.mes) : formatDia(row.fecha);
+              return `
+                <tr class="ct-lg-row" data-idx="${i}" style="cursor:pointer">
+                  <td><b style="font-size:13px">${labelFecha}</b></td>
+                  <td style="text-align:right;font-weight:600">$${fmt(row.ingreso)}</td>
+                  <td style="text-align:right;color:#e65100">$${fmt(row.cmv)}</td>
+                  <td style="text-align:right;font-weight:700;color:${ganancia>=0?'#00695c':'#c62828'}">$${fmt(ganancia)}</td>
+                  <td style="text-align:right;color:${margen>=0?'#00695c':'#c62828'}">${margen}%</td>
+                  <td style="text-align:right;color:#65676b">${row.ventas.length}</td>
+                  <td style="text-align:center"><span class="material-icons" style="font-size:18px;color:#65676b">chevron_right</span></td>
+                </tr>
+              `;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+
+    el.querySelectorAll('.ct-lg-row').forEach(tr => {
+      tr.addEventListener('click', () => {
+        const idx = parseInt(tr.dataset.idx);
+        abrirDetalleGanancia(data[idx], vista);
+      });
+      tr.addEventListener('mouseenter', () => tr.style.background = '#f7f8fa');
+      tr.addEventListener('mouseleave', () => tr.style.background = '');
+    });
+  };
+
+  // Tabs
+  container.querySelectorAll('.ct-lg-tab').forEach(btn => {
+    btn.onclick = () => {
+      vista = btn.dataset.vista;
+      localStorage.setItem('ct:lg_vista', vista);
+      container.querySelectorAll('.ct-lg-tab').forEach(b => {
+        const active = b.dataset.vista === vista;
+        b.classList.toggle('active', active);
+        b.style.background = active ? '#fff' : 'transparent';
+        b.style.color      = active ? '#1c1e21' : '#65676b';
+        b.style.fontWeight = active ? '700' : '600';
+        b.style.boxShadow  = active ? '0 1px 2px rgba(0,0,0,0.05)' : 'none';
+      });
+      renderTabla();
+    };
+  });
+
+  renderTabla();
+}
+
+function formatDia(yyyymmdd) {
+  // 2026-04-23 → "Jue 23/04/2026"
+  const [y, m, d] = yyyymmdd.split('-').map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  const dia = dt.toLocaleDateString('es-AR', { weekday: 'short', timeZone: 'UTC' });
+  return `${dia.charAt(0).toUpperCase() + dia.slice(1, 3)} ${String(d).padStart(2,'0')}/${String(m).padStart(2,'0')}/${y}`;
+}
+
+function formatMes(yyyymm) {
+  const [y, m] = yyyymm.split('-').map(Number);
+  const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  return `${meses[m-1]} ${y}`;
+}
+
+// ── Modal: detalle de un día/mes (lo mejor del período) ───────────────────────
+function abrirDetalleGanancia(row, vista) {
+  const titulo  = vista === 'mes' ? formatMes(row.mes) : formatDia(row.fecha);
+  const ganancia = row.ingresoConCosto - row.cmv;
+  const margen   = row.ingresoConCosto > 0 ? (ganancia / row.ingresoConCosto) * 100 : 0;
+
+  // Agregación de items: por nombre, cantidad y ingreso total
+  const porProducto = {};
+  const porCategoria = {};
+  let itemsConCosto = 0, itemsSinCosto = 0;
+  for (const it of row.items) {
+    const nombre = it.nombre || '(sin nombre)';
+    if (!porProducto[nombre]) {
+      porProducto[nombre] = { nombre, cantidad: 0, ingreso: 0, cmv: 0, costoUnit: it.costoUnit, categoria: it.categoria };
+    }
+    porProducto[nombre].cantidad += it.cantidad;
+    porProducto[nombre].ingreso  += (it.subtotal || it.precio_unitario * it.cantidad || 0);
+    if (it.costoUnit > 0) {
+      porProducto[nombre].cmv += it.costoUnit * it.cantidad;
+      itemsConCosto++;
+    } else {
+      itemsSinCosto++;
+    }
+    const cat = it.categoria || 'Sin categoría';
+    if (!porCategoria[cat]) porCategoria[cat] = { nombre: cat, ingreso: 0, cantidad: 0 };
+    porCategoria[cat].ingreso  += (it.subtotal || it.precio_unitario * it.cantidad || 0);
+    porCategoria[cat].cantidad += it.cantidad;
+  }
+  const productos = Object.values(porProducto).map(p => ({
+    ...p, ganancia: p.cmv > 0 ? p.ingreso - p.cmv : null,
+  }));
+  const top5Ingreso  = [...productos].sort((a, b) => b.ingreso - a.ingreso).slice(0, 5);
+  const top5Cantidad = [...productos].sort((a, b) => b.cantidad - a.cantidad).slice(0, 5);
+  const top5Ganancia = productos.filter(p => p.ganancia != null).sort((a, b) => b.ganancia - a.ganancia).slice(0, 5);
+  const topCategorias = Object.values(porCategoria).sort((a, b) => b.ingreso - a.ingreso).slice(0, 3);
+
+  // Hora pico (solo en vista por día) — agrupar ventas por hora
+  let horaPico = null;
+  if (vista !== 'mes') {
+    const porHora = {};
+    for (const v of row.ventas) {
+      const f = parseArDate(v.created_at);
+      if (isNaN(f)) continue;
+      const h = f.getHours();
+      if (!porHora[h]) porHora[h] = { hora: h, ventas: 0, ingreso: 0 };
+      porHora[h].ventas++;
+      porHora[h].ingreso += (v.total_amount || 0);
+    }
+    horaPico = Object.values(porHora).sort((a, b) => b.ingreso - a.ingreso)[0];
+  }
+
+  // Mejor venta individual
+  const mejorVenta = [...row.ventas].sort((a, b) => (b.total_amount || 0) - (a.total_amount || 0))[0];
+  const ticketProm = row.ventas.length > 0 ? row.ingreso / row.ventas.length : 0;
+  const ventasEfectivo  = row.ventas.filter(v => v.payment_type === 'cash').length;
+  const ventasTransfer  = row.ventas.length - ventasEfectivo;
+
+  // Mejor día (solo en vista por mes)
+  let mejorDia = null;
+  if (vista === 'mes' && row.dias) {
+    mejorDia = [...row.dias].map(d => ({
+      ...d,
+      ganancia: d.ingresoConCosto - d.cmv,
+    })).sort((a, b) => b.ganancia - a.ganancia)[0];
+  }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'ct-modal-overlay';
+  overlay.innerHTML = `
+    <div class="ct-modal" role="dialog" style="max-width:780px">
+      <div class="ct-modal-header">
+        <span class="material-icons" style="color:#00695c">insights</span>
+        <h3>${vista === 'mes' ? 'Mes:' : ''} ${titulo}</h3>
+        <button class="ct-modal-close" title="Cerrar"><span class="material-icons">close</span></button>
+      </div>
+
+      <div class="ct-modal-desc">
+        <b style="color:${ganancia>=0?'#00695c':'#c62828'}">$${fmt(ganancia)}</b> de ganancia bruta
+        (${Math.round(margen)}% margen) sobre <b>$${fmt(row.ingreso)}</b> en ventas.
+      </div>
+
+      <div class="ct-modal-body">
+
+        <!-- KPIs principales -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px">
+          <div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">Ingreso total</span><b style="color:#1877f2">$${fmt(row.ingreso)}</b></div>
+          <div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">CMV</span><b style="color:#e65100">$${fmt(row.cmv)}</b></div>
+          <div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">Ganancia bruta</span><b style="color:${ganancia>=0?'#00695c':'#c62828'}">$${fmt(ganancia)}</b></div>
+          <div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">Margen</span><b style="color:${margen>=0?'#00695c':'#c62828'}">${Math.round(margen)}%</b></div>
+          <div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">Ventas</span><b>${row.ventas.length}</b></div>
+          <div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">Ticket prom.</span><b>$${fmt(ticketProm)}</b></div>
+        </div>
+
+        <!-- Highlights -->
+        <div style="background:#f7f8fa;border-radius:10px;padding:14px;margin-bottom:16px">
+          <div style="font-size:12px;font-weight:700;color:#1c1e21;margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px">Lo mejor del ${vista === 'mes' ? 'mes' : 'día'}</div>
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
+            ${top5Ingreso[0] ? `
+            <div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:3px solid #fbbf24">
+              <div style="font-size:10px;color:#65676b;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Top en ingreso</div>
+              <div style="font-size:13px;font-weight:700;color:#1c1e21;margin-top:2px">${escapeHtmlCt(top5Ingreso[0].nombre)}</div>
+              <div style="font-size:11px;color:#475569;margin-top:2px">$${fmt(top5Ingreso[0].ingreso)} · ${top5Ingreso[0].cantidad} u.</div>
+            </div>` : ''}
+            ${top5Cantidad[0] ? `
+            <div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:3px solid #94a3b8">
+              <div style="font-size:10px;color:#65676b;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Más vendido (unidades)</div>
+              <div style="font-size:13px;font-weight:700;color:#1c1e21;margin-top:2px">${escapeHtmlCt(top5Cantidad[0].nombre)}</div>
+              <div style="font-size:11px;color:#475569;margin-top:2px">${top5Cantidad[0].cantidad} u. · $${fmt(top5Cantidad[0].ingreso)}</div>
+            </div>` : ''}
+            ${top5Ganancia[0] ? `
+            <div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:3px solid #00695c">
+              <div style="font-size:10px;color:#65676b;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Mayor ganancia</div>
+              <div style="font-size:13px;font-weight:700;color:#1c1e21;margin-top:2px">${escapeHtmlCt(top5Ganancia[0].nombre)}</div>
+              <div style="font-size:11px;color:#475569;margin-top:2px">$${fmt(top5Ganancia[0].ganancia)} de ganancia</div>
+            </div>` : ''}
+            ${topCategorias[0] ? `
+            <div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:3px solid #6a1b9a">
+              <div style="font-size:10px;color:#65676b;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Mejor categoría</div>
+              <div style="font-size:13px;font-weight:700;color:#1c1e21;margin-top:2px">${escapeHtmlCt(topCategorias[0].nombre)}</div>
+              <div style="font-size:11px;color:#475569;margin-top:2px">$${fmt(topCategorias[0].ingreso)} · ${topCategorias[0].cantidad} u.</div>
+            </div>` : ''}
+            ${horaPico ? `
+            <div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:3px solid #1877f2">
+              <div style="font-size:10px;color:#65676b;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Hora pico</div>
+              <div style="font-size:13px;font-weight:700;color:#1c1e21;margin-top:2px">${String(horaPico.hora).padStart(2,'0')}:00 — ${String(horaPico.hora+1).padStart(2,'0')}:00</div>
+              <div style="font-size:11px;color:#475569;margin-top:2px">${horaPico.ventas} ventas · $${fmt(horaPico.ingreso)}</div>
+            </div>` : ''}
+            ${mejorVenta ? `
+            <div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:3px solid #c62828">
+              <div style="font-size:10px;color:#65676b;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Mejor venta</div>
+              <div style="font-size:13px;font-weight:700;color:#1c1e21;margin-top:2px">$${fmt(mejorVenta.total_amount)}</div>
+              <div style="font-size:11px;color:#475569;margin-top:2px">${mejorVenta.payment_type === 'cash' ? 'Efectivo' : 'Transferencia'}${mejorVenta.username ? ' · ' + escapeHtmlCt(mejorVenta.username) : ''}</div>
+            </div>` : ''}
+            ${mejorDia ? `
+            <div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:3px solid #fbbf24">
+              <div style="font-size:10px;color:#65676b;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Mejor día del mes</div>
+              <div style="font-size:13px;font-weight:700;color:#1c1e21;margin-top:2px">${formatDia(mejorDia.fecha)}</div>
+              <div style="font-size:11px;color:#475569;margin-top:2px">$${fmt(mejorDia.ganancia)} de ganancia</div>
+            </div>` : ''}
+            <div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:3px solid #94a3b8">
+              <div style="font-size:10px;color:#65676b;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Mix de pago</div>
+              <div style="font-size:13px;font-weight:700;color:#1c1e21;margin-top:2px">${ventasEfectivo} ef · ${ventasTransfer} tr</div>
+              <div style="font-size:11px;color:#475569;margin-top:2px">${row.ventas.length > 0 ? Math.round(ventasEfectivo / row.ventas.length * 100) : 0}% efectivo</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Top 5 productos por ingreso -->
+        ${top5Ingreso.length > 0 ? `
+        <div style="margin-bottom:16px">
+          <div style="font-size:12px;font-weight:700;color:#1c1e21;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Top 5 productos por ingreso</div>
+          <table class="ct-costos-table">
+            <thead><tr>
+              <th>Producto</th>
+              <th style="text-align:right">Cant.</th>
+              <th style="text-align:right">Ingreso</th>
+              <th style="text-align:right">Costo</th>
+              <th style="text-align:right">Ganancia</th>
+            </tr></thead>
+            <tbody>
+              ${top5Ingreso.map(p => `
+                <tr>
+                  <td><b style="font-size:13px">${escapeHtmlCt(p.nombre)}</b></td>
+                  <td style="text-align:right">${p.cantidad}</td>
+                  <td style="text-align:right;font-weight:700">$${fmt(p.ingreso)}</td>
+                  <td style="text-align:right;color:${p.cmv>0?'#e65100':'#94a3b8'}">${p.cmv>0?'$'+fmt(p.cmv):'s/c'}</td>
+                  <td style="text-align:right;font-weight:700;color:${p.ganancia==null?'#94a3b8':(p.ganancia>=0?'#00695c':'#c62828')}">${p.ganancia==null?'—':'$'+fmt(p.ganancia)}</td>
+                </tr>
+              `).join('')}
+            </tbody>
+          </table>
+        </div>` : ''}
+
+        ${itemsSinCosto > 0 ? `
+        <div style="background:#fff8e1;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;display:flex;align-items:center;gap:8px;font-size:12px;color:#92400e">
+          <span class="material-icons" style="font-size:16px;color:#d97706">warning</span>
+          <span><b>${itemsSinCosto}</b> items sin costo cargado en este ${vista === 'mes' ? 'mes' : 'día'}. La ganancia bruta no los incluye.</span>
+        </div>` : ''}
+
+      </div>
+      <div class="ct-modal-footer">
+        <button class="ct-btn-primary" id="ct-close-lg-detalle">Cerrar</button>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const closeModal = () => overlay.remove();
+  overlay.querySelector('.ct-modal-close').addEventListener('click', closeModal);
+  overlay.querySelector('#ct-close-lg-detalle').addEventListener('click', closeModal);
+  overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(); });
+}
+
+function escapeHtmlCt(s) {
+  return String(s || '').replace(/[&<>"']/g, c => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+  }[c]));
+}
+
 // ── Esqueleto HTML ────────────────────────────────────────────────────────────
 function buildSkeleton(periodo, config) {
   const c1 = config.cuenta1_nombre || 'Cuenta 1';
@@ -924,6 +1270,24 @@ function buildSkeleton(periodo, config) {
           Gastos anotados
         </div>
         <div id="ct-gastos-lista">
+          <div class="ct-loading"><div class="spinner" style="width:24px;height:24px;border-width:3px"></div></div>
+        </div>
+      </div>
+
+      <!-- Lista Ganancia: agregaciones por día / mes -->
+      <div class="ct-gastos-card" style="margin-top:16px">
+        <div class="ct-section-title" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+          <div>
+            <span class="material-icons" style="font-size:16px;vertical-align:middle">insights</span>
+            Lista de Ganancia
+            <span style="font-size:11px;color:#65676b;margin-left:8px;font-weight:400">Click en una fila para ver el detalle</span>
+          </div>
+          <div class="ct-lg-tabs" style="display:flex;gap:4px;background:#f0f2f5;padding:3px;border-radius:8px">
+            <button class="ct-lg-tab active" data-vista="dia" style="padding:5px 14px;border:none;background:#fff;border-radius:6px;font-weight:700;font-size:12px;cursor:pointer;color:#1c1e21;box-shadow:0 1px 2px rgba(0,0,0,0.05)">Por día</button>
+            <button class="ct-lg-tab" data-vista="mes" style="padding:5px 14px;border:none;background:transparent;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;color:#65676b">Por mes</button>
+          </div>
+        </div>
+        <div id="ct-ganancia-lista">
           <div class="ct-loading"><div class="spinner" style="width:24px;height:24px;border-width:3px"></div></div>
         </div>
       </div>

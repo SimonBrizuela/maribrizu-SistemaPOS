@@ -238,26 +238,30 @@ class Sale:
         
         return sale
     
-    def get_all(self, start_date: str = None, end_date: str = None, 
-                payment_type: str = None) -> List[Dict]:
-        """Obtiene todas las ventas con filtros opcionales"""
+    def get_all(self, start_date: str = None, end_date: str = None,
+                payment_type: str = None, limit: int = None) -> List[Dict]:
+        """Obtiene todas las ventas con filtros opcionales.
+        limit: si se pasa, corta el resultado (las ventas más recientes primero).
+        """
         query = "SELECT * FROM sales WHERE 1=1"
         params = []
-        
+
         if start_date:
             query += " AND created_at >= ?"
             params.append(start_date)
-        
+
         if end_date:
             query += " AND created_at <= ?"
             params.append(end_date)
-        
+
         if payment_type:
             query += " AND payment_type = ?"
             params.append(payment_type)
-        
+
         # Orden estable: desempate por id para ventas con el mismo timestamp.
         query += " ORDER BY created_at DESC, id DESC"
+        if limit and int(limit) > 0:
+            query += f" LIMIT {int(limit)}"
         return self.db.execute_query(query, tuple(params))
     
     def get_today_sales(self) -> List[Dict]:

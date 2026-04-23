@@ -2452,9 +2452,15 @@ class SalesView(QWidget):
                 pdf_path = None
                 # pdf_path = self.pdf_generator.generate_sale_ticket(sale)
 
-                # ── Persistir observaciones de items editadas desde el carrito ──
+                # ── Persistir observaciones de items (incluye VARIOS) ──
+                # Mira tanto 'observation' (items normales editados desde el carrito)
+                # como 'pending_observation' (items VARIOS creados via VariosItemDialog).
+                # Antes el VARIOS creaba su obs en _add_varios_item con sale_id=None →
+                # quedaba huerfana en Firestore. Ahora se crea acá con el sale_id real.
                 try:
-                    items_with_obs = [it for it in self.cart if (it.get('observation') or '').strip()]
+                    def _obs_text(it):
+                        return (it.get('observation') or it.get('pending_observation') or '').strip()
+                    items_with_obs = [it for it in self.cart if _obs_text(it)]
                     if items_with_obs:
                         from pos_system.models.observation import Observation
                         from pos_system.utils.firebase_sync import get_firebase_sync, now_ar, _get_pc_id
@@ -2465,7 +2471,13 @@ class SalesView(QWidget):
                         created_at = now_ar().strftime('%Y-%m-%d %H:%M:%S')
                         fb = get_firebase_sync()
                         for it in items_with_obs:
-                            text = f"[{it.get('product_name', 'Item')}] {it['observation'].strip()}"
+                            obs_raw = _obs_text(it)
+                            prefix = 'Varios' if it.get('is_varios') else (it.get('product_name', 'Item'))
+                            # Para items normales: "[Producto] obs". Para VARIOS: "[Varios] nombre: obs"
+                            if it.get('is_varios'):
+                                text = f"[Varios] {it.get('product_name', 'Item')}: {obs_raw}"
+                            else:
+                                text = f"[{prefix}] {obs_raw}"
                             obs_id = obs_model.create(
                                 text=text, context='sale',
                                 sale_id=sale_id, sale_item_id=None,
@@ -2609,37 +2621,9 @@ class SalesView(QWidget):
         }
         self.cart.append(cart_item)
         self.update_cart_display()
-
-        if obs_text:
-            try:
-                from pos_system.models.observation import Observation
-                from pos_system.utils.firebase_sync import get_firebase_sync, now_ar, _get_pc_id
-                obs = Observation(self.db)
-                u = self.current_user or {}
-                uname = u.get('full_name') or u.get('username') or 'Cajero'
-                pc = _get_pc_id()
-                created_at = now_ar().strftime('%Y-%m-%d %H:%M:%S')
-                obs_id = obs.create(
-                    text=f"[Varios] {name}: {obs_text}",
-                    context='sale',
-                    sale_id=None, sale_item_id=None,
-                    created_by_id=u.get('id'),
-                    created_by_name=str(uname), pc_id=pc
-                )
-                fb = get_firebase_sync()
-                if fb:
-                    fb.sync_observation(obs_id, {
-                        'text': f"[Varios] {name}: {obs_text}",
-                        'context': 'sale',
-                        'created_by_id': u.get('id'),
-                        'created_by_name': str(uname),
-                        'pc_id': pc,
-                        'created_at': created_at,
-                    }, db_manager=self.db)
-                cart_item['observation_local_id'] = obs_id
-            except Exception as _e:
-                import logging as _log
-                _log.getLogger(__name__).warning(f"No se pudo guardar observación Varios: {_e}")
+        # Nota: la observación NO se crea acá — quedaría con sale_id=None
+        # (huérfana). El linker en complete_sale() la persiste con el sale_id
+        # correcto leyendo it['pending_observation'].
 
     # ── Item "Varios 2" (SOLO factura AFIP, no afecta caja/ventas/historial) ──
     def _add_varios_2_item(self):

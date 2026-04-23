@@ -1,4 +1,4 @@
-import { collection, getDocs, query, orderBy, where, limit, doc, updateDoc } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, where, limit, doc, updateDoc, setDoc, getDoc, runTransaction, Timestamp } from 'firebase/firestore';
 import { getCached, invalidateCache } from '../cache.js';
 import { getFechaInicioDate, isVentaVarios2 } from '../config.js';
 
@@ -189,6 +189,18 @@ export async function renderCierres(container, db) {
     return hrs > 0 ? `${hrs}h ${min}m` : `${min}m`;
   }
 
+  // ID de la caja abierta (para cerrarla desde la web). Si hay varias PCs con
+  // distinto register_id (raro tras la migracion), tomamos el primero.
+  const cajaAbiertaId = cajaAbierta && cajasAbiertas.length > 0
+    ? (cajasAbiertas[0].register_id != null ? cajasAbiertas[0].register_id : null)
+    : null;
+  // Próximo register_id sugerido para apertura (max actual + 1).
+  const maxRegId = todos.reduce((m, c) => {
+    const r = parseInt(c.register_id);
+    return Number.isFinite(r) && r > m ? r : m;
+  }, 0);
+  const proximoRegId = maxRegId + 1;
+
   container.innerHTML = `
     ${cajaAbierta ? `
     <!-- CAJA ACTUALMENTE ABIERTA -->
@@ -197,11 +209,17 @@ export async function renderCierres(container, db) {
         <div style="display:flex;align-items:center;gap:12px">
           <div style="width:12px;height:12px;border-radius:50%;background:#34d399;box-shadow:0 0 0 3px rgba(52,211,153,0.3);animation:pulse 2s infinite"></div>
           <div>
-            <div style="font-size:16px;font-weight:800">Caja Abierta</div>
+            <div style="font-size:16px;font-weight:800">Caja Abierta${cajaAbiertaId != null ? ` #${cajaAbiertaId}` : ''}</div>
             <div style="font-size:12px;color:#6ee7b7;margin-top:2px">${cajaAbierta._pcs > 1 ? `${cajaAbierta._pcs} cajas activas · ` : `Cajero: ${cajaAbierta.cajero || 'Sin cajero'} · `}Abierta hace ${tiempoAbierto(cajaAbierta.fecha_apertura)}</div>
           </div>
         </div>
-        <div style="font-size:11px;color:#6ee7b7">Apertura: ${fmtDT(parseArDate(cajaAbierta.fecha_apertura))}</div>
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <div style="font-size:11px;color:#6ee7b7">Apertura: ${fmtDT(parseArDate(cajaAbierta.fecha_apertura))}</div>
+          ${cajaAbiertaId != null ? `
+          <button id="btn-cerrar-caja-web" style="background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.3);border-radius:8px;padding:8px 14px;font-weight:700;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:6px">
+            <span class="material-icons" style="font-size:16px">lock</span>Cerrar caja
+          </button>` : ''}
+        </div>
       </div>
 
       <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px;margin-top:16px">
@@ -263,9 +281,14 @@ export async function renderCierres(container, db) {
       </div>` : ''}
     </div>
     ` : `
-    <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;gap:10px">
-      <span class="material-icons" style="color:#2e7d32">lock</span>
-      <span style="font-size:14px;color:#166534;font-weight:600">No hay ninguna caja abierta en este momento.</span>
+    <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
+      <div style="display:flex;align-items:center;gap:10px">
+        <span class="material-icons" style="color:#2e7d32">lock</span>
+        <span style="font-size:14px;color:#166534;font-weight:600">No hay ninguna caja abierta. La próxima será la <b>#${proximoRegId}</b>.</span>
+      </div>
+      <button id="btn-abrir-caja-web" style="background:#15803d;color:#fff;border:none;border-radius:8px;padding:9px 16px;font-weight:700;font-size:13px;cursor:pointer;display:flex;align-items:center;gap:6px">
+        <span class="material-icons" style="font-size:16px">lock_open</span>Abrir caja #${proximoRegId}
+      </button>
     </div>
     `}
 
@@ -344,6 +367,252 @@ export async function renderCierres(container, db) {
     });
     row.addEventListener('mouseenter', () => row.style.background = 'var(--bg)');
     row.addEventListener('mouseleave', () => row.style.background = '');
+  });
+
+  // Botón cerrar caja desde web
+  const btnCerrarWeb = container.querySelector('#btn-cerrar-caja-web');
+  if (btnCerrarWeb && cajaAbiertaId != null) {
+    btnCerrarWeb.addEventListener('click', () => {
+      openCerrarCajaModal(db, cajaAbiertaId, () => {
+        invalidateCache('cierres:caja');
+        renderCierres(container, db);
+      });
+    });
+  }
+
+  // Botón abrir caja desde web
+  const btnAbrirWeb = container.querySelector('#btn-abrir-caja-web');
+  if (btnAbrirWeb) {
+    btnAbrirWeb.addEventListener('click', () => {
+      openAbrirCajaModal(db, proximoRegId, () => {
+        invalidateCache('cierres:caja');
+        renderCierres(container, db);
+      });
+    });
+  }
+}
+
+// ─── Modal: Cerrar caja desde web ─────────────────────────────────────────
+// Marca status='closed' en caja_activa/current y cierres_caja/{id}.
+// Las PCs detectan el cierre via listener y mergean su reporte (totales,
+// retiros, productos vendidos) al mismo doc cierres_caja/{id}.
+// Queda pendiente_conteo:true para que después una PC cargue el monto contado.
+function openCerrarCajaModal(db, registerId, onDone) {
+  document.querySelector('.modal-overlay')?.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal" style="max-width:480px">
+      <div class="modal-header" style="background:linear-gradient(135deg,#7c2d12,#9a3412);color:#fff;border-radius:12px 12px 0 0;padding:16px 22px;display:flex;justify-content:space-between;align-items:center">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="material-icons">lock</span>
+          <h3 style="color:#fff;margin:0;font-size:16px">Cerrar caja #${registerId}</h3>
+        </div>
+        <button class="modal-close" style="color:#fff;background:rgba(255,255,255,0.15);border-radius:8px;width:30px;height:30px;display:flex;align-items:center;justify-content:center"><span class="material-icons" style="font-size:18px">close</span></button>
+      </div>
+      <div class="modal-body" style="padding:20px 22px">
+        <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:10px;padding:12px 14px;margin-bottom:14px;display:flex;gap:10px">
+          <span class="material-icons" style="color:#b45309">info</span>
+          <div style="font-size:12.5px;color:#92400e;line-height:1.45">
+            Esto cerrará la caja en <b>todas las PCs conectadas</b>.
+            El cierre quedará marcado como <b>pendiente de conteo</b>: cargá luego el efectivo contado desde el detalle del cierre.
+          </div>
+        </div>
+        <div style="font-size:13px;color:#475569;margin-bottom:14px">¿Confirmás cerrar la caja <b>#${registerId}</b>?</div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button id="btn-cancel-cerrar" style="background:#e5e7eb;color:#374151;border:none;border-radius:8px;padding:10px 18px;font-weight:700;font-size:13px;cursor:pointer">Cancelar</button>
+          <button id="btn-confirm-cerrar" style="background:#b91c1c;color:#fff;border:none;border-radius:8px;padding:10px 18px;font-weight:700;font-size:13px;cursor:pointer;display:flex;align-items:center;gap:6px">
+            <span class="material-icons" style="font-size:16px">lock</span>Cerrar caja
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector('.modal-close').addEventListener('click', close);
+  overlay.querySelector('#btn-cancel-cerrar').addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+  const btn = overlay.querySelector('#btn-confirm-cerrar');
+  btn.addEventListener('click', async () => {
+    btn.disabled = true; btn.textContent = 'Cerrando...';
+    try {
+      const nowDate = new Date();
+      const nowIso = nowDate.toISOString();
+      const nowTs = Timestamp.fromDate(nowDate);
+      const sessionId = nowDate.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+
+      // 1. Marcar caja_activa/current como cerrada → dispara listeners desktop
+      await setDoc(doc(db, 'caja_activa', 'current'), {
+        status:      'closed',
+        id:          registerId,
+        register_id: registerId,
+        session_id:  sessionId,
+        updated_at:  nowIso,
+      }, { merge: true });
+
+      // 2. Marcar cierres_caja/{id} con fecha_cierre y pendiente_conteo
+      //    Las PCs van a hacer merge con sus totales después.
+      //    fecha_cierre como Timestamp para que el desktop lo deserialice como datetime.
+      await setDoc(doc(db, 'cierres_caja', String(registerId)), {
+        fecha_cierre:     nowTs,
+        session_id:       sessionId,
+        pendiente_conteo: true,
+        monto_final:      0,
+        cerrado_desde:    'web',
+        updated_at:       nowIso,
+      }, { merge: true });
+
+      close();
+      if (typeof onDone === 'function') onDone();
+    } catch (e) {
+      btn.disabled = false; btn.innerHTML = '<span class="material-icons" style="font-size:16px">lock</span>Cerrar caja';
+      alert('Error al cerrar caja: ' + (e?.message || e));
+    }
+  });
+}
+
+// ─── Modal: Abrir caja desde web ──────────────────────────────────────────
+// Crea caja_activa/current con status='open' y cierres_caja/{id} con esquema
+// base. Las PCs reciben el snapshot via listener y crean la fila en su SQLite
+// local (cash_register) con el mismo id, así las próximas ventas usan ese
+// cash_register_id automáticamente.
+// Usa runTransaction para evitar colisiones si una PC abre una caja al mismo
+// tiempo: si la caja_activa/current ya está 'open', se aborta y reintenta.
+function openAbrirCajaModal(db, sugerenciaId, onDone) {
+  document.querySelector('.modal-overlay')?.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal" style="max-width:480px">
+      <div class="modal-header" style="background:linear-gradient(135deg,#065f46,#047857);color:#fff;border-radius:12px 12px 0 0;padding:16px 22px;display:flex;justify-content:space-between;align-items:center">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="material-icons">lock_open</span>
+          <h3 style="color:#fff;margin:0;font-size:16px">Abrir caja #${sugerenciaId}</h3>
+        </div>
+        <button class="modal-close" style="color:#fff;background:rgba(255,255,255,0.15);border-radius:8px;width:30px;height:30px;display:flex;align-items:center;justify-content:center"><span class="material-icons" style="font-size:18px">close</span></button>
+      </div>
+      <div class="modal-body" style="padding:20px 22px">
+        <div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:10px;padding:12px 14px;margin-bottom:14px;display:flex;gap:10px">
+          <span class="material-icons" style="color:#047857">info</span>
+          <div style="font-size:12.5px;color:#065f46;line-height:1.45">
+            Esto abrirá la caja <b>#${sugerenciaId}</b> en todas las PCs.
+            Las ventas que hagan se vincularán automáticamente a esta caja.
+          </div>
+        </div>
+        <div style="margin-bottom:14px">
+          <label style="font-size:12px;color:#475569;font-weight:700;display:block;margin-bottom:6px">Monto inicial ($)</label>
+          <input type="number" step="0.01" id="abrir-monto" placeholder="0.00" value="0" style="width:100%;padding:10px 12px;font-size:14px;border:1.5px solid #cbd5e1;border-radius:8px;outline:none;font-family:inherit">
+        </div>
+        <div style="margin-bottom:14px">
+          <label style="font-size:12px;color:#475569;font-weight:700;display:block;margin-bottom:6px">Cajero / Notas (opcional)</label>
+          <input type="text" id="abrir-notas" placeholder="Ej: Turno mañana - María" style="width:100%;padding:10px 12px;font-size:14px;border:1.5px solid #cbd5e1;border-radius:8px;outline:none;font-family:inherit">
+        </div>
+        <div style="display:flex;gap:8px;justify-content:flex-end">
+          <button id="btn-cancel-abrir" style="background:#e5e7eb;color:#374151;border:none;border-radius:8px;padding:10px 18px;font-weight:700;font-size:13px;cursor:pointer">Cancelar</button>
+          <button id="btn-confirm-abrir" style="background:#15803d;color:#fff;border:none;border-radius:8px;padding:10px 18px;font-weight:700;font-size:13px;cursor:pointer;display:flex;align-items:center;gap:6px">
+            <span class="material-icons" style="font-size:16px">lock_open</span>Abrir caja
+          </button>
+        </div>
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  const close = () => overlay.remove();
+  overlay.querySelector('.modal-close').addEventListener('click', close);
+  overlay.querySelector('#btn-cancel-abrir').addEventListener('click', close);
+  overlay.addEventListener('click', e => { if (e.target === overlay) close(); });
+
+  const btn = overlay.querySelector('#btn-confirm-abrir');
+  const inputMonto = overlay.querySelector('#abrir-monto');
+  const inputNotas = overlay.querySelector('#abrir-notas');
+  setTimeout(() => { inputMonto.focus(); inputMonto.select(); }, 50);
+
+  btn.addEventListener('click', async () => {
+    const monto = parseFloat(inputMonto.value);
+    if (isNaN(monto) || monto < 0) { inputMonto.focus(); return; }
+    const notas = (inputNotas.value || '').trim();
+    btn.disabled = true; btn.textContent = 'Abriendo...';
+    try {
+      const nowDate = new Date();
+      const nowIso = nowDate.toISOString();
+      const nowTs = Timestamp.fromDate(nowDate);
+      const sessionId = nowDate.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+
+      // Recalcular max(register_id) ANTES de la transaction.
+      // Las queries con collection() no se permiten dentro de runTransaction
+      // (solo tx.get sobre un documento). El lock fuerte se hace sobre
+      // caja_activa/current dentro de la transaction.
+      let nextId = sugerenciaId;
+      try {
+        const cierresSnap = await getDocs(query(collection(db, 'cierres_caja'), orderBy('register_id', 'desc'), limit(1)));
+        if (!cierresSnap.empty) {
+          const top = parseInt(cierresSnap.docs[0].data().register_id);
+          if (Number.isFinite(top)) nextId = Math.max(nextId, top + 1);
+        }
+      } catch (_) { /* si falla, usamos sugerenciaId */ }
+
+      // Transaction: lockea caja_activa/current. Si una PC ya abrió una caja
+      // entre el render y el click, vemos status='open' y abortamos.
+      const cajaActivaRef = doc(db, 'caja_activa', 'current');
+      const newId = await runTransaction(db, async (tx) => {
+        const snap = await tx.get(cajaActivaRef);
+        if (snap.exists()) {
+          const data = snap.data();
+          if (data.status === 'open') {
+            throw new Error(`Ya hay una caja abierta (#${data.id}) — refrescá la página.`);
+          }
+        }
+
+        // Escritura 1: caja_activa/current → dispara listener apertura en PCs
+        // opening_date como Timestamp → desktop lo recibe como datetime y lo
+        // pasa a SQLite vía _to_ar_str (acepta datetime nativamente).
+        tx.set(cajaActivaRef, {
+          id:             nextId,
+          initial_amount: monto,
+          opening_date:   nowTs,
+          notes:          notas,
+          status:         'open',
+          updated_at:     nowIso,
+        });
+
+        // Escritura 2: cierres_caja/{id} con esquema base (igual que sync_open_register)
+        tx.set(doc(db, 'cierres_caja', String(nextId)), {
+          register_id:               nextId,
+          pc_id:                     'WEB',
+          session_id:                sessionId,
+          fecha_apertura:            nowTs,
+          fecha_cierre:              '',
+          cajero:                    notas || 'Web',
+          monto_inicial:             monto,
+          total_ventas:              0,
+          total_efectivo:            0,
+          total_transferencia:       0,
+          total_retiros:             0,
+          total_transacciones:       0,
+          num_ventas_efectivo:       0,
+          num_ventas_transferencia:  0,
+          monto_esperado:            monto,
+          monto_final:               0,
+          productos_vendidos:        [],
+          retiros:                   [],
+          abierto_desde:             'web',
+        });
+
+        return nextId;
+      });
+
+      close();
+      if (typeof onDone === 'function') onDone();
+      // Pequeño delay para que el listener del desktop alcance a procesar
+      setTimeout(() => {
+        alert(`Caja #${newId} abierta. Las PCs conectadas la detectarán en unos segundos.`);
+      }, 300);
+    } catch (e) {
+      btn.disabled = false; btn.innerHTML = '<span class="material-icons" style="font-size:16px">lock_open</span>Abrir caja';
+      alert('Error al abrir caja: ' + (e?.message || e));
+    }
   });
 }
 

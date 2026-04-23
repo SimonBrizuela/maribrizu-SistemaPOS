@@ -108,27 +108,45 @@ export async function renderObservaciones(container, db) {
     }
 
     list.innerHTML = filtered.map(o => {
-      const ctx = String(o.context || 'general');
-      const border = ctx === 'sale' ? '#f59e0b' : 'var(--border)';
-      const tag    = ctx === 'sale' ? 'Venta (Varios)' : 'General';
+      const ctx    = String(o.context || 'general');
+      const text   = String(o.text || '');
+      // Parsear prefijo "[Varios] nombre: cuerpo" para destacar el item
+      const matchVarios = text.match(/^\[Varios\]\s*([^:]+):\s*(.+)$/i);
+      const matchOtro   = !matchVarios ? text.match(/^\[([^\]]+)\]\s*(.+)$/) : null;
+      const esVarios    = !!matchVarios;
+      const itemNombre  = esVarios ? matchVarios[1].trim() : (matchOtro ? matchOtro[1].trim() : null);
+      const cuerpo      = esVarios ? matchVarios[2].trim() : (matchOtro ? matchOtro[2].trim() : text);
+
+      const border = esVarios ? '#a78bfa' : (ctx === 'sale' ? '#f59e0b' : 'var(--border)');
+      const tag    = esVarios ? 'VARIOS' : (ctx === 'sale' ? 'Venta' : 'General');
+      const tagBg  = esVarios ? '#7c3aed' : (ctx === 'sale' ? '#b45309' : '#475569');
       const when   = o.created_at || '';
       const author = o.created_by_name || 'Cajero';
       const pc     = o.pc_id ? `<span style="color:var(--text-muted)"> · ${o.pc_id}</span>` : '';
-      const saleRef = (ctx === 'sale' && o.sale_id)
-        ? `<div style="color:#b45309;font-size:12px;margin-top:4px">Venta #${o.sale_id}</div>` : '';
+
+      // Vinculación a la venta: si hay sale_id mostramos "Venta #X",
+      // si es de tipo 'sale' pero quedó huérfana (obs vieja antes del fix) avisamos.
+      let saleRef = '';
+      if (o.sale_id) {
+        saleRef = `<div style="color:#b45309;font-size:12px;margin-top:6px">Venta #${o.sale_id}</div>`;
+      } else if (ctx === 'sale') {
+        saleRef = `<div style="color:#94a3b8;font-size:11px;margin-top:6px;font-style:italic">Sin venta vinculada (obs antigua)</div>`;
+      }
+
       const delBtn = isAdmin
         ? `<button class="obs-del" data-id="${o.id}" style="background:transparent;color:#dc2626;border:1px solid #fecaca;padding:3px 10px;border-radius:6px;font-size:12px;cursor:pointer;font-family:inherit">Eliminar</button>`
         : '';
       return `
-        <div style="background:var(--card-bg);border:1px solid ${border};border-radius:10px;padding:12px 14px">
-          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:4px">
-            <div style="font-size:12px;color:var(--text-muted)">
-              <b style="color:var(--text)">${escapeHtml(author)}</b> · ${escapeHtml(when)}${pc}
-              <span style="margin-left:8px;padding:1px 8px;border-radius:4px;background:rgba(0,0,0,0.05);font-size:11px">${tag}</span>
+        <div style="background:var(--card-bg);border:1px solid ${border};border-left:4px solid ${border};border-radius:10px;padding:12px 14px">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;flex-wrap:wrap">
+            <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-size:12px;color:var(--text-muted)">
+              <span style="background:${tagBg};color:#fff;font-size:9px;font-weight:800;padding:2px 7px;border-radius:5px;letter-spacing:.5px">${tag}</span>
+              ${esVarios && itemNombre ? `<b style="color:var(--text);font-size:13px">${escapeHtml(itemNombre)}</b>` : ''}
+              <span><b style="color:var(--text)">${escapeHtml(author)}</b> · ${escapeHtml(when)}${pc}</span>
             </div>
             ${delBtn}
           </div>
-          <div style="font-size:14px;color:var(--text);white-space:pre-wrap">${escapeHtml(o.text || '')}</div>
+          <div style="font-size:14px;color:var(--text);white-space:pre-wrap">${escapeHtml(cuerpo)}</div>
           ${saleRef}
         </div>`;
     }).join('');

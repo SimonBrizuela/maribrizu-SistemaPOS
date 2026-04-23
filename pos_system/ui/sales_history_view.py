@@ -33,6 +33,20 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
 from PyQt5.QtCore import Qt, QDate
 from PyQt5.QtGui import QFont, QColor
 
+# Constantes cacheadas para evitar instanciar QFont/QColor por cada celda
+# durante refresh_data y _show_sale_detail (causa lag con cientos de ventas).
+_FONT_BOLD_9     = QFont('Segoe UI', 9, QFont.Bold)
+_FONT_NORMAL_9   = QFont('Segoe UI', 9)
+_FONT_STRIKE_9   = QFont('Segoe UI', 9); _FONT_STRIKE_9.setStrikeOut(True)
+_COLOR_GREEN     = QColor('#198754')
+_COLOR_BLUE      = QColor('#0d6efd')
+_COLOR_RED       = QColor('#dc3545')
+_COLOR_GRAY      = QColor('#adb5bd')
+# Máximo de ventas a cargar por refresh — protege la UI cuando el rango
+# de fechas devuelve miles de filas. La paginación se hace por filtro de
+# fecha (los rangos rápidos ya filtran).
+_MAX_SALES_LOAD = 500
+
 from pos_system.models.sale import Sale
 from pos_system.database.db_manager import DatabaseManager
 from pos_system.utils.pdf_generator import PDFGenerator
@@ -169,9 +183,9 @@ class SalesHistoryView(QWidget):
         self.sales_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self.sales_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
         self.sales_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
-        self.sales_table.selectionModel().currentRowChanged.connect(
-            lambda current, prev: self._show_sale_detail(current.row())
-        ) if self.sales_table.selectionModel() else None
+        # Una sola conexión: itemSelectionChanged. Antes había dos
+        # (currentRowChanged + itemSelectionChanged) y ambas disparaban
+        # _show_sale_detail en cada selección → get_by_id() x2 en cada click.
         self.sales_table.itemSelectionChanged.connect(self._on_selection_changed)
         splitter.addWidget(self.sales_table)
 
@@ -262,73 +276,83 @@ class SalesHistoryView(QWidget):
         sales = self.sale_model.get_all(
             start_date=from_date,
             end_date=to_date,
-            payment_type=payment_type
+            payment_type=payment_type,
+            limit=_MAX_SALES_LOAD,
         )
 
-        self.sales_table.setRowCount(len(sales))
-        total_sum = 0.0
-        cash_sum = 0.0
-        transfer_sum = 0.0
+        # Bloquear señales y repaints durante el populate — antes cada setItem
+        # podía disparar selectionChanged → _show_sale_detail → query SQLite.
+        # Con N=300 esto causaba freezes de 1-2s al filtrar.
+        tbl = self.sales_table
+        tbl.blockSignals(True)
+        tbl.setUpdatesEnabled(False)
+        tbl.clearSelection()
+        try:
+            tbl.setRowCount(len(sales))
+            total_sum = 0.0
+            cash_sum = 0.0
+            transfer_sum = 0.0
 
-        for row, sale in enumerate(sales):
-            self.sales_table.setRowHeight(row, 36)
+            for row, sale in enumerate(sales):
+                tbl.setRowHeight(row, 36)
 
-            id_item = QTableWidgetItem(str(sale['id']))
-            id_item.setTextAlignment(Qt.AlignCenter)
-            id_item.setData(Qt.UserRole, sale['id'])
-            self.sales_table.setItem(row, 0, id_item)
+                id_item = QTableWidgetItem(str(sale['id']))
+                id_item.setTextAlignment(Qt.AlignCenter)
+                id_item.setData(Qt.UserRole, sale['id'])
+                tbl.setItem(row, 0, id_item)
 
-            try:
-                dt = _parse_ar(sale['created_at'])
-                date_str = dt.strftime('%d/%m/%Y %H:%M:%S')
-            except Exception:
-                date_str = sale['created_at']
-            self.sales_table.setItem(row, 1, QTableWidgetItem(date_str))
+                try:
+                    dt = _parse_ar(sale['created_at'])
+                    date_str = dt.strftime('%d/%m/%Y %H:%M:%S')
+                except Exception:
+                    date_str = sale['created_at']
+                tbl.setItem(row, 1, QTableWidgetItem(date_str))
 
-            ptype = sale['payment_type']
-            ptype_label = 'Efectivo' if ptype == 'cash' else 'Transferencia'
-            ptype_item = QTableWidgetItem(ptype_label)
-            ptype_item.setTextAlignment(Qt.AlignCenter)
-            if ptype == 'cash':
-                ptype_item.setForeground(QColor('#198754'))
-            else:
-                ptype_item.setForeground(QColor('#0d6efd'))
-            self.sales_table.setItem(row, 2, ptype_item)
+                ptype = sale['payment_type']
+                ptype_label = 'Efectivo' if ptype == 'cash' else 'Transferencia'
+                ptype_item = QTableWidgetItem(ptype_label)
+                ptype_item.setTextAlignment(Qt.AlignCenter)
+                ptype_item.setForeground(_COLOR_GREEN if ptype == 'cash' else _COLOR_BLUE)
+                tbl.setItem(row, 2, ptype_item)
 
-            total = sale['total_amount']
-            total_item = QTableWidgetItem(f'${total:.2f}')
-            total_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            total_item.setFont(QFont('Segoe UI', 9, QFont.Bold))
-            self.sales_table.setItem(row, 3, total_item)
+                total = sale['total_amount']
+                total_item = QTableWidgetItem(f'${total:.2f}')
+                total_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                total_item.setFont(_FONT_BOLD_9)
+                tbl.setItem(row, 3, total_item)
 
-            received = sale.get('cash_received', 0) or 0
-            change = sale.get('change_given', 0) or 0
-            rec_item = QTableWidgetItem(f'${received:.2f}' if received > 0 else '-')
-            rec_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.sales_table.setItem(row, 4, rec_item)
+                received = sale.get('cash_received', 0) or 0
+                change = sale.get('change_given', 0) or 0
+                rec_item = QTableWidgetItem(f'${received:.2f}' if received > 0 else '-')
+                rec_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                tbl.setItem(row, 4, rec_item)
 
-            chg_item = QTableWidgetItem(f'${change:.2f}' if change > 0 else '-')
-            chg_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            self.sales_table.setItem(row, 5, chg_item)
+                chg_item = QTableWidgetItem(f'${change:.2f}' if change > 0 else '-')
+                chg_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                tbl.setItem(row, 5, chg_item)
 
-            discount = sale.get('discount', 0) or 0
-            disc_item = QTableWidgetItem(f'-${discount:.2f}' if discount > 0 else '-')
-            disc_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            if discount > 0:
-                disc_item.setForeground(QColor('#dc3545'))
-            self.sales_table.setItem(row, 6, disc_item)
+                discount = sale.get('discount', 0) or 0
+                disc_item = QTableWidgetItem(f'-${discount:.2f}' if discount > 0 else '-')
+                disc_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                if discount > 0:
+                    disc_item.setForeground(_COLOR_RED)
+                tbl.setItem(row, 6, disc_item)
 
-            total_sum += total
-            if ptype == 'cash':
-                cash_sum += total
-            else:
-                transfer_sum += total
+                total_sum += total
+                if ptype == 'cash':
+                    cash_sum += total
+                else:
+                    transfer_sum += total
+        finally:
+            tbl.setUpdatesEnabled(True)
+            tbl.blockSignals(False)
 
         # Resumen
         count = len(sales)
         avg = total_sum / count if count > 0 else 0
+        truncado = f' (limite: {_MAX_SALES_LOAD} mas recientes — acota fechas para ver mas)' if count >= _MAX_SALES_LOAD else ''
         self.summary_label.setText(
-            f'<b>{count}</b> ventas  |  '
+            f'<b>{count}</b> ventas{truncado}  |  '
             f'Total: <b>${total_sum:.2f}</b>  |  '
             f'Efectivo: <b>${cash_sum:.2f}</b>  |  '
             f'Virtual: <b>${transfer_sum:.2f}</b>  |  '
@@ -352,6 +376,10 @@ class SalesHistoryView(QWidget):
         if not id_item:
             return
         sale_id = id_item.data(Qt.UserRole)
+        # Evitar re-cargar si ya está mostrado (la doble-conexión vieja causaba esto;
+        # ahora con una sola conexión sigue siendo barato pero ahorra un get_by_id).
+        if sale_id == self._current_sale_id:
+            return
         self._current_sale_id = sale_id
 
         sale = self.sale_model.get_by_id(sale_id)
@@ -359,51 +387,56 @@ class SalesHistoryView(QWidget):
             return
 
         items = sale.get('items', [])
-        self.detail_table.setRowCount(len(items))
-        for r, item in enumerate(items):
-            self.detail_table.setRowHeight(r, 32)
-            self.detail_table.setItem(r, 0, QTableWidgetItem(item['product_name']))
-            
-            orig_price = item.get('original_price', 0) or item.get('unit_price', 0)
-            orig_item = QTableWidgetItem(f"${orig_price:.2f}")
-            orig_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            if orig_price != item['unit_price']:
-                orig_item.setForeground(QColor('#adb5bd'))  # gris si hubo descuento
-                font = QFont('Segoe UI', 9)
-                font.setStrikeOut(True)
-                orig_item.setFont(font)
-            self.detail_table.setItem(r, 1, orig_item)
-            
-            price_item = QTableWidgetItem(f"${item['unit_price']:.2f}")
-            price_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            if orig_price != item['unit_price']:
-                price_item.setForeground(QColor('#198754'))  # verde si tiene descuento
-            self.detail_table.setItem(r, 2, price_item)
-            
-            qty_item = QTableWidgetItem(_fmt_qty(item['quantity']))
-            qty_item.setTextAlignment(Qt.AlignCenter)
-            self.detail_table.setItem(r, 3, qty_item)
-            
-            disc_amount = item.get('discount_amount', 0) or 0
-            disc_type = item.get('discount_type', '') or ''
-            disc_val = item.get('discount_value', 0) or 0
-            if disc_amount > 0:
-                if disc_type == 'percentage':
-                    disc_text = f"-${disc_amount:.2f} ({disc_val:.0f}%)"
+        dt = self.detail_table
+        dt.blockSignals(True)
+        dt.setUpdatesEnabled(False)
+        try:
+            dt.setRowCount(len(items))
+            for r, item in enumerate(items):
+                dt.setRowHeight(r, 32)
+                dt.setItem(r, 0, QTableWidgetItem(item['product_name']))
+
+                orig_price = item.get('original_price', 0) or item.get('unit_price', 0)
+                orig_item = QTableWidgetItem(f"${orig_price:.2f}")
+                orig_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                if orig_price != item['unit_price']:
+                    orig_item.setForeground(_COLOR_GRAY)
+                    orig_item.setFont(_FONT_STRIKE_9)
+                dt.setItem(r, 1, orig_item)
+
+                price_item = QTableWidgetItem(f"${item['unit_price']:.2f}")
+                price_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                if orig_price != item['unit_price']:
+                    price_item.setForeground(_COLOR_GREEN)
+                dt.setItem(r, 2, price_item)
+
+                qty_item = QTableWidgetItem(_fmt_qty(item['quantity']))
+                qty_item.setTextAlignment(Qt.AlignCenter)
+                dt.setItem(r, 3, qty_item)
+
+                disc_amount = item.get('discount_amount', 0) or 0
+                disc_type = item.get('discount_type', '') or ''
+                disc_val = item.get('discount_value', 0) or 0
+                if disc_amount > 0:
+                    if disc_type == 'percentage':
+                        disc_text = f"-${disc_amount:.2f} ({disc_val:.0f}%)"
+                    else:
+                        disc_text = f"-${disc_amount:.2f}"
                 else:
-                    disc_text = f"-${disc_amount:.2f}"
-            else:
-                disc_text = '-'
-            disc_item = QTableWidgetItem(disc_text)
-            disc_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            if disc_amount > 0:
-                disc_item.setForeground(QColor('#dc3545'))
-            self.detail_table.setItem(r, 4, disc_item)
-            
-            sub_item = QTableWidgetItem(f"${item['subtotal']:.2f}")
-            sub_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            sub_item.setFont(QFont('Segoe UI', 9, QFont.Bold))
-            self.detail_table.setItem(r, 5, sub_item)
+                    disc_text = '-'
+                disc_item = QTableWidgetItem(disc_text)
+                disc_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                if disc_amount > 0:
+                    disc_item.setForeground(_COLOR_RED)
+                dt.setItem(r, 4, disc_item)
+
+                sub_item = QTableWidgetItem(f"${item['subtotal']:.2f}")
+                sub_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                sub_item.setFont(_FONT_BOLD_9)
+                dt.setItem(r, 5, sub_item)
+        finally:
+            dt.setUpdatesEnabled(True)
+            dt.blockSignals(False)
 
         self.reprint_btn.setEnabled(True)
         self.edit_btn.setEnabled(True)
