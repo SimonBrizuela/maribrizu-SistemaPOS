@@ -369,11 +369,19 @@ export async function renderCierres(container, db) {
     row.addEventListener('mouseleave', () => row.style.background = '');
   });
 
-  // Botón cerrar caja desde web
+  // Botón cerrar caja desde web — pasamos el monto_inicial y los retiros del doc
+  // de cierres_caja para calcular monto_esperado correctamente.
   const btnCerrarWeb = container.querySelector('#btn-cerrar-caja-web');
   if (btnCerrarWeb && cajaAbiertaId != null) {
     btnCerrarWeb.addEventListener('click', () => {
-      openCerrarCajaModal(db, cajaAbiertaId, () => {
+      const cajaCtx = {
+        registerId:    cajaAbiertaId,
+        monto_inicial: cajasAbiertas[0]?.monto_inicial || 0,
+        cajero:        cajasAbiertas[0]?.cajero || '',
+        retiros:       cajaAbierta?.retiros || [],
+        total_retiros: cajaAbierta?.total_retiros || 0,
+      };
+      openCerrarCajaModal(db, cajaCtx, () => {
         invalidateCache('cierres:caja');
         renderCierres(container, db);
       });
@@ -393,11 +401,14 @@ export async function renderCierres(container, db) {
 }
 
 // ─── Modal: Cerrar caja desde web ─────────────────────────────────────────
-// Marca status='closed' en caja_activa/current y cierres_caja/{id}.
-// Las PCs detectan el cierre via listener y mergean su reporte (totales,
-// retiros, productos vendidos) al mismo doc cierres_caja/{id}.
-// Queda pendiente_conteo:true para que después una PC cargue el monto contado.
-function openCerrarCajaModal(db, registerId, onDone) {
+// Lee `ventas` filtradas por cash_register_id, calcula totales (efectivo,
+// transferencia, transacciones, productos_vendidos) y los escribe a
+// cierres_caja/{id} junto con fecha_cierre y pendiente_conteo:true.
+// Después marca caja_activa/current como cerrada — los listeners desktop
+// detectan y, si tienen la caja abierta local, mergean también su reporte.
+// Cuando NO hay PCs online, los stats igual aparecen porque la web los calcula.
+function openCerrarCajaModal(db, ctx, onDone) {
+  const { registerId, monto_inicial = 0, cajero = '', retiros = [], total_retiros = 0 } = ctx;
   document.querySelector('.modal-overlay')?.remove();
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
@@ -414,8 +425,9 @@ function openCerrarCajaModal(db, registerId, onDone) {
         <div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:10px;padding:12px 14px;margin-bottom:14px;display:flex;gap:10px">
           <span class="material-icons" style="color:#b45309">info</span>
           <div style="font-size:12.5px;color:#92400e;line-height:1.45">
-            Esto cerrará la caja en <b>todas las PCs conectadas</b>.
-            El cierre quedará marcado como <b>pendiente de conteo</b>: cargá luego el efectivo contado desde el detalle del cierre.
+            La web calculará los totales desde las ventas y cerrará la caja.
+            Las PCs conectadas también la marcarán como cerrada.
+            Quedará <b>pendiente de conteo</b>: cargá después el efectivo real.
           </div>
         </div>
         <div style="font-size:13px;color:#475569;margin-bottom:14px">¿Confirmás cerrar la caja <b>#${registerId}</b>?</div>
@@ -436,32 +448,106 @@ function openCerrarCajaModal(db, registerId, onDone) {
 
   const btn = overlay.querySelector('#btn-confirm-cerrar');
   btn.addEventListener('click', async () => {
-    btn.disabled = true; btn.textContent = 'Cerrando...';
+    btn.disabled = true; btn.innerHTML = '<span class="material-icons" style="font-size:16px">hourglass_empty</span>Calculando...';
     try {
       const nowDate = new Date();
       const nowIso = nowDate.toISOString();
       const nowTs = Timestamp.fromDate(nowDate);
       const sessionId = nowDate.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
 
-      // 1. Marcar caja_activa/current como cerrada → dispara listeners desktop
-      await setDoc(doc(db, 'caja_activa', 'current'), {
-        status:      'closed',
-        id:          registerId,
-        register_id: registerId,
-        session_id:  sessionId,
-        updated_at:  nowIso,
+      // ── 1. Calcular totales desde `ventas` filtrando por cash_register_id ──
+      // Leemos las 500 más recientes (cubre cualquier turno operativo).
+      // Si una caja viejísima necesitara más, habría que paginar — caso raro.
+      const ventasSnap = await getDocs(query(
+        collection(db, 'ventas'),
+        orderBy('created_at', 'desc'),
+        limit(500)
+      ));
+      const ventasCaja = ventasSnap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(v => {
+          if (v.deleted === true) return false;
+          if (isVentaVarios2(v)) return false;
+          const reg = v.cash_register_id != null ? String(v.cash_register_id) : '';
+          return reg === String(registerId);
+        });
+
+      let total_efectivo = 0, total_transferencia = 0;
+      let num_ventas_efectivo = 0, num_ventas_transferencia = 0;
+      const saleIds = new Set();
+      for (const v of ventasCaja) {
+        const monto = parseFloat(v.total_amount || 0);
+        if (v.payment_type === 'cash') {
+          total_efectivo += monto; num_ventas_efectivo++;
+        } else {
+          total_transferencia += monto; num_ventas_transferencia++;
+        }
+        const sid = v.sale_id || v.id;
+        saleIds.add(String(sid));
+      }
+      const total_ventas        = total_efectivo + total_transferencia;
+      const total_transacciones = ventasCaja.length;
+      const monto_esperado      = (parseFloat(monto_inicial) || 0) + total_efectivo - (parseFloat(total_retiros) || 0);
+
+      // ── Productos vendidos: cruzar ventas_por_dia por num_venta ──
+      // Solo cargamos los items necesarios para no traer 5000 docs si hay otra caja.
+      // Si no hay ventas, salteamos esta query.
+      const productosMap = {};
+      if (saleIds.size > 0 && saleIds.size <= 500) {
+        try {
+          const itemsSnap = await getDocs(query(
+            collection(db, 'ventas_por_dia'),
+            orderBy('num_venta', 'desc'),
+            limit(2000)
+          ));
+          for (const d of itemsSnap.docs) {
+            const it = d.data();
+            if (it.deleted === true) continue;
+            const nv = String(it.num_venta);
+            if (!saleIds.has(nv)) continue;
+            const nombre = (it.producto || it.product_name || '').trim();
+            if (!nombre) continue;
+            if (!productosMap[nombre]) productosMap[nombre] = { product_name: nombre, total_quantity: 0, total_amount: 0 };
+            productosMap[nombre].total_quantity += Number(it.cantidad || it.quantity || 0);
+            productosMap[nombre].total_amount   += Number(it.subtotal || 0);
+          }
+        } catch (_) { /* si falla, dejamos productos_vendidos vacío */ }
+      }
+      const productos_vendidos = Object.values(productosMap)
+        .sort((a, b) => b.total_amount - a.total_amount);
+
+      // ── 2. Escribir cierres_caja/{id} con TODOS los stats calculados ──
+      await setDoc(doc(db, 'cierres_caja', String(registerId)), {
+        register_id:               Number(registerId),
+        fecha_cierre:              nowTs,
+        session_id:                sessionId,
+        pendiente_conteo:          true,
+        monto_final:               0,
+        monto_inicial:             Number(monto_inicial) || 0,
+        monto_esperado:            monto_esperado,
+        total_ventas:              total_ventas,
+        total_efectivo:            total_efectivo,
+        total_transferencia:       total_transferencia,
+        total_transacciones:       total_transacciones,
+        num_ventas_efectivo:       num_ventas_efectivo,
+        num_ventas_transferencia:  num_ventas_transferencia,
+        total_retiros:             Number(total_retiros) || 0,
+        retiros:                   retiros || [],
+        productos_vendidos:        productos_vendidos,
+        cajero:                    cajero || '',
+        cerrado_desde:             'web',
+        updated_at:                nowIso,
       }, { merge: true });
 
-      // 2. Marcar cierres_caja/{id} con fecha_cierre y pendiente_conteo
-      //    Las PCs van a hacer merge con sus totales después.
-      //    fecha_cierre como Timestamp para que el desktop lo deserialice como datetime.
-      await setDoc(doc(db, 'cierres_caja', String(registerId)), {
-        fecha_cierre:     nowTs,
-        session_id:       sessionId,
-        pendiente_conteo: true,
-        monto_final:      0,
-        cerrado_desde:    'web',
-        updated_at:       nowIso,
+      // ── 3. Marcar caja_activa/current como cerrada → dispara listeners desktop ──
+      // Las PCs que tengan la caja abierta local también van a recalcular y mergear,
+      // pero los stats principales ya están escritos por la web.
+      await setDoc(doc(db, 'caja_activa', 'current'), {
+        status:      'closed',
+        id:          Number(registerId),
+        register_id: Number(registerId),
+        session_id:  sessionId,
+        updated_at:  nowIso,
       }, { merge: true });
 
       close();
