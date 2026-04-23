@@ -171,9 +171,8 @@ class MainWindow(QMainWindow):
         self.check_cash_register_status()
         self._check_low_stock_badge()
 
-        # Auto-update deshabilitado localmente (cambios WIP no publicados)
-        # from PyQt5.QtCore import QTimer as _QT2
-        # _QT2.singleShot(8000, self._check_for_updates)
+        from PyQt5.QtCore import QTimer as _QT2
+        _QT2.singleShot(8000, self._check_for_updates)
 
         # Poller de sync remoto: detecta comando del admin → sube o descarga en silencio
         self._last_sync_trigger_ts = None
