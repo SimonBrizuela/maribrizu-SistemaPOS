@@ -44,10 +44,13 @@ class Sale:
         with self.db.get_connection() as conn:
             cursor = conn.cursor()
 
-            # 1. Crear la venta
+            # 1. Crear la venta — pasamos created_at explícito en hora AR para
+            #    no depender del DEFAULT de la tabla (bases viejas lo tienen
+            #    como CURRENT_TIMESTAMP = UTC)
+            created_at_ar = now_ar().strftime('%Y-%m-%d %H:%M:%S')
             cursor.execute(
-                "INSERT INTO sales (total_amount, payment_type, cash_received, change_given, cash_register_id, user_id, notes, turno_nombre) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (total_amount, payment_type, cash_received, change_given, cash_register_id, user_id, notes, turno_nombre)
+                "INSERT INTO sales (total_amount, payment_type, cash_received, change_given, cash_register_id, user_id, notes, turno_nombre, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (total_amount, payment_type, cash_received, change_given, cash_register_id, user_id, notes, turno_nombre, created_at_ar)
             )
             sale_id = cursor.lastrowid
 

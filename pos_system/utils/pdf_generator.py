@@ -27,10 +27,28 @@ def _fmt_qty(q):
     return f"{q:.2f}".rstrip('0').rstrip('.')
 
 def _parse_ar(s):
-    try:
-        dt = datetime.fromisoformat(str(s))
-    except (ValueError, TypeError):
+    """Parsea un timestamp de la DB (o Firestore) y lo devuelve en hora AR (naive).
+    La DB guarda con `localtime_now()` → "YYYY-MM-DD HH:MM:SS" sin tz, ya en AR."""
+    if not s:
         return datetime.now(_TZ_AR).replace(tzinfo=None)
+    raw = str(s).strip()
+    # Compatibilidad con Python 3.10-: fromisoformat no acepta espacio, solo 'T'
+    iso = raw.replace(' ', 'T', 1)
+    # Y tampoco 'Z' sufijo (UTC) en <3.11
+    if iso.endswith('Z'):
+        iso = iso[:-1] + '+00:00'
+    try:
+        dt = datetime.fromisoformat(iso)
+    except (ValueError, TypeError):
+        # Último recurso: intentar formatos comunes
+        for fmt in ('%Y-%m-%d %H:%M:%S', '%Y-%m-%dT%H:%M:%S', '%Y-%m-%d %H:%M:%S.%f', '%Y-%m-%d'):
+            try:
+                dt = datetime.strptime(raw, fmt)
+                break
+            except ValueError:
+                continue
+        else:
+            return datetime.now(_TZ_AR).replace(tzinfo=None)
     if dt.tzinfo is not None:
         return dt.astimezone(_TZ_AR).replace(tzinfo=None)
     return dt
@@ -195,7 +213,7 @@ class PDFGenerator:
         canvas_obj.line(doc.leftMargin, 40, doc.width + doc.leftMargin, 40)
         
         # Texto del footer
-        footer_text = f"Documento generado el {datetime.now().strftime('%d/%m/%Y %H:%M')} | {self.company_info['website']}"
+        footer_text = f"Documento generado el {datetime.now(_TZ_AR).strftime('%d/%m/%Y %H:%M')} | {self.company_info['website']}"
         canvas_obj.drawCentredString(doc.width/2 + doc.leftMargin, 25, footer_text)
         
         canvas_obj.restoreState()
@@ -1121,7 +1139,7 @@ class PDFGenerator:
             textColor=colors.black,
             alignment=TA_CENTER
         )
-        story.append(Paragraph(f'Documento generado: {datetime.now().strftime("%d/%m/%Y %H:%M")}', footer_style))
+        story.append(Paragraph(f'Documento generado: {datetime.now(_TZ_AR).strftime("%d/%m/%Y %H:%M")}', footer_style))
         story.append(Spacer(1, 3*mm))
         story.append(Paragraph('_' * 25, footer_style))
         story.append(Paragraph('Firma', footer_style))
@@ -1322,7 +1340,7 @@ class PDFGenerator:
         if _QRCODE_AVAILABLE:
             qr_data = {
                 "ver":        1,
-                "fecha":      datetime.now().strftime('%Y-%m-%d'),
+                "fecha":      datetime.now(_TZ_AR).strftime('%Y-%m-%d'),
                 "cuit":       int(str(factura.get('cuit', '0') or '0').replace('-', '').strip() or '0'),
                 "ptoVta":     int(factura.get('punto_venta', 0)),
                 "tipoCmp":    6,   # 6=Fact.B  1=Fact.A  11=Ticket
@@ -1355,7 +1373,7 @@ class PDFGenerator:
         # ── Footer ───────────────────────────────────────────────────────────
         story.append(Paragraph('─' * 40, sty_sep))
         story.append(Paragraph('*** Documento válido como factura ***', sty_footer))
-        story.append(Paragraph(datetime.now().strftime('%d/%m/%Y %H:%M'), sty_footer))
+        story.append(Paragraph(datetime.now(_TZ_AR).strftime('%d/%m/%Y %H:%M'), sty_footer))
 
         # ── Calcular altura real del contenido y generar en 1 sola página ────
         # 1) Medir en un canvas temporal con altura grande
@@ -1436,7 +1454,7 @@ class PDFGenerator:
         nro_str = str(factura.get('nro_comprobante', 1)).zfill(8)
         comp_nro_full = f'{pto_str}-{nro_str}'
 
-        fecha_comp = factura.get('fecha', datetime.now().strftime('%d/%m/%Y'))
+        fecha_comp = factura.get('fecha', datetime.now(_TZ_AR).strftime('%d/%m/%Y'))
         # Normalizar fecha a solo dia/mes/anio
         if len(fecha_comp) > 10:
             fecha_comp = fecha_comp[:10]
