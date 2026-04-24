@@ -416,3 +416,165 @@ def calcular_iva_neto(total: float, alicuota: float = 21.0) -> tuple:
     neto = round(total / (1 + factor), 2)
     iva  = round(total - neto, 2)
     return neto, iva
+
+
+# ── WS Padron (Constancia de Inscripcion, via getPersona_v2) ──────────────────
+
+PADRON_URL_HOMO = 'https://awshomo.afip.gov.ar/sr-padron/webservices/personaServiceA5?WSDL'
+PADRON_URL_PROD = 'https://aws.afip.gov.ar/sr-padron/webservices/personaServiceA5?WSDL'
+
+
+def _mapear_condicion_iva_constancia(data) -> str:
+    """
+    Deriva la condición frente al IVA desde la respuesta de getPersona_v2.
+    Prioridad: monotributo activo > IVA (régimen general) > consumidor final.
+    """
+    try:
+        monot = getattr(data, 'datosMonotributo', None)
+        if monot:
+            impuestos = getattr(monot, 'impuesto', None) or []
+            for imp in impuestos:
+                if int(getattr(imp, 'idImpuesto', 0) or 0) == 20 and \
+                   str(getattr(imp, 'estadoImpuesto', '')).upper() == 'AC':
+                    return 'Monotributista'
+    except Exception:
+        pass
+    try:
+        rg = getattr(data, 'datosRegimenGeneral', None)
+        if rg:
+            impuestos = getattr(rg, 'impuesto', None) or []
+            codigos_ac = {
+                int(getattr(i, 'idImpuesto', 0) or 0)
+                for i in impuestos
+                if str(getattr(i, 'estadoImpuesto', '')).upper() == 'AC'
+            }
+            if 30 in codigos_ac:   return 'Responsable Inscripto'
+            if 32 in codigos_ac:   return 'Exento'
+    except Exception:
+        pass
+    return 'Consumidor Final'
+
+
+class AFIPPadron(AfipWsfe):
+    """
+    Consulta al padrón AFIP (servicio `ws_sr_constancia_inscripcion`) para
+    obtener razón social, domicilio y condición frente al IVA desde un CUIT.
+
+    Usa los mismos certificados que AfipWsfe. El cert tiene que estar
+    autorizado al servicio `ws_sr_constancia_inscripcion` en el Administrador
+    de Relaciones de AFIP. Si no, WSAA falla con AFIPAuthError.
+    """
+
+    def _get_ticket_acceso(self):
+        """Override: pide TA para ws_sr_constancia_inscripcion."""
+        now = datetime.now(timezone.utc)
+        if self._ta_token and self._ta_expiry and now < self._ta_expiry - timedelta(minutes=5):
+            return self._ta_token, self._ta_sign
+
+        wsaa_url = WSAA_URL_PROD if self.produccion else WSAA_URL_HOMO
+        _TZ_AR = timezone(timedelta(hours=-3))
+        now_ar = now.astimezone(_TZ_AR)
+        gen_time  = (now_ar - timedelta(minutes=10)).strftime('%Y-%m-%dT%H:%M:%S-03:00')
+        exp_time  = (now_ar + timedelta(hours=12)).strftime('%Y-%m-%dT%H:%M:%S-03:00')
+        unique_id = int(now.timestamp())
+
+        tra_xml = f"""<?xml version="1.0" encoding="UTF-8"?>
+<loginTicketRequest version="1.0">
+  <header>
+    <uniqueId>{unique_id}</uniqueId>
+    <generationTime>{gen_time}</generationTime>
+    <expirationTime>{exp_time}</expirationTime>
+  </header>
+  <service>ws_sr_constancia_inscripcion</service>
+</loginTicketRequest>"""
+
+        try:
+            with open(self.cert_path, 'rb') as f: cert_data = f.read()
+            with open(self.key_path,  'rb') as f: key_data  = f.read()
+            smime_buf = self._sign_tra_smime(tra_xml, cert_data, key_data)
+        except Exception as e:
+            raise AFIPAuthError(f'Error al firmar TRA (padron): {e}')
+
+        try:
+            from zeep.transports import Transport
+            transport = Transport(session=_make_afip_session(), timeout=30)
+            client = self._zeep.Client(wsdl=wsaa_url, transport=transport)
+            response = client.service.loginCms(in0=smime_buf)
+        except Exception as e:
+            raise AFIPAuthError(f'Error en WSAA (padron): {e}')
+
+        import xml.etree.ElementTree as ET
+        root = ET.fromstring(response)
+        token = root.find('.//token').text
+        sign  = root.find('.//sign').text
+        exp_str = root.find('.//expirationTime').text
+        try:
+            exp_dt = datetime.fromisoformat(exp_str.replace('Z', '+00:00'))
+        except Exception:
+            exp_dt = now + timedelta(hours=12)
+
+        self._ta_token, self._ta_sign, self._ta_expiry = token, sign, exp_dt
+        return token, sign
+
+    def consultar(self, cuit: str) -> dict:
+        """
+        Devuelve {'razon_social', 'domicilio', 'localidad', 'condicion_iva', 'activo'}
+        o None si el CUIT no existe.
+        """
+        cuit = str(cuit).replace('-', '').replace(' ', '').strip()
+        if not cuit.isdigit() or len(cuit) != 11:
+            return None
+
+        token, sign = self._get_ticket_acceso()
+        url = PADRON_URL_PROD if self.produccion else PADRON_URL_HOMO
+
+        from zeep.transports import Transport
+        transport = Transport(session=_make_afip_session(), timeout=30)
+        client = self._zeep.Client(wsdl=url, transport=transport)
+
+        try:
+            resp = client.service.getPersona_v2(
+                token=token, sign=sign,
+                cuitRepresentada=int(self.cuit),
+                idPersona=int(cuit),
+            )
+        except Exception as e:
+            msg = str(e)
+            if 'No existe persona' in msg or 'no existe' in msg.lower():
+                return None
+            raise AFIPError(f'Error consultando padron: {e}')
+
+        # Respuesta de getPersona_v2 (ws_sr_constancia_inscripcion):
+        # { datosGenerales: {...}, datosMonotributo: {...}, datosRegimenGeneral: {...} }
+        gen = getattr(resp, 'datosGenerales', None)
+        if not gen:
+            return None
+
+        # Razón social: para jurídicas viene en razonSocial; para físicas se arma
+        # con apellido + nombre.
+        razon = (getattr(gen, 'razonSocial', None) or '').strip()
+        if not razon:
+            razon = ' '.join(filter(None, [
+                (getattr(gen, 'apellido', '') or '').strip(),
+                (getattr(gen, 'nombre', '')   or '').strip(),
+            ])).strip()
+
+        # Domicilio fiscal (único objeto)
+        dom = getattr(gen, 'domicilioFiscal', None)
+        dom_str, localidad = '', ''
+        if dom:
+            dom_str = (getattr(dom, 'direccion', '') or '').strip()
+            loc   = (getattr(dom, 'localidad', '') or '').strip()
+            prov  = (getattr(dom, 'descripcionProvincia', '') or '').strip()
+            if loc and prov and prov.upper() != loc.upper():
+                localidad = f'{loc} - {prov}'
+            else:
+                localidad = loc or prov
+
+        return {
+            'razon_social':  razon,
+            'domicilio':     dom_str,
+            'localidad':     localidad,
+            'condicion_iva': _mapear_condicion_iva_constancia(resp),
+            'activo':        (getattr(gen, 'estadoClave', '') or '').upper() == 'ACTIVO',
+        }

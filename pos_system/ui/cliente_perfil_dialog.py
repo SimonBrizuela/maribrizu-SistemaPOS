@@ -162,10 +162,16 @@ class ClientePerfilDialog(QDialog):
         form.setSpacing(8)
 
         self.nombre_input = QLineEdit()
-        self.nombre_input.setPlaceholderText('Nombre o Razón Social *')
+        self.nombre_input.setPlaceholderText('Nombre comercial *')
         self.nombre_input.setMinimumHeight(34)
         self.nombre_input.setFont(QFont('Segoe UI', 10))
         form.addRow('Nombre:', self.nombre_input)
+
+        self.razon_social_input = QLineEdit()
+        self.razon_social_input.setPlaceholderText('Razón Social legal (se autocompleta con Buscar AFIP)')
+        self.razon_social_input.setMinimumHeight(34)
+        self.razon_social_input.setFont(QFont('Segoe UI', 10))
+        form.addRow('Razón Social:', self.razon_social_input)
 
         cuit_row = QHBoxLayout()
         self.cuit_input = QLineEdit()
@@ -260,9 +266,11 @@ class ClientePerfilDialog(QDialog):
         main.addLayout(btn_row)
 
     def _buscar_cuit_afip(self):
-        """Consulta datos del CUIT en cuitonline.com (padrón AFIP) y autocompleta el formulario."""
+        """Consulta datos del CUIT al padrón oficial AFIP (ws_sr_constancia_inscripcion)
+        usando el cert del perfil activo. Autocompleta nombre, razón social,
+        domicilio y condición IVA."""
         cuit_raw = self.cuit_input.text().strip().replace('-', '').replace(' ', '')
-        if len(cuit_raw) < 10:
+        if len(cuit_raw) != 11 or not cuit_raw.isdigit():
             QMessageBox.warning(self, 'CUIT incompleto', 'Ingresa un CUIT de 11 digitos.')
             return
 
@@ -271,48 +279,66 @@ class ClientePerfilDialog(QDialog):
         QApplication.processEvents()
 
         try:
-            import urllib.request
-            import re
-            import html as htmllib
+            # Levantar el perfil activo con cert para autenticar en el padrón
+            from pos_system.database.db_manager import DatabaseManager
+            from pos_system.utils.afip_wsfe import AFIPPadron
+            db = DatabaseManager()
+            cfg = db.execute_query("SELECT value FROM config WHERE key='emisor_activo_id'")
+            emisor_id = cfg[0]['value'] if cfg and cfg[0].get('value') else ''
+            perfil = None
+            if emisor_id:
+                r = db.execute_query(
+                    "SELECT * FROM perfiles_facturacion WHERE firebase_id=? AND activo=1",
+                    (emisor_id,)
+                )
+                if r: perfil = r[0]
+            if not perfil:
+                r = db.execute_query(
+                    "SELECT * FROM perfiles_facturacion "
+                    "WHERE activo=1 AND LENGTH(cuit) >= 10 "
+                    "ORDER BY updated_at DESC LIMIT 1"
+                )
+                if r: perfil = r[0]
+            if not perfil or not perfil.get('cert_path') or not perfil.get('key_path'):
+                QMessageBox.warning(
+                    self, 'Sin certificado AFIP',
+                    'No hay perfil AFIP con certificado cargado.\nCompletá los datos manualmente.'
+                )
+                return
 
-            url = f'https://www.cuitonline.com/search.php?q={cuit_raw}'
-            req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
-            raw = urllib.request.urlopen(req, timeout=10).read().decode('utf-8', errors='replace')
-
-            # Nombre desde el h2.denominacion
-            m_nombre = re.search(r'<h2[^>]*class="denominacion"[^>]*>([^<]+)</h2>', raw)
-            nombre = htmllib.unescape(m_nombre.group(1).strip()) if m_nombre else ''
-
-            # Condicion IVA
-            m_iva = re.search(r'IVA:&nbsp;([^<&\n]+)', raw)
-            iva_raw = m_iva.group(1).strip() if m_iva else ''
-            iva_l = iva_raw.lower()
-            if 'monotributo' in iva_l or 'monotrib' in iva_l:
-                cond_iva = 'Monotributista'
-            elif 'inscripto' in iva_l:
-                cond_iva = 'Responsable Inscripto'
-            elif 'exento' in iva_l:
-                cond_iva = 'Exento'
-            else:
-                cond_iva = 'Consumidor Final'
-
-            if not nombre:
+            padron = AFIPPadron(
+                cuit=perfil['cuit'],
+                cert_path=perfil['cert_path'],
+                key_path=perfil['key_path'],
+                produccion=bool(perfil['produccion']),
+            )
+            data = padron.consultar(cuit_raw)
+            if not data:
                 QMessageBox.warning(
                     self, 'No encontrado',
                     f'No se encontraron datos para el CUIT {cuit_raw}.\nVerifica que sea correcto.'
                 )
                 return
 
-            # Rellenar formulario
-            self.nombre_input.setText(nombre)
-            idx = self.condicion_combo.findText(cond_iva)
-            if idx >= 0:
-                self.condicion_combo.setCurrentIndex(idx)
+            razon = (data.get('razon_social') or '').strip()
+            dom   = (data.get('domicilio') or '').strip()
+            loc   = (data.get('localidad') or '').strip()
+            cond  = (data.get('condicion_iva') or '').strip()
+
+            if razon:
+                self.nombre_input.setText(razon)
+                self.razon_social_input.setText(razon)
+            if dom:
+                self.domicilio_input.setText(f'{dom} - {loc}' if loc else dom)
+            if cond:
+                idx = self.condicion_combo.findText(cond)
+                if idx >= 0:
+                    self.condicion_combo.setCurrentIndex(idx)
 
         except Exception as e:
             QMessageBox.warning(
                 self, 'No se pudo consultar',
-                f'Verifica la conexion a internet e intenta de nuevo.\n\nDetalle: {e}'
+                f'Error consultando padron AFIP.\n\nDetalle: {e}'
             )
         finally:
             self._buscar_btn.setEnabled(True)
@@ -341,9 +367,10 @@ class ClientePerfilDialog(QDialog):
             QMessageBox.warning(self, 'Nombre requerido', 'Ingresá al menos el nombre del cliente.')
             return
 
+        razon = self.razon_social_input.text().strip() or nombre
         self.selected_cliente = {
             'nombre':       nombre,
-            'razon_social': nombre,
+            'razon_social': razon,
             'cuit':         self.cuit_input.text().strip(),
             'domicilio':    self.domicilio_input.text().strip(),
             'localidad':    '',

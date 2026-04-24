@@ -175,12 +175,16 @@ function buildEmitirForm(emisor) {
         <div class="fact-card">
           <div class="fact-card-title">Cliente / Receptor</div>
           <div class="fact-row">
-            <label>Nombre / Razón Social</label>
+            <label>Nombre / Cliente</label>
             <input type="text" id="fCliente" value="CONSUMIDOR FINAL" />
           </div>
           <div class="fact-row">
             <label>CUIT (vacío = Cons. Final)</label>
             <input type="text" id="fCuitCliente" placeholder="20123456789" />
+          </div>
+          <div class="fact-row">
+            <label>Razón Social</label>
+            <input type="text" id="fRazonSocialCliente" placeholder="Razón Social legal del receptor" />
           </div>
           <div class="fact-row">
             <label>Domicilio</label>
@@ -389,6 +393,8 @@ function getFormData(container, emisor) {
   const fecha       = container.querySelector('#fFecha').value;  // YYYY-MM-DD
   const cliente     = container.querySelector('#fCliente').value.trim() || 'CONSUMIDOR FINAL';
   const cuitCliente = container.querySelector('#fCuitCliente').value.trim().replace(/[-\s]/g, '');
+  const razonSocialEl = container.querySelector('#fRazonSocialCliente');
+  const razonSocial = razonSocialEl ? razonSocialEl.value.trim() : '';
   const domCliente  = container.querySelector('#fDomCliente').value.trim();
   const condIva     = container.querySelector('#fCondIva').value;
   const iva         = parseFloat(container.querySelector('#fIva').value) || 0;
@@ -405,7 +411,7 @@ function getFormData(container, emisor) {
     if (desc || cant || precio) items.push({ idx: i + 1, desc, cant, precio, importe });
   });
 
-  return { tipo, concepto, pago, fecha, cliente, cuitCliente, domCliente, condIva, iva, otros, total, neto, items, emisor };
+  return { tipo, concepto, pago, fecha, cliente, cuitCliente, razonSocial, domCliente, condIva, iva, otros, total, neto, items, emisor };
 }
 
 async function getNextNro(db, tipo) {
@@ -478,17 +484,19 @@ async function emitirFactura(container, db, emisor, conAfip) {
     container.querySelector('#btnSolicitarCAE').disabled = false;
   }
 
-  // Guardar en Firestore
+  // Guardar en Firestore (incluye snapshot del emisor para poder reimprimir sin
+  // depender de perfiles_facturacion en el momento)
   try {
     await addDoc(collection(db, 'facturas'), {
       tipo_comprobante:  data.tipo,
       punto_venta:       emisor.punto_venta || 1,
       nro_comprobante:   nro,
       fecha:             data.fecha,
-      cliente:           data.cliente,
-      cuit_cliente:      data.cuitCliente,
-      domicilio_cliente: data.domCliente,
-      cond_iva_receptor: data.condIva,
+      cliente:              data.cliente,
+      cuit_cliente:         data.cuitCliente,
+      razon_social_receptor: data.razonSocial || data.cliente,
+      domicilio_cliente:    data.domCliente,
+      cond_iva_receptor:    data.condIva,
       concepto:          data.concepto,
       pago:              data.pago,
       items:             data.items,
@@ -498,6 +506,19 @@ async function emitirFactura(container, db, emisor, conAfip) {
       cae,
       vto_cae:           vtoCae,
       con_afip:          conAfip,
+      // Snapshot del emisor al momento de emisión (reimpresiones fiables)
+      emisor:            {
+        razon_social:       emisor.razon_social || '',
+        cuit:               emisor.cuit || '',
+        domicilio:          emisor.domicilio || '',
+        localidad:          emisor.localidad || '',
+        telefono:           emisor.telefono || '',
+        email:              emisor.email || '',
+        ing_brutos:         emisor.ing_brutos || '',
+        inicio_actividades: emisor.inicio_actividades || '',
+        condicion_iva:      emisor.condicion_iva || '',
+        punto_venta:        emisor.punto_venta || 1,
+      },
       created_at:        new Date().toLocaleString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }).replace(' ', 'T'),
     });
   } catch (e) {
@@ -593,7 +614,22 @@ async function loadHistorial(db, container) {
     el.querySelectorAll('.fact-btn-reprint').forEach(btn => {
       btn.addEventListener('click', () => {
         const row = rows.find(r => r.id === btn.dataset.id);
-        if (row) printFactura({ ...row, vtoCae: row.vto_cae, emisor: row.emisor || {} });
+        if (!row) return;
+        // Facturas viejas no tienen `emisor` snapshot → reconstruir desde los
+        // campos root que sync_factura del POS subió flat.
+        const emisor = row.emisor || {
+          razon_social:       row.razon_social       || '',
+          cuit:               row.cuit               || '',
+          domicilio:          row.domicilio          || '',
+          localidad:          row.localidad          || '',
+          telefono:           row.telefono           || '',
+          email:              row.email              || '',
+          ing_brutos:         row.ing_brutos         || '',
+          inicio_actividades: row.inicio_actividades || '',
+          condicion_iva:      row.condicion_iva      || '',
+          punto_venta:        row.punto_venta        || 1,
+        };
+        printFactura({ ...row, vtoCae: row.vto_cae, emisor });
       });
     });
   } catch (err) {
@@ -689,7 +725,7 @@ function bindConfigForm(container, db) {
 // ── Generar factura imprimible ────────────────────────────────────────────────
 
 function printFactura(data) {
-  const { tipo, nro, fecha, cliente, cuitCliente, domCliente, condIva, pago,
+  const { tipo, nro, fecha, cliente, cuitCliente, razonSocial, domCliente, condIva, pago,
           items, total, iva, otros, cae, vtoCae, emisor } = normalizeData(data);
 
   const letra    = tipo.includes(' A') ? 'A' : tipo.includes(' C') ? 'C' : 'B';
@@ -747,13 +783,15 @@ function printFactura(data) {
                   justify-content: center; text-align: center; }
     .letra-grande { font-size: 36px; font-weight: bold; line-height: 1; }
     .cod-afip { font-size: 7px; font-weight: bold; margin-top: 2px; }
-    .fact-logo { display: block; max-width: 50mm; max-height: 22mm;
-                 width: auto; height: auto; object-fit: contain;
-                 margin-bottom: 6px; }
+    /* Logo + texto del emisor lado a lado (mismo layout que el PDF del POS) */
+    .emisor-inner { display: flex; align-items: center; gap: 6px; }
+    .emisor-logo-col { flex: 0 0 auto; display: flex; align-items: center; justify-content: center; }
+    .emisor-text-col { flex: 1 1 auto; min-width: 0; }
+    .fact-logo { display: block; width: 22mm; height: auto; object-fit: contain; }
     .emisor-name { font-size: 12px; font-weight: bold; margin-bottom: 4px; }
     .row-lbl { font-weight: bold; font-size: 8px; }
     .row-val { font-size: 8px; margin-bottom: 2px; }
-    .comp-title { font-size: 12px; font-weight: bold; margin-bottom: 6px; }
+    .comp-title { font-size: 13px; font-weight: bold; margin-bottom: 6px; text-align: center; }
     /* Receptor */
     .receptor { border: 1px solid #000; border-top: none; }
     .rec-row { display: grid; grid-template-columns: 1fr 1fr; padding: 4px 8px;
@@ -812,12 +850,20 @@ function printFactura(data) {
   <!-- HEADER 3 COLUMNAS -->
   <div class="hdr">
     <div class="hdr-col">
-      <img src="${window.location.origin}/factura-logo.png" alt="Libreria Liceo" class="fact-logo" onerror="this.style.display='none'"/>
-      <div class="emisor-name">${emisor.razon_social || ''}</div>
-      <div class="row-val"><span class="row-lbl">Razon Social:</span> ${emisor.razon_social || ''}</div>
-      <div class="row-val"><span class="row-lbl">Domicilio Comercial:</span> ${emisor.domicilio || ''}</div>
-      <div class="row-val">${emisor.localidad || ''}</div>
-      <div class="row-val" style="font-weight:bold">Condicion frente al IVA: ${emisor.condicion_iva || 'Resp. Inscripto'}</div>
+      <div class="emisor-inner">
+        <div class="emisor-logo-col">
+          <img src="${window.location.origin}/logo-liceo.png" alt="Libreria Liceo" class="fact-logo" onerror="this.style.display='none'"/>
+        </div>
+        <div class="emisor-text-col">
+          <div class="emisor-name">${emisor.razon_social || ''}</div>
+          <div class="row-val"><span class="row-lbl">Razon Social:</span> ${emisor.razon_social || ''}</div>
+          <div class="row-val"><span class="row-lbl">Domicilio Comercial:</span> ${emisor.domicilio || ''}</div>
+          ${emisor.localidad ? `<div class="row-val">${emisor.localidad}</div>` : ''}
+          <div class="row-val" style="font-weight:bold">Condicion frente al IVA: ${emisor.condicion_iva || 'Resp. Inscripto'}</div>
+          ${emisor.telefono ? `<div class="row-val"><span class="row-lbl">Tel:</span> ${emisor.telefono}</div>` : ''}
+          ${emisor.email ? `<div class="row-val">${emisor.email}</div>` : ''}
+        </div>
+      </div>
     </div>
     <div class="hdr-center">
       <div class="letra-grande">${letra}</div>
@@ -838,11 +884,15 @@ function printFactura(data) {
   <div class="receptor">
     <div class="rec-row">
       <div><span class="row-lbl">Senor(es):</span> ${cliente}</div>
-      <div><span class="row-lbl">Domicilio:</span> ${domCliente || '—'}</div>
+      <div><span class="row-lbl">CUIT:</span> ${cuitCliente || '—'}</div>
     </div>
     <div class="rec-row">
+      <div><span class="row-lbl">Razon Social:</span> ${razonSocial || cliente}</div>
       <div><span class="row-lbl">Condicion frente al IVA:</span> ${condIva}</div>
-      <div><span class="row-lbl">CUIT:</span> ${cuitCliente || '—'}</div>
+    </div>
+    <div class="rec-row">
+      <div><span class="row-lbl">Domicilio:</span> ${domCliente || '—'}</div>
+      <div></div>
     </div>
   </div>
 
@@ -863,8 +913,8 @@ function printFactura(data) {
           <td class="center">${String(i + 1).padStart(4, '0')}</td>
           <td>${it.desc || it.descripcion || ''}</td>
           <td class="center">${Number(it.cant || it.cantidad || 1).toFixed(6)}</td>
-          <td class="right">${Number(it.precio || it.unit_price || 0).toFixed(6)}</td>
-          <td class="right">${Number(it.importe || 0).toFixed(2)}</td>
+          <td class="center">${Number(it.precio || it.unit_price || 0).toFixed(6)}</td>
+          <td class="center">${Number(it.importe || 0).toFixed(2)}</td>
         </tr>
       `).join('')}
     </tbody>
@@ -932,6 +982,7 @@ function normalizeData(d) {
     fecha:       d.fecha,
     cliente:     d.cliente    || 'CONSUMIDOR FINAL',
     cuitCliente: d.cuitCliente || d.cuit_cliente    || '',
+    razonSocial: d.razonSocial || d.razon_social_receptor || d.razon_social_cliente || '',
     domCliente:  d.domCliente  || d.domicilio_cliente || '',
     condIva:     d.condIva     || d.cond_iva_receptor || 'Consumidor Final',
     pago:        d.pago        || 'Efectivo',

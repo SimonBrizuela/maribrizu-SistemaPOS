@@ -1,13 +1,18 @@
 import { collection, getDocs, query, orderBy, where, limit, doc, updateDoc, setDoc, getDoc, runTransaction, Timestamp } from 'firebase/firestore';
 import { getCached, invalidateCache } from '../cache.js';
-import { getFechaInicioDate, isVentaVarios2 } from '../config.js';
+import { getFechaInicioDate, getFechaInicio, isVentaVarios2, isItemVarios2, fechaDMYtoYMD } from '../config.js';
 
 export async function renderCierres(container, db) {
-  const fechaInicio = await getFechaInicioDate(db);
+  const fechaInicio    = await getFechaInicioDate(db);
+  const fechaInicioStr = await getFechaInicio(db);
 
   // TTL corto: la caja abierta es crítica y debe reflejarse casi en tiempo real.
   // Catálogo + gastos se usan en el modal de cierre para calcular rentabilidad.
-  const [todosRaw, catalogo, gastosAll] = await Promise.all([
+  // `ventas_por_dia` es la fuente de verdad para los totales (misma que Historial):
+  // los campos total_* guardados en cierres_caja pueden quedar stale si una caja
+  // multi-PC se cierra desde una sola PC y las demás siguen vendiendo → acá los
+  // ignoramos y recomputamos por rango [apertura, cierre] contra los items.
+  const [todosRaw, catalogo, gastosAll, itemsRaw, cajaActivaSnap] = await Promise.all([
     getCached('cierres:caja', async () => {
       const snap = await getDocs(query(collection(db, 'cierres_caja'), orderBy('fecha_apertura', 'desc')));
       return snap.docs.map(d => ({ id: d.id, ...d.data() }));
@@ -20,7 +25,90 @@ export async function renderCierres(container, db) {
       const snap = await getDocs(query(collection(db, 'gastos'), orderBy('created_at', 'desc')));
       return snap.docs.map(d => d.data());
     }, { ttl: 60 * 1000 }),
+    getCached('historial:ventas_dia:v3', async () => {
+      const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('fecha', 'desc')));
+      return snap.docs.map(d => {
+        const data  = d.data();
+        const parts = d.id.split('_');
+        const pcId  = parts.length >= 3 ? parts.slice(0, -2).join('_') : '';
+        return { ...data, _pc_id: pcId };
+      });
+    }, { ttl: 60 * 1000 }),
+    // caja_activa/current es la fuente de verdad sobre cuál caja está REALMENTE
+    // abierta. Si un doc fantasma de cierres_caja quedó con fecha_cierre vacía
+    // (bug: una PC desktop reabre su caja vieja pisando un cierre), la ignoramos.
+    getDoc(doc(db, 'caja_activa', 'current')).then(s => s.exists() ? s.data() : null),
   ]);
+
+  // ── Items normalizados para agregar por rango [apertura, cierre] ──
+  // fecha_dt se guarda desde el desktop como Timestamp UTC. Algunos items viejos
+  // pueden no tenerlo → caemos a componer fecha (DD/MM/YYYY) + hora (HH:MM:SS) AR.
+  const items = itemsRaw
+    .filter(it => {
+      if (it.deleted === true) return false;
+      if (isItemVarios2(it)) return false;
+      return fechaDMYtoYMD(it.fecha) >= fechaInicioStr;
+    })
+    .map(it => {
+      let dt = null;
+      if (it.fecha_dt) {
+        dt = typeof it.fecha_dt.toDate === 'function' ? it.fecha_dt.toDate()
+           : it.fecha_dt.seconds !== undefined
+             ? new Date(it.fecha_dt.seconds * 1000 + Math.floor((it.fecha_dt.nanoseconds || 0) / 1e6))
+             : new Date(it.fecha_dt);
+        if (dt && isNaN(dt)) dt = null;
+      }
+      if (!dt) {
+        const ymd = fechaDMYtoYMD(it.fecha);
+        const hora = (it.hora || '00:00:00').padEnd(8, ':00').slice(0, 8);
+        if (ymd) {
+          const parsed = new Date(`${ymd}T${hora}-03:00`);
+          if (!isNaN(parsed)) dt = parsed;
+        }
+      }
+      return {
+        pc_id:     it._pc_id || '',
+        num_venta: it.num_venta,
+        subtotal:  Number(it.subtotal || 0),
+        cantidad:  Number(it.cantidad || 0),
+        tipo_pago: it.tipo_pago || '',
+        producto:  it.producto || it.product_name || '-',
+        fecha_dt:  dt,
+      };
+    });
+
+  // Agrega items cuyo `fecha_dt` cae en [apertura, cierre]. cierre=null → hasta ahora.
+  function aggregateInRange(apertura, cierre) {
+    const ini = apertura && !isNaN(apertura) ? apertura.getTime() : -Infinity;
+    const fin = cierre   && !isNaN(cierre)   ? cierre.getTime()   : Infinity;
+    let total_efectivo = 0, total_transferencia = 0;
+    const ventasEf = new Set();
+    const ventasTr = new Set();
+    const prodMap  = {};
+    for (const it of items) {
+      if (!it.fecha_dt) continue;
+      const t = it.fecha_dt.getTime();
+      if (t < ini || t > fin) continue;
+      const esTr = it.tipo_pago === 'Transferencia';
+      const key  = `${it.pc_id}|${it.num_venta}`;
+      if (esTr) { total_transferencia += it.subtotal; ventasTr.add(key); }
+      else      { total_efectivo      += it.subtotal; ventasEf.add(key); }
+      if (!prodMap[it.producto]) {
+        prodMap[it.producto] = { product_name: it.producto, total_quantity: 0, total_amount: 0 };
+      }
+      prodMap[it.producto].total_quantity += it.cantidad || 1;
+      prodMap[it.producto].total_amount   += it.subtotal;
+    }
+    return {
+      total_ventas:             total_efectivo + total_transferencia,
+      total_efectivo,
+      total_transferencia,
+      num_ventas_efectivo:      ventasEf.size,
+      num_ventas_transferencia: ventasTr.size,
+      total_transacciones:      ventasEf.size + ventasTr.size,
+      productos_vendidos:       Object.values(prodMap).sort((a, b) => b.total_amount - a.total_amount),
+    };
+  }
 
   // Índice catálogo por nombre (para obtener costo al calcular CMV del turno)
   const catByName = {};
@@ -38,11 +126,24 @@ export async function renderCierres(container, db) {
     return d && d >= fechaInicio;
   });
 
-  // Separar cajas abiertas (sin fecha_cierre) de las cerradas
-  const cajasAbiertasRaw = todos.filter(c => !c.fecha_cierre || c.fecha_cierre === null || c.fecha_cierre === '');
-  // Deduplicar por register_id: hoy hay UN solo doc compartido por caja, pero
-  // pueden quedar docs viejos en formato "{pc_id}_{register_id}" del esquema
-  // anterior → si vemos el mismo register_id en varios docs, nos quedamos con uno.
+  // Separar cajas abiertas (sin fecha_cierre) de las cerradas.
+  // Filtro adicional: solo aceptamos como "abierta" la que matchea
+  // caja_activa/current.id. Así, si un doc fantasma quedó sin fecha_cierre (bug
+  // de PC vieja que reabre su caja pisando un cierre), lo tratamos como
+  // cerrada para la UI (no se suma a la tarjeta "Caja Abierta").
+  const cajaActivaId = (cajaActivaSnap && cajaActivaSnap.status === 'open')
+    ? (cajaActivaSnap.register_id != null ? String(cajaActivaSnap.register_id)
+        : (cajaActivaSnap.id != null ? String(cajaActivaSnap.id) : null))
+    : null;
+  const cajasAbiertasRaw = todos.filter(c => {
+    const sinCierre = !c.fecha_cierre || c.fecha_cierre === null || c.fecha_cierre === '';
+    if (!sinCierre) return false;
+    // Si caja_activa/current dice que la única abierta es otra, descartamos.
+    if (cajaActivaId && c.register_id != null && String(c.register_id) !== cajaActivaId) {
+      return false;
+    }
+    return true;
+  });
   const _seenReg = new Set();
   const cajasAbiertas = [];
   for (const c of cajasAbiertasRaw) {
@@ -51,98 +152,63 @@ export async function renderCierres(container, db) {
     _seenReg.add(key);
     cajasAbiertas.push(c);
   }
-  const cierres = todos.filter(c => c.fecha_cierre && c.fecha_cierre !== '');
+  // Los docs filtrados (fantasmas reabiertos) los contamos como cerrados igual,
+  // para que no desaparezcan de la tabla — usamos su fecha_cierre original si
+  // la tienen, o la apertura como fallback (caso raro).
+  const cierres = todos.filter(c => {
+    if (c.fecha_cierre && c.fecha_cierre !== '') return true;
+    if (cajaActivaId && c.register_id != null && String(c.register_id) !== cajaActivaId) {
+      return true;  // fantasma: tratarla como cerrada para que aparezca en la tabla
+    }
+    return false;
+  });
 
-  // Caja abierta consolidada: calcular totales desde la colección `ventas`
-  // para no depender del documento de cierres_caja (que solo se actualiza al cerrar/sincronizar)
+  // Caja abierta consolidada: totales computados desde `ventas_por_dia` en el
+  // rango [apertura_mas_temprana, ahora]. Ignora los totales guardados en los
+  // docs de cierres_caja (que pueden estar stale si no sincronizó una PC).
   let cajaAbierta = null;
   if (cajasAbiertas.length > 0) {
     const fechaAperturaRaw = cajasAbiertas.reduce(
       (min, c) => (!min || toDate(c.fecha_apertura) < toDate(min) ? c.fecha_apertura : min), null
     );
     const fechaAperturaDate = toDate(fechaAperturaRaw);
-
-    // "Ventas en curso" = ventas desde la apertura del turno (con buffer).
-    // Una caja que quedó abierta cruzando medianoche sigue siendo el mismo turno:
-    // hay que mostrar TODAS sus ventas, no cortarlas al inicio del día actual.
-    const BUFFER_MS = 5 * 60 * 1000;
-    let fechaLimite = fechaAperturaDate ? new Date(fechaAperturaDate.getTime() - BUFFER_MS) : null;
-    if (fechaInicio && (!fechaLimite || fechaLimite < fechaInicio)) {
-      fechaLimite = fechaInicio;
-    }
-    // Reutilizar cache compartido con dashboard/control_total (500 ventas recientes).
-    // Cubre holgadamente las ventas del día actual; TTL corto = datos casi en vivo.
-    const ventasCache = await getCached('dashboard:ventas', async () => {
-      const snap = await getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc'), limit(500)));
-      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    }, { ttl: 60 * 1000 });
-    // Sumar SOLO ventas pertenecientes a cajas actualmente abiertas. Si no filtramos
-    // por register_id, una caja vieja sin cerrar arrastra ventas de cajas ya cerradas
-    // (Historial 22/04 ≠ Caja Abierta porque ésta sumaba 20, 21 y 22).
-    const idsAbiertos = new Set(
-      cajasAbiertas
-        .map(c => (c.register_id != null ? String(c.register_id) : null))
-        .filter(Boolean)
-    );
-    let totalEfectivo = 0, totalTransferencia = 0, totalTransacciones = 0;
-    for (const v of ventasCache) {
-      if (v.deleted === true) continue;
-      if (isVentaVarios2(v)) continue;
-      if (idsAbiertos.size > 0) {
-        const regId = v.cash_register_id != null ? String(v.cash_register_id) : '';
-        if (!idsAbiertos.has(regId)) continue;
-      }
-      const vDate = toDate(v.created_at);
-      if (!vDate) continue;
-      if (fechaLimite && vDate < fechaLimite) continue;
-      const monto = parseFloat(v.total_amount || 0);
-      if (v.payment_type === 'cash') totalEfectivo += monto;
-      else if (v.payment_type === 'transfer') totalTransferencia += monto;
-      totalTransacciones++;
-    }
+    const agg = aggregateInRange(fechaAperturaDate, null);
 
     cajaAbierta = {
       cajero:              cajasAbiertas.map(c => c.cajero || c.pc_id || 'PC').join(', '),
       fecha_apertura:      fechaAperturaRaw,
       monto_inicial:       cajasAbiertas[0]?.monto_inicial || 0,
-      total_ventas:        totalEfectivo + totalTransferencia,
-      total_efectivo:      totalEfectivo,
-      total_transferencia: totalTransferencia,
+      total_ventas:        agg.total_ventas,
+      total_efectivo:      agg.total_efectivo,
+      total_transferencia: agg.total_transferencia,
       total_retiros:       cajasAbiertas.reduce((s, c) => s + (c.total_retiros || 0), 0),
-      total_transacciones: totalTransacciones,
-      productos_vendidos:  [],
+      total_transacciones: agg.total_transacciones,
+      productos_vendidos:  agg.productos_vendidos,
       retiros:             cajasAbiertas.flatMap(c => c.retiros || []),
       _pcs:                cajasAbiertas.length,
     };
   }
 
-  // Agrupar cierres por session_id (misma sesión = mismo día de cierre)
-  // Docs sin session_id se tratan como sesión individual (compatibilidad con datos viejos)
+  // Agrupar cierres por session_id (misma sesión = mismas aperturas/cierres).
+  // Docs sin session_id se tratan como sesión individual (compat datos viejos).
+  // De los docs solo conservamos metadata (apertura, cierre, PCs, retiros,
+  // monto_final, pendiente). Los totales los recalculamos abajo desde items.
   const sesionesMap = {};
   for (const c of cierres) {
-    const key = c.session_id || c.id; // fallback al id del doc para datos sin session_id
+    const key = c.session_id || c.id;
     if (!sesionesMap[key]) {
       sesionesMap[key] = {
-        session_id:          key,
-        fecha_apertura:      c.fecha_apertura,
-        fecha_cierre:        c.fecha_cierre,
-        cajero:              [],
-        pcs:                 [],
-        monto_inicial:       c.monto_inicial || 0,  // compartido entre PCs, no se suma
-        total_ventas:        0,
-        total_efectivo:      0,
-        total_transferencia: 0,
-        total_retiros:       0,
-        total_transacciones: 0,
-        num_ventas_efectivo: 0,
-        num_ventas_transferencia: 0,
-        monto_inicial_sum:   c.monto_inicial || 0,
-        monto_esperado:      0,
-        monto_final:         0,
-        productos_vendidos:  [],
-        retiros:             [],
-        pendiente_conteo:    false,
-        _docs:               [],
+        session_id:       key,
+        fecha_apertura:   c.fecha_apertura,
+        fecha_cierre:     c.fecha_cierre,
+        cajero:           [],
+        pcs:              [],
+        monto_inicial:    c.monto_inicial || 0,  // compartido entre PCs, no se suma
+        total_retiros:    0,
+        monto_final:      0,
+        retiros:          [],
+        pendiente_conteo: false,
+        _docs:            [],
       };
     }
     const s = sesionesMap[key];
@@ -150,27 +216,28 @@ export async function renderCierres(container, db) {
     if (c.pendiente_conteo === true) s.pendiente_conteo = true;
     if (c.cajero && !s.cajero.includes(c.cajero)) s.cajero.push(c.cajero);
     if (c.pc_id  && !s.pcs.includes(c.pc_id))    s.pcs.push(c.pc_id);
-    s.total_ventas        += (c.total_ventas        || 0);
-    s.total_efectivo      += (c.total_efectivo      || 0);
-    s.total_transferencia += (c.total_transferencia || 0);
-    s.total_retiros       += (c.total_retiros       || 0);
-    s.total_transacciones += (c.total_transacciones || 0);
-    s.num_ventas_efectivo += (c.num_ventas_efectivo || 0);
-    s.num_ventas_transferencia += (c.num_ventas_transferencia || 0);
-    // monto_inicial es el mismo en todas las PCs (viene de PC1), no se acumula
-    s.monto_esperado      += (c.monto_esperado      || 0);
-    s.monto_final         += (c.monto_final         || 0);
+    s.total_retiros += (c.total_retiros || 0);
+    s.monto_final   += (c.monto_final   || 0);
     // Usar la apertura más temprana y el cierre más tardío
     if (!s.fecha_apertura || toDate(c.fecha_apertura) < toDate(s.fecha_apertura)) s.fecha_apertura = c.fecha_apertura;
     if (!s.fecha_cierre   || toDate(c.fecha_cierre)   > toDate(s.fecha_cierre))   s.fecha_cierre   = c.fecha_cierre;
-    s.productos_vendidos.push(...(c.productos_vendidos || []));
     s.retiros.push(...(c.retiros || []));
   }
-  // Convertir mapa a array ordenado por fecha_cierre desc
   const sesiones = Object.values(sesionesMap).sort((a, b) => toDate(b.fecha_cierre) - toDate(a.fecha_cierre));
   for (const s of sesiones) {
-    s.cajero        = s.cajero.join(', ') || '-';
-    s.monto_inicial = s.monto_inicial_sum;
+    s.cajero = s.cajero.join(', ') || '-';
+    // Recomputar totales desde ventas_por_dia en el rango [apertura, cierre].
+    // Esto evita que una caja multi-PC cerrada desde una sola PC muestre totales
+    // rotos porque las otras PCs siguieron vendiendo sin tocar el doc del cierre.
+    const agg = aggregateInRange(toDate(s.fecha_apertura), toDate(s.fecha_cierre));
+    s.total_ventas             = agg.total_ventas;
+    s.total_efectivo           = agg.total_efectivo;
+    s.total_transferencia      = agg.total_transferencia;
+    s.total_transacciones      = agg.total_transacciones;
+    s.num_ventas_efectivo      = agg.num_ventas_efectivo;
+    s.num_ventas_transferencia = agg.num_ventas_transferencia;
+    s.productos_vendidos       = agg.productos_vendidos;
+    s.monto_esperado           = (s.monto_inicial || 0) + agg.total_efectivo - (s.total_retiros || 0);
   }
 
   const totalCierres = sesiones.length;
@@ -248,27 +315,6 @@ export async function renderCierres(container, db) {
           <div style="font-size:20px;font-weight:800;margin-top:4px;color:${(cajaAbierta.total_retiros||0)>0?'#fca5a5':'#fff'}">-$${fmt(cajaAbierta.total_retiros || 0)}</div>
         </div>
       </div>
-
-      ${(cajaAbierta.productos_vendidos||[]).length > 0 ? `
-      <div style="margin-top:16px">
-        <div style="font-size:11px;color:#6ee7b7;font-weight:700;margin-bottom:8px">PRODUCTOS VENDIDOS EN ESTE TURNO</div>
-        <div style="background:rgba(0,0,0,0.2);border-radius:10px;overflow:hidden;max-height:160px;overflow-y:auto">
-          <table style="width:100%;border-collapse:collapse;font-size:12px">
-            <thead><tr style="background:rgba(0,0,0,0.2)">
-              <th style="padding:8px 12px;text-align:left;color:#6ee7b7">Producto</th>
-              <th style="padding:8px 12px;text-align:center;color:#6ee7b7">Cant.</th>
-              <th style="padding:8px 12px;text-align:right;color:#6ee7b7">Total</th>
-            </tr></thead>
-            <tbody>${(cajaAbierta.productos_vendidos||[]).map((p,i)=>`
-              <tr style="border-top:1px solid rgba(255,255,255,0.08)">
-                <td style="padding:7px 12px;color:#fff">${p.product_name||p.nombre||'-'}</td>
-                <td style="padding:7px 12px;text-align:center;color:#6ee7b7">${p.total_quantity||p.cantidad||0}</td>
-                <td style="padding:7px 12px;text-align:right;font-weight:700;color:#34d399">$${fmt(p.total_amount||p.total||0)}</td>
-              </tr>`).join('')}
-            </tbody>
-          </table>
-        </div>
-      </div>` : ''}
 
       ${(cajaAbierta.retiros||[]).length > 0 ? `
       <div style="margin-top:12px">

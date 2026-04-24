@@ -28,22 +28,18 @@ def _fmt_qty(q):
 
 
 class CartQuantitySpinBox(QDoubleSpinBox):
-    """Cantidad del carrito con convención de unidades según separador:
+    """Cantidad del carrito aceptando coma o punto como separador decimal.
 
-    - '2'     (sin separador) → 2 unidades (precio x 2)
-    - '1.'    o '1.5'         → metros     (precio x 1.0, x 1.5)
-    - '100,'  o '50,'         → centímetros (precio x 1.0, x 0.5)
-
-    El valor interno almacenado en el spinbox es siempre el multiplicador
-    final (unidades / metros equivalentes), así el cálculo de subtotal
-    sigue siendo quantity * unit_price sin tocar nada más.
+    Ambos separadores se interpretan igual (formato AR y EN):
+      - '2'    → 2 unidades
+      - '1.5'  → 1.5 unidades
+      - '1,5'  → 1.5 unidades (equivalente a '1.5')
     """
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setKeyboardTracking(True)
         self.setFocusPolicy(Qt.WheelFocus)
-        # 3 decimales para que '1,5' cm = 0.015 se almacene sin redondeo.
         self.setDecimals(3)
         self.setSingleStep(1.0)
 
@@ -51,18 +47,12 @@ class CartQuantitySpinBox(QDoubleSpinBox):
         super().wheelEvent(event)
 
     def _parse(self, text):
-        """Convierte el texto del usuario al multiplicador final.
-        Devuelve None si el texto aún es incompleto/intermedio."""
+        """Parsea texto a float. Devuelve None si es intermedio/inválido."""
         t = (text or '').strip()
         if not t or t in ('.', ','):
             return None
-        if ',' in t:
-            try:
-                return float(t.replace(',', '.')) / 100.0
-            except ValueError:
-                return None
         try:
-            return float(t)
+            return float(t.replace(',', '.'))
         except ValueError:
             return None
 
@@ -2448,9 +2438,6 @@ class SalesView(QWidget):
             sale_id = self.sale_model.create(sale_data)
             if sale_id:
                 sale = self.sale_model.get_by_id(sale_id)
-                # Generación de ticket desactivada temporalmente
-                pdf_path = None
-                # pdf_path = self.pdf_generator.generate_sale_ticket(sale)
 
                 # ── Persistir observaciones de items (incluye VARIOS) ──
                 # Mira tanto 'observation' (items normales editados desde el carrito)
@@ -2523,9 +2510,31 @@ class SalesView(QWidget):
                         if resp == QMessageBox.Yes:
                             self.open_pdf(fac_dlg.pdf_path)
                 else:
-                    # Solo abrir el ticket si fue generado
-                    if pdf_path:
-                        self.open_pdf(pdf_path)
+                    # Venta sin AFIP: ofrecer ticket de compra no fiscal
+                    resp = QMessageBox.question(
+                        self, 'Ticket de compra',
+                        'Generar ticket de compra?',
+                        QMessageBox.Yes | QMessageBox.No,
+                        QMessageBox.No
+                    )
+                    if resp == QMessageBox.Yes:
+                        try:
+                            cli_name = ''
+                            if selected_cliente:
+                                cli_name = (selected_cliente.get('razon_social')
+                                            or selected_cliente.get('nombre')
+                                            or '').strip()
+                            pdf_path = self.pdf_generator.generate_non_fiscal_ticket(
+                                sale,
+                                cajero_name=turno_nombre,
+                                cliente_name=cli_name or 'Consumidor Final',
+                            )
+                            self.open_pdf(pdf_path)
+                        except Exception as e:
+                            QMessageBox.warning(
+                                self, 'Ticket',
+                                f'No se pudo generar el ticket: {e}'
+                            )
 
                 self.cart = []
                 self.update_cart_display()

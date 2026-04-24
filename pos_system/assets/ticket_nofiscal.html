@@ -1,0 +1,371 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Ticket · Librería Liceo</title>
+<style>
+  :root {
+    --ink: #000;
+    --paper: #fff;
+    --ticket-width: 72mm;
+    --mono: "Courier New", "Courier", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #e9e9ec;
+    color: #111;
+    font-family: ui-sans-serif, system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+
+  /* Paper stack (solo en pantalla) */
+  .paper-stack {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    padding: 30px 16px 60px;
+    box-sizing: border-box;
+    gap: 14px;
+  }
+  .paper-label {
+    font-size: 11px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: #6b6b72;
+  }
+  .print-btn {
+    position: fixed;
+    top: 16px;
+    right: 16px;
+    background: #111;
+    color: #fff;
+    border: 0;
+    font: inherit;
+    font-size: 13px;
+    padding: 10px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+    z-index: 10;
+  }
+  .print-btn:hover { background: #000; }
+
+  /* El ticket */
+  .ticket {
+    width: var(--ticket-width);
+    background: var(--paper);
+    color: var(--ink);
+    padding: 6mm 4mm 10mm;
+    box-sizing: border-box;
+    font-family: var(--mono);
+    font-size: 11pt;
+    line-height: 1.35;
+    box-shadow: 0 1px 0 rgba(0,0,0,0.05), 0 10px 30px rgba(0,0,0,0.08);
+  }
+
+  .t-logo {
+    display: block;
+    margin: 0 auto 3mm;
+    width: 30mm;
+    height: auto;
+  }
+  .t-center  { text-align: center; }
+  .t-bold    { font-weight: 700; }
+  .t-xsmall  { font-size: 8.5pt; }
+  .t-upper   { text-transform: uppercase; letter-spacing: 0.04em; }
+
+  .t-name {
+    font-size: 13pt;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-align: center;
+    margin: 0 0 1mm;
+  }
+  .t-tag {
+    text-align: center;
+    font-size: 9pt;
+    letter-spacing: 0.18em;
+    margin: 0 0 3mm;
+  }
+  .t-meta {
+    text-align: center;
+    font-size: 9.5pt;
+    margin: 0;
+  }
+  .t-meta p { margin: 0; }
+
+  .t-rule {
+    border: 0;
+    border-top: 1px dashed #000;
+    margin: 2.5mm 0;
+  }
+  .t-rule-solid {
+    border: 0;
+    border-top: 1px solid #000;
+    margin: 2.5mm 0;
+  }
+
+  .t-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 10pt;
+  }
+  .t-row + .t-row { margin-top: 0.5mm; }
+  .t-row .lbl { font-weight: 700; }
+
+  .t-items {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10pt;
+    margin: 1mm 0 0;
+  }
+  .t-items th {
+    text-align: left;
+    font-weight: 700;
+    font-size: 8.5pt;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    padding: 0 0 1mm;
+    border-bottom: 1px solid #000;
+  }
+  .t-items th.num, .t-items td.num { text-align: right; }
+  .t-items td {
+    padding: 1.2mm 0 0;
+    vertical-align: top;
+  }
+  .t-items td.qty { width: 8mm; font-weight: 700; }
+  .t-items td.prod { word-break: break-word; }
+  .t-items td.amt { width: 16mm; white-space: nowrap; }
+
+  .t-item-sub {
+    font-size: 8.5pt;
+    padding-left: 0 !important;
+  }
+  .t-strike { text-decoration: line-through; }
+  .t-badge {
+    display: inline-block;
+    border: 1px solid #000;
+    padding: 0 3px;
+    border-radius: 2px;
+    font-size: 8pt;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    margin-right: 4px;
+  }
+
+  .t-totals { font-size: 10.5pt; }
+  .t-totals .t-row { font-size: 10.5pt; }
+  .t-total-big {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-weight: 800;
+    font-size: 14pt;
+    letter-spacing: 0.04em;
+    padding: 2mm 0;
+    border-top: 1px solid #000;
+    border-bottom: 1px solid #000;
+    margin: 2mm 0;
+  }
+  .t-save {
+    border: 1px dashed #000;
+    padding: 1.5mm 2mm;
+    text-align: center;
+    font-size: 9.5pt;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    margin: 1.5mm 0;
+  }
+
+  .t-pay .t-row { font-size: 10.5pt; }
+
+  .t-thanks {
+    text-align: center;
+    font-weight: 700;
+    letter-spacing: 0.2em;
+    font-size: 11pt;
+    margin: 3mm 0 1mm;
+  }
+  .t-nocopy {
+    text-align: center;
+    font-size: 8pt;
+    letter-spacing: 0.08em;
+    margin-top: 2mm;
+  }
+
+  .t-barcode {
+    margin: 3mm auto 1mm;
+    height: 10mm;
+    width: 54mm;
+    background-image: repeating-linear-gradient(
+      to right,
+      #000 0 1px, #fff 1px 3px,
+      #000 3px 5px, #fff 5px 6px,
+      #000 6px 9px, #fff 9px 11px,
+      #000 11px 12px, #fff 12px 15px
+    );
+  }
+  .t-barcode-num {
+    text-align: center;
+    font-size: 9pt;
+    letter-spacing: 0.28em;
+  }
+
+  /* Impresión: una sola hoja A4 */
+  @page {
+    size: A4 portrait;
+    margin: 6mm;
+  }
+  @media print {
+    html, body { background: #fff; }
+    .paper-stack { display: block; padding: 0; min-height: 0; }
+    .paper-label, .print-btn { display: none !important; }
+
+    .ticket {
+      margin: 0 auto;
+      width: 80mm;
+      box-shadow: none;
+      padding: 3mm 4mm 4mm;
+      page-break-inside: avoid;
+      break-inside: avoid;
+      transform: scale(0.86);
+      transform-origin: top center;
+    }
+    .ticket .t-logo { width: 24mm; margin-bottom: 2mm; }
+    .ticket .t-barcode { margin: 2mm auto 1mm; }
+
+    .t-items, .t-total-big, .t-pay, .t-totals {
+      page-break-inside: avoid;
+      break-inside: avoid;
+    }
+  }
+</style>
+</head>
+<body>
+
+<div class="paper-stack">
+
+  <!--
+    ============================================================
+    TICKET — plantilla Mustache / Handlebars
+    Copiá este bloque a tu backend. Las secciones {{#...}} son loops
+    o condicionales (items, descuentos, efectivo, etc.).
+    ============================================================
+  -->
+  <div class="ticket" id="ticket">
+
+    <!-- Logo -->
+    <img class="t-logo" src="{{logo_src}}" alt="Logo">
+
+    <!-- Cabecera empresa -->
+    <h1 class="t-name">{{empresa_nombre}}</h1>
+    <p class="t-tag">LIBRERIA · MERCERIA · REGALERIA</p>
+
+    <div class="t-meta">
+      <p>{{empresa_direccion}}</p>
+      <p>Tel: {{empresa_tel}}</p>
+      <p>{{empresa_email}}</p>
+    </div>
+
+    <hr class="t-rule">
+
+    <div class="t-meta">
+      <p><span class="t-bold">CUIT:</span> {{cuit}}</p>
+      <p><span class="t-bold">IIBB:</span> {{ing_brutos}}</p>
+      <p class="t-xsmall t-upper">Responsable monotributo</p>
+    </div>
+
+    <hr class="t-rule-solid">
+
+    <p class="t-center t-bold t-upper" style="letter-spacing:.18em; font-size:11pt; margin:0 0 2mm;">
+      Ticket no fiscal
+    </p>
+
+    <div class="t-row"><span class="lbl">N°</span><span>{{nro_ticket}}</span></div>
+    <div class="t-row"><span class="lbl">Fecha</span><span>{{fecha}} · {{hora}}</span></div>
+    <div class="t-row"><span class="lbl">Cajero</span><span>{{cajero}}</span></div>
+    <div class="t-row"><span class="lbl">Cliente</span><span>{{cliente}}</span></div>
+
+    <hr class="t-rule">
+
+    <!-- Items -->
+    <table class="t-items">
+      <thead>
+        <tr>
+          <th>Cant</th>
+          <th>Producto</th>
+          <th class="num">Subt.</th>
+        </tr>
+      </thead>
+      <tbody>
+        {{#items}}
+        <tr>
+          <td class="qty">{{cantidad}}</td>
+          <td class="prod">{{producto}}</td>
+          <td class="amt num">${{subtotal}}</td>
+        </tr>
+        {{#precio_original}}
+        <tr>
+          <td></td>
+          <td class="prod t-item-sub" colspan="2">
+            <span class="t-badge">{{descuento_texto}}</span>
+            <span class="t-strike">${{precio_original}}</span>
+            &nbsp;→&nbsp;
+            <span>${{precio_unit}}</span>
+            {{#descuento_monto}}
+              &nbsp;(-${{descuento_monto}})
+            {{/descuento_monto}}
+          </td>
+        </tr>
+        {{/precio_original}}
+        {{/items}}
+      </tbody>
+    </table>
+
+    <hr class="t-rule">
+
+    <!-- Totales -->
+    <div class="t-totals">
+      <div class="t-row"><span>Subtotal</span><span>${{subtotal_total}}</span></div>
+      {{#ahorro_total}}
+      <div class="t-row"><span>Descuentos</span><span>-${{ahorro_total}}</span></div>
+      {{/ahorro_total}}
+    </div>
+
+    <div class="t-total-big">
+      <span>TOTAL</span>
+      <span>${{total}}</span>
+    </div>
+
+    {{#ahorro_total}}
+    <div class="t-save">¡AHORRASTE ${{ahorro_total}}!</div>
+    {{/ahorro_total}}
+
+    <!-- Pago -->
+    <div class="t-pay">
+      <div class="t-row"><span class="lbl">Forma de pago</span><span>{{forma_pago}}</span></div>
+      {{#recibido}}
+      <div class="t-row"><span>Recibido</span><span>${{recibido}}</span></div>
+      <div class="t-row"><span>Vuelto</span><span>${{vuelto}}</span></div>
+      {{/recibido}}
+    </div>
+
+    <hr class="t-rule">
+
+    <!-- Barcode + footer -->
+    <div class="t-barcode" aria-hidden="true"></div>
+    <div class="t-barcode-num">{{nro_ticket}}</div>
+
+    <p class="t-thanks">¡GRACIAS POR SU COMPRA!</p>
+    <p class="t-nocopy">— Documento no válido como factura —</p>
+  </div>
+  <!-- /ticket -->
+
+</div>
+
+</body>
+</html>

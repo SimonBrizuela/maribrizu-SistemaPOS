@@ -60,6 +60,34 @@ class _CaeWorker(QThread):
             self.fail.emit(e)
 
 
+class _PadronWorker(QThread):
+    """Worker que consulta el padrón AFIP en background para no frizar la UI."""
+    ok   = pyqtSignal(str, object)   # (cuit, dict_o_None)
+    fail = pyqtSignal(str, object)   # (cuit, exception)
+
+    def __init__(self, cuit, cuit_emisor, cert_path, key_path, produccion):
+        super().__init__()
+        self.cuit = cuit
+        self.cuit_emisor = cuit_emisor
+        self.cert_path = cert_path
+        self.key_path = key_path
+        self.produccion = produccion
+
+    def run(self):
+        try:
+            from pos_system.utils.afip_wsfe import AFIPPadron
+            padron = AFIPPadron(
+                cuit=self.cuit_emisor,
+                cert_path=self.cert_path,
+                key_path=self.key_path,
+                produccion=self.produccion,
+            )
+            data = padron.consultar(self.cuit)
+            self.ok.emit(self.cuit, data)
+        except Exception as e:
+            self.fail.emit(self.cuit, e)
+
+
 class FacturaDialog(QDialog):
     """
     Diálogo para emitir una factura electrónica AFIP a partir de una venta.
@@ -261,6 +289,21 @@ class FacturaDialog(QDialog):
         self.cuit_cliente_input.setPlaceholderText('Ej: 20123456789 (vacio = Consumidor Final)')
         cliente_layout.addRow('CUIT Cliente:', self.cuit_cliente_input)
 
+        # Label de estado del lookup al padrón AFIP (se actualiza al consultar)
+        self.cuit_status_lbl = QLabel('')
+        self.cuit_status_lbl.setFont(QFont('Segoe UI', 8))
+        self.cuit_status_lbl.setStyleSheet('color:#6c757d; padding-left:2px;')
+        cliente_layout.addRow('', self.cuit_status_lbl)
+        # Disparar consulta al padrón cuando se termina de editar el CUIT
+        self.cuit_cliente_input.editingFinished.connect(self._on_cuit_lookup)
+        self._cuit_lookup_thread = None
+        self._last_lookup_cuit = ''
+
+        self.razon_social_cliente_input = QLineEdit('')
+        self.razon_social_cliente_input.setFont(QFont('Segoe UI', 10))
+        self.razon_social_cliente_input.setPlaceholderText('Razon Social legal (se autocompleta al consultar CUIT)')
+        cliente_layout.addRow('Razon Social:', self.razon_social_cliente_input)
+
         self.domicilio_cliente_input = QLineEdit('')
         self.domicilio_cliente_input.setFont(QFont('Segoe UI', 10))
         self.domicilio_cliente_input.setPlaceholderText('Opcional')
@@ -419,6 +462,136 @@ class FacturaDialog(QDialog):
             except Exception:
                 pass
 
+    def _on_cuit_lookup(self):
+        """
+        Cuando el usuario termina de editar el CUIT, consulta el padrón AFIP en
+        background y auto-rellena razón social, domicilio y condición IVA.
+        Si el CUIT es válido y trae datos, también guarda el cliente en la DB
+        local (tabla clientes_facturacion) para reusarlo después.
+        """
+        cuit = (self.cuit_cliente_input.text() or '').replace('-', '').replace(' ', '').strip()
+        if not cuit:
+            self.cuit_status_lbl.setText('')
+            return
+        if not cuit.isdigit() or len(cuit) != 11:
+            self.cuit_status_lbl.setText('CUIT invalido (11 digitos)')
+            self.cuit_status_lbl.setStyleSheet('color:#dc3545; padding-left:2px;')
+            return
+        # Evitar re-lookup si el usuario sale y vuelve al mismo CUIT
+        if cuit == self._last_lookup_cuit:
+            return
+        # Validar que el emisor tenga cert (si no, el padron no puede autenticar)
+        cert_path = self.emisor.get('cert_path', '')
+        key_path  = self.emisor.get('key_path', '')
+        cuit_emi  = (self.emisor.get('cuit', '') or '').replace('-', '').replace(' ', '')
+        if not (cert_path and key_path and cuit_emi):
+            self.cuit_status_lbl.setText('Sin certificado AFIP — completalo manual')
+            self.cuit_status_lbl.setStyleSheet('color:#b45309; padding-left:2px;')
+            return
+        # Buscar primero en la DB local (sin gastar un roundtrip a AFIP si ya lo tenemos)
+        try:
+            from pos_system.database.db_manager import DatabaseManager
+            _db = DatabaseManager()
+            r = _db.execute_query(
+                "SELECT * FROM clientes_facturacion WHERE cuit=? AND activo=1 LIMIT 1",
+                (cuit,)
+            )
+            if r:
+                self._apply_padron_result(cuit, {
+                    'razon_social':  r[0].get('razon_social') or r[0].get('nombre', ''),
+                    'domicilio':     r[0].get('domicilio', ''),
+                    'localidad':     r[0].get('localidad', ''),
+                    'condicion_iva': r[0].get('condicion_iva', ''),
+                    'activo':        True,
+                }, from_local=True)
+                return
+        except Exception:
+            pass
+
+        self._last_lookup_cuit = cuit
+        self.cuit_status_lbl.setText('Consultando padron AFIP...')
+        self.cuit_status_lbl.setStyleSheet('color:#0d6efd; padding-left:2px;')
+
+        # Cortar worker previo si estaba corriendo
+        prev = self._cuit_lookup_thread
+        if prev and prev.isRunning():
+            prev.ok.disconnect()
+            prev.fail.disconnect()
+
+        produccion = bool(self.emisor.get('produccion'))
+        w = _PadronWorker(cuit, cuit_emi, cert_path, key_path, produccion)
+        w.ok.connect(self._on_cuit_lookup_ok)
+        w.fail.connect(self._on_cuit_lookup_fail)
+        self._cuit_lookup_thread = w
+        w.start()
+
+    def _on_cuit_lookup_ok(self, cuit, data):
+        if data is None:
+            self.cuit_status_lbl.setText('CUIT no encontrado en AFIP')
+            self.cuit_status_lbl.setStyleSheet('color:#b45309; padding-left:2px;')
+            return
+        self._apply_padron_result(cuit, data, from_local=False)
+        # Guardar cliente en la DB local para futuros lookups
+        try:
+            self._save_cliente_facturacion(cuit, data)
+        except Exception as e:
+            logger.warning(f'No se pudo guardar cliente facturacion: {e}')
+
+    def _on_cuit_lookup_fail(self, cuit, exc):
+        msg = str(exc)
+        if 'ws_sr_padron_a5' in msg or 'no autoriza' in msg.lower() or 'delegation' in msg.lower():
+            self.cuit_status_lbl.setText('Cert sin permiso para padron — autorizalo en AFIP')
+        else:
+            self.cuit_status_lbl.setText(f'Error: {msg[:60]}')
+        self.cuit_status_lbl.setStyleSheet('color:#dc3545; padding-left:2px;')
+
+    def _apply_padron_result(self, cuit, data, from_local=False):
+        """Aplica el resultado del lookup a los campos del formulario."""
+        razon = (data.get('razon_social') or '').strip()
+        dom   = (data.get('domicilio') or '').strip()
+        cond  = (data.get('condicion_iva') or '').strip()
+        if razon:
+            self.cliente_input.setText(razon)
+            self.razon_social_cliente_input.setText(razon)
+        if dom:
+            loc = (data.get('localidad') or '').strip()
+            self.domicilio_cliente_input.setText(f'{dom} - {loc}' if loc else dom)
+        if cond:
+            idx = self.condicion_iva_cliente.findText(cond)
+            if idx >= 0:
+                self.condicion_iva_cliente.setCurrentIndex(idx)
+            if cond == 'Responsable Inscripto':
+                self.tipo_combo.setCurrentText('FAC. ELEC. A')
+        suffix = ' (cache local)' if from_local else ''
+        self.cuit_status_lbl.setText(f'OK: {razon[:40]}{suffix}')
+        self.cuit_status_lbl.setStyleSheet('color:#15803d; padding-left:2px;')
+
+    def _save_cliente_facturacion(self, cuit, data):
+        """Upsert del cliente en la tabla clientes_facturacion."""
+        from pos_system.database.db_manager import DatabaseManager
+        db = DatabaseManager()
+        razon = (data.get('razon_social') or '').strip()
+        dom   = (data.get('domicilio') or '').strip()
+        loc   = (data.get('localidad') or '').strip()
+        cond  = (data.get('condicion_iva') or '').strip()
+        now = now_ar().strftime('%Y-%m-%d %H:%M:%S')
+        existing = db.execute_query(
+            "SELECT id FROM clientes_facturacion WHERE cuit=? LIMIT 1", (cuit,)
+        )
+        if existing:
+            db.execute_query(
+                "UPDATE clientes_facturacion SET nombre=?, razon_social=?, domicilio=?, "
+                "localidad=?, condicion_iva=?, activo=1, updated_at=? WHERE id=?",
+                (razon, razon, dom, loc, cond, now, existing[0]['id'])
+            )
+        else:
+            db.execute_query(
+                "INSERT INTO clientes_facturacion (nombre, razon_social, cuit, domicilio, "
+                "localidad, condicion_iva, activo, created_at, updated_at) "
+                "VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                (razon, razon, cuit, dom, loc, cond, now, now)
+            )
+
     def _prefill_cliente(self, cliente: dict):
         """Pre-rellena los datos del receptor con el cliente seleccionado."""
         nombre = cliente.get('razon_social') or cliente.get('nombre', '')
@@ -427,6 +600,7 @@ class FacturaDialog(QDialog):
         cond_iva = cliente.get('condicion_iva', '')
         if nombre:
             self.cliente_input.setText(nombre)
+            self.razon_social_cliente_input.setText(nombre)
         if cuit:
             self.cuit_cliente_input.setText(cuit)
         if domicilio:
@@ -499,6 +673,7 @@ class FacturaDialog(QDialog):
             'modalidad':          self.modalidad_input.text().strip(),
             'cliente':            self.cliente_input.text().strip() or 'CONSUMIDOR FINAL',
             'cuit_receptor':      self.cuit_cliente_input.text().strip(),
+            'razon_social_receptor': self.razon_social_cliente_input.text().strip(),
             'domicilio_receptor': self.domicilio_cliente_input.text().strip(),
             'condicion_iva_receptor': self.condicion_iva_cliente.currentText(),
             'items':              self._build_items_factura(),
@@ -677,6 +852,7 @@ class FacturaDialog(QDialog):
         tipo = self.tipo_combo.currentText()
         cliente = self.cliente_input.text().strip() or 'CONSUMIDOR FINAL'
         cuit_cliente = self.cuit_cliente_input.text().strip()
+        razon_cliente = self.razon_social_cliente_input.text().strip()
         dom_cliente = self.domicilio_cliente_input.text().strip()
         cond_iva_cliente = self.condicion_iva_cliente.currentText()
         total = float(self.sale.get('total_amount', 0))
@@ -706,9 +882,10 @@ class FacturaDialog(QDialog):
             'pago':               self.pago_input.text().strip(),
             'modalidad':          self.modalidad_input.text().strip(),
             # Cliente / Receptor
-            'cliente':               cliente,
-            'cuit_receptor':         cuit_cliente,
-            'domicilio_receptor':    dom_cliente,
+            'cliente':                cliente,
+            'cuit_receptor':          cuit_cliente,
+            'razon_social_receptor':  razon_cliente,
+            'domicilio_receptor':     dom_cliente,
             'condicion_iva_receptor': cond_iva_cliente,
             # Items
             'items':              self._build_items_factura(),

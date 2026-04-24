@@ -7,20 +7,88 @@ export async function renderResumenes(container, db) {
   const fechaInicioStr = await getFechaInicio(db);
   const [inicioYear, inicioMonth] = fechaInicioStr.split('-').map(Number);
 
-  const mesesRaw = await getCached('resumenes:mensuales', async () => {
-    const snap = await getDocs(query(collection(db, 'resumenes_mensuales'), orderBy('anio', 'desc')));
-    return snap.docs
-      .map(d => ({ id: d.id, ...d.data() }))
-      .sort((a, b) => b.anio - a.anio || b.mes_num - a.mes_num);
+  // Los docs de 'resumenes_mensuales' son por PC (doc_id incluye pc_id), asi que
+  // listarlos daria una fila por PC/mes. Computamos el resumen desde 'ventas' (monto,
+  // pago, descuento, ticket) y 'ventas_por_dia' (top productos), que son compartidas.
+  const [ventasRaw, itemsRaw] = await Promise.all([
+    getCached('ventas:lista', async () => {
+      const snap = await getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc')));
+      return snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    }),
+    getCached('historial:ventas_dia', async () => {
+      const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('fecha', 'desc')));
+      return snap.docs.map(d => d.data());
+    }),
+  ]);
+
+  const fechaInicio = new Date(fechaInicioStr + 'T00:00:00-03:00');
+  const monthNames = ['enero','febrero','marzo','abril','mayo','junio',
+                      'julio','agosto','septiembre','octubre','noviembre','diciembre'];
+
+  const ventasFiltradas = ventasRaw.filter(v =>
+    v.deleted !== true && !isVentaVarios2(v) && parseArDate(v.created_at) >= fechaInicio
+  );
+  const itemsFiltrados = itemsRaw.filter(v => {
+    if (v.deleted === true) return false;
+    if (isItemVarios2(v)) return false;
+    const f = (v.fecha || '').split('/').reverse().join('-');
+    return f >= fechaInicioStr;
   });
 
-  // Ocultar meses anteriores al de fecha_inicio
-  const meses = mesesRaw.filter(m => {
-    if (!m.anio || !m.mes_num) return false;
+  // Agrupar por YYYY-MM
+  const mesesMap = {};
+  const getMes = (anio, mes_num) => {
+    const key = `${anio}-${String(mes_num).padStart(2,'0')}`;
+    if (!mesesMap[key]) {
+      mesesMap[key] = {
+        anio, mes_num,
+        mes_nombre: `${monthNames[mes_num-1]} ${anio}`,
+        num_ventas: 0, total: 0, efectivo: 0, transferencia: 0, descuentos_total: 0,
+        _prods: {},
+      };
+    }
+    return mesesMap[key];
+  };
+
+  for (const v of ventasFiltradas) {
+    const dt = parseArDate(v.created_at);
+    const arStr = dt.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+    const [y, m] = arStr.split('-').map(Number);
+    const g = getMes(y, m);
+    const monto = Number(v.total_amount || 0);
+    g.num_ventas++;
+    g.total += monto;
+    if (v.payment_type === 'cash') g.efectivo += monto;
+    else g.transferencia += monto;
+    g.descuentos_total += Number(v.discount || 0);
+  }
+
+  for (const it of itemsFiltrados) {
+    const [dd, mm, yy] = (it.fecha || '').split('/');
+    if (!yy || !mm) continue;
+    const g = getMes(Number(yy), Number(mm));
+    const name = it.producto || it.product_name || '?';
+    if (!g._prods[name]) g._prods[name] = { producto: name, cantidad: 0, total: 0 };
+    g._prods[name].cantidad += Number(it.cantidad || 1);
+    g._prods[name].total    += Number(it.subtotal || 0);
+  }
+
+  const meses = Object.values(mesesMap).map(g => ({
+    anio: g.anio,
+    mes_num: g.mes_num,
+    mes_nombre: g.mes_nombre,
+    num_ventas: g.num_ventas,
+    total: g.total,
+    efectivo: g.efectivo,
+    transferencia: g.transferencia,
+    descuentos_total: g.descuentos_total,
+    ticket_promedio: g.num_ventas > 0 ? g.total / g.num_ventas : 0,
+    top_productos: Object.values(g._prods).sort((a,b) => b.total - a.total).slice(0, 10),
+  })).filter(m => {
     if (m.anio > inicioYear) return true;
     if (m.anio < inicioYear) return false;
     return m.mes_num >= inicioMonth;
-  });
+  }).sort((a, b) => b.anio - a.anio || b.mes_num - a.mes_num);
 
   // Totales generales
   const totalGeneral = meses.reduce((a, m) => a + (m.total || 0), 0);

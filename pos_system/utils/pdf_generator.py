@@ -43,6 +43,92 @@ try:
 except ImportError:
     _QRCODE_AVAILABLE = False
 
+
+def _find_chrome():
+    """Devuelve la ruta a chrome.exe o msedge.exe para imprimir HTML a PDF."""
+    candidates = [
+        r'C:\Program Files\Google\Chrome\Application\chrome.exe',
+        r'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe',
+        r'C:\Program Files\Microsoft\Edge\Application\msedge.exe',
+        r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
+    ]
+    for p in candidates:
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def _render_mustache(template, ctx):
+    """
+    Mini-renderer compatible con el subset de Mustache que usa el template del
+    ticket no fiscal: {{var}}, {{#seccion}}...{{/seccion}} donde seccion es
+    lista (repite por item) o truthy/falsy (condicional).
+    """
+    def _esc(val):
+        if val is None:
+            return ''
+        return (str(val)
+                .replace('&', '&amp;')
+                .replace('<', '&lt;')
+                .replace('>', '&gt;'))
+
+    def _render(tpl, context):
+        out = []
+        i = 0
+        n = len(tpl)
+        while i < n:
+            start = tpl.find('{{', i)
+            if start == -1:
+                out.append(tpl[i:])
+                break
+            out.append(tpl[i:start])
+            end = tpl.find('}}', start)
+            if end == -1:
+                out.append(tpl[start:])
+                break
+            tag = tpl[start + 2:end].strip()
+            i = end + 2
+            if tag.startswith('#'):
+                key = tag[1:].strip()
+                close = '{{/' + key + '}}'
+                open_tag = '{{#' + key + '}}'
+                depth = 1
+                j = i
+                while j < n:
+                    next_open = tpl.find(open_tag, j)
+                    next_close = tpl.find(close, j)
+                    if next_close == -1:
+                        j = n
+                        break
+                    if next_open != -1 and next_open < next_close:
+                        depth += 1
+                        j = next_open + len(open_tag)
+                    else:
+                        depth -= 1
+                        if depth == 0:
+                            inner = tpl[i:next_close]
+                            val = context.get(key)
+                            if isinstance(val, list):
+                                for item in val:
+                                    sub = dict(context)
+                                    sub.update(item)
+                                    out.append(_render(inner, sub))
+                            elif val:
+                                out.append(_render(inner, context))
+                            i = next_close + len(close)
+                            break
+                        j = next_close + len(close)
+                else:
+                    i = n
+            elif tag.startswith('/'):
+                # cierre sin apertura — ignorar
+                pass
+            else:
+                out.append(_esc(context.get(tag, '')))
+        return ''.join(out)
+
+    return _render(template, ctx)
+
 class PDFGenerator:
     def __init__(self, output_dir=None):
         if output_dir is None:
@@ -313,7 +399,169 @@ class PDFGenerator:
 
         doc.build(story)
         return filepath
-    
+
+    # ─── Ticket NO fiscal (HTML → PDF via Chrome headless) ──────────────────
+    # Solo se usa en ventas sin factura AFIP. Renderiza el template
+    # `pos_system/assets/ticket_nofiscal.html` (sintaxis Mustache), embebe el
+    # logo como data-URI y lo convierte a PDF con Chrome headless (no agrega
+    # deps de Python). Si no encuentra Chrome/Edge, tira excepción.
+    def generate_non_fiscal_ticket(self, sale, cajero_name='', cliente_name='Consumidor Final'):
+        import subprocess
+        import tempfile
+        from pathlib import Path
+
+        # ── Paths de assets ────────────────────────────────────────────────
+        assets_base = os.path.dirname(__file__)
+        tpl_path = os.path.join(assets_base, '..', 'assets', 'ticket_nofiscal.html')
+        meipass = getattr(sys, '_MEIPASS', None)
+        if meipass:
+            tpl_path = os.path.join(meipass, 'pos_system', 'assets', 'ticket_nofiscal.html')
+        with open(tpl_path, 'r', encoding='utf-8') as f:
+            template = f.read()
+
+        # ── Logo como data-URI ─────────────────────────────────────────────
+        logo_path = _asset_path('logo_liceo_ticket.png')
+        logo_src = ''
+        if os.path.exists(logo_path):
+            with open(logo_path, 'rb') as f:
+                logo_src = 'data:image/png;base64,' + base64.b64encode(f.read()).decode('ascii')
+
+        # ── Datos empresa: leer desde perfiles_facturacion (fuente real) ───
+        # La tabla `config` con keys afip_* existe pero suele estar vacía; los
+        # datos fiscales viven en perfiles_facturacion. Priorizamos el perfil
+        # apuntado por config.emisor_activo_id; si no match, tomamos cualquier
+        # perfil con activo=1 que tenga CUIT cargado (no los perfiles de prueba).
+        perfil = {}
+        try:
+            from pos_system.database.db_manager import DatabaseManager
+            _db = DatabaseManager()
+            _cfg = _db.execute_query("SELECT value FROM config WHERE key='emisor_activo_id'")
+            emisor_fb_id = _cfg[0]['value'] if _cfg and _cfg[0].get('value') else ''
+            if emisor_fb_id:
+                r = _db.execute_query(
+                    "SELECT * FROM perfiles_facturacion WHERE firebase_id=? AND activo=1",
+                    (emisor_fb_id,)
+                )
+                if r: perfil = r[0]
+            if not perfil:
+                # fallback: primer perfil activo con CUIT "real" (al menos 10 dígitos)
+                r = _db.execute_query(
+                    "SELECT * FROM perfiles_facturacion "
+                    "WHERE activo=1 AND LENGTH(cuit) >= 10 "
+                    "ORDER BY updated_at DESC LIMIT 1"
+                )
+                if r: perfil = r[0]
+        except Exception:
+            pass
+
+        # ── Datos de la venta ──────────────────────────────────────────────
+        sale_dt = _parse_ar(sale.get('created_at'))
+        payment_type = (sale.get('payment_type') or '').lower()
+        forma_pago = 'Efectivo' if payment_type == 'cash' else 'Transferencia'
+
+        # Items + descuentos
+        items_ctx = []
+        ahorro_total = 0.0
+        for it in (sale.get('items') or []):
+            qty         = float(it.get('quantity', 1) or 0)
+            name        = (it.get('product_name') or '-').strip()
+            subtotal    = float(it.get('subtotal', 0) or 0)
+            unit_price  = float(it.get('unit_price', 0) or 0)
+            orig_price  = float(it.get('original_price') or 0)
+            disc_amount = float(it.get('discount_amount', 0) or 0)
+            disc_type   = (it.get('discount_type') or '').lower()
+            disc_value  = it.get('discount_value', 0)
+
+            row = {
+                'cantidad': _fmt_qty(qty),
+                'producto': name,
+                'subtotal': f'{subtotal:,.2f}',
+                'precio_unit': f'{unit_price:,.2f}',
+            }
+            if disc_amount > 0 and orig_price > 0 and orig_price != unit_price:
+                row['precio_original'] = f'{orig_price:,.2f}'
+                row['descuento_monto'] = f'{disc_amount:,.2f}' if disc_amount > 0 else ''
+                if disc_type == 'percentage':
+                    try:
+                        row['descuento_texto'] = f'{int(float(disc_value or 0))}% OFF'
+                    except (TypeError, ValueError):
+                        row['descuento_texto'] = 'DESC'
+                elif disc_type == '2x1':
+                    row['descuento_texto'] = '2x1'
+                elif disc_type in ('nxm', 'bundle'):
+                    row['descuento_texto'] = 'PROMO'
+                else:
+                    row['descuento_texto'] = 'DESC'
+                ahorro_total += disc_amount
+            items_ctx.append(row)
+
+        total = float(sale.get('total_amount', 0) or 0)
+        subtotal_total = total + ahorro_total
+        cash_received  = float(sale.get('cash_received', 0) or 0)
+        change_given   = float(sale.get('change_given', 0) or 0)
+
+        empresa_direccion = perfil.get('domicilio', '') or self.company_info.get('address', '')
+        if perfil.get('localidad'):
+            empresa_direccion = f"{empresa_direccion} - {perfil['localidad']}".strip(' -')
+
+        ctx = {
+            'logo_src':          logo_src,
+            'empresa_nombre':    perfil.get('razon_social') or perfil.get('nombre') or self.company_info.get('name', ''),
+            'empresa_direccion': empresa_direccion,
+            'empresa_tel':       perfil.get('telefono', '') or self.company_info.get('phone', ''),
+            'empresa_email':     perfil.get('email', '')    or self.company_info.get('email', ''),
+            'cuit':              perfil.get('cuit', ''),
+            'ing_brutos':        perfil.get('ing_brutos', ''),
+            'nro_ticket':        str(sale.get('id', '')),
+            'fecha':             sale_dt.strftime('%d/%m/%Y'),
+            'hora':              sale_dt.strftime('%H:%M'),
+            'cajero':            cajero_name or sale.get('cajero', '') or sale.get('username', ''),
+            'cliente':           cliente_name or 'Consumidor Final',
+            'items':             items_ctx,
+            'subtotal_total':    f'{subtotal_total:,.2f}',
+            'ahorro_total':      f'{ahorro_total:,.2f}' if ahorro_total > 0 else '',
+            'total':             f'{total:,.2f}',
+            'forma_pago':        forma_pago,
+            'recibido':          f'{cash_received:,.2f}' if (payment_type == 'cash' and cash_received > 0) else '',
+            'vuelto':            f'{change_given:,.2f}'  if (payment_type == 'cash' and cash_received > 0) else '',
+        }
+
+        # ── Render Mustache (mini) ─────────────────────────────────────────
+        html = _render_mustache(template, ctx)
+
+        # ── Escribir HTML temporal y convertir a PDF con Chrome headless ───
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'ticket_{sale.get("id", "x")}_{timestamp}.pdf'
+        filepath = os.path.join(self.output_dir, filename)
+
+        tmp_html = tempfile.NamedTemporaryFile(
+            mode='w', suffix='.html', delete=False, encoding='utf-8'
+        )
+        tmp_html.write(html)
+        tmp_html.close()
+
+        chrome = _find_chrome()
+        if not chrome:
+            os.unlink(tmp_html.name)
+            raise RuntimeError('No se encontro Chrome ni Edge para generar el ticket PDF.')
+
+        try:
+            subprocess.run(
+                [
+                    chrome,
+                    '--headless=new', '--disable-gpu', '--no-sandbox',
+                    '--no-pdf-header-footer',
+                    f'--print-to-pdf={filepath}',
+                    Path(tmp_html.name).as_uri(),
+                ],
+                check=True, capture_output=True, timeout=30,
+            )
+        finally:
+            try: os.unlink(tmp_html.name)
+            except OSError: pass
+
+        return filepath
+
     def generate_withdrawal_ticket(self, withdrawal):
         """Generar ticket de retiro profesional"""
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
@@ -1194,7 +1442,7 @@ class PDFGenerator:
             fecha_comp = fecha_comp[:10]
 
         # ── HEADER ───────────────────────────────────────────────────────────
-        # Medidas columnas header
+        # Medidas columnas header (layout original AFIP 3-col)
         col_emisor = 85 * mm
         col_letra  = 30 * mm
         col_datos  = CONTENT_W - col_emisor - col_letra
@@ -1210,25 +1458,11 @@ class PDFGenerator:
         email_emisor      = factura.get('email', '')
 
         sE_name = S('EN', fontSize=11, fontName='Helvetica-Bold', alignment=TA_LEFT, spaceAfter=2, leading=13)
-        sE_lbl  = S('EL', fontSize=7.5, fontName='Helvetica-Bold', alignment=TA_LEFT, spaceAfter=0, leading=10)
         sE_val  = S('EV', fontSize=7.5, fontName='Helvetica', alignment=TA_LEFT, spaceAfter=1, leading=10)
         sE_iva  = S('EI', fontSize=7.5, fontName='Helvetica-Bold', alignment=TA_LEFT, spaceAfter=0, leading=10)
 
-        emisor_content = []
-        # Logo arriba a la izquierda (si el archivo existe). Respeta aspect ratio
-        # original escalando por ancho objetivo.
-        _logo_p = _asset_path('factura_logo.png')
-        if os.path.exists(_logo_p):
-            try:
-                from reportlab.lib.utils import ImageReader
-                _iw, _ih = ImageReader(_logo_p).getSize()
-                _target_w = 45 * mm
-                _target_h = _target_w * (_ih / _iw) if _iw else 22 * mm
-                emisor_content.append(RLImage(_logo_p, width=_target_w, height=_target_h))
-                emisor_content.append(Spacer(1, 2 * mm))
-            except Exception:
-                pass
-        emisor_content += [
+        # Textos del emisor (al lado del logo)
+        emisor_text = [
             Paragraph(razon, sE_name),
             Paragraph(f'<b>Razon Social:</b> {razon}', sE_val),
             Paragraph(f'<b>Domicilio Comercial:</b> {domicilio_emisor}', sE_val),
@@ -1236,9 +1470,39 @@ class PDFGenerator:
             Paragraph(f'Condicion frente al IVA: {condicion_iva_emisor}', sE_iva),
         ]
         if telefono_emisor:
-            emisor_content.append(Paragraph(f'<b>Tel:</b> {telefono_emisor}', sE_val))
+            emisor_text.append(Paragraph(f'<b>Tel:</b> {telefono_emisor}', sE_val))
         if email_emisor:
-            emisor_content.append(Paragraph(email_emisor, sE_val))
+            emisor_text.append(Paragraph(email_emisor, sE_val))
+
+        # Logo a la izquierda, datos a la derecha (lado a lado en misma celda).
+        # Eso achica la altura del bloque emisor vs logo-encima-de-datos.
+        _logo_p = _asset_path('logo_liceo_ticket.png')
+        _logo_cell = ''
+        _logo_w = 22 * mm
+        if os.path.exists(_logo_p):
+            try:
+                from reportlab.lib.utils import ImageReader
+                _iw, _ih = ImageReader(_logo_p).getSize()
+                _target_h = _logo_w * (_ih / _iw) if _iw else _logo_w
+                _img = RLImage(_logo_p, width=_logo_w, height=_target_h)
+                _img.hAlign = 'CENTER'
+                _logo_cell = _img
+            except Exception:
+                pass
+
+        _emisor_inner = Table(
+            [[_logo_cell, emisor_text]],
+            colWidths=[_logo_w + 2*mm, col_emisor - _logo_w - 4*mm],
+        )
+        _emisor_inner.setStyle(TableStyle([
+            ('VALIGN',        (0, 0), (-1, -1), 'MIDDLE'),
+            ('ALIGN',         (0, 0), (0, 0),   'CENTER'),
+            ('LEFTPADDING',   (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING',  (0, 0), (-1, -1), 0),
+            ('TOPPADDING',    (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        emisor_content = [_emisor_inner]
 
         # -- Columna central: letra grande + COD --
         sL_letra = S('LL', fontSize=36, fontName='Helvetica-Bold', alignment=TA_CENTER, spaceAfter=0, leading=40)
@@ -1256,8 +1520,8 @@ class PDFGenerator:
             ('BOX',           (0, 0), (-1, -1), 1.5, colors.black),
         ]))
 
-        # -- Columna derecha: nombre comprobante + nro + fecha + CUIT + otros --
-        sD_title = S('DT', fontSize=11, fontName='Helvetica-Bold', alignment=TA_LEFT, spaceAfter=3, leading=13)
+        # -- Columna derecha: nombre comprobante (centrado) + nro + fecha + CUIT --
+        sD_title = S('DT', fontSize=13, fontName='Helvetica-Bold', alignment=TA_CENTER, spaceAfter=4, leading=15)
         sD_lbl   = S('DL', fontSize=7.5, fontName='Helvetica-Bold', alignment=TA_LEFT, spaceAfter=1, leading=10)
         sD_val   = S('DV', fontSize=7.5, fontName='Helvetica', alignment=TA_LEFT, spaceAfter=1, leading=10)
 
@@ -1294,6 +1558,7 @@ class PDFGenerator:
 
         # ── SECCION RECEPTOR ─────────────────────────────────────────────────
         cliente_txt      = factura.get('cliente', 'CONSUMIDOR FINAL')
+        razon_receptor   = factura.get('razon_social_receptor', '') or cliente_txt
         cuit_receptor    = factura.get('cuit_receptor', '')
         dom_receptor     = factura.get('domicilio_receptor', '')
         cond_iva_recep   = factura.get('condicion_iva_receptor', 'Consumidor Final')
@@ -1301,9 +1566,11 @@ class PDFGenerator:
         sR_lbl = S('RL', fontSize=8, fontName='Helvetica-Bold', alignment=TA_LEFT, spaceAfter=0, leading=11)
         sR_val = S('RV', fontSize=8, fontName='Helvetica',      alignment=TA_LEFT, spaceAfter=0, leading=11)
 
+        cuit_recep_txt = cuit_receptor if cuit_receptor else '—'
+
         receptor_row1_data = [
             [Paragraph(f'<b>Senor(es):</b> {cliente_txt}', sR_val),
-             Paragraph(f'<b>Domicilio:</b> {dom_receptor}', sR_val)],
+             Paragraph(f'<b>CUIT:</b> {cuit_recep_txt}', sR_val)],
         ]
         receptor_row1 = Table(receptor_row1_data, colWidths=[CONTENT_W * 0.55, CONTENT_W * 0.45])
         receptor_row1.setStyle(TableStyle([
@@ -1313,10 +1580,22 @@ class PDFGenerator:
             ('BOTTOMPADDING', (0,0),(-1,-1), 3),
         ]))
 
-        cuit_recep_txt = cuit_receptor if cuit_receptor else '—'
+        # Nueva fila: Razon Social (antes del domicilio)
+        receptor_row_rs_data = [
+            [Paragraph(f'<b>Razon Social:</b> {razon_receptor}', sR_val),
+             Paragraph(f'<b>Condicion frente al IVA:</b> {cond_iva_recep}', sR_val)],
+        ]
+        receptor_row_rs = Table(receptor_row_rs_data, colWidths=[CONTENT_W * 0.55, CONTENT_W * 0.45])
+        receptor_row_rs.setStyle(TableStyle([
+            ('LEFTPADDING',   (0,0),(-1,-1), 4),
+            ('RIGHTPADDING',  (0,0),(-1,-1), 4),
+            ('TOPPADDING',    (0,0),(-1,-1), 3),
+            ('BOTTOMPADDING', (0,0),(-1,-1), 3),
+        ]))
+
         receptor_row2_data = [
-            [Paragraph(f'<b>Condicion frente al IVA:</b> {cond_iva_recep}', sR_val),
-             Paragraph(f'<b>CUIT:</b> {cuit_recep_txt}', sR_val)],
+            [Paragraph(f'<b>Domicilio:</b> {dom_receptor}', sR_val),
+             Paragraph('', sR_val)],
         ]
         receptor_row2 = Table(receptor_row2_data, colWidths=[CONTENT_W * 0.55, CONTENT_W * 0.45])
         receptor_row2.setStyle(TableStyle([
@@ -1327,7 +1606,7 @@ class PDFGenerator:
         ]))
 
         remito_val = factura.get('remito', '')
-        receptor_rows = [[receptor_row1], [receptor_row2]]
+        receptor_rows = [[receptor_row1], [receptor_row_rs], [receptor_row2]]
         if remito_val:
             receptor_row3_data = [
                 [Paragraph(f'<b>Remito:</b> {remito_val}', sR_val),
@@ -1396,15 +1675,15 @@ class PDFGenerator:
         for idx, item in enumerate(factura.get('items', []), start=1):
             imp = float(item.get('importe', 0))
             imp_color = colors.HexColor('#cc0000') if imp < 0 else colors.black
-            sI_rgt_col = S(f'IRc{idx}', fontSize=7.5, fontName='Helvetica', alignment=TA_RIGHT, leading=10, textColor=imp_color)
+            sI_ctr_col = S(f'ICc{idx}', fontSize=7.5, fontName='Helvetica', alignment=TA_CENTER, leading=10, textColor=imp_color)
             cant_val = float(item.get('cantidad', 1))
             precio_val = float(item.get('precio', 0))
             items_data.append([
                 Paragraph(str(idx).zfill(4), sI_ctr),
                 Paragraph(str(item.get('descripcion', '')), sI_lft),
                 Paragraph(f'{cant_val:,.6f}', sI_ctr),
-                Paragraph(f'{precio_val:,.6f}', sI_rgt),
-                Paragraph(f'{imp:,.2f}', sI_rgt_col),
+                Paragraph(f'{precio_val:,.6f}', sI_ctr),
+                Paragraph(f'{imp:,.2f}', sI_ctr_col),
             ])
             # Unidad de medida
             um = item.get('unidad', '')
