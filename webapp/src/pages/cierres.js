@@ -189,13 +189,13 @@ export async function renderCierres(container, db) {
     };
   }
 
-  // Agrupar cierres por session_id (misma sesión = mismas aperturas/cierres).
-  // Docs sin session_id se tratan como sesión individual (compat datos viejos).
-  // De los docs solo conservamos metadata (apertura, cierre, PCs, retiros,
-  // monto_final, pendiente). Los totales los recalculamos abajo desde items.
+  // Agrupar cierres por fecha de APERTURA (misma jornada = mismo día de apertura).
+  // Usar fecha_apertura en lugar de session_id evita que una caja de un día anterior
+  // cerrada al día siguiente (session_id=hoy) se fusione con la caja legítima de hoy.
+  // Docs sin fecha_apertura caen back a session_id o id (compat datos viejos).
   const sesionesMap = {};
   for (const c of cierres) {
-    const key = c.session_id || c.id;
+    const key = aperturaDayKey(c.fecha_apertura) || c.session_id || c.id;
     if (!sesionesMap[key]) {
       sesionesMap[key] = {
         session_id:       key,
@@ -1224,6 +1224,23 @@ function toDate(val) {
   if (typeof val === 'object' && val.seconds !== undefined)
     return new Date(val.seconds * 1000 + Math.floor((val.nanoseconds || 0) / 1e6));
   return new Date(val);
+}
+
+// Returns 'YYYY-MM-DD' in AR timezone from a fecha_apertura value.
+// Strings (naive AR local time) are sliced directly; Firestore Timestamps
+// are shifted +3h before extracting the date.
+function aperturaDayKey(val) {
+  if (!val) return '';
+  if (typeof val === 'string') return val.slice(0, 10);
+  if (typeof val.toDate === 'function') {
+    const ar = new Date(val.toDate().getTime() + 3 * 3600000);
+    return ar.toISOString().slice(0, 10);
+  }
+  if (typeof val === 'object' && val.seconds !== undefined) {
+    const ar = new Date(val.seconds * 1000 + 3 * 3600000);
+    return ar.toISOString().slice(0, 10);
+  }
+  return '';
 }
 
 // Fechas guardadas por Python con timezone AR → Firestore las almacena como UTC correcto → no necesita compensación

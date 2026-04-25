@@ -129,8 +129,11 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
-    // ── CONTROL TOTAL (gastos y config) ───────────────────────────────────────
+    // ── CONTROL TOTAL (gastos, categorías y config) ───────────────────────────
     match /gastos/{gastoId} {
+      allow read, write: if true;
+    }
+    match /gasto_categorias/{catId} {
       allow read, write: if true;
     }
     match /control_config/{docId} {

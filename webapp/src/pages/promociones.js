@@ -2,6 +2,7 @@ import {
   collection, getDocs, addDoc, updateDoc, deleteDoc,
   doc, query, orderBy, serverTimestamp, Timestamp
 } from 'firebase/firestore';
+import { getCached, peekCache, invalidateCacheByPrefix } from '../cache.js';
 
 const TIPOS_PROMO = {
   percentage: { label: 'Descuento %',           icon: 'percent' },
@@ -16,18 +17,25 @@ function fmt(n) {
 }
 
 export async function renderPromociones(container, db) {
-  // ── Cargar datos ──────────────────────────────────────────────────────────
-  const [promoSnap, catSnap] = await Promise.all([
-    getDocs(query(collection(db, 'promociones'), orderBy('created_at', 'desc'))),
-    getDocs(collection(db, 'catalogo')),
+  // ── Cargar datos (cache 60s promos, 2 min catálogo) ───────────────────────
+  const [promosCacheadas, catalogoMap] = await Promise.all([
+    getCached('promos:lista', async () => {
+      const snap = await getDocs(query(collection(db, 'promociones'), orderBy('created_at', 'desc')));
+      return snap.docs.map(d => ({ _id: d.id, ...d.data() }));
+    }, { ttl: 60000, memOnly: true }),
+    getCached('promos:catalogo_min', async () => {
+      const snap = await getDocs(collection(db, 'catalogo'));
+      const map = {};
+      snap.docs.forEach(d => {
+        const data = d.data();
+        map[d.id] = { id: d.id, nombre: data.nombre || data.name || d.id, codigo: data.codigo || '' };
+      });
+      return map;
+    }, { ttl: 120000, memOnly: true }),
   ]);
 
-  let promociones = promoSnap.docs.map(d => ({ _id: d.id, ...d.data() }));
-  const catalogoMap = {};
-  catSnap.docs.forEach(d => {
-    const data = d.data();
-    catalogoMap[d.id] = { id: d.id, nombre: data.nombre || data.name || d.id, codigo: data.codigo || '' };
-  });
+  // Copia local mutable: la vista modifica esta lista (toggle, delete, add)
+  let promociones = [...promosCacheadas];
   const catalogoList = Object.values(catalogoMap).sort((a, b) => (a.nombre || '').localeCompare(b.nombre || ''));
 
   // ── Shell ─────────────────────────────────────────────────────────────────
@@ -196,12 +204,14 @@ export async function renderPromociones(container, db) {
       const newActivo = promo.activo === false ? true : false;
       await updateDoc(doc(db, 'promociones', id), { activo: newActivo });
       invalidateCacheByPrefix('promociones');
+      invalidateCacheByPrefix('promos:');
       promo.activo = newActivo;
       renderGrid();
     } else if (action === 'delete') {
       if (!confirm(`¿Eliminar la promoción "${promo.nombre}"?\nEsta acción no se puede deshacer.`)) return;
       await deleteDoc(doc(db, 'promociones', id));
       invalidateCacheByPrefix('promociones');
+      invalidateCacheByPrefix('promos:');
       promociones = promociones.filter(p => p._id !== id);
       renderGrid();
     }
@@ -423,6 +433,7 @@ export async function renderPromociones(container, db) {
           const ref = await addDoc(collection(db, 'promociones'), data);
           promociones.unshift({ _id: ref.id, ...data });
         }
+        invalidateCacheByPrefix('promos:');
         modal.remove();
         renderGrid();
       } catch (err) {

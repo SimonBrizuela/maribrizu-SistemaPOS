@@ -1,5 +1,5 @@
-import { collection, getDocs, query, orderBy, doc, updateDoc, getDoc, serverTimestamp } from 'firebase/firestore';
-import { invalidateCacheByPrefix } from '../cache.js';
+import { collection, getDocs, query, orderBy, where, doc, updateDoc, getDoc, serverTimestamp, Timestamp } from 'firebase/firestore';
+import { getCached, peekCache, invalidateCacheByPrefix } from '../cache.js';
 
 // Mapa de subcategorías por rubro cargado desde Firebase sub_categories
 // Se llena en initSubCats()
@@ -55,7 +55,10 @@ const RUBRO_CATS = {};
 
 export async function renderInventario(container, db) {
 
-  container.innerHTML = `<div class="loader"><div class="spinner"></div><span>Analizando inventario...</span></div>`;
+  const hayCache = peekCache('inv:productos', 120000) && peekCache('inv:ventas_por_dia', 120000);
+  if (!hayCache) {
+    container.innerHTML = `<div class="loader"><div class="spinner"></div><span>Analizando inventario...</span></div>`;
+  }
 
   // ── Cargar rubros y subcategorías en paralelo ─────────────────────────────
   await Promise.all([
@@ -67,14 +70,34 @@ export async function renderInventario(container, db) {
     initSubCats(db),
   ]);
 
-  // ── Cargar catálogo y ventas en paralelo ──────────────────────────────────
-  const [catSnap, ventasSnap] = await Promise.all([
-    getDocs(query(collection(db, 'catalogo'), orderBy('nombre'))),
-    getDocs(query(collection(db, 'ventas_por_dia'), orderBy('fecha', 'desc'))).catch(() => ({ docs: [] }))
+  // ── Cargar catálogo y ventas en paralelo (cacheado 2 min) ─────────────────
+  const [productos, ventasRaw] = await Promise.all([
+    getCached('inv:productos', async () => {
+      const snap = await getDocs(query(collection(db, 'catalogo'), orderBy('nombre')));
+      return snap.docs.map(d => ({ id: d.id, doc_id: d.id, ...d.data() }));
+    }, { ttl: 120000, memOnly: true }),
+    getCached('inv:ventas_por_dia', async () => {
+      try {
+        // Solo últimos 90 días: la velocidad de venta se calcula sobre 30 y 7 días.
+        // 90d cubre con margen y reduce ~80% las lecturas en historicos largos.
+        const hace90d = new Date();
+        hace90d.setDate(hace90d.getDate() - 90);
+        const snap = await getDocs(query(
+          collection(db, 'ventas_por_dia'),
+          where('fecha_dt', '>=', Timestamp.fromDate(hace90d)),
+          orderBy('fecha_dt', 'desc')
+        ));
+        return snap.docs.map(d => d.data());
+      } catch (e) {
+        // Fallback: si fecha_dt no existe en docs viejos, intenta sin filtro
+        console.warn('inv:ventas_por_dia con fecha_dt falló, fallback a fecha:', e?.message);
+        try {
+          const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('fecha', 'desc')));
+          return snap.docs.map(d => d.data());
+        } catch { return []; }
+      }
+    }, { ttl: 120000, memOnly: true }),
   ]);
-
-  const productos = catSnap.docs.map(d => ({ id: d.id, doc_id: d.id, ...d.data() }));
-  const ventasRaw = ventasSnap.docs.map(d => d.data());
 
   // ── Calcular velocidad de venta ───────────────────────────────────────────
   const hace30 = new Date(); hace30.setDate(hace30.getDate() - 30);
@@ -414,6 +437,7 @@ export async function renderInventario(container, db) {
     try {
       await updateDoc(doc(db, 'catalogo', docId), { stock: valor, ultima_actualizacion: serverTimestamp() });
       invalidateCacheByPrefix('catalogo');
+      invalidateCacheByPrefix('inv:');
       const idx = prods.findIndex(x => x.doc_id === docId);
       if (idx !== -1) {
         prods[idx].stock = valor;

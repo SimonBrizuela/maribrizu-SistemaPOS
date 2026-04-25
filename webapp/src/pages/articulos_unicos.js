@@ -10,7 +10,7 @@
 import {
   collection, getDocs, doc, updateDoc, deleteDoc, writeBatch, serverTimestamp,
 } from 'firebase/firestore';
-import { invalidateCacheByPrefix } from '../cache.js';
+import { getCached, peekCache, invalidateCacheByPrefix } from '../cache.js';
 import { _registerCatalogoDeleted } from './catalogo.js';
 
 function fmt(n) {
@@ -59,15 +59,19 @@ function esGrupoVariantes(base, items) {
 }
 
 export async function renderArticulosUnicos(container, db) {
-  container.innerHTML = `
-    <div style="text-align:center;padding:60px;color:var(--text-muted)">
-      <div class="spinner"></div>
-      <p>Detectando artículos con variantes...</p>
-    </div>`;
+  if (!peekCache('artUnicos:catalogo', 120000)) {
+    container.innerHTML = `
+      <div style="text-align:center;padding:60px;color:var(--text-muted)">
+        <div class="spinner"></div>
+        <p>Detectando artículos con variantes...</p>
+      </div>`;
+  }
 
-  // ── Cargar colección completa ─────────────────────────────────────────
-  const snap = await getDocs(collection(db, 'catalogo'));
-  const todos = snap.docs.map(d => ({ _id: d.id, ...d.data() }));
+  // ── Cargar colección completa (cache 2 min en memoria) ────────────────
+  const todos = await getCached('artUnicos:catalogo', async () => {
+    const snap = await getDocs(collection(db, 'catalogo'));
+    return snap.docs.map(d => ({ _id: d.id, ...d.data() }));
+  }, { ttl: 120000, memOnly: true });
 
   // ── Agrupar por nombre base ───────────────────────────────────────────
   const grupos = {};
@@ -371,6 +375,8 @@ export async function renderArticulosUnicos(container, db) {
     try {
       const ref = doc(db, 'catalogo', p._id);
       await updateDoc(ref, datos);
+      invalidateCacheByPrefix('catalogo');
+      invalidateCacheByPrefix('artUnicos:');
       // Actualizar datos locales
       Object.assign(p, datos);
       document.getElementById(`editor-${gi}-${ii}`).style.display = 'none';
@@ -395,6 +401,7 @@ export async function renderArticulosUnicos(container, db) {
       await deleteDoc(doc(db, 'catalogo', p._id));
       await _registerCatalogoDeleted(db, p._id);
       invalidateCacheByPrefix('catalogo');
+      invalidateCacheByPrefix('artUnicos:');
       items.splice(ii, 1);
       renderGrupos(document.getElementById('searchVariantes').value);
       mostrarToast('🗑️ Producto eliminado');

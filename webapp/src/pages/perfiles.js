@@ -9,6 +9,7 @@ import {
   collection, getDocs, addDoc, doc, updateDoc, deleteDoc, setDoc,
   getDoc, query, orderBy
 } from 'firebase/firestore';
+import { getCached, invalidateCacheByPrefix } from '../cache.js';
 
 const COL = 'perfiles_facturacion';
 const CFG_DOC = 'config/emisor_activo';
@@ -207,17 +208,20 @@ export async function renderPerfiles(container, db) {
 async function cargarPerfiles(db) {
   const lista = document.getElementById('perfilesLista');
   try {
-    // Leer perfiles y emisor activo en paralelo
-    const [snap, cfgSnap] = await Promise.all([
-      getDocs(query(collection(db, COL), orderBy('nombre'))),
-      getDoc(doc(db, 'config', 'emisor_activo')),
+    // Leer perfiles y emisor activo en paralelo (cache 60s memoria)
+    const [perfiles, emisorActivoId] = await Promise.all([
+      getCached('perfiles:lista', async () => {
+        const snap = await getDocs(query(collection(db, COL), orderBy('nombre')));
+        const arr = [];
+        snap.forEach(d => arr.push({ _docId: d.id, ...d.data() }));
+        return arr;
+      }, { ttl: 60000, memOnly: true }),
+      getCached('perfiles:emisor_activo', async () => {
+        const cfgSnap = await getDoc(doc(db, 'config', 'emisor_activo'));
+        return cfgSnap.exists() ? cfgSnap.data().firebase_id : null;
+      }, { ttl: 60000, memOnly: true }),
     ]);
-
-    const perfiles = [];
-    snap.forEach(d => perfiles.push({ _docId: d.id, ...d.data() }));
     const activos = perfiles.filter(p => p.activo !== false);
-
-    const emisorActivoId = cfgSnap.exists() ? cfgSnap.data().firebase_id : null;
 
     if (!activos.length) {
       lista.innerHTML = `
@@ -447,6 +451,7 @@ function setupEvents(db) {
       }
 
       cerrarModal();
+      invalidateCacheByPrefix('perfiles:');
       await cargarPerfiles(db);
     } catch (err) {
       mostrarError(`Error al guardar: ${err.message}`);
@@ -476,6 +481,7 @@ function setupEvents(db) {
           nombre,
           activado_en: new Date().toLocaleString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }).replace(' ', 'T'),
         });
+        invalidateCacheByPrefix('perfiles:');
         await cargarPerfiles(db);
       } catch (err) {
         alert(`Error al activar emisor: ${err.message}`);
@@ -489,6 +495,7 @@ function setupEvents(db) {
           nombre: '',
           activado_en: new Date().toLocaleString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }).replace(' ', 'T'),
         });
+        invalidateCacheByPrefix('perfiles:');
         await cargarPerfiles(db);
       } catch (err) {
         alert(`Error al desactivar emisor: ${err.message}`);
@@ -500,6 +507,7 @@ function setupEvents(db) {
       if (!confirm(`¿Eliminar "${nombre}"? Se sincronizará al POS.`)) return;
       try {
         await updateDoc(doc(db, COL, docId), { activo: false });
+        invalidateCacheByPrefix('perfiles:');
         await cargarPerfiles(db);
       } catch (err) {
         alert(`Error al eliminar: ${err.message}`);

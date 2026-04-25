@@ -2,23 +2,53 @@ import { collection, getDocs, query, orderBy, limit, where } from 'firebase/fire
 import { openSaleModal } from '../components/modal.js';
 import { getSaleNumberMap, displayNumForVenta } from '../sale_numbers.js';
 import { isVentaVarios2 } from '../config.js';
+import { getCached, peekCache } from '../cache.js';
+
+const CACHE_KEY_VENTAS = 'turnos:ventas1000';
+const CACHE_KEY_NUMMAP = 'turnos:saleNumMap';
+const CACHE_TTL_MS     = 60 * 1000; // 60s
 
 /**
  * Página: Resumen por Turno / Cajero
  * Muestra cuánto vendió cada cajero hoy y en períodos seleccionables.
  * Datos: colección 'ventas' con campo 'cajero' (o 'username').
  */
-export async function renderTurnos(container, db) {
-  container.innerHTML = `<div style="text-align:center;padding:60px;color:var(--text-muted)">
-    <div class="spinner"></div><p>Cargando datos de turnos...</p>
-  </div>`;
 
-  // Cargar ventas (últimas 1000 para cubrir varios días) + mapa de numeración global
-  const [snap, saleNumMap] = await Promise.all([
-    getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc'), limit(1000))),
-    getSaleNumberMap(db),
+// Alias de cajeros: misma persona con distintos perfiles → unificar SOLO en esta vista.
+// Las claves se normalizan a UPPERCASE sin espacios extras antes de buscar.
+const CAJERO_ALIAS = {
+  'AGUSTIN 1':     'AGUSTIN',
+  'AGUS GONZALEZ': 'AGUSTIN',
+  'AGUS GONZÁLEZ': 'AGUSTIN',
+};
+
+function normalizarCajero(raw) {
+  const nombre = String(raw || '').trim();
+  if (!nombre) return 'Sin nombre';
+  const key = nombre.toUpperCase().replace(/\s+/g, ' ').normalize('NFD').replace(/[̀-ͯ]/g, '');
+  return CAJERO_ALIAS[key] || nombre;
+}
+
+export async function renderTurnos(container, db) {
+  // Si hay cache caliente, no mostramos spinner (carga visualmente instantánea)
+  const hayCache = peekCache(CACHE_KEY_VENTAS, CACHE_TTL_MS) && peekCache(CACHE_KEY_NUMMAP, CACHE_TTL_MS);
+  if (!hayCache) {
+    container.innerHTML = `<div style="text-align:center;padding:60px;color:var(--text-muted)">
+      <div class="spinner"></div><p>Cargando datos de turnos...</p>
+    </div>`;
+  }
+
+  // Cargar ventas (últimas 1000) + mapa de numeración, con cache 60s en memoria
+  const [ventas, saleNumMap] = await Promise.all([
+    getCached(CACHE_KEY_VENTAS, async () => {
+      const snap = await getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc'), limit(1000)));
+      return snap.docs
+        .map(d => ({ id: d.id, ...d.data() }))
+        .filter(v => v.deleted !== true && !isVentaVarios2(v))
+        .map(v => ({ ...v, _ts: parseArDate(v.created_at).getTime() }));  // timestamp pre-calculado
+    }, { ttl: CACHE_TTL_MS, memOnly: true }),
+    getCached(CACHE_KEY_NUMMAP, () => getSaleNumberMap(db), { ttl: CACHE_TTL_MS, memOnly: true }),
   ]);
-  const ventas = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(v => v.deleted !== true && !isVentaVarios2(v));
 
   // Rango de fechas por defecto: hoy en hora Argentina
   const hoy = new Date(todayAR() + 'T00:00:00-03:00');
@@ -107,20 +137,17 @@ export async function renderTurnos(container, db) {
 
   // ── Función principal: calcular y renderizar ──────────────────────────
   function calcularYRenderizar() {
-    const desde  = new Date(document.getElementById('filtroDesde').value + 'T00:00:00-03:00');
-    const hasta  = new Date(document.getElementById('filtroHasta').value + 'T23:59:59-03:00');
+    const desdeMs = new Date(document.getElementById('filtroDesde').value + 'T00:00:00-03:00').getTime();
+    const hastaMs = new Date(document.getElementById('filtroHasta').value + 'T23:59:59-03:00').getTime();
     const filtroN = document.getElementById('filtroCajeroNombre').value.toLowerCase();
 
-    // Filtrar ventas por rango de fechas
-    const ventasFiltradas = ventas.filter(v => {
-      const dt = parseArDate(v.created_at);
-      return dt >= desde && dt <= hasta;
-    });
+    // Filtrar ventas por rango de fechas (timestamps numéricos pre-calculados)
+    const ventasFiltradas = ventas.filter(v => v._ts >= desdeMs && v._ts <= hastaMs);
 
     // Agrupar por cajero
     const porCajero = {};
     for (const v of ventasFiltradas) {
-      const cajero = v.cajero || v.username || v.user_id || 'Sin nombre';
+      const cajero = normalizarCajero(v.cajero || v.username || v.user_id);
       if (!porCajero[cajero]) {
         porCajero[cajero] = { ventas: [], total: 0, efectivo: 0, transferencia: 0 };
       }
@@ -208,11 +235,7 @@ export async function renderTurnos(container, db) {
     document.getElementById('cajeroDetalleTitle').textContent =
       `👤 ${nombre} — ${data.ventas.length} ventas · $${fmt(data.total)}`;
 
-    const ventasOrdenadas = [...data.ventas].sort((a, b) => {
-      const da = parseArDate(a.created_at);
-      const db_ = parseArDate(b.created_at);
-      return db_ - da;
-    });
+    const ventasOrdenadas = [...data.ventas].sort((a, b) => (b._ts || 0) - (a._ts || 0));
 
     document.getElementById('cajeroDetalleBody').innerHTML = ventasOrdenadas.map((v, i) => {
       const dt = parseArDate(v.created_at);

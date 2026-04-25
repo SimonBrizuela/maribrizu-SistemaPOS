@@ -6,8 +6,10 @@
 import {
   collection, getDocs, addDoc, doc, updateDoc, deleteDoc, query, orderBy
 } from 'firebase/firestore';
+import { getCached, invalidateCacheByPrefix } from '../cache.js';
 
 const COL = 'clientes_facturacion';
+const CACHE_KEY = 'clientes:lista';
 
 // ── Render ────────────────────────────────────────────────────────────────────
 export async function renderClientes(container, db) {
@@ -153,9 +155,12 @@ export async function renderClientes(container, db) {
 async function cargarClientes(db) {
   const lista = document.getElementById('clientesLista');
   try {
-    const snap = await getDocs(query(collection(db, COL), orderBy('nombre')));
-    const clientes = [];
-    snap.forEach(d => clientes.push({ _docId: d.id, ...d.data() }));
+    const clientes = await getCached(CACHE_KEY, async () => {
+      const snap = await getDocs(query(collection(db, COL), orderBy('nombre')));
+      const arr = [];
+      snap.forEach(d => arr.push({ _docId: d.id, ...d.data() }));
+      return arr;
+    }, { ttl: 60000, memOnly: true });
     window._clientesData = {};
     window._clientesTodos = clientes.filter(c => c.activo !== false);
     window._clientesTodos.forEach(c => { window._clientesData[c._docId] = c; });
@@ -370,6 +375,7 @@ function setupClientesEvents(db) {
         await updateDoc(ref, { id: ref.id });
       }
       cerrarClienteModal();
+      invalidateCacheByPrefix('clientes:');
       await cargarClientes(db);
     } catch (err) {
       const el = document.getElementById('clienteError');
@@ -397,6 +403,7 @@ function setupClientesEvents(db) {
       if (!confirm(`¿Eliminar "${nombre}"?`)) return;
       try {
         await updateDoc(doc(db, COL, docId), { activo: false });
+        invalidateCacheByPrefix('clientes:');
         await cargarClientes(db);
       } catch (err) {
         alert(`Error: ${err.message}`);

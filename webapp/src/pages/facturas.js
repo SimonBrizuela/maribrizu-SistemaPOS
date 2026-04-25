@@ -7,7 +7,7 @@
  */
 
 import { collection, addDoc, getDocs, query, orderBy, limit } from 'firebase/firestore';
-import { getCached } from '../cache.js';
+import { getCached, invalidateCache } from '../cache.js';
 
 async function loadCatalogo(db) {
   return getCached('catalogo:all', async () => {
@@ -521,6 +521,7 @@ async function emitirFactura(container, db, emisor, conAfip) {
       },
       created_at:        new Date().toLocaleString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' }).replace(' ', 'T'),
     });
+    invalidateCache('facturas:all:2000');
   } catch (e) {
     console.warn('No se pudo guardar en Firestore:', e.message);
   }
@@ -544,9 +545,13 @@ async function loadHistorial(db, container) {
   const el = container.querySelector('#factHistorial');
   el.innerHTML = '<div class="loader"><div class="spinner"></div><span>Cargando...</span></div>';
   try {
-    const snap = await getDocs(query(collection(db, 'facturas'), orderBy('created_at', 'desc'), limit(100)));
-    const rows = [];
-    snap.forEach(d => rows.push({ id: d.id, ...d.data() }));
+    const all = await getCached('facturas:all:2000', async () => {
+      const snap = await getDocs(query(collection(db, 'facturas'), orderBy('created_at', 'desc'), limit(2000)));
+      const arr = [];
+      snap.forEach(d => arr.push({ id: d.id, ...d.data() }));
+      return arr;
+    }, { ttl: 60 * 1000 });
+    const rows = all.slice(0, 100);
 
     if (!rows.length) {
       el.innerHTML = '<div class="empty-state"><span class="material-icons">receipt_long</span><p>Sin comprobantes emitidos aún.</p></div>';
@@ -1017,16 +1022,37 @@ async function loadResumen(db, container) {
   el.innerHTML = '<div class="loader"><div class="spinner"></div><span>Calculando...</span></div>';
 
   try {
-    const { collection, getDocs, query, orderBy } = await import('firebase/firestore');
-    const snap = await getDocs(query(collection(db, 'facturas'), orderBy('fecha', 'desc')));
+    const { collection, getDocs, query, orderBy, limit } = await import('firebase/firestore');
 
-    const facturas = [];
-    snap.forEach(d => facturas.push({ id: d.id, ...d.data() }));
+    // Cache del listado de facturas (compartido entre Historial y Resumen) —
+    // bajamos hasta 2000 y filtramos client-side. `fecha` viene como "DD/MM/YYYY"
+    // desde el POS, así que parseamos a ISO para comparar con el rango.
+    const todas = await getCached('facturas:all:2000', async () => {
+      const snap = await getDocs(query(
+        collection(db, 'facturas'),
+        orderBy('created_at', 'desc'),
+        limit(2000),
+      ));
+      const arr = [];
+      snap.forEach(d => arr.push({ id: d.id, ...d.data() }));
+      return arr;
+    }, { ttl: 60 * 1000 });
 
-    // Filtrar por rango de fechas
-    const filtered = facturas.filter(f => {
-      const raw = f.fecha || f.created_at || '';
-      const iso = raw.slice(0, 10);  // YYYY-MM-DD
+    const toIso = raw => {
+      if (!raw) return '';
+      if (raw && typeof raw === 'object' && typeof raw.toDate === 'function') {
+        return raw.toDate().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+      }
+      const s = String(raw);
+      // "DD/MM/YYYY..." → "YYYY-MM-DD"
+      const m = s.match(/^(\d{2})\/(\d{2})\/(\d{4})/);
+      if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+      // "YYYY-MM-DD..." → ya está
+      return s.slice(0, 10);
+    };
+
+    const filtered = todas.filter(f => {
+      const iso = toIso(f.fecha) || toIso(f.created_at);
       return iso >= desde && iso <= hasta;
     });
 

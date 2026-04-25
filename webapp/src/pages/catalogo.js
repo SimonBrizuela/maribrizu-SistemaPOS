@@ -536,12 +536,61 @@ export async function _registerCatalogoDeleted(db, docId) {
   } catch(e) { /* silently ignore */ }
 }
 
+// ── JsBarcode lazy load + generador de etiqueta PNG ──────────────────────────
+let _jsBarcodePromise = null;
+function _ensureJsBarcode() {
+  if (window.JsBarcode) return Promise.resolve();
+  if (_jsBarcodePromise) return _jsBarcodePromise;
+  _jsBarcodePromise = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js';
+    s.onload  = () => resolve();
+    s.onerror = () => { _jsBarcodePromise = null; reject(new Error('No se pudo cargar JsBarcode (revisá conexión)')); };
+    document.head.appendChild(s);
+  });
+  return _jsBarcodePromise;
+}
+
+async function _descargarEtiqueta(codigo, nombre) {
+  const tmp = document.createElement('canvas');
+  window.JsBarcode(tmp, String(codigo), {
+    format: 'CODE128', width: 2, height: 60, fontSize: 16, margin: 6, displayValue: true,
+  });
+  const final = document.createElement('canvas');
+  const ctx = final.getContext('2d');
+  const nombreCorto = (nombre || '').slice(0, 38);
+  final.width  = Math.max(tmp.width + 16, 280);
+  final.height = tmp.height + 36;
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, final.width, final.height);
+  ctx.fillStyle = '#000';
+  ctx.font = 'bold 13px Arial';
+  ctx.textAlign = 'center';
+  ctx.fillText(nombreCorto, final.width/2, 20);
+  ctx.drawImage(tmp, (final.width - tmp.width)/2, 28);
+  const safe = `${codigo}_${(nombre||'').replace(/[^A-Za-z0-9]+/g, '_').slice(0,40)}`;
+  const link = document.createElement('a');
+  link.download = `${safe}.png`;
+  link.href = final.toDataURL('image/png');
+  link.click();
+}
+
 export async function renderCatalogo(container, db) {
   // Estado local
   let allProductos = [];
   let filtrados = [];
   let currentPage = 1;
   const PER_PAGE = 50;
+
+  // ── Filtro alfabético (temporal — eliminar bloque "ABC FILTER" cuando ya no se use) ──
+  const ABC_FILTER = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
+  let letraActiva = '';
+  function primeraLetraNombre(nombre) {
+    const n = (nombre || '').trim();
+    if (!n) return '';
+    const c = n.normalize('NFD').replace(/[̀-ͯ]/g, '')[0];
+    return (c || '').toUpperCase();
+  }
 
   // Inventario: velocidad de venta (lazy-load cuando se abre la pestaña o el banner)
   let ventasProd = null;      // { 'NOMBRE': { u30, u7 } }
@@ -984,6 +1033,19 @@ export async function renderCatalogo(container, db) {
         </select>
         <button id="btnLimpiar" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:none;cursor:pointer;color:var(--text-muted);font-size:13px">Limpiar</button>
       </div>
+
+      <!-- ABC FILTER (temporal) -->
+      <div id="abcBar" style="display:flex;flex-wrap:wrap;gap:4px;margin:8px 0 14px 0;align-items:center">
+        <button data-letra="" class="abc-btn" style="padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:#7c3aed;color:#fff;cursor:pointer;font-size:12px;font-weight:700">Todas</button>
+        ${ABC_FILTER.map(l => {
+          const n = base.filter(p => primeraLetraNombre(p.nombre) === l).length;
+          const dis = (n === 0 && letraActiva !== l);
+          const dim = dis ? 'opacity:0.35;' : '';
+          return `<button data-letra="${l}" class="abc-btn" ${dis?'disabled':''} style="${dim}padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:none;cursor:${dis?'not-allowed':'pointer'};font-size:12px;font-weight:700;min-width:34px">${l}<span style="font-size:10px;color:var(--text-muted);font-weight:400;margin-left:3px">${n}</span></button>`;
+        }).join('')}
+      </div>
+      <!-- /ABC FILTER -->
+
       <div class="table-card">
         <div class="table-card-header">
           <h3>Catálogo${rubroActivo !== 'TODOS' ? ' — ' + rubroActivo.charAt(0) + rubroActivo.slice(1).toLowerCase() : ''}</h3>
@@ -1023,11 +1085,35 @@ export async function renderCatalogo(container, db) {
         const el = document.getElementById(id);
         if (el) el.value = '';
       });
+      letraActiva = '';
+      _pintarABC();
       currentPage = 1;
       aplicarFiltros();
     });
 
+    // ABC FILTER (temporal)
+    document.getElementById('abcBar')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.abc-btn');
+      if (!btn || btn.disabled) return;
+      const l = btn.dataset.letra || '';
+      letraActiva = (l && letraActiva === l) ? '' : l;
+      _pintarABC();
+      currentPage = 1;
+      aplicarFiltros();
+    });
+    _pintarABC();
+
     aplicarFiltros();
+  }
+
+  // ABC FILTER (temporal)
+  function _pintarABC() {
+    document.querySelectorAll('#abcBar .abc-btn').forEach(b => {
+      const l = b.dataset.letra || '';
+      const activo = (l === letraActiva) || (l === '' && !letraActiva);
+      b.style.background = activo ? '#7c3aed' : 'none';
+      b.style.color      = activo ? '#fff' : 'var(--text)';
+    });
   }
 
   // Búsqueda fuzzy: cada palabra del texto debe aparecer en algún campo del producto
@@ -1049,6 +1135,7 @@ export async function renderCatalogo(container, db) {
     const base = getBaseRubro();
 
     filtrados = base.filter(p => {
+      if (letraActiva && primeraLetraNombre(p.nombre) !== letraActiva) return false;
       if (buscar && !fuzzyMatch(buscar, p)) return false;
       if (cat   && (p.categoria || '') !== cat) return false;
       if (prov  && (p.proveedor || '') !== prov) return false;
@@ -1063,6 +1150,11 @@ export async function renderCatalogo(container, db) {
       }
       return true;
     });
+
+    // Orden estable: alfabético por nombre (case-insensitive, ignora acentos)
+    filtrados.sort((a, b) =>
+      (a.nombre || '').localeCompare(b.nombre || '', 'es', { sensitivity: 'base', numeric: true })
+    );
 
     renderTabla();
   }
@@ -1239,7 +1331,7 @@ export async function renderCatalogo(container, db) {
   // ── Modal de edición completa de producto ──────────────────────────────────
   function abrirEditorCompleto(prod) {
     const overlay = document.createElement('div');
-    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:2000;display:flex;align-items:center;justify-content:center;padding:16px;overflow-y:auto';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:2000;display:flex;align-items:center;justify-content:center;padding:8px;overflow-y:auto';
 
     const subRubrosDisponibles = [...new Set(
       allProductos
@@ -1254,10 +1346,10 @@ export async function renderCatalogo(container, db) {
     const margenActual = prod.costo > 0 ? Math.round(((prod.precio_venta - prod.costo) / prod.costo) * 100) : 0;
 
     overlay.innerHTML = `
-      <div style="background:#fff;border-radius:18px;padding:0;max-width:520px;width:100%;box-shadow:0 12px 48px rgba(0,0,0,0.22);overflow:hidden">
+      <div style="background:#fff;border-radius:18px;padding:0;max-width:520px;width:100%;max-height:96vh;display:flex;flex-direction:column;box-shadow:0 12px 48px rgba(0,0,0,0.22);overflow:hidden">
 
         <!-- Header -->
-        <div style="background:linear-gradient(135deg,#1877f2,#0d5db5);padding:20px 24px;display:flex;align-items:center;justify-content:space-between">
+        <div style="background:linear-gradient(135deg,#1877f2,#0d5db5);padding:16px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
           <div>
             <div style="color:rgba(255,255,255,0.75);font-size:11px;font-weight:700;letter-spacing:1px;margin-bottom:4px">EDITAR PRODUCTO</div>
             <div style="color:#fff;font-size:14px;font-weight:700;line-height:1.3;max-width:380px">${prod.nombre}</div>
@@ -1268,7 +1360,7 @@ export async function renderCatalogo(container, db) {
         </div>
 
         <!-- Body -->
-        <div style="padding:24px;display:flex;flex-direction:column;gap:16px;max-height:70vh;overflow-y:auto">
+        <div style="padding:20px;display:flex;flex-direction:column;gap:14px;flex:1 1 auto;min-height:0;overflow-y:auto">
 
           <!-- Nombre -->
           <div>
@@ -1277,7 +1369,7 @@ export async function renderCatalogo(container, db) {
           </div>
 
           <!-- Rubro + Sub-rubro -->
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px">
             <div>
               <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:6px">RUBRO</label>
               <select id="ed_rubro" style="width:100%;padding:10px 12px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit;background:#fff">
@@ -1292,7 +1384,7 @@ export async function renderCatalogo(container, db) {
           </div>
 
           <!-- Marca + Proveedor -->
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px">
             <div>
               <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:6px">MARCA</label>
               <input id="ed_marca" type="text" value="${prod.marca && prod.marca !== 'SIN MARCA' ? prod.marca : ''}" placeholder="Ej: RIVADAVIA" style="width:100%;padding:10px 12px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit" />
@@ -1304,7 +1396,7 @@ export async function renderCatalogo(container, db) {
           </div>
 
           <!-- Código + Código de barras -->
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px">
             <div>
               <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:6px">CÓDIGO INTERNO</label>
               <input id="ed_codigo" type="text" value="${prod.codigo || ''}" style="width:100%;padding:10px 12px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit" />
@@ -1316,7 +1408,7 @@ export async function renderCatalogo(container, db) {
           </div>
 
           <!-- Costo + Precio venta -->
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:12px">
             <div>
               <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:6px">COSTO $</label>
               <input id="ed_costo" type="number" step="0.01" min="0" value="${prod.costo || 0}" style="width:100%;padding:10px 12px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit" />
@@ -1335,7 +1427,7 @@ export async function renderCatalogo(container, db) {
           </div>
 
           <!-- Stock + Alertas -->
-          <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;align-items:end">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:12px;align-items:end">
             <div>
               <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:6px">STOCK</label>
               <input id="ed_stock" type="number" step="1" min="-1" value="${prod.stock ?? 0}" style="width:100%;padding:10px 12px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit" />
@@ -1359,14 +1451,61 @@ export async function renderCatalogo(container, db) {
             </span>
           </div>
 
+          <!-- Producto Conjunto (pack / rollo / caja) -->
+          <div style="border:1.5px dashed #c4b5fd;border-radius:10px;padding:14px;background:#faf5ff">
+            <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-weight:700;color:#6d28d9;font-size:13px;user-select:none">
+              <input id="ed_es_conjunto" type="checkbox" ${prod.es_conjunto ? 'checked' : ''} style="width:18px;height:18px;cursor:pointer;accent-color:#7c3aed">
+              <span class="material-icons" style="font-size:18px">inventory_2</span>
+              PRODUCTO CONJUNTO (pack / rollo / caja / metros)
+            </label>
+            <div id="ed_conjunto_fields" style="margin-top:12px;${prod.es_conjunto ? 'display:grid' : 'display:none'};grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
+              <div>
+                <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:4px">TIPO</label>
+                <select id="ed_conj_tipo" style="width:100%;padding:8px 10px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit;background:#fff">
+                  ${['rollo','pack','caja','bobina','bolsa','plancha','otro'].map(t => `<option value="${t}" ${ (prod.conjunto_tipo||'rollo') === t ? 'selected':'' }>${t.charAt(0).toUpperCase()+t.slice(1)}</option>`).join('')}
+                </select>
+              </div>
+              <div>
+                <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:4px">UNIDAD DE MEDIDA</label>
+                <select id="ed_conj_unidad_medida" style="width:100%;padding:8px 10px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit;background:#fff">
+                  ${['metros','unidades','gramos','kilos','litros','cm'].map(u => `<option value="${u}" ${ (prod.conjunto_unidad_medida||'metros') === u ? 'selected':'' }>${u.charAt(0).toUpperCase()+u.slice(1)}</option>`).join('')}
+                </select>
+              </div>
+              <div>
+                <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:4px">CANTIDAD DE <span id="lbl_unidades">ROLLOS</span></label>
+                <input id="ed_conj_unidades" type="number" min="0" step="1" value="${prod.conjunto_unidades ?? ''}" placeholder="Ej: 5" style="width:100%;padding:8px 10px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
+              </div>
+              <div>
+                <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:4px">CONTENIDO POR <span id="lbl_contenido">ROLLO</span></label>
+                <input id="ed_conj_contenido" type="number" min="0" step="0.01" value="${prod.conjunto_contenido ?? ''}" placeholder="Ej: 100" style="width:100%;padding:8px 10px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
+              </div>
+              <div>
+                <label style="font-size:11px;font-weight:700;color:#b45309;letter-spacing:0.5px;display:block;margin-bottom:4px">RESTANTE EN <span id="lbl_restante">ROLLO</span> ABIERTO (opcional)</label>
+                <input id="ed_conj_restante" type="number" min="0" step="0.01" value="${prod.conjunto_restante ?? ''}" placeholder="Ej: 35.5" style="width:100%;padding:8px 10px;border:1.5px solid #ffe082;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit;background:#fffef7" />
+              </div>
+              <div>
+                <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:4px">PRECIO POR <span id="lbl_punidad">METRO</span> (opcional)</label>
+                <input id="ed_conj_precio_unidad" type="number" min="0" step="0.01" value="${prod.conjunto_precio_unidad ?? ''}" placeholder="Ej: 250" style="width:100%;padding:8px 10px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
+              </div>
+              <div style="grid-column:1/-1;background:#fff;border-radius:6px;padding:10px 12px;font-size:12px;color:#374151">
+                <span id="ed_conj_resumen">Completá los campos para ver el total</span>
+              </div>
+            </div>
+          </div>
+
         </div>
 
         <!-- Footer -->
-        <div style="padding:16px 24px;border-top:1px solid #e4e6eb;display:flex;gap:10px;justify-content:flex-end;background:#f9fafb">
-          <button id="ed_cancelar" style="padding:10px 20px;border-radius:8px;border:1.5px solid #e4e6eb;background:#fff;cursor:pointer;font-size:14px;font-weight:600;color:#65676b">Cancelar</button>
-          <button id="ed_guardar" style="padding:10px 24px;border-radius:8px;border:none;background:#1877f2;color:#fff;cursor:pointer;font-size:14px;font-weight:700;display:flex;align-items:center;gap:8px">
-            <span class="material-icons" style="font-size:16px">save</span>Guardar cambios
+        <div style="padding:14px 20px;border-top:1px solid #e4e6eb;display:flex;gap:10px;justify-content:space-between;align-items:center;background:#f9fafb;flex-wrap:wrap;flex-shrink:0">
+          <button id="ed_etiqueta" type="button" style="padding:10px 16px;border-radius:8px;border:1.5px solid #d1d5db;background:#fff;cursor:pointer;font-size:13px;font-weight:600;color:#374151;display:flex;align-items:center;gap:6px">
+            <span class="material-icons" style="font-size:16px">qr_code_2</span>Descargar etiqueta
           </button>
+          <div style="display:flex;gap:10px">
+            <button id="ed_cancelar" style="padding:10px 20px;border-radius:8px;border:1.5px solid #e4e6eb;background:#fff;cursor:pointer;font-size:14px;font-weight:600;color:#65676b">Cancelar</button>
+            <button id="ed_guardar" style="padding:10px 24px;border-radius:8px;border:none;background:#1877f2;color:#fff;cursor:pointer;font-size:14px;font-weight:700;display:flex;align-items:center;gap:8px">
+              <span class="material-icons" style="font-size:16px">save</span>Guardar cambios
+            </button>
+          </div>
         </div>
 
       </div>
@@ -1404,6 +1543,58 @@ export async function renderCatalogo(container, db) {
       if (c > 0) inMargen.value = Math.round(((redondeado - c) / c) * 100);
     });
 
+    // ── Producto Conjunto: toggle + etiquetas dinámicas + resumen ──
+    const cbConj   = overlay.querySelector('#ed_es_conjunto');
+    const conjBox  = overlay.querySelector('#ed_conjunto_fields');
+    const conjTipo = overlay.querySelector('#ed_conj_tipo');
+    const conjUM   = overlay.querySelector('#ed_conj_unidad_medida');
+    const conjU    = overlay.querySelector('#ed_conj_unidades');
+    const conjC    = overlay.querySelector('#ed_conj_contenido');
+    const conjR    = overlay.querySelector('#ed_conj_restante');
+    const lblU     = overlay.querySelector('#lbl_unidades');
+    const lblC     = overlay.querySelector('#lbl_contenido');
+    const lblR     = overlay.querySelector('#lbl_restante');
+    const lblPU    = overlay.querySelector('#lbl_punidad');
+    const conjRes  = overlay.querySelector('#ed_conj_resumen');
+
+    const NOMBRES_TIPO = {
+      rollo:   ['ROLLOS','ROLLO'],
+      pack:    ['PACKS','PACK'],
+      caja:    ['CAJAS','CAJA'],
+      bobina:  ['BOBINAS','BOBINA'],
+      bolsa:   ['BOLSAS','BOLSA'],
+      plancha: ['PLANCHAS','PLANCHA'],
+      otro:    ['UNIDADES','UNIDAD'],
+    };
+
+    function _refrescarConjunto() {
+      const [pl, sg] = NOMBRES_TIPO[conjTipo.value] || NOMBRES_TIPO.otro;
+      const um = conjUM.value || 'unidades';
+      const umSg = um.endsWith('s') ? um.slice(0, -1) : um;
+      lblU.textContent  = pl;
+      lblC.textContent  = sg;
+      lblR.textContent  = sg;
+      lblPU.textContent = umSg.toUpperCase();
+      const u = parseFloat(conjU.value) || 0;
+      const c = parseFloat(conjC.value) || 0;
+      const r = parseFloat(conjR.value) || 0;
+      if (u > 0 && c > 0) {
+        const totalCerrados = Math.max(0, (u - (r > 0 ? 1 : 0))) * c;
+        const total = totalCerrados + (r > 0 ? r : (r === 0 && u > 0 ? 0 : 0));
+        const detalleR = r > 0 ? ` + ${r} ${um} restantes en ${sg.toLowerCase()} abierto` : '';
+        conjRes.innerHTML = `<b>Total disponible:</b> ${u} ${pl.toLowerCase()} × ${c} ${um}${detalleR} = <b style="color:#6d28d9">${(total).toLocaleString('es-AR')} ${um}</b>`;
+      } else {
+        conjRes.textContent = 'Completá los campos para ver el total';
+      }
+    }
+
+    cbConj.addEventListener('change', () => {
+      conjBox.style.display = cbConj.checked ? 'grid' : 'none';
+      if (cbConj.checked) _refrescarConjunto();
+    });
+    [conjTipo, conjUM, conjU, conjC, conjR].forEach(el => el.addEventListener('input', _refrescarConjunto));
+    if (cbConj.checked) _refrescarConjunto();
+
     // Actualizar sub-rubros disponibles al cambiar rubro
     overlay.querySelector('#ed_rubro').addEventListener('change', (e) => {
       const nuevoRubro = e.target.value.toUpperCase();
@@ -1421,6 +1612,19 @@ export async function renderCatalogo(container, db) {
     overlay.querySelector('#cerrarEditor').addEventListener('click', cerrar);
     overlay.querySelector('#ed_cancelar').addEventListener('click', cerrar);
     overlay.addEventListener('click', e => { if (e.target === overlay) cerrar(); });
+
+    // Descargar etiqueta (barcode PNG con nombre + codigo)
+    overlay.querySelector('#ed_etiqueta').addEventListener('click', async () => {
+      const codigo = (overlay.querySelector('#ed_barra').value || overlay.querySelector('#ed_codigo').value || '').trim();
+      if (!codigo) { alert('Cargá primero un código de barras o código interno.'); return; }
+      const nombre = (overlay.querySelector('#ed_nombre').value || '').trim() || 'producto';
+      try {
+        await _ensureJsBarcode();
+        await _descargarEtiqueta(codigo, nombre);
+      } catch (e) {
+        alert('No se pudo generar la etiqueta: ' + e.message);
+      }
+    });
 
     overlay.querySelector('#ed_guardar').addEventListener('click', async () => {
       const btn = overlay.querySelector('#ed_guardar');
@@ -1451,6 +1655,43 @@ export async function renderCatalogo(container, db) {
         return;
       }
 
+      // Producto Conjunto
+      const esConjunto = overlay.querySelector('#ed_es_conjunto').checked;
+      let conjuntoFields;
+      if (esConjunto) {
+        const cTipo = overlay.querySelector('#ed_conj_tipo').value || 'rollo';
+        const cUM   = overlay.querySelector('#ed_conj_unidad_medida').value || 'unidades';
+        const cU    = parseFloat(overlay.querySelector('#ed_conj_unidades').value) || 0;
+        const cC    = parseFloat(overlay.querySelector('#ed_conj_contenido').value) || 0;
+        const cRraw = overlay.querySelector('#ed_conj_restante').value.trim();
+        const cR    = cRraw === '' ? null : (parseFloat(cRraw) || 0);
+        const cPraw = overlay.querySelector('#ed_conj_precio_unidad').value.trim();
+        const cP    = cPraw === '' ? null : (parseFloat(cPraw) || 0);
+        const cerrados = cR !== null && cR > 0 ? Math.max(0, cU - 1) : cU;
+        const cTotal   = cerrados * cC + (cR || 0);
+        conjuntoFields = {
+          es_conjunto:           true,
+          conjunto_tipo:         cTipo,
+          conjunto_unidad_medida: cUM,
+          conjunto_unidades:     cU,
+          conjunto_contenido:    cC,
+          conjunto_restante:     cR,
+          conjunto_precio_unidad: cP,
+          conjunto_total:        cTotal,
+        };
+      } else {
+        conjuntoFields = {
+          es_conjunto:           false,
+          conjunto_tipo:         null,
+          conjunto_unidad_medida: null,
+          conjunto_unidades:     null,
+          conjunto_contenido:    null,
+          conjunto_restante:     null,
+          conjunto_precio_unidad: null,
+          conjunto_total:        null,
+        };
+      }
+
       const update = {
         nombre:               nuevoNombre,
         rubro:                nuevoRubro,
@@ -1465,6 +1706,7 @@ export async function renderCatalogo(container, db) {
         stock_min:            nuevoStockMin,
         stock_max:            nuevoStockMax,
         estado:               nuevoCosto === 0 ? 'sin_precio' : 'activo',
+        ...conjuntoFields,
         ultima_actualizacion: serverTimestamp(),
       };
 
@@ -3139,16 +3381,16 @@ export async function renderCatalogo(container, db) {
         <div class="table-card-header"><h3>Agregar Producto</h3></div>
         <div style="padding:20px;display:flex;flex-direction:column;gap:14px">
 
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
-            <div style="display:flex;flex-direction:column;gap:4px">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:14px">
+            <div style="display:flex;flex-direction:column;gap:4px;grid-column:1/-1">
               <label style="font-size:13px;font-weight:600">Nombre del producto *</label>
               <input id="np_nombre" type="text" placeholder="Ej: LAPICERA BIC AZUL X 1" style="padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:var(--surface);color:var(--text)" />
             </div>
             <div style="display:flex;flex-direction:column;gap:4px">
               <label style="font-size:13px;font-weight:600">Código interno</label>
               <div style="display:flex;gap:6px">
-                <input id="np_codigo" type="text" placeholder="Ej: 300001" style="flex:1;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:var(--surface);color:var(--text)" />
-                <button id="np_gen_codes" type="button" title="Generar código + código de barras únicos" style="padding:0 10px;background:#6366f1;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:12px;white-space:nowrap">Generar</button>
+                <input id="np_codigo" type="text" placeholder="Ej: 300001" style="flex:1;min-width:0;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;background:var(--surface);color:var(--text)" />
+                <button id="np_gen_codes" type="button" title="Generar código + código de barras únicos" style="padding:0 10px;background:#6366f1;color:#fff;border:none;border-radius:8px;cursor:pointer;font-size:12px;white-space:nowrap;flex-shrink:0">Generar</button>
               </div>
             </div>
             <div style="display:flex;flex-direction:column;gap:4px">
@@ -3402,7 +3644,7 @@ export async function renderCatalogo(container, db) {
           <div style="padding:16px;display:flex;flex-direction:column;gap:14px">
             <p style="font-size:13px;color:#65676b;margin:0">Seleccioná un grupo de productos y aplicá un % de margen sobre el costo. El sistema calculará y actualizará el precio de venta automáticamente.</p>
 
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px">
               <div style="display:flex;flex-direction:column;gap:4px">
                 <label style="font-size:12px;font-weight:600;color:#65676b">APLICAR A</label>
                 <select id="mas_tipo" style="padding:8px 12px;border:1px solid #e4e6eb;border-radius:8px;font-size:14px">
@@ -3838,7 +4080,7 @@ export async function renderCatalogo(container, db) {
                 </table>
               </div>
             </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px">
               <div class="table-card">
                 <div class="table-card-header" style="padding:12px 16px"><h4 style="margin:0;font-size:14px">Mayor Margen</h4></div>
                 <div class="table-wrap">
@@ -3893,7 +4135,7 @@ export async function renderCatalogo(container, db) {
 
       else if (tipo === 'unidades') {
         panel.innerHTML = `
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px">
             <div class="table-card">
               <div class="table-card-header" style="padding:12px 16px"><h3 style="margin:0">Más Vendidos por Unidades</h3></div>
               <div class="table-wrap">

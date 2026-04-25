@@ -1555,6 +1555,226 @@ body {
 }
 .ct-del-btn:hover { background: #fce4e4; color: #c62828; }
 
+/* ── Control Total: toggle Gasto/Ingreso ─────────────────────────────────── */
+.ct-mov-toggle {
+  display: inline-flex; gap: 4px; background: #f0f2f5;
+  padding: 3px; border-radius: 8px;
+}
+.ct-mov-btn {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 14px; border: none; background: transparent;
+  border-radius: 6px; font-weight: 600; font-size: 13px;
+  cursor: pointer; color: var(--text-muted); font-family: inherit;
+  transition: all 0.15s;
+}
+.ct-mov-btn.active {
+  background: #fff; color: var(--text);
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05); font-weight: 700;
+}
+.ct-mov-btn .material-icons { font-size: 16px !important; }
+
+/* ── Control Total: filtros lista ───────────────────────────────────────── */
+.ct-gastos-filtros {
+  display: flex; flex-wrap: wrap; gap: 8px; align-items: center;
+  padding: 6px 0 12px 0; border-bottom: 1px solid var(--border);
+  margin-bottom: 10px;
+}
+.ct-flt-mov {
+  display: inline-flex; gap: 3px; background: #f0f2f5;
+  padding: 3px; border-radius: 7px;
+}
+.ct-flt-btn {
+  padding: 5px 12px; border: none; background: transparent;
+  border-radius: 5px; font-weight: 600; font-size: 12px;
+  cursor: pointer; color: var(--text-muted); font-family: inherit;
+}
+.ct-flt-btn.active {
+  background: #fff; color: var(--text); font-weight: 700;
+  box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+.ct-flt-cat {
+  padding: 7px 10px; border: 1.5px solid var(--border);
+  border-radius: 7px; font-size: 12px; background: #fff;
+  min-width: 160px; font-family: inherit;
+}
+.ct-flt-search {
+  display: flex; align-items: center; gap: 6px; flex: 1;
+  background: #fff; border: 1.5px solid var(--border);
+  border-radius: 7px; padding: 0 10px; min-width: 180px;
+}
+.ct-flt-search .material-icons { color: var(--text-muted); font-size: 18px !important; }
+.ct-flt-search input {
+  border: none; outline: none; padding: 7px 0;
+  font-size: 13px; flex: 1; background: transparent; font-family: inherit;
+}
+
+/* ── Control Total: tag de movimiento (ingreso) y badges de categoría ──── */
+.ct-mov-tag {
+  display: inline-block; font-size: 10px; font-weight: 800;
+  padding: 1px 6px; border-radius: 99px; letter-spacing: .4px;
+  text-transform: uppercase; vertical-align: middle;
+}
+.ct-mov-ingreso { background: #e8f5e9; color: #2e7d32; border: 1px solid #a5d6a7; }
+
+.ct-cat-badge {
+  display: inline-block; font-size: 11px; font-weight: 700;
+  padding: 2px 8px; border-radius: 99px;
+  background: color-mix(in srgb, var(--cat-color) 12%, transparent);
+  color: var(--cat-color);
+  border: 1px solid color-mix(in srgb, var(--cat-color) 40%, transparent);
+}
+.ct-rubro-badge {
+  display: inline-block; font-size: 10px; font-weight: 800;
+  padding: 2px 8px; border-radius: 4px; letter-spacing: .3px;
+  background: #eceff1; color: #455a64;
+  border: 1px solid #cfd8dc; text-transform: uppercase;
+}
+.ct-flt-rubro {
+  padding: 7px 10px; border: 1.5px solid var(--border);
+  border-radius: 7px; font-size: 12px; background: #fff;
+  min-width: 140px; font-family: inherit;
+}
+
+/* ── Control Total: resumen por categoría (chips) ──────────────────────── */
+#ct-resumen-categorias { margin-top: 4px; }
+.ct-cat-chips {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 8px;
+}
+.ct-cat-chip {
+  background: #fff; border-radius: 10px; padding: 10px 12px;
+  border: 1px solid var(--border); border-left: 4px solid var(--cat-color);
+  display: flex; flex-direction: column; gap: 4px;
+  box-shadow: var(--shadow);
+}
+.ct-cat-chip-head {
+  display: flex; align-items: center; gap: 6px;
+  font-size: 13px; color: var(--text);
+}
+.ct-cat-chip-head .ct-cat-dot {
+  width: 8px; height: 8px; border-radius: 50%; background: var(--cat-color);
+}
+.ct-cat-chip-count {
+  margin-left: auto; font-size: 10px; font-weight: 700;
+  color: var(--text-muted); background: var(--bg);
+  padding: 1px 7px; border-radius: 99px;
+}
+.ct-cat-chip-nums {
+  display: flex; gap: 8px; font-size: 12px; font-weight: 700;
+}
+
+/* ── Control Total: field de categoría + botón Nueva ──────────────────── */
+.ct-cat-field {
+  display: inline-flex; align-items: stretch;
+  border: 1.5px solid var(--border); border-radius: 8px; overflow: hidden;
+  background: #fff; font-family: inherit;
+}
+.ct-cat-field select {
+  border: none; outline: none; padding: 10px 12px; font-size: 14px;
+  background: #fff; font-family: inherit; max-width: 200px; min-width: 120px;
+  cursor: pointer;
+}
+.ct-cat-nueva-btn {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 0 14px; border: none; border-left: 1.5px solid var(--border);
+  background: linear-gradient(180deg, #f7f8fa 0%, #eceff1 100%);
+  color: #6a1b9a; font-weight: 700; font-size: 13px; cursor: pointer;
+  font-family: inherit; white-space: nowrap; transition: all 0.15s;
+}
+.ct-cat-nueva-btn:hover {
+  background: linear-gradient(180deg, #f3e5f5 0%, #e1bee7 100%);
+  color: #4a148c;
+}
+.ct-cat-nueva-btn .material-icons { font-size: 16px !important; }
+
+/* Modal compacto: nueva categoría rápida */
+.ct-modal.ct-modal-compact { max-width: 440px; }
+
+.ct-field-label {
+  display: block; font-size: 12px; font-weight: 700;
+  color: var(--text-muted); text-transform: uppercase;
+  letter-spacing: .4px; margin-bottom: 6px;
+}
+.ct-field-input {
+  width: 100%; padding: 10px 12px; font-size: 14px;
+  border: 1.5px solid var(--border); border-radius: 8px;
+  font-family: inherit; background: #fff; outline: none;
+  box-sizing: border-box; transition: all 0.15s;
+}
+.ct-field-input:focus {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px rgba(123,63,166,.15);
+}
+.ct-field-err { border-color: #c62828 !important; background: #fff5f5 !important; }
+
+.ct-nc-tipo-row {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.ct-nc-tipo-opt {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 8px 12px; border: 1.5px solid var(--border); border-radius: 8px;
+  cursor: pointer; font-size: 13px; font-weight: 600;
+  color: var(--text-muted); background: #fff; flex: 1; min-width: 110px;
+  justify-content: center; transition: all 0.15s;
+}
+.ct-nc-tipo-opt:has(input:checked) {
+  border-color: var(--primary); background: #f3e5f5; color: var(--primary);
+}
+.ct-nc-tipo-opt input { display: none; }
+
+.ct-nc-colors {
+  display: flex; flex-wrap: wrap; gap: 6px;
+}
+.ct-nc-color {
+  width: 32px; height: 32px; border-radius: 50%;
+  border: 2px solid transparent; cursor: pointer; padding: 0;
+  transition: transform 0.15s, border-color 0.15s;
+  box-shadow: inset 0 0 0 2px rgba(255,255,255,0.3);
+}
+.ct-nc-color:hover { transform: scale(1.1); }
+.ct-nc-color.selected {
+  border-color: var(--text);
+  transform: scale(1.15);
+  box-shadow: inset 0 0 0 2px rgba(255,255,255,0.6), 0 0 0 2px var(--text);
+}
+
+.ct-btn-ghost {
+  padding: 8px 16px; background: transparent; color: var(--text);
+  border: 1.5px solid var(--border); border-radius: 8px;
+  font-size: 13px; font-weight: 700; font-family: inherit; cursor: pointer;
+}
+.ct-btn-ghost:hover { background: var(--bg); }
+
+/* ── Control Total: gestor de categorías ─────────────────────────────── */
+.ct-cat-form {
+  display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
+}
+.ct-cat-row {
+  display: flex; align-items: center; gap: 10px;
+  padding: 10px 12px; border-bottom: 1px solid var(--border);
+  font-size: 13px;
+}
+.ct-cat-row:last-child { border-bottom: none; }
+.ct-cat-swatch {
+  width: 14px; height: 14px; border-radius: 4px; flex-shrink: 0;
+  border: 1px solid rgba(0,0,0,0.08);
+}
+.ct-cat-nombre { flex: 1; min-width: 100px; }
+.ct-cat-tipo-badge {
+  font-size: 10px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: .4px; padding: 1px 7px; border-radius: 99px;
+  background: var(--bg); color: var(--text-muted);
+}
+.ct-cat-parent-hint { font-size: 11px; color: var(--text-muted); }
+.ct-cat-actions { display: flex; gap: 2px; margin-left: auto; }
+.ct-cat-actions button {
+  background: none; border: none; cursor: pointer;
+  padding: 4px 6px; border-radius: 5px;
+  color: var(--text-muted); display: flex; align-items: center;
+}
+.ct-cat-actions button:hover { background: var(--bg); color: var(--text); }
+
 .ct-loading {
   display: flex; justify-content: center; align-items: center; padding: 40px;
 }
@@ -1565,8 +1785,68 @@ body {
   .ct-eq-num { font-size: 15px; }
   .ct-eq-op { font-size: 18px; }
   .ct-cuentas-row { grid-template-columns: 1fr; }
-  .ct-gasto-form { flex-direction: column; }
-  .ct-gasto-form input, .ct-gasto-form select, .ct-gasto-form button { width: 100%; }
+
+  /* Form en celular: todo apilado ancho completo */
+  .ct-gasto-form { flex-direction: column; align-items: stretch; }
+  .ct-gasto-form > input,
+  .ct-gasto-form > select,
+  .ct-gasto-form > button { width: 100%; max-width: none; }
+
+  /* Wrapper categoría + botón Nueva en ancho completo, lado a lado */
+  .ct-cat-field { width: 100%; display: flex; }
+  .ct-cat-field select { flex: 1; max-width: none; min-width: 0; }
+  .ct-cat-nueva-btn { padding: 0 16px; }
+  #gasto-rubro { max-width: none; }
+
+  /* Toggle gasto/ingreso ocupa todo el ancho */
+  .ct-mov-toggle { display: flex; width: 100%; }
+  .ct-mov-btn { flex: 1; justify-content: center; }
+
+  /* Toolbar superior (periodos + configurar) — ahora en columna */
+  .ct-toolbar { flex-direction: column; align-items: stretch; gap: 8px; }
+  .ct-periodo { width: 100%; display: flex; }
+  .ct-periodo-btn { flex: 1; }
+  .ct-config-btn { justify-content: center; }
+
+  /* Título de sección con botón de gestionar — en columna */
+  .ct-gasto-section > .ct-section-title {
+    flex-direction: column; align-items: stretch; gap: 8px;
+  }
+  .ct-gasto-section > .ct-section-title > button { width: 100%; justify-content: center; }
+
+  /* Filtros de la lista en celular */
+  .ct-gastos-filtros { gap: 6px; }
+  .ct-flt-mov { width: 100%; display: flex; }
+  .ct-flt-btn { flex: 1; text-align: center; }
+  .ct-flt-cat, .ct-flt-rubro { width: 100%; min-width: 0; }
+  .ct-flt-search { width: 100%; min-width: 0; }
+
+  /* Tabla de movimientos: compactar, ocultar fecha (ya está cronológica) */
+  .ct-gastos-card { padding: 12px 10px; }
+  .ct-gastos-table { font-size: 12px; }
+  .ct-gastos-table th, .ct-gastos-table td { padding: 6px 4px; }
+  .ct-gastos-table th:first-child,
+  .ct-gastos-table td:first-child { display: none; }
+  .ct-cat-badge, .ct-rubro-badge { font-size: 10px; padding: 1px 5px; }
+
+  /* Chips de resumen por categoría */
+  .ct-cat-chips { grid-template-columns: 1fr 1fr; gap: 6px; }
+  .ct-cat-chip { padding: 8px 10px; }
+
+  /* Modal compacto de nueva categoría en pantalla completa */
+  .ct-modal.ct-modal-compact { max-height: 100vh; border-radius: 0; max-width: none; }
+  .ct-nc-tipo-row { flex-direction: column; }
+  .ct-nc-tipo-opt { width: 100%; }
+  .ct-nc-colors { justify-content: space-between; }
+  .ct-nc-color { width: 36px; height: 36px; }
+
+  /* Gestor de categorías: filas en celular */
+  .ct-cat-form { flex-direction: column; align-items: stretch; }
+  .ct-cat-form input, .ct-cat-form select, .ct-cat-form button { width: 100%; }
+  .ct-cat-form input[type="color"] { height: 44px; }
+  .ct-cat-row { flex-wrap: wrap; gap: 6px; }
+  .ct-cat-row .ct-cat-nombre { flex-basis: 100%; }
+  .ct-cat-actions { margin-left: auto; }
 }
 
 /* ── Catálogo: banner de productos críticos ─────────────────────────────── */

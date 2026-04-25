@@ -185,10 +185,15 @@ class FirebaseSync:
             logger.error(f"Firebase: No se pudo iniciar listener de inventario: {e}")
 
     def start_stock_sync_listener(self, db_manager, on_refresh: Optional[Callable] = None):
-        """Listener en tiempo real de 'inventario': cada vez que cambia el stock
-        en Firebase (venta de otra PC, edición desde la web, etc.), actualiza la
-        SQLite local. Sólo procesa los docs que cambian (added/modified) y
-        evita overwrites innecesarios comparando valores.
+        """Listener real-time de 'catalogo' con filtro where('ultima_actualizacion','>', last_ts).
+
+        - El snapshot inicial trae SÓLO los docs cambiados desde el último arranque
+          (en vez de los 12K completos), reduciendo lecturas en ~99% si no hubo cambios.
+        - Reacciona a cambios en: nombre, precio, costo, stock, codigo, cod_barra,
+          categoria, rubro, marca, proveedor, stock_min, stock_max.
+        - Procesa REMOVED (delete local + soft-delete si hay FK).
+        - Procesa ADDED (insert nuevo en SQLite).
+        - Persiste el último ts visto en DATA_DIR/last_ts_catalogo.txt.
 
         db_manager : DatabaseManager (SQLite)
         on_refresh : callable() — se invoca si hubo cambios reales (para refrescar UI)
@@ -196,65 +201,196 @@ class FirebaseSync:
         if not self.enabled:
             return
 
+        from pos_system.config import DATA_DIR
+        ts_file = DATA_DIR / "last_ts_catalogo.txt"
+
+        # Leer el último timestamp visto. Si no existe, primer arranque → filtro
+        # desde hace 1 año (los productos viejos ya están en la SQLite via delta_sync).
+        last_ts: Optional[datetime] = None
+        if ts_file.exists():
+            try:
+                raw = ts_file.read_text(encoding="utf-8").strip()
+                if raw:
+                    last_ts = datetime.fromisoformat(raw)
+                    if last_ts.tzinfo is None:
+                        last_ts = last_ts.replace(tzinfo=timezone.utc)
+            except Exception as e:
+                logger.warning(f"Listener catalogo: no se pudo leer {ts_file.name}: {e}")
+        if last_ts is None:
+            last_ts = datetime.now(timezone.utc) - timedelta(days=365)
+            logger.info("Listener catalogo: primer arranque, filtro desde hace 1 año")
+        else:
+            logger.info(f"Listener catalogo: filtro desde {last_ts.isoformat()}")
+
+        def _doc_dt(value):
+            """Convierte el campo ultima_actualizacion (varios formatos) a datetime UTC."""
+            if isinstance(value, datetime):
+                return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+            if isinstance(value, str) and value.strip():
+                for _f in ('%Y-%m-%dT%H:%M:%S.%f%z','%Y-%m-%dT%H:%M:%S%z',
+                           '%Y-%m-%dT%H:%M:%S.%f','%Y-%m-%dT%H:%M:%S',
+                           '%Y-%m-%d %H:%M:%S.%f%z','%Y-%m-%d %H:%M:%S%z',
+                           '%Y-%m-%d %H:%M:%S.%f','%Y-%m-%d %H:%M:%S'):
+                    try:
+                        dt = datetime.strptime(value.strip(), _f)
+                        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+                    except ValueError:
+                        continue
+            return None
+
         def _watch(col_snapshot, changes, read_time):
+            nonlocal last_ts
             try:
                 from google.cloud.firestore_v1.watch import ChangeType
                 changed_any = False
+                max_ts_batch = last_ts
+                now_local_str = now_ar().strftime('%Y-%m-%d %H:%M:%S')
+
                 for change in changes:
-                    if change.type == ChangeType.REMOVED:
-                        continue
+                    doc_id = change.document.id
                     d = change.document.to_dict() or {}
-                    pid = d.get('id')
-                    if pid is None:
+
+                    # Trackear el max ts visto en el batch
+                    doc_ts = _doc_dt(d.get('ultima_actualizacion'))
+                    if doc_ts and (max_ts_batch is None or doc_ts > max_ts_batch):
+                        max_ts_batch = doc_ts
+
+                    # ── REMOVED: borrar del SQLite local ──
+                    if change.type == ChangeType.REMOVED:
                         try:
-                            pid = int(change.document.id)
+                            db_manager.execute_update(
+                                "DELETE FROM products WHERE firebase_id = ?", (doc_id,)
+                            )
+                            changed_any = True
                         except Exception:
-                            continue
-                    try:
-                        pid = int(pid)
-                    except Exception:
+                            # FK error → soft delete (preserva ventas históricas)
+                            try:
+                                db_manager.execute_update(
+                                    "UPDATE products SET stock=0, firebase_id=NULL WHERE firebase_id = ?",
+                                    (doc_id,)
+                                )
+                                changed_any = True
+                            except Exception as e:
+                                logger.warning(f"Listener catalogo: no pude borrar {doc_id}: {e}")
                         continue
-                    nuevo_stock = d.get('stock')
-                    if nuevo_stock is None:
+
+                    # ── ADDED / MODIFIED ──
+                    nombre = str(d.get('nombre') or d.get('name') or '').strip()
+                    if not nombre:
                         continue
-                    try:
-                        nuevo_stock = int(nuevo_stock)
-                    except Exception:
+                    estado = str(d.get('estado') or 'activo').lower()
+                    precio = float(d.get('precio_venta') or d.get('precio') or d.get('price') or 0)
+                    if precio <= 0 or estado == 'sin_precio':
                         continue
+                    costo   = float(d.get('costo') or d.get('cost') or 0)
+                    stock   = int(d.get('stock') or 0)
+                    categ   = str(d.get('categoria') or d.get('category') or '').strip() or 'Sin categoría'
+                    rubro   = str(d.get('rubro') or '').strip() or None
+                    barcode = str(d.get('cod_barra') or d.get('barcode') or '').strip() or None
+                    desc    = float(d.get('descuento') or 0)
+                    raw_smin = d.get('stock_min')
+                    raw_smax = d.get('stock_max')
+                    stock_min = int(raw_smin) if raw_smin not in (None, '', False) else None
+                    stock_max = int(raw_smax) if raw_smax not in (None, '', False) else None
+
                     try:
                         rows = db_manager.execute_query(
-                            "SELECT stock FROM products WHERE id = ?", (pid,)
-                        )
+                            "SELECT id, name, price, cost, stock, barcode, category, rubro, stock_min, stock_max "
+                            "FROM products WHERE firebase_id = ?", (doc_id,)
+                        ) or []
                     except Exception:
                         rows = []
+
                     if not rows:
-                        continue
-                    stock_local = int(rows[0].get('stock') or 0)
-                    if stock_local == nuevo_stock:
-                        continue
-                    try:
-                        db_manager.execute_update(
-                            "UPDATE products SET stock = ?, updated_at = ? WHERE id = ?",
-                            (nuevo_stock, now_ar().strftime('%Y-%m-%d %H:%M:%S'), pid)
+                        # Producto nuevo en Firebase → insertar local
+                        try:
+                            if barcode:
+                                db_manager.execute_update(
+                                    "UPDATE products SET barcode = NULL WHERE barcode = ?", (barcode,)
+                                )
+                            db_manager.execute_update(
+                                """INSERT OR IGNORE INTO products
+                                   (name, category, price, cost, stock, barcode,
+                                    discount_value, firebase_id, rubro,
+                                    stock_min, stock_max,
+                                    created_at, updated_at)
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)""",
+                                (nombre, categ, precio, costo, stock, barcode,
+                                 desc, doc_id, rubro, stock_min, stock_max, now_local_str)
+                            )
+                            changed_any = True
+                        except Exception as e:
+                            logger.warning(f"Listener catalogo: error INSERT {doc_id}: {e}")
+                    else:
+                        r = rows[0]
+                        local_id = r['id']
+                        # Sólo actualizar si algo realmente cambió (evita overwrites)
+                        cambios = (
+                            (r.get('name') or '')     != nombre or
+                            float(r.get('price') or 0) != precio or
+                            float(r.get('cost')  or 0) != costo  or
+                            int(r.get('stock')   or 0) != stock  or
+                            (r.get('barcode') or '')  != (barcode or '') or
+                            (r.get('category') or '') != categ or
+                            (r.get('rubro') or '')    != (rubro or '') or
+                            r.get('stock_min')        != stock_min or
+                            r.get('stock_max')        != stock_max
                         )
-                        changed_any = True
+                        if not cambios:
+                            continue
+                        try:
+                            if barcode:
+                                db_manager.execute_update(
+                                    "UPDATE products SET barcode = NULL WHERE barcode = ? AND id != ?",
+                                    (barcode, local_id)
+                                )
+                            db_manager.execute_update(
+                                """UPDATE products
+                                   SET name=?, category=?, price=?, cost=?, stock=?,
+                                       barcode=?, discount_value=?, rubro=?,
+                                       stock_min=?, stock_max=?, updated_at=?
+                                   WHERE id=?""",
+                                (nombre, categ, precio, costo, stock,
+                                 barcode, desc, rubro, stock_min, stock_max,
+                                 now_local_str, local_id)
+                            )
+                            changed_any = True
+                        except Exception as e:
+                            logger.warning(f"Listener catalogo: error UPDATE {doc_id}: {e}")
+
+                # Persistir el max ts visto en este batch
+                if max_ts_batch and (last_ts is None or max_ts_batch > last_ts):
+                    last_ts = max_ts_batch
+                    try:
+                        ts_file.write_text(last_ts.isoformat(), encoding="utf-8")
                     except Exception as e:
-                        logger.warning(f"Firebase stock listener: error UPDATE pid={pid}: {e}")
+                        logger.warning(f"Listener catalogo: no pude escribir {ts_file.name}: {e}")
+
                 if changed_any and on_refresh:
                     try:
                         on_refresh()
                     except Exception as e:
-                        logger.warning(f"Firebase stock listener: on_refresh() falló: {e}")
+                        logger.warning(f"Listener catalogo: on_refresh() falló: {e}")
             except Exception as e:
-                logger.error(f"Firebase: error en listener de stock: {e}")
+                logger.error(f"Listener catalogo: error en _watch: {e}")
 
         try:
-            col_ref = self.db.collection('inventario')
-            watcher = col_ref.on_snapshot(_watch)
+            # Query con filtro: snapshot inicial sólo trae lo que cambió desde last_ts
+            try:
+                from google.cloud.firestore_v1.base_query import FieldFilter
+                col_query = self.db.collection('catalogo').where(
+                    filter=FieldFilter('ultima_actualizacion', '>', last_ts)
+                )
+            except ImportError:
+                # SDK más viejo, fallback a sintaxis posicional
+                col_query = self.db.collection('catalogo').where(
+                    'ultima_actualizacion', '>', last_ts
+                )
+            watcher = col_query.on_snapshot(_watch)
             self._listeners.append(watcher)
-            logger.info("Firebase: Listener de stock (inventario) en tiempo real activado.")
+            logger.info(f"Firebase: Listener real-time catalogo activado (filtro: > {last_ts.isoformat()})")
         except Exception as e:
-            logger.error(f"Firebase: No se pudo iniciar listener de stock: {e}")
+            logger.error(f"Firebase: No se pudo iniciar listener catalogo: {e}")
 
     def start_products_remote_listener(self, on_change: Callable):
         """
@@ -486,6 +622,25 @@ class FirebaseSync:
                         continue
                     product_ids.add(pid)
                     ref = col.document(pid)
+                    # ultima_actualizacion siempre como datetime para que matchee where(>last_ts)
+                    raw_ts = p.get('updated_at') or p.get('ultima_actualizacion')
+                    ts_dt = None
+                    if isinstance(raw_ts, datetime):
+                        ts_dt = raw_ts if raw_ts.tzinfo else raw_ts.replace(tzinfo=timezone.utc)
+                    elif isinstance(raw_ts, str) and raw_ts.strip():
+                        for _f in ('%Y-%m-%d %H:%M:%S.%f%z','%Y-%m-%d %H:%M:%S%z',
+                                   '%Y-%m-%d %H:%M:%S.%f','%Y-%m-%d %H:%M:%S',
+                                   '%Y-%m-%dT%H:%M:%S.%f%z','%Y-%m-%dT%H:%M:%S%z',
+                                   '%Y-%m-%dT%H:%M:%S.%f','%Y-%m-%dT%H:%M:%S'):
+                            try:
+                                ts_dt = datetime.strptime(raw_ts.strip(), _f)
+                                if ts_dt.tzinfo is None:
+                                    ts_dt = ts_dt.replace(tzinfo=timezone.utc)
+                                break
+                            except ValueError:
+                                continue
+                    if ts_dt is None:
+                        ts_dt = now_ar().astimezone(timezone.utc)
                     batch.set(ref, {
                         'id':                  int(pid),
                         'nombre':              p.get('name') or p.get('nombre', ''),
@@ -494,7 +649,7 @@ class FirebaseSync:
                         'costo':               float(p.get('cost') or p.get('costo', 0) or 0),
                         'stock':               int(p.get('stock', 0) or 0),
                         'descuento':           float(p.get('discount') or p.get('descuento', 0) or 0),
-                        'ultima_actualizacion': str(p.get('updated_at') or p.get('ultima_actualizacion', '')),
+                        'ultima_actualizacion': ts_dt,
                     })
                     count += 1
                     if count % 500 == 0:
@@ -646,7 +801,8 @@ class FirebaseSync:
         def _do():
             try:
                 from firebase_admin import firestore as _fs
-                now_str = now_ar().strftime('%Y-%m-%dT%H:%M:%S')
+                now_dt  = now_ar().astimezone(timezone.utc)
+                now_str = now_dt.strftime('%Y-%m-%dT%H:%M:%S')
                 batch = self.db.batch()
                 updated = 0
 
@@ -674,7 +830,7 @@ class FirebaseSync:
                     inv_ref = self.db.collection('inventario').document(str(pid))
                     batch.set(inv_ref, {
                         'stock': _fs.Increment(-qty),
-                        'ultima_actualizacion': now_str,
+                        'ultima_actualizacion': now_dt,  # Timestamp para que matchee where(>last_ts)
                     }, merge=True)
 
                     # Catalogo (doc_id = firebase_id) — decremento atómico
@@ -682,7 +838,7 @@ class FirebaseSync:
                         cat_ref = self.db.collection('catalogo').document(firebase_id)
                         batch.set(cat_ref, {
                             'stock': _fs.Increment(-qty),
-                            'ultima_actualizacion': now_str,
+                            'ultima_actualizacion': now_dt,  # Timestamp para que matchee where(>last_ts)
                         }, merge=True)
 
                     updated += 1
@@ -756,12 +912,47 @@ class FirebaseSync:
                 else:
                     logger.info(f"Delta sync: cambios detectados (Firebase: {firebase_ts}, local: {last_local_ts})")
 
-                # 3. Descargar colección completa de catálogo (necesario para reconciliar borrados)
-                docs = list(self.db.collection('catalogo').stream())
-                if not docs:
-                    if on_done:
-                        on_done(0)
-                    return
+                # 3. Descargar el catálogo. OPTIMIZACIÓN:
+                #    Si tenemos last_local_ts → bajar SÓLO docs cambiados desde entonces
+                #    (where(>last_local_ts)). Si no hay last_local_ts (instalación nueva),
+                #    se hace stream() completo una sola vez.
+                last_local_dt = None
+                if last_local_ts:
+                    for _f in ('%Y-%m-%dT%H:%M:%S.%f%z','%Y-%m-%dT%H:%M:%S%z',
+                               '%Y-%m-%dT%H:%M:%S.%f','%Y-%m-%dT%H:%M:%S',
+                               '%Y-%m-%d %H:%M:%S.%f','%Y-%m-%d %H:%M:%S'):
+                        try:
+                            _dt = datetime.strptime(last_local_ts, _f)
+                            last_local_dt = _dt if _dt.tzinfo else _dt.replace(tzinfo=timezone.utc)
+                            break
+                        except ValueError:
+                            continue
+                    # Damos un margen de 5min hacia atrás para cubrir relojes
+                    # ligeramente desincronizados o writes en transito.
+                    if last_local_dt:
+                        last_local_dt = last_local_dt - timedelta(minutes=5)
+
+                if last_local_dt:
+                    try:
+                        from google.cloud.firestore_v1.base_query import FieldFilter
+                        q = self.db.collection('catalogo').where(
+                            filter=FieldFilter('ultima_actualizacion', '>', last_local_dt)
+                        )
+                    except ImportError:
+                        q = self.db.collection('catalogo').where(
+                            'ultima_actualizacion', '>', last_local_dt
+                        )
+                    docs = list(q.stream())
+                    logger.info(f"Delta sync: bajando solo cambios desde {last_local_dt.isoformat()} → {len(docs)} docs")
+                    full_sync = False
+                else:
+                    docs = list(self.db.collection('catalogo').stream())
+                    logger.info(f"Delta sync: full sync (sin last_ts) → {len(docs)} docs")
+                    full_sync = True
+
+                if not docs and not full_sync:
+                    # Sin cambios: igual reconciliamos borrados via catalogo_deleted
+                    docs = []
 
                 # 4. Mapa local: firebase_id → (local_id, updated_at, barcode, stock_min, stock_max)
                 rows = local_db.execute_query(
@@ -775,11 +966,8 @@ class FirebaseSync:
                             r.get('stock_min'), r.get('stock_max')
                         )
 
-                # 5. Aplicar solo diffs (si hay cambios detectados por timestamp)
-                if inventario_al_dia:
-                    docs_for_diff = []
-                else:
-                    docs_for_diff = docs
+                # 5. Aplicar diffs (con filtro nuevo, todos los docs son candidatos)
+                docs_for_diff = docs if not inventario_al_dia else []
                 for doc in docs_for_diff:
                     d = doc.to_dict() or {}
                     firebase_id = doc.id
@@ -852,40 +1040,59 @@ class FirebaseSync:
                             except Exception as e:
                                 logger.warning(f"Delta sync: error UPDATE {firebase_id}: {e}")
 
-                # 6. Reconciliación: borrar locales con firebase_id que ya no están en Firestore.
-                # Productos sin firebase_id (creados localmente sin sync) no se tocan.
-                # Productos con ventas asociadas (FK a sale_items) se marcan stock=0 y
-                # firebase_id=NULL para que queden fuera del catálogo pero conserven el
-                # histórico de ventas. Ese comportamiento replica al full sync.
+                # 6. Reconciliación de borrados.
+                #    - full_sync (primer arranque): comparar contra TODOS los doc.id de Firestore
+                #    - delta (filtrado): leer 'catalogo_deleted' para saber qué se borró desde last_ts
+                stale_fids = []
                 try:
-                    firestore_ids = {doc.id for doc in docs}
-                    stale = [
-                        (lid, fid) for fid, (lid, *_) in local_by_firebase_id.items()
-                        if fid not in firestore_ids and lid != 0
-                    ]
-                    deleted = 0
-                    softdeleted = 0
-                    for lid, fid in stale:
+                    if full_sync:
+                        firestore_ids = {doc.id for doc in docs}
+                        stale_fids = [
+                            (lid, fid) for fid, (lid, *_) in local_by_firebase_id.items()
+                            if fid not in firestore_ids and lid != 0
+                        ]
+                    else:
+                        # Tombstones: docs en 'catalogo_deleted' con deleted_at > last_local_dt
                         try:
-                            local_db.execute_update("DELETE FROM products WHERE id=?", (lid,))
-                            deleted += 1
-                        except Exception as _e:
-                            # Probablemente FK: hay ventas apuntando a este producto.
-                            try:
-                                local_db.execute_update(
-                                    "UPDATE products SET stock=0, firebase_id=NULL WHERE id=?",
-                                    (lid,)
-                                )
-                                softdeleted += 1
-                            except Exception as _e2:
-                                logger.debug(f"Delta sync: no se pudo limpiar producto {lid}: {_e2}")
-                    if deleted or softdeleted:
-                        logger.info(
-                            f"Delta sync: {deleted} productos eliminados, "
-                            f"{softdeleted} conservados (con ventas) y marcados stock=0."
-                        )
+                            from google.cloud.firestore_v1.base_query import FieldFilter
+                            qd = self.db.collection('catalogo_deleted').where(
+                                filter=FieldFilter('deleted_at', '>', last_local_dt)
+                            )
+                        except ImportError:
+                            qd = self.db.collection('catalogo_deleted').where(
+                                'deleted_at', '>', last_local_dt
+                            )
+                        deleted_docs = list(qd.stream())
+                        for dd in deleted_docs:
+                            entry = local_by_firebase_id.get(dd.id)
+                            if entry:
+                                stale_fids.append((entry[0], dd.id))
+                        if deleted_docs:
+                            logger.info(f"Delta sync: {len(deleted_docs)} tombstones detectados desde {last_local_dt.isoformat()}")
                 except Exception as e:
-                    logger.warning(f"Delta sync: error en reconciliación de borrados: {e}")
+                    logger.warning(f"Delta sync: error detectando borrados: {e}")
+
+                deleted = 0
+                softdeleted = 0
+                for lid, fid in stale_fids:
+                    try:
+                        local_db.execute_update("DELETE FROM products WHERE id=?", (lid,))
+                        deleted += 1
+                    except Exception as _e:
+                        # Probablemente FK: hay ventas apuntando a este producto.
+                        try:
+                            local_db.execute_update(
+                                "UPDATE products SET stock=0, firebase_id=NULL WHERE id=?",
+                                (lid,)
+                            )
+                            softdeleted += 1
+                        except Exception as _e2:
+                            logger.debug(f"Delta sync: no se pudo limpiar producto {lid}: {_e2}")
+                if deleted or softdeleted:
+                    logger.info(
+                        f"Delta sync: {deleted} productos eliminados, "
+                        f"{softdeleted} conservados (con ventas) y marcados stock=0."
+                    )
 
                 # 7. Guardar timestamp del sync exitoso
                 now_str = now_ar().strftime('%Y-%m-%dT%H:%M:%S')

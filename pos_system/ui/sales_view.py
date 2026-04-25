@@ -2035,6 +2035,9 @@ class SalesView(QWidget):
                 disc_lbl.setToolTip(promo_label_tip)
                 self.cart_table.setCellWidget(row, 1, disc_lbl)
             else:
+                # IMPORTANTE: removeCellWidget primero — sin esto el QLabel anterior
+                # queda visible aunque setItem ponga un text-item vacío encima.
+                self.cart_table.removeCellWidget(row, 1)
                 disc_item = QTableWidgetItem('')
                 disc_item.setTextAlignment(Qt.AlignCenter)
                 self.cart_table.setItem(row, 1, disc_item)
@@ -2229,34 +2232,82 @@ class SalesView(QWidget):
         try:
             product = self.product_model.get_by_id(item['product_id'])
             if product:
-                old_unit = item.get('unit_price')
+                old_unit  = item.get('unit_price')
+                old_disc  = item.get('discount_amount', 0)
+                old_promo = item.get('promo_id')
+                old_label = item.get('promo_label', '')
                 pricing = self._resolve_price_for_product(product, quantity)
                 item.update(pricing)
-                promo_changed = (pricing.get('unit_price') != old_unit)
+                # Detecta cualquier cambio relevante (unit_price, monto descuento,
+                # promo activa o etiqueta) — no sólo unit_price. Asegura que al
+                # bajar la cantidad debajo del minimo de promo, el badge se vaya.
+                promo_changed = (
+                    pricing.get('unit_price')      != old_unit  or
+                    pricing.get('discount_amount') != old_disc  or
+                    pricing.get('promo_id')        != old_promo or
+                    pricing.get('promo_label', '') != old_label
+                )
         except Exception:
             pass
         item['subtotal'] = round(quantity * item['unit_price'], 2)
 
-        # Si cambió una promo (activación/desactivación por cantidad), sí
-        # necesitamos rebuild para que se vea el badge de descuento. Si no,
-        # actualizamos sólo subtotal + total sin tocar el spinbox.
+        # Si cambió una promo (activación/desactivación por cantidad), refrescamos
+        # SÓLO las celdas afectadas (descuento, precio, subtotal) en esta fila.
+        # NO rebuildeamos toda la tabla porque eso recrea el QSpinBox de cantidad
+        # y mata el caret mientras el cajero está tipeando ("25" → cursor a posición 1).
         if promo_changed:
-            had_focus = False
-            try:
-                old_w = self.cart_table.cellWidget(row, 3)
-                had_focus = bool(old_w and old_w.hasFocus())
-            except Exception:
-                pass
-            self.update_cart_display()
-            if had_focus:
-                try:
-                    w = self.cart_table.cellWidget(row, 3)
-                    if isinstance(w, CartQuantitySpinBox):
-                        w.setFocus(Qt.OtherFocusReason)
-                except Exception:
-                    pass
+            self._refresh_cart_row_pricing(row, item)
         else:
             self._refresh_cart_totals(row)
+
+    def _refresh_cart_row_pricing(self, row, item):
+        """Actualiza in-place las celdas de descuento, precio y subtotal de UNA fila.
+        NO toca el QSpinBox de cantidad → preserva caret y foco mientras el cajero tipea.
+        Útil cuando una promo se activa/desactiva por cambio de cantidad."""
+        if row >= self.cart_table.rowCount() or row >= len(self.cart):
+            return
+
+        has_discount = item.get('discount_amount', 0) > 0
+        promo_label = item.get('promo_label', '')
+
+        # Col 0: nombre — actualizar fuente/color
+        name_item = self.cart_table.item(row, 0)
+        if name_item:
+            name_item.setFont(QFont('Segoe UI', 9, QFont.Bold if has_discount else QFont.Normal))
+            name_item.setForeground(QColor('#198754') if has_discount else QColor('#000000'))
+            name_item.setToolTip(f'{item["product_name"]}{(" | " + promo_label) if promo_label else ""}')
+
+        # Col 1: descuento — recreate QLabel o text item vacío
+        if has_discount:
+            orig = item.get('original_price', item['unit_price'])
+            disc_total = (orig - item['unit_price']) * item['quantity']
+            disc_lbl = QLabel(
+                f'<div style="text-align:center;">'
+                f'<span style="color:#198754;font-size:9px;font-weight:bold;">DESCUENTO</span><br>'
+                f'<b style="color:#dc3545;font-size:12px;">-${disc_total:,.0f}</b>'
+                f'</div>'
+            )
+            disc_lbl.setAlignment(Qt.AlignCenter)
+            disc_lbl.setWordWrap(True)
+            disc_lbl.setStyleSheet('background:transparent; padding:1px 2px;')
+            disc_lbl.setToolTip(promo_label)
+            self.cart_table.setCellWidget(row, 1, disc_lbl)
+        else:
+            # IMPORTANTE: removeCellWidget primero (sino el QLabel anterior queda visible)
+            self.cart_table.removeCellWidget(row, 1)
+            disc_item = QTableWidgetItem('')
+            disc_item.setTextAlignment(Qt.AlignCenter)
+            self.cart_table.setItem(row, 1, disc_item)
+
+        # Col 2: precio unitario
+        price_item = self.cart_table.item(row, 2)
+        if price_item:
+            price_item.setText(f'${item["unit_price"]:,.0f}')
+            price_item.setFont(QFont('Segoe UI', 10, QFont.Bold if has_discount else QFont.Normal))
+            price_item.setForeground(QColor('#dc3545') if has_discount else QColor('#000000'))
+
+        # Col 4: subtotal + total global
+        self._refresh_cart_totals(row)
 
     def _refresh_cart_totals(self, row=None):
         """Light update: sólo subtotal de la fila y total global.
