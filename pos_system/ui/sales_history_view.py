@@ -30,7 +30,7 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
                              QDialog, QFormLayout, QMessageBox, QHeaderView,
                              QDateEdit, QFrame, QSplitter, QGroupBox, QScrollArea,
                              QDialogButtonBox, QDoubleSpinBox)
-from PyQt5.QtCore import Qt, QDate
+from PyQt5.QtCore import Qt, QDate, QThread, pyqtSignal
 from PyQt5.QtGui import QFont, QColor
 
 # Constantes cacheadas para evitar instanciar QFont/QColor por cada celda
@@ -52,6 +52,32 @@ from pos_system.database.db_manager import DatabaseManager
 from pos_system.utils.pdf_generator import PDFGenerator
 
 logger = logging.getLogger(__name__)
+
+
+class _SalesLoaderThread(QThread):
+    """Runs the sales query on a background thread so the UI never blocks."""
+    results_ready = pyqtSignal(list)
+
+    def __init__(self, sale_model, from_date, to_date, payment_type, limit, parent=None):
+        super().__init__(parent)
+        self._sale_model  = sale_model
+        self._from_date   = from_date
+        self._to_date     = to_date
+        self._payment     = payment_type
+        self._limit       = limit
+
+    def run(self):
+        try:
+            sales = self._sale_model.get_all(
+                start_date=self._from_date,
+                end_date=self._to_date,
+                payment_type=self._payment,
+                limit=self._limit,
+            )
+        except Exception as e:
+            logger.error(f"SalesLoaderThread: {e}")
+            sales = []
+        self.results_ready.emit(sales)
 
 
 class SalesHistoryView(QWidget):
@@ -158,6 +184,7 @@ class SalesHistoryView(QWidget):
         search_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
         search_btn.clicked.connect(self.refresh_data)
         filter_layout.addWidget(search_btn)
+        self._search_btn = search_btn
 
         filter_layout.addStretch()
         filter_scroll.setWidget(filter_frame)
@@ -251,6 +278,7 @@ class SalesHistoryView(QWidget):
         layout.addWidget(self.summary_label)
 
         self._current_sale_id = None
+        self._loader_thread   = None
         self.refresh_data()
 
     def _set_today(self):
@@ -269,20 +297,28 @@ class SalesHistoryView(QWidget):
         self.refresh_data()
 
     def refresh_data(self):
-        from_date = self.from_date.date().toString('yyyy-MM-dd') + ' 00:00:00'
-        to_date = self.to_date.date().toString('yyyy-MM-dd') + ' 23:59:59'
+        # If a previous load is still running, ignore — it will populate when done.
+        if self._loader_thread and self._loader_thread.isRunning():
+            return
+
+        from_date    = self.from_date.date().toString('yyyy-MM-dd') + ' 00:00:00'
+        to_date      = self.to_date.date().toString('yyyy-MM-dd') + ' 23:59:59'
         payment_type = self.payment_filter.currentData()
 
-        sales = self.sale_model.get_all(
-            start_date=from_date,
-            end_date=to_date,
-            payment_type=payment_type,
-            limit=_MAX_SALES_LOAD,
-        )
+        self.summary_label.setText('Cargando...')
+        self._search_btn.setEnabled(False)
 
-        # Bloquear señales y repaints durante el populate — antes cada setItem
-        # podía disparar selectionChanged → _show_sale_detail → query SQLite.
-        # Con N=300 esto causaba freezes de 1-2s al filtrar.
+        self._loader_thread = _SalesLoaderThread(
+            self.sale_model, from_date, to_date, payment_type, _MAX_SALES_LOAD, parent=self
+        )
+        self._loader_thread.results_ready.connect(self._on_sales_loaded)
+        self._loader_thread.start()
+
+    def _on_sales_loaded(self, sales):
+        self._search_btn.setEnabled(True)
+
+        # Bloquear señales y repaints durante el populate — cada setItem
+        # puede disparar selectionChanged → _show_sale_detail → query SQLite.
         tbl = self.sales_table
         tbl.blockSignals(True)
         tbl.setUpdatesEnabled(False)
