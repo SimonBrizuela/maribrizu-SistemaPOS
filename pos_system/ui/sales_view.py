@@ -1027,6 +1027,10 @@ class SalesView(QWidget):
         self._filter_lbl = QLabel(''); self._filter_lbl.setVisible(False)
         # Stub _result_count_lbl
         self.result_count_lbl = QLabel(''); self.result_count_lbl.setVisible(False)
+        # Stub favorites_btn (eliminado del layout pero referenciado por métodos viejos)
+        self.favorites_btn = QPushButton('Favoritos')
+        self.favorites_btn.setCheckable(True)
+        self.favorites_btn.setVisible(False)
 
         # Atajos F1-F7
         from PyQt5.QtWidgets import QShortcut
