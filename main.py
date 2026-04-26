@@ -313,6 +313,11 @@ def main():
         app.setAttribute(Qt.AA_EnableHighDpiScaling, True)
         app.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
+        # Aplicar tema Graphite (paleta cálida + QSS global)
+        from pos_system.ui.theme import apply_theme
+        apply_theme(app)
+        logger.info("Theme: Graphite aplicado.")
+
         from PyQt5.QtGui import QIcon
         import os
         logo_path = os.path.join(os.path.dirname(__file__), 'pos_system', 'assets', 'images', 'logo.png')

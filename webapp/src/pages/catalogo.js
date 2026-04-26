@@ -1,6 +1,7 @@
 ﻿import {
   collection, getDocs, doc, setDoc, updateDoc, getDoc,
-  query, orderBy, writeBatch, deleteDoc, limit, serverTimestamp
+  query, orderBy, writeBatch, deleteDoc, limit, serverTimestamp,
+  onSnapshot
 } from 'firebase/firestore';
 import { getCached, invalidateCache, invalidateCacheByPrefix } from '../cache.js';
 
@@ -1179,18 +1180,46 @@ export async function renderCatalogo(container, db) {
       return;
     }
 
-    tbody.innerHTML = chunk.map(p => {
-      const estadoBadge = p.duplicado
-        ? `<span class="badge badge-orange">Duplicado</span>`
-        : p.estado === 'sin_precio'
-          ? `<span class="badge" style="background:#fef3c7;color:#92400e">Sin Precio</span>`
-          : (p.stock || 0) === 0
-            ? `<span class="badge badge-red">Agotado</span>`
-            : (p.stock || 0) <= 3
-              ? `<span class="badge badge-orange">Stock Bajo</span>`
-              : `<span class="badge badge-green">Con Stock</span>`;
+    // Mapeo unidad larga → corta para badges de productos conjunto
+    const _UCONJ_SHORT = {
+      metros:'m', cm:'cm', unidades:'u', gramos:'g', kilos:'kg',
+      litros:'L', m2:'m²',
+    };
 
-      const stockColor = (p.stock || 0) === 0 ? 'var(--danger)' : (p.stock || 0) <= 3 ? 'var(--warning)' : 'var(--text)';
+    tbody.innerHTML = chunk.map(p => {
+      // Producto Conjunto: el stock real es conjunto_total, no `stock`.
+      const esConj = !!p.es_conjunto;
+      const cTotal = Number(p.conjunto_total || 0);
+      const cContenido = Number(p.conjunto_contenido || 0);
+      const cUShort = _UCONJ_SHORT[p.conjunto_unidad_medida] || '';
+
+      const stockNum = esConj ? cTotal : (p.stock || 0);
+      const stockText = esConj
+        ? (Number.isInteger(cTotal) ? `${cTotal}${cUShort}` : `${cTotal.toFixed(2)}${cUShort}`)
+        : String(p.stock || 0);
+
+      let estadoBadge;
+      if (p.duplicado) {
+        estadoBadge = `<span class="badge badge-orange">Duplicado</span>`;
+      } else if (p.estado === 'sin_precio') {
+        estadoBadge = `<span class="badge" style="background:#fef3c7;color:#92400e">Sin Precio</span>`;
+      } else if (stockNum <= 0) {
+        estadoBadge = `<span class="badge badge-red">Agotado</span>`;
+      } else if (esConj) {
+        estadoBadge = (cContenido > 0 && cTotal <= cContenido)
+          ? `<span class="badge badge-orange">Stock Bajo</span>`
+          : `<span class="badge" style="background:#ede9fe;color:#7c3aed">Con Stock</span>`;
+      } else if (stockNum <= 3) {
+        estadoBadge = `<span class="badge badge-orange">Stock Bajo</span>`;
+      } else {
+        estadoBadge = `<span class="badge badge-green">Con Stock</span>`;
+      }
+
+      const stockColor = stockNum <= 0
+        ? 'var(--danger)'
+        : (esConj
+            ? '#7c3aed'
+            : (stockNum <= 3 ? 'var(--warning)' : 'var(--text)'));
 
       return `<tr>
         <td class="cat-col-codigo" style="color:var(--text-muted);font-size:12px">${p.codigo || '-'}</td>
@@ -1206,7 +1235,7 @@ export async function renderCatalogo(container, db) {
             return `<span style="font-size:10px;color:#7b1fa2;font-weight:700;margin-left:4px">(${margenPct}%)</span>`;
           })()}
         </td>
-        <td style="text-align:center;font-weight:700;color:${stockColor}" class="precio-cell" data-id="${p.doc_id}" data-field="stock" title="Click para editar">${p.stock || 0}</td>
+        <td style="text-align:center;font-weight:700;color:${stockColor}" class="${esConj ? '' : 'precio-cell'}" data-id="${p.doc_id}" data-field="stock" title="${esConj ? 'Stock conjunto — editá desde el modal' : 'Click para editar'}">${stockText}</td>
         <td>${estadoBadge}</td>
         <td style="display:flex;gap:4px;align-items:center">
           <button class="btn-editar" data-id="${p.doc_id}" style="background:none;border:none;cursor:pointer;color:var(--primary);padding:4px" title="Editar producto">
@@ -4390,4 +4419,27 @@ export async function renderCatalogo(container, db) {
     renderStats();
     renderTab('catalogo');
   }
+
+  // ── Listener real-time: cuando el POS o cualquier otra PC actualiza el
+  // catálogo (ej. venta de producto conjunto descuenta stock), Firestore
+  // toca config/catalogo_meta. Refrescamos la vista sin que el usuario
+  // tenga que apretar F5.
+  let _lastMetaTs = null;
+  onSnapshot(doc(db, 'config', 'catalogo_meta'), async (snap) => {
+    if (!snap.exists()) return;
+    const ts = snap.data().last_updated;
+    if (_lastMetaTs === null) { _lastMetaTs = ts; return; }
+    if (ts === _lastMetaTs) return;
+    _lastMetaTs = ts;
+    try {
+      invalidateCache('catalogo:all');
+      await cargarDatos({ silent: true });
+      const activeTab = document.querySelector('.tab-btn.active')?.dataset?.tab;
+      if (activeTab === 'catalogo' || activeTab === 'inventario') {
+        renderTab(activeTab);
+      }
+    } catch (err) {
+      console.error('Refresco automático de catálogo falló:', err);
+    }
+  }, (err) => console.warn('Listener catalogo_meta:', err));
 }

@@ -780,10 +780,10 @@ class SyncProgressDialog(QDialog):
 
     # Colores para los tipos de log
     _LOG_COLORS = {
-        'ok':    '#4ade80',
-        'error': '#f87171',
-        'warn':  '#fbbf24',
-        'info':  '#94a3b8',
+        'ok':    '#3d7a3a',
+        'error': '#a01616',
+        'warn':  '#b07020',
+        'info':  '#9b958a',
     }
 
     def __init__(self, parent=None, mode='upload', full_history=True):
@@ -827,36 +827,36 @@ class SyncProgressDialog(QDialog):
         self.setStyleSheet('''
             QDialog { background: #f0f4f8; }
             QFrame#headerCard {
-                background: #1e293b;
+                background: #1c1c1e;
                 border-radius: 12px;
             }
             QLabel#dlgIcon  { font-size: 28px; color: #60a5fa; }
-            QLabel#dlgTitle { font-size: 15px; font-weight: bold; color: #f1f5f9; }
-            QLabel#dlgStep  { font-size: 12px; color: #94a3b8; }
+            QLabel#dlgTitle { font-size: 15px; font-weight: bold; color: #fafaf7; }
+            QLabel#dlgStep  { font-size: 12px; color: #9b958a; }
             QLabel#statusBadge {
                 font-size: 12px; font-weight: bold;
                 padding: 3px 12px; border-radius: 10px;
             }
-            QLabel#elapsedLbl { font-size: 11px; color: #64748b; }
-            QLabel#dlgDetail  { font-size: 11px; color: #64748b; }
+            QLabel#elapsedLbl { font-size: 11px; color: #6f6a5d; }
+            QLabel#dlgDetail  { font-size: 11px; color: #6f6a5d; }
             QProgressBar {
                 border: none; border-radius: 6px;
-                background: #cbd5e1; height: 18px; text-align: center;
-                font-size: 11px; color: #1e293b;
+                background: #dcd6c8; height: 18px; text-align: center;
+                font-size: 11px; color: #1c1c1e;
             }
             QProgressBar::chunk {
                 background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                    stop:0 #3b82f6, stop:1 #06b6d4);
+                    stop:0 #c1521f, stop:1 #06b6d4);
                 border-radius: 6px;
             }
             QProgressBar#progressDone::chunk {
                 background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                    stop:0 #16a34a, stop:1 #22c55e);
+                    stop:0 #3d7a3a, stop:1 #3d7a3a);
                 border-radius: 6px;
             }
             QProgressBar#progressError::chunk {
                 background: qlineargradient(x1:0,y1:0,x2:1,y2:0,
-                    stop:0 #dc2626, stop:1 #f87171);
+                    stop:0 #dc2626, stop:1 #a01616);
                 border-radius: 6px;
             }
             QProgressBar#detailBar::chunk {
@@ -868,23 +868,23 @@ class SyncProgressDialog(QDialog):
                 height: 8px; border-radius: 4px;
             }
             QTextEdit {
-                background: #0f172a; color: #e2e8f0;
-                border-radius: 8px; border: 1px solid #334155;
+                background: #1c1c1e; color: #dcd6c8;
+                border-radius: 8px; border: 1px solid #5a5448;
                 font-family: Consolas, monospace; font-size: 11px;
                 padding: 8px;
             }
             QLabel#logHeader {
-                color: #64748b; font-weight: 600; font-size: 11px;
+                color: #6f6a5d; font-weight: 600; font-size: 11px;
                 padding: 2px 0px;
             }
             QPushButton#closeBtn {
-                background: #3b82f6; color: white; border: none;
+                background: #c1521f; color: white; border: none;
                 border-radius: 8px; font-size: 13px; font-weight: bold;
                 padding: 10px 32px;
             }
-            QPushButton#closeBtn:hover  { background: #2563eb; }
+            QPushButton#closeBtn:hover  { background: #c1521f; }
             QPushButton#closeBtn:disabled {
-                background: #475569; color: #94a3b8;
+                background: #5a5448; color: #9b958a;
             }
         ''')
 
@@ -926,7 +926,7 @@ class SyncProgressDialog(QDialog):
         self.status_badge = QLabel('  EN PROCESO  ')
         self.status_badge.setObjectName('statusBadge')
         self.status_badge.setStyleSheet(
-            'QLabel { background: #1d4ed8; color: #bfdbfe;'
+            'QLabel { background: #1d4ed8; color: #c1521f;'
             ' font-size: 11px; font-weight: bold;'
             ' padding: 4px 10px; border-radius: 10px; }'
         )
@@ -950,7 +950,7 @@ class SyncProgressDialog(QDialog):
 
         self.elapsed_lbl = QLabel('00:00')
         self.elapsed_lbl.setObjectName('elapsedLbl')
-        self.elapsed_lbl.setStyleSheet('color: #64748b; font-size: 11px;')
+        self.elapsed_lbl.setStyleSheet('color: #6f6a5d; font-size: 11px;')
         self.elapsed_lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         bottom_row.addWidget(self.elapsed_lbl)
 
@@ -961,7 +961,7 @@ class SyncProgressDialog(QDialog):
         prog_row = QHBoxLayout()
         prog_row.setSpacing(8)
         prog_lbl = QLabel('Pasos:')
-        prog_lbl.setStyleSheet('color: #475569; font-size: 11px; font-weight: 600;')
+        prog_lbl.setStyleSheet('color: #5a5448; font-size: 11px; font-weight: 600;')
         prog_lbl.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         prog_row.addWidget(prog_lbl)
 
@@ -989,7 +989,7 @@ class SyncProgressDialog(QDialog):
         # Separador
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet('color: #cbd5e1;')
+        sep.setStyleSheet('color: #dcd6c8;')
         layout.addWidget(sep)
 
         # ── Log en tiempo real ───────────────────────────────────────────
@@ -1082,7 +1082,7 @@ class SyncProgressDialog(QDialog):
         self.step_lbl.setText(step_text)
 
     def _on_log(self, message, tipo):
-        color = self._LOG_COLORS.get(tipo, '#e2e8f0')
+        color = self._LOG_COLORS.get(tipo, '#dcd6c8')
         self.log_area.append(f'<span style="color:{color}">{message}</span>')
         self.log_area.moveCursor(QTextCursor.End)
 
@@ -1096,20 +1096,20 @@ class SyncProgressDialog(QDialog):
         m, s = divmod(secs, 60)
         elapsed_str = f'{m:02d}:{s:02d}'
         self.elapsed_lbl.setText(f'Duración: {elapsed_str}')
-        self.elapsed_lbl.setStyleSheet('color: #475569; font-size: 11px;')
+        self.elapsed_lbl.setStyleSheet('color: #5a5448; font-size: 11px;')
 
         if success:
             # Spinner → checkmark
-            self.spinner_lbl.setText('✔')
-            self.spinner_lbl.setStyleSheet('color: #22c55e; font-size: 14px; font-weight: bold;')
+            self.spinner_lbl.setText('OK')
+            self.spinner_lbl.setStyleSheet('color: #3d7a3a; font-size: 14px; font-weight: bold;')
 
             self.running_lbl.setText('Operación finalizada correctamente')
-            self.running_lbl.setStyleSheet('color: #22c55e; font-size: 11px; font-weight: 600;')
+            self.running_lbl.setStyleSheet('color: #3d7a3a; font-size: 11px; font-weight: 600;')
 
             # Badge verde
             self.status_badge.setText('  COMPLETADO  ')
             self.status_badge.setStyleSheet(
-                'QLabel { background: #14532d; color: #86efac;'
+                'QLabel { background: #14532d; color: #3d7a3a;'
                 ' font-size: 11px; font-weight: bold;'
                 ' padding: 4px 10px; border-radius: 10px; }'
             )
@@ -1121,22 +1121,22 @@ class SyncProgressDialog(QDialog):
             self.progress_bar.style().polish(self.progress_bar)
 
             # Icono header
-            self.icon_lbl.setText('✅')
+            self.icon_lbl.setText('')
 
             titulo = 'Descarga completada' if self.mode == 'download' else 'Sincronización completada'
             self.setWindowTitle(titulo)
         else:
             # Spinner → X
-            self.spinner_lbl.setText('✖')
-            self.spinner_lbl.setStyleSheet('color: #f87171; font-size: 14px; font-weight: bold;')
+            self.spinner_lbl.setText('')
+            self.spinner_lbl.setStyleSheet('color: #a01616; font-size: 14px; font-weight: bold;')
 
             self.running_lbl.setText('La operación terminó con errores')
-            self.running_lbl.setStyleSheet('color: #f87171; font-size: 11px; font-weight: 600;')
+            self.running_lbl.setStyleSheet('color: #a01616; font-size: 11px; font-weight: 600;')
 
             # Badge rojo
             self.status_badge.setText('  ERROR  ')
             self.status_badge.setStyleSheet(
-                'QLabel { background: #7f1d1d; color: #fca5a5;'
+                'QLabel { background: #7f1d1d; color: #a01616;'
                 ' font-size: 11px; font-weight: bold;'
                 ' padding: 4px 10px; border-radius: 10px; }'
             )
@@ -1148,7 +1148,7 @@ class SyncProgressDialog(QDialog):
             self.progress_bar.style().polish(self.progress_bar)
 
             # Icono header
-            self.icon_lbl.setText('❌')
+            self.icon_lbl.setText('')
 
             self.setWindowTitle('Error en la operación')
             self._on_log(f'Error: {message}', 'error')
@@ -1185,7 +1185,7 @@ class CloudSyncMenu:
         menu.setStyleSheet('''
             QMenu {
                 background: #ffffff;
-                border: 1px solid #dee2e6;
+                border: 1px solid #dcd6c8;
                 border-radius: 8px;
                 padding: 6px 4px;
                 font-size: 13px;
@@ -1193,16 +1193,16 @@ class CloudSyncMenu:
             QMenu::item {
                 padding: 10px 20px;
                 border-radius: 6px;
-                color: #212529;
+                color: #1c1c1e;
                 margin: 2px 4px;
             }
             QMenu::item:selected {
                 background: #e8f0fe;
-                color: #0d6efd;
+                color: #c1521f;
             }
             QMenu::separator {
                 height: 1px;
-                background: #e9ecef;
+                background: #ece8df;
                 margin: 4px 8px;
             }
         ''')

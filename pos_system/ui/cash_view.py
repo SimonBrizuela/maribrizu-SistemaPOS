@@ -79,8 +79,8 @@ class CashView(QWidget):
         status_card.setStyleSheet('''
             QWidget {
                 background-color: #ffffff;
-                border: 1.5px solid #e2e8f0;
-                border-top: 4px solid #0d6efd;
+                border: 1.5px solid #dcd6c8;
+                border-top: 4px solid #c1521f;
                 border-radius: 12px;
             }
         ''')
@@ -91,13 +91,13 @@ class CashView(QWidget):
         status_header = QHBoxLayout()
         status_title = QLabel('Estado de Caja')
         status_title.setFont(QFont('Segoe UI', 14, QFont.Bold))
-        status_title.setStyleSheet('color: #1e293b; background: transparent; border: none;')
+        status_title.setStyleSheet('color: #1c1c1e; background: transparent; border: none;')
         status_header.addWidget(status_title, 1)
         status_card_layout.addLayout(status_header)
 
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet('color: #e9ecef;')
+        sep.setStyleSheet('color: #ece8df;')
         status_card_layout.addWidget(sep)
         
         self.status_label = QLabel()
@@ -138,8 +138,8 @@ class CashView(QWidget):
         summary_card.setStyleSheet('''
             QWidget {
                 background-color: #ffffff;
-                border: 1.5px solid #e2e8f0;
-                border-top: 4px solid #198754;
+                border: 1.5px solid #dcd6c8;
+                border-top: 4px solid #3d7a3a;
                 border-radius: 12px;
             }
         ''')
@@ -150,13 +150,13 @@ class CashView(QWidget):
         summary_header = QHBoxLayout()
         summary_title = QLabel('Resumen Financiero')
         summary_title.setFont(QFont('Segoe UI', 13, QFont.Bold))
-        summary_title.setStyleSheet('color: #1e293b; background: transparent; border: none;')
+        summary_title.setStyleSheet('color: #1c1c1e; background: transparent; border: none;')
         summary_header.addWidget(summary_title, 1)
         summary_card_layout.addLayout(summary_header)
 
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.HLine)
-        sep2.setStyleSheet('color: #e9ecef;')
+        sep2.setStyleSheet('color: #ece8df;')
         summary_card_layout.addWidget(sep2)
         
         self.summary_label = QLabel()
@@ -179,7 +179,7 @@ class CashView(QWidget):
         retiros_header = QHBoxLayout()
         retiros_label = QLabel('Retiros del Día')
         retiros_label.setFont(QFont('Segoe UI', 13, QFont.Bold))
-        retiros_label.setStyleSheet('color: #1e293b;')
+        retiros_label.setStyleSheet('color: #1c1c1e;')
         retiros_header.addWidget(retiros_label)
         retiros_header.addStretch()
         
@@ -200,7 +200,7 @@ class CashView(QWidget):
         history_header = QHBoxLayout()
         history_label = QLabel('Historial de Cajas')
         history_label.setFont(QFont('Segoe UI', 13, QFont.Bold))
-        history_label.setStyleSheet('color: #1e293b;')
+        history_label.setStyleSheet('color: #1c1c1e;')
         history_header.addWidget(history_label)
         history_header.addStretch()
         
@@ -241,7 +241,7 @@ class CashView(QWidget):
             
             opening_date = _parse_ar(current_register['opening_date'])
             self.status_label.setText(
-                f"<b>Estado:</b> <span style='color: #27ae60;'>CAJA ABIERTA</span><br>"
+                f"<b>Estado:</b> <span style='color: #3d7a3a;'>CAJA ABIERTA</span><br>"
                 f"<b>Fecha de Apertura:</b> {opening_date.strftime('%d/%m/%Y %H:%M:%S')}<br>"
                 f"<b>Monto Inicial:</b> ${current_register['initial_amount']:.2f}"
             )
@@ -253,8 +253,8 @@ class CashView(QWidget):
                 f"<b>Ventas en Efectivo:</b> +${cash_summary['cash_sales']:.2f}<br>"
                 f"<b>Ventas por Transferencia:</b> ${cash_summary['transfer_sales']:.2f}<br>"
                 f"<b>Retiros:</b> -${cash_summary['withdrawals']:.2f}<br>"
-                f"<b style='font-size: 14pt; color: #27ae60;'>Efectivo en Caja:</b> "
-                f"<b style='font-size: 14pt; color: #27ae60;'>${cash_summary['cash_in_drawer']:.2f}</b>"
+                f"<b style='font-size: 14pt; color: #3d7a3a;'>Efectivo en Caja:</b> "
+                f"<b style='font-size: 14pt; color: #3d7a3a;'>${cash_summary['cash_in_drawer']:.2f}</b>"
             )
             
             # Retiros
@@ -276,7 +276,7 @@ class CashView(QWidget):
             self.close_btn.setEnabled(False)
             
             self.status_label.setText(
-                "<b>Estado:</b> <span style='color: #e74c3c;'>CAJA CERRADA</span><br>"
+                "<b>Estado:</b> <span style='color: #a01616;'>CAJA CERRADA</span><br>"
                 "<i>Debe abrir la caja para comenzar a realizar operaciones</i>"
             )
             
@@ -597,7 +597,7 @@ class CloseCashDialog(QDialog):
             
             expected_label = QLabel(f"${self.closing_report['expected_amount']:.2f}")
             expected_label.setFont(QFont('Arial', 12, QFont.Bold))
-            expected_label.setStyleSheet('color: #27ae60;')
+            expected_label.setStyleSheet('color: #3d7a3a;')
             summary_layout.addRow('Efectivo Esperado en Caja:', expected_label)
             
         summary_group.setLayout(summary_layout)

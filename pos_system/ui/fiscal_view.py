@@ -37,7 +37,7 @@ class FiscalView(QWidget):
         # Título
         title = QLabel('Facturación Electrónica AFIP')
         title.setFont(QFont('Segoe UI', 15, QFont.Bold))
-        title.setStyleSheet('color: #0d6efd;')
+        title.setStyleSheet('color: #c1521f;')
         layout.addWidget(title)
 
         # Sub-tabs
@@ -70,8 +70,8 @@ class FiscalView(QWidget):
         )
         info.setWordWrap(True)
         info.setStyleSheet(
-            'background:#e7f3ff; border:1px solid #b6d4fe; border-radius:6px;'
-            'padding:8px 12px; color:#084298; font-size:11px;'
+            'background:#fbeee5; border:1px solid #dcd6c8; border-radius:6px;'
+            'padding:8px 12px; color:#7a3514; font-size:11px;'
         )
         layout.addWidget(info)
 
@@ -216,10 +216,10 @@ class FiscalView(QWidget):
         afip_btn.setFont(QFont('Segoe UI', 11, QFont.Bold))
         afip_btn.setStyleSheet('''
             QPushButton {
-                background: #198754; color: white;
+                background: #3d7a3a; color: white;
                 border: none; border-radius: 8px;
             }
-            QPushButton:hover { background: #157347; }
+            QPushButton:hover { background: #2f5e2c; }
         ''')
         afip_btn.clicked.connect(self._emit_con_afip)
         btn_row.addWidget(afip_btn, 2)
@@ -229,10 +229,10 @@ class FiscalView(QWidget):
         manual_btn.setFont(QFont('Segoe UI', 11, QFont.Bold))
         manual_btn.setStyleSheet('''
             QPushButton {
-                background: #0d6efd; color: white;
+                background: #c1521f; color: white;
                 border: none; border-radius: 8px;
             }
-            QPushButton:hover { background: #0b5ed7; }
+            QPushButton:hover { background: #a3441a; }
         ''')
         manual_btn.clicked.connect(self._emit_manual)
         btn_row.addWidget(manual_btn, 1)
@@ -559,19 +559,19 @@ class FiscalView(QWidget):
             v.addWidget(value)
             return box, title, value
 
-        box_total, self.t_total_title, self.t_total_value = _totbox('#e7f3ff', '#084298')
+        box_total, self.t_total_title, self.t_total_value = _totbox('#fbeee5', '#7a3514')
         self.t_total_title.setText('Total facturado')
         totales_row.addWidget(box_total)
 
-        box_v2, self.t_v2_title, self.t_v2_value = _totbox('#f3e8ff', '#5b21b6')
+        box_v2, self.t_v2_title, self.t_v2_value = _totbox('#f3e8ff', '#a3441a')
         self.t_v2_title.setText('Varios 2 facturado')
         totales_row.addWidget(box_v2)
 
-        box_reg, self.t_reg_title, self.t_reg_value = _totbox('#d1e7dd', '#0a3622')
+        box_reg, self.t_reg_title, self.t_reg_value = _totbox('#e7f4ec', '#0a3622')
         self.t_reg_title.setText('Facturas regulares')
         totales_row.addWidget(box_reg)
 
-        box_cnt, self.t_cnt_title, self.t_cnt_value = _totbox('#fff3cd', '#664d03')
+        box_cnt, self.t_cnt_title, self.t_cnt_value = _totbox('#fbeee5', '#664d03')
         self.t_cnt_title.setText('Cant. total / Varios 2')
         totales_row.addWidget(box_cnt)
 
@@ -643,7 +643,7 @@ class FiscalView(QWidget):
         )
         info.setWordWrap(True)
         info.setStyleSheet(
-            'background:#fff3cd; border:1px solid #ffecb5; border-radius:6px;'
+            'background:#fbeee5; border:1px solid #ffecb5; border-radius:6px;'
             'padding:8px 12px; color:#664d03; font-size:11px;'
         )
         layout.addWidget(info)
@@ -680,7 +680,7 @@ class FiscalView(QWidget):
         from PyQt5.QtWidgets import QCheckBox
         self.cfg_produccion_check = QCheckBox('Usar entorno PRODUCCIÓN (desactivado = Homologación/Prueba)')
         self.cfg_produccion_check.setFont(QFont('Segoe UI', 10))
-        self.cfg_produccion_check.setStyleSheet('color: #dc3545; font-weight: bold;')
+        self.cfg_produccion_check.setStyleSheet('color: #a01616; font-weight: bold;')
         form.addRow('Entorno AFIP:', self.cfg_produccion_check)
 
         layout.addWidget(group)
@@ -696,7 +696,7 @@ class FiscalView(QWidget):
         )
         info2.setWordWrap(True)
         info2.setStyleSheet(
-            'background:#d1e7dd; border:1px solid #a3cfbb; border-radius:6px;'
+            'background:#e7f4ec; border:1px solid #a3cfbb; border-radius:6px;'
             'padding:10px 12px; color:#0a3622; font-size:10px;'
         )
         layout.addWidget(info2)
@@ -706,10 +706,10 @@ class FiscalView(QWidget):
         save_btn.setFont(QFont('Segoe UI', 11, QFont.Bold))
         save_btn.setStyleSheet('''
             QPushButton {
-                background: #198754; color: white;
+                background: #3d7a3a; color: white;
                 border: none; border-radius: 8px;
             }
-            QPushButton:hover { background: #157347; }
+            QPushButton:hover { background: #2f5e2c; }
         ''')
         save_btn.clicked.connect(self._save_config)
         layout.addWidget(save_btn)
@@ -816,21 +816,21 @@ class FiscalView(QWidget):
                 self.h_table.setItem(i, 4, QTableWidgetItem(r.get('cliente', '')))
                 cae_item = QTableWidgetItem(cae_short)
                 if has_cae:
-                    cae_item.setForeground(QColor('#198754'))
+                    cae_item.setForeground(QColor('#3d7a3a'))
                 else:
-                    cae_item.setForeground(QColor('#dc3545'))
+                    cae_item.setForeground(QColor('#a01616'))
                 self.h_table.setItem(i, 5, cae_item)
                 self.h_table.setItem(i, 6, QTableWidgetItem(f'${tot:,.2f}'))
 
                 pdf_item = QTableWidgetItem('Abrir' if r.get('pdf_path') else '—')
                 pdf_item.setData(Qt.UserRole, r.get('pdf_path'))
                 if r.get('pdf_path'):
-                    pdf_item.setForeground(QColor('#0d6efd'))
+                    pdf_item.setForeground(QColor('#c1521f'))
                 self.h_table.setItem(i, 7, pdf_item)
 
                 origen_item = QTableWidgetItem('Varios 2' if es_v2 else 'Venta/Manual')
                 if es_v2:
-                    origen_item.setForeground(QColor('#5b21b6'))
+                    origen_item.setForeground(QColor('#a3441a'))
                     origen_item.setFont(QFont('Segoe UI', 9, QFont.Bold))
                 self.h_table.setItem(i, 8, origen_item)
 
@@ -863,8 +863,8 @@ class FiscalView(QWidget):
         )
         info.setWordWrap(True)
         info.setStyleSheet(
-            'background:#e7f3ff; border:1px solid #b6d4fe; border-radius:6px;'
-            'padding:8px 12px; color:#084298; font-size:11px;'
+            'background:#fbeee5; border:1px solid #dcd6c8; border-radius:6px;'
+            'padding:8px 12px; color:#7a3514; font-size:11px;'
         )
         layout.addWidget(info)
 
@@ -945,8 +945,8 @@ class FiscalView(QWidget):
         self.p_guardar_btn.setMinimumHeight(38)
         self.p_guardar_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
         self.p_guardar_btn.setStyleSheet('''
-            QPushButton { background:#0d6efd; color:white; border:none; border-radius:6px; }
-            QPushButton:hover { background:#0b5ed7; }
+            QPushButton { background:#c1521f; color:white; border:none; border-radius:6px; }
+            QPushButton:hover { background:#a3441a; }
         ''')
         self.p_guardar_btn.clicked.connect(self._guardar_perfil)
         btn_row.addWidget(self.p_guardar_btn)
@@ -955,7 +955,7 @@ class FiscalView(QWidget):
         self.p_limpiar_btn.setMinimumHeight(38)
         self.p_limpiar_btn.setFont(QFont('Segoe UI', 10))
         self.p_limpiar_btn.setStyleSheet('''
-            QPushButton { background:#6c757d; color:white; border:none; border-radius:6px; }
+            QPushButton { background:#6f6a5d; color:white; border:none; border-radius:6px; }
             QPushButton:hover { background:#5c636a; }
         ''')
         self.p_limpiar_btn.clicked.connect(self._limpiar_form_perfil)
@@ -999,7 +999,7 @@ class FiscalView(QWidget):
             self.p_table.setRowCount(len(rows))
             for i, r in enumerate(rows):
                 entorno = 'Produccion' if r.get('produccion') else 'Homologacion'
-                cert_ok = '✓' if r.get('cert_path') else '—'
+                cert_ok = 'OK' if r.get('cert_path') else '—'
 
                 self.p_table.setItem(i, 0, QTableWidgetItem(str(r['id'])))
                 self.p_table.setItem(i, 1, QTableWidgetItem(r.get('nombre', '')))
@@ -1007,7 +1007,7 @@ class FiscalView(QWidget):
                 self.p_table.setItem(i, 3, QTableWidgetItem(r.get('condicion_iva', '')))
                 entorno_item = QTableWidgetItem(f'{entorno}  cert:{cert_ok}')
                 entorno_item.setForeground(
-                    QColor('#198754') if r.get('produccion') else QColor('#856404')
+                    QColor('#3d7a3a') if r.get('produccion') else QColor('#b07020')
                 )
                 self.p_table.setItem(i, 4, entorno_item)
 
@@ -1018,13 +1018,13 @@ class FiscalView(QWidget):
 
                 edit_btn = QPushButton('Editar')
                 edit_btn.setFixedHeight(28)
-                edit_btn.setStyleSheet('QPushButton{background:#0d6efd;color:white;border:none;border-radius:4px;font-size:11px;} QPushButton:hover{background:#0b5ed7;}')
+                edit_btn.setStyleSheet('QPushButton{background:#c1521f;color:white;border:none;border-radius:4px;font-size:11px;} QPushButton:hover{background:#a3441a;}')
                 edit_btn.clicked.connect(lambda _, row=r: self._editar_perfil(row))
                 acc_layout.addWidget(edit_btn)
 
                 del_btn = QPushButton('Eliminar')
                 del_btn.setFixedHeight(28)
-                del_btn.setStyleSheet('QPushButton{background:#dc3545;color:white;border:none;border-radius:4px;font-size:11px;} QPushButton:hover{background:#bb2d3b;}')
+                del_btn.setStyleSheet('QPushButton{background:#a01616;color:white;border:none;border-radius:4px;font-size:11px;} QPushButton:hover{background:#7f1212;}')
                 del_btn.clicked.connect(lambda _, rid=r['id']: self._eliminar_perfil(rid))
                 acc_layout.addWidget(del_btn)
 

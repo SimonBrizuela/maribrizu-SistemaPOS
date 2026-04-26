@@ -17,6 +17,7 @@ from pos_system.models.sale import Sale
 from pos_system.models.cash_register import CashRegister
 from pos_system.models.promotion import Promotion
 from pos_system.utils.pdf_generator import PDFGenerator
+from pos_system.ui.conjunto_dialog import ConjuntoDialog, UNIDADES as _CONJ_UNIDADES, TIPOS as _CONJ_TIPOS
 
 
 def _fmt_qty(q):
@@ -102,8 +103,9 @@ class BarcodeScanner(QLineEdit):
         self._scan_timer = QTimer()
         self._scan_timer.setSingleShot(True)
         self._scan_timer.timeout.connect(self._flush_buffer)
-        # Umbral: si pasan más de 100ms entre caracteres, no es un escáner
-        self._threshold_ms = 100
+        # Umbral: escáneres reales tipean a ~5-15ms entre chars; humanos rápidos a >40ms.
+        # Threshold conservador: 30ms — solo desvía al buffer entradas extremadamente rápidas.
+        self._threshold_ms = 30
 
     def keyPressEvent(self, event):
         import time
@@ -233,7 +235,7 @@ class ProductSearchDialog(QDialog):
         self.search_input.setMinimumHeight(42)
         self.search_input.setStyleSheet('''
             QLineEdit {
-                border: 2px solid #6366f1;
+                border: 2px solid #c1521f;
                 border-radius: 8px;
                 padding: 6px 14px;
                 background: white;
@@ -247,7 +249,7 @@ class ProductSearchDialog(QDialog):
         clear_btn = QPushButton('Limpiar')
         clear_btn.setMinimumHeight(42)
         clear_btn.setFont(QFont('Segoe UI', 10))
-        clear_btn.setStyleSheet('QPushButton { background:#f1f5f9; color:#1e293b; border:1.5px solid #cbd5e1; border-radius:8px; padding:0 12px; } QPushButton:hover { background:#e2e8f0; }')
+        clear_btn.setStyleSheet('QPushButton { background:#fafaf7; color:#1c1c1e; border:1.5px solid #dcd6c8; border-radius:8px; padding:0 12px; } QPushButton:hover { background:#dcd6c8; }')
         clear_btn.clicked.connect(lambda: self.search_input.clear())
         search_row.addWidget(clear_btn)
         root.addLayout(search_row)
@@ -264,11 +266,11 @@ class ProductSearchDialog(QDialog):
             filtro_txt += self._rubro
         self._filter_lbl = QLabel(filtro_txt)
         self._filter_lbl.setFont(QFont('Segoe UI', 10, QFont.Bold))
-        self._filter_lbl.setStyleSheet('color:#6366f1; background:#eef2ff; border:1px solid #c7d2fe; border-radius:5px; padding:3px 8px;')
+        self._filter_lbl.setStyleSheet('color:#c1521f; background:#fbeee5; border:1px solid #c1521f; border-radius:5px; padding:3px 8px;')
         fb.addWidget(self._filter_lbl)
         cf_btn = QPushButton('x  Todos los productos')
         cf_btn.setFont(QFont('Segoe UI', 10))
-        cf_btn.setStyleSheet('QPushButton { background:#f1f5f9; color:#1e293b; border:1.5px solid #cbd5e1; border-radius:5px; padding:3px 10px; } QPushButton:hover { background:#e2e8f0; }')
+        cf_btn.setStyleSheet('QPushButton { background:#fafaf7; color:#1c1c1e; border:1.5px solid #dcd6c8; border-radius:5px; padding:3px 10px; } QPushButton:hover { background:#dcd6c8; }')
         cf_btn.clicked.connect(self._clear_filter)
         fb.addWidget(cf_btn)
         fb.addStretch()
@@ -278,14 +280,14 @@ class ProductSearchDialog(QDialog):
         # Contador
         self.result_count_lbl = QLabel('')
         self.result_count_lbl.setFont(QFont('Segoe UI', 9))
-        self.result_count_lbl.setStyleSheet('color:#64748b;')
+        self.result_count_lbl.setStyleSheet('color:#6f6a5d;')
         root.addWidget(self.result_count_lbl)
 
         # ── Splitter: tabla búsqueda | panel carrito ──
         from PyQt5.QtWidgets import QSplitter
         splitter = QSplitter(Qt.Horizontal)
         splitter.setHandleWidth(6)
-        splitter.setStyleSheet('QSplitter::handle { background: #e2e8f0; border-radius: 3px; }')
+        splitter.setStyleSheet('QSplitter::handle { background: #dcd6c8; border-radius: 3px; }')
 
         # Tabla de resultados
         self.table = QTableWidget()
@@ -302,10 +304,10 @@ class ProductSearchDialog(QDialog):
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
         self.table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self.table.setStyleSheet('''
-            QTableWidget { border: 1.5px solid #e2e8f0; border-radius: 8px; gridline-color: #f1f5f9; }
+            QTableWidget { border: 1.5px solid #dcd6c8; border-radius: 8px; gridline-color: #fafaf7; }
             QTableWidget::item { padding: 6px; }
-            QTableWidget::item:selected { background: #6366f1; color: white; }
-            QHeaderView::section { background: #f8fafc; padding: 6px; border: none; border-bottom: 2px solid #e2e8f0; font-weight: bold; }
+            QTableWidget::item:selected { background: #c1521f; color: white; }
+            QHeaderView::section { background: #fafaf7; padding: 6px; border: none; border-bottom: 2px solid #dcd6c8; font-weight: bold; }
         ''')
         self.table.verticalHeader().setDefaultSectionSize(38)
         self.table.doubleClicked.connect(self._on_double_click)
@@ -316,14 +318,14 @@ class ProductSearchDialog(QDialog):
         cart_panel = QWidget()
         cart_panel.setMinimumWidth(230)
         cart_panel.setMaximumWidth(380)
-        cart_panel.setStyleSheet('QWidget { background: #f8fafc; border-radius: 10px; }')
+        cart_panel.setStyleSheet('QWidget { background: #fafaf7; border-radius: 10px; }')
         cp = QVBoxLayout(cart_panel)
         cp.setContentsMargins(10, 10, 10, 10)
         cp.setSpacing(6)
 
         cart_title = QLabel('Carrito actual')
         cart_title.setFont(QFont('Segoe UI', 11, QFont.Bold))
-        cart_title.setStyleSheet('color: #1e293b; background: transparent; border: none;')
+        cart_title.setStyleSheet('color: #1c1c1e; background: transparent; border: none;')
         cp.addWidget(cart_title)
 
         self.cart_list = QTableWidget()
@@ -341,25 +343,25 @@ class ProductSearchDialog(QDialog):
         self.cart_list.setAlternatingRowColors(True)
         self.cart_list.verticalHeader().setDefaultSectionSize(30)
         self.cart_list.setStyleSheet('''
-            QTableWidget { border: 1px solid #e2e8f0; border-radius: 6px; gridline-color: #f1f5f9; background: white; }
+            QTableWidget { border: 1px solid #dcd6c8; border-radius: 6px; gridline-color: #fafaf7; background: white; }
             QTableWidget::item { padding: 3px 5px; }
-            QHeaderView::section { background: #f1f5f9; padding: 4px; border: none; border-bottom: 1.5px solid #e2e8f0; font-size: 10px; }
+            QHeaderView::section { background: #fafaf7; padding: 4px; border: none; border-bottom: 1.5px solid #dcd6c8; font-size: 10px; }
         ''')
         cp.addWidget(self.cart_list, 1)
 
         # Total en el panel derecho
         total_frame = QFrame()
-        total_frame.setStyleSheet('QFrame { background: #1a1a2e; border-radius: 8px; border: none; }')
+        total_frame.setStyleSheet('QFrame { background: #1c1c1e; border-radius: 8px; border: none; }')
         tl = QHBoxLayout(total_frame)
         tl.setContentsMargins(12, 10, 12, 10)
         tl.setSpacing(8)
         total_lbl = QLabel('TOTAL')
         total_lbl.setFont(QFont('Segoe UI', 10, QFont.Bold))
-        total_lbl.setStyleSheet('color:#adb5bd; background:transparent; border:none;')
+        total_lbl.setStyleSheet('color:#9b958a; background:transparent; border:none;')
         tl.addWidget(total_lbl)
         self.dialog_total_amount = QLabel('$0.00')
         self.dialog_total_amount.setFont(QFont('Segoe UI', 18, QFont.Bold))
-        self.dialog_total_amount.setStyleSheet('color:#4ade80; background:transparent; border:none;')
+        self.dialog_total_amount.setStyleSheet('color:#3d7a3a; background:transparent; border:none;')
         self.dialog_total_amount.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self.dialog_total_amount.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         tl.addWidget(self.dialog_total_amount)
@@ -367,7 +369,7 @@ class ProductSearchDialog(QDialog):
 
         hint = QLabel('Enter o doble click para agregar')
         hint.setFont(QFont('Segoe UI', 9))
-        hint.setStyleSheet('color:#94a3b8; background:transparent; border:none;')
+        hint.setStyleSheet('color:#9b958a; background:transparent; border:none;')
         hint.setAlignment(Qt.AlignCenter)
         cp.addWidget(hint)
 
@@ -414,7 +416,7 @@ class ProductSearchDialog(QDialog):
             # Columna combinada: "x2  $500"
             detail_item = QTableWidgetItem(f'x{_fmt_qty(qty)}  ${subtotal:,.0f}')
             detail_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            detail_item.setForeground(QColor('#6366f1'))
+            detail_item.setForeground(QColor('#c1521f'))
             self.cart_list.setItem(row, 1, detail_item)
 
         if cart_items:
@@ -448,7 +450,7 @@ class ProductSearchDialog(QDialog):
         self.table.setSpan(0, 0, 1, 4)
         item = QTableWidgetItem('Escribí para buscar productos...')
         item.setTextAlignment(Qt.AlignCenter)
-        item.setForeground(QColor('#94a3b8'))
+        item.setForeground(QColor('#9b958a'))
         item.setFont(QFont('Segoe UI', 13))
         self.table.setItem(0, 0, item)
         self.result_count_lbl.setText('')
@@ -509,7 +511,7 @@ class ProductSearchDialog(QDialog):
             stock_item = QTableWidgetItem(str(stock if stock is not None else 0))
             stock_item.setTextAlignment(Qt.AlignCenter)
             if stock is not None and stock <= 0:
-                stock_item.setForeground(QColor('#dc3545'))
+                stock_item.setForeground(QColor('#a01616'))
             self.table.setItem(row, 3, stock_item)
 
         n = len(results)
@@ -769,405 +771,531 @@ class SalesView(QWidget):
         pass
         
     def init_ui(self):
+        from pos_system.ui.theme import COLORS as _T
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(10)
 
-        # ── Barra superior: escáner automático + búsqueda manual ──
-        search_row = QHBoxLayout()
-        search_row.setSpacing(8)
+        # ────────────────────────────────────────────────────────────────
+        # ── Header: search bar + botón Agregar (estilo mockup) ─────────
+        # ────────────────────────────────────────────────────────────────
+        top = QFrame()
+        top.setStyleSheet(
+            f"QFrame {{ background:{_T['surface']}; border:1px solid {_T['border']};"
+            f" border-radius:8px; }}"
+        )
+        h_top = QHBoxLayout(top)
+        h_top.setContentsMargins(12, 10, 12, 10)
+        h_top.setSpacing(8)
 
-        # Etiqueta escáner
-        scanner_lbl = QLabel('Codigo / Busqueda:')
-        scanner_lbl.setFont(QFont('Segoe UI', 10, QFont.Bold))
-        scanner_lbl.setStyleSheet('color: #495057;')
-        search_row.addWidget(scanner_lbl)
-
-        # Campo inteligente: detecta escáner automático o tipeo manual
         self.barcode_field = BarcodeScanner()
-        self.barcode_field.setPlaceholderText('Escanee un codigo de barras o escriba para buscar...')
+        self.barcode_field.setPlaceholderText('Código de barras o nombre…')
         self.barcode_field.setFont(QFont('Segoe UI', 11))
-        self.barcode_field.setMinimumHeight(40)
-        self.barcode_field.setStyleSheet('''
-            QLineEdit {
-                border: 2px solid #ced4da;
-                border-radius: 6px;
-                padding: 6px 12px;
-                background: white;
-                font-size: 13px;
-            }
-            QLineEdit:focus { border-color: #0d6efd; }
-        ''')
-        # Escáner automático detectado
+        self.barcode_field.setMinimumHeight(38)
+        self.barcode_field.setStyleSheet(
+            f"QLineEdit {{ border:1px solid {_T['border']}; background:{_T['surface_alt']};"
+            f" border-radius:6px; padding:6px 12px; font-size:14px; color:{_T['text']}; }}"
+            f"QLineEdit:focus {{ border-color:{_T['accent']}; background:{_T['surface']}; }}"
+        )
         self.barcode_field.barcode_scanned.connect(self._on_barcode_scanned)
-        # Tipeo manual → sugerencias en tiempo real
         self.barcode_field.textChanged.connect(self._on_search_text_changed)
         self.barcode_field.returnPressed.connect(self.search_product)
-        # Historial de búsquedas: mostrar popup al recibir foco con campo vacío
         self.barcode_field.installEventFilter(self)
-        search_row.addWidget(self.barcode_field, 1)
+        h_top.addWidget(self.barcode_field, 1)
 
-        search_btn = QPushButton('Buscar')
-        search_btn.setMinimumHeight(40)
-        search_btn.setMinimumWidth(80)
-        search_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
-        search_btn.clicked.connect(self.search_product)
-        search_row.addWidget(search_btn)
-
-        # Botón "Varios" — producto libre con nombre/precio/observación opcional
-        varios_btn = QPushButton('Varios')
-        varios_btn.setMinimumHeight(40)
-        varios_btn.setMinimumWidth(90)
-        varios_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
-        varios_btn.setToolTip('Agregar producto genérico (sin código) con observación opcional')
-        varios_btn.setStyleSheet('''
-            QPushButton {
-                background: #f59e0b; color: white;
-                border: none; border-radius: 6px; padding: 4px 14px;
-            }
-            QPushButton:hover { background: #d97706; }
-            QPushButton:pressed { background: #b45309; }
-        ''')
-        varios_btn.clicked.connect(self._add_varios_item)
-        search_row.addWidget(varios_btn)
-
-        # Botón "Varios 2" — SOLO FACTURA AFIP (no afecta caja, historial ni ventas)
-        # Solo visible para Administrador.
-        if (self.current_user or {}).get('role') == 'admin':
-            varios2_btn = QPushButton('Varios 2')
-            varios2_btn.setMinimumHeight(40)
-            varios2_btn.setMinimumWidth(90)
-            varios2_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
-            varios2_btn.setToolTip(
-                'Item solo para facturar a AFIP — NO suma a caja, historial ni ventas.\n'
-                'Al cobrar se emite factura directa sin registrar la venta.\n'
-                'No se puede mezclar con items normales en el mismo carrito.'
-            )
-            varios2_btn.setStyleSheet('''
-                QPushButton {
-                    background: #7c3aed; color: white;
-                    border: none; border-radius: 6px; padding: 4px 14px;
-                }
-                QPushButton:hover { background: #6d28d9; }
-                QPushButton:pressed { background: #5b21b6; }
-            ''')
-            varios2_btn.clicked.connect(self._add_varios_2_item)
-            search_row.addWidget(varios2_btn)
-
-        layout.addLayout(search_row)
-
-        # Suggestion list eliminada — los resultados se muestran directo en la tabla de productos
-
-        # ── Splitter principal: productos (arriba) | carrito (abajo) ──
-        splitter = QSplitter(Qt.Vertical)
-        splitter.setHandleWidth(6)
-
-        # ── Panel superior: Lista de productos ──
-        left_panel = QWidget()
-        left_layout = QVBoxLayout(left_panel)
-        left_layout.setContentsMargins(0, 0, 0, 0)
-        left_layout.setSpacing(8)
-
-        # ── Cabecera: título + indicador ──
-        filter_row = QHBoxLayout()
-        filter_row.setSpacing(8)
-
-        products_title = QLabel('Productos')
-        products_title.setFont(QFont('Segoe UI', 13, QFont.Bold))
-        products_title.setStyleSheet('color: #212529;')
-        filter_row.addWidget(products_title)
-
-        # Botón lupa para abrir búsqueda ampliada
-        lupa_btn = QPushButton('🔍  Vista ampliada')
-        lupa_btn.setMinimumHeight(34)
-        lupa_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
-        lupa_btn.setToolTip('Abrir búsqueda ampliada de productos (fuente grande)')
-        lupa_btn.setStyleSheet('''
-            QPushButton {
-                background: #6366f1; color: white;
-                border: none; border-radius: 6px; padding: 4px 14px;
-            }
-            QPushButton:hover { background: #4f46e5; }
-            QPushButton:pressed { background: #4338ca; }
-        ''')
-        lupa_btn.clicked.connect(self._open_search_dialog)
-        filter_row.addWidget(lupa_btn)
-
-        filter_row.addStretch()
-
-        # Indicador de acción (escáner)
+        # Indicador inline (escáner, errores)
         self.sync_indicator = QLabel('')
-        self.sync_indicator.setFont(QFont('Segoe UI', 9))
         self.sync_indicator.setStyleSheet(
-            'color: #198754; background: #d1fae5; border: 1px solid #6ee7b7;'
-            'border-radius: 4px; padding: 2px 8px; font-weight: 600;'
+            f"color:{_T['success']}; background:{_T['success_bg']};"
+            f" border:1px solid {_T['success']}; border-radius:4px;"
+            f" padding:2px 8px; font-weight:600; font-size:11px;"
         )
         self.sync_indicator.setVisible(False)
-        filter_row.addWidget(self.sync_indicator)
+        h_top.addWidget(self.sync_indicator)
 
-        left_layout.addLayout(filter_row)
-
-        # ── Estilos para botones de rubro ──
-        self._btn_off = ('background:#f1f3f5;color:#495057;border:1.5px solid #ced4da;'
-                    'border-radius:6px;padding:4px 12px;font-size:11px;font-weight:bold;')
-        self._btn_on  = ('background:#0d6efd;color:white;border:1.5px solid #0d6efd;'
-                    'border-radius:6px;padding:4px 12px;font-size:11px;font-weight:bold;')
-        self._fav_style_off = f'QPushButton{{{self._btn_off}}} QPushButton:hover{{background:#e9ecef;}}'
-        self._fav_style_on  = f'QPushButton{{{self._btn_on}}} QPushButton:hover{{background:#0b5ed7;}}'
-        self._selected_category = None
-        self._category_buttons = {}
-
-        # ── Fila SECCIÓN: etiqueta + botones de rubros ──
-        section_row = QHBoxLayout()
-        section_row.setSpacing(6)
-
-        section_lbl = QLabel('SECCIÓN:')
-        section_lbl.setFont(QFont('Segoe UI', 10, QFont.Bold))
-        section_lbl.setStyleSheet('color: #495057;')
-        section_row.addWidget(section_lbl)
-
-        # Área scrollable para los botones de rubro
-        self._rubros_scroll = QScrollArea()
-        self._rubros_scroll.setFixedHeight(48)
-        self._rubros_scroll.setWidgetResizable(True)
-        self._rubros_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        self._rubros_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        self._rubros_scroll.setStyleSheet('QScrollArea { border: none; background: transparent; }')
-
-        self._rubros_inner = QWidget()
-        self._rubros_inner.setStyleSheet('background: transparent;')
-        self._rubros_layout = QHBoxLayout(self._rubros_inner)
-        self._rubros_layout.setContentsMargins(0, 0, 0, 0)
-        self._rubros_layout.setSpacing(6)
-        self._rubros_layout.setAlignment(Qt.AlignLeft)
-        self._rubros_scroll.setWidget(self._rubros_inner)
-        section_row.addWidget(self._rubros_scroll, 1)
-
-        self.favorites_btn = QPushButton('Favoritos')
-        self.favorites_btn.setCheckable(True)
-        self.favorites_btn.setMinimumHeight(34)
-        self.favorites_btn.setStyleSheet(self._fav_style_off)
-        self.favorites_btn.toggled.connect(self._on_favorites_toggled)
-        section_row.addWidget(self.favorites_btn)
-
-        reset_btn = QPushButton('Limpiar')
-        reset_btn.setMinimumHeight(34)
-        reset_btn.setStyleSheet(f'QPushButton{{{self._btn_off}}} QPushButton:hover{{background:#e9ecef;}}')
-        reset_btn.clicked.connect(self.reset_category_filter)
-        section_row.addWidget(reset_btn)
-
-        left_layout.addLayout(section_row)
-
-        # ── Combo de CATEGORÍAS (desplegable simple) ──
-        subcat_row = QHBoxLayout()
-        subcat_row.setSpacing(6)
-
-        subcat_lbl = QLabel('Categoría:')
-        subcat_lbl.setFont(QFont('Segoe UI', 10, QFont.Bold))
-        subcat_lbl.setStyleSheet('color: #495057;')
-        subcat_row.addWidget(subcat_lbl)
-
-        self._subcat_combo = QComboBox()
-        self._subcat_combo.setMinimumHeight(34)
-        self._subcat_combo.setFont(QFont('Segoe UI', 10))
-        self._subcat_combo.setStyleSheet('''
-            QComboBox {
-                border: 1.5px solid #ced4da;
-                border-radius: 6px;
-                padding: 4px 10px;
-                background: white;
-                color: #212529;
-            }
-            QComboBox:focus { border-color: #6366f1; }
-            QComboBox::drop-down { border: none; width: 24px; }
-            QComboBox QAbstractItemView {
-                border: 1px solid #ced4da;
-                border-radius: 4px;
-                selection-background-color: #6366f1;
-                selection-color: white;
-                font-size: 11px;
-            }
-        ''')
-        self._subcat_combo.currentTextChanged.connect(self._on_subcat_combo_changed)
-        subcat_row.addWidget(self._subcat_combo, 1)
-
-        self._subcat_container = QWidget()
-        self._subcat_container.setLayout(subcat_row)
-        self._subcat_container.setVisible(False)
-        left_layout.addWidget(self._subcat_container)
-
-        self._selected_subcategory = None
-        self._subcat_buttons = {}
-
-        # Mantener estos atributos por compatibilidad con código existente
-        self.category_filter = QComboBox()
-        self.rubro_filter = QComboBox()
-
-        # Cargar botones de rubros desde la BD
-        self._load_rubro_buttons()
-
-        # Instrucción
-        hint = QLabel('Escriba un nombre, escanee un código o elija una categoría')
-        hint.setFont(QFont('Segoe UI', 9))
-        hint.setStyleSheet(
-            'color: #64748b; background: #f8fafc; border: 1px solid #e2e8f0;'
-            'border-radius: 6px; padding: 5px 12px;'
+        agregar_btn = QPushButton('Agregar')
+        agregar_btn.setMinimumHeight(38); agregar_btn.setMinimumWidth(96)
+        agregar_btn.setCursor(Qt.PointingHandCursor)
+        agregar_btn.setFont(QFont('Segoe UI', 11, QFont.Bold))
+        agregar_btn.setStyleSheet(
+            f"QPushButton {{ background:{_T['accent']}; color:white;"
+            f" border:none; border-radius:6px; padding:0 16px; font-weight:700; }}"
+            f"QPushButton:hover {{ background:{_T['accent_hover']}; }}"
         )
-        left_layout.addWidget(hint)
+        agregar_btn.clicked.connect(self.search_product)
+        h_top.addWidget(agregar_btn)
 
-        # Tabla de productos
-        self.products_table = QTableWidget()
-        self.products_table.setColumnCount(5)
-        self.products_table.setHorizontalHeaderLabels(['FAV', 'Producto', 'Codigo', 'Precio', 'Stock'])
-        self.products_table.verticalHeader().setVisible(False)
-        self.products_table.setSelectionBehavior(QTableWidget.SelectRows)
-        self.products_table.setEditTriggers(QTableWidget.NoEditTriggers)
-        self.products_table.doubleClicked.connect(self.add_to_cart_from_table)
-        self.products_table.setAlternatingRowColors(True)
-        self.products_table.horizontalHeader().setStretchLastSection(False)
-        self.products_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Fixed)
-        self.products_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.products_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.products_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.products_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self.products_table.setColumnWidth(0, 36)
-        # Enter en tabla también agrega al carrito
-        self.products_table.keyPressEvent = self._products_table_key_press
-        left_layout.addWidget(self.products_table)
+        # Botón Varios (item libre)
+        varios_btn = QPushButton('Varios')
+        varios_btn.setMinimumHeight(38); varios_btn.setMinimumWidth(80)
+        varios_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        varios_btn.setCursor(Qt.PointingHandCursor)
+        varios_btn.setStyleSheet(
+            f"QPushButton {{ background:{_T['surface_alt']}; color:{_T['text']};"
+            f" border:1px solid {_T['border']}; border-radius:6px; padding:0 14px; font-weight:600; }}"
+            f"QPushButton:hover {{ background:{_T['border_soft']}; }}"
+        )
+        varios_btn.setToolTip('Agregar producto genérico (sin código)')
+        varios_btn.clicked.connect(self._add_varios_item)
+        h_top.addWidget(varios_btn)
 
-        splitter.addWidget(left_panel)
+        if (self.current_user or {}).get('role') == 'admin':
+            varios2_btn = QPushButton('Varios 2')
+            varios2_btn.setMinimumHeight(38); varios2_btn.setMinimumWidth(80)
+            varios2_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
+            varios2_btn.setCursor(Qt.PointingHandCursor)
+            varios2_btn.setStyleSheet(
+                f"QPushButton {{ background:{_T['surface']}; color:{_T['accent']};"
+                f" border:1px dashed {_T['accent']}; border-radius:6px; padding:0 14px; font-weight:700; }}"
+                f"QPushButton:hover {{ background:{_T['accent_soft']}; }}"
+            )
+            varios2_btn.setToolTip('Item solo para facturar a AFIP')
+            varios2_btn.clicked.connect(self._add_varios_2_item)
+            h_top.addWidget(varios2_btn)
 
-        # ── Panel inferior: Carrito (tabla a la izquierda, total+cobrar a la derecha) ──
-        right_panel = QWidget()
-        right_panel.setStyleSheet('background: #f8f9fa; border-top: 2px solid #e9ecef;')
-        right_main = QHBoxLayout(right_panel)
-        right_main.setContentsMargins(8, 8, 8, 8)
-        right_main.setSpacing(10)
+        layout.addWidget(top)
 
-        # ── Izquierda: cabecera + tabla + hint promo ──
-        cart_left = QVBoxLayout()
-        cart_left.setSpacing(6)
+        # ────────────────────────────────────────────────────────────────
+        # ── Body: izquierda carrito | derecha panel ────────────────────
+        # ────────────────────────────────────────────────────────────────
+        body = QHBoxLayout()
+        body.setSpacing(10)
 
-        cart_header = QHBoxLayout()
-        cart_title = QLabel('Carrito de Venta')
-        cart_title.setFont(QFont('Segoe UI', 11, QFont.Bold))
-        cart_title.setStyleSheet('color: #1e293b; background:transparent;')
-        cart_header.addWidget(cart_title)
-        cart_header.addStretch()
+        # ── Carrito (panel principal) ──
+        cart_panel = QFrame()
+        cart_panel.setStyleSheet(
+            f"QFrame {{ background:{_T['surface']}; border:1px solid {_T['border']};"
+            f" border-radius:8px; }}"
+        )
+        cart_v = QVBoxLayout(cart_panel)
+        cart_v.setContentsMargins(0, 0, 0, 0)
+        cart_v.setSpacing(0)
+
+        # Header carrito
+        cart_hdr = QFrame()
+        cart_hdr.setStyleSheet(f"QFrame {{ border-bottom:1px solid {_T['border_soft']}; background:transparent; }}")
+        cart_hdr_l = QHBoxLayout(cart_hdr)
+        cart_hdr_l.setContentsMargins(14, 10, 14, 10)
+        cart_title = QLabel('Carrito')
+        cart_title.setFont(QFont('Segoe UI', 12, QFont.Bold))
+        cart_title.setStyleSheet(f"color:{_T['text']}; background:transparent; border:none;")
+        cart_hdr_l.addWidget(cart_title)
+        cart_hdr_l.addStretch(1)
         self.items_count_lbl = QLabel('0 items')
-        self.items_count_lbl.setFont(QFont('Segoe UI', 9))
         self.items_count_lbl.setStyleSheet(
-            'color:#6c757d; background:#f1f5f9; border-radius:10px; padding:2px 8px;'
+            f"color:{_T['text_muted']}; font-size:11px;"
+            f" font-family:'JetBrains Mono', Consolas, monospace; background:transparent; border:none;"
         )
-        cart_header.addWidget(self.items_count_lbl)
-        cart_left.addLayout(cart_header)
+        cart_hdr_l.addWidget(self.items_count_lbl)
+        cart_v.addWidget(cart_hdr)
 
-        # Tabla del carrito
+        # Tabla del carrito (4 columnas estilo mockup)
         self.cart_table = QTableWidget()
-        self.cart_table.setColumnCount(6)
-        self.cart_table.setHorizontalHeaderLabels(['Producto', 'Descuento', 'Precio', 'Cant.', 'Subtotal', ''])
+        self.cart_table.setColumnCount(4)
+        self.cart_table.setHorizontalHeaderLabels(['Producto', 'Cantidad', 'Subtotal', ''])
         self.cart_table.verticalHeader().setVisible(False)
-        self.cart_table.setAlternatingRowColors(True)
-        self.cart_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.cart_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.cart_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)
-        self.cart_table.setColumnWidth(1, 110)
         self.cart_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Fixed)
-        self.cart_table.setColumnWidth(2, 100)
         self.cart_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
-        self.cart_table.setColumnWidth(3, 85)
-        self.cart_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Fixed)
-        self.cart_table.setColumnWidth(4, 90)
-        self.cart_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.Fixed)
-        self.cart_table.setColumnWidth(5, 34)
-        self.cart_table.setFocusPolicy(Qt.NoFocus)
+        self.cart_table.setColumnWidth(1, 130)
+        self.cart_table.setColumnWidth(2, 130)
+        self.cart_table.setColumnWidth(3, 78)
+        self.cart_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.cart_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.cart_table.setStyleSheet(
+            f"QTableWidget {{ border:none; background:{_T['surface']}; }}"
+            f"QHeaderView::section {{ background:{_T['surface_alt']}; color:{_T['text_muted']};"
+            f" padding:8px 12px; border:none; border-bottom:1px solid {_T['border']};"
+            f" font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.4px; }}"
+        )
         self.cart_table.cellClicked.connect(self._on_cart_cell_clicked)
-        cart_left.addWidget(self.cart_table, 1)
+        cart_v.addWidget(self.cart_table, 1)
 
-        # Aviso de promoción cercana
+        # Hint promo cercana
         self._promo_hint_lbl = QLabel('')
         self._promo_hint_lbl.setWordWrap(True)
         self._promo_hint_lbl.setVisible(False)
-        self._promo_hint_lbl.setFont(QFont('Segoe UI', 9))
-        self._promo_hint_lbl.setStyleSheet('''
-            QLabel {
-                background: #fff8e1; border: 1.5px solid #ffc107;
-                border-radius: 7px; padding: 5px 10px; color: #6d4c00;
-            }
-        ''')
-        cart_left.addWidget(self._promo_hint_lbl)
+        self._promo_hint_lbl.setStyleSheet(
+            f"QLabel {{ background:{_T['warning_bg']}; border:1px solid {_T['warning']};"
+            f" border-radius:6px; padding:6px 10px; color:{_T['warning']}; font-size:11px; }}"
+        )
+        cart_v.addWidget(self._promo_hint_lbl)
 
-        right_main.addLayout(cart_left, 1)
-
-        # ── Derecha: Total + Cobrar ──
-        cart_right = QVBoxLayout()
-        cart_right.setSpacing(8)
-        cart_right.setContentsMargins(0, 0, 0, 0)
-
-        # Total frame
-        total_frame = QFrame()
-        total_frame.setStyleSheet('QFrame { background: #1a1a2e; border-radius: 10px; }')
-        total_frame.setMinimumWidth(240)
-        total_layout = QVBoxLayout(total_frame)
-        total_layout.setContentsMargins(12, 14, 12, 14)
-        total_layout.setSpacing(4)
-
+        # Footer carrito: TOTAL + Cobrar
+        cart_ft = QFrame()
+        cart_ft.setStyleSheet(
+            f"QFrame {{ background:{_T['surface_alt']}; border-top:1px solid {_T['border']};"
+            f" border-bottom-left-radius:8px; border-bottom-right-radius:8px; }}"
+        )
+        ft_l = QHBoxLayout(cart_ft)
+        ft_l.setContentsMargins(16, 14, 14, 14); ft_l.setSpacing(14)
+        col = QVBoxLayout(); col.setSpacing(0); col.setContentsMargins(0, 0, 0, 0)
         total_lbl = QLabel('TOTAL')
-        total_lbl.setFont(QFont('Segoe UI', 10, QFont.Bold))
-        total_lbl.setStyleSheet('color: #adb5bd; background: transparent; border: none;')
-        total_lbl.setAlignment(Qt.AlignCenter)
-        total_layout.addWidget(total_lbl)
-
+        total_lbl.setStyleSheet(
+            f"color:{_T['text_muted']}; background:transparent; border:none;"
+            f" font-size:10px; font-weight:700; letter-spacing:0.6px;"
+        )
+        col.addWidget(total_lbl)
         self.total_amount_label = QLabel('$0.00')
-        self.total_amount_label.setFont(QFont('Segoe UI', 24, QFont.Bold))
-        self.total_amount_label.setStyleSheet('color: #4ade80; background: transparent; border: none;')
-        self.total_amount_label.setAlignment(Qt.AlignCenter)
-        self.total_amount_label.setMinimumWidth(220)
-        self.total_amount_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        total_layout.addWidget(self.total_amount_label)
-        cart_right.addWidget(total_frame)
+        self.total_amount_label.setStyleSheet(
+            f"color:{_T['text']}; background:transparent; border:none;"
+            f" font-size:30px; font-weight:700;"
+            f" font-family:'JetBrains Mono', Consolas, monospace;"
+        )
+        col.addWidget(self.total_amount_label)
+        ft_l.addLayout(col, 1)
+        ft_l.addStretch(1)
 
-        cart_right.addStretch()
-
-        # Botón Limpiar
         clear_btn = QPushButton('Limpiar')
-        clear_btn.setObjectName('btnSecondary')
-        clear_btn.setMinimumHeight(38)
-        clear_btn.setFont(QFont('Segoe UI', 10))
+        clear_btn.setMinimumHeight(48); clear_btn.setMinimumWidth(100)
+        clear_btn.setFont(QFont('Segoe UI', 11))
         clear_btn.setCursor(Qt.PointingHandCursor)
+        clear_btn.setStyleSheet(
+            f"QPushButton {{ background:{_T['surface']}; color:{_T['text_muted']};"
+            f" border:1px solid {_T['border']}; border-radius:6px; font-weight:600; }}"
+            f"QPushButton:hover {{ background:{_T['border_soft']}; color:{_T['text']}; }}"
+        )
         clear_btn.clicked.connect(self.clear_cart)
-        cart_right.addWidget(clear_btn)
+        ft_l.addWidget(clear_btn)
 
-        # Botón COBRAR
-        facturar_btn = QPushButton('COBRAR')
-        facturar_btn.setMinimumHeight(56)
-        facturar_btn.setFont(QFont('Segoe UI', 14, QFont.Bold))
-        facturar_btn.setCursor(Qt.PointingHandCursor)
-        facturar_btn.setStyleSheet('''
-            QPushButton {
-                background-color: #198754; color: white;
-                border: none; border-radius: 10px; letter-spacing: 0.5px;
-            }
-            QPushButton:hover { background-color: #157347; }
-            QPushButton:pressed { background-color: #146c43; }
-        ''')
-        facturar_btn.clicked.connect(self.complete_sale)
-        cart_right.addWidget(facturar_btn)
+        cobrar_btn = QPushButton('Cobrar\nF2')
+        cobrar_btn.setMinimumHeight(56); cobrar_btn.setMinimumWidth(180)
+        cobrar_btn.setFont(QFont('Segoe UI', 14, QFont.Bold))
+        cobrar_btn.setCursor(Qt.PointingHandCursor)
+        cobrar_btn.setStyleSheet(
+            f"QPushButton {{ background:{_T['accent']}; color:white;"
+            f" border:none; border-radius:8px; padding:6px 24px; font-weight:700; }}"
+            f"QPushButton:hover {{ background:{_T['accent_hover']}; }}"
+            f"QPushButton:disabled {{ background:#c9c2b3; color:white; }}"
+        )
+        cobrar_btn.clicked.connect(self.complete_sale)
+        ft_l.addWidget(cobrar_btn)
+        cart_v.addWidget(cart_ft)
 
-        right_main.addLayout(cart_right)
+        body.addWidget(cart_panel, 1)
 
-        splitter.addWidget(right_panel)
-        # Productos: 60% de la altura, Carrito: 40%
-        splitter.setStretchFactor(0, 3)
-        splitter.setStretchFactor(1, 2)
-        splitter.setSizes([600, 400])
+        # ── Panel lateral derecho ──
+        side = QWidget()
+        side.setFixedWidth(252)
+        side_v = QVBoxLayout(side)
+        side_v.setContentsMargins(0, 0, 0, 0)
+        side_v.setSpacing(10)
 
-        layout.addWidget(splitter)
+        # ACCIONES
+        side_v.addWidget(self._build_acciones_card())
+        # CAJA
+        side_v.addWidget(self._build_caja_card())
+        # ESTADO
+        side_v.addWidget(self._build_estado_card())
+
+        side_v.addStretch(1)
+        body.addWidget(side)
+
+        layout.addLayout(body, 1)
+
+        # ────────────────────────────────────────────────────────────────
+        # ── Widgets ocultos: products_table + categorías ──
+        # Se mantienen en memoria para no romper la lógica existente
+        # (refresh_data, on_search_text_changed, _filter_by_category, etc).
+        # No se agregan al layout visible.
+        # ────────────────────────────────────────────────────────────────
+        self.products_table = QTableWidget()
+        self.products_table.setColumnCount(5)
+        self.products_table.setHorizontalHeaderLabels(['FAV', 'Producto', 'Codigo', 'Precio', 'Stock'])
+        self.products_table.setVisible(False)
+        self.products_table.doubleClicked.connect(self.add_to_cart_from_table)
+
+        self._btn_off = (
+            f"background:{_T['surface']};color:{_T['text_muted']};"
+            f"border:1px solid {_T['border']};border-radius:6px;padding:4px 12px;"
+            f"font-size:11px;font-weight:600;"
+        )
+        self._btn_on = (
+            f"background:{_T['text']};color:white;border:1px solid {_T['text']};"
+            f"border-radius:6px;padding:4px 12px;font-size:11px;font-weight:600;"
+        )
+        self._fav_style_off = f'QPushButton{{{self._btn_off}}} QPushButton:hover{{background:{_T["surface_alt"]};color:{_T["text"]};}}'
+        self._fav_style_on  = f'QPushButton{{{self._btn_on}}} QPushButton:hover{{background:#000;}}'
+        self._selected_category = None
+        self._category_buttons = {}
+        self._all_products = []
+        # Layouts ocultos requeridos por métodos de la clase que asumen su existencia
+        self._rubros_layout = QHBoxLayout()
+        self._subcats_layout = QHBoxLayout()
+        # Stub _filter_lbl (se referencia en algunos paths viejos)
+        self._filter_lbl = QLabel(''); self._filter_lbl.setVisible(False)
+        # Stub _result_count_lbl
+        self.result_count_lbl = QLabel(''); self.result_count_lbl.setVisible(False)
+
+        # Atajos F1-F7
+        from PyQt5.QtWidgets import QShortcut
+        from PyQt5.QtGui import QKeySequence
+        QShortcut(QKeySequence("F1"), self, self._open_search_dialog)
+        QShortcut(QKeySequence("F2"), self, self.complete_sale)
+        QShortcut(QKeySequence("F3"), self, self._open_cliente_dialog)
+        QShortcut(QKeySequence("F4"), self, self._open_promos_dialog)
+        QShortcut(QKeySequence("F5"), self, self._cambiar_cajero)
+        QShortcut(QKeySequence("F7"), self, self._goto_caja)
+        QShortcut(QKeySequence("F8"), self, self._trigger_sync)
 
         # Cargar datos iniciales
         self.refresh_data()
+        # Aplicar filtro de favoritos por defecto
+        QTimer.singleShot(50, self._apply_initial_filter)
 
-    # ── Lógica de búsqueda y sugerencias ──
+    def _apply_initial_filter(self):
+        try:
+            if hasattr(self, 'show_favorites_only'):
+                self.show_favorites_only = False
+        except Exception:
+            pass
+
+    def _build_acciones_card(self):
+        from pos_system.ui.theme import COLORS as _T
+        card = QFrame()
+        card.setStyleSheet(
+            f"QFrame {{ background:{_T['surface']}; border:1px solid {_T['border']};"
+            f" border-radius:8px; }}"
+        )
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 10, 12, 12); v.setSpacing(8)
+
+        l = QLabel('ACCIONES')
+        l.setStyleSheet(
+            f"color:{_T['text_muted']}; font-size:10px; font-weight:700;"
+            f" letter-spacing:0.5px; background:transparent; border:none;"
+        )
+        v.addWidget(l)
+
+        grid = QGridLayout(); grid.setSpacing(6)
+        actions = [
+            ('F1', 'Buscar',      self._open_search_dialog),
+            ('F3', 'Cliente',     self._open_cliente_dialog),
+            ('F4', 'Promo',       self._open_promos_dialog),
+            ('F5', 'Cajero',      self._cambiar_cajero),
+            ('F7', 'Caja',        self._goto_caja),
+            ('F8', 'Sincronizar', self._trigger_sync),
+        ]
+        for i, (key, lbl, fn) in enumerate(actions):
+            b = self._make_action_button(key, lbl, fn)
+            grid.addWidget(b, i // 2, i % 2)
+        v.addLayout(grid)
+        return card
+
+    def _make_action_button(self, key, label, fn):
+        from pos_system.ui.theme import COLORS as _T
+        b = QPushButton(f"{key}\n{label}")
+        b.setMinimumHeight(54)
+        b.setCursor(Qt.PointingHandCursor)
+        b.setStyleSheet(
+            f"QPushButton {{ text-align:left; padding:6px 8px;"
+            f" background:{_T['surface']}; color:{_T['text']};"
+            f" border:1px solid {_T['border']}; border-radius:6px;"
+            f" font-size:12px; font-weight:700; }}"
+            f"QPushButton:hover {{ background:{_T['surface_alt']}; }}"
+        )
+        b.clicked.connect(fn)
+        return b
+
+    def _build_caja_card(self):
+        from pos_system.ui.theme import COLORS as _T
+        card = QFrame()
+        card.setStyleSheet(
+            f"QFrame {{ background:{_T['surface']}; border:1px solid {_T['border']};"
+            f" border-radius:8px; }}"
+        )
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 10, 12, 12); v.setSpacing(6)
+        l = QLabel('CAJA')
+        l.setStyleSheet(
+            f"color:{_T['text_muted']}; font-size:10px; font-weight:700;"
+            f" letter-spacing:0.5px; background:transparent; border:none;"
+        )
+        v.addWidget(l)
+
+        # Stats live
+        self._caja_ventas_lbl   = QLabel('—')
+        self._caja_tickets_lbl  = QLabel('—')
+        self._caja_promedio_lbl = QLabel('—')
+        for nombre, lbl in [('Ventas hoy', self._caja_ventas_lbl),
+                            ('Tickets', self._caja_tickets_lbl),
+                            ('Promedio', self._caja_promedio_lbl)]:
+            row = QHBoxLayout()
+            n = QLabel(nombre)
+            n.setStyleSheet(f"color:{_T['text_muted']}; font-size:11px; background:transparent; border:none;")
+            lbl.setStyleSheet(
+                f"color:{_T['text']}; font-size:11px; font-weight:600; background:transparent;"
+                f" border:none; font-family:'JetBrains Mono', Consolas, monospace;"
+            )
+            lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            row.addWidget(n); row.addStretch(1); row.addWidget(lbl)
+            v.addLayout(row)
+
+        # Refrescar al inicio y cada 30s
+        self._caja_timer = QTimer(self)
+        self._caja_timer.timeout.connect(self._refresh_caja_card)
+        self._caja_timer.start(30_000)
+        QTimer.singleShot(500, self._refresh_caja_card)
+        return card
+
+    def _build_estado_card(self):
+        from pos_system.ui.theme import COLORS as _T
+        card = QFrame()
+        card.setStyleSheet(
+            f"QFrame {{ background:{_T['surface']}; border:1px solid {_T['border']};"
+            f" border-radius:8px; }}"
+        )
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 10, 12, 12); v.setSpacing(6)
+        l = QLabel('ESTADO')
+        l.setStyleSheet(
+            f"color:{_T['text_muted']}; font-size:10px; font-weight:700;"
+            f" letter-spacing:0.5px; background:transparent; border:none;"
+        )
+        v.addWidget(l)
+
+        self._estado_sync_lbl  = self._estado_row(_T['success'], 'Sincronizado')
+        self._estado_stock_lbl = self._estado_row(_T['warning'], 'Stock OK')
+        v.addWidget(self._estado_sync_lbl)
+        v.addWidget(self._estado_stock_lbl)
+        # Refresh inmediato + cada 10s (Firebase puede tardar varios segundos en
+        # inicializarse en el thread de fondo, por eso reintentamos)
+        QTimer.singleShot(800,  self._refresh_estado_card)
+        QTimer.singleShot(3000, self._refresh_estado_card)
+        QTimer.singleShot(8000, self._refresh_estado_card)
+        self._estado_timer = QTimer(self)
+        self._estado_timer.timeout.connect(self._refresh_estado_card)
+        self._estado_timer.start(10_000)
+        return card
+
+    def _estado_row(self, color, txt):
+        from pos_system.ui.theme import COLORS as _T
+        w = QWidget()
+        h = QHBoxLayout(w); h.setContentsMargins(0, 0, 0, 0); h.setSpacing(6)
+        d = QLabel('●')
+        d.setStyleSheet(f"color:{color}; font-size:12px; background:transparent; border:none;")
+        t = QLabel(txt)
+        t.setStyleSheet(f"color:{_T['text_muted']}; font-size:11px; background:transparent; border:none;")
+        h.addWidget(d); h.addWidget(t); h.addStretch(1)
+        w._dot = d; w._txt = t
+        return w
+
+    def _refresh_caja_card(self):
+        try:
+            from datetime import datetime as _dt
+            today = _dt.now().strftime('%Y-%m-%d')
+            sales = self.sale_model.get_all(start_date=f'{today} 00:00:00',
+                                            end_date=f'{today} 23:59:59') or []
+            n = len(sales)
+            total = sum(float(s.get('total_amount') or 0) for s in sales)
+            avg = (total / n) if n else 0.0
+            self._caja_ventas_lbl.setText(f'${total:,.0f}'.replace(',', '.'))
+            self._caja_tickets_lbl.setText(str(n))
+            self._caja_promedio_lbl.setText(f'${avg:,.0f}'.replace(',', '.') if n else '$0')
+        except Exception:
+            pass
+
+    def _refresh_estado_card(self):
+        from pos_system.ui.theme import COLORS as _T
+        try:
+            from pos_system.utils.firebase_sync import get_firebase_sync
+            fb = get_firebase_sync()
+            if fb and fb.enabled:
+                self._estado_sync_lbl._dot.setStyleSheet(
+                    f"color:{_T['success']}; font-size:12px; background:transparent; border:none;")
+                self._estado_sync_lbl._txt.setText('Conectado')
+                self._estado_sync_lbl._txt.setStyleSheet(
+                    f"color:{_T['success']}; font-size:11px; font-weight:600;"
+                    f" background:transparent; border:none;")
+            else:
+                self._estado_sync_lbl._dot.setStyleSheet(
+                    f"color:{_T['warning']}; font-size:12px; background:transparent; border:none;")
+                self._estado_sync_lbl._txt.setText('Sin conexión')
+                self._estado_sync_lbl._txt.setStyleSheet(
+                    f"color:{_T['warning']}; font-size:11px; font-weight:600;"
+                    f" background:transparent; border:none;")
+        except Exception:
+            pass
+        try:
+            low = self.product_model.get_low_stock(threshold=3) or []
+            real_low = [p for p in low if (p.get('stock') or 0) > 0]
+            if real_low:
+                self._estado_stock_lbl._dot.setStyleSheet(f"color:{_T['warning']}; font-size:12px; background:transparent; border:none;")
+                self._estado_stock_lbl._txt.setText(f'{len(real_low)} con stock bajo')
+            else:
+                self._estado_stock_lbl._dot.setStyleSheet(f"color:{_T['success']}; font-size:12px; background:transparent; border:none;")
+                self._estado_stock_lbl._txt.setText('Stock OK')
+        except Exception:
+            pass
+
+    # ── Atajos del panel lateral ──
+    def _open_promos_dialog(self):
+        """Abre PromosQuickDialog: lista de promos activas. Click → carga el producto al carrito."""
+        try:
+            dlg = PromosQuickDialog(self, firebase_promos=self._firebase_promos)
+            dlg.product_chosen.connect(self._on_promo_product_chosen)
+            dlg.exec_()
+        except Exception as e:
+            QMessageBox.information(self, 'Promociones', f'No disponible: {e}')
+
+    def _on_promo_product_chosen(self, product_id, qty):
+        """Recibe el producto elegido del PromosQuickDialog y lo agrega N veces
+        (la cantidad mínima requerida para que aplique la promo)."""
+        try:
+            prod = self.product_model.get_by_id(int(product_id))
+            if not prod:
+                return
+            qty = max(1, int(qty))
+            for _ in range(qty):
+                self.add_to_cart(prod)
+        except Exception:
+            pass
+
+    def _open_cliente_dialog(self):
+        try:
+            from pos_system.ui.cliente_perfil_dialog import ClientePerfilDialog
+            ClientePerfilDialog(self).exec_()
+        except Exception as e:
+            QMessageBox.information(self, 'Cliente', f'No disponible: {e}')
+
+    def _cambiar_cajero(self):
+        try:
+            mw = self.get_main_window()
+            if mw and hasattr(mw, '_prompt_turno'):
+                mw._prompt_turno()
+        except Exception:
+            pass
+
+    def _trigger_sync(self):
+        """Dispara sync con Firebase abriendo el dialog de progreso (estilo mockup)."""
+        try:
+            from pos_system.utils.firebase_sync import get_firebase_sync
+            fb = get_firebase_sync()
+            if not fb or not fb.enabled:
+                QMessageBox.information(self, 'Sincronizar',
+                    'Firebase no está activo. Verificá firebase_key.json.')
+                return
+            mw = self.get_main_window()
+            if mw and hasattr(mw, 'cloud_btn'):
+                # Usa el flujo nativo del MainWindow (descarga catálogo + ventas)
+                mw._open_cloud_menu()
+            else:
+                QMessageBox.information(self, 'Sincronizar',
+                    'Sincronización iniciada en background.')
+        except Exception as e:
+            QMessageBox.warning(self, 'Sincronizar', f'Error: {e}')
+
+    def _goto_caja(self):
+        try:
+            mw = self.get_main_window()
+            if mw and hasattr(mw, 'tabs') and hasattr(mw, 'cash_view') and mw.cash_view:
+                idx = mw.tabs.indexOf(mw.cash_view)
+                if idx >= 0:
+                    mw.tabs.setCurrentIndex(idx)
+        except Exception:
+            pass
+
 
     def _open_search_dialog(self):
         """Abre el diálogo de búsqueda ampliada de productos."""
@@ -1177,19 +1305,16 @@ class SalesView(QWidget):
         self._open_search_dialog_with_text(initial_text)
 
     def _open_search_dialog_with_text(self, text: str):
-        """Abre (o reusa) el diálogo ampliado con un texto inicial dado."""
+        """Abre Spotlight de búsqueda con texto inicial."""
         if hasattr(self, '_search_dialog') and self._search_dialog:
-            if text:
-                self._search_dialog.search_input.setText(text)
-            self._search_dialog.activateWindow()
-            self._search_dialog.raise_()
-            return
-        rubro = getattr(self, '_selected_category', None)
-        subcat = getattr(self, '_selected_subcategory', None)
-        dlg = ProductSearchDialog(
-            parent=self, db=self.db, initial_text=text or '',
-            rubro=rubro, subcategory=subcat, cart=list(self.cart)
-        )
+            try:
+                self._search_dialog.search_input.setText(text or '')
+                self._search_dialog.activateWindow()
+                self._search_dialog.raise_()
+                return
+            except Exception:
+                self._search_dialog = None
+        dlg = SpotlightDialog(parent=self, db=self.db, initial_text=text or '')
         dlg.product_selected.connect(self._on_product_selected_from_dialog)
         self._search_dialog = dlg
         dlg.exec_()
@@ -1237,14 +1362,14 @@ class SalesView(QWidget):
             self._history_popup.setStyleSheet('''
                 QListWidget {
                     background: white;
-                    border: 1.5px solid #ced4da;
+                    border: 1.5px solid #dcd6c8;
                     border-radius: 6px;
                     padding: 4px;
                     font-size: 12px;
                     outline: none;
                 }
-                QListWidget::item { padding: 6px 10px; border-radius: 4px; color: #495057; }
-                QListWidget::item:hover { background: #eef2ff; color: #4338ca; }
+                QListWidget::item { padding: 6px 10px; border-radius: 4px; color: #5a5448; }
+                QListWidget::item:hover { background: #fbeee5; color: #a3441a; }
                 QListWidget::item:selected { background: #e0e7ff; color: #3730a3; }
             ''')
             self._history_popup.itemClicked.connect(self._on_history_item_clicked)
@@ -1292,7 +1417,12 @@ class SalesView(QWidget):
             QTableWidget.keyPressEvent(self.products_table, event)
 
     def _on_barcode_scanned(self, code: str):
-        """Escáner automático detectado — agrega producto directamente sin tocar nada."""
+        """Escáner automático: SOLO agrega si hay match EXACTO por barcode/firebase_id.
+
+        Si no, abre el Spotlight con el texto. Evita agregar el primer producto
+        que matchee por nombre cuando el usuario tipeó rápido un nombre exacto
+        (que el BarcodeScanner detectó como escaneo).
+        """
         self.barcode_field.clear()
         self._hide_suggestions()
 
@@ -1305,32 +1435,16 @@ class SalesView(QWidget):
             )
             product = rows[0] if rows else None
 
-        # Si no hay coincidencia exacta, intentar búsqueda parcial
-        if not product:
-            products = self.product_model.get_all(search=code)
-            if products:
-                product = products[0]
-
         if product:
+            # Match exacto por código → agregar de una
             self.add_to_cart(product)
-            # Feedback visual breve en el indicador de sync
             self.sync_indicator.setText(f'Agregado: {product["name"]}')
             self.sync_indicator.setVisible(True)
             QTimer.singleShot(2000, lambda: self.sync_indicator.setVisible(False))
         else:
-            self.sync_indicator.setText(f'No encontrado: {code}')
-            self.sync_indicator.setStyleSheet(
-                'color: #dc3545; background: #fee2e2; border: 1px solid #fca5a5;'
-                'border-radius: 4px; padding: 2px 8px; font-weight: 600;'
-            )
-            self.sync_indicator.setVisible(True)
-            QTimer.singleShot(2500, lambda: (
-                self.sync_indicator.setVisible(False),
-                self.sync_indicator.setStyleSheet(
-                    'color: #198754; background: #d1fae5; border: 1px solid #6ee7b7;'
-                    'border-radius: 4px; padding: 2px 8px; font-weight: 600;'
-                )
-            ))
+            # No hay match exacto: abrir Spotlight con el texto, sin agregar
+            self._add_to_search_history(code)
+            self._open_search_dialog_with_text(code)
 
     @staticmethod
     def _normalize(text: str) -> str:
@@ -1385,40 +1499,48 @@ class SalesView(QWidget):
         return query, tuple(params)
 
     def _on_search_text_changed(self, text: str):
-        """Tipeo manual — buscar en BD, mostrar sugerencias Y auto-abrir diálogo ampliado."""
+        """Tipeo manual — debounced para no bloquear el input.
+
+        Cada keystroke programa una búsqueda diferida con QTimer(150ms);
+        si el usuario sigue escribiendo, el timer se reinicia. Esto evita
+        que letras se "pierdan" cuando se tipea rápido.
+        """
         text = text.strip()
-        # Ocultar popup de historial apenas el usuario empieza a escribir
         self._hide_history_popup()
+        # Cancelar búsqueda pendiente y programar nueva
+        if not hasattr(self, '_search_debounce_timer'):
+            self._search_debounce_timer = QTimer(self)
+            self._search_debounce_timer.setSingleShot(True)
+            self._search_debounce_timer.timeout.connect(self._do_search_debounced)
+        self._search_debounce_timer.start(150)
+
+        # Auto-abrir diálogo ampliado tras 1s de escribir
+        if not hasattr(self, '_auto_open_timer'):
+            self._auto_open_timer = QTimer(self)
+            self._auto_open_timer.setSingleShot(True)
+            self._auto_open_timer.timeout.connect(self._auto_open_search_dialog)
+        if len(text) >= 2:
+            self._auto_open_timer.start(1000)
+        else:
+            self._auto_open_timer.stop()
+
+    def _do_search_debounced(self):
+        """Ejecuta la búsqueda real una vez que el usuario para de tipear."""
+        text = self.barcode_field.text().strip()
         if len(text) < 1:
             self._hide_suggestions()
-            # Si hay un rubro/favoritos activos, mantener esa vista; si no, limpiar
             if not self._selected_category and not self.favorites_btn.isChecked():
                 self.products_table.clearSpans()
                 self.products_table.setRowCount(0)
                 self._all_products = []
             return
-
-        # Búsqueda fuzzy multi-palabra: el orden no importa, sin acentos
         try:
             query, params = self._build_fuzzy_query(text, limit=100)
             matches = self.db.execute_query(query, params) if query else []
         except Exception:
             matches = []
-
-        # ── Actualizar tabla de productos en tiempo real ──
         self._all_products = matches
         self._populate_products_table(matches)
-
-        # Auto-abrir diálogo de búsqueda ampliada después de 600ms de escribir
-        if not hasattr(self, '_auto_open_timer'):
-            self._auto_open_timer = QTimer(self)
-            self._auto_open_timer.setSingleShot(True)
-            self._auto_open_timer.timeout.connect(self._auto_open_search_dialog)
-        
-        if len(text) >= 2:  # Mínimo 2 caracteres
-            self._auto_open_timer.start(1000)  # 1000ms de debounce
-        else:
-            self._auto_open_timer.stop()
 
     def _auto_open_search_dialog(self):
         """Abre el diálogo de búsqueda ampliada si no está ya abierto."""
@@ -1448,7 +1570,7 @@ class SalesView(QWidget):
         btn_todos.setChecked(True)
         btn_todos.setProperty('rubro_name', '')
         btn_todos.setProperty('rubro_id', -1)
-        btn_todos.setStyleSheet(f'QPushButton{{{self._btn_on}}} QPushButton:hover{{background:#0b5ed7;}}')
+        btn_todos.setStyleSheet(f'QPushButton{{{self._btn_on}}} QPushButton:hover{{background:#a3441a;}}')
         btn_todos.clicked.connect(lambda checked, b=btn_todos: self._on_rubro_btn_clicked(b))
         self._rubros_layout.addWidget(btn_todos)
         self._category_buttons[''] = btn_todos
@@ -1465,7 +1587,7 @@ class SalesView(QWidget):
         btn.setCheckable(True)
         btn.setProperty('rubro_name', name)
         btn.setProperty('rubro_id', cat_id)
-        btn.setStyleSheet(f'QPushButton{{{self._btn_off}}} QPushButton:hover{{background:#e9ecef;}}')
+        btn.setStyleSheet(f'QPushButton{{{self._btn_off}}} QPushButton:hover{{background:#ece8df;}}')
         btn.clicked.connect(lambda checked, b=btn: self._on_rubro_btn_clicked(b))
         # Clic derecho para opciones de edición/borrado
         btn.setContextMenuPolicy(Qt.CustomContextMenu)
@@ -1478,11 +1600,11 @@ class SalesView(QWidget):
         # Desactivar todos los botones de rubro
         for btn in self._category_buttons.values():
             btn.setChecked(False)
-            btn.setStyleSheet(f'QPushButton{{{self._btn_off}}} QPushButton:hover{{background:#e9ecef;}}')
+            btn.setStyleSheet(f'QPushButton{{{self._btn_off}}} QPushButton:hover{{background:#ece8df;}}')
 
         # Activar el clickeado
         clicked_btn.setChecked(True)
-        clicked_btn.setStyleSheet(f'QPushButton{{{self._btn_on}}} QPushButton:hover{{background:#0b5ed7;}}')
+        clicked_btn.setStyleSheet(f'QPushButton{{{self._btn_on}}} QPushButton:hover{{background:#a3441a;}}')
 
         # Desactivar favoritos si estaban activos
         self.favorites_btn.setChecked(False)
@@ -1522,7 +1644,7 @@ class SalesView(QWidget):
                     f'{self._selected_category} — Elegí una categoría arriba o escribí para buscar'
                 )
                 hint_item.setTextAlignment(Qt.AlignCenter)
-                hint_item.setForeground(QColor('#6c757d'))
+                hint_item.setForeground(QColor('#6f6a5d'))
                 hint_item.setFont(QFont('Segoe UI', 11))
                 self.products_table.setItem(0, 0, hint_item)
         else:
@@ -1675,7 +1797,7 @@ class SalesView(QWidget):
                 if '' in self._category_buttons:
                     todos_btn = self._category_buttons['']
                     todos_btn.setChecked(True)
-                    todos_btn.setStyleSheet(f'QPushButton{{{self._btn_on}}} QPushButton:hover{{background:#0b5ed7;}}')
+                    todos_btn.setStyleSheet(f'QPushButton{{{self._btn_on}}} QPushButton:hover{{background:#a3441a;}}')
             QMessageBox.information(self, 'Éxito', f'Rubro "{name}" eliminado.')
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'No se pudo eliminar: {e}')
@@ -1695,7 +1817,7 @@ class SalesView(QWidget):
             # Deseleccionar rubros
             for btn in self._category_buttons.values():
                 btn.setChecked(False)
-                btn.setStyleSheet(f'QPushButton{{{self._btn_off}}} QPushButton:hover{{background:#e9ecef;}}')
+                btn.setStyleSheet(f'QPushButton{{{self._btn_off}}} QPushButton:hover{{background:#ece8df;}}')
             self._selected_category = None
             products = self.product_model.get_favorites()
             self._all_products = products
@@ -1707,7 +1829,7 @@ class SalesView(QWidget):
             if '' in self._category_buttons:
                 btn_todos = self._category_buttons['']
                 btn_todos.setChecked(True)
-                btn_todos.setStyleSheet(f'QPushButton{{{self._btn_on}}} QPushButton:hover{{background:#0b5ed7;}}')
+                btn_todos.setStyleSheet(f'QPushButton{{{self._btn_on}}} QPushButton:hover{{background:#a3441a;}}')
 
     def reset_category_filter(self):
         """Limpiar todos los filtros y la tabla."""
@@ -1720,10 +1842,10 @@ class SalesView(QWidget):
         for name, btn in self._category_buttons.items():
             if name == '':
                 btn.setChecked(True)
-                btn.setStyleSheet(f'QPushButton{{{self._btn_on}}} QPushButton:hover{{background:#0b5ed7;}}')
+                btn.setStyleSheet(f'QPushButton{{{self._btn_on}}} QPushButton:hover{{background:#a3441a;}}')
             else:
                 btn.setChecked(False)
-                btn.setStyleSheet(f'QPushButton{{{self._btn_off}}} QPushButton:hover{{background:#e9ecef;}}')
+                btn.setStyleSheet(f'QPushButton{{{self._btn_off}}} QPushButton:hover{{background:#ece8df;}}')
 
     def filter_products(self):
         """Alias para compatibilidad."""
@@ -1767,34 +1889,57 @@ class SalesView(QWidget):
 
         for row, product in enumerate(products):
             self.products_table.setRowHeight(row, 42)
+            es_conjunto = int(product.get('es_conjunto') or 0) == 1
+            tipo_lbl = (_CONJ_TIPOS.get((product.get('conjunto_tipo') or '').lower(), {})
+                        .get('label')) if es_conjunto else None
 
             # Col 0: Favorito
             fav_item = QTableWidgetItem('*' if product['is_favorite'] else '')
             fav_item.setTextAlignment(Qt.AlignCenter)
             fav_item.setFont(QFont('Segoe UI', 13, QFont.Bold))
-            fav_item.setForeground(QColor('#f59e0b') if product['is_favorite'] else QColor('#dee2e6'))
+            fav_item.setForeground(QColor('#c1521f') if product['is_favorite'] else QColor('#dcd6c8'))
             fav_item.setData(Qt.UserRole, product)
             self.products_table.setItem(row, 0, fav_item)
 
-            # Col 1: Nombre
+            # Col 1: Nombre (con badge "[Rollo]" / "[Pack]" / etc para productos conjunto)
+            badge_prefix = f'[{tipo_lbl}] ' if tipo_lbl else ''
             stock_val_name = product['stock']
-            if stock_val_name == 0:
+            if es_conjunto:
+                # Para conjunto, el "sin stock" se decide por conjunto_total, no por stock
+                ctotal = float(product.get('conjunto_total') or 0)
+                if ctotal <= 0:
+                    name_item = QTableWidgetItem(f"{badge_prefix}{product['name']}  [Sin stock]")
+                    name_item.setForeground(QColor('#a01616'))
+                else:
+                    name_item = QTableWidgetItem(f"{badge_prefix}{product['name']}")
+                    name_item.setForeground(QColor('#c1521f'))  # violeta del catálogo conjunto
+                name_item.setFont(QFont('Segoe UI', 10, QFont.Bold))
+            elif stock_val_name == 0:
                 name_item = QTableWidgetItem(f"{product['name']}  [Sin stock]")
                 name_item.setFont(QFont('Segoe UI', 10))
-                name_item.setForeground(QColor('#dc3545'))  # rojo legible
+                name_item.setForeground(QColor('#a01616'))  # rojo legible
             elif stock_val_name < 0:
                 name_item = QTableWidgetItem(f"{product['name']}  [Servicio]")
                 name_item.setFont(QFont('Segoe UI', 10))
-                name_item.setForeground(QColor('#0d6efd'))
+                name_item.setForeground(QColor('#c1521f'))
             else:
                 name_item = QTableWidgetItem(product['name'])
                 name_item.setFont(QFont('Segoe UI', 10))
+            if es_conjunto:
+                u_short = _CONJ_UNIDADES.get(
+                    (product.get('conjunto_unidad_medida') or '').lower(), {}
+                ).get('short', '')
+                name_item.setToolTip(
+                    f'{tipo_lbl} · {product.get("conjunto_unidades") or 0:g} cerrado(s) + '
+                    f'{product.get("conjunto_restante") or 0:g}{u_short} abierto = '
+                    f'{product.get("conjunto_total") or 0:g}{u_short}'
+                )
             self.products_table.setItem(row, 1, name_item)
 
             # Col 2: Codigo de barras
             barcode_item = QTableWidgetItem(str(product.get('barcode') or ''))
             barcode_item.setFont(QFont('Courier New', 9))
-            barcode_item.setForeground(QColor('#6c757d'))
+            barcode_item.setForeground(QColor('#6f6a5d'))
             barcode_item.setTextAlignment(Qt.AlignCenter)
             self.products_table.setItem(row, 2, barcode_item)
 
@@ -1805,25 +1950,50 @@ class SalesView(QWidget):
             self.products_table.setItem(row, 3, price_item)
 
             # Col 4: Stock
-            stock_val = product['stock']
-            stock_item = QTableWidgetItem(str(stock_val))
-            stock_item.setTextAlignment(Qt.AlignCenter)
-            if stock_val <= 0:
-                stock_item.setForeground(QColor('#dc3545'))
-                stock_item.setFont(QFont('Segoe UI', 10, QFont.Bold))
-            elif stock_val < 5:
-                stock_item.setForeground(QColor('#f59e0b'))
+            if es_conjunto:
+                ctotal = float(product.get('conjunto_total') or 0)
+                u_short = _CONJ_UNIDADES.get(
+                    (product.get('conjunto_unidad_medida') or '').lower(), {}
+                ).get('short', '')
+                txt = f'{int(ctotal) if abs(ctotal - round(ctotal)) < 1e-9 else round(ctotal, 2)}{u_short}'
+                stock_item = QTableWidgetItem(txt)
+                stock_item.setTextAlignment(Qt.AlignCenter)
+                if ctotal <= 0:
+                    stock_item.setForeground(QColor('#a01616'))
+                else:
+                    stock_item.setForeground(QColor('#c1521f'))
                 stock_item.setFont(QFont('Segoe UI', 10, QFont.Bold))
             else:
-                stock_item.setFont(QFont('Segoe UI', 10))
+                stock_val = product['stock']
+                stock_item = QTableWidgetItem(str(stock_val))
+                stock_item.setTextAlignment(Qt.AlignCenter)
+                if stock_val <= 0:
+                    stock_item.setForeground(QColor('#a01616'))
+                    stock_item.setFont(QFont('Segoe UI', 10, QFont.Bold))
+                elif stock_val < 5:
+                    stock_item.setForeground(QColor('#c1521f'))
+                    stock_item.setFont(QFont('Segoe UI', 10, QFont.Bold))
+                else:
+                    stock_item.setFont(QFont('Segoe UI', 10))
             self.products_table.setItem(row, 4, stock_item)
 
     def search_product(self):
         """Búsqueda manual (Enter en el campo o botón Buscar)."""
+        # Guard: bloquear re-entrada para que un doble-click no agregue 2x.
+        if getattr(self, '_searching_now', False):
+            return
         search_text = self.barcode_field.text().strip()
         if not search_text:
             return
+        self._searching_now = True
+        try:
+            self._search_product_impl(search_text)
+        finally:
+            # Permitir nuevo search 250ms después (suficiente para limpiar input
+            # y descartar clicks en ráfaga, no bloquea ventas legítimas seguidas)
+            QTimer.singleShot(250, lambda: setattr(self, '_searching_now', False))
 
+    def _search_product_impl(self, search_text):
         self._hide_suggestions()
         self._hide_history_popup()
 
@@ -1959,6 +2129,11 @@ class SalesView(QWidget):
             )
             return
 
+        # Producto Conjunto (rollo / pack / caja / etc.) → diálogo táctil que pregunta cuánto vender
+        if int(product.get('es_conjunto') or 0) == 1:
+            self._add_conjunto_to_cart(product)
+            return
+
         stock = product['stock']
         # Stock -1 = servicio/ilimitado (sin control de stock)
         is_unlimited = (stock is None or stock == -1)
@@ -1994,8 +2169,65 @@ class SalesView(QWidget):
         })
 
         self.update_cart_display()
-        
+
+    def _add_conjunto_to_cart(self, product):
+        """Abre el ConjuntoDialog y agrega el resultado como ítem del carrito.
+
+        Cada venta de conjunto va como un ítem independiente (no se acumula
+        con otras del mismo producto), porque cada una baja stock distinto
+        del par (unidades cerradas, restante abierto).
+        """
+        dlg = ConjuntoDialog(product, parent=self)
+        if dlg.exec_() != QDialog.Accepted or not dlg.result_data:
+            return
+        r = dlg.result_data
+
+        u_short = _CONJ_UNIDADES[dlg.unidad_base]['short']
+        venta_short = _CONJ_UNIDADES.get(r['unidad_venta'], {}).get('short', u_short)
+        tipo_label = _CONJ_TIPOS.get(dlg.tipo, {}).get('label', 'Conjunto')
+
+        if r['vender_por'] == 'conjunto':
+            descripcion = f'{_fmt_qty(r["cantidad"])} {tipo_label.lower()}(s)'
+        elif r['vender_por'] == 'unidad':
+            descripcion = f'{_fmt_qty(r["cantidad"])} u'
+        else:
+            descripcion = f'{_fmt_qty(r["cantidad"])} {venta_short}'
+
+        nombre_largo = f'{product["name"]}  ·  {descripcion}'
+        precio_total = float(r['precio_total'])
+
+        self.cart.append({
+            'product_id':    product['id'],
+            'product_name':  nombre_largo,
+            # Los items conjunto siempre cuentan como 1 línea (la cantidad real
+            # está en cantidad_conjunto). Esto evita romper el resto de la UI
+            # que asume quantity entera.
+            'quantity':         1,
+            'unit_price':       precio_total,
+            'original_price':   precio_total,
+            'discount_type':    None,
+            'discount_value':   0,
+            'discount_amount':  0,
+            'promo_id':         None,
+            'promo_label':      '',
+            'subtotal':         precio_total,
+            'max_stock':        9999,
+            'category':         product.get('category'),
+            # Flags / payload conjunto (consumidos por el descuento de stock al cerrar venta)
+            'is_conjunto':            True,
+            'conjunto_tipo':          dlg.tipo,
+            'conjunto_unidad_base':   dlg.unidad_base,
+            'conjunto_cantidad':      r['cantidad'],
+            'conjunto_unidad_venta':  r['unidad_venta'],
+            'conjunto_cantidad_base': r['cantidad_base'],
+            'conjunto_vender_por':    r['vender_por'],
+            'conjunto_after_unidades': r['after_unidades'],
+            'conjunto_after_restante': r['after_restante'],
+        })
+        self.update_cart_display()
+
     def update_cart_display(self):
+        from pos_system.ui.theme import COLORS as _T
         self.cart_table.setRowCount(len(self.cart))
         total = 0
 
@@ -2008,100 +2240,118 @@ class SalesView(QWidget):
             has_discount = item.get('discount_amount', 0) > 0
             self.cart_table.setRowHeight(row, 44)
 
-            # Col 0: Nombre producto
+            # Col 0: Nombre producto (con sub-línea de promo cuando aplica)
             name_text = item['product_name']
             promo_label = item.get('promo_label', '')
-            name_item = QTableWidgetItem(name_text)
-            name_item.setFont(QFont('Segoe UI', 9, QFont.Bold if has_discount else QFont.Normal))
-            if has_discount:
-                name_item.setForeground(QColor('#198754'))
-            name_item.setToolTip(f'{name_text}{(" | " + promo_label) if promo_label else ""}')
-            self.cart_table.setItem(row, 0, name_item)
-
-            # Col 1: Descuento — muestra cuánto se ahorra en total (unit_discount * qty)
             if has_discount:
                 orig = item.get('original_price', item['unit_price'])
                 disc_total = (orig - item['unit_price']) * item['quantity']
-                promo_label_tip = item.get('promo_label', '')
-                disc_lbl = QLabel(
-                    f'<div style="text-align:center;">'
-                    f'<span style="color:#198754;font-size:9px;font-weight:bold;">DESCUENTO</span><br>'
-                    f'<b style="color:#dc3545;font-size:12px;">-${disc_total:,.0f}</b>'
-                    f'</div>'
+                w = QWidget()
+                wl = QVBoxLayout(w); wl.setContentsMargins(12, 4, 8, 4); wl.setSpacing(2)
+                n = QLabel(name_text)
+                n.setStyleSheet(
+                    f"color:{_T['text']}; font-size:12px; font-weight:600;"
+                    f" background:transparent; border:none;"
                 )
-                disc_lbl.setAlignment(Qt.AlignCenter)
-                disc_lbl.setWordWrap(True)
-                disc_lbl.setStyleSheet('background:transparent; padding:1px 2px;')
-                disc_lbl.setToolTip(promo_label_tip)
-                self.cart_table.setCellWidget(row, 1, disc_lbl)
+                tag = (promo_label or 'Promo').upper()[:24]
+                sub = QLabel(f"<span style='color:{_T['accent']};'>● {tag}</span>"
+                             f"  <span style='color:{_T['text_muted']};'>·</span>"
+                             f"  <b style='color:{_T['accent']};font-family:\"JetBrains Mono\",Consolas,monospace;'>"
+                             f"-${disc_total:,.0f}</b>")
+                sub.setStyleSheet(f"font-size:10px; background:transparent; border:none;")
+                sub.setToolTip(promo_label or 'Descuento aplicado')
+                wl.addWidget(n); wl.addWidget(sub); wl.addStretch(1)
+                self.cart_table.setCellWidget(row, 0, w)
+                self.cart_table.setItem(row, 0, QTableWidgetItem(''))
+                self.cart_table.setRowHeight(row, 56)
             else:
-                # IMPORTANTE: removeCellWidget primero — sin esto el QLabel anterior
-                # queda visible aunque setItem ponga un text-item vacío encima.
-                self.cart_table.removeCellWidget(row, 1)
-                disc_item = QTableWidgetItem('')
-                disc_item.setTextAlignment(Qt.AlignCenter)
-                self.cart_table.setItem(row, 1, disc_item)
+                self.cart_table.removeCellWidget(row, 0)
+                name_item = QTableWidgetItem(name_text)
+                name_item.setFont(QFont('Segoe UI', 10))
+                name_item.setForeground(QColor(_T['text']))
+                name_item.setToolTip(name_text)
+                self.cart_table.setItem(row, 0, name_item)
 
-            # Col 2: Precio final (con descuento aplicado)
-            price_item = QTableWidgetItem(f'${item["unit_price"]:,.0f}')
-            price_item.setTextAlignment(Qt.AlignCenter)
-            price_item.setFont(QFont('Segoe UI', 10, QFont.Bold if has_discount else QFont.Normal))
-            if has_discount:
-                price_item.setForeground(QColor('#dc3545'))
-            self.cart_table.setItem(row, 2, price_item)
-
-            # Col 3: Cantidad (DoubleSpinBox: acepta decimales, p.ej. 0.3 = fraccion)
+            # Col 1: Cantidad (DoubleSpinBox)
             qty_spin = CartQuantitySpinBox()
-            # Minimum=0 para permitir estados transitorios al tipear "0,5"
-            # (el 0 inicial). En update_quantity se ignoran valores <=0.
             qty_spin.setMinimum(0.0)
             max_stock = item.get('max_stock', 0)
             qty_spin.setMaximum(float(max_stock) if max_stock and max_stock > 0 else 9999.0)
             qty_spin.setValue(float(item['quantity']))
             qty_spin.setFixedHeight(32)
-            qty_spin.setFont(QFont('Segoe UI', 10, QFont.Bold))
-            qty_spin.setStyleSheet('''
-                QSpinBox {
-                    font-size: 12px; padding: 2px 2px;
-                    border: 1.5px solid #ced4da; border-radius: 5px; background: #fff;
-                }
-                QSpinBox:focus { border-color: #4361ee; }
-                QSpinBox::up-button   { width: 18px; }
-                QSpinBox::down-button { width: 18px; }
-            ''')
+            qty_spin.setFont(QFont('Segoe UI', 11, QFont.Bold))
+            qty_spin.setAlignment(Qt.AlignCenter)
+            qty_spin.setStyleSheet(
+                f"QDoubleSpinBox, QSpinBox {{"
+                f" font-size:12px; padding:2px 6px;"
+                f" border:1px solid {_T['border']}; border-radius:5px;"
+                f" background:{_T['surface']}; color:{_T['text']};"
+                f" font-family:'JetBrains Mono', Consolas, monospace;"
+                f"}}"
+                f"QDoubleSpinBox:focus, QSpinBox:focus {{ border-color:{_T['accent']}; }}"
+                f"QDoubleSpinBox::up-button, QSpinBox::up-button {{ width:16px; }}"
+                f"QDoubleSpinBox::down-button, QSpinBox::down-button {{ width:16px; }}"
+            )
             qty_spin.valueChanged.connect(lambda v, r=row: self.update_quantity(r, v))
-            self.cart_table.setCellWidget(row, 3, qty_spin)
+            self.cart_table.setCellWidget(row, 1, qty_spin)
 
-            # Col 4: Subtotal (clickeable para editar precio)
-            subtotal_item = QTableWidgetItem(f'${item["subtotal"]:,.0f}')
-            subtotal_item.setTextAlignment(Qt.AlignCenter)
-            subtotal_item.setFont(QFont('Segoe UI', 10, QFont.Bold))
-            subtotal_item.setToolTip('Clic para editar el precio')
+            # Col 2: Subtotal (con precio tachado arriba si hay descuento)
             if has_discount:
-                subtotal_item.setForeground(QColor('#dc3545'))
+                orig = item.get('original_price', item['unit_price'])
+                orig_total = orig * item['quantity']
+                self.cart_table.removeCellWidget(row, 2)
+                w = QWidget()
+                wl = QVBoxLayout(w); wl.setContentsMargins(8, 4, 12, 4); wl.setSpacing(0)
+                wl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                strike = QLabel(f"<s>${orig_total:,.0f}</s>")
+                strike.setStyleSheet(
+                    f"color:{_T['text_dim']}; font-size:10px; background:transparent;"
+                    f" border:none; font-family:'JetBrains Mono', Consolas, monospace;"
+                )
+                strike.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                final = QLabel(f"${item['subtotal']:,.0f}")
+                final.setStyleSheet(
+                    f"color:{_T['accent']}; font-size:13px; font-weight:700; background:transparent;"
+                    f" border:none; font-family:'JetBrains Mono', Consolas, monospace;"
+                )
+                final.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                wl.addWidget(strike); wl.addWidget(final)
+                self.cart_table.setCellWidget(row, 2, w)
+                self.cart_table.setItem(row, 2, QTableWidgetItem(''))
             else:
-                subtotal_item.setForeground(QColor('#0d6efd'))
-            self.cart_table.setItem(row, 4, subtotal_item)
+                self.cart_table.removeCellWidget(row, 2)
+                subtotal_item = QTableWidgetItem(f'${item["subtotal"]:,.0f}')
+                subtotal_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                subtotal_item.setFont(QFont('Consolas', 11, QFont.Bold))
+                subtotal_item.setToolTip('Clic para editar el precio')
+                subtotal_item.setForeground(QColor(_T['text']))
+                self.cart_table.setItem(row, 2, subtotal_item)
 
-            # Col 5: Botón quitar
+            # Col 3: Botón quitar (×)
             rm_container = QWidget()
             rm_layout = QHBoxLayout(rm_container)
             rm_layout.setContentsMargins(0, 0, 0, 0)
             rm_layout.setAlignment(Qt.AlignCenter)
-
-            rm_btn = QPushButton('X')
-            rm_btn.setFixedSize(28, 28)
-            rm_btn.setStyleSheet('''
-                QPushButton {
-                    background: #dc3545; color: white;
-                    border: none; border-radius: 14px;
-                    font-weight: bold; font-size: 11px;
-                }
-                QPushButton:hover { background: #bb2d3b; }
-            ''')
+            rm_btn = QPushButton('Quitar')
+            rm_btn.setFixedSize(60, 30)
+            rm_btn.setCursor(Qt.PointingHandCursor)
+            rm_btn.setFont(QFont('Segoe UI', 9, QFont.Bold))
+            rm_btn.setStyleSheet(
+                "QPushButton {"
+                "  background-color: #ffffff;"
+                "  color: #a01616;"
+                "  border: 1px solid #a01616;"
+                "  border-radius: 5px;"
+                "  padding: 0;"
+                "}"
+                "QPushButton:hover {"
+                "  background-color: #a01616;"
+                "  color: #ffffff;"
+                "}"
+            )
             rm_btn.clicked.connect(lambda checked, r=row: self.remove_from_cart(r))
             rm_layout.addWidget(rm_btn)
-            self.cart_table.setCellWidget(row, 5, rm_container)
+            self.cart_table.setCellWidget(row, 3, rm_container)
 
             total += item['subtotal']
 
@@ -2111,9 +2361,9 @@ class SalesView(QWidget):
         total_discount = sum(item.get('discount_amount', 0) for item in self.cart)
         if total_discount > 0:
             self.total_amount_label.setText(
-                f'<span style="font-size:12px;color:#6ee7b7;font-weight:normal;">'
+                f'<span style="font-size:12px;color:#3d7a3a;font-weight:normal;">'
                 f'Ahorro: ${total_discount:,.2f}</span><br>'
-                f'<b style="color:#4ade80;font-size:{font_size}px;">{total_str}</b>'
+                f'<b style="color:#3d7a3a;font-size:{font_size}px;">{total_str}</b>'
             )
             self.total_amount_label.setTextFormat(Qt.RichText)
         else:
@@ -2125,14 +2375,39 @@ class SalesView(QWidget):
 
     def _update_promo_hints(self):
         """
-        Muestra avisos discretos cuando una promoción de Firebase está cerca de activarse.
-        Por ejemplo: '🏷️ Agregá 2 más de Shampú para activar el 3x2'.
-        Solo muestra hints para promos que AÚN NO están activas (cantidad_minima no alcanzada).
+        Muestra dos tipos de avisos en el cartel:
+        1. Descuentos APLICADOS al carrito ('Promo activa: -20% en Cuaderno · ahorrás $560').
+        2. Promos Firebase CERCANAS ('Agregá 2 más de Shampú para activar el 3x2').
         """
         if not hasattr(self, '_promo_hint_lbl'):
             return
+        from pos_system.ui.theme import COLORS as _T
 
         hints = []
+        active_lines = []
+        total_savings = 0.0
+        for it in self.cart:
+            disc = float(it.get('discount_amount') or 0)
+            if disc <= 0:
+                continue
+            total_savings += disc
+            label = it.get('promo_label') or '−'
+            name = it.get('product_name', '')[:32]
+            active_lines.append(
+                f'<span style="color:{_T["accent"]};font-weight:700;">●</span> '
+                f'<b>{name}</b> '
+                f'<span style="color:{_T["accent"]};font-family:\'JetBrains Mono\',Consolas,monospace;">'
+                f'{label}</span> '
+                f'<span style="color:{_T["text_muted"]};">·</span> '
+                f'<span style="color:{_T["accent"]};font-family:\'JetBrains Mono\',Consolas,monospace;">'
+                f'-${disc:,.0f}</span>'
+            )
+        if active_lines:
+            header = (
+                f'<span style="color:{_T["accent"]};font-weight:700;">'
+                f'PROMOS APLICADAS · ahorrás ${total_savings:,.0f}</span>'
+            )
+            hints.append(header + '<br>' + '<br>'.join(active_lines))
 
         # Construir mapa producto → cantidad en carrito
         cart_qty = {}      # product_id → qty
@@ -2205,12 +2480,22 @@ class SalesView(QWidget):
                     desc_txt = nombre_promo
 
                 unidad = 'unidad' if faltan == 1 else 'unidades'
-                hint = f'🏷️  Agregá {faltan} {unidad} más de <b>{name}</b> para activar <b>{desc_txt}</b>'
+                hint = f'Agregá {faltan} {unidad} más de <b>{name}</b> para activar <b>{desc_txt}</b>'
                 if nombre_promo and nombre_promo != desc_txt:
                     hint += f' ({nombre_promo})'
                 hints.append(hint)
 
         if hints:
+            from pos_system.ui.theme import COLORS as _T2
+            # Si hay descuentos APLICADOS pinto en accent, si solo hay hints faltantes en warning
+            if active_lines:
+                bg = _T2['accent_soft']; bd = _T2['accent']; fg = _T2['text']
+            else:
+                bg = _T2['warning_bg']; bd = _T2['warning']; fg = _T2['warning']
+            self._promo_hint_lbl.setStyleSheet(
+                f"QLabel {{ background:{bg}; border:1px solid {bd};"
+                f" border-radius:6px; padding:8px 12px; color:{fg}; font-size:11px; }}"
+            )
             self._promo_hint_lbl.setText('<br>'.join(hints))
             self._promo_hint_lbl.setTextFormat(Qt.RichText)
             self._promo_hint_lbl.setVisible(True)
@@ -2261,52 +2546,81 @@ class SalesView(QWidget):
             self._refresh_cart_totals(row)
 
     def _refresh_cart_row_pricing(self, row, item):
-        """Actualiza in-place las celdas de descuento, precio y subtotal de UNA fila.
-        NO toca el QSpinBox de cantidad → preserva caret y foco mientras el cajero tipea.
+        """Actualiza in-place las celdas Producto (col 0) y Subtotal (col 2) de UNA fila.
+        NO toca col 1 (spinbox cantidad) → preserva caret y foco mientras el cajero tipea.
         Útil cuando una promo se activa/desactiva por cambio de cantidad."""
         if row >= self.cart_table.rowCount() or row >= len(self.cart):
             return
+        from pos_system.ui.theme import COLORS as _T
 
         has_discount = item.get('discount_amount', 0) > 0
         promo_label = item.get('promo_label', '')
+        name_text = item['product_name']
 
-        # Col 0: nombre — actualizar fuente/color
-        name_item = self.cart_table.item(row, 0)
-        if name_item:
-            name_item.setFont(QFont('Segoe UI', 9, QFont.Bold if has_discount else QFont.Normal))
-            name_item.setForeground(QColor('#198754') if has_discount else QColor('#000000'))
-            name_item.setToolTip(f'{item["product_name"]}{(" | " + promo_label) if promo_label else ""}')
-
-        # Col 1: descuento — recreate QLabel o text item vacío
+        # ── Col 0: Producto (nombre + sub-línea promo si aplica) ──
         if has_discount:
             orig = item.get('original_price', item['unit_price'])
             disc_total = (orig - item['unit_price']) * item['quantity']
-            disc_lbl = QLabel(
-                f'<div style="text-align:center;">'
-                f'<span style="color:#198754;font-size:9px;font-weight:bold;">DESCUENTO</span><br>'
-                f'<b style="color:#dc3545;font-size:12px;">-${disc_total:,.0f}</b>'
-                f'</div>'
+            w = QWidget()
+            wl = QVBoxLayout(w); wl.setContentsMargins(12, 4, 8, 4); wl.setSpacing(2)
+            n = QLabel(name_text)
+            n.setStyleSheet(
+                f"color:{_T['text']}; font-size:12px; font-weight:600;"
+                f" background:transparent; border:none;"
             )
-            disc_lbl.setAlignment(Qt.AlignCenter)
-            disc_lbl.setWordWrap(True)
-            disc_lbl.setStyleSheet('background:transparent; padding:1px 2px;')
-            disc_lbl.setToolTip(promo_label)
-            self.cart_table.setCellWidget(row, 1, disc_lbl)
+            tag = (promo_label or 'Promo').upper()[:24]
+            sub = QLabel(
+                f"<span style='color:{_T['accent']};'>● {tag}</span>"
+                f"  <span style='color:{_T['text_muted']};'>·</span>"
+                f"  <b style='color:{_T['accent']};font-family:\"JetBrains Mono\",Consolas,monospace;'>"
+                f"-${disc_total:,.0f}</b>"
+            )
+            sub.setStyleSheet(f"font-size:10px; background:transparent; border:none;")
+            sub.setToolTip(promo_label or 'Descuento aplicado')
+            wl.addWidget(n); wl.addWidget(sub); wl.addStretch(1)
+            self.cart_table.setCellWidget(row, 0, w)
+            self.cart_table.setItem(row, 0, QTableWidgetItem(''))
+            self.cart_table.setRowHeight(row, 56)
         else:
-            # IMPORTANTE: removeCellWidget primero (sino el QLabel anterior queda visible)
-            self.cart_table.removeCellWidget(row, 1)
-            disc_item = QTableWidgetItem('')
-            disc_item.setTextAlignment(Qt.AlignCenter)
-            self.cart_table.setItem(row, 1, disc_item)
+            self.cart_table.removeCellWidget(row, 0)
+            name_item = QTableWidgetItem(name_text)
+            name_item.setFont(QFont('Segoe UI', 10))
+            name_item.setForeground(QColor(_T['text']))
+            name_item.setToolTip(name_text)
+            self.cart_table.setItem(row, 0, name_item)
+            self.cart_table.setRowHeight(row, 44)
 
-        # Col 2: precio unitario
-        price_item = self.cart_table.item(row, 2)
-        if price_item:
-            price_item.setText(f'${item["unit_price"]:,.0f}')
-            price_item.setFont(QFont('Segoe UI', 10, QFont.Bold if has_discount else QFont.Normal))
-            price_item.setForeground(QColor('#dc3545') if has_discount else QColor('#000000'))
+        # ── Col 2: Subtotal (con tachado del precio original si hay descuento) ──
+        if has_discount:
+            orig = item.get('original_price', item['unit_price'])
+            orig_total = orig * item['quantity']
+            self.cart_table.removeCellWidget(row, 2)
+            w = QWidget()
+            wl = QVBoxLayout(w); wl.setContentsMargins(8, 4, 12, 4); wl.setSpacing(0)
+            wl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            strike = QLabel(f"<s>${orig_total:,.0f}</s>")
+            strike.setStyleSheet(
+                f"color:{_T['text_dim']}; font-size:10px; background:transparent;"
+                f" border:none; font-family:'JetBrains Mono', Consolas, monospace;"
+            )
+            strike.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            final = QLabel(f"${item['subtotal']:,.0f}")
+            final.setStyleSheet(
+                f"color:{_T['accent']}; font-size:13px; font-weight:700; background:transparent;"
+                f" border:none; font-family:'JetBrains Mono', Consolas, monospace;"
+            )
+            final.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            wl.addWidget(strike); wl.addWidget(final)
+            self.cart_table.setCellWidget(row, 2, w)
+            self.cart_table.setItem(row, 2, QTableWidgetItem(''))
+        else:
+            self.cart_table.removeCellWidget(row, 2)
+            sub_item = QTableWidgetItem(f'${item["subtotal"]:,.0f}')
+            sub_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            sub_item.setFont(QFont('Consolas', 11, QFont.Bold))
+            sub_item.setForeground(QColor(_T['text']))
+            self.cart_table.setItem(row, 2, sub_item)
 
-        # Col 4: subtotal + total global
         self._refresh_cart_totals(row)
 
     def _refresh_cart_totals(self, row=None):
@@ -2315,9 +2629,13 @@ class SalesView(QWidget):
         mientras el cajero sigue tipeando."""
         if row is not None and row < len(self.cart):
             item = self.cart[row]
-            sub_it = self.cart_table.item(row, 4)
-            if sub_it:
-                sub_it.setText(f'${item["subtotal"]:,.0f}')
+            # Si la fila NO tiene cellWidget en col 2 (sin descuento), actualizamos el
+            # text item simple. Si tiene widget (con descuento), no lo tocamos acá —
+            # _refresh_cart_row_pricing ya lo manejó.
+            if self.cart_table.cellWidget(row, 2) is None:
+                sub_it = self.cart_table.item(row, 2)
+                if sub_it:
+                    sub_it.setText(f'${item["subtotal"]:,.0f}')
         # Total y contador
         total = sum(item['subtotal'] for item in self.cart)
         total_items = sum(float(item['quantity']) for item in self.cart)
@@ -2328,9 +2646,9 @@ class SalesView(QWidget):
         total_discount = sum(item.get('discount_amount', 0) for item in self.cart)
         if total_discount > 0:
             self.total_amount_label.setText(
-                f'<span style="font-size:12px;color:#6ee7b7;font-weight:normal;">'
+                f'<span style="font-size:12px;color:#3d7a3a;font-weight:normal;">'
                 f'Ahorro: ${total_discount:,.2f}</span><br>'
-                f'<b style="color:#4ade80;font-size:{font_size}px;">{total_str}</b>'
+                f'<b style="color:#3d7a3a;font-size:{font_size}px;">{total_str}</b>'
             )
             self.total_amount_label.setTextFormat(Qt.RichText)
         else:
@@ -2348,8 +2666,8 @@ class SalesView(QWidget):
             self.update_cart_display()
 
     def _on_cart_cell_clicked(self, row, col):
-        """Click en col 4 (Subtotal) o col 2 (Precio) abre dialog para editar el precio unitario."""
-        if col not in (2, 4):
+        """Click en col 2 (Subtotal) abre dialog para editar el precio unitario."""
+        if col != 2:
             return
         if row >= len(self.cart):
             return
@@ -2365,7 +2683,7 @@ class SalesView(QWidget):
         layout.setContentsMargins(16, 16, 16, 16)
 
         lbl = QLabel(f'<b>{item["product_name"]}</b><br>'
-                     f'<span style="color:#6c757d;font-size:11px;">Precio actual: ${current_price:,.0f}</span>')
+                     f'<span style="color:#6f6a5d;font-size:11px;">Precio actual: ${current_price:,.0f}</span>')
         lbl.setWordWrap(True)
         layout.addWidget(lbl)
 
@@ -2378,18 +2696,26 @@ class SalesView(QWidget):
         price_spin.setPrefix('$ ')
         price_spin.setFont(QFont('Segoe UI', 13, QFont.Bold))
         price_spin.setMinimumHeight(44)
-        price_spin.setStyleSheet('QDoubleSpinBox { border: 2px solid #0d6efd; border-radius: 6px; padding: 4px 8px; }')
-        price_spin.selectAll()
+        price_spin.setStyleSheet('QDoubleSpinBox { border: 2px solid #c1521f; border-radius: 6px; padding: 4px 8px; }')
+        # Si el precio actual es 0 (caso Varios 2 recién creado), dejar el campo
+        # vacío para que el cajero tipee directamente sin tener que borrar el "0".
+        if current_price <= 0:
+            try:
+                price_spin.lineEdit().clear()
+            except Exception:
+                pass
+        else:
+            price_spin.selectAll()
         layout.addWidget(price_spin)
 
         obs_lbl = QLabel('Observación (opcional):')
-        obs_lbl.setStyleSheet('color:#495057;font-size:11px;margin-top:4px')
+        obs_lbl.setStyleSheet('color:#5a5448;font-size:11px;margin-top:4px')
         layout.addWidget(obs_lbl)
         obs_input = QTextEdit()
         obs_input.setPlainText(item.get('observation', '') or '')
         obs_input.setPlaceholderText('Ej: detalle, aclaración, nota del producto...')
         obs_input.setMaximumHeight(64)
-        obs_input.setStyleSheet('QTextEdit { border: 1px solid #ced4da; border-radius: 6px; padding: 4px 6px; }')
+        obs_input.setStyleSheet('QTextEdit { border: 1px solid #dcd6c8; border-radius: 6px; padding: 4px 6px; }')
         layout.addWidget(obs_input)
 
         btn_row = QHBoxLayout()
@@ -2699,12 +3025,9 @@ class SalesView(QWidget):
             )
             return
 
-        from PyQt5.QtWidgets import QInputDialog
-        unit_price, ok = QInputDialog.getDouble(
-            self, 'Varios 2 — Solo Factura AFIP',
-            'Monto a facturar:', 0.0, 0.0, 99999999.0, 2
-        )
-        if not ok or unit_price <= 0:
+        # Mini-dialog custom: campo arranca VACÍO (no con 0,00 default).
+        unit_price = self._ask_varios2_amount()
+        if unit_price is None or unit_price <= 0:
             return
 
         cart_item = {
@@ -2725,6 +3048,73 @@ class SalesView(QWidget):
         }
         self.cart.append(cart_item)
         self.update_cart_display()
+
+    def _ask_varios2_amount(self):
+        """Mini-dialog para pedir el monto de Varios 2 con campo vacío inicial."""
+        from PyQt5.QtGui import QDoubleValidator
+        from pos_system.ui.theme import COLORS as _C
+        dlg = QDialog(self)
+        dlg.setWindowTitle('Varios 2 — Solo Factura AFIP')
+        dlg.setWindowFlags(dlg.windowFlags() & ~Qt.WindowContextHelpButtonHint)
+        dlg.setFixedWidth(340)
+        dlg.setStyleSheet(f"QDialog {{ background:{_C['bg']}; }}")
+        lay = QVBoxLayout(dlg)
+        lay.setContentsMargins(20, 20, 20, 16)
+        lay.setSpacing(12)
+
+        lbl = QLabel('Monto a facturar')
+        lbl.setStyleSheet(
+            f"color:{_C['text_muted']}; font-size:10px; font-weight:700;"
+            f" letter-spacing:0.5px; background:transparent; border:none;"
+        )
+        lay.addWidget(lbl)
+
+        inp = QLineEdit()
+        inp.setPlaceholderText('Ej: 5000')
+        inp.setMinimumHeight(46)
+        inp.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        inp.setStyleSheet(
+            f"QLineEdit {{ background:{_C['surface']}; border:2px solid {_C['accent']};"
+            f" border-radius:8px; padding:6px 14px; color:{_C['text']};"
+            f" font-size:20px; font-weight:700;"
+            f" font-family:'Consolas','JetBrains Mono',monospace; }}"
+        )
+        v = QDoubleValidator(0.0, 99_999_999.0, 2, dlg)
+        v.setNotation(QDoubleValidator.StandardNotation)
+        inp.setValidator(v)
+        lay.addWidget(inp)
+
+        btn_row = QHBoxLayout(); btn_row.setSpacing(8)
+        cancel = QPushButton('Cancelar')
+        cancel.setMinimumHeight(36)
+        cancel.setStyleSheet(
+            f"QPushButton {{ background:{_C['surface']}; color:{_C['text']};"
+            f" border:1px solid {_C['border']}; border-radius:6px; padding:6px 18px; font-weight:600; }}"
+            f"QPushButton:hover {{ background:{_C['surface_alt']}; }}"
+        )
+        cancel.clicked.connect(dlg.reject)
+        ok = QPushButton('Agregar')
+        ok.setMinimumHeight(36)
+        ok.setDefault(True)
+        ok.setStyleSheet(
+            f"QPushButton {{ background:{_C['accent']}; color:white;"
+            f" border:none; border-radius:6px; padding:6px 22px; font-weight:700; }}"
+            f"QPushButton:hover {{ background:{_C['accent_hover']}; }}"
+        )
+        ok.clicked.connect(dlg.accept)
+        btn_row.addStretch(1); btn_row.addWidget(cancel); btn_row.addWidget(ok)
+        lay.addLayout(btn_row)
+
+        inp.setFocus()
+        if dlg.exec_() != QDialog.Accepted:
+            return None
+        txt = inp.text().strip().replace(',', '.')
+        if not txt:
+            return None
+        try:
+            return float(txt)
+        except ValueError:
+            return None
 
     def _emit_factura_varios_2(self):
         """Flujo exclusivo para items Varios 2: factura AFIP directa,
@@ -2803,6 +3193,494 @@ class SalesView(QWidget):
             self.reset_category_filter()
 
 
+class SpotlightDialog(QDialog):
+    """Búsqueda rápida estilo Spotlight: overlay flotante, input + lista + atajos.
+
+    Reemplaza el ProductSearchDialog antiguo (fullscreen) con una experiencia
+    minimalista al estilo del mockup PosNew.
+    """
+    product_selected = pyqtSignal(dict)
+
+    def __init__(self, parent=None, db=None, initial_text=''):
+        from PyQt5.QtWidgets import QApplication, QGraphicsDropShadowEffect
+        from PyQt5.QtGui import QColor
+        super().__init__(parent)
+        self.db = db
+        self._results = []
+        self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
+        self.setModal(True)
+        self.setAttribute(Qt.WA_TranslucentBackground, True)
+
+        from pos_system.ui.theme import COLORS as _C
+
+        screen = QApplication.primaryScreen().availableGeometry()
+        w = min(640, int(screen.width() * 0.55))
+        h = 480
+        self.setFixedWidth(w + 40)
+        self.resize(w + 40, h + 40)
+        self.move(
+            screen.x() + (screen.width()  - (w + 40)) // 2,
+            screen.y() + (screen.height() - (h + 40)) // 2,
+        )
+
+        self._search_timer = QTimer(self)
+        self._search_timer.setSingleShot(True)
+        self._search_timer.setInterval(220)
+        self._search_timer.timeout.connect(self._do_search)
+
+        self._build_ui()
+
+        # Sombra alrededor del frame interno
+        try:
+            shadow = QGraphicsDropShadowEffect(self)
+            shadow.setBlurRadius(40)
+            shadow.setOffset(0, 6)
+            shadow.setColor(QColor(0, 0, 0, 90))
+            self._shell.setGraphicsEffect(shadow)
+        except Exception:
+            pass
+
+        if initial_text:
+            self.search_input.setText(initial_text)
+        else:
+            self._do_search()
+
+    def _build_ui(self):
+        from pos_system.ui.theme import COLORS as _C
+        # Layout exterior con margen para que la sombra del shell sea visible
+        wrap = QVBoxLayout(self)
+        wrap.setContentsMargins(20, 20, 20, 20)
+        wrap.setSpacing(0)
+
+        # Shell (frame interno con borde y radius — donde se aplica la sombra)
+        self._shell = QFrame()
+        self._shell.setStyleSheet(
+            f"QFrame {{ background:{_C['surface']}; border:1px solid {_C['border']};"
+            f" border-radius:12px; }}"
+        )
+        wrap.addWidget(self._shell)
+
+        outer = QVBoxLayout(self._shell)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # ── Bar superior: lupa + input + Esc chip ──
+        bar = QFrame()
+        bar.setStyleSheet(
+            f"QFrame {{ border:none; border-bottom:1px solid {_C['border_soft']};"
+            f" background:{_C['surface']};"
+            f" border-top-left-radius:12px; border-top-right-radius:12px; }}"
+        )
+        bar_l = QHBoxLayout(bar); bar_l.setContentsMargins(14, 14, 14, 14); bar_l.setSpacing(10)
+
+        icon = QLabel('⌕')
+        icon.setStyleSheet(
+            f"color:{_C['text_muted']}; font-size:18px; background:transparent; border:none;"
+        )
+        bar_l.addWidget(icon)
+
+        self.search_input = QLineEdit()
+        self.search_input.setPlaceholderText('Código, nombre, categoría…')
+        self.search_input.setStyleSheet(
+            f"QLineEdit {{ border:none; background:transparent; font-size:16px;"
+            f" color:{_C['text']}; padding:2px; }}"
+        )
+        f = QFont('Segoe UI', 13)
+        self.search_input.setFont(f)
+        self.search_input.textChanged.connect(self._on_text)
+        self.search_input.installEventFilter(self)
+        bar_l.addWidget(self.search_input, 1)
+
+        esc = QPushButton('Esc')
+        esc.setCursor(Qt.PointingHandCursor)
+        esc.setStyleSheet(
+            f"QPushButton {{ background:{_C['surface_alt']}; border:1px solid {_C['border']};"
+            f" border-radius:4px; padding:4px 10px; color:{_C['text_muted']};"
+            f" font-family:'JetBrains Mono', Consolas, monospace; font-size:10px;"
+            f" font-weight:600; min-height:18px; }}"
+            f"QPushButton:hover {{ background:{_C['border_soft']}; color:{_C['text']}; }}"
+        )
+        esc.clicked.connect(self.reject)
+        bar_l.addWidget(esc)
+
+        outer.addWidget(bar)
+
+        # ── Lista de resultados ──
+        self.list = QListWidget()
+        self.list.setStyleSheet(
+            f"QListWidget {{ border:none; background:{_C['surface']};"
+            f" outline:none; font-size:13px; }}"
+            f"QListWidget::item {{ padding:0; border-bottom:1px solid {_C['border_soft']}; }}"
+            f"QListWidget::item:selected {{ background:{_C['accent_soft']}; color:{_C['text']};"
+            f" border-left:3px solid {_C['accent']}; }}"
+            f"QListWidget::item:hover:!selected {{ background:{_C['surface_alt']}; }}"
+        )
+        # Solo doubleClicked — itemActivated también dispararía con Enter del list,
+        # pero ya manejamos Enter en eventFilter del input. Evita doble-add.
+        self.list.itemDoubleClicked.connect(self._on_pick)
+        outer.addWidget(self.list, 1)
+
+        # ── Footer con atajos ──
+        ft = QFrame()
+        ft.setStyleSheet(
+            f"QFrame {{ background:{_C['surface_alt']}; border:none;"
+            f" border-top:1px solid {_C['border_soft']};"
+            f" border-bottom-left-radius:12px; border-bottom-right-radius:12px; }}"
+        )
+        ft_l = QHBoxLayout(ft); ft_l.setContentsMargins(14, 8, 14, 8); ft_l.setSpacing(14)
+        for keys, label in [('↑↓', 'navegar'), ('↵', 'agregar'), ('Esc', 'cerrar')]:
+            chip = QLabel(keys)
+            chip.setStyleSheet(
+                f"background:{_C['surface']}; border:1px solid {_C['border']};"
+                f" border-radius:3px; padding:2px 6px; color:{_C['text_muted']};"
+                f" font-family:'JetBrains Mono', Consolas, monospace; font-size:10px;"
+            )
+            lbl = QLabel(label)
+            lbl.setStyleSheet(f"color:{_C['text_muted']}; font-size:11px; background:transparent;")
+            ft_l.addWidget(chip); ft_l.addWidget(lbl)
+        ft_l.addStretch(1)
+        outer.addWidget(ft)
+
+    def _on_text(self, _):
+        self._search_timer.start()
+
+    def _do_search(self):
+        text = self.search_input.text().strip()
+        try:
+            from pos_system.models.product import Product
+            pm = Product(self.db)
+            results = pm.get_all(search=text) if text else pm.get_all()
+        except Exception:
+            results = []
+        # Excluir sentinel "Varios" (id=0)
+        results = [r for r in results if r.get('id', 0) > 0][:30]
+        self._results = results
+        self._render()
+
+    def _render(self):
+        """Render simple usando QListWidgetItem.setText con HTML embebido.
+        Evita el problema visual de cellWidget que no respeta selection-background.
+        """
+        from pos_system.ui.theme import COLORS as _C
+        self.list.clear()
+        for p in self._results:
+            cat = p.get('category') or 'Sin categoría'
+            stock = p.get('stock', 0)
+            es_conj = int(p.get('es_conjunto') or 0) == 1
+            if es_conj:
+                stock_txt = f"{p.get('conjunto_total') or 0:.0f} {p.get('conjunto_unidad_medida') or ''}".strip()
+            else:
+                stock_txt = f"{stock} un"
+            barcode = p.get('barcode') or ''
+            price_txt = f"${p.get('price', 0):,.0f}"
+            # Texto principal (nombre) y subtexto (codigo/categoria/stock) van como
+            # un solo string con \n. Stylesheet del QListWidget pinta padding/border.
+            line1 = f"{p.get('name', '—')}"
+            sub = f"{barcode}  ·  {cat}  ·  stock: {stock_txt}"
+            item = QListWidgetItem()
+            item.setData(Qt.UserRole, p)
+            item.setData(Qt.UserRole + 1, line1)
+            item.setData(Qt.UserRole + 2, sub)
+            item.setData(Qt.UserRole + 3, price_txt)
+            item.setSizeHint(QSize(0, 56))
+            self.list.addItem(item)
+        # Custom paint via delegate
+        if not hasattr(self, '_delegate_set'):
+            from PyQt5.QtWidgets import QStyledItemDelegate, QStyle
+            from PyQt5.QtGui import QPalette, QPen
+            spotlight_self = self
+            class _Delegate(QStyledItemDelegate):
+                def paint(self, painter, option, index):
+                    p_data = index.data(Qt.UserRole + 1) or ''
+                    sub = index.data(Qt.UserRole + 2) or ''
+                    price = index.data(Qt.UserRole + 3) or ''
+                    r = option.rect
+                    selected = bool(option.state & QStyle.State_Selected)
+                    hover = bool(option.state & QStyle.State_MouseOver)
+                    painter.save()
+                    painter.fillRect(r,
+                        QColor(_C['accent_soft']) if selected else
+                        (QColor(_C['surface_alt']) if hover else QColor(_C['surface']))
+                    )
+                    if selected:
+                        painter.fillRect(r.x(), r.y(), 3, r.height(), QColor(_C['accent']))
+                    # Bottom border
+                    painter.setPen(QPen(QColor(_C['border_soft']), 1))
+                    painter.drawLine(r.x(), r.y() + r.height() - 1, r.x() + r.width(), r.y() + r.height() - 1)
+                    # Texto nombre
+                    f1 = QFont('Segoe UI', 10, QFont.Bold)
+                    painter.setFont(f1)
+                    painter.setPen(QColor(_C['text']))
+                    name_rect = r.adjusted(16, 8, -120, -28)
+                    painter.drawText(name_rect, Qt.AlignLeft | Qt.AlignTop, p_data)
+                    # Sub
+                    f2 = QFont('Consolas', 9)
+                    painter.setFont(f2)
+                    painter.setPen(QColor(_C['text_muted']))
+                    sub_rect = r.adjusted(16, 30, -120, -8)
+                    painter.drawText(sub_rect, Qt.AlignLeft | Qt.AlignTop, sub)
+                    # Precio
+                    f3 = QFont('Consolas', 11, QFont.Bold)
+                    painter.setFont(f3)
+                    painter.setPen(QColor(_C['text']))
+                    price_rect = r.adjusted(0, 0, -16, 0)
+                    painter.drawText(price_rect, Qt.AlignRight | Qt.AlignVCenter, price)
+                    painter.restore()
+            self.list.setItemDelegate(_Delegate(self.list))
+            self._delegate_set = True
+        if self._results:
+            self.list.setCurrentRow(0)
+
+    def _on_pick(self, item):
+        # Guard: evitar doble emisión por doble-click + activated
+        if getattr(self, '_picking', False):
+            return
+        if not item:
+            return
+        p = item.data(Qt.UserRole)
+        if not p:
+            return
+        self._picking = True
+        self.product_selected.emit(p)
+        self.accept()
+
+    def eventFilter(self, obj, event):
+        from PyQt5.QtCore import QEvent
+        if obj is self.search_input and event.type() == QEvent.KeyPress:
+            key = event.key()
+            if key in (Qt.Key_Down, Qt.Key_Up):
+                row = self.list.currentRow()
+                if key == Qt.Key_Down:
+                    row = min(row + 1, self.list.count() - 1)
+                else:
+                    row = max(row - 1, 0)
+                if row >= 0:
+                    self.list.setCurrentRow(row)
+                return True
+            if key in (Qt.Key_Return, Qt.Key_Enter):
+                self._on_pick(self.list.currentItem())
+                return True
+            if key == Qt.Key_Escape:
+                self.reject()
+                return True
+        return super().eventFilter(obj, event)
+
+    def keyPressEvent(self, event):
+        if event.key() == Qt.Key_Escape:
+            self.reject()
+            return
+        super().keyPressEvent(event)
+
+
+class PromosQuickDialog(QDialog):
+    """Dialog rápido de promociones activas. Click en una promo → emite product_chosen
+    con el product_id para que el caller lo agregue al carrito.
+
+    Replica el mockup PromoDialog: cards con nombre + condición + descuento.
+    """
+    product_chosen = pyqtSignal(int, int)  # (product_id, cantidad_a_agregar)
+
+    def __init__(self, parent=None, firebase_promos=None):
+        super().__init__(parent)
+        self.fb_promos = firebase_promos or []
+        self._db = getattr(parent, 'db', None)
+        self._product_model = getattr(parent, 'product_model', None)
+        self.setWindowTitle('Promociones')
+        self.setModal(True)
+        self.setMinimumWidth(560)
+        self._build_ui()
+
+    def _build_ui(self):
+        from pos_system.ui.theme import COLORS as _C
+        self.setStyleSheet(f"QDialog {{ background:{_C['bg']}; }}")
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+
+        # Header
+        hdr = QFrame()
+        hdr.setStyleSheet(f"QFrame {{ background:{_C['surface']}; border-bottom:1px solid {_C['border_soft']}; }}")
+        h_lay = QHBoxLayout(hdr); h_lay.setContentsMargins(20, 14, 14, 14); h_lay.setSpacing(12)
+        title_box = QVBoxLayout(); title_box.setSpacing(2)
+        t = QLabel('Aplicar promoción'); t.setStyleSheet(
+            f"color:{_C['text']}; font-size:14px; font-weight:700; background:transparent; border:none;")
+        s = QLabel('Promos activas hoy'); s.setStyleSheet(
+            f"color:{_C['text_muted']}; font-size:11px; background:transparent; border:none;"
+            f" font-family:'Consolas','JetBrains Mono',monospace;")
+        title_box.addWidget(t); title_box.addWidget(s)
+        h_lay.addLayout(title_box, 1)
+        close = QPushButton('×'); close.setFixedSize(28, 28); close.setCursor(Qt.PointingHandCursor)
+        close.setStyleSheet(
+            f"QPushButton {{ background:{_C['surface_alt']}; border:1px solid {_C['border_soft']};"
+            f" border-radius:14px; color:{_C['text_muted']}; font-size:16px; font-weight:700; }}"
+            f"QPushButton:hover {{ background:{_C['border_soft']}; }}")
+        close.clicked.connect(self.reject)
+        h_lay.addWidget(close)
+        outer.addWidget(hdr)
+
+        # Body con scroll de promos
+        body = QFrame(); body.setStyleSheet(f"background:{_C['bg']};")
+        b_lay = QVBoxLayout(body); b_lay.setContentsMargins(20, 16, 20, 16); b_lay.setSpacing(8)
+
+        promos = self._gather_promos()
+        if not promos:
+            empty = QLabel('No hay promociones activas en este momento.')
+            empty.setStyleSheet(
+                f"color:{_C['text_muted']}; font-size:13px; padding:30px; background:transparent;")
+            empty.setAlignment(Qt.AlignCenter)
+            b_lay.addWidget(empty)
+        else:
+            for p in promos:
+                b_lay.addWidget(self._build_promo_card(p))
+        b_lay.addStretch(1)
+        outer.addWidget(body, 1)
+
+        # Footer
+        ft = QFrame(); ft.setStyleSheet(
+            f"QFrame {{ background:{_C['surface']}; border-top:1px solid {_C['border_soft']}; }}")
+        ft_l = QHBoxLayout(ft); ft_l.setContentsMargins(20, 12, 20, 12)
+        ft_l.addStretch(1)
+        cancel = QPushButton('Cerrar')
+        cancel.setMinimumHeight(36); cancel.setCursor(Qt.PointingHandCursor)
+        cancel.setStyleSheet(
+            f"QPushButton {{ background:{_C['surface']}; color:{_C['text']};"
+            f" border:1px solid {_C['border']}; border-radius:6px; padding:6px 18px; font-weight:600; }}"
+            f"QPushButton:hover {{ background:{_C['surface_alt']}; }}")
+        cancel.clicked.connect(self.reject)
+        ft_l.addWidget(cancel)
+        outer.addWidget(ft)
+
+    def _gather_promos(self):
+        """Combina promos de Firebase + descuentos locales en una lista uniforme.
+        Cada item incluye 'qty_min' = cantidad a agregar al carrito al activar la promo.
+        """
+        out = []
+        for fb in self.fb_promos or []:
+            if not fb.get('activo', True):
+                continue
+            tipo = fb.get('tipo', '')
+            valor = fb.get('valor', 0)
+            cant_min = int(fb.get('cantidad_minima') or 1)
+            cant_req = int(fb.get('cantidad_requerida') or cant_min)
+            qty_min = max(cant_min, cant_req, 1)
+            if tipo == 'percentage':
+                desc = f"-{valor:.0f}%"
+            elif tipo == 'fixed':
+                desc = f"-${valor:,.0f}"
+            elif tipo in ('2x1', 'nxm'):
+                paga = fb.get('cantidad_paga') or (cant_req - 1)
+                desc = f"{cant_req}x{paga}"
+                qty_min = cant_req
+            else:
+                desc = '-'
+            out.append({
+                'name': fb.get('nombre', 'Promo'),
+                'cond': self._fmt_cond_firebase(fb),
+                'desc': desc,
+                'product_id': self._first_product_id(fb.get('productos') or []),
+                'qty_min': qty_min,
+                'source': 'firebase',
+            })
+        # Productos con descuento local
+        try:
+            if self._db:
+                rows = self._db.execute_query(
+                    "SELECT id, name, price, discount_type, discount_value FROM products "
+                    "WHERE discount_type IS NOT NULL AND discount_value > 0 AND id != 0 LIMIT 30"
+                ) or []
+                for r in rows:
+                    dt = (r.get('discount_type') or '')
+                    dv = float(r.get('discount_value') or 0)
+                    if dt == 'percentage':
+                        desc = f"-{dv:.0f}%"
+                    elif dt == 'fixed':
+                        desc = f"-${dv:,.0f}"
+                    else:
+                        continue
+                    out.append({
+                        'name': r.get('name'),
+                        'cond': f"Cualquier cantidad · ${r.get('price', 0):,.0f}",
+                        'desc': desc,
+                        'product_id': r.get('id'),
+                        'qty_min': 1,
+                        'source': 'local',
+                    })
+        except Exception:
+            pass
+        return out
+
+    def _fmt_cond_firebase(self, fb):
+        prods = fb.get('productos') or []
+        if not prods:
+            return 'Sin productos asociados'
+        # Intentar resolver el nombre del primer producto
+        try:
+            first_id = prods[0]
+            row = self._db.execute_query(
+                "SELECT name FROM products WHERE firebase_id=? OR barcode=? OR CAST(id AS TEXT)=? LIMIT 1",
+                (str(first_id), str(first_id), str(first_id))
+            ) if self._db else None
+            if row:
+                name = row[0].get('name', '')
+                more = f" + {len(prods)-1} más" if len(prods) > 1 else ''
+                return f"{name}{more}"
+        except Exception:
+            pass
+        return f"{len(prods)} producto(s)"
+
+    def _first_product_id(self, prod_refs):
+        """De una lista de refs (firebase_id/barcode/id) devuelve el id local del primero."""
+        if not prod_refs or not self._db:
+            return None
+        try:
+            row = self._db.execute_query(
+                "SELECT id FROM products WHERE firebase_id=? OR barcode=? OR CAST(id AS TEXT)=? LIMIT 1",
+                (str(prod_refs[0]), str(prod_refs[0]), str(prod_refs[0]))
+            )
+            return row[0]['id'] if row else None
+        except Exception:
+            return None
+
+    def _build_promo_card(self, p):
+        from pos_system.ui.theme import COLORS as _C
+        card = QFrame()
+        card.setCursor(Qt.PointingHandCursor)
+        card.setStyleSheet(
+            f"QFrame {{ background:{_C['surface']}; border:1px solid {_C['border']};"
+            f" border-radius:8px; }}"
+            f"QFrame:hover {{ background:{_C['accent_soft']}; border-color:{_C['accent']}; }}")
+        lay = QHBoxLayout(card); lay.setContentsMargins(14, 12, 16, 12); lay.setSpacing(12)
+        col = QVBoxLayout(); col.setSpacing(2)
+        n = QLabel(p['name'])
+        n.setStyleSheet(f"color:{_C['text']}; font-size:13px; font-weight:700; background:transparent; border:none;")
+        # Sub-línea: condición + indicador "agregar Nx"
+        cond_text = p['cond']
+        qty_min = int(p.get('qty_min') or 1)
+        if qty_min > 1:
+            cond_text = f"{cond_text}  ·  agregará {qty_min} unidades"
+        c = QLabel(cond_text)
+        c.setStyleSheet(f"color:{_C['text_muted']}; font-size:11px; background:transparent; border:none;")
+        col.addWidget(n); col.addWidget(c)
+        lay.addLayout(col, 1)
+        d = QLabel(p['desc'])
+        d.setStyleSheet(
+            f"color:{_C['accent']}; font-size:16px; font-weight:700; background:transparent; border:none;"
+            f" font-family:'Consolas','JetBrains Mono',monospace;")
+        d.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        lay.addWidget(d)
+        # Hacer clickeable: emite (product_id, qty)
+        pid = p.get('product_id')
+        def _click(_evt, p_id=pid, q=qty_min):
+            if p_id:
+                self.product_chosen.emit(int(p_id), int(q))
+                self.accept()
+            else:
+                QMessageBox.information(self, 'Promoción',
+                    'Esta promoción no tiene productos vinculados.')
+        card.mousePressEvent = _click
+        return card
+
+
 class PaymentDialog(QDialog):
     """Dialogo de cobro: seleccion de pago, monto y teclado numerico"""
 
@@ -2853,43 +3731,99 @@ class PaymentDialog(QDialog):
         _sp   = max(4, _h(6))  # spacing
 
         self.setStyleSheet('''
-            QDialog { background: #f8f9fa; }
-            QLabel#total_label { font-size: 20px; font-weight: bold; color: #198754; }
-            QPushButton#btn_cash {
-                background: #198754; color: white; border: none; border-radius: 8px;
-                font-size: 13px; font-weight: bold; padding: 10px;
+            QDialog { background: #fafaf7; }
+            QLabel#total_label {
+                font-size: 22px; font-weight: 700; color: #1c1c1e;
+                font-family: 'Consolas', 'JetBrains Mono', monospace;
             }
-            QPushButton#btn_cash:hover { background: #157347; }
-            QPushButton#btn_cash:checked { background: #0f5132; border: 3px solid #0d6efd; }
-            QPushButton#btn_transfer {
-                background: #0d6efd; color: white; border: none; border-radius: 8px;
-                font-size: 13px; font-weight: bold; padding: 10px;
+            /* ── Pills de medio de pago ───────────────────────────────── */
+            QPushButton#btn_cash, QPushButton#btn_transfer {
+                background: #ffffff;
+                color: #6f6a5d;
+                border: 1px solid #dcd6c8;
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: 700;
+                padding: 12px;
+                letter-spacing: 0.3px;
             }
-            QPushButton#btn_transfer:hover { background: #0b5ed7; }
-            QPushButton#btn_transfer:checked { background: #084298; border: 3px solid #198754; }
+            QPushButton#btn_cash:hover, QPushButton#btn_transfer:hover {
+                background: #fafaf7;
+                color: #1c1c1e;
+                border-color: #6f6a5d;
+            }
+            QPushButton#btn_cash:checked, QPushButton#btn_transfer:checked {
+                background: #1c1c1e;
+                color: #ffffff;
+                border-color: #1c1c1e;
+            }
+            /* ── Numpad ───────────────────────────────────────────────── */
             QPushButton#numpad_btn {
-                background: #ffffff; border: 2px solid #ced4da; border-radius: 6px;
-                font-size: 16px; font-weight: bold; color: #212529;
-                min-height: 44px; max-height: 44px;
+                background: #ffffff;
+                border: 1px solid #dcd6c8;
+                border-radius: 8px;
+                font-size: 16px;
+                font-weight: 700;
+                color: #1c1c1e;
+                min-height: 44px;
+                max-height: 44px;
+                font-family: 'Consolas', 'JetBrains Mono', monospace;
             }
-            QPushButton#numpad_btn:hover { background: #e9ecef; border-color: #adb5bd; }
-            QPushButton#numpad_btn:pressed { background: #0d6efd; color: white; border-color: #0d6efd; }
+            QPushButton#numpad_btn:hover {
+                background: #fafaf7;
+                border-color: #c1521f;
+                color: #c1521f;
+            }
+            QPushButton#numpad_btn:pressed {
+                background: #fbeee5;
+                border-color: #c1521f;
+                color: #c1521f;
+            }
+            /* ── Borrar (outline rojo sutil) ──────────────────────────── */
             QPushButton#btn_clear {
-                background: #dc3545; color: white; border: none; border-radius: 6px;
-                font-size: 13px; font-weight: bold; min-height: 40px; max-height: 40px;
+                background: #ffffff;
+                color: #a01616;
+                border: 1px solid #a01616;
+                border-radius: 8px;
+                font-size: 13px;
+                font-weight: 700;
+                min-height: 44px;
+                max-height: 44px;
             }
-            QPushButton#btn_clear:hover { background: #bb2d3b; }
+            QPushButton#btn_clear:hover {
+                background: #a01616;
+                color: #ffffff;
+            }
+            /* ── Cobrar (THE botón principal: accent) ─────────────────── */
             QPushButton#btn_facturar {
-                background: #198754; color: white; border: none; border-radius: 8px;
-                font-size: 15px; font-weight: bold; min-height: 50px;
+                background: #c1521f;
+                color: #ffffff;
+                border: none;
+                border-radius: 8px;
+                font-size: 15px;
+                font-weight: 700;
+                min-height: 52px;
+                letter-spacing: 0.5px;
             }
-            QPushButton#btn_facturar:hover { background: #157347; }
+            QPushButton#btn_facturar:hover {
+                background: #a3441a;
+            }
+            QPushButton#btn_facturar:disabled {
+                background: #c9c2b3;
+                color: #ffffff;
+            }
+            /* ── Input de monto ───────────────────────────────────────── */
             QLineEdit#amount_input {
-                font-size: 20px; font-weight: bold; color: #212529;
-                border: 2px solid #dee2e6; border-radius: 8px;
-                padding: 6px 12px; background: white;
+                font-size: 22px;
+                font-weight: 700;
+                color: #1c1c1e;
+                border: 1px solid #dcd6c8;
+                border-radius: 8px;
+                padding: 8px 14px;
+                background: #ffffff;
+                font-family: 'Consolas', 'JetBrains Mono', monospace;
             }
-            QLineEdit#amount_input:focus { border-color: #0d6efd; }
+            QLineEdit#amount_input:focus { border-color: #c1521f; }
         ''')
 
         # Layout exterior: contenido + barra fija de botones
@@ -2906,7 +3840,7 @@ class PaymentDialog(QDialog):
         total_row = QHBoxLayout()
         total_txt = QLabel('Total a cobrar:')
         total_txt.setFont(QFont('Segoe UI', 11))
-        total_txt.setStyleSheet('color: #6c757d;')
+        total_txt.setStyleSheet('color: #6f6a5d;')
         total_row.addWidget(total_txt)
         total_row.addStretch()
         self.total_lbl = QLabel(f'${self.total:,.2f}')
@@ -2915,7 +3849,7 @@ class PaymentDialog(QDialog):
         total_row.addWidget(self.total_lbl)
         main.addLayout(total_row)
 
-        sep = QFrame(); sep.setFrameShape(QFrame.HLine); sep.setStyleSheet('color:#dee2e6;')
+        sep = QFrame(); sep.setFrameShape(QFrame.HLine); sep.setStyleSheet('color:#dcd6c8;')
         main.addWidget(sep)
 
         # ── Items del carrito ──
@@ -2935,9 +3869,9 @@ class PaymentDialog(QDialog):
             items_tbl.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
             items_tbl.verticalHeader().setDefaultSectionSize(24)
             items_tbl.setStyleSheet('''
-                QTableWidget { border: 1px solid #dee2e6; border-radius: 6px; background: white; }
+                QTableWidget { border: 1px solid #dcd6c8; border-radius: 6px; background: white; }
                 QTableWidget::item { padding: 2px 6px; }
-                QHeaderView::section { background: #f8f9fa; padding: 3px; border: none; border-bottom: 1px solid #dee2e6; }
+                QHeaderView::section { background: #fafaf7; padding: 3px; border: none; border-bottom: 1px solid #dcd6c8; }
             ''')
             for row, it in enumerate(self.cart):
                 name = str(it.get('product_name') or it.get('name', ''))
@@ -2958,14 +3892,14 @@ class PaymentDialog(QDialog):
 
         # ── Botones forma de pago ──
         pay_row = QHBoxLayout(); pay_row.setSpacing(8)
-        self.btn_cash = QPushButton('💵  Efectivo')
+        self.btn_cash = QPushButton('Efectivo')
         self.btn_cash.setObjectName('btn_cash'); self.btn_cash.setCheckable(True)
         self.btn_cash.setChecked(True); self.btn_cash.setMinimumHeight(_pay)
         self.btn_cash.setFont(QFont('Segoe UI', 11, QFont.Bold))
         self.btn_cash.clicked.connect(lambda: self._set_payment('cash'))
         pay_row.addWidget(self.btn_cash)
 
-        self.btn_transfer = QPushButton('📲  Transferencia')
+        self.btn_transfer = QPushButton('Transferencia')
         self.btn_transfer.setObjectName('btn_transfer'); self.btn_transfer.setCheckable(True)
         self.btn_transfer.setMinimumHeight(_pay)
         self.btn_transfer.setFont(QFont('Segoe UI', 11, QFont.Bold))
@@ -2985,9 +3919,9 @@ class PaymentDialog(QDialog):
             sb.setMinimumHeight(_sub)
             sb.setFont(QFont('Segoe UI', 9, QFont.Bold))
             sb.setStyleSheet('''
-                QPushButton { background:#e7f3ff; color:#0d6efd; border:1.5px solid #b6d4fe; border-radius:6px; padding:0 12px; }
-                QPushButton:hover { background:#cfe2ff; }
-                QPushButton:checked { background:#0d6efd; color:white; border-color:#0d6efd; }
+                QPushButton { background:#fbeee5; color:#c1521f; border:1.5px solid #dcd6c8; border-radius:6px; padding:0 12px; }
+                QPushButton:hover { background:#fbeee5; }
+                QPushButton:checked { background:#c1521f; color:white; border-color:#c1521f; }
             ''')
             sb.clicked.connect(lambda _, k=key, b=sb: self._set_subtype(k, b))
             subtype_row.addWidget(sb)
@@ -3009,7 +3943,7 @@ class PaymentDialog(QDialog):
         cp = QVBoxLayout(self.cash_panel); cp.setContentsMargins(0, 0, 0, 0); cp.setSpacing(_sp)
         lbl_paga = QLabel('Cliente paga con:')
         lbl_paga.setFont(QFont('Segoe UI', 10, QFont.Bold))
-        lbl_paga.setStyleSheet('color:#495057;')
+        lbl_paga.setStyleSheet('color:#5a5448;')
         cp.addWidget(lbl_paga)
         self.amount_input = QLineEdit()
         self.amount_input.setObjectName('amount_input')
@@ -3020,11 +3954,11 @@ class PaymentDialog(QDialog):
         self.amount_input.setReadOnly(True)
         cp.addWidget(self.amount_input)
         change_frame = QFrame()
-        change_frame.setStyleSheet('QFrame{background:#f0fdf4;border:2px solid #86efac;border-radius:8px;}')
+        change_frame.setStyleSheet('QFrame{background:#f0fdf4;border:2px solid #3d7a3a;border-radius:8px;}')
         ci = QHBoxLayout(change_frame); ci.setContentsMargins(12, 6, 12, 6)
         lbl_vuelto = QLabel('Vuelto:')
         lbl_vuelto.setFont(QFont('Segoe UI', 10, QFont.Bold))
-        lbl_vuelto.setStyleSheet('color:#166534;background:transparent;border:none;')
+        lbl_vuelto.setStyleSheet('color:#3d7a3a;background:transparent;border:none;')
         ci.addWidget(lbl_vuelto); ci.addStretch()
         self.change_lbl = QLabel('$0.00')
         self.change_lbl.setFont(QFont('Segoe UI', 16, QFont.Bold))
@@ -3038,7 +3972,7 @@ class PaymentDialog(QDialog):
         tl = QVBoxLayout(self.transfer_panel); tl.setContentsMargins(0, 0, 0, 0)
         info = QLabel('El cliente realiza la\ntransferencia o pago virtual.')
         info.setFont(QFont('Segoe UI', 10))
-        info.setStyleSheet('background:#e7f3ff;color:#0d6efd;border:1px solid #b6d4fe;border-radius:8px;padding:12px;')
+        info.setStyleSheet('background:#fbeee5;color:#c1521f;border:1px solid #dcd6c8;border-radius:8px;padding:12px;')
         info.setAlignment(Qt.AlignCenter); info.setWordWrap(True)
         tl.addWidget(info)
         self.transfer_panel.setVisible(False)
@@ -3061,7 +3995,7 @@ class PaymentDialog(QDialog):
             self._preview_btn.setFont(QFont('Segoe UI', 10))
             self._preview_btn.setToolTip('Vista previa del PDF (seleccioná un perfil ARCA primero)')
             self._preview_btn.setStyleSheet('''
-                QPushButton { background:#f0f4ff; color:#0d6efd; border:1.5px solid #b6d4fe; border-radius:8px; padding:0 10px; }
+                QPushButton { background:#f0f4ff; color:#c1521f; border:1.5px solid #dcd6c8; border-radius:8px; padding:0 10px; }
                 QPushButton:hover { background:#dbeafe; }
             ''')
             self._preview_btn.clicked.connect(self._preview_invoice)
@@ -3073,9 +4007,9 @@ class PaymentDialog(QDialog):
         self._nota_btn.setFont(QFont('Segoe UI', 9))
         self._nota_btn.setCheckable(True)
         self._nota_btn.setStyleSheet('''
-            QPushButton { background:transparent; color:#6c757d; border:none; text-align:left; padding:0 2px; }
+            QPushButton { background:transparent; color:#6f6a5d; border:none; text-align:left; padding:0 2px; }
             QPushButton:hover { color:#343a40; }
-            QPushButton:checked { color:#198754; font-weight:bold; }
+            QPushButton:checked { color:#3d7a3a; font-weight:bold; }
         ''')
         self._nota_btn.clicked.connect(self._toggle_nota)
         left.addWidget(self._nota_btn)
@@ -3118,12 +4052,12 @@ class PaymentDialog(QDialog):
         if self._profiles:
             arca_sep = QFrame()
             arca_sep.setFrameShape(QFrame.HLine)
-            arca_sep.setStyleSheet('color:#dee2e6; max-height:1px;')
+            arca_sep.setStyleSheet('color:#dcd6c8; max-height:1px;')
             right_layout.addWidget(arca_sep)
 
             arca_lbl = QLabel('Facturar en ARCA:')
             arca_lbl.setFont(QFont('Segoe UI', 9, QFont.Bold))
-            arca_lbl.setStyleSheet('color:#495057;')
+            arca_lbl.setStyleSheet('color:#5a5448;')
             right_layout.addWidget(arca_lbl)
 
             profiles_w = QWidget()
@@ -3131,7 +4065,7 @@ class PaymentDialog(QDialog):
             profiles_row.setContentsMargins(0, 0, 0, 0)
             profiles_row.setSpacing(5)
 
-            _colors = [('#0d6efd','#0b5ed7'),('#6f42c1','#5a32a3'),
+            _colors = [('#c1521f','#a3441a'),('#6f42c1','#5a32a3'),
                        ('#d63384','#ab296a'),('#fd7e14','#dc6502'),('#20c997','#1aa179')]
 
             for i, p in enumerate(self._profiles):
@@ -3155,9 +4089,9 @@ class PaymentDialog(QDialog):
             no_btn.setMinimumHeight(_prf)
             no_btn.setFont(QFont('Segoe UI', 9))
             no_btn.setStyleSheet('''
-                QPushButton { background:#f8f9fa; color:#6c757d; border:1.5px solid #dee2e6; border-radius:7px; padding:0 8px; }
-                QPushButton:hover { background:#e9ecef; }
-                QPushButton:checked { border:2px solid #adb5bd; background:#e9ecef; color:#343a40; }
+                QPushButton { background:#fafaf7; color:#6f6a5d; border:1.5px solid #dcd6c8; border-radius:7px; padding:0 8px; }
+                QPushButton:hover { background:#ece8df; }
+                QPushButton:checked { border:2px solid #9b958a; background:#ece8df; color:#343a40; }
             ''')
             no_btn.clicked.connect(lambda: self._select_profile(None, no_btn))
             self._no_factura_btn = no_btn
@@ -3170,8 +4104,8 @@ class PaymentDialog(QDialog):
             self._cliente_btn.setFont(QFont('Segoe UI', 8))
             self._cliente_btn.setCursor(Qt.PointingHandCursor)
             self._cliente_btn.setStyleSheet('''
-                QPushButton { background:#f8f9fa; color:#6c757d; border:1px dashed #adb5bd; border-radius:5px; text-align:left; padding:0 8px; }
-                QPushButton:hover { background:#e9ecef; border-style:solid; }
+                QPushButton { background:#fafaf7; color:#6f6a5d; border:1px dashed #9b958a; border-radius:5px; text-align:left; padding:0 8px; }
+                QPushButton:hover { background:#ece8df; border-style:solid; }
             ''')
             self._cliente_btn.clicked.connect(self._open_client_selector)
             right_layout.addWidget(self._cliente_btn)
@@ -3218,16 +4152,16 @@ class PaymentDialog(QDialog):
             cuit = dlg.selected_cliente.get('cuit', '')
             self._cliente_btn.setText(f'{nombre}{"  —  CUIT: " + cuit if cuit else ""}')
             self._cliente_btn.setStyleSheet('''
-                QPushButton { background:#e7f3ff; color:#0d6efd; border:1px solid #b6d4fe; border-radius:6px; text-align:left; padding:0 10px; }
-                QPushButton:hover { background:#cfe2ff; }
+                QPushButton { background:#fbeee5; color:#c1521f; border:1px solid #dcd6c8; border-radius:6px; text-align:left; padding:0 10px; }
+                QPushButton:hover { background:#fbeee5; }
             ''')
 
     def _clear_cliente(self):
         self.selected_cliente = None
         self._cliente_btn.setText('Sin cliente  (Consumidor Final)')
         self._cliente_btn.setStyleSheet('''
-            QPushButton { background:#f8f9fa; color:#6c757d; border:1px dashed #adb5bd; border-radius:5px; text-align:left; padding:0 8px; }
-            QPushButton:hover { background:#e9ecef; border-style:solid; }
+            QPushButton { background:#fafaf7; color:#6f6a5d; border:1px dashed #9b958a; border-radius:5px; text-align:left; padding:0 8px; }
+            QPushButton:hover { background:#ece8df; border-style:solid; }
         ''')
 
     def _preview_invoice(self):
@@ -3399,11 +4333,11 @@ class PaymentDialog(QDialog):
         if change >= 0:
             self.change_lbl.setText(f'${change:,.2f}')
             self.change_lbl.setStyleSheet('color: #16a34a; font-size: 22px; font-weight: bold; background: transparent; border: none;')
-            self.change_lbl.parent().setStyleSheet('QFrame { background: #f0fdf4; border: 2px solid #86efac; border-radius: 10px; }')
+            self.change_lbl.parent().setStyleSheet('QFrame { background: #f0fdf4; border: 2px solid #3d7a3a; border-radius: 10px; }')
         else:
             self.change_lbl.setText(f'Faltan ${abs(change):,.2f}')
-            self.change_lbl.setStyleSheet('color: #dc3545; font-size: 18px; font-weight: bold; background: transparent; border: none;')
-            self.change_lbl.parent().setStyleSheet('QFrame { background: #fff5f5; border: 2px solid #fca5a5; border-radius: 10px; }')
+            self.change_lbl.setStyleSheet('color: #a01616; font-size: 18px; font-weight: bold; background: transparent; border: none;')
+            self.change_lbl.parent().setStyleSheet('QFrame { background: #fff5f5; border: 2px solid #a01616; border-radius: 10px; }')
 
     def _toggle_nota(self, checked):
         self._nota_input.setVisible(checked)
@@ -3453,7 +4387,7 @@ class VariosItemDialog(QDialog):
 
         title = QLabel('Item genérico')
         title.setFont(QFont('Segoe UI', 13, QFont.Bold))
-        title.setStyleSheet('color: #1e293b;')
+        title.setStyleSheet('color: #1c1c1e;')
         layout.addWidget(title)
 
         form = QFormLayout()
@@ -3480,16 +4414,16 @@ class VariosItemDialog(QDialog):
 
         # Toggle observación (ícono lápiz)
         obs_row = QHBoxLayout()
-        self.obs_toggle_btn = QPushButton('✏ Agregar observación')
+        self.obs_toggle_btn = QPushButton('Agregar observación')
         self.obs_toggle_btn.setCheckable(True)
         self.obs_toggle_btn.setCursor(Qt.PointingHandCursor)
         self.obs_toggle_btn.setStyleSheet('''
-            QPushButton { background: #f1f5f9; color: #1e293b;
-                          border: 1px solid #cbd5e1; padding: 6px 12px;
+            QPushButton { background: #fafaf7; color: #1c1c1e;
+                          border: 1px solid #dcd6c8; padding: 6px 12px;
                           border-radius: 6px; font-size: 10pt; }
-            QPushButton:checked { background: #fef3c7; border-color: #f59e0b;
-                                  color: #b45309; }
-            QPushButton:hover { background: #e2e8f0; }
+            QPushButton:checked { background: #fbeee5; border-color: #c1521f;
+                                  color: #a3441a; }
+            QPushButton:hover { background: #dcd6c8; }
         ''')
         self.obs_toggle_btn.clicked.connect(self._toggle_obs)
         obs_row.addWidget(self.obs_toggle_btn)
@@ -3515,7 +4449,7 @@ class VariosItemDialog(QDialog):
     def _toggle_obs(self):
         checked = self.obs_toggle_btn.isChecked()
         self.obs_edit.setVisible(checked)
-        self.obs_toggle_btn.setText('✏ Quitar observación' if checked else '✏ Agregar observación')
+        self.obs_toggle_btn.setText('Quitar observación' if checked else 'Agregar observación')
         if checked:
             self.obs_edit.setFocus()
         self.adjustSize()

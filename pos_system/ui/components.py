@@ -95,19 +95,19 @@ class PriceInput(QFrame):
         # Estilo limpio
         self._edit.setStyleSheet(f"""
             QLineEdit {{
-                border: 1px solid #ccc;
+                border: 1px solid #dcd6c8;
                 border-radius: 6px;
                 padding: 4px 10px;
                 font-size: {font_size}pt;
                 background: white;
-                color: #1a1a1a;
+                color: #1c1c1e;
             }}
             QLineEdit:focus {{
-                border: 2px solid #1565C0;
-                background: #f0f6ff;
+                border: 2px solid #c1521f;
+                background: #fbeee5;
             }}
             QLineEdit:hover {{
-                border: 1px solid #1565C0;
+                border: 1px solid #c1521f;
             }}
         """)
 
@@ -185,10 +185,10 @@ class Toast(QFrame):
     Toast notification profesional con tipos, animación fade y apilado automático.
 
     Tipos disponibles:
-        'success'  → verde  ✓  (ej: sync exitoso)
-        'error'    → rojo   ✗  (ej: fallo de conexión)
+        'success'  → verde  OK (ej: sync exitoso)
+        'error'    → rojo   (ej: fallo de conexión)
         'info'     → azul   ℹ  (ej: sincronizando...)
-        'warning'  → naranja ⚠  (ej: sin conexión)
+        'warning'  → naranja (ej: sin conexión)
     """
 
     # Registro global de toasts activos para apilarlos
@@ -197,28 +197,28 @@ class Toast(QFrame):
     # Paleta de estilos por tipo
     _STYLES = {
         'success': {
-            'icon': '✓',
-            'bg':   '#1a7a4a',
-            'border': '#156b3f',
-            'icon_bg': '#15a05e',
+            'icon': 'OK',
+            'bg':   '#3d7a3a',
+            'border': '#2f5e2c',
+            'icon_bg': '#3d7a3a',
         },
         'error': {
-            'icon': '✗',
-            'bg':   '#c0392b',
-            'border': '#a93226',
-            'icon_bg': '#e74c3c',
+            'icon': '',
+            'bg':   '#a01616',
+            'border': '#7f1212',
+            'icon_bg': '#a01616',
         },
         'info': {
-            'icon': '☁',
-            'bg':   '#1a4fa0',
-            'border': '#154494',
-            'icon_bg': '#2563eb',
+            'icon': '',
+            'bg':   '#c1521f',
+            'border': '#a3441a',
+            'icon_bg': '#c1521f',
         },
         'warning': {
-            'icon': '⚠',
-            'bg':   '#b45309',
-            'border': '#9a4a08',
-            'icon_bg': '#d97706',
+            'icon': '!',
+            'bg':   '#a3441a',
+            'border': '#7a3514',
+            'icon_bg': '#a3441a',
         },
     }
 
@@ -431,7 +431,7 @@ class Card(QFrame):
         self.setStyleSheet("""
             QFrame#card {
                 background-color: white;
-                border: 1px solid #dee2e6;
+                border: 1px solid #dcd6c8;
                 border-radius: 8px;
                 padding: 16px;
             }
@@ -451,11 +451,11 @@ class StatCard(QFrame):
         
         title_label = QLabel(title)
         title_label.setFont(QFont('Segoe UI', 10, QFont.Bold))
-        title_label.setStyleSheet("color: #495057;")
+        title_label.setStyleSheet("color: #5a5448;")
         
         value_label = QLabel(value)
         value_label.setFont(QFont('Segoe UI', 24, QFont.Bold))
-        value_label.setStyleSheet("color: #212529;")
+        value_label.setStyleSheet("color: #1c1c1e;")
         
         layout.addWidget(title_label)
         layout.addWidget(value_label)
@@ -463,12 +463,12 @@ class StatCard(QFrame):
         self.setStyleSheet("""
             QFrame#statCard {
                 background-color: white;
-                border: 1px solid #dee2e6;
+                border: 1px solid #dcd6c8;
                 border-radius: 8px;
             }
             QFrame#statCard:hover {
-                border-color: #0d6efd;
-                background-color: #f8f9fa;
+                border-color: #c1521f;
+                background-color: #fafaf7;
             }
         """)
     

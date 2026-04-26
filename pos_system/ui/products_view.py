@@ -42,9 +42,9 @@ class ProductsView(QWidget):
         layout.addWidget(title)
 
         # ── Estilos para botones de rubro ──
-        self._btn_off = ('background:#f1f3f5;color:#495057;border:1.5px solid #ced4da;'
+        self._btn_off = ('background:#fafaf7;color:#5a5448;border:1.5px solid #dcd6c8;'
                          'border-radius:6px;padding:4px 12px;font-size:11px;font-weight:bold;')
-        self._btn_on  = ('background:#0d6efd;color:white;border:1.5px solid #0d6efd;'
+        self._btn_on  = ('background:#c1521f;color:white;border:1.5px solid #c1521f;'
                          'border-radius:6px;padding:4px 12px;font-size:11px;font-weight:bold;')
         self._selected_category = None
         self._category_buttons = {}
@@ -55,7 +55,7 @@ class ProductsView(QWidget):
 
         section_lbl = QLabel('SECCIÓN:')
         section_lbl.setFont(QFont('Arial', 10, QFont.Bold))
-        section_lbl.setStyleSheet('color: #495057;')
+        section_lbl.setStyleSheet('color: #5a5448;')
         section_row.addWidget(section_lbl)
 
         self._rubros_scroll = QScrollArea()
@@ -82,7 +82,7 @@ class ProductsView(QWidget):
 
         subcat_lbl = QLabel('Categoría:')
         subcat_lbl.setFont(QFont('Arial', 10, QFont.Bold))
-        subcat_lbl.setStyleSheet('color: #495057;')
+        subcat_lbl.setStyleSheet('color: #5a5448;')
         subcat_row.addWidget(subcat_lbl)
 
         self._subcat_combo = QComboBox()
@@ -90,18 +90,18 @@ class ProductsView(QWidget):
         self._subcat_combo.setFont(QFont('Arial', 10))
         self._subcat_combo.setStyleSheet('''
             QComboBox {
-                border: 1.5px solid #ced4da;
+                border: 1.5px solid #dcd6c8;
                 border-radius: 6px;
                 padding: 4px 10px;
                 background: white;
-                color: #212529;
+                color: #1c1c1e;
             }
-            QComboBox:focus { border-color: #6366f1; }
+            QComboBox:focus { border-color: #c1521f; }
             QComboBox::drop-down { border: none; width: 24px; }
             QComboBox QAbstractItemView {
-                border: 1px solid #ced4da;
+                border: 1px solid #dcd6c8;
                 border-radius: 4px;
-                selection-background-color: #6366f1;
+                selection-background-color: #c1521f;
                 selection-color: white;
                 font-size: 11px;
             }
@@ -238,7 +238,7 @@ class ProductsView(QWidget):
         btn_todos.setChecked(True)
         btn_todos.setProperty('rubro_name', '')
         btn_todos.setProperty('rubro_id', -1)
-        btn_todos.setStyleSheet(f'QPushButton{{{self._btn_on}}} QPushButton:hover{{background:#0b5ed7;}}')
+        btn_todos.setStyleSheet(f'QPushButton{{{self._btn_on}}} QPushButton:hover{{background:#a3441a;}}')
         btn_todos.clicked.connect(lambda checked, b=btn_todos: self._on_rubro_btn_clicked(b))
         self._rubros_layout.addWidget(btn_todos)
         self._category_buttons[''] = btn_todos
@@ -255,7 +255,7 @@ class ProductsView(QWidget):
         btn.setCheckable(True)
         btn.setProperty('rubro_name', name)
         btn.setProperty('rubro_id', cat_id)
-        btn.setStyleSheet(f'QPushButton{{{self._btn_off}}} QPushButton:hover{{background:#e9ecef;}}')
+        btn.setStyleSheet(f'QPushButton{{{self._btn_off}}} QPushButton:hover{{background:#ece8df;}}')
         btn.clicked.connect(lambda checked, b=btn: self._on_rubro_btn_clicked(b))
         btn.setContextMenuPolicy(Qt.CustomContextMenu)
         btn.customContextMenuRequested.connect(lambda pos, b=btn: self._show_rubro_context_menu(b, pos))
@@ -266,9 +266,9 @@ class ProductsView(QWidget):
         """Maneja la selección de un botón de rubro."""
         for btn in self._category_buttons.values():
             btn.setChecked(False)
-            btn.setStyleSheet(f'QPushButton{{{self._btn_off}}} QPushButton:hover{{background:#e9ecef;}}')
+            btn.setStyleSheet(f'QPushButton{{{self._btn_off}}} QPushButton:hover{{background:#ece8df;}}')
         clicked_btn.setChecked(True)
-        clicked_btn.setStyleSheet(f'QPushButton{{{self._btn_on}}} QPushButton:hover{{background:#0b5ed7;}}')
+        clicked_btn.setStyleSheet(f'QPushButton{{{self._btn_on}}} QPushButton:hover{{background:#a3441a;}}')
 
         rubro = clicked_btn.property('rubro_name')
         self._selected_category = rubro if rubro else None
@@ -293,7 +293,7 @@ class ProductsView(QWidget):
                 )
                 hint_item.setTextAlignment(Qt.AlignCenter)
                 from PyQt5.QtGui import QColor
-                hint_item.setForeground(QColor('#6c757d'))
+                hint_item.setForeground(QColor('#6f6a5d'))
                 from PyQt5.QtGui import QFont
                 hint_item.setFont(QFont('Segoe UI', 11))
                 self.products_table.setItem(0, 0, hint_item)
@@ -397,7 +397,7 @@ class ProductsView(QWidget):
                 if '' in self._category_buttons:
                     todos_btn = self._category_buttons['']
                     todos_btn.setChecked(True)
-                    todos_btn.setStyleSheet(f'QPushButton{{{self._btn_on}}} QPushButton:hover{{background:#0b5ed7;}}')
+                    todos_btn.setStyleSheet(f'QPushButton{{{self._btn_on}}} QPushButton:hover{{background:#a3441a;}}')
             self.filter_products()
             QMessageBox.information(self, 'Éxito', f'Rubro "{name}" eliminado.')
         except Exception as e:
@@ -410,7 +410,7 @@ class ProductsView(QWidget):
         if self._selected_category and self._selected_category in self._category_buttons:
             btn = self._category_buttons[self._selected_category]
             btn.setChecked(True)
-            btn.setStyleSheet(f'QPushButton{{{self._btn_on}}} QPushButton:hover{{background:#0b5ed7;}}')
+            btn.setStyleSheet(f'QPushButton{{{self._btn_on}}} QPushButton:hover{{background:#a3441a;}}')
         if self._selected_category or self.favorites_btn.isChecked():
             self.filter_products()
 
@@ -522,10 +522,10 @@ class ProductsView(QWidget):
                     image_label.setStyleSheet('padding: 5px;')
                 else:
                     image_label.setText('[ ]')
-                    image_label.setStyleSheet('font-size: 14px; color: #adb5bd; padding: 5px;')
+                    image_label.setStyleSheet('font-size: 14px; color: #9b958a; padding: 5px;')
             else:
                 image_label.setText('[ ]')
-                image_label.setStyleSheet('font-size: 14px; color: #adb5bd; padding: 5px;')
+                image_label.setStyleSheet('font-size: 14px; color: #9b958a; padding: 5px;')
             image_label.setAlignment(Qt.AlignCenter)
             self.products_table.setCellWidget(row, 0, image_label)
             
@@ -540,12 +540,12 @@ class ProductsView(QWidget):
             if dtype == 'percentage' and dval > 0:
                 disc_text = f"-{dval:.0f}%"
                 disc_item = QTableWidgetItem(disc_text)
-                disc_item.setForeground(QColor('#dc3545'))
+                disc_item.setForeground(QColor('#a01616'))
                 disc_item.setFont(QFont('Arial', 9, QFont.Bold))
             elif dtype == 'fixed' and dval > 0:
                 disc_text = f"-${dval:.2f}"
                 disc_item = QTableWidgetItem(disc_text)
-                disc_item.setForeground(QColor('#dc3545'))
+                disc_item.setForeground(QColor('#a01616'))
                 disc_item.setFont(QFont('Arial', 9, QFont.Bold))
             else:
                 disc_item = QTableWidgetItem('')
@@ -557,7 +557,7 @@ class ProductsView(QWidget):
             # Stock con color
             stock_item = QTableWidgetItem(str(product['stock']))
             if product['stock'] < 10:
-                stock_item.setBackground(QColor('#fee'))
+                stock_item.setBackground(QColor('#fbe5e5'))
                 stock_item.setForeground(QColor('#c00'))
             elif product['stock'] < 20:
                 stock_item.setBackground(QColor('#ffeaa7'))
@@ -720,7 +720,7 @@ class ProductsView(QWidget):
             self.products_table.setRowHeight(row, 70)
             image_label = QLabel()
             image_label.setText('BAJO')
-            image_label.setStyleSheet('font-size: 10px; color: #dc3545; font-weight: bold; padding: 5px;')
+            image_label.setStyleSheet('font-size: 10px; color: #a01616; font-weight: bold; padding: 5px;')
             image_label.setAlignment(Qt.AlignCenter)
             self.products_table.setCellWidget(row, 0, image_label)
             self.products_table.setItem(row, 1, QTableWidgetItem(str(product['id'])))
@@ -730,7 +730,7 @@ class ProductsView(QWidget):
             self.products_table.setItem(row, 5, QTableWidgetItem(f"${product['cost']:.2f}"))
             from PyQt5.QtGui import QColor
             stock_item = QTableWidgetItem(str(product['stock']))
-            stock_item.setBackground(QColor('#fee'))
+            stock_item.setBackground(QColor('#fbe5e5'))
             stock_item.setForeground(QColor('#c00'))
             stock_item.setFont(QFont('Arial', 10, QFont.Bold))
             stock_item.setTextAlignment(Qt.AlignCenter)
@@ -782,7 +782,7 @@ class StockAdjustDialog(QDialog):
 
         self.preview_label = QLabel()
         self.preview_label.setFont(QFont('Segoe UI', 10, QFont.Bold))
-        self.preview_label.setStyleSheet('color: #0d6efd; padding: 4px;')
+        self.preview_label.setStyleSheet('color: #c1521f; padding: 4px;')
         layout.addRow('Resultado:', self.preview_label)
 
         btn_layout = QHBoxLayout()
@@ -803,7 +803,7 @@ class StockAdjustDialog(QDialog):
         change = qty if is_add else -qty
         new_stock = self.current_stock + change
         sign = '+' if is_add else '-'
-        color = '#198754' if new_stock >= 0 else '#dc3545'
+        color = '#3d7a3a' if new_stock >= 0 else '#a01616'
         self.preview_label.setText(
             f'{self.current_stock} {sign} {qty} = <b style="color:{color};">{new_stock}</b> unidades'
         )
@@ -856,7 +856,7 @@ class ProductDialog(QDialog):
         # ── Alertas de stock ──
         alert_title = QLabel('Alertas de stock (opcional)')
         alert_title.setFont(QFont('Arial', 9, QFont.Bold))
-        alert_title.setStyleSheet('color:#f59e0b;')
+        alert_title.setStyleSheet('color:#c1521f;')
         layout.addRow(alert_title)
 
         self.stock_min_input = QSpinBox()
@@ -909,12 +909,12 @@ class ProductDialog(QDialog):
         # ── Descuento del producto ──
         disc_sep = QFrame()
         disc_sep.setFrameShape(QFrame.HLine)
-        disc_sep.setStyleSheet('color:#dee2e6;')
+        disc_sep.setStyleSheet('color:#dcd6c8;')
         layout.addRow(disc_sep)
 
         disc_title = QLabel('Descuento del producto')
         disc_title.setFont(QFont('Arial', 10, QFont.Bold))
-        disc_title.setStyleSheet('color:#dc3545;')
+        disc_title.setStyleSheet('color:#a01616;')
         layout.addRow(disc_title)
 
         self.discount_type_combo = QComboBox()
@@ -934,7 +934,7 @@ class ProductDialog(QDialog):
         layout.addRow('Valor de descuento:', self.discount_value_spin)
 
         self.discount_preview = QLabel('')
-        self.discount_preview.setStyleSheet('color:#dc3545; font-weight:bold; font-size:11px;')
+        self.discount_preview.setStyleSheet('color:#a01616; font-weight:bold; font-size:11px;')
         self.discount_preview.setVisible(False)
         layout.addRow('', self.discount_preview)
 
@@ -943,14 +943,14 @@ class ProductDialog(QDialog):
 
         disc_sep2 = QFrame()
         disc_sep2.setFrameShape(QFrame.HLine)
-        disc_sep2.setStyleSheet('color:#dee2e6;')
+        disc_sep2.setStyleSheet('color:#dcd6c8;')
         layout.addRow(disc_sep2)
 
         # Imagen
         image_layout = QHBoxLayout()
         self.image_label = QLabel('Sin imagen')
         self.image_label.setFixedSize(150, 150)
-        self.image_label.setStyleSheet('border: 2px solid #ccc; background: #f0f0f0;')
+        self.image_label.setStyleSheet('border: 2px solid #dcd6c8; background: #f0f0f0;')
         self.image_label.setAlignment(Qt.AlignCenter)
         image_layout.addWidget(self.image_label)
         

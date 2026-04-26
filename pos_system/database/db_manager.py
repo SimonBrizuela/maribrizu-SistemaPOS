@@ -122,6 +122,21 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE products ADD COLUMN stock_max INTEGER DEFAULT NULL")
             except Exception:
                 pass
+            # Producto Conjunto (rollo/pack/caja/etc con stock fraccionado)
+            for col_def in [
+                "ALTER TABLE products ADD COLUMN es_conjunto INTEGER DEFAULT 0",
+                "ALTER TABLE products ADD COLUMN conjunto_tipo TEXT DEFAULT NULL",
+                "ALTER TABLE products ADD COLUMN conjunto_unidad_medida TEXT DEFAULT NULL",
+                "ALTER TABLE products ADD COLUMN conjunto_unidades REAL DEFAULT NULL",
+                "ALTER TABLE products ADD COLUMN conjunto_contenido REAL DEFAULT NULL",
+                "ALTER TABLE products ADD COLUMN conjunto_restante REAL DEFAULT NULL",
+                "ALTER TABLE products ADD COLUMN conjunto_precio_unidad REAL DEFAULT NULL",
+                "ALTER TABLE products ADD COLUMN conjunto_total REAL DEFAULT NULL",
+            ]:
+                try:
+                    cursor.execute(col_def)
+                except Exception:
+                    pass
             # Índice para búsqueda rápida por firebase_id
             try:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_products_firebase_id ON products(firebase_id)")

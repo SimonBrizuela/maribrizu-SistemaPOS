@@ -55,6 +55,7 @@ class Sale:
             sale_id = cursor.lastrowid
 
             # 2. Insertar items y actualizar stock
+            now_iso = datetime.now().isoformat()
             for item in items:
                 subtotal       = item['quantity'] * item['unit_price']
                 original_price = item.get('original_price', item['unit_price'])
@@ -73,12 +74,34 @@ class Sale:
                      discount_type, discount_value, discount_amount,
                      promo_id, subtotal)
                 )
-                # Descontar stock — se permite vender aunque no haya stock suficiente
-                cursor.execute(
-                    "UPDATE products SET stock = stock - ?, updated_at = ? WHERE id = ? AND stock != -1",
-                    (item['quantity'], datetime.now().isoformat(), item['product_id'])
-                )
-                # stock = -1 significa servicio/ilimitado, no se descuenta
+                if item.get('is_conjunto'):
+                    # Producto conjunto: no se descuenta stock clásico, se
+                    # actualizan unidades cerradas + restante abierto del par.
+                    after_u = float(item.get('conjunto_after_unidades') or 0)
+                    after_r = float(item.get('conjunto_after_restante') or 0)
+                    # contenido: lo leemos de la fila para recalcular total
+                    row = cursor.execute(
+                        "SELECT conjunto_contenido FROM products WHERE id = ?",
+                        (item['product_id'],)
+                    ).fetchone()
+                    contenido = float(row[0]) if row and row[0] is not None else 0.0
+                    after_total = after_u * contenido + after_r
+                    cursor.execute(
+                        """UPDATE products
+                           SET conjunto_unidades = ?,
+                               conjunto_restante = ?,
+                               conjunto_total    = ?,
+                               updated_at        = ?
+                           WHERE id = ?""",
+                        (after_u, after_r, after_total, now_iso, item['product_id'])
+                    )
+                else:
+                    # Descontar stock — se permite vender aunque no haya stock suficiente
+                    cursor.execute(
+                        "UPDATE products SET stock = stock - ?, updated_at = ? WHERE id = ? AND stock != -1",
+                        (item['quantity'], now_iso, item['product_id'])
+                    )
+                    # stock = -1 significa servicio/ilimitado, no se descuenta
 
             # 3. Actualizar caja registradora
             if cash_register_id:

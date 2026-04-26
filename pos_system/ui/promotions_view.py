@@ -43,7 +43,7 @@ class PromotionsView(QWidget):
         layout.addWidget(title)
 
         sub = QLabel('Creá descuentos por %, fijos, 2x1, NxM y packs que se aplican automáticamente en ventas.')
-        sub.setStyleSheet('color: #6c757d; font-size: 11px; padding-bottom: 4px;')
+        sub.setStyleSheet('color: #6f6a5d; font-size: 11px; padding-bottom: 4px;')
         layout.addWidget(sub)
 
         # Botones
@@ -133,11 +133,11 @@ class PromotionsView(QWidget):
             estado_item = QTableWidgetItem(estado)
             estado_item.setTextAlignment(Qt.AlignCenter)
             if p['is_active']:
-                estado_item.setForeground(QColor('#198754'))
-                estado_item.setBackground(QColor('#d1e7dd'))
+                estado_item.setForeground(QColor('#3d7a3a'))
+                estado_item.setBackground(QColor('#e7f4ec'))
             else:
-                estado_item.setForeground(QColor('#6c757d'))
-                estado_item.setBackground(QColor('#e9ecef'))
+                estado_item.setForeground(QColor('#6f6a5d'))
+                estado_item.setBackground(QColor('#ece8df'))
             self.table.setItem(row, 5, estado_item)
 
             self.table.setItem(row, 6, QTableWidgetItem(p.get('description') or ''))
@@ -264,7 +264,7 @@ class PromoDialog(QDialog):
         self.help_label = QLabel()
         self.help_label.setWordWrap(True)
         self.help_label.setStyleSheet(
-            'background:#e7f3ff; color:#0d6efd; border:1px solid #b6d4fe; '
+            'background:#fbeee5; color:#c1521f; border:1px solid #dcd6c8; '
             'border-radius:6px; padding:8px; font-size:11px;'
         )
         form.addRow('', self.help_label)
@@ -310,7 +310,7 @@ class PromoDialog(QDialog):
         layout.addWidget(prod_label)
 
         prod_hint = QLabel('Seleccioná los productos a los que aplica esta promo (si no seleccionás ninguno, aplica a todos).')
-        prod_hint.setStyleSheet('color:#6c757d; font-size:10px;')
+        prod_hint.setStyleSheet('color:#6f6a5d; font-size:10px;')
         prod_hint.setWordWrap(True)
         layout.addWidget(prod_hint)
 

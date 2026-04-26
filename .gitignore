@@ -97,3 +97,64 @@ presupuesto_libreria.html
 # Scripts de utilidad puntual
 csv_to_firebase.py
 build_usb.bat
+
+# Backup pre-Graphite migration (no commitear)
+pos_system/ui_backup_pre_graphite/
+
+# Carpetas test/dev creadas durante migración Graphite
+PosNewTema/
+PosNew/
+ui_copia/
+backup_ui_*/
+
+# Screenshots de testing
+*.png
+2026-*.png
+
+# Build / dist binarios (los genera GitHub Actions)
+SistemaPOS_Portable.zip
+build_output/
+
+# Scripts puntuales de mantenimiento (no se distribuyen)
+backup_ventas_firebase.py
+check_caja_activa.py
+check_historial_22_23.py
+check_registers.py
+check_varios_obs.py
+check_ventas_por_dia.py
+close_orphan_cajas.py
+delete_caja_14.py
+diagnostico_caja_18.py
+fix_caja_15.py
+fix_caja_activa.py
+fix_session_ids.py
+inspect_schemas.py
+mark_varios2_en_ventas.py
+rebuild_cierres_desde_historial.py
+rename_session_15.py
+split_orphan_cajas_por_dia.py
+extract_v4dialog.py
+
+# Backups varios
+backup_codigos_*.json
+backup_ts_strings_*.json
+backup_ventas_*.json
+
+# Mockups HTML de diseño (no van al POS)
+"Libreria Liceo Login.html"
+"QDialog Conjunto - V4 Tactil _standalone_.html"
+ticket-liceo.html
+presupuesto_libreria.html
+
+# Favicon / Logo / Imágenes sueltas en raíz
+favicon.svg
+Logo.png
+"Trsparente logo.png"
+libreria-liceo-512.png
+
+# Worktrees / lockfiles
+.claude/scheduled_tasks.lock
+.claude/worktrees/vigorous-albattani-fce814/
+
+# Settings locales de Claude Code (cada PC tiene su propio)
+.claude/settings.local.json

@@ -59,18 +59,18 @@ class ArcoPerfilDialog(QDialog):
         header = QLabel(f'${self.total:,.2f}')
         header.setFont(QFont('Segoe UI', 22, QFont.Bold))
         header.setAlignment(Qt.AlignCenter)
-        header.setStyleSheet('color: #212529;')
+        header.setStyleSheet('color: #1c1c1e;')
         main.addWidget(header)
 
         sub = QLabel('¿En qué perfil ARCA facturar?')
         sub.setFont(QFont('Segoe UI', 10))
         sub.setAlignment(Qt.AlignCenter)
-        sub.setStyleSheet('color: #6c757d;')
+        sub.setStyleSheet('color: #6f6a5d;')
         main.addWidget(sub)
 
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet('background:#dee2e6; max-height:1px;')
+        sep.setStyleSheet('background:#dcd6c8; max-height:1px;')
         main.addWidget(sep)
 
         # ── Botones de perfiles ───────────────────────────────────────────────
@@ -78,7 +78,7 @@ class ArcoPerfilDialog(QDialog):
             aviso = QLabel('No hay perfiles cargados.\nAgregá uno en Fiscal → Perfiles ARCA.')
             aviso.setAlignment(Qt.AlignCenter)
             aviso.setStyleSheet(
-                'color:#856404; background:#fff3cd; border:1px solid #ffecb5;'
+                'color:#b07020; background:#fbeee5; border:1px solid #ffecb5;'
                 'border-radius:8px; padding:12px; font-size:11px;'
             )
             aviso.setWordWrap(True)
@@ -96,12 +96,12 @@ class ArcoPerfilDialog(QDialog):
             cards_layout.setContentsMargins(0, 0, 0, 0)
 
             colors = [
-                ('#0d6efd', '#0b5ed7'),
-                ('#6f42c1', '#5a32a3'),
-                ('#d63384', '#ab296a'),
-                ('#fd7e14', '#dc6502'),
-                ('#20c997', '#1aa179'),
-                ('#0dcaf0', '#0aadce'),
+                ('#c1521f', '#a3441a'),
+                ('#c1521f', '#a3441a'),
+                ('#a01616', '#7f1212'),
+                ('#c1521f', '#dc6502'),
+                ('#3d7a3a', '#2f5e2c'),
+                ('#c1521f', '#a3441a'),
             ]
 
             hay_activo = any(
@@ -133,28 +133,28 @@ class ArcoPerfilDialog(QDialog):
 
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.HLine)
-        sep2.setStyleSheet('background:#dee2e6; max-height:1px;')
+        sep2.setStyleSheet('background:#dcd6c8; max-height:1px;')
         main.addWidget(sep2)
 
         # ── Seleccionar cliente ───────────────────────────────────────────────
-        self._cliente_btn = QPushButton('👤  Sin cliente seleccionado — clic para elegir')
+        self._cliente_btn = QPushButton('Sin cliente seleccionado — clic para elegir')
         self._cliente_btn.setMinimumHeight(40)
         self._cliente_btn.setFont(QFont('Segoe UI', 10))
         self._cliente_btn.setCursor(Qt.PointingHandCursor)
         self._cliente_btn.setStyleSheet('''
             QPushButton {
-                background: #f8f9fa; color: #495057;
-                border: 1px dashed #adb5bd; border-radius: 8px;
+                background: #fafaf7; color: #5a5448;
+                border: 1px dashed #9b958a; border-radius: 8px;
                 text-align: left; padding: 0 14px;
             }
-            QPushButton:hover { background: #e9ecef; border-style: solid; }
+            QPushButton:hover { background: #ece8df; border-style: solid; }
         ''')
         self._cliente_btn.clicked.connect(self._abrir_selector_cliente)
         main.addWidget(self._cliente_btn)
 
         sep3 = QFrame()
         sep3.setFrameShape(QFrame.HLine)
-        sep3.setStyleSheet('background:#dee2e6; max-height:1px;')
+        sep3.setStyleSheet('background:#dcd6c8; max-height:1px;')
         main.addWidget(sep3)
 
         # ── No facturar ───────────────────────────────────────────────────────
@@ -165,13 +165,13 @@ class ArcoPerfilDialog(QDialog):
         no_btn.setStyleSheet('''
             QPushButton {
                 background: transparent;
-                color: #6c757d;
-                border: 1px solid #ced4da;
+                color: #6f6a5d;
+                border: 1px solid #dcd6c8;
                 border-radius: 8px;
             }
             QPushButton:hover {
-                background: #f8f9fa;
-                color: #343a40;
+                background: #fafaf7;
+                color: #5a5448;
             }
         ''')
         no_btn.clicked.connect(self._solo_registrar)
@@ -193,8 +193,8 @@ class ArcoPerfilDialog(QDialog):
             activo_lbl.setFont(QFont('Segoe UI', 8, QFont.Bold))
             activo_lbl.setAlignment(Qt.AlignCenter)
             activo_lbl.setStyleSheet(
-                'color: #1a1a1a;'
-                'background: #ffd600;'
+                'color: #1c1c1e;'
+                'background: #c1521f;'
                 'border-radius: 4px;'
                 'padding: 2px 8px;'
                 'letter-spacing: 0.5px;'
@@ -218,7 +218,7 @@ class ArcoPerfilDialog(QDialog):
             btn.setStyleSheet(f'''
                 QPushButton {{
                     background: {color_bg};
-                    border: 3px solid #ffd600;
+                    border: 3px solid #c1521f;
                     border-radius: 12px;
                 }}
                 QPushButton:hover {{ background: {color_hover}; }}
@@ -244,17 +244,17 @@ class ArcoPerfilDialog(QDialog):
             self.selected_cliente = dlg.selected_cliente
             nombre = dlg.selected_cliente.get('nombre', '')
             cuit = dlg.selected_cliente.get('cuit', '')
-            txt = f'👤  {nombre}'
+            txt = f'{nombre}'
             if cuit:
                 txt += f'  —  CUIT: {cuit}'
             self._cliente_btn.setText(txt)
             self._cliente_btn.setStyleSheet('''
                 QPushButton {
-                    background: #e7f3ff; color: #0d6efd;
-                    border: 1px solid #b6d4fe; border-radius: 8px;
+                    background: #fbeee5; color: #c1521f;
+                    border: 1px solid #dcd6c8; border-radius: 8px;
                     text-align: left; padding: 0 14px;
                 }
-                QPushButton:hover { background: #cfe2ff; }
+                QPushButton:hover { background: #fbeee5; }
             ''')
 
     def _facturar_perfil(self, perfil: dict):

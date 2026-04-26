@@ -38,10 +38,10 @@ from PyQt5.QtGui import QFont, QColor
 _FONT_BOLD_9     = QFont('Segoe UI', 9, QFont.Bold)
 _FONT_NORMAL_9   = QFont('Segoe UI', 9)
 _FONT_STRIKE_9   = QFont('Segoe UI', 9); _FONT_STRIKE_9.setStrikeOut(True)
-_COLOR_GREEN     = QColor('#198754')
-_COLOR_BLUE      = QColor('#0d6efd')
-_COLOR_RED       = QColor('#dc3545')
-_COLOR_GRAY      = QColor('#adb5bd')
+_COLOR_GREEN     = QColor('#3d7a3a')
+_COLOR_BLUE      = QColor('#c1521f')
+_COLOR_RED       = QColor('#a01616')
+_COLOR_GRAY      = QColor('#9b958a')
 # Máximo de ventas a cargar por refresh — protege la UI cuando el rango
 # de fechas devuelve miles de filas. La paginación se hace por filtro de
 # fecha (los rangos rápidos ya filtran).
@@ -109,7 +109,7 @@ class SalesHistoryView(QWidget):
         # Header
         title = QLabel('Historial de Ventas')
         title.setFont(QFont('Segoe UI', 15, QFont.Bold))
-        title.setStyleSheet('color: #1e293b;')
+        title.setStyleSheet('color: #1c1c1e;')
         layout.addWidget(title)
 
         # Filtros — con scroll horizontal si la pantalla es chica
@@ -122,7 +122,7 @@ class SalesHistoryView(QWidget):
 
         filter_frame = QFrame()
         filter_frame.setStyleSheet(
-            'QFrame { background: white; border: 1px solid #dee2e6; border-radius: 8px; }'
+            'QFrame { background: white; border: 1px solid #dcd6c8; border-radius: 8px; }'
         )
         filter_layout = QHBoxLayout(filter_frame)
         filter_layout.setContentsMargins(12, 6, 12, 6)
@@ -157,12 +157,12 @@ class SalesHistoryView(QWidget):
         # Botones de rango rápido
         range_btn_style = '''
             QPushButton {
-                background: #f1f3f5; color: #495057;
-                border: 1.5px solid #ced4da; border-radius: 6px;
+                background: #fafaf7; color: #5a5448;
+                border: 1.5px solid #dcd6c8; border-radius: 6px;
                 padding: 4px 12px; font-size: 10px; font-weight: bold;
                 min-height: 32px; min-width: 54px;
             }
-            QPushButton:hover { background: #0d6efd; color: white; border-color: #0d6efd; }
+            QPushButton:hover { background: #c1521f; color: white; border-color: #c1521f; }
         '''
         for label, slot in [('Hoy', self._set_today), ('7 dias', self._set_week), ('30 dias', self._set_month)]:
             btn = QPushButton(label)
@@ -174,12 +174,12 @@ class SalesHistoryView(QWidget):
         search_btn = QPushButton('Buscar')
         search_btn.setStyleSheet('''
             QPushButton {
-                background: #0d6efd; color: white;
+                background: #c1521f; color: white;
                 border: none; border-radius: 6px;
                 padding: 4px 16px; font-weight: bold;
                 min-height: 32px;
             }
-            QPushButton:hover { background: #0b5ed7; }
+            QPushButton:hover { background: #a3441a; }
         ''')
         search_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
         search_btn.clicked.connect(self.refresh_data)
@@ -225,7 +225,7 @@ class SalesHistoryView(QWidget):
         detail_header = QHBoxLayout()
         detail_title = QLabel('Detalle de la Venta')
         detail_title.setFont(QFont('Segoe UI', 11, QFont.Bold))
-        detail_title.setStyleSheet('color: #1e293b;')
+        detail_title.setStyleSheet('color: #1c1c1e;')
         detail_header.addWidget(detail_title)
         detail_header.addStretch()
 
@@ -234,10 +234,10 @@ class SalesHistoryView(QWidget):
         self.edit_btn.setEnabled(False)
         self.edit_btn.setCursor(Qt.PointingHandCursor)
         self.edit_btn.setStyleSheet('''
-            QPushButton { background:#f59e0b; color:white; border:none;
+            QPushButton { background:#c1521f; color:white; border:none;
                           border-radius:6px; padding:6px 14px; font-weight:bold; }
-            QPushButton:hover { background:#d97706; }
-            QPushButton:disabled { background:#e5e7eb; color:#9ca3af; }
+            QPushButton:hover { background:#a3441a; }
+            QPushButton:disabled { background:#dcd6c8; color:#9b958a; }
         ''')
         self.edit_btn.clicked.connect(self._edit_current_sale)
         detail_header.addWidget(self.edit_btn)
@@ -271,8 +271,8 @@ class SalesHistoryView(QWidget):
         # Resumen de totales
         self.summary_label = QLabel('')
         self.summary_label.setStyleSheet(
-            'background: white; border: 1px solid #e2e8f0; border-left: 4px solid #0d6efd; '
-            'border-radius: 7px; padding: 10px 16px; font-size: 12px; color: #1e293b;'
+            'background: white; border: 1px solid #dcd6c8; border-left: 4px solid #c1521f; '
+            'border-radius: 7px; padding: 10px 16px; font-size: 12px; color: #1c1c1e;'
         )
         self.summary_label.setFont(QFont('Segoe UI', 10, QFont.Bold))
         layout.addWidget(self.summary_label)
@@ -564,7 +564,7 @@ class EditSaleDialog(QDialog):
 
         header = QLabel(f"Venta #{self.sale.get('id', '')}  -  {self.sale.get('created_at', '')}")
         header.setFont(QFont('Segoe UI', 11, QFont.Bold))
-        header.setStyleSheet('color: #1e293b;')
+        header.setStyleSheet('color: #1c1c1e;')
         layout.addWidget(header)
 
         pay_group = QGroupBox('Método de pago')
@@ -590,12 +590,14 @@ class EditSaleDialog(QDialog):
         self.table.setHorizontalHeaderLabels(['Producto', 'Cant.', 'Precio unit.', 'Desc.', 'Subtotal'])
         self.table.setRowCount(len(self.items))
         self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(54)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionMode(QTableWidget.NoSelection)
         hdr = self.table.horizontalHeader()
         hdr.setSectionResizeMode(0, QHeaderView.Stretch)
         hdr.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        hdr.setSectionResizeMode(2, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(2, QHeaderView.Fixed)
+        self.table.setColumnWidth(2, 170)
         hdr.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         hdr.setSectionResizeMode(4, QHeaderView.ResizeToContents)
 
@@ -616,9 +618,30 @@ class EditSaleDialog(QDialog):
             spin.setSingleStep(100.0)
             spin.setValue(float(it.get('unit_price') or 0))
             spin.setPrefix('$ ')
+            spin.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
+            spin.setMinimumHeight(40)
+            spin.setStyleSheet(
+                "QDoubleSpinBox {"
+                "  background: #ffffff;"
+                "  border: 1.5px solid #c1521f;"
+                "  border-radius: 6px;"
+                "  padding: 6px 12px;"
+                "  font-family: 'Consolas', monospace;"
+                "  font-weight: 700;"
+                "  font-size: 14px;"
+                "  color: #1c1c1e;"
+                "}"
+                "QDoubleSpinBox:focus { border-color: #a3441a; border-width: 2px; }"
+            )
+            wrap = QWidget()
+            wlay = QHBoxLayout(wrap)
+            wlay.setContentsMargins(10, 8, 10, 8)
+            wlay.setSpacing(0)
+            wlay.addWidget(spin)
             spin.valueChanged.connect(self._recalc_total)
             self._spins[int(it.get('id'))] = spin
-            self.table.setCellWidget(row, 2, spin)
+            self.table.setCellWidget(row, 2, wrap)
 
             disc = float(it.get('discount_amount') or 0)
             disc_item = QTableWidgetItem(f"${disc:.2f}" if disc else '-')
@@ -640,7 +663,7 @@ class EditSaleDialog(QDialog):
         total_row.addWidget(QLabel('Total:'))
         self.total_lbl = QLabel('$0.00')
         self.total_lbl.setFont(QFont('Segoe UI', 13, QFont.Bold))
-        self.total_lbl.setStyleSheet('color: #0f172a;')
+        self.total_lbl.setStyleSheet('color: #1c1c1e;')
         total_row.addWidget(self.total_lbl)
         layout.addLayout(total_row)
 

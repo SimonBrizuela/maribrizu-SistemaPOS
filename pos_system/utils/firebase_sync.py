@@ -293,9 +293,28 @@ class FirebaseSync:
                     stock_min = int(raw_smin) if raw_smin not in (None, '', False) else None
                     stock_max = int(raw_smax) if raw_smax not in (None, '', False) else None
 
+                    # Producto Conjunto
+                    def _to_float(v):
+                        if v in (None, '', False):
+                            return None
+                        try:
+                            return float(v)
+                        except (TypeError, ValueError):
+                            return None
+                    es_conjunto = 1 if d.get('es_conjunto') else 0
+                    conjunto_tipo = (str(d.get('conjunto_tipo') or '').strip() or None) if es_conjunto else None
+                    conjunto_unidad_medida = (str(d.get('conjunto_unidad_medida') or '').strip() or None) if es_conjunto else None
+                    conjunto_unidades = _to_float(d.get('conjunto_unidades')) if es_conjunto else None
+                    conjunto_contenido = _to_float(d.get('conjunto_contenido')) if es_conjunto else None
+                    conjunto_restante = _to_float(d.get('conjunto_restante')) if es_conjunto else None
+                    conjunto_precio_unidad = _to_float(d.get('conjunto_precio_unidad')) if es_conjunto else None
+                    conjunto_total = _to_float(d.get('conjunto_total')) if es_conjunto else None
+
                     try:
                         rows = db_manager.execute_query(
-                            "SELECT id, name, price, cost, stock, barcode, category, rubro, stock_min, stock_max "
+                            "SELECT id, name, price, cost, stock, barcode, category, rubro, stock_min, stock_max, "
+                            "es_conjunto, conjunto_tipo, conjunto_unidad_medida, conjunto_unidades, "
+                            "conjunto_contenido, conjunto_restante, conjunto_precio_unidad, conjunto_total "
                             "FROM products WHERE firebase_id = ?", (doc_id,)
                         ) or []
                     except Exception:
@@ -313,10 +332,19 @@ class FirebaseSync:
                                    (name, category, price, cost, stock, barcode,
                                     discount_value, firebase_id, rubro,
                                     stock_min, stock_max,
+                                    es_conjunto, conjunto_tipo, conjunto_unidad_medida,
+                                    conjunto_unidades, conjunto_contenido, conjunto_restante,
+                                    conjunto_precio_unidad, conjunto_total,
                                     created_at, updated_at)
-                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)""",
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                                           ?, ?, ?, ?, ?, ?, ?, ?,
+                                           CURRENT_TIMESTAMP, ?)""",
                                 (nombre, categ, precio, costo, stock, barcode,
-                                 desc, doc_id, rubro, stock_min, stock_max, now_local_str)
+                                 desc, doc_id, rubro, stock_min, stock_max,
+                                 es_conjunto, conjunto_tipo, conjunto_unidad_medida,
+                                 conjunto_unidades, conjunto_contenido, conjunto_restante,
+                                 conjunto_precio_unidad, conjunto_total,
+                                 now_local_str)
                             )
                             changed_any = True
                         except Exception as e:
@@ -325,6 +353,15 @@ class FirebaseSync:
                         r = rows[0]
                         local_id = r['id']
                         # Sólo actualizar si algo realmente cambió (evita overwrites)
+                        def _eq_float(a, b):
+                            if a is None and b is None:
+                                return True
+                            if a is None or b is None:
+                                return False
+                            try:
+                                return abs(float(a) - float(b)) < 1e-9
+                            except (TypeError, ValueError):
+                                return False
                         cambios = (
                             (r.get('name') or '')     != nombre or
                             float(r.get('price') or 0) != precio or
@@ -334,7 +371,15 @@ class FirebaseSync:
                             (r.get('category') or '') != categ or
                             (r.get('rubro') or '')    != (rubro or '') or
                             r.get('stock_min')        != stock_min or
-                            r.get('stock_max')        != stock_max
+                            r.get('stock_max')        != stock_max or
+                            int(r.get('es_conjunto') or 0) != es_conjunto or
+                            (r.get('conjunto_tipo') or None)          != conjunto_tipo or
+                            (r.get('conjunto_unidad_medida') or None) != conjunto_unidad_medida or
+                            not _eq_float(r.get('conjunto_unidades'),      conjunto_unidades) or
+                            not _eq_float(r.get('conjunto_contenido'),     conjunto_contenido) or
+                            not _eq_float(r.get('conjunto_restante'),      conjunto_restante) or
+                            not _eq_float(r.get('conjunto_precio_unidad'), conjunto_precio_unidad) or
+                            not _eq_float(r.get('conjunto_total'),         conjunto_total)
                         )
                         if not cambios:
                             continue
@@ -348,10 +393,17 @@ class FirebaseSync:
                                 """UPDATE products
                                    SET name=?, category=?, price=?, cost=?, stock=?,
                                        barcode=?, discount_value=?, rubro=?,
-                                       stock_min=?, stock_max=?, updated_at=?
+                                       stock_min=?, stock_max=?,
+                                       es_conjunto=?, conjunto_tipo=?, conjunto_unidad_medida=?,
+                                       conjunto_unidades=?, conjunto_contenido=?, conjunto_restante=?,
+                                       conjunto_precio_unidad=?, conjunto_total=?,
+                                       updated_at=?
                                    WHERE id=?""",
                                 (nombre, categ, precio, costo, stock,
                                  barcode, desc, rubro, stock_min, stock_max,
+                                 es_conjunto, conjunto_tipo, conjunto_unidad_medida,
+                                 conjunto_unidades, conjunto_contenido, conjunto_restante,
+                                 conjunto_precio_unidad, conjunto_total,
                                  now_local_str, local_id)
                             )
                             changed_any = True
@@ -813,7 +865,9 @@ class FirebaseSync:
                         continue
                     try:
                         rows = db_manager.execute_query(
-                            "SELECT id, firebase_id, stock FROM products WHERE id = ?",
+                            "SELECT id, firebase_id, stock, es_conjunto, "
+                            "       conjunto_unidades, conjunto_restante, conjunto_total "
+                            "FROM products WHERE id = ?",
                             (int(pid),)
                         )
                     except Exception:
@@ -821,10 +875,29 @@ class FirebaseSync:
                     if not rows:
                         continue
                     row = rows[0]
+                    firebase_id = str(row.get('firebase_id') or '').strip()
+
+                    # Producto Conjunto: no se toca `stock`, se sincroniza el
+                    # estado absoluto (unidades / restante / total) que el modelo
+                    # de venta ya actualizó en SQLite.
+                    if int(row.get('es_conjunto') or 0) == 1:
+                        payload_conj = {
+                            'conjunto_unidades':    float(row.get('conjunto_unidades') or 0),
+                            'conjunto_restante':    float(row.get('conjunto_restante') or 0),
+                            'conjunto_total':       float(row.get('conjunto_total') or 0),
+                            'ultima_actualizacion': now_dt,
+                        }
+                        inv_ref = self.db.collection('inventario').document(str(pid))
+                        batch.set(inv_ref, payload_conj, merge=True)
+                        if firebase_id:
+                            cat_ref = self.db.collection('catalogo').document(firebase_id)
+                            batch.set(cat_ref, payload_conj, merge=True)
+                        updated += 1
+                        continue
+
                     # Servicio/ilimitado: no tocar el stock en Firebase
                     if int(row.get('stock') or 0) == -1:
                         continue
-                    firebase_id = str(row.get('firebase_id') or '').strip()
 
                     # Inventario (doc_id = id numérico local) — decremento atómico
                     inv_ref = self.db.collection('inventario').document(str(pid))
@@ -1624,6 +1697,11 @@ class FirebaseSync:
             from pos_system.models.user import User, _hash_password
             user_model = User(db_manager)
             docs = list(self.db.collection('cajeros').stream())
+            # Lista de usernames que NO se sincronizan (datos viejos de prueba).
+            # Si aparecen en Firebase, se ignoran y se borran localmente para que
+            # no vuelvan a aparecer en la pantalla de cajeros.
+            BLOCKED_USERNAMES = {'simon', 'simone'}
+
             count = 0
             for doc in docs:
                 d = doc.to_dict() or {}
@@ -1632,6 +1710,15 @@ class FirebaseSync:
                 role      = str(d.get('role') or 'cajero').strip()
                 is_active = bool(d.get('is_active', True))
                 if not username:
+                    continue
+                if username in BLOCKED_USERNAMES:
+                    # Borrar localmente si quedó de un sync anterior
+                    try:
+                        db_manager.execute_update(
+                            "DELETE FROM users WHERE username=?", (username,)
+                        )
+                    except Exception:
+                        pass
                     continue
                 existing = user_model.get_by_username(username)
                 if existing:
@@ -1654,6 +1741,12 @@ class FirebaseSync:
                     except Exception:
                         pass
                 count += 1
+            # Limpieza adicional por si los blocked existen sin venir de Firebase
+            for blk in BLOCKED_USERNAMES:
+                try:
+                    db_manager.execute_update("DELETE FROM users WHERE username=?", (blk,))
+                except Exception:
+                    pass
             logger.info(f"Firebase: {count} cajeros sincronizados desde Firestore.")
             return count
         except Exception as e:

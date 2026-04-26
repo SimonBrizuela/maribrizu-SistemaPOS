@@ -168,14 +168,14 @@ class FacturaDialog(QDialog):
 
         # ── Encabezado fijo ───────────────────────────────────────────────
         header_w = QWidget()
-        header_w.setStyleSheet('background: #f8f9fa; border-bottom: 1px solid #dee2e6;')
+        header_w.setStyleSheet('background: #fafaf7; border-bottom: 1px solid #dcd6c8;')
         header_lay = QVBoxLayout(header_w)
         header_lay.setContentsMargins(16, 12, 16, 10)
         header_lay.setSpacing(2)
 
         title = QLabel('Factura Electronica AFIP')
         title.setFont(QFont('Segoe UI', 13, QFont.Bold))
-        title.setStyleSheet('color: #0d6efd; background: transparent;')
+        title.setStyleSheet('color: #c1521f; background: transparent;')
         header_lay.addWidget(title)
 
         total = self.sale.get('total_amount', 0)
@@ -223,9 +223,9 @@ class FacturaDialog(QDialog):
             itbl.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
             itbl.verticalHeader().setDefaultSectionSize(26)
             itbl.setStyleSheet('''
-                QTableWidget { border: 1px solid #dee2e6; border-radius: 4px; }
+                QTableWidget { border: 1px solid #dcd6c8; border-radius: 4px; }
                 QTableWidget::item { padding: 2px 4px; }
-                QHeaderView::section { background: #f8f9fa; padding: 3px; border: none; border-bottom: 1px solid #dee2e6; }
+                QHeaderView::section { background: #fafaf7; padding: 3px; border: none; border-bottom: 1px solid #dcd6c8; }
             ''')
 
             for row, it in enumerate(sale_items):
@@ -292,7 +292,7 @@ class FacturaDialog(QDialog):
         # Label de estado del lookup al padrón AFIP (se actualiza al consultar)
         self.cuit_status_lbl = QLabel('')
         self.cuit_status_lbl.setFont(QFont('Segoe UI', 8))
-        self.cuit_status_lbl.setStyleSheet('color:#6c757d; padding-left:2px;')
+        self.cuit_status_lbl.setStyleSheet('color:#6f6a5d; padding-left:2px;')
         cliente_layout.addRow('', self.cuit_status_lbl)
         # Disparar consulta al padrón cuando se termina de editar el CUIT
         self.cuit_cliente_input.editingFinished.connect(self._on_cuit_lookup)
@@ -362,7 +362,7 @@ class FacturaDialog(QDialog):
         self.notas_input.setPlaceholderText('Aclaraciones o condiciones para incluir en la factura...')
         self.notas_input.setMaximumHeight(64)
         self.notas_input.setStyleSheet(
-            'QPlainTextEdit { border: 1px solid #ced4da; border-radius: 4px; padding: 4px; }'
+            'QPlainTextEdit { border: 1px solid #dcd6c8; border-radius: 4px; padding: 4px; }'
         )
         notas_layout.addWidget(self.notas_input)
         main.addWidget(notas_group)
@@ -371,19 +371,19 @@ class FacturaDialog(QDialog):
         if self.emisor.get('cert_path') and self.emisor.get('key_path'):
             badge = QLabel('CAE automatico — se solicitara a AFIP al generar')
             badge.setStyleSheet(
-                'background:#e7f3ff; color:#0d6efd; border:1px solid #b6d4fe;'
+                'background:#fbeee5; color:#c1521f; border:1px solid #dcd6c8;'
                 'border-radius:6px; padding:6px 10px; font-size:10px;'
             )
             main.addWidget(badge)
         elif not self.emisor.get('cuit'):
             warn = QLabel('Configure los datos del emisor en Fiscal → Configuracion AFIP')
-            warn.setStyleSheet('color: #dc3545; font-size: 10px; padding: 4px;')
+            warn.setStyleSheet('color: #a01616; font-size: 10px; padding: 4px;')
             warn.setWordWrap(True)
             main.addWidget(warn)
         else:
             badge = QLabel('Sin certificado — ingresa el CAE manualmente si lo tenes')
             badge.setStyleSheet(
-                'background:#fff3cd; color:#856404; border:1px solid #ffecb5;'
+                'background:#fbeee5; color:#b07020; border:1px solid #ffecb5;'
                 'border-radius:6px; padding:6px 10px; font-size:10px;'
             )
             main.addWidget(badge)
@@ -393,7 +393,7 @@ class FacturaDialog(QDialog):
 
         # ── Botones fijos abajo ───────────────────────────────────────────
         btn_bar = QWidget()
-        btn_bar.setStyleSheet('background: #f8f9fa; border-top: 1px solid #dee2e6;')
+        btn_bar.setStyleSheet('background: #fafaf7; border-top: 1px solid #dcd6c8;')
         btn_row = QHBoxLayout(btn_bar)
         btn_row.setContentsMargins(16, 10, 16, 10)
         btn_row.setSpacing(8)
@@ -411,11 +411,11 @@ class FacturaDialog(QDialog):
         preview_btn.setToolTip('Generar PDF de vista previa sin guardar')
         preview_btn.setStyleSheet('''
             QPushButton {
-                background: #f8f9fa; color: #495057;
-                border: 1px solid #ced4da; border-radius: 8px;
+                background: #fafaf7; color: #5a5448;
+                border: 1px solid #dcd6c8; border-radius: 8px;
                 padding: 0 10px;
             }
-            QPushButton:hover { background: #e9ecef; }
+            QPushButton:hover { background: #ece8df; }
         ''')
         preview_btn.clicked.connect(self._preview_factura)
         btn_row.addWidget(preview_btn)
@@ -425,10 +425,10 @@ class FacturaDialog(QDialog):
         emit_btn.setFont(QFont('Segoe UI', 11, QFont.Bold))
         emit_btn.setStyleSheet('''
             QPushButton {
-                background: #0d6efd; color: white;
+                background: #c1521f; color: white;
                 border: none; border-radius: 8px;
             }
-            QPushButton:hover { background: #0b5ed7; }
+            QPushButton:hover { background: #a3441a; }
         ''')
         emit_btn.clicked.connect(self._emit_factura)
         btn_row.addWidget(emit_btn, 2)
@@ -475,7 +475,7 @@ class FacturaDialog(QDialog):
             return
         if not cuit.isdigit() or len(cuit) != 11:
             self.cuit_status_lbl.setText('CUIT invalido (11 digitos)')
-            self.cuit_status_lbl.setStyleSheet('color:#dc3545; padding-left:2px;')
+            self.cuit_status_lbl.setStyleSheet('color:#a01616; padding-left:2px;')
             return
         # Evitar re-lookup si el usuario sale y vuelve al mismo CUIT
         if cuit == self._last_lookup_cuit:
@@ -486,7 +486,7 @@ class FacturaDialog(QDialog):
         cuit_emi  = (self.emisor.get('cuit', '') or '').replace('-', '').replace(' ', '')
         if not (cert_path and key_path and cuit_emi):
             self.cuit_status_lbl.setText('Sin certificado AFIP — completalo manual')
-            self.cuit_status_lbl.setStyleSheet('color:#b45309; padding-left:2px;')
+            self.cuit_status_lbl.setStyleSheet('color:#a3441a; padding-left:2px;')
             return
         # Buscar primero en la DB local (sin gastar un roundtrip a AFIP si ya lo tenemos)
         try:
@@ -510,7 +510,7 @@ class FacturaDialog(QDialog):
 
         self._last_lookup_cuit = cuit
         self.cuit_status_lbl.setText('Consultando padron AFIP...')
-        self.cuit_status_lbl.setStyleSheet('color:#0d6efd; padding-left:2px;')
+        self.cuit_status_lbl.setStyleSheet('color:#c1521f; padding-left:2px;')
 
         # Cortar worker previo si estaba corriendo
         prev = self._cuit_lookup_thread
@@ -528,7 +528,7 @@ class FacturaDialog(QDialog):
     def _on_cuit_lookup_ok(self, cuit, data):
         if data is None:
             self.cuit_status_lbl.setText('CUIT no encontrado en AFIP')
-            self.cuit_status_lbl.setStyleSheet('color:#b45309; padding-left:2px;')
+            self.cuit_status_lbl.setStyleSheet('color:#a3441a; padding-left:2px;')
             return
         self._apply_padron_result(cuit, data, from_local=False)
         # Guardar cliente en la DB local para futuros lookups
@@ -543,7 +543,7 @@ class FacturaDialog(QDialog):
             self.cuit_status_lbl.setText('Cert sin permiso para padron — autorizalo en AFIP')
         else:
             self.cuit_status_lbl.setText(f'Error: {msg[:60]}')
-        self.cuit_status_lbl.setStyleSheet('color:#dc3545; padding-left:2px;')
+        self.cuit_status_lbl.setStyleSheet('color:#a01616; padding-left:2px;')
 
     def _apply_padron_result(self, cuit, data, from_local=False):
         """Aplica el resultado del lookup a los campos del formulario."""
@@ -564,7 +564,7 @@ class FacturaDialog(QDialog):
                 self.tipo_combo.setCurrentText('FAC. ELEC. A')
         suffix = ' (cache local)' if from_local else ''
         self.cuit_status_lbl.setText(f'OK: {razon[:40]}{suffix}')
-        self.cuit_status_lbl.setStyleSheet('color:#15803d; padding-left:2px;')
+        self.cuit_status_lbl.setStyleSheet('color:#3d7a3a; padding-left:2px;')
 
     def _save_cliente_facturacion(self, cuit, data):
         """Upsert del cliente en la tabla clientes_facturacion."""
@@ -794,7 +794,7 @@ class FacturaDialog(QDialog):
         pl = QVBoxLayout(prog)
         pl.addWidget(QLabel('Conectando con AFIP, por favor esperá...'))
         pb_lbl = QLabel('')
-        pb_lbl.setStyleSheet('color:#6c757d;font-size:11px;')
+        pb_lbl.setStyleSheet('color:#6f6a5d;font-size:11px;')
         pl.addWidget(pb_lbl)
 
         worker = _CaeWorker(

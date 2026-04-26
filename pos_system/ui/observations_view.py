@@ -71,17 +71,17 @@ class ObservationsView(QWidget):
         header = QHBoxLayout()
         title = QLabel('Observaciones')
         title.setFont(QFont('Segoe UI', 15, QFont.Bold))
-        title.setStyleSheet('color: #1e293b;')
+        title.setStyleSheet('color: #1c1c1e;')
         header.addWidget(title)
         header.addStretch()
 
         self.new_btn = QPushButton('+ Nueva observación')
         self.new_btn.setCursor(Qt.PointingHandCursor)
         self.new_btn.setStyleSheet('''
-            QPushButton { background: #0d6efd; color: white; border: none;
+            QPushButton { background: #c1521f; color: white; border: none;
                           padding: 8px 18px; border-radius: 6px;
                           font-weight: bold; font-size: 10pt; }
-            QPushButton:hover { background: #0b5ed7; }
+            QPushButton:hover { background: #a3441a; }
         ''')
         self.new_btn.clicked.connect(self._on_new)
         header.addWidget(self.new_btn)
@@ -89,10 +89,10 @@ class ObservationsView(QWidget):
         self.refresh_btn = QPushButton('Actualizar')
         self.refresh_btn.setCursor(Qt.PointingHandCursor)
         self.refresh_btn.setStyleSheet('''
-            QPushButton { background: #f1f5f9; color: #1e293b;
-                          border: 1px solid #cbd5e1; padding: 8px 14px;
+            QPushButton { background: #fafaf7; color: #1c1c1e;
+                          border: 1px solid #dcd6c8; padding: 8px 14px;
                           border-radius: 6px; font-size: 10pt; }
-            QPushButton:hover { background: #e2e8f0; }
+            QPushButton:hover { background: #dcd6c8; }
         ''')
         self.refresh_btn.clicked.connect(self.refresh_data)
         header.addWidget(self.refresh_btn)
@@ -100,7 +100,7 @@ class ObservationsView(QWidget):
         layout.addLayout(header)
 
         self.count_lbl = QLabel('0 observaciones')
-        self.count_lbl.setStyleSheet('color: #64748b; font-size: 9pt;')
+        self.count_lbl.setStyleSheet('color: #6f6a5d; font-size: 9pt;')
         layout.addWidget(self.count_lbl)
 
         scroll = QScrollArea()
@@ -136,7 +136,7 @@ class ObservationsView(QWidget):
     def _make_card(self, row: dict) -> QWidget:
         card = QFrame()
         ctx = str(row.get('context') or 'general')
-        border = '#f59e0b' if ctx == 'sale' else '#cbd5e1'
+        border = '#c1521f' if ctx == 'sale' else '#dcd6c8'
         card.setStyleSheet(f'''
             QFrame {{ background: white; border: 1px solid {border};
                       border-radius: 8px; }}
@@ -150,8 +150,8 @@ class ObservationsView(QWidget):
         when = row.get('created_at') or ''
         tag = 'Venta' if ctx == 'sale' else 'General'
 
-        meta_lbl = QLabel(f"<b>{author}</b>  ·  {when}  ·  <span style='color:#64748b;'>{tag}</span>")
-        meta_lbl.setStyleSheet('color: #334155; font-size: 9pt; border: none;')
+        meta_lbl = QLabel(f"<b>{author}</b>  ·  {when}  ·  <span style='color:#6f6a5d;'>{tag}</span>")
+        meta_lbl.setStyleSheet('color: #5a5448; font-size: 9pt; border: none;')
         meta_row.addWidget(meta_lbl)
         meta_row.addStretch()
 
@@ -163,9 +163,9 @@ class ObservationsView(QWidget):
             del_btn.setCursor(Qt.PointingHandCursor)
             del_btn.setStyleSheet('''
                 QPushButton { background: transparent; color: #dc2626;
-                              border: 1px solid #fecaca; padding: 2px 10px;
+                              border: 1px solid #a01616; padding: 2px 10px;
                               border-radius: 4px; font-size: 9pt; }
-                QPushButton:hover { background: #fef2f2; }
+                QPushButton:hover { background: #fbe5e5; }
             ''')
             del_btn.clicked.connect(lambda _=False, r=row: self._on_delete(r))
             meta_row.addWidget(del_btn)
@@ -174,12 +174,12 @@ class ObservationsView(QWidget):
 
         text_lbl = QLabel(str(row.get('text') or ''))
         text_lbl.setWordWrap(True)
-        text_lbl.setStyleSheet('color: #0f172a; font-size: 11pt; border: none; padding-top: 2px;')
+        text_lbl.setStyleSheet('color: #1c1c1e; font-size: 11pt; border: none; padding-top: 2px;')
         lyt.addWidget(text_lbl)
 
         if ctx == 'sale' and row.get('sale_id'):
             sale_lbl = QLabel(f"Venta #{row.get('sale_id')}")
-            sale_lbl.setStyleSheet('color: #b45309; font-size: 9pt; border: none;')
+            sale_lbl.setStyleSheet('color: #a3441a; font-size: 9pt; border: none;')
             lyt.addWidget(sale_lbl)
 
         return card

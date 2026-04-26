@@ -36,14 +36,14 @@ class DashboardView(QWidget):
 
         title = QLabel('Dashboard — Estadísticas')
         title.setFont(QFont('Segoe UI', 15, QFont.Bold))
-        title.setStyleSheet('color: #1e293b;')
+        title.setStyleSheet('color: #1c1c1e;')
         header_layout.addWidget(title)
         header_layout.addStretch()
 
         # Toolbar de fechas — en su propio frame para que no se apriete
         toolbar = QFrame()
         toolbar.setStyleSheet(
-            'QFrame { background: white; border: 1px solid #dee2e6; border-radius: 8px; }'
+            'QFrame { background: white; border: 1px solid #dcd6c8; border-radius: 8px; }'
         )
         toolbar_layout = QHBoxLayout(toolbar)
         toolbar_layout.setContentsMargins(10, 6, 10, 6)
@@ -51,13 +51,13 @@ class DashboardView(QWidget):
 
         range_btn_style = '''
             QPushButton {
-                background: #f1f3f5; color: #495057;
-                border: 1.5px solid #ced4da; border-radius: 6px;
+                background: #fafaf7; color: #5a5448;
+                border: 1.5px solid #dcd6c8; border-radius: 6px;
                 padding: 4px 12px; font-size: 11px; font-weight: bold;
                 min-height: 30px;
             }
-            QPushButton:hover { background: #0d6efd; color: white; border-color: #0d6efd; }
-            QPushButton:pressed { background: #0b5ed7; color: white; }
+            QPushButton:hover { background: #c1521f; color: white; border-color: #c1521f; }
+            QPushButton:pressed { background: #a3441a; color: white; }
         '''
 
         for label, slot in [('Hoy', self._set_today), ('7 dias', self._set_week), ('30 dias', self._set_month)]:
@@ -69,7 +69,7 @@ class DashboardView(QWidget):
 
         sep = QFrame()
         sep.setFrameShape(QFrame.VLine)
-        sep.setStyleSheet('color: #dee2e6;')
+        sep.setStyleSheet('color: #dcd6c8;')
         toolbar_layout.addWidget(sep)
 
         toolbar_layout.addWidget(QLabel('Desde:'))
@@ -93,12 +93,12 @@ class DashboardView(QWidget):
         refresh_btn = QPushButton('Actualizar')
         refresh_btn.setStyleSheet('''
             QPushButton {
-                background: #0d6efd; color: white;
+                background: #c1521f; color: white;
                 border: none; border-radius: 6px;
                 padding: 4px 16px; font-size: 11px; font-weight: bold;
                 min-height: 30px;
             }
-            QPushButton:hover { background: #0b5ed7; }
+            QPushButton:hover { background: #a3441a; }
         ''')
         refresh_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
         refresh_btn.clicked.connect(self.refresh_data)
@@ -125,7 +125,7 @@ class DashboardView(QWidget):
         self.stock_alert_frame = QFrame()
         self.stock_alert_frame.setVisible(False)
         self.stock_alert_frame.setStyleSheet(
-            'QFrame { background: #fff8e1; border: 1.5px solid #ffc107; border-radius: 8px; }'
+            'QFrame { background: #fbeee5; border: 1.5px solid #b07020; border-radius: 8px; }'
         )
         alert_layout = QHBoxLayout(self.stock_alert_frame)
         alert_layout.setContentsMargins(12, 8, 12, 8)
@@ -136,7 +136,7 @@ class DashboardView(QWidget):
         self.stock_alert_label = QLabel()
         self.stock_alert_label.setFont(QFont('Segoe UI', 10))
         self.stock_alert_label.setWordWrap(True)
-        self.stock_alert_label.setStyleSheet('color: #856404; background: transparent; border: none;')
+        self.stock_alert_label.setStyleSheet('color: #b07020; background: transparent; border: none;')
         alert_layout.addWidget(self.stock_alert_label, 1)
         content_layout.addWidget(self.stock_alert_frame)
 
@@ -186,7 +186,7 @@ class DashboardView(QWidget):
         card.setStyleSheet(f'''
             QFrame {{
                 background-color: white;
-                border: 1px solid #e9ecef;
+                border: 1px solid #ece8df;
                 border-top: 3px solid {color};
                 border-radius: 10px;
                 margin: 2px;
@@ -208,7 +208,7 @@ class DashboardView(QWidget):
 
         title_label = QLabel(title)
         title_label.setFont(QFont('Segoe UI', 9, QFont.Bold))
-        title_label.setStyleSheet('color: #6c757d; background: transparent; border: none; letter-spacing: 0.3px;')
+        title_label.setStyleSheet('color: #6f6a5d; background: transparent; border: none; letter-spacing: 0.3px;')
         title_label.setWordWrap(True)
         top_row.addWidget(title_label, 1)
         card_layout.addLayout(top_row)
@@ -229,7 +229,7 @@ class DashboardView(QWidget):
         canvas = FigureCanvas(figure)
         canvas.setMinimumHeight(240)
         canvas.setSizePolicy(QSP.Expanding, QSP.Expanding)
-        canvas.setStyleSheet('border: 1px solid #e9ecef; border-radius: 8px; background: white;')
+        canvas.setStyleSheet('border: 1px solid #ece8df; border-radius: 8px; background: white;')
         return canvas
 
     def refresh_data(self):
@@ -254,13 +254,13 @@ class DashboardView(QWidget):
 
         # Método de pago preferido
         if total_sales_count == 0:
-            preferred_payment, preferred_color = 'Sin datos', '#6c757d'
+            preferred_payment, preferred_color = 'Sin datos', '#6f6a5d'
         elif cash_count > transfer_count:
-            preferred_payment, preferred_color = 'Efectivo', '#22c55e'
+            preferred_payment, preferred_color = 'Efectivo', '#3d7a3a'
         elif transfer_count > cash_count:
-            preferred_payment, preferred_color = 'Virtual', '#3b82f6'
+            preferred_payment, preferred_color = 'Virtual', '#c1521f'
         else:
-            preferred_payment, preferred_color = 'Igual', '#f59e0b'
+            preferred_payment, preferred_color = 'Igual', '#c1521f'
 
         # Producto más vendido
         if top_products:
@@ -271,14 +271,14 @@ class DashboardView(QWidget):
 
         # Crear cards con íconos
         cards = [
-            ('VENTAS TOTALES',    f'${summary["total_amount"]:.2f}',         '', '#22c55e'),
-            ('Nº DE VENTAS',      str(total_sales_count),                    '', '#3b82f6'),
+            ('VENTAS TOTALES',    f'${summary["total_amount"]:.2f}',         '', '#3d7a3a'),
+            ('Nº DE VENTAS',      str(total_sales_count),                    '', '#c1521f'),
             ('PAGO PREFERIDO',    preferred_payment,                         '', preferred_color),
-            ('TICKET PROMEDIO',   f'${summary["average_sale"]:.2f}',         '', '#f59e0b'),
-            (f'EFECTIVO ({cash_count})',   f'${summary["cash_amount"]:.2f}', '', '#22c55e'),
-            (f'VIRTUAL ({transfer_count})',f'${summary["transfer_amount"]:.2f}','', '#3b82f6'),
-            ('MÁS VENDIDO',       f'{top_name} ({top_qty})',                 '', '#8b5cf6'),
-            ('STOCK BAJO',        str(len(low_stock)),                       '', '#ef4444' if low_stock else '#22c55e'),
+            ('TICKET PROMEDIO',   f'${summary["average_sale"]:.2f}',         '', '#c1521f'),
+            (f'EFECTIVO ({cash_count})',   f'${summary["cash_amount"]:.2f}', '', '#3d7a3a'),
+            (f'VIRTUAL ({transfer_count})',f'${summary["transfer_amount"]:.2f}','', '#c1521f'),
+            ('MÁS VENDIDO',       f'{top_name} ({top_qty})',                 '', '#c1521f'),
+            ('STOCK BAJO',        str(len(low_stock)),                       '', '#a01616' if low_stock else '#3d7a3a'),
         ]
 
         positions = [(0, 0), (0, 1), (0, 2), (0, 3), (1, 0), (1, 1), (1, 2), (1, 3)]
@@ -317,7 +317,7 @@ class DashboardView(QWidget):
         if sales_by_hour:
             hours = [item['hour'] for item in sales_by_hour]
             amounts = [item['total'] for item in sales_by_hour]
-            bars = ax.bar(hours, amounts, color='#3b82f6', alpha=0.8, width=0.6)
+            bars = ax.bar(hours, amounts, color='#c1521f', alpha=0.8, width=0.6)
             ax.set_xlabel('Hora del Día', fontsize=9)
             ax.set_ylabel('Ventas ($)', fontsize=9)
             ax.set_title('Ventas por Hora (Hoy)', fontsize=11, fontweight='bold')
@@ -350,8 +350,8 @@ class DashboardView(QWidget):
         if rows:
             days = [r['day'][5:] for r in rows]  # MM-DD
             totals = [r['total'] for r in rows]
-            ax.plot(days, totals, color='#3b82f6', marker='o', linewidth=2, markersize=5)
-            ax.fill_between(range(len(days)), totals, alpha=0.15, color='#3b82f6')
+            ax.plot(days, totals, color='#c1521f', marker='o', linewidth=2, markersize=5)
+            ax.fill_between(range(len(days)), totals, alpha=0.15, color='#c1521f')
             ax.set_xticks(range(len(days)))
             ax.set_xticklabels(days, rotation=45, fontsize=7)
             ax.set_ylabel('Ventas ($)', fontsize=9)
@@ -377,7 +377,7 @@ class DashboardView(QWidget):
                 for p in top_products
             ]
             quantities = [p['total_quantity'] for p in top_products]
-            colors = ['#8b5cf6', '#6d28d9', '#a78bfa', '#7c3aed', '#ddd6fe']
+            colors = ['#c1521f', '#a3441a', '#a78bfa', '#c1521f', '#dcd6c86fe']
             bars = ax.barh(products, quantities, color=colors[:len(products)], alpha=0.85)
             ax.set_xlabel('Cantidad Vendida', fontsize=9)
             ax.set_title('Top 5 Productos', fontsize=11, fontweight='bold')
@@ -406,9 +406,9 @@ class DashboardView(QWidget):
             x_pos = [0, 1]
             width = 0.35
             bars1 = ax.bar([p - width / 2 for p in x_pos], [cash_count, cash_amount],
-                           width, label='Efectivo', color='#22c55e', alpha=0.85)
+                           width, label='Efectivo', color='#3d7a3a', alpha=0.85)
             bars2 = ax.bar([p + width / 2 for p in x_pos], [transfer_count, transfer_amount],
-                           width, label='Virtual', color='#3b82f6', alpha=0.85)
+                           width, label='Virtual', color='#c1521f', alpha=0.85)
 
             ax.set_ylabel('Valor', fontsize=9)
             ax.set_title('Efectivo vs Virtual', fontsize=11, fontweight='bold')

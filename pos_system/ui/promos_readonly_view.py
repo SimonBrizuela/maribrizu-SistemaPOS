@@ -29,9 +29,9 @@ class PromosReadOnlyView(QWidget):
 
         # ── Encabezado ──
         header_row = QHBoxLayout()
-        title = QLabel('🏷️  Promociones Activas')
+        title = QLabel('Promociones Activas')
         title.setFont(QFont('Segoe UI', 15, QFont.Bold))
-        title.setStyleSheet('color: #1e293b;')
+        title.setStyleSheet('color: #1c1c1e;')
         header_row.addWidget(title)
         header_row.addStretch()
 
@@ -41,11 +41,11 @@ class PromosReadOnlyView(QWidget):
         self.refresh_btn.setFont(QFont('Segoe UI', 9, QFont.Bold))
         self.refresh_btn.setStyleSheet('''
             QPushButton {
-                background: #0d6efd; color: white;
+                background: #c1521f; color: white;
                 border: none; border-radius: 6px; padding: 4px 14px;
             }
-            QPushButton:hover { background: #0b5ed7; }
-            QPushButton:disabled { background: #6c757d; }
+            QPushButton:hover { background: #a3441a; }
+            QPushButton:disabled { background: #6f6a5d; }
         ''')
         self.refresh_btn.clicked.connect(self.refresh_data)
         header_row.addWidget(self.refresh_btn)
@@ -53,12 +53,12 @@ class PromosReadOnlyView(QWidget):
 
         self.status_lbl = QLabel('Cargando promociones...')
         self.status_lbl.setFont(QFont('Segoe UI', 9))
-        self.status_lbl.setStyleSheet('color: #6c757d;')
+        self.status_lbl.setStyleSheet('color: #6f6a5d;')
         layout.addWidget(self.status_lbl)
 
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet('color: #e2e8f0;')
+        sep.setStyleSheet('color: #dcd6c8;')
         layout.addWidget(sep)
 
         # ── Tabla única ──
@@ -76,11 +76,11 @@ class PromosReadOnlyView(QWidget):
         hh.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         hh.setSectionResizeMode(4, QHeaderView.Stretch)
         self.table.setStyleSheet('''
-            QTableWidget { border: 1.5px solid #e2e8f0; border-radius: 6px; }
+            QTableWidget { border: 1.5px solid #dcd6c8; border-radius: 6px; }
             QTableWidget::item { padding: 6px; }
             QHeaderView::section {
-                background: #f1f5f9; font-weight: bold; font-size: 10px;
-                padding: 8px; border: none; border-bottom: 1.5px solid #cbd5e1;
+                background: #fafaf7; font-weight: bold; font-size: 10px;
+                padding: 8px; border: none; border-bottom: 1.5px solid #dcd6c8;
             }
         ''')
         layout.addWidget(self.table, 1)
@@ -119,23 +119,23 @@ class PromosReadOnlyView(QWidget):
         self.refresh_btn.setText('↻  Actualizar')
 
         if error:
-            self.status_lbl.setText(f'⚠️  {error}')
-            self.status_lbl.setStyleSheet('color: #dc3545;')
+            self.status_lbl.setText(f'{error}')
+            self.status_lbl.setStyleSheet('color: #a01616;')
             return
 
         # Filtrar solo activas explícitamente
         activas = [p for p in promos if p.get('activo') is True]
 
         n = len(activas)
-        self.status_lbl.setText(f'✅  {n} promoción{"es" if n != 1 else ""} activa{"s" if n != 1 else ""} — consultá con los clientes')
-        self.status_lbl.setStyleSheet('color: #198754;')
+        self.status_lbl.setText(f'{n} promoción{"es" if n != 1 else ""} activa{"s" if n != 1 else ""} — consultá con los clientes')
+        self.status_lbl.setStyleSheet('color: #3d7a3a;')
 
         self.table.setRowCount(0)
         if not activas:
             self.table.setRowCount(1)
             self.table.setSpan(0, 0, 1, 5)
             item = QTableWidgetItem('No hay promociones activas en este momento')
-            item.setForeground(QColor('#6c757d'))
+            item.setForeground(QColor('#6f6a5d'))
             item.setTextAlignment(Qt.AlignCenter)
             item.setFont(QFont('Segoe UI', 10))
             self.table.setItem(0, 0, item)
@@ -149,7 +149,7 @@ class PromosReadOnlyView(QWidget):
             nombre = p.get('nombre') or p.get('name') or ''
             name_item = QTableWidgetItem(nombre)
             name_item.setFont(QFont('Segoe UI', 10, QFont.Bold))
-            name_item.setForeground(QColor('#1e293b'))
+            name_item.setForeground(QColor('#1c1c1e'))
             self.table.setItem(row, 0, name_item)
 
             # Col 1: Descuento (valor legible)
@@ -171,7 +171,7 @@ class PromosReadOnlyView(QWidget):
                 desc_txt = 'Especial'
             desc_item = QTableWidgetItem(desc_txt)
             desc_item.setFont(QFont('Segoe UI', 11, QFont.Bold))
-            desc_item.setForeground(QColor('#dc3545'))
+            desc_item.setForeground(QColor('#a01616'))
             desc_item.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(row, 1, desc_item)
 

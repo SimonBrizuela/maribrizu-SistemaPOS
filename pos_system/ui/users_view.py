@@ -36,7 +36,7 @@ class UsersView(QWidget):
 
         icon_title = QLabel('Gestión de Cajeros')
         icon_title.setFont(QFont('Segoe UI', 17, QFont.Bold))
-        icon_title.setStyleSheet('color: #1e293b;')
+        icon_title.setStyleSheet('color: #1c1c1e;')
         header_layout.addWidget(icon_title)
         header_layout.addStretch()
 
@@ -47,7 +47,7 @@ class UsersView(QWidget):
         nuevo_cajero_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
         nuevo_cajero_btn.setStyleSheet('''
             QPushButton {
-                background: #198754;
+                background: #3d7a3a;
                 color: white;
                 border: none;
                 border-radius: 8px;
@@ -55,8 +55,8 @@ class UsersView(QWidget):
                 font-size: 11px;
                 font-weight: bold;
             }
-            QPushButton:hover { background: #157347; }
-            QPushButton:pressed { background: #146c43; }
+            QPushButton:hover { background: #2f5e2c; }
+            QPushButton:pressed { background: #2f5e2c; }
         ''')
         nuevo_cajero_btn.clicked.connect(self.add_user)
         header_layout.addWidget(nuevo_cajero_btn)
@@ -68,7 +68,7 @@ class UsersView(QWidget):
             'Solo el administrador ve Productos, Promociones, Fiscal y esta sección.'
         )
         info_banner.setStyleSheet(
-            'background: #fff3cd; color: #856404; border: 1.5px solid #ffc107; '
+            'background: #fbeee5; color: #b07020; border: 1.5px solid #b07020; '
             'border-radius: 8px; padding: 10px 14px; font-size: 11px;'
         )
         info_banner.setWordWrap(True)
@@ -87,22 +87,22 @@ class UsersView(QWidget):
         self.table.verticalHeader().setVisible(False)
         self.table.setStyleSheet('''
             QTableWidget {
-                border: 1.5px solid #dee2e6;
+                border: 1.5px solid #dcd6c8;
                 border-radius: 8px;
                 background: white;
-                gridline-color: #f1f3f5;
+                gridline-color: #fafaf7;
                 font-size: 12px;
             }
             QTableWidget::item { padding: 6px 10px; }
-            QTableWidget::item:selected { background: #e8f0fe; color: #1a1a1a; }
+            QTableWidget::item:selected { background: #e8f0fe; color: #1c1c1e; }
             QHeaderView::section {
-                background: #f8f9fa;
+                background: #fafaf7;
                 border: none;
-                border-bottom: 2px solid #dee2e6;
+                border-bottom: 2px solid #dcd6c8;
                 padding: 8px 10px;
                 font-weight: bold;
                 font-size: 11px;
-                color: #495057;
+                color: #5a5448;
             }
         ''')
         self.table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Stretch)
@@ -117,7 +117,7 @@ class UsersView(QWidget):
         # ── Botones de acción ─────────────────────────────────────────────
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet('color: #e9ecef; margin: 0px;')
+        sep.setStyleSheet('color: #ece8df; margin: 0px;')
         layout.addWidget(sep)
 
         btn_layout = QHBoxLayout()
@@ -125,19 +125,19 @@ class UsersView(QWidget):
 
         edit_btn = QPushButton('Editar')
         edit_btn.setMinimumHeight(38)
-        edit_btn.setStyleSheet(self._btn_style('#0d6efd', '#0b5ed7'))
+        edit_btn.setStyleSheet(self._btn_style('#c1521f', '#a3441a'))
         edit_btn.clicked.connect(self.edit_user)
         btn_layout.addWidget(edit_btn)
 
         change_pass_btn = QPushButton('Cambiar Contraseña')
         change_pass_btn.setMinimumHeight(38)
-        change_pass_btn.setStyleSheet(self._btn_style('#6c757d', '#5c636a'))
+        change_pass_btn.setStyleSheet(self._btn_style('#6f6a5d', '#5c636a'))
         change_pass_btn.clicked.connect(self.change_password)
         btn_layout.addWidget(change_pass_btn)
 
         deactivate_btn = QPushButton('Desactivar')
         deactivate_btn.setMinimumHeight(38)
-        deactivate_btn.setStyleSheet(self._btn_style('#dc3545', '#b02a37'))
+        deactivate_btn.setStyleSheet(self._btn_style('#a01616', '#b02a37'))
         deactivate_btn.clicked.connect(self.deactivate_user)
         btn_layout.addWidget(deactivate_btn)
 
@@ -151,7 +151,7 @@ class UsersView(QWidget):
 
         # Hint de doble clic
         hint = QLabel('Doble clic para editar un cajero')
-        hint.setStyleSheet('color: #adb5bd; font-size: 10px;')
+        hint.setStyleSheet('color: #9b958a; font-size: 10px;')
         hint.setFont(QFont('Segoe UI', 9))
         btn_layout.addWidget(hint)
 
@@ -191,10 +191,10 @@ class UsersView(QWidget):
             role_item = QTableWidgetItem(role_label)
             role_item.setTextAlignment(Qt.AlignCenter)
             if user['role'] == 'admin':
-                role_item.setForeground(QColor('#0d6efd'))
+                role_item.setForeground(QColor('#c1521f'))
                 role_item.setFont(QFont('Segoe UI', 9, QFont.Bold))
             else:
-                role_item.setForeground(QColor('#198754'))
+                role_item.setForeground(QColor('#3d7a3a'))
                 role_item.setFont(QFont('Segoe UI', 9))
             self.table.setItem(row, 3, role_item)
 
@@ -202,7 +202,7 @@ class UsersView(QWidget):
             status_text = 'Activo' if is_active else 'Inactivo'
             status_item = QTableWidgetItem(status_text)
             status_item.setTextAlignment(Qt.AlignCenter)
-            status_item.setForeground(QColor('#198754') if is_active else QColor('#dc3545'))
+            status_item.setForeground(QColor('#3d7a3a') if is_active else QColor('#a01616'))
             self.table.setItem(row, 4, status_item)
 
             last_login = user.get('last_login') or 'Nunca'
@@ -368,17 +368,17 @@ class UserDialog(QDialog):
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.setMinimumWidth(420)
         self.setStyleSheet('''
-            QDialog { background: #f8f9fa; }
+            QDialog { background: #fafaf7; }
             QLineEdit, QComboBox {
-                border: 1.5px solid #ced4da;
+                border: 1.5px solid #dcd6c8;
                 border-radius: 6px;
                 padding: 8px 10px;
                 font-size: 12px;
                 background: white;
                 min-height: 34px;
             }
-            QLineEdit:focus, QComboBox:focus { border-color: #0d6efd; }
-            QLabel { font-size: 12px; color: #495057; }
+            QLineEdit:focus, QComboBox:focus { border-color: #c1521f; }
+            QLabel { font-size: 12px; color: #5a5448; }
         ''')
         self.init_ui()
 
@@ -391,12 +391,12 @@ class UserDialog(QDialog):
         is_new = self.user is None
         title = QLabel('Nuevo Cajero' if is_new else 'Editar Cajero')
         title.setFont(QFont('Segoe UI', 14, QFont.Bold))
-        title.setStyleSheet('color: #1e293b;')
+        title.setStyleSheet('color: #1c1c1e;')
         layout.addWidget(title)
 
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet('color: #e9ecef;')
+        sep.setStyleSheet('color: #ece8df;')
         layout.addWidget(sep)
 
         form = QFormLayout()
@@ -409,7 +409,7 @@ class UserDialog(QDialog):
         if self.user:
             self.username_input.setText(self.user['username'])
             self.username_input.setEnabled(False)
-            self.username_input.setStyleSheet('background: #e9ecef; color: #6c757d; border-radius: 6px; padding: 8px;')
+            self.username_input.setStyleSheet('background: #ece8df; color: #6f6a5d; border-radius: 6px; padding: 8px;')
         form.addRow('Usuario:', self.username_input)
 
         # Nombre completo
@@ -444,7 +444,7 @@ class UserDialog(QDialog):
             'Administrador: accede a todo el sistema.'
         )
         role_info.setStyleSheet(
-            'background: #e7f3ff; color: #0d6efd; border: 1px solid #b6d4fe; '
+            'background: #fbeee5; color: #c1521f; border: 1px solid #dcd6c8; '
             'border-radius: 6px; padding: 8px 12px; font-size: 10px;'
         )
         role_info.setWordWrap(True)
@@ -460,11 +460,11 @@ class UserDialog(QDialog):
         cancel_btn.setMinimumHeight(40)
         cancel_btn.setStyleSheet('''
             QPushButton {
-                background: #f8f9fa; border: 1px solid #dee2e6;
+                background: #fafaf7; border: 1px solid #dcd6c8;
                 border-radius: 7px; padding: 8px 20px;
-                color: #495057; font-size: 12px;
+                color: #5a5448; font-size: 12px;
             }
-            QPushButton:hover { background: #e9ecef; }
+            QPushButton:hover { background: #ece8df; }
         ''')
         cancel_btn.clicked.connect(self.reject)
 
@@ -473,11 +473,11 @@ class UserDialog(QDialog):
         save_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         save_btn.setStyleSheet('''
             QPushButton {
-                background: #198754; color: white; border: none;
+                background: #3d7a3a; color: white; border: none;
                 border-radius: 7px; padding: 8px 24px;
                 font-size: 12px; font-weight: bold;
             }
-            QPushButton:hover { background: #157347; }
+            QPushButton:hover { background: #2f5e2c; }
         ''')
         save_btn.clicked.connect(self._validate_and_accept)
 
@@ -513,16 +513,16 @@ class ChangePasswordDialog(QDialog):
         self.setWindowFlags(self.windowFlags() & ~Qt.WindowContextHelpButtonHint)
         self.setMinimumWidth(380)
         self.setStyleSheet('''
-            QDialog { background: #f8f9fa; }
+            QDialog { background: #fafaf7; }
             QLineEdit {
-                border: 1.5px solid #ced4da;
+                border: 1.5px solid #dcd6c8;
                 border-radius: 6px;
                 padding: 8px 10px;
                 font-size: 12px;
                 background: white;
                 min-height: 34px;
             }
-            QLineEdit:focus { border-color: #0d6efd; }
+            QLineEdit:focus { border-color: #c1521f; }
         ''')
         self.user_name = user_name
         self.init_ui()
@@ -534,17 +534,17 @@ class ChangePasswordDialog(QDialog):
 
         title = QLabel(f'Cambiar contraseña')
         title.setFont(QFont('Segoe UI', 14, QFont.Bold))
-        title.setStyleSheet('color: #1e293b;')
+        title.setStyleSheet('color: #1c1c1e;')
         layout.addWidget(title)
 
         if self.user_name:
             sub = QLabel(f'Cajero: {self.user_name}')
-            sub.setStyleSheet('color: #6c757d; font-size: 11px;')
+            sub.setStyleSheet('color: #6f6a5d; font-size: 11px;')
             layout.addWidget(sub)
 
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet('color: #e9ecef;')
+        sep.setStyleSheet('color: #ece8df;')
         layout.addWidget(sep)
 
         form = QFormLayout()
@@ -569,10 +569,10 @@ class ChangePasswordDialog(QDialog):
         cancel_btn.setMinimumHeight(40)
         cancel_btn.setStyleSheet('''
             QPushButton {
-                background: #f8f9fa; border: 1px solid #dee2e6;
-                border-radius: 7px; padding: 8px 20px; color: #495057; font-size: 12px;
+                background: #fafaf7; border: 1px solid #dcd6c8;
+                border-radius: 7px; padding: 8px 20px; color: #5a5448; font-size: 12px;
             }
-            QPushButton:hover { background: #e9ecef; }
+            QPushButton:hover { background: #ece8df; }
         ''')
         cancel_btn.clicked.connect(self.reject)
 
@@ -581,11 +581,11 @@ class ChangePasswordDialog(QDialog):
         ok_btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         ok_btn.setStyleSheet('''
             QPushButton {
-                background: #0d6efd; color: white; border: none;
+                background: #c1521f; color: white; border: none;
                 border-radius: 7px; padding: 8px 24px;
                 font-size: 12px; font-weight: bold;
             }
-            QPushButton:hover { background: #0b5ed7; }
+            QPushButton:hover { background: #a3441a; }
         ''')
         ok_btn.clicked.connect(self._validate)
 

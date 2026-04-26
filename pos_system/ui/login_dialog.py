@@ -49,31 +49,35 @@ class LoginDialog(QDialog):
             screen.y() + (screen.height() - h) // 2,
         )
 
-        self.setStyleSheet("""
-            QDialog { background-color: #f0f2f5; }
-            QScrollArea { border: none; background: transparent; }
-            QWidget#scrollContent { background: transparent; }
-            QLabel#loginTitle {
-                color: #1a1a1a; font-size: 20px; font-weight: bold;
-            }
-            QLabel#loginSubtitle { color: #6c757d; font-size: 11px; }
-            QLineEdit {
-                border: 1.5px solid #dee2e6; border-radius: 8px;
+        from pos_system.ui.theme import COLORS as _C
+        self.setStyleSheet(f"""
+            QDialog {{ background-color: {_C['bg']}; }}
+            QScrollArea {{ border: none; background: transparent; }}
+            QWidget#scrollContent {{ background: transparent; }}
+            QLabel#loginTitle {{
+                color: {_C['text']}; font-size: 20px; font-weight: 700;
+            }}
+            QLabel#loginSubtitle {{
+                color: {_C['text_muted']}; font-size: 11px;
+                font-family: 'JetBrains Mono', Consolas, monospace;
+            }}
+            QLineEdit {{
+                border: 1px solid {_C['border']}; border-radius: 6px;
                 padding: 10px 14px; font-size: 13px;
-                background: white; color: #212529;
-            }
-            QLineEdit:focus { border-color: #0d6efd; }
-            QPushButton#btnLogin {
-                background-color: #0d6efd; color: white;
-                border: none; border-radius: 8px;
-                padding: 13px; font-size: 14px; font-weight: bold;
-            }
-            QPushButton#btnLogin:hover    { background-color: #0b5ed7; }
-            QPushButton#btnLogin:pressed  { background-color: #0a58ca; }
-            QFrame#card {
-                background: white; border: 1px solid #dee2e6;
-                border-radius: 14px;
-            }
+                background: {_C['surface']}; color: {_C['text']};
+            }}
+            QLineEdit:focus {{ border-color: {_C['accent']}; }}
+            QPushButton#btnLogin {{
+                background-color: {_C['accent']}; color: white;
+                border: none; border-radius: 6px;
+                padding: 13px; font-size: 14px; font-weight: 700;
+            }}
+            QPushButton#btnLogin:hover    {{ background-color: {_C['accent_hover']}; }}
+            QPushButton#btnLogin:pressed  {{ background-color: {_C['accent_hover']}; }}
+            QFrame#card {{
+                background: {_C['surface']}; border: 1px solid {_C['border']};
+                border-radius: 8px;
+            }}
         """)
 
         # ── Layout raíz con scroll para que todo quepa ───────────────────
@@ -95,14 +99,28 @@ class LoginDialog(QDialog):
         scroll.setWidget(content)
         root_layout.addWidget(scroll)
 
-        # ── Header ───────────────────────────────────────────────────────
+        # ── Header con logo "P" estilo Graphite ──────────────────────────
+        from pos_system.ui.theme import COLORS as _C
+        logo_row = QHBoxLayout()
+        logo_row.addStretch(1)
+        logo = QLabel('L')
+        logo.setFixedSize(56, 56)
+        logo.setAlignment(Qt.AlignCenter)
+        logo.setStyleSheet(
+            f'background: {_C["accent"]}; color: white; border-radius: 10px;'
+            f' font-size: 28px; font-weight: 700;'
+        )
+        logo_row.addWidget(logo)
+        logo_row.addStretch(1)
+        main_layout.addLayout(logo_row)
+
         title = QLabel(APP_NAME)
         title.setObjectName('loginTitle')
         title.setFont(QFont('Segoe UI', 20, QFont.Bold))
         title.setAlignment(Qt.AlignCenter)
         main_layout.addWidget(title)
 
-        subtitle = QLabel(f'Sistema de Punto de Venta  v{APP_VERSION}')
+        subtitle = QLabel(f'v{APP_VERSION} · Caja')
         subtitle.setObjectName('loginSubtitle')
         subtitle.setFont(QFont('Segoe UI', 10))
         subtitle.setAlignment(Qt.AlignCenter)
@@ -117,14 +135,14 @@ class LoginDialog(QDialog):
 
         login_title = QLabel('Iniciar Sesión')
         login_title.setFont(QFont('Segoe UI', 14, QFont.Bold))
-        login_title.setStyleSheet('color: #212529;')
+        login_title.setStyleSheet(f'color: {_C["text"]};')
         login_title.setAlignment(Qt.AlignCenter)
         card_layout.addWidget(login_title)
 
         # Usuario
-        user_label = QLabel('Usuario')
-        user_label.setFont(QFont('Segoe UI', 10, QFont.Bold))
-        user_label.setStyleSheet('color: #495057;')
+        user_label = QLabel('USUARIO')
+        user_label.setFont(QFont('Segoe UI', 9, QFont.Bold))
+        user_label.setStyleSheet(f'color: {_C["text_muted"]}; letter-spacing: 0.5px;')
         card_layout.addWidget(user_label)
 
         self.username_input = QLineEdit()
@@ -134,9 +152,9 @@ class LoginDialog(QDialog):
         card_layout.addWidget(self.username_input)
 
         # Contraseña
-        pass_label = QLabel('Contraseña')
-        pass_label.setFont(QFont('Segoe UI', 10, QFont.Bold))
-        pass_label.setStyleSheet('color: #495057;')
+        pass_label = QLabel('CONTRASEÑA')
+        pass_label.setFont(QFont('Segoe UI', 9, QFont.Bold))
+        pass_label.setStyleSheet(f'color: {_C["text_muted"]}; letter-spacing: 0.5px;')
         card_layout.addWidget(pass_label)
 
         self.password_input = QLineEdit()
@@ -157,7 +175,7 @@ class LoginDialog(QDialog):
 
         # Error
         self.error_label = QLabel('')
-        self.error_label.setStyleSheet('color: #dc3545; font-size: 11px;')
+        self.error_label.setStyleSheet(f'color: {_C["danger"]}; font-size: 11px; font-weight: 600;')
         self.error_label.setAlignment(Qt.AlignCenter)
         self.error_label.setWordWrap(True)
         card_layout.addWidget(self.error_label)
@@ -166,7 +184,7 @@ class LoginDialog(QDialog):
 
         # Hint
         hint = QLabel('Primer inicio: usuario <b>admin</b> · contraseña <b>admin123</b>')
-        hint.setStyleSheet('color: #6c757d; font-size: 10px;')
+        hint.setStyleSheet(f'color: {_C["text_muted"]}; font-size: 10px;')
         hint.setAlignment(Qt.AlignCenter)
         hint.setFont(QFont('Segoe UI', 9))
         main_layout.addWidget(hint)
@@ -223,13 +241,14 @@ class LoginDialog(QDialog):
         except Exception:
             firebase_ok = False
 
+        from pos_system.ui.theme import COLORS as _C
         sep_row = QHBoxLayout()
         sep_left = QFrame(); sep_left.setFrameShape(QFrame.HLine)
-        sep_left.setStyleSheet('color: #dee2e6;')
+        sep_left.setStyleSheet(f'color: {_C["border_soft"]};')
         sep_right = QFrame(); sep_right.setFrameShape(QFrame.HLine)
-        sep_right.setStyleSheet('color: #dee2e6;')
+        sep_right.setStyleSheet(f'color: {_C["border_soft"]};')
         sep_lbl = QLabel('ó')
-        sep_lbl.setStyleSheet('color: #adb5bd; font-size: 11px;')
+        sep_lbl.setStyleSheet(f'color: {_C["text_dim"]}; font-size: 11px;')
         sep_lbl.setAlignment(Qt.AlignCenter)
         sep_row.addWidget(sep_left, 1)
         sep_row.addWidget(sep_lbl)
@@ -237,29 +256,25 @@ class LoginDialog(QDialog):
         layout.addLayout(sep_row)
 
         self.install_btn = QPushButton('Primera Instalación — Descargar datos desde Firebase')
-        self.install_btn.setStyleSheet('''
-            QPushButton {
-                background: #f0fdf4;
-                border: 1.5px solid #86efac;
-                border-radius: 8px;
+        self.install_btn.setStyleSheet(f'''
+            QPushButton {{
+                background: {_C['success_bg']};
+                border: 1px solid {_C['success']};
+                border-radius: 6px;
                 padding: 10px 14px;
-                color: #166534;
+                color: {_C['success']};
                 font-size: 12px;
-                font-weight: bold;
+                font-weight: 700;
                 text-align: center;
-            }
-            QPushButton:hover {
-                background: #dcfce7;
-                border-color: #4ade80;
-            }
-            QPushButton:pressed {
-                background: #bbf7d0;
-            }
-            QPushButton:disabled {
-                background: #f1f5f9;
-                border-color: #cbd5e1;
-                color: #94a3b8;
-            }
+            }}
+            QPushButton:hover {{
+                background: {_C['border_soft']};
+            }}
+            QPushButton:disabled {{
+                background: {_C['surface_alt']};
+                border-color: {_C['border']};
+                color: {_C['text_dim']};
+            }}
         ''')
         self.install_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
         self.install_btn.setMinimumHeight(44)
@@ -322,11 +337,11 @@ class LoginDialog(QDialog):
             self.install_btn.setText('Descarga completada — Ahora podés iniciar sesión')
             self.install_btn.setStyleSheet('''
                 QPushButton {
-                    background: #dcfce7;
-                    border: 1.5px solid #4ade80;
+                    background: #e7f4ec;
+                    border: 1.5px solid #3d7a3a;
                     border-radius: 8px;
                     padding: 10px 14px;
-                    color: #166534;
+                    color: #3d7a3a;
                     font-size: 12px;
                     font-weight: bold;
                 }

@@ -55,19 +55,19 @@ class ClientePerfilDialog(QDialog):
         sub = QLabel('Seleccioná un cliente guardado o ingresá uno nuevo')
         sub.setFont(QFont('Segoe UI', 9))
         sub.setAlignment(Qt.AlignCenter)
-        sub.setStyleSheet('color: #6c757d;')
+        sub.setStyleSheet('color: #6f6a5d;')
         main.addWidget(sub)
 
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet('background:#dee2e6; max-height:1px;')
+        sep.setStyleSheet('background:#dcd6c8; max-height:1px;')
         main.addWidget(sep)
 
         # ── Lista de clientes guardados ───────────────────────────────────────
         if self._clientes:
             lbl = QLabel('Clientes guardados:')
             lbl.setFont(QFont('Segoe UI', 9, QFont.Bold))
-            lbl.setStyleSheet('color: #495057;')
+            lbl.setStyleSheet('color: #5a5448;')
             main.addWidget(lbl)
 
             scroll = QScrollArea()
@@ -82,12 +82,12 @@ class ClientePerfilDialog(QDialog):
             cards_layout.setContentsMargins(0, 0, 0, 0)
 
             colors = [
-                ('#0d6efd', '#0b5ed7'),
-                ('#6f42c1', '#5a32a3'),
-                ('#d63384', '#ab296a'),
-                ('#fd7e14', '#dc6502'),
-                ('#20c997', '#1aa179'),
-                ('#0dcaf0', '#0aadce'),
+                ('#c1521f', '#a3441a'),
+                ('#c1521f', '#a3441a'),
+                ('#a01616', '#7f1212'),
+                ('#c1521f', '#dc6502'),
+                ('#3d7a3a', '#2f5e2c'),
+                ('#c1521f', '#a3441a'),
             ]
 
             for i, c in enumerate(self._clientes):
@@ -110,7 +110,7 @@ class ClientePerfilDialog(QDialog):
                 layout.setContentsMargins(14, 0, 14, 0)
                 layout.setSpacing(10)
 
-                icon = QLabel('👤')
+                icon = QLabel('')
                 icon.setFont(QFont('Segoe UI', 16))
                 icon.setStyleSheet('background:transparent; color:white;')
                 layout.addWidget(icon)
@@ -149,13 +149,13 @@ class ClientePerfilDialog(QDialog):
 
             sep2 = QFrame()
             sep2.setFrameShape(QFrame.HLine)
-            sep2.setStyleSheet('background:#dee2e6; max-height:1px;')
+            sep2.setStyleSheet('background:#dcd6c8; max-height:1px;')
             main.addWidget(sep2)
 
         # ── Formulario nuevo cliente ──────────────────────────────────────────
         nuevo_lbl = QLabel('Nuevo cliente:' if self._clientes else 'Ingresar datos del cliente:')
         nuevo_lbl.setFont(QFont('Segoe UI', 9, QFont.Bold))
-        nuevo_lbl.setStyleSheet('color: #495057;')
+        nuevo_lbl.setStyleSheet('color: #5a5448;')
         main.addWidget(nuevo_lbl)
 
         form = QFormLayout()
@@ -184,11 +184,11 @@ class ClientePerfilDialog(QDialog):
         self._buscar_btn.setFont(QFont('Segoe UI', 9))
         self._buscar_btn.setStyleSheet('''
             QPushButton {
-                background: #0d6efd; color: white; border: none;
+                background: #c1521f; color: white; border: none;
                 border-radius: 6px; padding: 0 10px;
             }
-            QPushButton:hover { background: #0b5ed7; }
-            QPushButton:disabled { background: #adb5bd; }
+            QPushButton:hover { background: #a3441a; }
+            QPushButton:disabled { background: #9b958a; }
         ''')
         self._buscar_btn.setCursor(Qt.PointingHandCursor)
         self._buscar_btn.clicked.connect(self._buscar_cuit_afip)
@@ -210,17 +210,17 @@ class ClientePerfilDialog(QDialog):
         ])
         form.addRow('Condición IVA:', self.condicion_combo)
 
-        self.guardar_check = QPushButton('☐  Guardar para la próxima vez')
+        self.guardar_check = QPushButton('[ ] Guardar para la próxima vez')
         self.guardar_check.setCheckable(True)
         self.guardar_check.setChecked(False)
         self.guardar_check.setFont(QFont('Segoe UI', 9))
         self.guardar_check.setStyleSheet('''
             QPushButton {
-                background: transparent; border: 1px solid #dee2e6;
-                border-radius: 6px; padding: 6px 10px; color: #495057; text-align: left;
+                background: transparent; border: 1px solid #dcd6c8;
+                border-radius: 6px; padding: 6px 10px; color: #5a5448; text-align: left;
             }
             QPushButton:checked {
-                background: #e7f3ff; border-color: #b6d4fe; color: #0d6efd;
+                background: #fbeee5; border-color: #dcd6c8; color: #c1521f;
             }
         ''')
         self.guardar_check.clicked.connect(self._toggle_guardar_text)
@@ -231,7 +231,7 @@ class ClientePerfilDialog(QDialog):
         # ── Botones ───────────────────────────────────────────────────────────
         sep3 = QFrame()
         sep3.setFrameShape(QFrame.HLine)
-        sep3.setStyleSheet('background:#dee2e6; max-height:1px;')
+        sep3.setStyleSheet('background:#dcd6c8; max-height:1px;')
         main.addWidget(sep3)
 
         btn_row = QHBoxLayout()
@@ -242,10 +242,10 @@ class ClientePerfilDialog(QDialog):
         cancel_btn.setFont(QFont('Segoe UI', 10))
         cancel_btn.setStyleSheet('''
             QPushButton {
-                background:transparent; border:1px solid #dee2e6;
-                border-radius:8px; color:#6c757d;
+                background:transparent; border:1px solid #dcd6c8;
+                border-radius:8px; color:#6f6a5d;
             }
-            QPushButton:hover { background:#f8f9fa; color:#343a40; }
+            QPushButton:hover { background:#fafaf7; color:#5a5448; }
         ''')
         cancel_btn.clicked.connect(self.reject)
         btn_row.addWidget(cancel_btn)
@@ -255,10 +255,10 @@ class ClientePerfilDialog(QDialog):
         ok_btn.setFont(QFont('Segoe UI', 11, QFont.Bold))
         ok_btn.setStyleSheet('''
             QPushButton {
-                background:#0d6efd; color:white;
+                background:#c1521f; color:white;
                 border:none; border-radius:8px;
             }
-            QPushButton:hover { background:#0b5ed7; }
+            QPushButton:hover { background:#a3441a; }
         ''')
         ok_btn.clicked.connect(self._use_new)
         btn_row.addWidget(ok_btn, 2)
@@ -346,9 +346,9 @@ class ClientePerfilDialog(QDialog):
 
     def _toggle_guardar_text(self):
         if self.guardar_check.isChecked():
-            self.guardar_check.setText('☑  Guardar para la próxima vez')
+            self.guardar_check.setText('[X] Guardar para la próxima vez')
         else:
-            self.guardar_check.setText('☐  Guardar para la próxima vez')
+            self.guardar_check.setText('[ ] Guardar para la próxima vez')
 
     def _select(self, cliente: dict):
         self.selected_cliente = {

@@ -67,17 +67,17 @@ class TurnoDialog(QDialog):
         small = screen.height() < 700
 
         self.setStyleSheet('''
-            QDialog { background: #f8f9fa; }
+            QDialog { background: #fafaf7; }
             QScrollArea { background: transparent; border: none; }
             QWidget#scrollContent { background: transparent; }
             QLabel#title {
-                font-size: 15px; font-weight: bold; color: #1e293b;
+                font-size: 15px; font-weight: bold; color: #1c1c1e;
             }
             QLabel#subtitle {
-                font-size: 10px; color: #64748b;
+                font-size: 10px; color: #6f6a5d;
             }
             QListWidget {
-                border: 1.5px solid #dee2e6;
+                border: 1.5px solid #dcd6c8;
                 border-radius: 8px;
                 background: white;
                 font-size: 12px;
@@ -87,29 +87,29 @@ class TurnoDialog(QDialog):
                 padding: 8px 12px;
                 border-radius: 5px;
                 margin: 1px 2px;
-                color: #212529;
+                color: #1c1c1e;
             }
-            QListWidget::item:selected { background: #0d6efd; color: white; }
+            QListWidget::item:selected { background: #c1521f; color: white; }
             QListWidget::item:hover:!selected { background: #e8f0fe; }
             QLineEdit {
-                border: 1.5px solid #ced4da;
+                border: 1.5px solid #dcd6c8;
                 border-radius: 6px;
                 padding: 6px 10px;
                 font-size: 12px;
                 background: white;
-                color: #212529;
+                color: #1c1c1e;
             }
-            QLineEdit:focus { border-color: #ffc107; }
+            QLineEdit:focus { border-color: #b07020; }
             QPushButton#confirmBtn {
-                background: #198754; border: none; border-radius: 7px;
-                padding: 9px 20px; color: white; font-size: 12px; font-weight: bold;
+                background: #c1521f; border: none; border-radius: 6px;
+                padding: 9px 20px; color: white; font-size: 13px; font-weight: 700;
             }
-            QPushButton#confirmBtn:hover { background: #157347; }
+            QPushButton#confirmBtn:hover { background: #a3441a; }
             QPushButton#skipBtn {
-                background: #f8f9fa; border: 1px solid #dee2e6; border-radius: 7px;
-                padding: 9px 16px; color: #495057; font-size: 12px;
+                background: #fafaf7; border: 1px solid #dcd6c8; border-radius: 7px;
+                padding: 9px 16px; color: #5a5448; font-size: 12px;
             }
-            QPushButton#skipBtn:hover { background: #e9ecef; }
+            QPushButton#skipBtn:hover { background: #ece8df; }
         ''')
 
         # Layout externo: scroll + botones fijos abajo
@@ -147,13 +147,13 @@ class TurnoDialog(QDialog):
 
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
-        sep.setStyleSheet('color: #e9ecef;')
+        sep.setStyleSheet('color: #ece8df;')
         layout.addWidget(sep)
 
         # ── Lista de cajeros ─────────────────────────────────────────────
         list_lbl = QLabel('Cajeros registrados:')
         list_lbl.setFont(QFont('Segoe UI', 9, QFont.Bold))
-        list_lbl.setStyleSheet('color: #495057;')
+        list_lbl.setStyleSheet('color: #5a5448;')
         layout.addWidget(list_lbl)
 
         self.cajeros_list = QListWidget()
@@ -167,7 +167,7 @@ class TurnoDialog(QDialog):
         # ── Nombre libre ─────────────────────────────────────────────────
         libre_lbl = QLabel('O escribe el nombre del turno:')
         libre_lbl.setFont(QFont('Segoe UI', 9, QFont.Bold))
-        libre_lbl.setStyleSheet('color: #495057;')
+        libre_lbl.setStyleSheet('color: #5a5448;')
         layout.addWidget(libre_lbl)
 
         self.nombre_input = QLineEdit()
@@ -180,7 +180,7 @@ class TurnoDialog(QDialog):
 
         # ── Countdown ────────────────────────────────────────────────────
         self._countdown_lbl = QLabel(f'Se seleccionara automaticamente en {AUTOSELECT_SECONDS}s...')
-        self._countdown_lbl.setStyleSheet('color: #6c757d; font-size: 9px;')
+        self._countdown_lbl.setStyleSheet('color: #6f6a5d; font-size: 9px;')
         self._countdown_lbl.setAlignment(Qt.AlignCenter)
         layout.addWidget(self._countdown_lbl)
 
@@ -189,7 +189,7 @@ class TurnoDialog(QDialog):
 
         # ── Botones (fijos abajo, fuera del scroll) ───────────────────────
         btn_bar = QWidget()
-        btn_bar.setStyleSheet('background: #f8f9fa; border-top: 1px solid #e9ecef;')
+        btn_bar.setStyleSheet('background: #fafaf7; border-top: 1px solid #ece8df;')
         btn_row = QHBoxLayout(btn_bar)
         btn_row.setContentsMargins(14, 10, 14, 10)
         btn_row.setSpacing(10)

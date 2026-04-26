@@ -84,16 +84,18 @@ class MainWindow(QMainWindow):
         self.setCentralWidget(central_widget)
 
         main_layout = QVBoxLayout(central_widget)
-        main_layout.setContentsMargins(16, 16, 16, 16)
-        main_layout.setSpacing(12)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.setSpacing(0)
 
-        # Header
+        # Header (full-width estilo Graphite)
         header = self.create_header()
         main_layout.addWidget(header)
 
-        # Tabs
+        # Tabs (con padding interno via QSS, el body queda al ras)
         self.tabs = QTabWidget()
         self.tabs.setFont(QFont('Segoe UI', 10))
+        self.tabs.setDocumentMode(True)
+        self.tabs.tabBar().setExpanding(False)
 
         is_admin = self.current_user.get('role') == 'admin'
 
@@ -126,7 +128,7 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.history_view, 'Historial')
         if is_admin:
             self.tabs.addTab(self.cash_view, 'Caja')
-        self.tabs.addTab(self.promos_readonly_view, '🏷️ Promociones')
+        self.tabs.addTab(self.promos_readonly_view, 'Promociones')
         self.tabs.addTab(self.observations_view, 'Observaciones')
 
         # Pestañas adicionales solo para admin
@@ -200,109 +202,131 @@ class MainWindow(QMainWindow):
         logger.debug("Keyboard shortcuts configured")
 
     def load_styles(self):
-        try:
-            import os
-            style_path = os.path.join(os.path.dirname(__file__), 'styles.qss')
-            if os.path.exists(style_path):
-                with open(style_path, 'r', encoding='utf-8') as f:
-                    self.setStyleSheet(f.read())
-        except Exception as e:
-            logger.warning(f"Error cargando estilos: {e}")
+        # Tema Graphite: el QSS global ya se aplica en main.py via apply_theme(app).
+        # No cargar el styles.qss viejo — pisaría los colores del tema.
+        pass
 
     def create_header(self):
+        """Header estilo Graphite: logo, título + sub mono, chip cajero/turno, acciones."""
         from pos_system.config import APP_VERSION
+        from pos_system.ui.theme import COLORS
 
         screen = QApplication.primaryScreen().availableGeometry()
         sw = screen.width()
-        # Tres niveles: grande ≥1400, normal ≥1100, pequeño <1100
         if sw >= 1400:
-            fs = 10; pad = '5px 14px'; h = 46; sp = 8
+            fs = 11; pad = '6px 14px'; h = 56
         elif sw >= 1100:
-            fs = 9;  pad = '4px 10px'; h = 42; sp = 6
+            fs = 10; pad = '5px 12px'; h = 52
         else:
-            fs = 8;  pad = '3px 8px';  h = 38; sp = 5
-
-        def _btn_style(bg, hover, color='white', border='none'):
-            return f'''QPushButton {{
-                background:{bg}; border:{border}; border-radius:6px;
-                padding:{pad}; color:{color}; font-size:{fs}px; font-weight:bold;
-            }} QPushButton:hover {{ background:{hover}; }}
-            QPushButton:pressed {{ background:{hover}; }}
-            QPushButton:disabled {{ background:#adb5bd; color:#f8f9fa; }}'''
+            fs = 9;  pad = '4px 10px'; h = 48
 
         header = QWidget()
         header.setObjectName('headerWidget')
-        header.setStyleSheet('''
-            QWidget#headerWidget {
-                background: qlineargradient(x1:0,y1:0,x2:1,y2:0,stop:0 #ffffff,stop:1 #f8f9fa);
-                border-radius: 8px; border: 1px solid #e1e4e8;
-            }
+        header.setStyleSheet(f'''
+            QWidget#headerWidget {{
+                background: {COLORS['surface']};
+                border-bottom: 1px solid {COLORS['border']};
+            }}
         ''')
         header.setFixedHeight(h)
 
         hl = QHBoxLayout(header)
-        hl.setContentsMargins(12, 0, 12, 0)
-        hl.setSpacing(sp)
+        hl.setContentsMargins(16, 8, 16, 8)
+        hl.setSpacing(10)
 
-        hl.addStretch()
+        # ── Logo "P" naranja ───────────────────────────────────────────────
+        logo = QLabel('L')
+        logo.setFixedSize(32, 32)
+        logo.setAlignment(Qt.AlignCenter)
+        logo.setStyleSheet(
+            f'background: {COLORS["accent"]}; color: white; border-radius: 6px;'
+            f' font-weight: 700; font-size: 16px;'
+        )
+        hl.addWidget(logo)
+
+        # ── Título + subtítulo mono con info de turno/caja ─────────────────
+        title_box = QVBoxLayout()
+        title_box.setSpacing(1)
+        title_box.setContentsMargins(0, 0, 0, 0)
+        title_lbl = QLabel('Librería Liceo')
+        title_lbl.setStyleSheet(
+            f'color: {COLORS["text"]}; font-weight: 700; font-size: 13px; background: transparent;'
+        )
+        self._header_subtitle = QLabel('—')
+        self._header_subtitle.setStyleSheet(
+            f'color: {COLORS["text_muted"]}; font-size: 10px; background: transparent;'
+            f' font-family: "JetBrains Mono", Consolas, monospace;'
+        )
+        title_box.addWidget(title_lbl)
+        title_box.addWidget(self._header_subtitle)
+        hl.addLayout(title_box)
+        hl.addStretch(1)
 
         user_role = self.current_user.get('role', '')
         full_name = self.current_user.get('full_name', 'Usuario')
         role_txt  = 'Admin' if user_role == 'admin' else 'Cajero'
-        color_role = '#0d6efd' if user_role == 'admin' else '#198754'
 
-        # ── Usuario (una sola línea en pantallas pequeñas) ────────────────
-        if sw < 1100:
-            # Pantalla chica: solo nombre + rol en un label
-            user_lbl = QLabel(f'<b style="color:#212529">{full_name}</b>'
-                              f' <span style="color:{color_role};font-size:{fs-1}px">({role_txt})</span>')
-            user_lbl.setTextFormat(Qt.RichText)
-            user_lbl.setStyleSheet('background:transparent;')
-            hl.addWidget(user_lbl)
-        else:
-            user_container = QVBoxLayout()
-            user_container.setSpacing(0)
-            n_lbl = QLabel(full_name)
-            n_lbl.setFont(QFont('Segoe UI', fs, QFont.Bold))
-            n_lbl.setStyleSheet('color:#212529; background:transparent;')
-            r_lbl = QLabel(role_txt)
-            r_lbl.setFont(QFont('Segoe UI', fs - 1))
-            r_lbl.setStyleSheet(f'color:{color_role}; background:transparent;')
-            user_container.addWidget(n_lbl)
-            user_container.addWidget(r_lbl)
-            hl.addLayout(user_container)
-
-        # ── Turno (solo admin) ────────────────────────────────────────────
+        # ── Chip cajero / turno ────────────────────────────────────────────
         self._turno_lbl = None
         if user_role == 'admin':
             turno_nombre = self.current_user.get('turno_nombre') or full_name
-            self._turno_lbl = QPushButton(f'Turno: {turno_nombre}')
-            self._turno_lbl.setStyleSheet(f'''
+            chip = QPushButton(f'  {turno_nombre[:1].upper()}   {turno_nombre} · {role_txt}  ▾')
+            chip.setStyleSheet(f'''
                 QPushButton {{
-                    background:#fff3cd; border:1.5px solid #ffc107; border-radius:6px;
-                    padding:{pad}; color:#856404; font-size:{fs}px; font-weight:bold;
+                    background: {COLORS['surface_alt']};
+                    border: 1px solid {COLORS['border']};
+                    border-radius: 6px; padding: {pad};
+                    color: {COLORS['text']}; font-size: {fs}px; font-weight: 600;
+                    text-align: left;
                 }}
-                QPushButton:hover {{ background:#ffe69c; border-color:#e0a800; }}
+                QPushButton:hover {{
+                    background: {COLORS['border_soft']};
+                    border-color: {COLORS['text_muted']};
+                }}
             ''')
-            self._turno_lbl.setFont(QFont('Segoe UI', fs, QFont.Bold))
-            self._turno_lbl.setToolTip('Click para cambiar el cajero de turno')
-            self._turno_lbl.clicked.connect(self._prompt_turno)
-            hl.addWidget(self._turno_lbl)
+            chip.setFont(QFont('Segoe UI', fs))
+            chip.setToolTip('Click para cambiar el cajero de turno')
+            chip.clicked.connect(self._prompt_turno)
+            self._turno_lbl = chip
+            hl.addWidget(chip)
         else:
             cajero_nombre = self.current_user.get('full_name') or self.current_user.get('username', '')
-            cajero_lbl = QLabel(cajero_nombre)
-            cajero_lbl.setStyleSheet(f'''
-                background:#d1e7dd; border:1.5px solid #198754; border-radius:6px;
-                padding:{pad}; color:#0f5132; font-size:{fs}px; font-weight:bold;
+            chip = QLabel(f'  {cajero_nombre[:1].upper()}   {cajero_nombre} · Cajero')
+            chip.setStyleSheet(f'''
+                background: {COLORS['success_bg']};
+                border: 1px solid {COLORS['success']};
+                border-radius: 6px; padding: {pad};
+                color: {COLORS['success']}; font-size: {fs}px; font-weight: 600;
             ''')
-            cajero_lbl.setFont(QFont('Segoe UI', fs, QFont.Bold))
-            hl.addWidget(cajero_lbl)
+            chip.setFont(QFont('Segoe UI', fs))
+            hl.addWidget(chip)
+
+        # ── Helpers de estilo para los botones ─────────────────────────────
+        def _btn_secondary(text):
+            b = QPushButton(text)
+            b.setStyleSheet(f'''
+                QPushButton {{
+                    background: {COLORS['surface']};
+                    border: 1px solid {COLORS['border']};
+                    border-radius: 6px; padding: {pad};
+                    color: {COLORS['text_muted']}; font-size: {fs}px; font-weight: 600;
+                }}
+                QPushButton:hover {{
+                    background: {COLORS['surface_alt']};
+                    color: {COLORS['text']};
+                    border-color: {COLORS['text_muted']};
+                }}
+                QPushButton:disabled {{
+                    background: {COLORS['border_soft']};
+                    color: {COLORS['text_dim']};
+                }}
+            ''')
+            b.setFont(QFont('Segoe UI', fs))
+            return b
 
         # ── Promociones ───────────────────────────────────────────────────
         promo_txt = 'Promos' if sw < 1200 else 'Promociones'
-        self.promos_btn = QPushButton(promo_txt)
-        self.promos_btn.setStyleSheet(_btn_style('#198754', '#157347'))
-        self.promos_btn.setFont(QFont('Segoe UI', fs, QFont.Bold))
+        self.promos_btn = _btn_secondary(promo_txt)
         self.promos_btn.setToolTip('Sincronizar promociones desde Firebase')
         self.promos_btn.clicked.connect(self._sync_promos_now)
         hl.addWidget(self.promos_btn)
@@ -315,10 +339,8 @@ class MainWindow(QMainWindow):
 
         # ── Sincronizar ───────────────────────────────────────────────────
         sync_txt = 'Sync' if sw < 1100 else 'Sincronizar'
-        self.cloud_btn = QPushButton(sync_txt)
-        self.cloud_btn.setStyleSheet(_btn_style('#0d6efd', '#0b5ed7'))
-        self.cloud_btn.setFont(QFont('Segoe UI', fs, QFont.Bold))
-        self.cloud_btn.setToolTip('Sincronizar con Firebase (Subir / Descargar datos)')
+        self.cloud_btn = _btn_secondary(sync_txt)
+        self.cloud_btn.setToolTip('Sincronizar con Firebase')
         self.cloud_btn.clicked.connect(self._open_cloud_menu)
         hl.addWidget(self.cloud_btn)
         try:
@@ -330,7 +352,14 @@ class MainWindow(QMainWindow):
 
         # ── Actualización (oculto por defecto) ────────────────────────────
         self.update_btn = QPushButton('Actualizando...')
-        self.update_btn.setStyleSheet(_btn_style('#fff3cd', '#ffe69c', color='#856404', border='1.5px solid #ffc107'))
+        self.update_btn.setStyleSheet(f'''
+            QPushButton {{
+                background: {COLORS['warning_bg']};
+                border: 1px solid {COLORS['warning']};
+                border-radius: 6px; padding: {pad};
+                color: {COLORS['warning']}; font-size: {fs}px; font-weight: 700;
+            }}
+        ''')
         self.update_btn.setFont(QFont('Segoe UI', fs, QFont.Bold))
         self.update_btn.setEnabled(False)
         self.update_btn.setVisible(False)
@@ -338,28 +367,20 @@ class MainWindow(QMainWindow):
 
         # ── Auto-inicio (solo admin) ──────────────────────────────────────
         if user_role == 'admin':
-            self._autostart_btn = QPushButton()
-            self._autostart_btn.setFont(QFont('Segoe UI', fs))
+            self._autostart_btn = _btn_secondary('Auto: ?')
             self._autostart_btn.clicked.connect(self._toggle_autostart)
             self._autostart_btn.setToolTip('Inicio automatico al encender la PC')
             hl.addWidget(self._autostart_btn)
             self._refresh_autostart_btn()
 
         # ── Cerrar sesión ─────────────────────────────────────────────────
-        logout_txt = 'Salir' if sw < 1100 else 'Cerrar Sesion'
-        logout_btn = QPushButton(logout_txt)
-        logout_btn.setStyleSheet(f'''
-            QPushButton {{
-                background:#f8f9fa; border:1px solid #dee2e6; border-radius:6px;
-                padding:{pad}; color:#495057; font-size:{fs}px;
-            }}
-            QPushButton:hover {{ background:#e9ecef; border-color:#adb5bd; }}
-        ''')
-        logout_btn.setFont(QFont('Segoe UI', fs))
+        logout_txt = 'Salir' if sw < 1100 else 'Cerrar Sesión'
+        logout_btn = _btn_secondary(logout_txt)
         logout_btn.clicked.connect(self._logout)
         logout_btn.setToolTip('Cerrar sesion (Ctrl+L)')
         hl.addWidget(logout_btn)
 
+        # Refrescar subtítulo cada segundo (lo hace el timer existente vía update_status_bar)
         return header
 
     def update_status_bar(self):
@@ -370,15 +391,26 @@ class MainWindow(QMainWindow):
             current_register = self.cash_register.get_current()
             if current_register:
                 cash_status = f'Caja Abierta | Monto Inicial: ${current_register["initial_amount"]:.2f}'
+                caja_short = f'Caja #{current_register.get("id", "?")}'
             else:
                 cash_status = 'Caja Cerrada'
+                caja_short = 'Caja cerrada'
         except Exception:
             cash_status = 'Caja Cerrada'
+            caja_short = 'Caja cerrada'
 
         user_info = f'{self.current_user.get("username", "")} ({self.current_user.get("role", "")})'
         turno = self.current_user.get('turno_nombre', '')
         turno_str = f'  |  Turno: {turno}' if turno and turno != self.current_user.get('username') else ''
         self.status_bar.showMessage(f'{date_time}  |  {cash_status}  |  {user_info}{turno_str}')
+
+        # Subtítulo del header (estilo PosNew: "Caja #2 · Turno: María · DD/MM HH:MM")
+        if hasattr(self, '_header_subtitle') and self._header_subtitle is not None:
+            sub = caja_short
+            if turno:
+                sub += f' · Turno: {turno}'
+            sub += f' · {now.strftime("%d/%m/%Y %H:%M")}'
+            self._header_subtitle.setText(sub)
 
     def _check_low_stock_badge(self):
         """Actualiza el badge de la pestaña Productos si hay stock bajo"""
@@ -756,26 +788,28 @@ class MainWindow(QMainWindow):
             enabled = is_autostart_enabled()
         except Exception:
             enabled = False
-
+        from pos_system.ui.theme import COLORS
         if enabled:
             self._autostart_btn.setText('Auto: ON')
-            self._autostart_btn.setStyleSheet('''
-                QPushButton {
-                    background: #d1e7dd; border: 1.5px solid #198754;
-                    border-radius: 6px; padding: 3px 10px;
-                    color: #0f5132; font-size: 10px; font-weight: bold;
-                }
-                QPushButton:hover { background: #badbcc; }
+            self._autostart_btn.setStyleSheet(f'''
+                QPushButton {{
+                    background: {COLORS['success_bg']};
+                    border: 1px solid {COLORS['success']};
+                    border-radius: 6px; padding: 5px 12px;
+                    color: {COLORS['success']}; font-size: 10px; font-weight: 700;
+                }}
+                QPushButton:hover {{ background: {COLORS['border_soft']}; }}
             ''')
         else:
             self._autostart_btn.setText('Auto: OFF')
-            self._autostart_btn.setStyleSheet('''
-                QPushButton {
-                    background: #f8f9fa; border: 1px solid #dee2e6;
-                    border-radius: 6px; padding: 3px 10px;
-                    color: #6c757d; font-size: 10px;
-                }
-                QPushButton:hover { background: #e9ecef; }
+            self._autostart_btn.setStyleSheet(f'''
+                QPushButton {{
+                    background: {COLORS['surface']};
+                    border: 1px solid {COLORS['border']};
+                    border-radius: 6px; padding: 5px 12px;
+                    color: {COLORS['text_muted']}; font-size: 10px;
+                }}
+                QPushButton:hover {{ background: {COLORS['surface_alt']}; }}
             ''')
 
     def _toggle_autostart(self):
@@ -820,27 +854,15 @@ class MainWindow(QMainWindow):
         except Exception:
             pass
 
-        logger.info(f"User logged out: {self.current_user.get('username')}")
-        self.timer.stop()
-        self.stock_timer.stop()
-
-        # Reabrir con selección de turno (sin pantalla de login)
-        from pos_system.database.db_manager import DatabaseManager
-        from pos_system.models.user import User as _User
-        _db = DatabaseManager()
-        _um  = _User(_db)
-        _um.ensure_default_admin()
-        _admins = _db.execute_query(
-            "SELECT * FROM users WHERE role='admin' AND is_active=1 LIMIT 1"
-        )
-        if _admins:
-            new_user = _admins[0]
-        else:
-            new_user = {'id': 0, 'username': 'admin', 'role': 'admin',
-                        'full_name': 'Administrador', 'is_active': 1}
-        new_window = MainWindow(current_user=new_user)
-        new_window.show()
-        self.close()
+        logger.info(f"User logged out: {self.current_user.get('username')} — cerrando aplicación")
+        try:
+            self.timer.stop()
+            self.stock_timer.stop()
+        except Exception:
+            pass
+        # Cerrar la app por completo (no reabrir ventana)
+        from PyQt5.QtWidgets import QApplication
+        QApplication.quit()
 
     def _do_cloud_sync(self, full_history=False):
         """
@@ -1212,8 +1234,8 @@ class MainWindow(QMainWindow):
         def on_progress(stage):
             labels = {
                 'downloading': f'⬇ Descargando v{version}...',
-                'extracting':  f'📦 Preparando v{version}...',
-                'applying':    f'✓ Instalando v{version}...',
+                'extracting':  f'Preparando v{version}...',
+                'applying':    f'OK Instalando v{version}...',
             }
             text = labels.get(stage, stage)
             QTimer.singleShot(0, lambda: self.update_btn.setText(text))
@@ -1227,10 +1249,10 @@ class MainWindow(QMainWindow):
     def _on_update_ready(self, success: bool):
         """Llamado desde hilo principal cuando el update está listo para aplicarse."""
         if success:
-            self.update_btn.setText('✓ Reiniciando...')
+            self.update_btn.setText('OK Reiniciando...')
             QTimer.singleShot(800, QApplication.instance().quit)
         else:
-            self.update_btn.setText('⚠ Error al actualizar')
+            self.update_btn.setText('Error al actualizar')
 
     def _poll_sync_trigger(self):
         """Corre cada 60s — detecta si el admin disparó un sync desde otra PC."""
