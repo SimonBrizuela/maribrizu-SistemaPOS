@@ -47,10 +47,11 @@ def main():
     
     # Compilar con PyInstaller directamente
     print("\n[2/5] Compilando aplicación con PyInstaller...")
-    assets_path = project_root / "pos_system/assets"
-    styles_path = project_root / "pos_system/ui/styles.qss"
-    icon_path = project_root / "pos_system/assets/images/logo.ico"
-    
+    assets_path     = project_root / "pos_system/assets"
+    styles_path     = project_root / "pos_system/ui/styles.qss"
+    styles_graphite = project_root / "pos_system/ui/styles_graphite.qss"
+    icon_path       = project_root / "pos_system/assets/images/logo.ico"
+
     # Comando PyInstaller directo
     pyinstaller_cmd = (
         f'pyinstaller '
@@ -61,6 +62,7 @@ def main():
         f'--workpath "{build_dir}" '
         f'--add-data "{assets_path}{os.pathsep}pos_system/assets" '
         f'--add-data "{styles_path}{os.pathsep}pos_system/ui" '
+        f'--add-data "{styles_graphite}{os.pathsep}pos_system/ui" '
         f'--icon "{icon_path}" '
         f'--hidden-import=firebase_admin '
         f'--hidden-import=firebase_admin.credentials '
