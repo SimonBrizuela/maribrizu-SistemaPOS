@@ -206,6 +206,11 @@ class ProductSearchDialog(QDialog):
         self.setMinimumSize(min(860, w), min(520, h))
         self.resize(w, h)
         self.move(screen.x() + (screen.width() - w) // 2, screen.y() + (screen.height() - h) // 2)
+        # Pre-cargar el catálogo en memoria al construir el diálogo, así el primer
+        # keystroke no dispara la carga de 12K productos (que se siente como lag).
+        self._catalog_cache = None
+        self._catalog_haystack = None
+        self._ensure_catalog_cache()
         self._init_ui(initial_text)
 
     def _init_ui(self, initial_text=''):
@@ -464,76 +469,60 @@ class ProductSearchDialog(QDialog):
             return
         self._search_timer.start()  # reinicia el timer en cada tecla
 
-    def _do_search(self):
-        """Ejecuta la búsqueda real después del debounce.
+    def _ensure_catalog_cache(self):
+        """Carga el catálogo completo en memoria (lazy). Idéntico a la webapp."""
+        if getattr(self, '_catalog_cache', None) is not None:
+            return
+        import unicodedata as _ud
+        def _norm(s):
+            s = _ud.normalize('NFD', str(s or ''))
+            return s.encode('ascii', 'ignore').decode('ascii').lower()
+        try:
+            products = self.db.execute_query(
+                "SELECT * FROM products ORDER BY is_favorite DESC, name ASC"
+            )
+        except Exception:
+            products = []
+        self._catalog_cache = products
+        self._catalog_haystack = [
+            _norm(' '.join(filter(None, [
+                p.get('name'), p.get('barcode'), p.get('firebase_id'),
+                p.get('description'), p.get('category'), p.get('rubro'),
+            ])))
+            for p in products
+        ]
 
-        Normaliza el texto (tildes → sin tilde, mayúsculas → minúsculas) tanto en el
-        patrón como en los valores almacenados (vía norm_text() de SQLite).
-        Usa AND entre palabras; si no hay resultados y hay 2+ palabras, reintenta con OR.
-        Busca en: nombre, código de barras, firebase_id, descripción, categoría y rubro.
+    def _do_search(self):
+        """Búsqueda en memoria, igual que la webapp (catálogo): AND de substrings sobre
+        haystack normalizado de todos los campos. Sin LIMIT, búsqueda siempre global
+        (ignora rubro/subcategoría cuando hay texto).
         """
         import unicodedata as _ud
         def _norm(s):
             s = _ud.normalize('NFD', str(s or ''))
             return s.encode('ascii', 'ignore').decode('ascii').lower()
 
-        _FIELDS = (
-            "norm_text(name)", "norm_text(barcode)", "norm_text(firebase_id)",
-            "norm_text(description)", "norm_text(category)", "norm_text(rubro)",
-        )
-
-        def _build_clauses(words, join='AND'):
-            """Devuelve (clauses_list, params_list) para los words dados."""
-            clauses, params = [], []
-            for w in words:
-                pat = f'%{w}%'
-                clauses.append('(' + ' OR '.join(f'{f} LIKE ?' for f in _FIELDS) + ')')
-                params.extend([pat] * len(_FIELDS))
-            return clauses, params
-
         text = self._pending_text
         fallback_used = False
+        results = []
         try:
-            clauses, params = [], []
-
-            # Filtro por rubro/subcategoría solo cuando no hay texto (modo browse).
-            if not text:
-                if self._subcategory:
-                    clauses.append("UPPER(category) = ?")
-                    params.append(self._subcategory.upper())
-                elif self._rubro:
-                    clauses.append("UPPER(rubro) = ?")
-                    params.append(self._rubro.upper())
-
+            self._ensure_catalog_cache()
+            cache = self._catalog_cache or []
+            haystacks = self._catalog_haystack or []
             words = [w for w in _norm(text).split() if w] if text else []
 
             if words:
-                word_clauses, word_params = _build_clauses(words, join='AND')
-                clauses.extend(word_clauses)
-                params.extend(word_params)
-
-            if not clauses:
+                # AND de substrings — idéntico a fuzzyMatch() de webapp/catalogo.js
+                results = [cache[i] for i, hs in enumerate(haystacks) if all(w in hs for w in words)]
+            elif self._subcategory:
+                key = self._subcategory.upper()
+                results = [p for p in cache if (p.get('category') or '').upper() == key]
+            elif self._rubro:
+                key = self._rubro.upper()
+                results = [p for p in cache if (p.get('rubro') or '').upper() == key]
+            else:
                 self._show_hint()
                 return
-
-            where = ' AND '.join(clauses)
-            results = self.db.execute_query(
-                f"SELECT * FROM products WHERE {where} "
-                f"ORDER BY is_favorite DESC, name ASC LIMIT 100",
-                tuple(params),
-            )
-
-            # OR fallback: si AND no da resultados y hay 2+ palabras, buscar cualquier palabra
-            if not results and len(words) > 1:
-                or_clauses, or_params = _build_clauses(words)
-                or_where = ' OR '.join(or_clauses)
-                results = self.db.execute_query(
-                    f"SELECT * FROM products WHERE {or_where} "
-                    f"ORDER BY is_favorite DESC, name ASC LIMIT 100",
-                    tuple(or_params),
-                )
-                fallback_used = bool(results)
-
         except Exception:
             results = []
 
@@ -620,6 +609,10 @@ class SalesView(QWidget):
         self.current_user = current_user or {}
         self.cart = []
         self._all_products = []          # cache local de productos
+        # Catálogo completo en memoria para búsqueda fuzzy (igual que la webapp).
+        # Se carga lazy y se invalida con inventory_updated/refresh_data.
+        self._catalog_cache = None       # list[dict] o None si hay que recargar
+        self._catalog_haystack = None    # list[str] paralelo al cache, ya normalizado
         # Cache de promociones de Firebase (actualizadas en tiempo real)
         self._firebase_promos = []
         # Historial de búsquedas (expira 4 min): lista de (termino, timestamp)
@@ -1519,7 +1512,7 @@ class SalesView(QWidget):
     )
 
     @classmethod
-    def _build_fuzzy_query(cls, text: str, limit: int = 60, mode: str = 'and'):
+    def _build_fuzzy_query(cls, text: str, limit: int = 500, mode: str = 'and'):
         """
         Construye query de búsqueda multi‑palabra usando norm_text() en todos los campos.
 
@@ -1624,40 +1617,56 @@ class SalesView(QWidget):
         return [p for _, p in scored[:limit]]
 
     def _on_search_text_changed(self, text: str):
-        """Tipeo manual — debounced para no bloquear el input.
+        """Tipeo manual — sin búsqueda en vivo.
 
-        Cada keystroke programa una búsqueda diferida con QTimer(150ms);
-        si el usuario sigue escribiendo, el timer se reinicia. Esto evita
-        que letras se "pierdan" cuando se tipea rápido.
+        Para que tipear rápido no se sienta lento, no filtramos la grilla
+        ni abrimos el diálogo en cada tecla. La búsqueda se ejecuta sólo
+        al presionar Enter (abre el Spotlight con resultados al toque).
+        Acá pre-cargamos el catálogo en memoria mientras el usuario tipea
+        para que la apertura del diálogo sea instantánea.
         """
-        text = text.strip()
         self._hide_history_popup()
-        # Cancelar búsqueda pendiente y programar nueva
-        if not hasattr(self, '_search_debounce_timer'):
-            self._search_debounce_timer = QTimer(self)
-            self._search_debounce_timer.setSingleShot(True)
-            self._search_debounce_timer.timeout.connect(self._do_search_debounced)
-        # 200ms da margen para tipear rápido sin que cada keystroke dispare una query
-        # (que en el hilo de UI puede bloquear y hacer "saltar" letras).
-        self._search_debounce_timer.start(200)
-
-        # Auto-abrir diálogo ampliado tras 1s de escribir
-        if not hasattr(self, '_auto_open_timer'):
-            self._auto_open_timer = QTimer(self)
-            self._auto_open_timer.setSingleShot(True)
-            self._auto_open_timer.timeout.connect(self._auto_open_search_dialog)
-        if len(text) >= 2:
-            self._auto_open_timer.start(1000)
-        else:
+        # Cancelar timers viejos por si existían de versiones anteriores
+        if hasattr(self, '_search_debounce_timer'):
+            self._search_debounce_timer.stop()
+        if hasattr(self, '_auto_open_timer'):
             self._auto_open_timer.stop()
+        # Pre-cargar catálogo en background (idempotente)
+        try:
+            self._ensure_catalog_cache()
+        except Exception:
+            pass
+
+    def _ensure_catalog_cache(self):
+        """Carga el catálogo completo en memoria (lazy). Se invalida con _invalidate_catalog_cache()."""
+        if self._catalog_cache is not None:
+            return
+        try:
+            products = self.db.execute_query(
+                "SELECT * FROM products ORDER BY is_favorite DESC, name ASC"
+            )
+        except Exception:
+            products = []
+        self._catalog_cache = products
+        # Pre-computar haystack normalizado por producto (como hace la webapp)
+        self._catalog_haystack = [
+            self._norm_search(' '.join(filter(None, [
+                p.get('name'), p.get('barcode'), p.get('firebase_id'),
+                p.get('description'), p.get('category'), p.get('rubro'),
+            ])))
+            for p in products
+        ]
+
+    def _invalidate_catalog_cache(self):
+        """Marca el cache como desactualizado para que se recargue en la próxima búsqueda."""
+        self._catalog_cache = None
+        self._catalog_haystack = None
 
     def _do_search_debounced(self):
-        """Ejecuta la búsqueda real una vez que el usuario para de tipear.
+        """Búsqueda en memoria estilo webapp/catálogo: AND de substrings sobre todos
+        los campos concatenados, sin LIMIT y siempre global (ignora rubro seleccionado).
 
-        Cadena de fallbacks para maximizar matches:
-          1) AND entre palabras (precisa)
-          2) OR entre palabras (al menos una palabra)
-          3) Fuzzy con levenshtein (tolerancia a typos)
+        Si AND no devuelve nada, intenta fallback fuzzy con tolerancia a typos.
         """
         text = self.barcode_field.text().strip()
         if len(text) < 1:
@@ -1667,17 +1676,22 @@ class SalesView(QWidget):
                 self.products_table.setRowCount(0)
                 self._all_products = []
             return
+        self._ensure_catalog_cache()
+        cache = self._catalog_cache or []
+        haystacks = self._catalog_haystack or []
+        words = [w for w in self._norm_search(text).split() if w]
         matches = []
-        try:
-            query, params = self._build_fuzzy_query(text, limit=60, mode='and')
-            matches = self.db.execute_query(query, params) if query else []
-            if not matches and len(text.split()) > 1:
-                query, params = self._build_fuzzy_query(text, limit=60, mode='or')
-                matches = self.db.execute_query(query, params) if query else []
-            if not matches:
-                matches = self._fuzzy_typo_search(text, limit=60)
-        except Exception:
-            matches = []
+        if words:
+            # AND de substrings — idéntico a fuzzyMatch() de webapp/catalogo.js
+            for i, hs in enumerate(haystacks):
+                if all(w in hs for w in words):
+                    matches.append(cache[i])
+        # Fallback fuzzy (typos) solo si AND no encontró nada
+        if not matches:
+            try:
+                matches = self._fuzzy_typo_search(text, limit=500)
+            except Exception:
+                matches = []
         self._all_products = matches
         self._populate_products_table(matches)
 
@@ -1943,6 +1957,7 @@ class SalesView(QWidget):
 
     def refresh_data(self):
         """Recarga botones de rubros desde la BD."""
+        self._invalidate_catalog_cache()
         self._load_rubro_buttons()
 
     def on_category_changed(self, text):
@@ -3451,9 +3466,12 @@ class SpotlightDialog(QDialog):
             pass
 
         if initial_text:
+            # setText dispara textChanged → _on_text → _search_timer.start();
+            # cancelamos ese debounce y buscamos al toque para abrir el diálogo
+            # con resultados ya visibles (sin esperar 220ms).
             self.search_input.setText(initial_text)
-        else:
-            self._do_search()
+            self._search_timer.stop()
+        self._do_search()
 
     def _build_ui(self):
         from pos_system.ui.theme import COLORS as _C
@@ -3555,15 +3573,56 @@ class SpotlightDialog(QDialog):
         self._search_timer.start()
 
     def _do_search(self):
+        """Búsqueda multi-palabra sobre el catálogo en memoria, idéntica a
+        la webapp (catalogo.js fuzzyMatch): AND de substrings normalizados
+        sobre nombre/código/categoría/rubro/descripción/firebase_id.
+        Si no hay matches, intenta fuzzy con tolerancia a typos.
+        """
         text = self.search_input.text().strip()
-        try:
-            from pos_system.models.product import Product
-            pm = Product(self.db)
-            results = pm.get_all(search=text) if text else pm.get_all()
-        except Exception:
-            results = []
-        # Excluir sentinel "Varios" (id=0)
-        results = [r for r in results if r.get('id', 0) > 0][:30]
+        sales_view = self.parent()
+
+        # Reusar cache normalizado del padre (warm) en vez de releer la DB
+        cache, haystacks, fuzzy_fn, norm_fn = [], [], None, None
+        if sales_view is not None:
+            try:
+                ensure = getattr(sales_view, '_ensure_catalog_cache', None)
+                if ensure:
+                    ensure()
+                cache = getattr(sales_view, '_catalog_cache', None) or []
+                haystacks = getattr(sales_view, '_catalog_haystack', None) or []
+                fuzzy_fn = getattr(sales_view, '_fuzzy_typo_search', None)
+                norm_fn = getattr(sales_view, '_norm_search', None)
+            except Exception:
+                cache, haystacks = [], []
+
+        if cache and norm_fn is not None and len(haystacks) == len(cache):
+            words = [w for w in norm_fn(text).split() if w] if text else []
+            if not words:
+                # Sin texto: mostrar primeros 200 (favoritos primero por orden del cache)
+                results = [p for p in cache if p.get('id', 0) > 0][:200]
+            else:
+                results = [
+                    cache[i] for i, hs in enumerate(haystacks)
+                    if all(w in hs for w in words) and cache[i].get('id', 0) > 0
+                ]
+                # Fallback fuzzy (typos) sólo si AND no encontró nada
+                if not results and fuzzy_fn is not None:
+                    try:
+                        results = [r for r in fuzzy_fn(text, limit=200)
+                                   if r.get('id', 0) > 0]
+                    except Exception:
+                        pass
+                results = results[:200]
+        else:
+            # Fallback legacy si no hay parent o cache (no debería pasar en POS real)
+            try:
+                from pos_system.models.product import Product
+                pm = Product(self.db)
+                results = pm.get_all(search=text) if text else pm.get_all()
+            except Exception:
+                results = []
+            results = [r for r in results if r.get('id', 0) > 0][:200]
+
         self._results = results
         self._render()
 
