@@ -470,13 +470,15 @@ class ProductSearchDialog(QDialog):
         try:
             clauses, params = [], []
 
-            # Filtro por rubro/subcategoría si están seleccionados
-            if self._subcategory:
-                clauses.append("UPPER(category) = ?")
-                params.append(self._subcategory.upper())
-            elif self._rubro:
-                clauses.append("UPPER(rubro) = ?")
-                params.append(self._rubro.upper())
+            # Filtro por rubro/subcategoría solo cuando no hay texto (modo browse).
+            # Con texto activo la búsqueda es global para no perder productos de otros rubros.
+            if not text:
+                if self._subcategory:
+                    clauses.append("UPPER(category) = ?")
+                    params.append(self._subcategory.upper())
+                elif self._rubro:
+                    clauses.append("UPPER(rubro) = ?")
+                    params.append(self._rubro.upper())
 
             # Filtro por texto si hay algo escrito
             if text:
@@ -519,14 +521,7 @@ class ProductSearchDialog(QDialog):
         if n > 0:
             self.table.selectRow(0)
 
-        # Si hay filtro activo y 0 resultados con texto escrito → auto-limpiar en 2s
-        has_filter = bool(self._rubro or self._subcategory)
-        has_text   = bool(self._pending_text)
-        if has_filter and has_text and n == 0:
-            self.result_count_lbl.setText('0 resultados en este rubro — buscando en todos...')
-            self._auto_clear_filter_timer.start()
-        else:
-            self._auto_clear_filter_timer.stop()
+        self._auto_clear_filter_timer.stop()
 
     def _select_first(self):
         if self.table.rowCount() > 0 and self.table.item(0, 0):
@@ -2181,7 +2176,12 @@ class SalesView(QWidget):
         con otras del mismo producto), porque cada una baja stock distinto
         del par (unidades cerradas, restante abierto).
         """
-        dlg = ConjuntoDialog(product, parent=self)
+        try:
+            dlg = ConjuntoDialog(product, parent=self)
+        except Exception as e:
+            logger.error(f"ConjuntoDialog: {e}")
+            QMessageBox.critical(self, 'Error', f'No se pudo abrir el diálogo de producto conjunto:\n{e}')
+            return
         if dlg.exec_() != QDialog.Accepted or not dlg.result_data:
             return
         r = dlg.result_data

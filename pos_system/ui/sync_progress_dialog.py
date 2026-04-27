@@ -72,7 +72,7 @@ class DownloadWorker(QThread):
             # Construir índice local: por firebase_id, id, barcode y nombre
             # Se incluyen price, stock, barcode, firebase_id para evitar queries individuales después
             local_rows = db.execute_query(
-                "SELECT id, name, barcode, firebase_id, updated_at, price, stock FROM products"
+                "SELECT id, name, barcode, firebase_id, updated_at, price, stock, es_conjunto FROM products"
             )
             local_by_firebase_id = {}
             local_by_id          = {}
@@ -93,6 +93,7 @@ class DownloadWorker(QThread):
                         'barcode':     str(row.get('barcode') or ''),
                         'firebase_id': str(row.get('firebase_id') or ''),
                         'name':        str(row.get('name') or ''),
+                        'es_conjunto': int(row.get('es_conjunto') or 0),
                         'ts':          ts,
                     }
                 if row.get('barcode'):
@@ -207,6 +208,14 @@ class DownloadWorker(QThread):
                         data['doc_id'] = d.id
                         productos_fb.append(data)
 
+            def _to_float_safe(v):
+                if v in (None, '', False):
+                    return None
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return None
+
             total_fb = len(productos_fb)
             for i, p in enumerate(productos_fb):
                 # firebase_id = doc_id del documento en Firestore (identificador único)
@@ -227,6 +236,16 @@ class DownloadWorker(QThread):
                 barcode = str(p.get('cod_barra') or p.get('barcode') or p.get('codigo_barra') or '').strip() or None
                 desc    = float(p.get('descuento') or p.get('discount') or 0)
                 estado  = str(p.get('estado') or 'activo').lower()
+
+                # Campos Producto Conjunto
+                es_conjunto   = 1 if p.get('es_conjunto') else 0
+                conj_tipo     = (str(p.get('conjunto_tipo') or '').strip() or None) if es_conjunto else None
+                conj_unidad   = (str(p.get('conjunto_unidad_medida') or '').strip() or None) if es_conjunto else None
+                conj_unidades = _to_float_safe(p.get('conjunto_unidades')) if es_conjunto else None
+                conj_contenido= _to_float_safe(p.get('conjunto_contenido')) if es_conjunto else None
+                conj_restante = _to_float_safe(p.get('conjunto_restante')) if es_conjunto else None
+                conj_precio   = _to_float_safe(p.get('conjunto_precio_unidad')) if es_conjunto else None
+                conj_total    = _to_float_safe(p.get('conjunto_total')) if es_conjunto else None
 
                 # Saltar productos sin precio o inactivos
                 if precio <= 0 or estado == 'sin_precio':
@@ -261,6 +280,7 @@ class DownloadWorker(QThread):
                         and int(local_data.get('stock') or 0) == stock
                         and str(local_data.get('name') or '').strip() == nombre
                         and str(local_data.get('barcode') or '') == (barcode or '')
+                        and int(local_data.get('es_conjunto') or 0) == es_conjunto
                     )
                     if datos_iguales:
                         productos_sin_cambios += 1
@@ -272,25 +292,36 @@ class DownloadWorker(QThread):
                             )
                     else:
                         def _do_update(bc):
+                            conj_params = (es_conjunto, conj_tipo, conj_unidad,
+                                           conj_unidades, conj_contenido, conj_restante,
+                                           conj_precio, conj_total)
                             if fb_ts:
                                 db.execute_update("""
                                     UPDATE products SET
                                         name = ?, price = ?, cost = ?, stock = ?,
                                         category = ?, barcode = ?, discount_value = ?,
-                                        firebase_id = ?, rubro = ?, updated_at = ?
+                                        firebase_id = ?, rubro = ?, updated_at = ?,
+                                        es_conjunto = ?, conjunto_tipo = ?, conjunto_unidad_medida = ?,
+                                        conjunto_unidades = ?, conjunto_contenido = ?, conjunto_restante = ?,
+                                        conjunto_precio_unidad = ?, conjunto_total = ?
                                     WHERE id = ?
                                 """, (nombre, precio, costo, stock, cat, bc, desc,
-                                      firebase_id, rubro, fb_ts, local_id))
+                                      firebase_id, rubro, fb_ts,
+                                      *conj_params, local_id))
                             else:
                                 db.execute_update("""
                                     UPDATE products SET
                                         name = ?, price = ?, cost = ?, stock = ?,
                                         category = ?, barcode = ?, discount_value = ?,
                                         firebase_id = ?, rubro = ?,
-                                        updated_at = CURRENT_TIMESTAMP
+                                        updated_at = CURRENT_TIMESTAMP,
+                                        es_conjunto = ?, conjunto_tipo = ?, conjunto_unidad_medida = ?,
+                                        conjunto_unidades = ?, conjunto_contenido = ?, conjunto_restante = ?,
+                                        conjunto_precio_unidad = ?, conjunto_total = ?
                                     WHERE id = ?
                                 """, (nombre, precio, costo, stock, cat, bc, desc,
-                                      firebase_id, rubro, local_id))
+                                      firebase_id, rubro,
+                                      *conj_params, local_id))
                         try:
                             _do_update(barcode)
                         except Exception as e:
@@ -303,15 +334,23 @@ class DownloadWorker(QThread):
                         local_by_firebase_id[firebase_id] = (local_id, new_ts)
                         local_by_id[str(local_id)] = new_ts
                 else:
-                    # Producto nuevo — insertar con firebase_id
+                    # Producto nuevo — insertar con firebase_id y campos conjunto
                     try:
                         db.execute_update("""
                             INSERT OR IGNORE INTO products
                                 (name, price, cost, stock, category,
                                  barcode, discount_value, firebase_id, rubro,
+                                 es_conjunto, conjunto_tipo, conjunto_unidad_medida,
+                                 conjunto_unidades, conjunto_contenido, conjunto_restante,
+                                 conjunto_precio_unidad, conjunto_total,
                                  created_at, updated_at)
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                        """, (nombre, precio, costo, stock, cat, barcode, desc, firebase_id or None, rubro))
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,
+                                    ?, ?, ?, ?, ?, ?, ?, ?,
+                                    CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                        """, (nombre, precio, costo, stock, cat, barcode, desc, firebase_id or None, rubro,
+                              es_conjunto, conj_tipo, conj_unidad,
+                              conj_unidades, conj_contenido, conj_restante,
+                              conj_precio, conj_total))
                         productos_nuevos += 1
                     except Exception:
                         pass
