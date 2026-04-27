@@ -2364,8 +2364,13 @@ class SalesView(QWidget):
                 )
                 final.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 wl.addWidget(strike); wl.addWidget(final)
+                # Transparente a eventos de ratón: el click cae en la celda
+                # subyacente y dispara cellClicked → abre el editor de precio.
+                w.setAttribute(Qt.WA_TransparentForMouseEvents, True)
                 self.cart_table.setCellWidget(row, 2, w)
-                self.cart_table.setItem(row, 2, QTableWidgetItem(''))
+                backing = QTableWidgetItem('')
+                backing.setToolTip('Clic para editar el precio')
+                self.cart_table.setItem(row, 2, backing)
             else:
                 self.cart_table.removeCellWidget(row, 2)
                 subtotal_item = QTableWidgetItem(f'${item["subtotal"]:,.0f}')
