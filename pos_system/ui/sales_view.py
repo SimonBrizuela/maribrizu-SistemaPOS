@@ -1626,16 +1626,21 @@ class SalesView(QWidget):
         para que la apertura del diálogo sea instantánea.
         """
         self._hide_history_popup()
-        # Cancelar timers viejos por si existían de versiones anteriores
         if hasattr(self, '_search_debounce_timer'):
             self._search_debounce_timer.stop()
-        if hasattr(self, '_auto_open_timer'):
-            self._auto_open_timer.stop()
+        if not hasattr(self, '_auto_open_timer'):
+            self._auto_open_timer = QTimer(self)
+            self._auto_open_timer.setSingleShot(True)
+            self._auto_open_timer.timeout.connect(self._auto_open_search_dialog)
+        self._auto_open_timer.stop()
         # Pre-cargar catálogo en background (idempotente)
         try:
             self._ensure_catalog_cache()
         except Exception:
             pass
+        # Auto-abrir diálogo de búsqueda 700 ms después de que el usuario para de escribir
+        if len(text.strip()) >= 2:
+            self._auto_open_timer.start(700)
 
     def _ensure_catalog_cache(self):
         """Carga el catálogo completo en memoria (lazy). Se invalida con _invalidate_catalog_cache()."""
@@ -2161,9 +2166,12 @@ class SalesView(QWidget):
             product = rows[0] if rows else None
 
         if product:
-            # Código exacto encontrado — agregar al carrito de una
-            self.add_to_cart(product)
+            # Mostrar en diálogo — el usuario confirma antes de agregar
+            if hasattr(self, '_auto_open_timer'):
+                self._auto_open_timer.stop()
+            self._add_to_search_history(search_text)
             self.barcode_field.clear()
+            self._open_search_dialog_with_text(search_text)
             return
 
         # Sin match exacto → abrir diálogo ampliado instantáneo con el texto
