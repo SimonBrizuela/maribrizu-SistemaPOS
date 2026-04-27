@@ -930,16 +930,18 @@ class SalesView(QWidget):
 
         # Tabla del carrito (4 columnas estilo mockup)
         self.cart_table = QTableWidget()
-        self.cart_table.setColumnCount(4)
-        self.cart_table.setHorizontalHeaderLabels(['Producto', 'Cantidad', 'Subtotal', ''])
+        self.cart_table.setColumnCount(5)
+        self.cart_table.setHorizontalHeaderLabels(['Producto', 'Cantidad', 'Precio Unit.', 'Subtotal', ''])
         self.cart_table.verticalHeader().setVisible(False)
         self.cart_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
         self.cart_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)
         self.cart_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.Fixed)
         self.cart_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
-        self.cart_table.setColumnWidth(1, 130)
-        self.cart_table.setColumnWidth(2, 130)
-        self.cart_table.setColumnWidth(3, 78)
+        self.cart_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.Fixed)
+        self.cart_table.setColumnWidth(1, 115)
+        self.cart_table.setColumnWidth(2, 105)
+        self.cart_table.setColumnWidth(3, 115)
+        self.cart_table.setColumnWidth(4, 78)
         self.cart_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.cart_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.cart_table.setStyleSheet(
@@ -2343,11 +2345,44 @@ class SalesView(QWidget):
             qty_spin.valueChanged.connect(lambda v, r=row: self.update_quantity(r, v))
             self.cart_table.setCellWidget(row, 1, qty_spin)
 
-            # Col 2: Subtotal (con precio tachado arriba si hay descuento)
+            # Col 2: Precio unitario (clickable — abre editor de precio)
+            orig_price = item.get('original_price', item['unit_price'])
             if has_discount:
-                orig = item.get('original_price', item['unit_price'])
-                orig_total = orig * item['quantity']
                 self.cart_table.removeCellWidget(row, 2)
+                w2 = QWidget()
+                wl2 = QVBoxLayout(w2); wl2.setContentsMargins(4, 4, 8, 4); wl2.setSpacing(0)
+                wl2.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                strike2 = QLabel(f"<s>${orig_price:,.0f}</s>")
+                strike2.setStyleSheet(
+                    f"color:{_T['text_dim']}; font-size:10px; background:transparent;"
+                    f" border:none; font-family:'JetBrains Mono', Consolas, monospace;"
+                )
+                strike2.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                final2 = QLabel(f"${item['unit_price']:,.0f}")
+                final2.setStyleSheet(
+                    f"color:{_T['text']}; font-size:12px; font-weight:600; background:transparent;"
+                    f" border:none; font-family:'JetBrains Mono', Consolas, monospace;"
+                )
+                final2.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                wl2.addWidget(strike2); wl2.addWidget(final2)
+                w2.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+                self.cart_table.setCellWidget(row, 2, w2)
+                b2 = QTableWidgetItem('')
+                b2.setToolTip('Clic para editar el precio unitario')
+                self.cart_table.setItem(row, 2, b2)
+            else:
+                self.cart_table.removeCellWidget(row, 2)
+                price_item = QTableWidgetItem(f'${item["unit_price"]:,.0f}')
+                price_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+                price_item.setFont(QFont('Consolas', 11))
+                price_item.setForeground(QColor(_T['text']))
+                price_item.setToolTip('Clic para editar el precio unitario')
+                self.cart_table.setItem(row, 2, price_item)
+
+            # Col 3: Subtotal (con precio tachado arriba si hay descuento)
+            if has_discount:
+                orig_total = orig_price * item['quantity']
+                self.cart_table.removeCellWidget(row, 3)
                 w = QWidget()
                 wl = QVBoxLayout(w); wl.setContentsMargins(8, 4, 12, 4); wl.setSpacing(0)
                 wl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -2364,23 +2399,20 @@ class SalesView(QWidget):
                 )
                 final.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 wl.addWidget(strike); wl.addWidget(final)
-                # Transparente a eventos de ratón: el click cae en la celda
-                # subyacente y dispara cellClicked → abre el editor de precio.
                 w.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-                self.cart_table.setCellWidget(row, 2, w)
+                self.cart_table.setCellWidget(row, 3, w)
                 backing = QTableWidgetItem('')
-                backing.setToolTip('Clic para editar el precio')
-                self.cart_table.setItem(row, 2, backing)
+                backing.setToolTip('Subtotal')
+                self.cart_table.setItem(row, 3, backing)
             else:
-                self.cart_table.removeCellWidget(row, 2)
+                self.cart_table.removeCellWidget(row, 3)
                 subtotal_item = QTableWidgetItem(f'${item["subtotal"]:,.0f}')
                 subtotal_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 subtotal_item.setFont(QFont('Consolas', 11, QFont.Bold))
-                subtotal_item.setToolTip('Clic para editar el precio')
                 subtotal_item.setForeground(QColor(_T['text']))
-                self.cart_table.setItem(row, 2, subtotal_item)
+                self.cart_table.setItem(row, 3, subtotal_item)
 
-            # Col 3: Botón quitar (×)
+            # Col 4: Botón quitar (×)
             rm_container = QWidget()
             rm_layout = QHBoxLayout(rm_container)
             rm_layout.setContentsMargins(0, 0, 0, 0)
@@ -2404,7 +2436,7 @@ class SalesView(QWidget):
             )
             rm_btn.clicked.connect(lambda checked, r=row: self.remove_from_cart(r))
             rm_layout.addWidget(rm_btn)
-            self.cart_table.setCellWidget(row, 3, rm_container)
+            self.cart_table.setCellWidget(row, 4, rm_container)
 
             total += item['subtotal']
 
@@ -2599,9 +2631,8 @@ class SalesView(QWidget):
             self._refresh_cart_totals(row)
 
     def _refresh_cart_row_pricing(self, row, item):
-        """Actualiza in-place las celdas Producto (col 0) y Subtotal (col 2) de UNA fila.
-        NO toca col 1 (spinbox cantidad) → preserva caret y foco mientras el cajero tipea.
-        Útil cuando una promo se activa/desactiva por cambio de cantidad."""
+        """Actualiza in-place las celdas Producto (col 0), Precio Unit. (col 2) y Subtotal (col 3).
+        NO toca col 1 (spinbox cantidad) → preserva caret y foco mientras el cajero tipea."""
         if row >= self.cart_table.rowCount() or row >= len(self.cart):
             return
         from pos_system.ui.theme import COLORS as _T
@@ -2609,10 +2640,10 @@ class SalesView(QWidget):
         has_discount = item.get('discount_amount', 0) > 0
         promo_label = item.get('promo_label', '')
         name_text = item['product_name']
+        orig = item.get('original_price', item['unit_price'])
 
         # ── Col 0: Producto (nombre + sub-línea promo si aplica) ──
         if has_discount:
-            orig = item.get('original_price', item['unit_price'])
             disc_total = (orig - item['unit_price']) * item['quantity']
             w = QWidget()
             wl = QVBoxLayout(w); wl.setContentsMargins(12, 4, 8, 4); wl.setSpacing(2)
@@ -2643,11 +2674,43 @@ class SalesView(QWidget):
             self.cart_table.setItem(row, 0, name_item)
             self.cart_table.setRowHeight(row, 44)
 
-        # ── Col 2: Subtotal (con tachado del precio original si hay descuento) ──
+        # ── Col 2: Precio unitario ──
         if has_discount:
-            orig = item.get('original_price', item['unit_price'])
-            orig_total = orig * item['quantity']
             self.cart_table.removeCellWidget(row, 2)
+            w2 = QWidget()
+            wl2 = QVBoxLayout(w2); wl2.setContentsMargins(4, 4, 8, 4); wl2.setSpacing(0)
+            wl2.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            strike2 = QLabel(f"<s>${orig:,.0f}</s>")
+            strike2.setStyleSheet(
+                f"color:{_T['text_dim']}; font-size:10px; background:transparent;"
+                f" border:none; font-family:'JetBrains Mono', Consolas, monospace;"
+            )
+            strike2.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            final2 = QLabel(f"${item['unit_price']:,.0f}")
+            final2.setStyleSheet(
+                f"color:{_T['text']}; font-size:12px; font-weight:600; background:transparent;"
+                f" border:none; font-family:'JetBrains Mono', Consolas, monospace;"
+            )
+            final2.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            wl2.addWidget(strike2); wl2.addWidget(final2)
+            w2.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            self.cart_table.setCellWidget(row, 2, w2)
+            b2 = QTableWidgetItem('')
+            b2.setToolTip('Clic para editar el precio unitario')
+            self.cart_table.setItem(row, 2, b2)
+        else:
+            self.cart_table.removeCellWidget(row, 2)
+            price_item = QTableWidgetItem(f'${item["unit_price"]:,.0f}')
+            price_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            price_item.setFont(QFont('Consolas', 11))
+            price_item.setForeground(QColor(_T['text']))
+            price_item.setToolTip('Clic para editar el precio unitario')
+            self.cart_table.setItem(row, 2, price_item)
+
+        # ── Col 3: Subtotal (con tachado del precio original si hay descuento) ──
+        if has_discount:
+            orig_total = orig * item['quantity']
+            self.cart_table.removeCellWidget(row, 3)
             w = QWidget()
             wl = QVBoxLayout(w); wl.setContentsMargins(8, 4, 12, 4); wl.setSpacing(0)
             wl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -2664,15 +2727,15 @@ class SalesView(QWidget):
             )
             final.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             wl.addWidget(strike); wl.addWidget(final)
-            self.cart_table.setCellWidget(row, 2, w)
-            self.cart_table.setItem(row, 2, QTableWidgetItem(''))
+            self.cart_table.setCellWidget(row, 3, w)
+            self.cart_table.setItem(row, 3, QTableWidgetItem(''))
         else:
-            self.cart_table.removeCellWidget(row, 2)
+            self.cart_table.removeCellWidget(row, 3)
             sub_item = QTableWidgetItem(f'${item["subtotal"]:,.0f}')
             sub_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             sub_item.setFont(QFont('Consolas', 11, QFont.Bold))
             sub_item.setForeground(QColor(_T['text']))
-            self.cart_table.setItem(row, 2, sub_item)
+            self.cart_table.setItem(row, 3, sub_item)
 
         self._refresh_cart_totals(row)
 
@@ -2685,8 +2748,8 @@ class SalesView(QWidget):
             # Si la fila NO tiene cellWidget en col 2 (sin descuento), actualizamos el
             # text item simple. Si tiene widget (con descuento), no lo tocamos acá —
             # _refresh_cart_row_pricing ya lo manejó.
-            if self.cart_table.cellWidget(row, 2) is None:
-                sub_it = self.cart_table.item(row, 2)
+            if self.cart_table.cellWidget(row, 3) is None:
+                sub_it = self.cart_table.item(row, 3)
                 if sub_it:
                     sub_it.setText(f'${item["subtotal"]:,.0f}')
         # Total y contador
@@ -2719,8 +2782,8 @@ class SalesView(QWidget):
             self.update_cart_display()
 
     def _on_cart_cell_clicked(self, row, col):
-        """Click en col 2 (Subtotal) abre dialog para editar el precio unitario."""
-        if col != 2:
+        """Click en col 2 (Precio Unit.) o col 3 (Subtotal) abre dialog para editar el precio."""
+        if col not in (2, 3):
             return
         if row >= len(self.cart):
             return
