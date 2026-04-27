@@ -307,11 +307,13 @@ def main():
 
         # 2. Crear la app Qt inmediatamente (la ventana aparece lo antes posible)
         logger.info("Creating application...")
+        # Estos atributos deben declararse ANTES de crear QApplication.
+        # Ponerlos después (en la instancia) no tiene efecto en Windows.
+        QApplication.setAttribute(Qt.AA_EnableHighDpiScaling, True)
+        QApplication.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
         app = QApplication(sys.argv)
         app.setApplicationName(APP_NAME)
         app.setOrganizationName(ORGANIZATION)
-        app.setAttribute(Qt.AA_EnableHighDpiScaling, True)
-        app.setAttribute(Qt.AA_UseHighDpiPixmaps, True)
 
         # Aplicar tema Graphite (paleta cálida + QSS global)
         from pos_system.ui.theme import apply_theme

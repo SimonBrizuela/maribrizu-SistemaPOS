@@ -51,11 +51,13 @@ def main():
     styles_path     = project_root / "pos_system/ui/styles.qss"
     styles_graphite = project_root / "pos_system/ui/styles_graphite.qss"
     icon_path       = project_root / "pos_system/assets/images/logo.ico"
+    manifest_path   = project_root / "app.manifest"
 
     # Comando PyInstaller directo
     pyinstaller_cmd = (
         f'pyinstaller '
         f'--onedir '
+        f'--manifest "{manifest_path}" '
         f'--windowed '
         f'--name SistemaPOS '
         f'--distpath "{dist_dir}" '
