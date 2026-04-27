@@ -32,6 +32,17 @@ class DatabaseManager:
         from datetime import datetime as _dt, timezone as _tz, timedelta as _td
         _TZ_AR = _tz(_td(hours=-3))
         conn.create_function("localtime_now", 0, lambda: _dt.now(_TZ_AR).strftime("%Y-%m-%d %H:%M:%S"))
+        # norm_text: normaliza texto para búsqueda insensible a tildes y mayúsculas.
+        # Descompone en NFD (separa letra base + diacrítico), descarta los diacríticos
+        # con encode ASCII ignore, luego pasa a minúsculas.
+        # Ej: norm_text('Repuésto') → 'repuesto'
+        import unicodedata as _ud
+        def _norm_text(s):
+            if not s:
+                return ''
+            s = _ud.normalize('NFD', str(s))
+            return s.encode('ascii', 'ignore').decode('ascii').lower()
+        conn.create_function("norm_text", 1, _norm_text)
 
     @contextmanager
     def get_connection(self):

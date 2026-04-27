@@ -465,13 +465,38 @@ class ProductSearchDialog(QDialog):
         self._search_timer.start()  # reinicia el timer en cada tecla
 
     def _do_search(self):
-        """Ejecuta la búsqueda real después del debounce."""
+        """Ejecuta la búsqueda real después del debounce.
+
+        Normaliza el texto (tildes → sin tilde, mayúsculas → minúsculas) tanto en el
+        patrón como en los valores almacenados (vía norm_text() de SQLite).
+        Usa AND entre palabras; si no hay resultados y hay 2+ palabras, reintenta con OR.
+        Busca en: nombre, código de barras, firebase_id, descripción, categoría y rubro.
+        """
+        import unicodedata as _ud
+        def _norm(s):
+            s = _ud.normalize('NFD', str(s or ''))
+            return s.encode('ascii', 'ignore').decode('ascii').lower()
+
+        _FIELDS = (
+            "norm_text(name)", "norm_text(barcode)", "norm_text(firebase_id)",
+            "norm_text(description)", "norm_text(category)", "norm_text(rubro)",
+        )
+
+        def _build_clauses(words, join='AND'):
+            """Devuelve (clauses_list, params_list) para los words dados."""
+            clauses, params = [], []
+            for w in words:
+                pat = f'%{w}%'
+                clauses.append('(' + ' OR '.join(f'{f} LIKE ?' for f in _FIELDS) + ')')
+                params.extend([pat] * len(_FIELDS))
+            return clauses, params
+
         text = self._pending_text
+        fallback_used = False
         try:
             clauses, params = [], []
 
             # Filtro por rubro/subcategoría solo cuando no hay texto (modo browse).
-            # Con texto activo la búsqueda es global para no perder productos de otros rubros.
             if not text:
                 if self._subcategory:
                     clauses.append("UPPER(category) = ?")
@@ -480,30 +505,44 @@ class ProductSearchDialog(QDialog):
                     clauses.append("UPPER(rubro) = ?")
                     params.append(self._rubro.upper())
 
-            # Filtro por texto si hay algo escrito
-            if text:
-                words = [w for w in text.split() if w]
-                for w in words:
-                    pat = f'%{w.upper()}%'
-                    clauses.append("(UPPER(name) LIKE ? OR UPPER(barcode) LIKE ? OR UPPER(firebase_id) LIKE ?)")
-                    params.extend([pat, pat, pat])
+            words = [w for w in _norm(text).split() if w] if text else []
+
+            if words:
+                word_clauses, word_params = _build_clauses(words, join='AND')
+                clauses.extend(word_clauses)
+                params.extend(word_params)
 
             if not clauses:
                 self._show_hint()
                 return
 
             where = ' AND '.join(clauses)
-            query = f"SELECT * FROM products WHERE {where} ORDER BY is_favorite DESC, name ASC LIMIT 100"
-            results = self.db.execute_query(query, tuple(params))
+            results = self.db.execute_query(
+                f"SELECT * FROM products WHERE {where} "
+                f"ORDER BY is_favorite DESC, name ASC LIMIT 100",
+                tuple(params),
+            )
+
+            # OR fallback: si AND no da resultados y hay 2+ palabras, buscar cualquier palabra
+            if not results and len(words) > 1:
+                or_clauses, or_params = _build_clauses(words)
+                or_where = ' OR '.join(or_clauses)
+                results = self.db.execute_query(
+                    f"SELECT * FROM products WHERE {or_where} "
+                    f"ORDER BY is_favorite DESC, name ASC LIMIT 100",
+                    tuple(or_params),
+                )
+                fallback_used = bool(results)
+
         except Exception:
             results = []
 
         self.table.clearSpans()
-        self.table.setRowCount(0)  # limpiar primero para evitar flickering
+        self.table.setRowCount(0)
         self.table.setRowCount(len(results))
         for row, p in enumerate(results):
             name_item = QTableWidgetItem(str(p.get('name', '')))
-            name_item.setData(Qt.UserRole, p)  # guardar datos en el item de nombre
+            name_item.setData(Qt.UserRole, p)
             self.table.setItem(row, 0, name_item)
             self.table.setItem(row, 1, QTableWidgetItem(str(p.get('barcode', '') or '')))
             price_item = QTableWidgetItem(f"${float(p.get('price', 0)):,.2f}")
@@ -517,7 +556,12 @@ class ProductSearchDialog(QDialog):
             self.table.setItem(row, 3, stock_item)
 
         n = len(results)
-        self.result_count_lbl.setText(f'{n} resultado{"s" if n != 1 else ""} encontrado{"s" if n != 1 else ""}')
+        if fallback_used:
+            self.result_count_lbl.setText(
+                f'{n} resultado{"s" if n != 1 else ""} (búsqueda ampliada)')
+        else:
+            self.result_count_lbl.setText(
+                f'{n} resultado{"s" if n != 1 else ""} encontrado{"s" if n != 1 else ""}')
         if n > 0:
             self.table.selectRow(0)
 
