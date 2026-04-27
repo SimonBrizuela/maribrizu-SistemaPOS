@@ -44,6 +44,34 @@ class DatabaseManager:
             return s.encode('ascii', 'ignore').decode('ascii').lower()
         conn.create_function("norm_text", 1, _norm_text)
 
+        # levenshtein: distancia de edición entre dos strings (tolerancia a typos).
+        # Usada como último fallback en búsqueda cuando AND/OR no devuelven nada.
+        def _levenshtein(a, b):
+            if a is None or b is None:
+                return 999
+            a, b = str(a), str(b)
+            if a == b:
+                return 0
+            la, lb = len(a), len(b)
+            if la == 0:
+                return lb
+            if lb == 0:
+                return la
+            # Cap para evitar costo en strings muy largos
+            if abs(la - lb) > 4:
+                return abs(la - lb)
+            prev = list(range(lb + 1))
+            for i, ca in enumerate(a, 1):
+                curr = [i]
+                for j, cb in enumerate(b, 1):
+                    ins = curr[j - 1] + 1
+                    dele = prev[j] + 1
+                    sub = prev[j - 1] + (ca != cb)
+                    curr.append(min(ins, dele, sub))
+                prev = curr
+            return prev[lb]
+        conn.create_function("levenshtein", 2, _levenshtein)
+
     @contextmanager
     def get_connection(self):
         """Context manager for database connections"""

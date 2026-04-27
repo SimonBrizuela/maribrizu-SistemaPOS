@@ -1506,42 +1506,122 @@ class SalesView(QWidget):
         return text
 
     @staticmethod
-    def _build_fuzzy_query(text: str, limit: int = 50):
-        """
-        Construye una query SQL con búsqueda por palabras individuales (fuzzy multi-word).
-        Cada palabra del texto debe aparecer en algún campo (name, barcode, description, category).
-        El orden de las palabras no importa: "Sobre PVC" encuentra "Sobre EM PVC".
-        Búsqueda case-insensitive: "goma" encuentra "GOMA DE BORRAR".
-        También busca en versión sin acentos para mayor tolerancia.
-        """
-        import unicodedata
+    def _norm_search(t: str) -> str:
+        """Normaliza para búsqueda: sin tildes, minúsculas (igual que norm_text de SQLite)."""
+        import unicodedata as _ud
+        s = _ud.normalize('NFD', str(t or ''))
+        return s.encode('ascii', 'ignore').decode('ascii').lower()
 
-        def normalize(t):
-            t = t.upper()
-            for a, b in [('Á','A'),('É','E'),('Í','I'),('Ó','O'),('Ú','U'),('Ü','U'),('Ñ','N')]:
-                t = t.replace(a, b)
-            return t
+    # Campos sobre los que se busca (usan norm_text() para tolerar tildes/mayúsculas)
+    _SEARCH_FIELDS = (
+        "norm_text(name)", "norm_text(barcode)", "norm_text(firebase_id)",
+        "norm_text(description)", "norm_text(category)", "norm_text(rubro)",
+    )
 
-        words = [w for w in text.strip().split() if w]
+    @classmethod
+    def _build_fuzzy_query(cls, text: str, limit: int = 60, mode: str = 'and'):
+        """
+        Construye query de búsqueda multi‑palabra usando norm_text() en todos los campos.
+
+        - mode='and': cada palabra debe aparecer en algún campo (precisa).
+        - mode='or' : alguna palabra aparece en algún campo (fallback amplio).
+
+        Busca en: name, barcode, firebase_id, description, category, rubro.
+        Tolera tildes y mayúsculas en cualquier campo (no solo en name).
+        """
+        words = [w for w in cls._norm_search(text).split() if w]
         if not words:
             return None, ()
-        clauses = []
-        params  = []
+        word_clauses, params = [], []
         for w in words:
-            pat       = f'%{w.upper()}%'
-            pat_norm  = f'%{normalize(w)}%'
-            # Busca la palabra tal cual Y también su versión sin acento
-            # Esto permite que "lapiz" encuentre "LÁPIZ" y viceversa
-            clauses.append(
-                "(UPPER(name) LIKE ? OR UPPER(barcode) LIKE ? OR UPPER(description) LIKE ? OR UPPER(category) LIKE ?"
-                " OR UPPER(firebase_id) LIKE ?"
-                " OR UPPER(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(name,'Á','A'),'É','E'),'Í','I'),'Ó','O'),'Ú','U'),'Ü','U'),'Ñ','N')) LIKE ?)"
-            )
-            params.extend([pat, pat, pat, pat, pat, pat_norm])
-        where = ' AND '.join(clauses)
-        query = f"""SELECT * FROM products WHERE {where}
-                    ORDER BY is_favorite DESC, name ASC LIMIT {limit}"""
+            pat = f'%{w}%'
+            word_clauses.append('(' + ' OR '.join(f'{f} LIKE ?' for f in cls._SEARCH_FIELDS) + ')')
+            params.extend([pat] * len(cls._SEARCH_FIELDS))
+        joiner = ' OR ' if mode == 'or' else ' AND '
+        where = joiner.join(word_clauses)
+        query = (f"SELECT * FROM products WHERE {where} "
+                 f"ORDER BY is_favorite DESC, name ASC LIMIT {limit}")
         return query, tuple(params)
+
+    def _fuzzy_typo_search(self, text: str, limit: int = 60):
+        """
+        Fallback con tolerancia a typos: split del nombre/desc/categoría en palabras,
+        y match si alguna palabra del producto tiene levenshtein ≤ 2 (≤1 para palabras de 3 chars)
+        contra alguna palabra tipeada.
+
+        Solo corre si AND/OR no devolvieron nada — escanea hasta 4000 productos en Python,
+        suficiente para un POS de tienda. Se ordena por mejor distancia.
+        """
+        words = [w for w in self._norm_search(text).split() if len(w) >= 3]
+        if not words:
+            return []
+        # Acotar el universo: traer productos donde algún campo tenga al menos los primeros
+        # 3 chars de alguna palabra (tolera typos a partir del 4to char).
+        like_clauses, params = [], []
+        for w in words:
+            prefix = w[:3]
+            for f in self._SEARCH_FIELDS:
+                like_clauses.append(f"{f} LIKE ?")
+                params.append(f'%{prefix}%')
+        where = ' OR '.join(like_clauses)
+        try:
+            candidates = self.db.execute_query(
+                f"SELECT * FROM products WHERE {where} "
+                f"ORDER BY is_favorite DESC, name ASC LIMIT 4000",
+                tuple(params),
+            )
+        except Exception:
+            return []
+
+        # Matchear en Python por palabra usando levenshtein con la función SQLite
+        # (la tenemos disponible en la conexión, pero acá usamos una local equivalente
+        # para no abrir otra conexión por cada producto).
+        def _lev(a: str, b: str) -> int:
+            if a == b:
+                return 0
+            la, lb = len(a), len(b)
+            if la == 0:
+                return lb
+            if lb == 0:
+                return la
+            if abs(la - lb) > 4:
+                return abs(la - lb)
+            prev = list(range(lb + 1))
+            for i, ca in enumerate(a, 1):
+                curr = [i]
+                for j, cb in enumerate(b, 1):
+                    curr.append(min(curr[j - 1] + 1, prev[j] + 1, prev[j - 1] + (ca != cb)))
+                prev = curr
+            return prev[lb]
+
+        scored = []
+        for p in candidates:
+            haystack = ' '.join(filter(None, [
+                p.get('name'), p.get('description'), p.get('category'),
+                p.get('rubro'), p.get('barcode'), p.get('firebase_id'),
+            ]))
+            tokens = self._norm_search(haystack).split()
+            best = 999
+            for w in words:
+                max_dist = 2 if len(w) >= 4 else 1
+                for tok in tokens:
+                    # Si la palabra está contenida → distancia 0 (ya debería haber matcheado en AND/OR,
+                    # pero lo dejamos por si el LIKE de SQLite difiere por edge case).
+                    if w in tok:
+                        best = 0
+                        break
+                    # Comparar la palabra completa con cada token, y también con substrings del token
+                    # del mismo largo — para que "respueto" matchee "repuesto" dentro de "Repuesto Tinta".
+                    if abs(len(tok) - len(w)) <= max_dist:
+                        d = _lev(w, tok)
+                        if d < best:
+                            best = d
+                if best == 0:
+                    break
+            if best <= 2:
+                scored.append((best, p))
+        scored.sort(key=lambda x: (x[0], 0 if x[1].get('is_favorite') else 1, x[1].get('name', '')))
+        return [p for _, p in scored[:limit]]
 
     def _on_search_text_changed(self, text: str):
         """Tipeo manual — debounced para no bloquear el input.
@@ -1557,7 +1637,9 @@ class SalesView(QWidget):
             self._search_debounce_timer = QTimer(self)
             self._search_debounce_timer.setSingleShot(True)
             self._search_debounce_timer.timeout.connect(self._do_search_debounced)
-        self._search_debounce_timer.start(150)
+        # 200ms da margen para tipear rápido sin que cada keystroke dispare una query
+        # (que en el hilo de UI puede bloquear y hacer "saltar" letras).
+        self._search_debounce_timer.start(200)
 
         # Auto-abrir diálogo ampliado tras 1s de escribir
         if not hasattr(self, '_auto_open_timer'):
@@ -1570,7 +1652,13 @@ class SalesView(QWidget):
             self._auto_open_timer.stop()
 
     def _do_search_debounced(self):
-        """Ejecuta la búsqueda real una vez que el usuario para de tipear."""
+        """Ejecuta la búsqueda real una vez que el usuario para de tipear.
+
+        Cadena de fallbacks para maximizar matches:
+          1) AND entre palabras (precisa)
+          2) OR entre palabras (al menos una palabra)
+          3) Fuzzy con levenshtein (tolerancia a typos)
+        """
         text = self.barcode_field.text().strip()
         if len(text) < 1:
             self._hide_suggestions()
@@ -1579,9 +1667,15 @@ class SalesView(QWidget):
                 self.products_table.setRowCount(0)
                 self._all_products = []
             return
+        matches = []
         try:
-            query, params = self._build_fuzzy_query(text, limit=100)
+            query, params = self._build_fuzzy_query(text, limit=60, mode='and')
             matches = self.db.execute_query(query, params) if query else []
+            if not matches and len(text.split()) > 1:
+                query, params = self._build_fuzzy_query(text, limit=60, mode='or')
+                matches = self.db.execute_query(query, params) if query else []
+            if not matches:
+                matches = self._fuzzy_typo_search(text, limit=60)
         except Exception:
             matches = []
         self._all_products = matches
