@@ -117,9 +117,20 @@ export async function renderInventario(container, db) {
     }
   });
 
+  // ── Stock efectivo: para productos conjunto el "stock" real vive en
+  // conjunto_total (suma de unidades cerradas × contenido + restante). El
+  // campo `stock` queda en 0 para esos productos y haría que se vean como
+  // "Agotado" si no lo derivamos.
+  function _stockEfectivo(p) {
+    if (p && (p.es_conjunto === true || p.es_conjunto === 1)) {
+      return Math.round(Number(p.conjunto_total || 0));
+    }
+    return Number(p.stock) || 0;
+  }
+
   // ── Estado inteligente ────────────────────────────────────────────────────
   function calcularEstado(p) {
-    const stock = p.stock || 0;
+    const stock = _stockEfectivo(p);
     const nombre = (p.nombre || '').toUpperCase().trim();
     const vData = ventasProd[nombre];
     const u30 = vData?.u30 || 0;
@@ -330,7 +341,7 @@ export async function renderInventario(container, db) {
             <div style="display:flex;align-items:center;justify-content:space-between;background:#fff;border-radius:8px;padding:8px 12px;border:1px solid #ef9a9a">
               <div>
                 <div style="font-weight:700;font-size:13px">${p.nombre}</div>
-                <div style="font-size:11px;color:#65676b">${p.rubro || p.categoria || '-'} · Stock: <b style="color:#c62828">${p.stock || 0}</b></div>
+                <div style="font-size:11px;color:#65676b">${p.rubro || p.categoria || '-'} · Stock: <b style="color:#c62828">${_stockEfectivo(p)}</b></div>
               </div>
               <div style="text-align:right">
                 <span class="badge badge-red">${p.estado.label}</span>
@@ -379,7 +390,7 @@ export async function renderInventario(container, db) {
       return;
     }
     tbody.innerHTML = data.map(p => {
-      const stock = p.stock || 0;
+      const stock = _stockEfectivo(p);
       const e = p.estado;
       const bgRow = e.key === 'agotado' ? 'background:#fff8f8' : e.key === 'critico' ? 'background:#fff3f3' : '';
       const pct = e.pct || 0;
@@ -430,6 +441,16 @@ export async function renderInventario(container, db) {
   async function editarStock(docId, data) {
     const p = data.find(x => x.doc_id === docId);
     if (!p) return;
+    // Productos conjunto: no se puede editar con un prompt simple (tienen
+    // unidades cerradas, restante y eventualmente colores). El editor real
+    // está en Catálogo.
+    if (p.es_conjunto === true || p.es_conjunto === 1) {
+      alert(
+        `"${p.nombre}" es un producto conjunto (rollo/pack/caja).\n\n` +
+        'Editá su stock desde Catálogo → abrí el producto y usá el bloque "PRODUCTO CONJUNTO".'
+      );
+      return;
+    }
     const nuevoStock = prompt(`Stock actual de "${p.nombre}": ${p.stock || 0}\n\nIngresá el nuevo stock:`);
     if (nuevoStock === null) return;
     const valor = parseInt(nuevoStock);

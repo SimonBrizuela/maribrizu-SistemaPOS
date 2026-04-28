@@ -430,7 +430,13 @@ class SalesHistoryView(QWidget):
             dt.setRowCount(len(items))
             for r, item in enumerate(items):
                 dt.setRowHeight(r, 32)
-                dt.setItem(r, 0, QTableWidgetItem(item['product_name']))
+                # Si el item tiene color de conjunto y el nombre no lo trae,
+                # lo prefijamos para que quede visible en el detalle.
+                _name = item['product_name'] or ''
+                _color = (item.get('conjunto_color') or '').strip()
+                if _color and not _name.startswith(f'[{_color}]'):
+                    _name = f'[{_color}]  {_name}'
+                dt.setItem(r, 0, QTableWidgetItem(_name))
 
                 orig_price = item.get('original_price', 0) or item.get('unit_price', 0)
                 orig_item = QTableWidgetItem(f"${orig_price:.2f}")
@@ -534,7 +540,15 @@ class SalesHistoryView(QWidget):
         if not sale:
             return
         try:
-            pdf_path = self.pdf_generator.generate_sale_ticket(sale)
+            cajero_name = (sale.get('cajero')
+                           or sale.get('username')
+                           or sale.get('turno_nombre')
+                           or '')
+            pdf_path = self.pdf_generator.generate_non_fiscal_ticket(
+                sale,
+                cajero_name=cajero_name,
+                cliente_name='Consumidor Final',
+            )
             self.open_pdf(pdf_path)
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'No se pudo generar el ticket: {e}')

@@ -25,7 +25,7 @@ class Sale:
 
         if not items:
             raise ValueError("La venta debe tener al menos un item")
-        if payment_type not in ('cash', 'transfer'):
+        if payment_type not in ('cash', 'transfer', 'mixed'):
             raise ValueError(f"Tipo de pago inválido: {payment_type}")
         if total_amount is None or total_amount <= 0:
             raise ValueError("El monto total debe ser mayor a cero")
@@ -36,9 +36,20 @@ class Sale:
 
         cash_received = sale_data.get('cash_received', 0) or 0
         change_given = sale_data.get('change_given', 0) or 0
+        # transfer_amount: parte de transferencia en pago mixto (0 si no aplica)
+        transfer_amount = sale_data.get('transfer_amount', 0) or 0
         user_id = sale_data.get('user_id')
         notes = sale_data.get('notes', '')
         turno_nombre = sale_data.get('turno_nombre', '') or ''
+
+        # Validar consistencia para pago mixto
+        if payment_type == 'mixed':
+            suma = round(float(cash_received) + float(transfer_amount), 2)
+            if abs(suma - float(total_amount)) > 0.01:
+                raise ValueError(
+                    f"Pago mixto inconsistente: efectivo {cash_received} + "
+                    f"transferencia {transfer_amount} = {suma} ≠ total {total_amount}"
+                )
 
         # Todo en una sola transacción atómica
         with self.db.get_connection() as conn:
@@ -49,8 +60,8 @@ class Sale:
             #    como CURRENT_TIMESTAMP = UTC)
             created_at_ar = now_ar().strftime('%Y-%m-%d %H:%M:%S')
             cursor.execute(
-                "INSERT INTO sales (total_amount, payment_type, cash_received, change_given, cash_register_id, user_id, notes, turno_nombre, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (total_amount, payment_type, cash_received, change_given, cash_register_id, user_id, notes, turno_nombre, created_at_ar)
+                "INSERT INTO sales (total_amount, payment_type, cash_received, change_given, transfer_amount, cash_register_id, user_id, notes, turno_nombre, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (total_amount, payment_type, cash_received, change_given, transfer_amount, cash_register_id, user_id, notes, turno_nombre, created_at_ar)
             )
             sale_id = cursor.lastrowid
 
@@ -63,38 +74,90 @@ class Sale:
                 discount_value = item.get('discount_value', 0) or 0
                 discount_amount= item.get('discount_amount', 0) or 0
                 promo_id       = item.get('promo_id') or None
+                conjunto_color = (item.get('conjunto_color') or '').strip() or None
                 cursor.execute(
                     """INSERT INTO sale_items
                        (sale_id, product_id, product_name, quantity,
                         unit_price, original_price, discount_type,
-                        discount_value, discount_amount, promo_id, subtotal)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        discount_value, discount_amount, promo_id, subtotal,
+                        conjunto_color)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (sale_id, item['product_id'], item['product_name'],
                      item['quantity'], item['unit_price'], original_price,
                      discount_type, discount_value, discount_amount,
-                     promo_id, subtotal)
+                     promo_id, subtotal, conjunto_color)
                 )
                 if item.get('is_conjunto'):
-                    # Producto conjunto: no se descuenta stock clásico, se
-                    # actualizan unidades cerradas + restante abierto del par.
+                    # Producto conjunto: no se descuenta stock clásico.
+                    # Si el item viene con `conjunto_color`, actualizamos el
+                    # color dentro del array `conjunto_colores` y recomputamos
+                    # los agregados planos (unidades / restante / total) como
+                    # SUMA de todos los colores. Si no trae color (legacy o
+                    # producto sin colores), updateamos los planos directamente.
                     after_u = float(item.get('conjunto_after_unidades') or 0)
                     after_r = float(item.get('conjunto_after_restante') or 0)
-                    # contenido: lo leemos de la fila para recalcular total
+                    color = (item.get('conjunto_color') or '').strip()
                     row = cursor.execute(
-                        "SELECT conjunto_contenido FROM products WHERE id = ?",
+                        "SELECT conjunto_contenido, conjunto_colores "
+                        "FROM products WHERE id = ?",
                         (item['product_id'],)
                     ).fetchone()
                     contenido = float(row[0]) if row and row[0] is not None else 0.0
-                    after_total = after_u * contenido + after_r
-                    cursor.execute(
-                        """UPDATE products
-                           SET conjunto_unidades = ?,
-                               conjunto_restante = ?,
-                               conjunto_total    = ?,
-                               updated_at        = ?
-                           WHERE id = ?""",
-                        (after_u, after_r, after_total, now_iso, item['product_id'])
-                    )
+                    colores_raw = row[1] if row and len(row) > 1 else None
+
+                    if color and colores_raw:
+                        try:
+                            import json as _json
+                            colores = _json.loads(colores_raw)
+                            if not isinstance(colores, list):
+                                colores = []
+                        except Exception:
+                            colores = []
+                        # Actualizar el color correspondiente
+                        encontrado = False
+                        for c in colores:
+                            if isinstance(c, dict) and str(c.get('color', '')).strip() == color:
+                                c['unidades'] = after_u
+                                c['restante'] = after_r
+                                encontrado = True
+                                break
+                        if not encontrado:
+                            colores.append({
+                                'color':    color,
+                                'unidades': after_u,
+                                'restante': after_r,
+                            })
+                        # Agregados = suma de todos los colores
+                        sum_u = sum(float(c.get('unidades') or 0) for c in colores if isinstance(c, dict))
+                        sum_r = sum(float(c.get('restante') or 0) for c in colores if isinstance(c, dict))
+                        sum_total = sum(
+                            float(c.get('unidades') or 0) * contenido + float(c.get('restante') or 0)
+                            for c in colores if isinstance(c, dict)
+                        )
+                        cursor.execute(
+                            """UPDATE products
+                               SET conjunto_unidades = ?,
+                                   conjunto_restante = ?,
+                                   conjunto_total    = ?,
+                                   conjunto_colores  = ?,
+                                   updated_at        = ?
+                               WHERE id = ?""",
+                            (sum_u, sum_r, sum_total,
+                             _json.dumps(colores, ensure_ascii=False),
+                             now_iso, item['product_id'])
+                        )
+                    else:
+                        # Legacy / sin colores: usar after_u / after_r directos
+                        after_total = after_u * contenido + after_r
+                        cursor.execute(
+                            """UPDATE products
+                               SET conjunto_unidades = ?,
+                                   conjunto_restante = ?,
+                                   conjunto_total    = ?,
+                                   updated_at        = ?
+                               WHERE id = ?""",
+                            (after_u, after_r, after_total, now_iso, item['product_id'])
+                        )
                 else:
                     # Descontar stock — se permite vender aunque no haya stock suficiente
                     cursor.execute(
@@ -109,6 +172,16 @@ class Sale:
                     cursor.execute(
                         "UPDATE cash_register SET cash_sales = cash_sales + ?, total_sales = total_sales + ? WHERE id = ?",
                         (total_amount, total_amount, cash_register_id)
+                    )
+                elif payment_type == 'mixed':
+                    # Parte efectivo + parte transferencia
+                    cash_part = float(cash_received) - float(change_given)  # neto en caja
+                    trans_part = float(transfer_amount)
+                    cursor.execute(
+                        "UPDATE cash_register SET cash_sales = cash_sales + ?, "
+                        "transfer_sales = transfer_sales + ?, "
+                        "total_sales = total_sales + ? WHERE id = ?",
+                        (cash_part, trans_part, total_amount, cash_register_id)
                     )
                 else:
                     cursor.execute(

@@ -242,13 +242,68 @@ class Product:
     def get_low_stock(self, threshold: int = 5) -> List[Dict]:
         """Obtiene productos con stock bajo (excluye sentinel y servicios).
 
-        Si el producto tiene stock_min configurado, se usa ese umbral
-        individual. Si no, se usa `threshold` global.
+        - Productos clásicos: `stock <= COALESCE(stock_min, threshold)`.
+        - Productos conjunto: el `stock` clásico no aplica, se compara el
+          `conjunto_total` (o, si tiene colores, el TOTAL de cualquier color
+          individual) contra el umbral. Esto captura "Rojo casi vacío"
+          aunque otros colores estén cargados.
         """
-        query = (
+        # 1) Productos clásicos (no conjunto)
+        clasicos = self.db.execute_query(
             "SELECT * FROM products "
             "WHERE id != 0 AND stock >= 0 "
+            "  AND COALESCE(es_conjunto, 0) = 0 "
             "  AND stock <= COALESCE(stock_min, ?) "
-            "ORDER BY stock ASC, name ASC"
-        )
-        return self.db.execute_query(query, (threshold,))
+            "ORDER BY stock ASC, name ASC",
+            (threshold,)
+        ) or []
+
+        # 2) Productos conjunto: filtrado en Python (tiene JSON y agregado)
+        conjuntos = self.db.execute_query(
+            "SELECT * FROM products "
+            "WHERE id != 0 AND COALESCE(es_conjunto, 0) = 1 "
+            "ORDER BY name ASC"
+        ) or []
+
+        bajos_conj = []
+        for p in conjuntos:
+            umbral = p.get('stock_min')
+            try:
+                umbral = float(umbral) if umbral not in (None, '') else float(threshold)
+            except (TypeError, ValueError):
+                umbral = float(threshold)
+
+            colores_raw = p.get('conjunto_colores')
+            color_bajo = False
+            color_lista = []
+            if colores_raw:
+                try:
+                    import json as _json
+                    color_lista = _json.loads(colores_raw) if isinstance(colores_raw, str) else colores_raw
+                except Exception:
+                    color_lista = []
+            contenido = float(p.get('conjunto_contenido') or 0)
+            if isinstance(color_lista, list) and color_lista:
+                # Marcar bajo si CUALQUIER color cae por debajo del umbral
+                bajos_color_lista = []
+                for c in color_lista:
+                    if not isinstance(c, dict):
+                        continue
+                    t_color = float(c.get('unidades') or 0) * contenido + float(c.get('restante') or 0)
+                    if t_color <= umbral:
+                        color_bajo = True
+                        bajos_color_lista.append({
+                            'color': c.get('color', ''),
+                            'total': t_color,
+                        })
+                if color_bajo:
+                    p = dict(p)
+                    p['_colores_bajos'] = bajos_color_lista
+                    bajos_conj.append(p)
+            else:
+                # Sin colores: comparar agregado conjunto_total
+                t_agg = float(p.get('conjunto_total') or 0)
+                if t_agg <= umbral:
+                    bajos_conj.append(p)
+
+        return list(clasicos) + bajos_conj

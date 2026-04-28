@@ -1439,7 +1439,24 @@ class PDFGenerator:
 
         # ── Determinar tipo, letra, codigo ───────────────────────────────────
         tipo_str = factura.get('tipo_comprobante', 'FAC. ELEC. B').upper()
-        if ' A' in tipo_str and ('ELEC. A' in tipo_str or tipo_str.endswith(' A')):
+        # Detectar Nota de Crédito / Débito antes de los Factura
+        es_nota_credito = 'NOTA CRED' in tipo_str
+        es_nota_debito  = 'NOTA DEB' in tipo_str
+        if es_nota_credito:
+            if tipo_str.endswith(' A'):
+                letra = 'A'; cod_tipo = 3;  cod_afip = 'COD. 03'
+            elif tipo_str.endswith(' C'):
+                letra = 'C'; cod_tipo = 13; cod_afip = 'COD. 13'
+            else:
+                letra = 'B'; cod_tipo = 8;  cod_afip = 'COD. 08'
+        elif es_nota_debito:
+            if tipo_str.endswith(' A'):
+                letra = 'A'; cod_tipo = 2;  cod_afip = 'COD. 02'
+            elif tipo_str.endswith(' C'):
+                letra = 'C'; cod_tipo = 12; cod_afip = 'COD. 12'
+            else:
+                letra = 'B'; cod_tipo = 7;  cod_afip = 'COD. 07'
+        elif ' A' in tipo_str and ('ELEC. A' in tipo_str or tipo_str.endswith(' A')):
             letra = 'A'; cod_tipo = 1; cod_afip = 'COD. 01'
         elif ' C' in tipo_str and ('ELEC. C' in tipo_str or tipo_str.endswith(' C')):
             letra = 'C'; cod_tipo = 11; cod_afip = 'COD. 11'
@@ -1447,7 +1464,11 @@ class PDFGenerator:
             letra = 'B'; cod_tipo = 6; cod_afip = 'COD. 06'
 
         # Nombre largo del comprobante (ej: FACTURA, NOTA DE CREDITO, etc.)
-        nombre_comp = factura.get('tipo_comprobante_nombre', 'FACTURA').upper()
+        # Si es NC y no vino nombre custom, forzamos "NOTA DE CREDITO"
+        _default_nombre = 'NOTA DE CREDITO' if es_nota_credito else (
+            'NOTA DE DEBITO' if es_nota_debito else 'FACTURA'
+        )
+        nombre_comp = factura.get('tipo_comprobante_nombre', _default_nombre).upper()
         condicion_iva_emisor = factura.get('condicion_iva', 'Responsable Inscripto')
 
         pto_str = str(factura.get('punto_venta', 1)).zfill(5)
@@ -1654,6 +1675,47 @@ class PDFGenerator:
         story.append(receptor_outer)
         story.append(Spacer(1, 3*mm))
 
+        # ── Comprobante Asociado (solo en NC / ND) ─────────────────────────
+        cbte_asoc_tipo = (factura.get('cbte_asoc_tipo') or '').strip()
+        cbte_asoc_pv   = int(factura.get('cbte_asoc_pv') or 0)
+        cbte_asoc_nro  = int(factura.get('cbte_asoc_nro') or 0)
+        if cbte_asoc_tipo and cbte_asoc_nro:
+            # Letra del comprobante asociado para mostrar lindo
+            _t_asoc = cbte_asoc_tipo.upper()
+            if _t_asoc.endswith(' A'):
+                _letra_asoc = 'A'
+            elif _t_asoc.endswith(' C'):
+                _letra_asoc = 'C'
+            else:
+                _letra_asoc = 'B'
+            _asoc_label = (
+                'NOTA DE CREDITO' if 'NOTA CRED' in _t_asoc
+                else 'NOTA DE DEBITO' if 'NOTA DEB' in _t_asoc
+                else 'FACTURA'
+            )
+            asoc_txt = (
+                f'<b>Comprobante Asociado:</b> {_asoc_label} {_letra_asoc} '
+                f'N° {cbte_asoc_pv:04d}-{cbte_asoc_nro:08d}'
+            )
+            motivo_nc = (factura.get('motivo_nc') or '').strip()
+            if motivo_nc:
+                asoc_txt += f'<br/><b>Motivo:</b> {motivo_nc}'
+            sA = S('AS', fontSize=8, fontName='Helvetica', alignment=TA_LEFT, spaceAfter=0, leading=11)
+            asoc_tbl = Table(
+                [[Paragraph(asoc_txt, sA)]],
+                colWidths=[CONTENT_W],
+            )
+            asoc_tbl.setStyle(TableStyle([
+                ('BOX',          (0,0),(-1,-1), 0.8, colors.HexColor('#a01616')),
+                ('BACKGROUND',   (0,0),(-1,-1), colors.HexColor('#fff5f5')),
+                ('LEFTPADDING',  (0,0),(-1,-1), 6),
+                ('RIGHTPADDING', (0,0),(-1,-1), 6),
+                ('TOPPADDING',   (0,0),(-1,-1), 4),
+                ('BOTTOMPADDING',(0,0),(-1,-1), 4),
+            ]))
+            story.append(asoc_tbl)
+            story.append(Spacer(1, 3*mm))
+
         # Forma de pago
         pago_txt = factura.get('pago', 'Contado')
         sP = S('PG', fontSize=8, fontName='Helvetica', alignment=TA_LEFT, spaceAfter=0, leading=11)
@@ -1852,9 +1914,31 @@ class PDFGenerator:
                 cuit_int = int(str(cuit_emisor or '0').replace('-','').replace(' ','') or '0')
             except Exception:
                 cuit_int = 0
+            # Fecha en formato AAAA-MM-DD (requerido por AFIP).
+            # fecha_comp viene como DD/MM/YYYY desde el dialog.
+            try:
+                if '/' in fecha_comp:
+                    d, m, a = fecha_comp.split('/')[:3]
+                    qr_fecha = f'{a.zfill(4)}-{m.zfill(2)}-{d.zfill(2)}'
+                else:
+                    qr_fecha = fecha_comp
+            except Exception:
+                qr_fecha = datetime.now(_TZ_AR).strftime('%Y-%m-%d')
+            # Tipo de documento receptor segun condicion IVA y CUIT informado
+            cuit_rec_clean = str(factura.get('cuit_receptor', '0') or '0').replace('-','').replace(' ','') or '0'
+            cond_rec = str(factura.get('condicion_iva_receptor', '') or '').lower()
+            if cuit_rec_clean and cuit_rec_clean != '0' and len(cuit_rec_clean) == 11:
+                tipo_doc_rec = 80   # CUIT
+                nro_doc_rec  = int(cuit_rec_clean)
+            elif cuit_rec_clean and cuit_rec_clean != '0' and len(cuit_rec_clean) in (7, 8):
+                tipo_doc_rec = 96   # DNI
+                nro_doc_rec  = int(cuit_rec_clean)
+            else:
+                tipo_doc_rec = 99   # sin identificar
+                nro_doc_rec  = 0
             qr_data = {
                 'ver': 1,
-                'fecha': fecha_comp.replace('/', '-') if '/' in fecha_comp else fecha_comp,
+                'fecha': qr_fecha,
                 'cuit': cuit_int,
                 'ptoVta': int(factura.get('punto_venta', 1)),
                 'tipoCmp': cod_tipo,
@@ -1862,8 +1946,8 @@ class PDFGenerator:
                 'importe': round(total, 2),
                 'moneda': 'PES',
                 'ctz': 1,
-                'tipoDocRec': 96 if factura.get('cuit_receptor', '') else 99,
-                'nroDocRec': int(str(factura.get('cuit_receptor', '0') or '0').replace('-','') or '0'),
+                'tipoDocRec': tipo_doc_rec,
+                'nroDocRec': nro_doc_rec,
                 'tipoCodAut': 'E',
                 'codAut': int(str(cae_val or '0').strip() or '0'),
             }

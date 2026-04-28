@@ -262,6 +262,172 @@ class AfipWsfe:
             raise AFIPWSFEError(f'WSFE Error: {msg}')
         return int(resp.CbteNro or 0)
 
+    def tipos_comprobante_disponibles(self) -> list:
+        """Devuelve la lista de tipos de comprobante que el emisor tiene habilitados.
+
+        Llama a FEParamGetTiposCbte que retorna los tipos disponibles según la
+        condición IVA del emisor. Útil para verificar si Nota de Crédito está
+        habilitada antes de intentar emitir.
+
+        Devuelve: [{'Id': 1, 'Desc': 'Factura A', 'FchDesde': '...', 'FchHasta': '...'}, ...]
+        """
+        token, sign = self._get_ticket_acceso()
+        client = self._get_wsfe_client()
+        auth = {'Token': token, 'Sign': sign, 'Cuit': int(self.cuit)}
+        resp = client.service.FEParamGetTiposCbte(Auth=auth)
+        if hasattr(resp, 'Errors') and resp.Errors and resp.Errors.Err:
+            errs = resp.Errors.Err
+            msg = '; '.join(f"[{e.Code}] {e.Msg}"
+                            for e in (errs if hasattr(errs, '__iter__') else [errs]))
+            raise AFIPWSFEError(f'WSFE Error tipos comprobante: {msg}')
+        out = []
+        try:
+            for t in resp.ResultGet.CbteTipo:
+                out.append({
+                    'Id':    int(getattr(t, 'Id', 0) or 0),
+                    'Desc':  str(getattr(t, 'Desc', '') or ''),
+                    'FchDesde': str(getattr(t, 'FchDesde', '') or ''),
+                    'FchHasta': str(getattr(t, 'FchHasta', '') or ''),
+                })
+        except Exception:
+            pass
+        return out
+
+    def puntos_venta_disponibles(self) -> list:
+        """Devuelve los puntos de venta habilitados para el emisor.
+
+        Llama a FEParamGetPtosVenta. Devuelve: [{'Nro': 1, 'EmisionTipo': 'CAE', 'Bloqueado': 'N', 'FchBaja': ''}, ...]
+        """
+        token, sign = self._get_ticket_acceso()
+        client = self._get_wsfe_client()
+        auth = {'Token': token, 'Sign': sign, 'Cuit': int(self.cuit)}
+        resp = client.service.FEParamGetPtosVenta(Auth=auth)
+        if hasattr(resp, 'Errors') and resp.Errors and resp.Errors.Err:
+            errs = resp.Errors.Err
+            msg = '; '.join(f"[{e.Code}] {e.Msg}"
+                            for e in (errs if hasattr(errs, '__iter__') else [errs]))
+            raise AFIPWSFEError(f'WSFE Error PVs: {msg}')
+        out = []
+        try:
+            for pv in resp.ResultGet.PtoVenta:
+                out.append({
+                    'Nro':         int(getattr(pv, 'Nro', 0) or 0),
+                    'EmisionTipo': str(getattr(pv, 'EmisionTipo', '') or ''),
+                    'Bloqueado':   str(getattr(pv, 'Bloqueado', 'N') or 'N'),
+                    'FchBaja':     str(getattr(pv, 'FchBaja', '') or ''),
+                })
+        except Exception:
+            pass
+        return out
+
+    def diagnosticar_permisos_nc(self, punto_venta: int) -> dict:
+        """Test integral: ¿el emisor puede emitir Notas de Crédito?
+
+        Verifica:
+          1. Autenticación WSAA OK.
+          2. PV está habilitado y no bloqueado.
+          3. Tipos de comprobante disponibles incluyen NC A/B/C.
+          4. ultimo_comprobante para cada tipo de NC responde sin error
+             (lo que confirma habilitación efectiva en ese PV).
+
+        Devuelve un dict con el resultado de cada chequeo:
+          {
+            'auth_ok': True,
+            'pv': 1, 'pv_ok': True, 'pv_msg': '',
+            'tipos_disponibles': [...],
+            'nc_a': {'permitido': True/False, 'msg': '', 'codigo': 3, 'ultimo_nro': N},
+            'nc_b': {...},
+            'nc_c': {...},
+            'puede_emitir_nc': True,
+          }
+        """
+        result = {
+            'auth_ok': False,
+            'pv': punto_venta,
+            'pv_ok': False, 'pv_msg': '',
+            'tipos_disponibles': [],
+            'nc_a': {}, 'nc_b': {}, 'nc_c': {},
+            'puede_emitir_nc': False,
+            'error': '',
+        }
+        # 1. Auth
+        try:
+            self._get_ticket_acceso()
+            result['auth_ok'] = True
+        except Exception as e:
+            result['error'] = f'Auth WSAA falló: {e}'
+            return result
+
+        # 2. PVs — chequear que el PV pedido esté en la lista, sin marcarlo
+        # como "dado de baja" salvo que FchBaja sea claramente una fecha real.
+        try:
+            pvs = self.puntos_venta_disponibles()
+            result['pvs_raw'] = pvs   # data cruda para diagnóstico
+            for pv in pvs:
+                if int(pv['Nro']) == int(punto_venta):
+                    bloq = (pv.get('Bloqueado') or '').strip().upper()
+                    fch_baja_raw = (pv.get('FchBaja') or '').strip()
+                    # Considerar "dado de baja" solo si FchBaja luce como fecha
+                    # real (YYYY-MM-DD o similar). 'NULL', '', '0', etc no cuentan.
+                    parece_fecha = (
+                        len(fch_baja_raw) >= 8
+                        and fch_baja_raw.upper() not in ('NULL', 'NONE', '0', '00000000')
+                        and any(ch.isdigit() for ch in fch_baja_raw)
+                        and '-' in fch_baja_raw
+                    )
+                    if bloq == 'S':
+                        result['pv_msg'] = 'PV bloqueado por AFIP'
+                    elif parece_fecha:
+                        result['pv_msg'] = f'PV dado de baja el {fch_baja_raw}'
+                    else:
+                        result['pv_ok'] = True
+                        result['pv_msg'] = f'OK ({pv.get("EmisionTipo", "CAE")})'
+                    break
+            else:
+                if pvs:
+                    nros = ', '.join(str(p['Nro']) for p in pvs)
+                    result['pv_msg'] = f'PV {punto_venta} no figura. AFIP reporta: {nros}'
+                else:
+                    result['pv_msg'] = 'AFIP no devolvió PVs habilitados (perfil sin alta)'
+        except Exception as e:
+            result['pv_msg'] = f'No se pudo consultar PVs: {e}'
+
+        # 3. Tipos disponibles
+        try:
+            result['tipos_disponibles'] = self.tipos_comprobante_disponibles()
+        except Exception as e:
+            result['error'] = f'No se pudieron consultar tipos: {e}'
+
+        ids_disponibles = {t['Id'] for t in result['tipos_disponibles']}
+
+        # 4. Probar cada NC
+        for letra, tipo_str, codigo in [
+            ('A', 'NOTA CRED. A', 3),
+            ('B', 'NOTA CRED. B', 8),
+            ('C', 'NOTA CRED. C', 13),
+        ]:
+            r = {'permitido': False, 'codigo': codigo, 'msg': '', 'ultimo_nro': None}
+            if codigo not in ids_disponibles and ids_disponibles:
+                r['msg'] = f'Tipo {codigo} no figura en habilitados (cond. IVA del emisor no lo permite)'
+            else:
+                try:
+                    nro = self.ultimo_comprobante(tipo_str, punto_venta)
+                    r['permitido'] = True
+                    r['ultimo_nro'] = nro
+                    r['msg'] = f'OK (último emitido: {nro})'
+                except AFIPWSFEError as ex:
+                    r['msg'] = str(ex)
+                except Exception as ex:
+                    r['msg'] = f'Error: {ex}'
+            result[f'nc_{letra.lower()}'] = r
+
+        result['puede_emitir_nc'] = (
+            result['auth_ok'] and result['pv_ok'] and any(
+                result[f'nc_{l}']['permitido'] for l in ('a', 'b', 'c')
+            )
+        )
+        return result
+
     def solicitar_cae(
         self,
         tipo_comprobante: str,
@@ -279,6 +445,9 @@ class AfipWsfe:
         importe_trib: float = 0.0,
         moneda: str = 'PES',
         cotizacion: float = 1.0,
+        cbtes_asoc: list = None,            # Notas de Crédito/Débito: lista de
+                                             # tuplas (tipo_str, pv, nro) referenciando
+                                             # el/los comprobantes originales.
     ) -> dict:
         """
         Solicita CAE a AFIP para un comprobante.
@@ -343,6 +512,23 @@ class AfipWsfe:
             detalle['FchServDesde'] = fecha_comprobante
             detalle['FchServHasta'] = fecha_comprobante
             detalle['FchVtoPago']   = fecha_comprobante
+
+        # Comprobantes asociados (Notas de Crédito / Débito).
+        # AFIP exige este campo para todo tipo 3/8/13 (NC) y 2/7/12 (ND).
+        if cbtes_asoc:
+            cbtes_list = []
+            for asoc in cbtes_asoc:
+                if not asoc:
+                    continue
+                a_tipo, a_pv, a_nro = asoc
+                cbtes_list.append({
+                    'Tipo':  TIPO_COMP_MAP.get(str(a_tipo).upper(), 6),
+                    'PtoVta': int(a_pv),
+                    'Nro':    int(a_nro),
+                    # Cuit y CbteFch son opcionales en WSFEv1
+                })
+            if cbtes_list:
+                detalle['CbtesAsoc'] = {'CbteAsoc': cbtes_list}
 
         req = {
             'FeCabReq': {
@@ -559,7 +745,7 @@ class AFIPPadron(AfipWsfe):
                 (getattr(gen, 'nombre', '')   or '').strip(),
             ])).strip()
 
-        # Domicilio fiscal (único objeto)
+        # Domicilio fiscal (unico objeto)
         dom = getattr(gen, 'domicilioFiscal', None)
         dom_str, localidad = '', ''
         if dom:

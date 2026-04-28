@@ -11,6 +11,9 @@ from datetime import datetime
 import os
 import subprocess
 import platform
+import logging
+
+logger = logging.getLogger(__name__)
 
 from pos_system.models.product import Product
 from pos_system.models.sale import Sale
@@ -1039,6 +1042,9 @@ class SalesView(QWidget):
         self.products_table.setHorizontalHeaderLabels(['FAV', 'Producto', 'Codigo', 'Precio', 'Stock'])
         self.products_table.setVisible(False)
         self.products_table.doubleClicked.connect(self.add_to_cart_from_table)
+        # Menú contextual: ajustar stock por color en productos conjunto
+        self.products_table.setContextMenuPolicy(Qt.CustomContextMenu)
+        self.products_table.customContextMenuRequested.connect(self._show_product_context_menu)
 
         self._btn_off = (
             f"background:{_T['surface']};color:{_T['text_muted']};"
@@ -1439,7 +1445,14 @@ class SalesView(QWidget):
         """Agrega al carrito el producto seleccionado desde el diálogo ampliado."""
         self.add_to_cart(product)
         if hasattr(self, '_search_dialog') and self._search_dialog:
-            self._search_dialog.update_cart_display(list(self.cart))
+            # SpotlightDialog (el buscador actual) no tiene update_cart_display;
+            # solo lo tenía la versión vieja. Como igual cerramos el diálogo
+            # acto seguido, la actualización es innecesaria.
+            try:
+                if hasattr(self._search_dialog, 'update_cart_display'):
+                    self._search_dialog.update_cart_display(list(self.cart))
+            except Exception:
+                pass
             self._search_dialog.close()
 
     def _products_table_key_press(self, event):
@@ -2063,14 +2076,25 @@ class SalesView(QWidget):
             # Col 1: Nombre (con badge "[Rollo]" / "[Pack]" / etc para productos conjunto)
             badge_prefix = f'[{tipo_lbl}] ' if tipo_lbl else ''
             stock_val_name = product['stock']
+            # Pre-parsear colores si los hay (afecta badge y tooltip del nombre)
+            _colores_list = []
+            if es_conjunto and product.get('conjunto_colores'):
+                try:
+                    from pos_system.ui.conjunto_dialog import parse_colores as _parse_col
+                    _colores_list = _parse_col(product.get('conjunto_colores'))
+                except Exception:
+                    _colores_list = []
+            color_badge = ''
+            if _colores_list:
+                color_badge = f' (#{len(_colores_list)} colores)'
             if es_conjunto:
                 # Para conjunto, el "sin stock" se decide por conjunto_total, no por stock
                 ctotal = float(product.get('conjunto_total') or 0)
                 if ctotal <= 0:
-                    name_item = QTableWidgetItem(f"{badge_prefix}{product['name']}  [Sin stock]")
+                    name_item = QTableWidgetItem(f"{badge_prefix}{product['name']}{color_badge}  [Sin stock]")
                     name_item.setForeground(QColor('#a01616'))
                 else:
-                    name_item = QTableWidgetItem(f"{badge_prefix}{product['name']}")
+                    name_item = QTableWidgetItem(f"{badge_prefix}{product['name']}{color_badge}")
                     name_item.setForeground(QColor('#c1521f'))  # violeta del catálogo conjunto
                 name_item.setFont(QFont('Segoe UI', 10, QFont.Bold))
             elif stock_val_name == 0:
@@ -2088,11 +2112,39 @@ class SalesView(QWidget):
                 u_short = _CONJ_UNIDADES.get(
                     (product.get('conjunto_unidad_medida') or '').lower(), {}
                 ).get('short', '')
-                name_item.setToolTip(
+                contenido = float(product.get('conjunto_contenido') or 0)
+                # Umbral de stock_min para señalar colores bajos
+                _smin = product.get('stock_min')
+                try:
+                    _smin = float(_smin) if _smin not in (None, '') else None
+                except (TypeError, ValueError):
+                    _smin = None
+                tooltip_lines = [
                     f'{tipo_lbl} · {product.get("conjunto_unidades") or 0:g} cerrado(s) + '
                     f'{product.get("conjunto_restante") or 0:g}{u_short} abierto = '
                     f'{product.get("conjunto_total") or 0:g}{u_short}'
-                )
+                ]
+                hay_color_bajo = False
+                if _colores_list:
+                    tooltip_lines.append('')
+                    tooltip_lines.append('Stock por color:')
+                    for _c in _colores_list:
+                        _ct = _c['unidades'] * contenido + _c['restante']
+                        marca = ''
+                        if _smin is not None and _ct <= _smin:
+                            marca = '  ⚠ STOCK BAJO'
+                            hay_color_bajo = True
+                        tooltip_lines.append(
+                            f'  • {_c["color"]}: {_ct:g}{u_short}  '
+                            f'({_c["unidades"]:g} cerr. + {_c["restante"]:g}{u_short} ab.){marca}'
+                        )
+                if hay_color_bajo:
+                    tooltip_lines.append('')
+                    tooltip_lines.append('Tip: click derecho → Ajustar stock por color')
+                    # Pintar el nombre con el rojo de stock bajo aunque
+                    # el agregado total no llegue al umbral.
+                    name_item.setForeground(QColor('#a01616'))
+                name_item.setToolTip('\n'.join(tooltip_lines))
             self.products_table.setItem(row, 1, name_item)
 
             # Col 2: Codigo de barras
@@ -2188,7 +2240,50 @@ class SalesView(QWidget):
             product = self.products_table.item(selected_row, 0).data(Qt.UserRole)
             if product:
                 self.add_to_cart(product)
-        
+
+    def _show_product_context_menu(self, pos):
+        """Menú contextual sobre la grilla de productos.
+
+        Por ahora solo muestra "Ajustar stock por color..." si el producto es
+        conjunto. Si en el futuro hay más acciones (editar precio, etc.) se
+        agregan acá.
+        """
+        idx = self.products_table.indexAt(pos)
+        if not idx.isValid():
+            return
+        item = self.products_table.item(idx.row(), 0)
+        if item is None:
+            return
+        product = item.data(Qt.UserRole)
+        if not product:
+            return
+        if int(product.get('es_conjunto') or 0) != 1:
+            return
+
+        from PyQt5.QtWidgets import QMenu
+        menu = QMenu(self)
+        action = menu.addAction('🎨  Ajustar stock por color…')
+        chosen = menu.exec_(self.products_table.viewport().mapToGlobal(pos))
+        if chosen is action:
+            self._open_editar_colores(product)
+
+    def _open_editar_colores(self, product):
+        try:
+            from pos_system.ui.editar_colores_dialog import EditarColoresDialog
+            dlg = EditarColoresDialog(product, self.db, parent=self)
+        except Exception as e:
+            logger.error(f'EditarColoresDialog: {e}')
+            QMessageBox.critical(self, 'Error', f'No se pudo abrir el editor:\n{e}')
+            return
+        if dlg.exec_() != QDialog.Accepted:
+            return
+        # Refrescar la grilla del POS para mostrar el stock actualizado
+        try:
+            self.refresh_data()
+        except Exception:
+            pass
+
+
     def _resolve_price_for_product(self, product: dict, quantity: int = 1) -> dict:
         """
         Calcula el precio efectivo aplicando descuentos del producto y promos activas.
@@ -2333,12 +2428,44 @@ class SalesView(QWidget):
         self.update_cart_display()
 
     def _add_conjunto_to_cart(self, product):
-        """Abre el ConjuntoDialog y agrega el resultado como ítem del carrito.
+        """Abre el ConjuntoDialog y agrega cada línea (1 por color) al carrito.
 
-        Cada venta de conjunto va como un ítem independiente (no se acumula
-        con otras del mismo producto), porque cada una baja stock distinto
-        del par (unidades cerradas, restante abierto).
+        En modo legacy (producto sin colores) el dialog devuelve una sola línea,
+        equivalente al comportamiento histórico. En modo multi-color, devuelve
+        una línea por cada `Agregar al subtotal`.
+
+        IMPORTANTE: Antes de abrir el diálogo:
+          1) Pulleamos el doc del catálogo desde Firebase (1 lectura, timeout
+             corto) para garantizar el dato más fresco — útil cuando el stock
+             se editó en la web o se vendió desde otra PC.
+          2) Refrescamos el dict del producto desde SQLite (que ya quedó
+             actualizado por el paso 1, o por ventas previas locales).
+        Si Firebase no responde, seguimos con lo que tengamos en local.
         """
+        try:
+            pid = product.get('id')
+            firebase_id = (product.get('firebase_id') or '').strip()
+            # 1) Refresh contra Firestore (best-effort, no bloquea más de 2.5s)
+            if firebase_id:
+                try:
+                    from pos_system.utils.firebase_sync import get_firebase_sync
+                    fb = get_firebase_sync()
+                    if fb and fb.enabled:
+                        fb.refresh_product_from_firestore(self.db, firebase_id, timeout=2.5)
+                except Exception as _e:
+                    logger.debug(f"ConjuntoDialog: refresh Firebase falló: {_e}")
+            # 2) Releer la fila ya actualizada desde SQLite
+            if pid:
+                rows = self.db.execute_query(
+                    "SELECT * FROM products WHERE id=? LIMIT 1", (int(pid),)
+                ) or []
+                if rows:
+                    fresco = dict(rows[0])
+                    for k, v in fresco.items():
+                        product[k] = v
+        except Exception as _e:
+            logger.warning(f"ConjuntoDialog: no se pudo refrescar producto: {_e}")
+
         try:
             dlg = ConjuntoDialog(product, parent=self)
         except Exception as e:
@@ -2347,50 +2474,55 @@ class SalesView(QWidget):
             return
         if dlg.exec_() != QDialog.Accepted or not dlg.result_data:
             return
-        r = dlg.result_data
 
         u_short = _CONJ_UNIDADES[dlg.unidad_base]['short']
-        venta_short = _CONJ_UNIDADES.get(r['unidad_venta'], {}).get('short', u_short)
         tipo_label = _CONJ_TIPOS.get(dlg.tipo, {}).get('label', 'Conjunto')
 
-        if r['vender_por'] == 'conjunto':
-            descripcion = f'{_fmt_qty(r["cantidad"])} {tipo_label.lower()}(s)'
-        elif r['vender_por'] == 'unidad':
-            descripcion = f'{_fmt_qty(r["cantidad"])} u'
-        else:
-            descripcion = f'{_fmt_qty(r["cantidad"])} {venta_short}'
+        # `lineas` siempre viene presente (1 elemento en modo legacy)
+        lineas = dlg.result_data.get('lineas') or [dlg.result_data]
+        for r in lineas:
+            venta_short = _CONJ_UNIDADES.get(r['unidad_venta'], {}).get('short', u_short)
+            if r['vender_por'] == 'conjunto':
+                descripcion = f'{_fmt_qty(r["cantidad"])} {tipo_label.lower()}(s)'
+            elif r['vender_por'] == 'unidad':
+                descripcion = f'{_fmt_qty(r["cantidad"])} u'
+            else:
+                descripcion = f'{_fmt_qty(r["cantidad"])} {venta_short}'
 
-        nombre_largo = f'{product["name"]}  ·  {descripcion}'
-        precio_total = float(r['precio_total'])
+            color = (r.get('color') or '').strip()
+            color_prefix = f'[{color}]  ' if color else ''
+            nombre_largo = f'{color_prefix}{product["name"]}  ·  {descripcion}'
+            precio_total = float(r['precio_total'])
 
-        self.cart.append({
-            'product_id':    product['id'],
-            'product_name':  nombre_largo,
-            # Los items conjunto siempre cuentan como 1 línea (la cantidad real
-            # está en cantidad_conjunto). Esto evita romper el resto de la UI
-            # que asume quantity entera.
-            'quantity':         1,
-            'unit_price':       precio_total,
-            'original_price':   precio_total,
-            'discount_type':    None,
-            'discount_value':   0,
-            'discount_amount':  0,
-            'promo_id':         None,
-            'promo_label':      '',
-            'subtotal':         precio_total,
-            'max_stock':        9999,
-            'category':         product.get('category'),
-            # Flags / payload conjunto (consumidos por el descuento de stock al cerrar venta)
-            'is_conjunto':            True,
-            'conjunto_tipo':          dlg.tipo,
-            'conjunto_unidad_base':   dlg.unidad_base,
-            'conjunto_cantidad':      r['cantidad'],
-            'conjunto_unidad_venta':  r['unidad_venta'],
-            'conjunto_cantidad_base': r['cantidad_base'],
-            'conjunto_vender_por':    r['vender_por'],
-            'conjunto_after_unidades': r['after_unidades'],
-            'conjunto_after_restante': r['after_restante'],
-        })
+            self.cart.append({
+                'product_id':    product['id'],
+                'product_name':  nombre_largo,
+                # Los items conjunto siempre cuentan como 1 línea (la cantidad real
+                # está en conjunto_cantidad). Esto evita romper el resto de la UI
+                # que asume quantity entera.
+                'quantity':         1,
+                'unit_price':       precio_total,
+                'original_price':   precio_total,
+                'discount_type':    None,
+                'discount_value':   0,
+                'discount_amount':  0,
+                'promo_id':         None,
+                'promo_label':      '',
+                'subtotal':         precio_total,
+                'max_stock':        9999,
+                'category':         product.get('category'),
+                # Flags / payload conjunto (consumidos por el descuento de stock al cerrar venta)
+                'is_conjunto':            True,
+                'conjunto_tipo':          dlg.tipo,
+                'conjunto_unidad_base':   dlg.unidad_base,
+                'conjunto_cantidad':      r['cantidad'],
+                'conjunto_unidad_venta':  r['unidad_venta'],
+                'conjunto_cantidad_base': r['cantidad_base'],
+                'conjunto_vender_por':    r['vender_por'],
+                'conjunto_after_unidades': r['after_unidades'],
+                'conjunto_after_restante': r['after_restante'],
+                'conjunto_color':          color,   # '' = legacy
+            })
         self.update_cart_display()
 
     def update_cart_display(self):
@@ -3021,6 +3153,7 @@ class SalesView(QWidget):
         payment_type = dialog.payment_type
         cash_received = dialog.cash_received
         change_given = dialog.change_given
+        transfer_amount = getattr(dialog, 'transfer_amount', 0.0) or 0.0
         selected_profile = dialog.selected_profile
         selected_cliente = dialog.selected_cliente
         payment_subtype = dialog.payment_subtype
@@ -3039,6 +3172,7 @@ class SalesView(QWidget):
             'payment_subtype': payment_subtype,
             'cash_received':   cash_received,
             'change_given':    change_given,
+            'transfer_amount': transfer_amount,
             'items':           self.cart,
             'user_id':         self.current_user.get('id'),
             'turno_nombre':    turno_nombre,
@@ -3968,7 +4102,12 @@ class PaymentDialog(QDialog):
         self.payment_type = 'cash'
         self.cash_received = 0.0
         self.change_given = 0.0
+        self.transfer_amount = 0.0      # parte de transferencia en pago mixto
         self._raw_amount = ""
+        # Buffers para pago mixto (cada campo lleva el suyo)
+        self._mixed_cash_raw = ""
+        self._mixed_transfer_raw = ""
+        self._mixed_focus = 'cash'      # 'cash' o 'transfer' — destino del numpad
         self.selected_profile = None
         self.selected_cliente = None
         self.payment_subtype = 'Efectivo'
@@ -4182,6 +4321,15 @@ class PaymentDialog(QDialog):
         self.btn_transfer.setFont(QFont('Segoe UI', 11, QFont.Bold))
         self.btn_transfer.clicked.connect(lambda: self._set_payment('transfer'))
         pay_row.addWidget(self.btn_transfer)
+
+        self.btn_mixed = QPushButton('Pago Mixto')
+        self.btn_mixed.setObjectName('btn_cash')  # mismo estilo que los otros (pill)
+        self.btn_mixed.setCheckable(True)
+        self.btn_mixed.setMinimumHeight(_pay)
+        self.btn_mixed.setFont(QFont('Segoe UI', 11, QFont.Bold))
+        self.btn_mixed.setToolTip('Parte en efectivo y parte en transferencia')
+        self.btn_mixed.clicked.connect(lambda: self._set_payment('mixed'))
+        pay_row.addWidget(self.btn_mixed)
         main.addLayout(pay_row)
 
         # ── Sub-tipo de pago electrónico (visible solo con Transferencia) ──
@@ -4254,6 +4402,65 @@ class PaymentDialog(QDialog):
         tl.addWidget(info)
         self.transfer_panel.setVisible(False)
         left.addWidget(self.transfer_panel)
+
+        # ── Panel Pago Mixto: dos inputs (efectivo + transferencia) ──
+        self.mixed_panel = QWidget()
+        ml = QVBoxLayout(self.mixed_panel); ml.setContentsMargins(0, 0, 0, 0); ml.setSpacing(_sp)
+
+        hint = QLabel('Tocá el monto que querés editar y usá el teclado:')
+        hint.setFont(QFont('Segoe UI', 9))
+        hint.setStyleSheet('color:#5a5448;')
+        ml.addWidget(hint)
+
+        # Input efectivo
+        cash_row = QHBoxLayout(); cash_row.setSpacing(8)
+        cash_lbl = QLabel('Efectivo')
+        cash_lbl.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        cash_lbl.setStyleSheet('color:#3d7a3a;')
+        cash_lbl.setMinimumWidth(110)
+        cash_row.addWidget(cash_lbl)
+        self.mix_cash_input = QLineEdit()
+        self.mix_cash_input.setPlaceholderText('0.00')
+        self.mix_cash_input.setAlignment(Qt.AlignRight)
+        self.mix_cash_input.setMinimumHeight(_inp)
+        self.mix_cash_input.setFont(QFont('Segoe UI', 16, QFont.Bold))
+        self.mix_cash_input.setReadOnly(True)
+        self.mix_cash_input.setCursor(Qt.PointingHandCursor)
+        self.mix_cash_input.mousePressEvent = lambda _e: self._set_mixed_focus('cash')
+        cash_row.addWidget(self.mix_cash_input, 1)
+        ml.addLayout(cash_row)
+
+        # Input transferencia
+        tra_row = QHBoxLayout(); tra_row.setSpacing(8)
+        tra_lbl = QLabel('Transferencia')
+        tra_lbl.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        tra_lbl.setStyleSheet('color:#c1521f;')
+        tra_lbl.setMinimumWidth(110)
+        tra_row.addWidget(tra_lbl)
+        self.mix_transfer_input = QLineEdit()
+        self.mix_transfer_input.setPlaceholderText('0.00')
+        self.mix_transfer_input.setAlignment(Qt.AlignRight)
+        self.mix_transfer_input.setMinimumHeight(_inp)
+        self.mix_transfer_input.setFont(QFont('Segoe UI', 16, QFont.Bold))
+        self.mix_transfer_input.setReadOnly(True)
+        self.mix_transfer_input.setCursor(Qt.PointingHandCursor)
+        self.mix_transfer_input.mousePressEvent = lambda _e: self._set_mixed_focus('transfer')
+        tra_row.addWidget(self.mix_transfer_input, 1)
+        ml.addLayout(tra_row)
+
+        # Estado: total / falta / OK
+        self.mix_status = QLabel(f'Falta: ${self.total:,.2f}')
+        self.mix_status.setFont(QFont('Segoe UI', 11, QFont.Bold))
+        self.mix_status.setAlignment(Qt.AlignCenter)
+        self.mix_status.setMinimumHeight(_inp - 6)
+        self.mix_status.setStyleSheet(
+            'background:#fff5f5;color:#a01616;border:2px solid #a01616;'
+            'border-radius:8px;padding:6px;'
+        )
+        ml.addWidget(self.mix_status)
+
+        self.mixed_panel.setVisible(False)
+        left.addWidget(self.mixed_panel)
 
         left.addStretch(1)
 
@@ -4547,23 +4754,82 @@ class PaymentDialog(QDialog):
 
     def _set_payment(self, ptype):
         self.payment_type = ptype
+        # Reset visual de los 3 botones
+        self.btn_cash.setChecked(ptype == 'cash')
+        self.btn_transfer.setChecked(ptype == 'transfer')
+        if hasattr(self, 'btn_mixed'):
+            self.btn_mixed.setChecked(ptype == 'mixed')
+        # Visibilidad de los 3 paneles
+        self.cash_panel.setVisible(ptype == 'cash')
+        self.transfer_panel.setVisible(ptype == 'transfer')
+        if hasattr(self, 'mixed_panel'):
+            self.mixed_panel.setVisible(ptype == 'mixed')
+
         if ptype == 'cash':
-            self.btn_cash.setChecked(True)
-            self.btn_transfer.setChecked(False)
-            self.cash_panel.setVisible(True)
-            self.transfer_panel.setVisible(False)
             self.payment_subtype = 'Efectivo'
             if self._subtype_row_widget:
                 self._subtype_row_widget.setVisible(False)
-        else:
-            self.btn_cash.setChecked(False)
-            self.btn_transfer.setChecked(True)
-            self.cash_panel.setVisible(False)
-            self.transfer_panel.setVisible(True)
+        elif ptype == 'transfer':
             if self._subtype_row_widget:
                 self._subtype_row_widget.setVisible(True)
             # Default: T. Débito
             self._set_subtype('T. DEBITO', self._subtype_btns.get('T. DEBITO'))
+        else:  # mixed
+            self.payment_subtype = 'Mixto'
+            if self._subtype_row_widget:
+                self._subtype_row_widget.setVisible(False)
+            # Foco inicial sobre el campo efectivo
+            self._set_mixed_focus('cash')
+
+    def _set_mixed_focus(self, which: str):
+        """Selecciona qué campo (cash/transfer) recibe los toques del numpad."""
+        if which not in ('cash', 'transfer'):
+            return
+        self._mixed_focus = which
+        # Resaltar el input activo
+        active_css = 'border:2px solid #c1521f; background:#fff;'
+        idle_css   = 'border:1px solid #dcd6c8; background:#fafaf7;'
+        if hasattr(self, 'mix_cash_input'):
+            self.mix_cash_input.setStyleSheet(
+                f'QLineEdit{{{active_css if which == "cash" else idle_css} '
+                f'border-radius:8px; padding:0 10px;}}'
+            )
+        if hasattr(self, 'mix_transfer_input'):
+            self.mix_transfer_input.setStyleSheet(
+                f'QLineEdit{{{active_css if which == "transfer" else idle_css} '
+                f'border-radius:8px; padding:0 10px;}}'
+            )
+
+    def _update_mixed_status(self):
+        """Calcula la suma cash + transfer y actualiza el indicador."""
+        try:
+            cash = float(self._mixed_cash_raw) if self._mixed_cash_raw else 0.0
+        except ValueError:
+            cash = 0.0
+        try:
+            tra = float(self._mixed_transfer_raw) if self._mixed_transfer_raw else 0.0
+        except ValueError:
+            tra = 0.0
+        suma = round(cash + tra, 2)
+        diff = round(self.total - suma, 2)
+        if abs(diff) < 0.01:
+            self.mix_status.setText(f'✓ Completo (${suma:,.2f})')
+            self.mix_status.setStyleSheet(
+                'background:#f0fdf4;color:#16a34a;border:2px solid #3d7a3a;'
+                'border-radius:8px;padding:6px;'
+            )
+        elif diff > 0:
+            self.mix_status.setText(f'Falta: ${diff:,.2f}')
+            self.mix_status.setStyleSheet(
+                'background:#fff5f5;color:#a01616;border:2px solid #a01616;'
+                'border-radius:8px;padding:6px;'
+            )
+        else:
+            self.mix_status.setText(f'Sobra: ${abs(diff):,.2f}')
+            self.mix_status.setStyleSheet(
+                'background:#fff5f5;color:#a01616;border:2px solid #a01616;'
+                'border-radius:8px;padding:6px;'
+            )
 
     def _set_subtype(self, key, btn):
         self.payment_subtype = key
@@ -4588,6 +4854,24 @@ class PaymentDialog(QDialog):
         return f'{formatted}.{dec_part}' if dec_part is not None else formatted
 
     def _numpad_press(self, text):
+        # En modo mixto el numpad va al campo activo
+        if self.payment_type == 'mixed':
+            buf_attr = ('_mixed_cash_raw' if self._mixed_focus == 'cash'
+                        else '_mixed_transfer_raw')
+            buf = getattr(self, buf_attr)
+            if text == '.' and '.' in buf:
+                return
+            if text == '00' and not buf:
+                return
+            buf += text
+            setattr(self, buf_attr, buf)
+            target = (self.mix_cash_input if self._mixed_focus == 'cash'
+                      else self.mix_transfer_input)
+            target.setText(self._fmt_input(buf))
+            self._update_mixed_status()
+            return
+
+        # Modo efectivo (transferencia ignora el numpad)
         if text == '.' and '.' in self._raw_amount:
             return
         if text == '00' and not self._raw_amount:
@@ -4597,9 +4881,53 @@ class PaymentDialog(QDialog):
         self._update_change()
 
     def _numpad_delete(self):
+        if self.payment_type == 'mixed':
+            buf_attr = ('_mixed_cash_raw' if self._mixed_focus == 'cash'
+                        else '_mixed_transfer_raw')
+            buf = getattr(self, buf_attr)[:-1]
+            setattr(self, buf_attr, buf)
+            target = (self.mix_cash_input if self._mixed_focus == 'cash'
+                      else self.mix_transfer_input)
+            target.setText(self._fmt_input(buf))
+            self._update_mixed_status()
+            return
         self._raw_amount = self._raw_amount[:-1]
         self.amount_input.setText(self._fmt_input(self._raw_amount))
         self._update_change()
+
+    def keyPressEvent(self, e):
+        """Soporta teclado físico (numpad y teclado normal) en los 3 modos.
+
+        - 0-9, '.', ',' → ingresan al campo activo (efectivo / transfer / cash).
+        - Backspace / Delete → borran un caracter del campo activo.
+        - Tab → en modo mixto, alterna entre Efectivo y Transferencia.
+        - Enter → confirma.
+        - Esc → cancela (default de QDialog).
+        """
+        from PyQt5.QtCore import Qt as _Qt
+        key = e.key()
+        text = e.text()
+        # Enter / Return → confirmar
+        if key in (_Qt.Key_Return, _Qt.Key_Enter):
+            self._confirm()
+            return
+        # Backspace / Delete → borrar
+        if key in (_Qt.Key_Backspace, _Qt.Key_Delete):
+            self._numpad_delete()
+            return
+        # Tab en modo mixto → alterna entre los dos campos
+        if key == _Qt.Key_Tab and self.payment_type == 'mixed':
+            self._set_mixed_focus('transfer' if self._mixed_focus == 'cash' else 'cash')
+            return
+        # Coma o punto decimal
+        if text in ('.', ','):
+            self._numpad_press('.')
+            return
+        # Dígitos 0-9 (incluye numpad físico)
+        if text and text.isdigit():
+            self._numpad_press(text)
+            return
+        super().keyPressEvent(e)
 
     def _update_change(self):
         try:
@@ -4638,9 +4966,38 @@ class PaymentDialog(QDialog):
                 return
             self.cash_received = received
             self.change_given = max(0.0, received - self.total)
+            self.transfer_amount = 0.0
+        elif self.payment_type == 'mixed':
+            try:
+                cash = float(self._mixed_cash_raw) if self._mixed_cash_raw else 0.0
+            except ValueError:
+                cash = 0.0
+            try:
+                tra = float(self._mixed_transfer_raw) if self._mixed_transfer_raw else 0.0
+            except ValueError:
+                tra = 0.0
+            suma = round(cash + tra, 2)
+            if abs(suma - self.total) > 0.01:
+                QMessageBox.warning(
+                    self, 'Pago mixto incompleto',
+                    f'Efectivo (${cash:,.2f}) + Transferencia (${tra:,.2f}) '
+                    f'= ${suma:,.2f}\n\nNo coincide con el total (${self.total:,.2f}).'
+                )
+                return
+            if cash <= 0 or tra <= 0:
+                QMessageBox.warning(
+                    self, 'Pago mixto',
+                    'En pago mixto ambos montos (efectivo y transferencia) deben ser mayores a cero.\n'
+                    'Si solo querés un medio de pago, usá Efectivo o Transferencia.'
+                )
+                return
+            self.cash_received = cash
+            self.change_given = 0.0
+            self.transfer_amount = tra
         else:
             self.cash_received = 0.0
             self.change_given = 0.0
+            self.transfer_amount = 0.0
         self.nota_factura = self._nota_input.text().strip() if hasattr(self, '_nota_input') else ''
         self.accept()
 
@@ -4689,19 +5046,19 @@ class VariosItemDialog(QDialog):
 
         layout.addLayout(form)
 
-        # Toggle observación (ícono lápiz)
+        # Toggle observación
         obs_row = QHBoxLayout()
         self.obs_toggle_btn = QPushButton('Agregar observación')
         self.obs_toggle_btn.setCheckable(True)
         self.obs_toggle_btn.setCursor(Qt.PointingHandCursor)
-        self.obs_toggle_btn.setStyleSheet('''
-            QPushButton { background: #fafaf7; color: #1c1c1e;
-                          border: 1px solid #dcd6c8; padding: 6px 12px;
-                          border-radius: 6px; font-size: 10pt; }
-            QPushButton:checked { background: #fbeee5; border-color: #c1521f;
-                                  color: #a3441a; }
-            QPushButton:hover { background: #dcd6c8; }
-        ''')
+        self.obs_toggle_btn.setStyleSheet(
+            'QPushButton { background: #fafaf7; color: #1c1c1e;'
+            ' border: 1px solid #dcd6c8; padding: 6px 12px;'
+            ' border-radius: 6px; font-size: 10pt; }'
+            'QPushButton:checked { background: #fbeee5; border-color: #c1521f;'
+            ' color: #a3441a; }'
+            'QPushButton:hover { background: #dcd6c8; }'
+        )
         self.obs_toggle_btn.clicked.connect(self._toggle_obs)
         obs_row.addWidget(self.obs_toggle_btn)
         obs_row.addStretch()
@@ -4709,7 +5066,7 @@ class VariosItemDialog(QDialog):
 
         self.obs_edit = QTextEdit()
         self.obs_edit.setFont(QFont('Segoe UI', 10))
-        self.obs_edit.setPlaceholderText('Ej: falta producto en stock, pedir al proveedor…')
+        self.obs_edit.setPlaceholderText('Ej: falta producto en stock, pedir al proveedor...')
         self.obs_edit.setFixedHeight(80)
         self.obs_edit.setVisible(False)
         layout.addWidget(self.obs_edit)
@@ -4726,7 +5083,7 @@ class VariosItemDialog(QDialog):
     def _toggle_obs(self):
         checked = self.obs_toggle_btn.isChecked()
         self.obs_edit.setVisible(checked)
-        self.obs_toggle_btn.setText('Quitar observación' if checked else 'Agregar observación')
+        self.obs_toggle_btn.setText('Quitar observacion' if checked else 'Agregar observacion')
         if checked:
             self.obs_edit.setFocus()
         self.adjustSize()
@@ -4734,7 +5091,7 @@ class VariosItemDialog(QDialog):
     def _on_ok(self):
         name = self.name_input.text().strip()
         if not name:
-            QMessageBox.warning(self, 'Varios', 'Ingresá una descripción.')
+            QMessageBox.warning(self, 'Varios', 'Ingresa una descripcion.')
             self.name_input.setFocus()
             return
         try:

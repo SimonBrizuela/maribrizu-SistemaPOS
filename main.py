@@ -96,8 +96,14 @@ def _sync_inventory_from_firebase(db):
             except Exception:
                 local_epoch = 0.0
 
+        # Retry helper: si Firebase tira 429, esperar y reintentar
+        from pos_system.utils.firebase_sync import _retry_on_429, _is_quota_error
+
         try:
-            meta_doc = fb.db.collection('config').document('catalogo_meta').get()
+            meta_doc = _retry_on_429(
+                lambda: fb.db.collection('config').document('catalogo_meta').get(),
+                label='catalogo_meta read'
+            )
             if meta_doc.exists:
                 meta = meta_doc.to_dict() or {}
                 fb_ts = meta.get('last_updated')
@@ -107,8 +113,11 @@ def _sync_inventory_from_firebase(db):
                         logger.info("Firebase: Catálogo sin cambios — sync omitido.")
                         return
         except Exception as e:
+            if _is_quota_error(e):
+                logger.warning("Firebase: cuota/429 leyendo catalogo_meta — abortando sync (se reintenta en próximo arranque).")
+                return
             logger.debug(f"Firebase: No se pudo leer catalogo_meta: {e}")
-            # Si falla la lectura del meta, continuar con el sync completo
+            # Si falla por otra razón, continuar con el sync completo
 
         logger.info("Firebase: Descargando catálogo desde Firestore...")
 
@@ -121,22 +130,43 @@ def _sync_inventory_from_firebase(db):
         creados = 0
         errores = 0
 
-        # Delta sync: solo productos modificados desde el último sync
+        # Delta sync: solo productos modificados desde el último sync.
+        # Si recibimos 429 abortamos (no fallback a full stream — empeoraría todo).
         try:
+            from google.cloud.firestore_v1.base_query import FieldFilter as _FF
             if local_epoch > 0:
                 last_dt = _dt.datetime.fromtimestamp(local_epoch, tz=_dt.timezone.utc)
-                all_docs = list(
-                    fb.db.collection('catalogo')
-                      .where('ultima_actualizacion', '>=', last_dt)
-                      .stream()
+                all_docs = _retry_on_429(
+                    lambda: list(
+                        fb.db.collection('catalogo')
+                          .where(filter=_FF('ultima_actualizacion', '>=', last_dt))
+                          .stream()
+                    ),
+                    label='delta query catalogo (main)'
                 )
                 logger.info(f"Firebase: {len(all_docs)} productos modificados desde el último sync.")
             else:
-                all_docs = list(fb.db.collection('catalogo').stream())
+                all_docs = _retry_on_429(
+                    lambda: list(fb.db.collection('catalogo').stream()),
+                    label='full stream catalogo (main)'
+                )
                 logger.info(f"Firebase: {len(all_docs)} productos en catálogo (sync completo).")
         except Exception as e_query:
-            logger.warning(f"Firebase: delta query falló ({e_query}), usando sync completo.")
-            all_docs = list(fb.db.collection('catalogo').stream())
+            if _is_quota_error(e_query):
+                logger.warning(
+                    f"Firebase: delta query 429/cuota ({e_query}) — abortando sync. "
+                    f"Reintentar en próximo arranque o cuando se libere cuota."
+                )
+                return
+            logger.warning(f"Firebase: delta query falló por otro motivo ({e_query}), usando sync completo.")
+            try:
+                all_docs = _retry_on_429(
+                    lambda: list(fb.db.collection('catalogo').stream()),
+                    label='full stream catalogo (fallback)'
+                )
+            except Exception as e2:
+                logger.error(f"Firebase: full stream también falló: {e2}")
+                return
 
         total_fb = len(all_docs)
         if total_fb == 0:
@@ -315,6 +345,12 @@ def main():
         app.setApplicationName(APP_NAME)
         app.setOrganizationName(ORGANIZATION)
 
+        # Fuente global UI: prioriza Inter, cae a Segoe UI. Mejor render que default Qt.
+        from PyQt5.QtGui import QFont, QFontDatabase
+        _families = set(QFontDatabase().families())
+        _global_font = 'Inter' if 'Inter' in _families else 'Segoe UI'
+        app.setFont(QFont(_global_font, 10))
+
         # Aplicar tema Graphite (paleta cálida + QSS global)
         from pos_system.ui.theme import apply_theme
         apply_theme(app)
@@ -353,10 +389,15 @@ def main():
         import threading
 
         def _background_init():
+            import time as _t
             logger.info("Background: Initializing Google Sheets sync...")
             _init_google_sheets()
             logger.info("Background: Initializing Firebase sync...")
             _init_firebase(db)
+            # Pequeño espaciado para no disparar todas las queries Firestore
+            # a la vez (cajeros, promociones, rubros, catálogo) y evitar
+            # ráfagas que disparen 429 en cuentas con cuota justa.
+            _t.sleep(1.5)
             logger.info("Background: Syncing inventory from Firebase...")
             _sync_inventory_from_firebase(db)
 
@@ -391,4 +432,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

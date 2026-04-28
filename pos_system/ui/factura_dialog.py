@@ -455,12 +455,29 @@ class FacturaDialog(QDialog):
             'produccion':         bool(perfil.get('produccion', 0)),
             'nombre_perfil':      perfil.get('nombre', ''),
         }
-        # Monotributista → FAC. ELEC. C por defecto
-        if str(self.emisor.get('condicion_iva', '')).lower().startswith('monotrib'):
-            try:
-                self.tipo_combo.setCurrentText('FAC. ELEC. C')
-            except Exception:
-                pass
+        # Conectar el cambio de condicion IVA del receptor para recalcular tipo
+        try:
+            self.condicion_iva_cliente.currentTextChanged.disconnect(self._on_cond_iva_receptor_changed)
+        except (TypeError, RuntimeError):
+            pass
+        self.condicion_iva_cliente.currentTextChanged.connect(self._on_cond_iva_receptor_changed)
+        # Aplicar tipo segun emisor + receptor
+        self._aplicar_tipo_factura_default()
+
+    def _tipo_factura_default(self) -> str:
+        """Default fijo: siempre FAC. ELEC. C sin importar emisor/receptor.
+        El usuario puede cambiarlo manualmente desde el combo si necesita A o B."""
+        return 'FAC. ELEC. C'
+
+    def _aplicar_tipo_factura_default(self):
+        """Setea el combo de tipo factura segun emisor + receptor."""
+        try:
+            self.tipo_combo.setCurrentText(self._tipo_factura_default())
+        except Exception:
+            pass
+
+    def _on_cond_iva_receptor_changed(self, _txt=None):
+        self._aplicar_tipo_factura_default()
 
     def _on_cuit_lookup(self):
         """
@@ -560,14 +577,14 @@ class FacturaDialog(QDialog):
             idx = self.condicion_iva_cliente.findText(cond)
             if idx >= 0:
                 self.condicion_iva_cliente.setCurrentIndex(idx)
-            if cond == 'Responsable Inscripto':
-                self.tipo_combo.setCurrentText('FAC. ELEC. A')
+        # Recalcular el tipo de factura segun emisor + receptor
+        self._aplicar_tipo_factura_default()
         suffix = ' (cache local)' if from_local else ''
         self.cuit_status_lbl.setText(f'OK: {razon[:40]}{suffix}')
         self.cuit_status_lbl.setStyleSheet('color:#3d7a3a; padding-left:2px;')
 
     def _save_cliente_facturacion(self, cuit, data):
-        """Upsert del cliente en la tabla clientes_facturacion."""
+        """Upsert del cliente en la tabla clientes_facturacion + sync a Firebase."""
         from pos_system.database.db_manager import DatabaseManager
         db = DatabaseManager()
         razon = (data.get('razon_social') or '').strip()
@@ -579,18 +596,35 @@ class FacturaDialog(QDialog):
             "SELECT id FROM clientes_facturacion WHERE cuit=? LIMIT 1", (cuit,)
         )
         if existing:
-            db.execute_query(
+            cliente_id = existing[0]['id']
+            db.execute_update(
                 "UPDATE clientes_facturacion SET nombre=?, razon_social=?, domicilio=?, "
                 "localidad=?, condicion_iva=?, activo=1, updated_at=? WHERE id=?",
-                (razon, razon, dom, loc, cond, now, existing[0]['id'])
+                (razon, razon, dom, loc, cond, now, cliente_id)
             )
         else:
-            db.execute_query(
+            cliente_id = db.execute_update(
                 "INSERT INTO clientes_facturacion (nombre, razon_social, cuit, domicilio, "
                 "localidad, condicion_iva, activo, created_at, updated_at) "
                 "VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
                 (razon, razon, cuit, dom, loc, cond, now, now)
             )
+        # Subir el cliente a Firebase para que todas las PCs lo vean
+        try:
+            from pos_system.utils.firebase_sync import get_firebase_sync
+            fb = get_firebase_sync()
+            if fb and fb.enabled:
+                fb.sync_cliente_individual({
+                    'id':            cliente_id,
+                    'nombre':        razon,
+                    'razon_social':  razon,
+                    'cuit':          cuit,
+                    'domicilio':     dom,
+                    'localidad':     loc,
+                    'condicion_iva': cond or 'Consumidor Final',
+                }, db_manager=db)
+        except Exception as e:
+            logger.warning(f'No se pudo sincronizar cliente facturacion a Firebase: {e}')
 
     def _prefill_cliente(self, cliente: dict):
         """Pre-rellena los datos del receptor con el cliente seleccionado."""
@@ -609,14 +643,12 @@ class FacturaDialog(QDialog):
             idx = self.condicion_iva_cliente.findText(cond_iva)
             if idx >= 0:
                 self.condicion_iva_cliente.setCurrentIndex(idx)
-        if cond_iva == 'Responsable Inscripto':
-            self.tipo_combo.setCurrentText('FAC. ELEC. A')
+        # Tipo factura segun emisor + receptor
+        self._aplicar_tipo_factura_default()
 
     def _prefill_virtual(self):
-        """Pre-rellena para pago virtual: Monotributista→C, resto→B; Consumidor Final."""
-        cond = str(self.emisor.get('condicion_iva', '')).lower()
-        tipo_default = 'FAC. ELEC. C' if cond.startswith('monotrib') else 'FAC. ELEC. B'
-        self.tipo_combo.setCurrentText(tipo_default)
+        """Pre-rellena para pago virtual: Consumidor Final.
+        El tipo de factura se decide por emisor + receptor."""
         # Respetar el subtype si fue seleccionado (T. DEBITO, T. CREDITO, etc.)
         subtype = self.sale.get('payment_subtype', '')
         if subtype and subtype != 'Efectivo':
@@ -625,6 +657,7 @@ class FacturaDialog(QDialog):
             self.pago_input.setText('Transferencia')
         self.cliente_input.setText('CONSUMIDOR FINAL')
         self.cuit_cliente_input.clear()
+        self._aplicar_tipo_factura_default()
 
     def _calc_iva_21(self):
         """Calcula IVA 21% incluido sobre el total."""

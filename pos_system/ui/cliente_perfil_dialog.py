@@ -401,15 +401,15 @@ class ClientePerfilDialog(QDialog):
                 )
             )
 
-            # Sincronizar con Firebase en segundo plano
+            # Subir SOLO este cliente a Firebase (idempotente, doc_id por CUIT
+            # cuando esta cargado → todas las PCs comparten el mismo registro).
             try:
                 from pos_system.utils.firebase_sync import get_firebase_sync
                 fb = get_firebase_sync()
                 if fb and fb.enabled:
-                    import threading
-                    threading.Thread(
-                        target=lambda: fb.sync_clientes(db), daemon=True
-                    ).start()
+                    cliente_payload = dict(self.selected_cliente)
+                    cliente_payload['id'] = new_id
+                    fb.sync_cliente_individual(cliente_payload, db_manager=db)
             except Exception:
                 pass
 

@@ -52,6 +52,7 @@ export async function renderVentas(container, db) {
         <option value="">Todos los pagos</option>
         <option value="cash">Efectivo</option>
         <option value="transfer">Transferencia</option>
+        <option value="mixed">Mixto</option>
       </select>
       <input type="text" id="filtroCajero" placeholder="Cajero..." style="width:140px" />
     </div>
@@ -83,7 +84,24 @@ export async function renderVentas(container, db) {
     tbody.innerHTML = data.map((v, i) => {
       const dt = parseArDate(v.created_at);
       const esEfectivo = v.payment_type === 'cash';
+      const esMixto    = v.payment_type === 'mixed';
       const tieneDescuento = (v.discount || 0) > 0;
+
+      // Para pago mixto, en la columna efectivo mostramos "X cash + Y transf"
+      let efectivoHtml, cambioHtml, badgeHtml;
+      if (esMixto) {
+        const cashPart = Number(v.cash_received || 0) - Number(v.change_given || 0);
+        const transPart = Number(v.transfer_amount || 0);
+        efectivoHtml = `<span title="Efectivo: $${fmt(cashPart)} · Transferencia: $${fmt(transPart)}">`
+          + `💵 $${fmt(cashPart)}<br/><span style="color:#c1521f;font-size:11px">🏦 $${fmt(transPart)}</span></span>`;
+        cambioHtml = `$${fmt(v.change_given)}`;
+        badgeHtml = `<span class="badge" style="background:#fbeee5;color:#7a3514;border:1px solid #c1521f">🔀 Mixto</span>`;
+      } else {
+        efectivoHtml = `$${fmt(v.cash_received)}`;
+        cambioHtml = `$${fmt(v.change_given)}`;
+        badgeHtml = `<span class="badge ${esEfectivo ? 'badge-green' : 'badge-blue'}">${esEfectivo ? '💵 Efectivo' : '🏦 Transferencia'}</span>`;
+      }
+
       return `<tr class="clickable-row" data-idx="${i}" title="Click para ver detalle">
         <td><b>#${displayNumForVenta(v, saleNumMap)}</b></td>
         <td>${fmtDate(dt)}</td>
@@ -95,10 +113,10 @@ export async function renderVentas(container, db) {
         </td>
         <td class="vta-col-items" style="text-align:center"><span class="badge badge-gray">${v.items_count || '-'}</span></td>
         <td><b>$${fmt(v.total_amount)}</b></td>
-        <td class="vta-col-efectivo">$${fmt(v.cash_received)}</td>
-        <td class="vta-col-cambio">$${fmt(v.change_given)}</td>
+        <td class="vta-col-efectivo">${efectivoHtml}</td>
+        <td class="vta-col-cambio">${cambioHtml}</td>
         <td>
-          <span class="badge ${esEfectivo ? 'badge-green' : 'badge-blue'}">${esEfectivo ? '💵 Efectivo' : '🏦 Transferencia'}</span>
+          ${badgeHtml}
           ${tieneDescuento ? `<span class="badge badge-orange" style="margin-left:4px">🏷️ -$${fmt(v.discount)}</span>` : ''}
         </td>
         <td><b>${v.cajero || v.username || v.user_id || '-'}</b></td>

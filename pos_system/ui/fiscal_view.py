@@ -15,12 +15,31 @@ from pos_system.utils.firebase_sync import now_ar
 _TZ_AR = timezone(timedelta(hours=-3))
 
 def _parse_ar(s):
+    """Parsea un timestamp guardado en SQLite y lo devuelve en hora AR (naive).
+
+    Maneja 3 casos:
+      - String con tzinfo (ej. '2026-04-28T14:08:00-03:00') → convierte a AR.
+      - String naive en hora AR (ej. '2026-04-28 14:08:00' insertado por
+        localtime_now() o now_ar()) → devuelve tal cual.
+      - String naive en hora UTC (rows viejos con CURRENT_TIMESTAMP de SQLite,
+        antes de la migración a localtime_now). Heurística: si la fecha
+        parsed está >1.5h adelante de "ahora AR", asumimos UTC y restamos 3h.
+    """
     try:
         dt = datetime.fromisoformat(str(s))
     except (ValueError, TypeError):
-        return datetime.now(_TZ_AR).replace(tzinfo=None)
+        # Intentar formato 'YYYY-MM-DD HH:MM:SS' sin separador T
+        try:
+            dt = datetime.strptime(str(s), '%Y-%m-%d %H:%M:%S')
+        except (ValueError, TypeError):
+            return datetime.now(_TZ_AR).replace(tzinfo=None)
     if dt.tzinfo is not None:
         return dt.astimezone(_TZ_AR).replace(tzinfo=None)
+    # Naive — heurística para detectar rows viejos guardados en UTC
+    now_ar_naive = datetime.now(_TZ_AR).replace(tzinfo=None)
+    if (dt - now_ar_naive).total_seconds() > 1.5 * 3600:
+        # Parece UTC (o futuro absurdo) → restar 3h
+        return dt - timedelta(hours=3)
     return dt
 
 
@@ -40,22 +59,15 @@ class FiscalView(QWidget):
         title.setStyleSheet('color: #c1521f;')
         layout.addWidget(title)
 
-        # Sub-tabs
-        self.tabs = QTabWidget()
-        self.tabs.setFont(QFont('Segoe UI', 10))
-
-        self.emitir_tab = self._build_emitir_tab()
+        # Solo se expone Historial de Facturas. La emisión manual, la config
+        # AFIP global y los perfiles ARCA están detrás (siguen accesibles desde
+        # otros menús si hace falta), pero acá se concentra todo en lo que el
+        # usuario realmente necesita: ver e historial + emitir Notas de Crédito.
         self.historial_tab = self._build_historial_tab()
-        self.config_tab = self._build_config_tab()
-        self.perfiles_tab = self._build_perfiles_tab()
-
-        self.tabs.addTab(self.emitir_tab,   'Emitir Factura Manual')
-        self.tabs.addTab(self.historial_tab, 'Historial de Facturas')
-        self.tabs.addTab(self.config_tab,    'Configuracion AFIP')
-        self.tabs.addTab(self.perfiles_tab,  'Perfiles ARCA')
-
-        self.tabs.currentChanged.connect(self._on_tab_changed)
-        layout.addWidget(self.tabs)
+        layout.addWidget(self.historial_tab)
+        # Compat: algunos métodos referencian self.tabs / self._on_tab_changed
+        # — los dejamos como atributos vacíos para no romper.
+        self.tabs = None
 
     # ── TAB 1: Emitir factura manual ─────────────────────────────────────────
     def _build_emitir_tab(self):
@@ -527,6 +539,35 @@ class FiscalView(QWidget):
         layout.setContentsMargins(10, 10, 10, 10)
         layout.setSpacing(8)
 
+        # Selector de perfil (toma los perfiles_facturacion ya cargados)
+        perfil_row = QHBoxLayout()
+        perfil_row.setSpacing(8)
+        perfil_lbl = QLabel('Perfil ARCA:')
+        perfil_lbl.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        perfil_row.addWidget(perfil_lbl)
+        self.perfil_combo = QComboBox()
+        self.perfil_combo.setFont(QFont('Segoe UI', 10))
+        self.perfil_combo.setMinimumWidth(280)
+        self._cargar_perfiles_combo()
+        perfil_row.addWidget(self.perfil_combo)
+
+        test_nc_btn = QPushButton('Probar permisos NC')
+        test_nc_btn.setFont(QFont('Segoe UI', 9, QFont.Bold))
+        test_nc_btn.setMinimumHeight(34)
+        test_nc_btn.setToolTip(
+            'Consulta a AFIP si el perfil seleccionado puede emitir Nota de Crédito.\n'
+            'No emite ningún comprobante.'
+        )
+        test_nc_btn.setStyleSheet(
+            'QPushButton { background:#fff; color:#a01616;'
+            '              border:2px solid #a01616; border-radius:6px; padding:0 12px; }'
+            'QPushButton:hover { background:#fff5f5; }'
+        )
+        test_nc_btn.clicked.connect(self._test_permisos_nc)
+        perfil_row.addWidget(test_nc_btn)
+        perfil_row.addStretch()
+        layout.addLayout(perfil_row)
+
         # Barra de acciones
         action_row = QHBoxLayout()
         refresh_btn = QPushButton('Actualizar')
@@ -599,14 +640,91 @@ class FiscalView(QWidget):
         hh.setSectionResizeMode(8, QHeaderView.ResizeToContents)
         layout.addWidget(self.h_table)
 
-        # Botón reimprimir
+        # Botones de acción sobre la fila seleccionada
+        actions_row = QHBoxLayout()
+        actions_row.setSpacing(8)
+
         reimp_btn = QPushButton('Abrir / Reimprimir seleccionada')
         reimp_btn.setFont(QFont('Segoe UI', 10))
         reimp_btn.setMinimumHeight(40)
         reimp_btn.clicked.connect(self._reprint_selected)
-        layout.addWidget(reimp_btn)
+        actions_row.addWidget(reimp_btn)
+
+        nc_btn = QPushButton('Hacer Nota de Crédito')
+        nc_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        nc_btn.setMinimumHeight(40)
+        nc_btn.setToolTip(
+            'Emite una NC vinculada a la factura seleccionada (total o parcial).\n'
+            'Solicita CAE a AFIP automáticamente.'
+        )
+        nc_btn.setStyleSheet(
+            'QPushButton { background:#a01616; color:white; border:none;'
+            '              border-radius:8px; padding:0 18px; }'
+            'QPushButton:hover { background:#7a1010; }'
+        )
+        nc_btn.clicked.connect(self._on_nota_credito)
+        actions_row.addWidget(nc_btn)
+
+        layout.addLayout(actions_row)
 
         return widget
+
+    def _on_nota_credito(self):
+        """Abre el diálogo de Nota de Crédito sobre la factura seleccionada."""
+        row = self.h_table.currentRow()
+        if row < 0:
+            QMessageBox.information(self, 'Sin selección',
+                'Seleccioná una factura del historial para emitir su NC.')
+            return
+        # Recuperar la factura por ID (columna 0)
+        try:
+            id_item = self.h_table.item(row, 0)
+            fid = int(id_item.text()) if id_item else 0
+        except (ValueError, AttributeError):
+            QMessageBox.warning(self, 'Error', 'No se pudo leer la fila seleccionada.')
+            return
+        from pos_system.database.db_manager import DatabaseManager
+        db = DatabaseManager()
+        rows = db.execute_query("SELECT * FROM facturas WHERE id=? LIMIT 1", (fid,))
+        if not rows:
+            QMessageBox.warning(self, 'Error', f'No se encontró la factura #{fid}.')
+            return
+        factura = rows[0]
+        # Validar que sea una factura (no otra NC) — para simplificar, no permitir
+        # encadenar NC sobre NC.
+        tipo = (factura.get('tipo_comprobante') or '').upper()
+        if tipo.startswith('NOTA'):
+            QMessageBox.warning(self, 'No permitido',
+                'No se puede emitir una Nota de Crédito sobre otra Nota de Crédito.')
+            return
+        # Validar que tenga CAE (factura emitida en AFIP)
+        if not (factura.get('cae') or '').strip():
+            QMessageBox.warning(self, 'Factura sin CAE',
+                'Solo se pueden hacer Notas de Crédito sobre facturas con CAE.\n'
+                'Esta factura figura como "manual" o aún no fue autorizada por AFIP.')
+            return
+        # Pasar el perfil seleccionado para que la NC use sus credenciales
+        perfil = self._get_perfil_seleccionado()
+        if not perfil:
+            QMessageBox.warning(self, 'Sin perfil',
+                'Seleccioná un perfil ARCA del combo arriba antes de emitir la NC.')
+            return
+        from pos_system.ui.nota_credito_dialog import NotaCreditoDialog
+        dlg = NotaCreditoDialog(factura, self, perfil=perfil)
+        if dlg.exec_() == dlg.Accepted:
+            self.refresh_data()
+            pdf = getattr(dlg, 'pdf_path', '')
+            if pdf:
+                resp = QMessageBox.question(
+                    self, 'NC generada',
+                    '¿Abrir el PDF de la Nota de Crédito?',
+                    QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+                )
+                if resp == QMessageBox.Yes:
+                    try:
+                        self._abrir_pdf(pdf)
+                    except Exception:
+                        pass
 
     def _reprint_selected(self):
         row = self.h_table.currentRow()
@@ -713,10 +831,166 @@ class FiscalView(QWidget):
         ''')
         save_btn.clicked.connect(self._save_config)
         layout.addWidget(save_btn)
+
+        # Botón de diagnóstico de permisos NC
+        test_nc_btn = QPushButton('Probar permisos para Nota de Crédito')
+        test_nc_btn.setMinimumHeight(38)
+        test_nc_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        test_nc_btn.setToolTip(
+            'Consulta a AFIP si tu CUIT y punto de venta están habilitados\n'
+            'para emitir Notas de Crédito A/B/C. No emite ningún comprobante.'
+        )
+        test_nc_btn.setStyleSheet('''
+            QPushButton {
+                background: #fff; color: #a01616;
+                border: 2px solid #a01616; border-radius: 8px;
+            }
+            QPushButton:hover { background: #fff5f5; }
+        ''')
+        test_nc_btn.clicked.connect(self._test_permisos_nc)
+        layout.addWidget(test_nc_btn)
         layout.addStretch()
 
         self._load_config_fields()
         return widget
+
+    def _cargar_perfiles_combo(self):
+        """Llena el combo con los perfiles de perfiles_facturacion.activo=1."""
+        from pos_system.database.db_manager import DatabaseManager
+        try:
+            db = DatabaseManager()
+            rows = db.execute_query(
+                "SELECT id, nombre, cuit, punto_venta FROM perfiles_facturacion "
+                "WHERE activo=1 ORDER BY nombre"
+            ) or []
+        except Exception:
+            rows = []
+        self.perfil_combo.clear()
+        if not rows:
+            self.perfil_combo.addItem('— sin perfiles cargados —', None)
+            return
+        for r in rows:
+            cuit = (r.get('cuit') or '').strip()
+            pv = int(r.get('punto_venta') or 1)
+            label = f"{r.get('nombre', '?')} — CUIT {cuit} — PV {pv}"
+            self.perfil_combo.addItem(label, int(r['id']))
+
+    def _get_perfil_seleccionado(self) -> dict:
+        """Devuelve el dict completo del perfil seleccionado en el combo, o {}."""
+        if not hasattr(self, 'perfil_combo') or self.perfil_combo is None:
+            return {}
+        pid = self.perfil_combo.currentData()
+        if not pid:
+            return {}
+        from pos_system.database.db_manager import DatabaseManager
+        try:
+            db = DatabaseManager()
+            rows = db.execute_query(
+                "SELECT * FROM perfiles_facturacion WHERE id=? AND activo=1 LIMIT 1",
+                (int(pid),)
+            ) or []
+            return rows[0] if rows else {}
+        except Exception:
+            return {}
+
+    def _test_permisos_nc(self):
+        """Llama a AFIP para verificar si el perfil seleccionado puede emitir NC."""
+        from PyQt5.QtWidgets import QApplication
+        perfil = self._get_perfil_seleccionado()
+        if not perfil:
+            QMessageBox.warning(
+                self, 'Sin perfil',
+                'Seleccioná un perfil ARCA del combo de arriba.\n'
+                'Los perfiles se cargan en la pestaña "Perfiles ARCA".'
+            )
+            return
+
+        cuit       = (perfil.get('cuit') or '').strip()
+        cert_path  = (perfil.get('cert_path') or '').strip()
+        key_path   = (perfil.get('key_path') or '').strip()
+        produccion = bool(perfil.get('produccion'))
+        try:
+            pv = int(perfil.get('punto_venta') or 1)
+        except (ValueError, TypeError):
+            pv = 1
+
+        if not cuit or not cert_path or not key_path:
+            QMessageBox.warning(
+                self, 'Perfil incompleto',
+                f'El perfil "{perfil.get("nombre", "?")}" no tiene CUIT, certificado o clave.\n'
+                'Editalo desde la pestaña "Perfiles ARCA".'
+            )
+            return
+
+        try:
+            from pos_system.utils.afip_wsfe import AfipWsfe
+            afip = AfipWsfe(cuit=cuit, cert_path=cert_path, key_path=key_path,
+                            produccion=produccion)
+        except ImportError as e:
+            QMessageBox.critical(self, 'Dependencia faltante', str(e))
+            return
+        except Exception as e:
+            QMessageBox.critical(self, 'Error AFIP', f'No se pudo iniciar el cliente AFIP:\n{e}')
+            return
+
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        try:
+            r = afip.diagnosticar_permisos_nc(pv)
+        except Exception as e:
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, 'Error', f'Error consultando a AFIP:\n{e}')
+            return
+        QApplication.restoreOverrideCursor()
+
+        # Construir reporte legible
+        env = 'PRODUCCIÓN' if produccion else 'HOMOLOGACIÓN'
+        lines = [
+            f'<b>Entorno:</b> {env}',
+            f'<b>CUIT emisor:</b> {cuit}',
+            f'<b>Punto de venta a usar:</b> {pv}',
+            '',
+            f'• Autenticación WSAA: {"✅ OK" if r["auth_ok"] else "❌ FALLO"}',
+            f'• PV {pv}: {"✅" if r["pv_ok"] else "❌"} {r["pv_msg"]}',
+        ]
+        # Mostrar TODOS los PVs que AFIP reporta para que veas el raw data
+        pvs_raw = r.get('pvs_raw') or []
+        if pvs_raw:
+            lines.append('')
+            lines.append('<b>PVs que AFIP devuelve para este CUIT:</b>')
+            for p in pvs_raw:
+                bloq = (p.get('Bloqueado') or 'N').strip().upper()
+                fbaja = (p.get('FchBaja') or '').strip() or '—'
+                tipo = p.get('EmisionTipo') or '?'
+                marker = '✅' if (bloq != 'S' and fbaja in ('—', '', 'NULL')) else '⚠️'
+                lines.append(f'&nbsp;&nbsp;{marker} N° {p.get("Nro")} · '
+                             f'tipo: {tipo} · bloqueado: {bloq} · fch_baja: {fbaja}')
+        if r['error']:
+            lines.append('')
+            lines.append(f'<span style="color:#a01616;"><b>Error:</b> {r["error"]}</span>')
+
+        lines.append('')
+        for letra in ('a', 'b', 'c'):
+            nc = r.get(f'nc_{letra}', {})
+            ok = '✅' if nc.get('permitido') else '❌'
+            cod = nc.get('codigo', '?')
+            msg = nc.get('msg', '')
+            lines.append(f'• NC {letra.upper()} (cód. {cod:02d}): {ok} {msg}')
+
+        lines.append('')
+        if r['puede_emitir_nc']:
+            lines.append('<b style="color:#3d7a3a;">✅ El emisor PUEDE emitir Notas de Crédito.</b>')
+        else:
+            lines.append('<b style="color:#a01616;">❌ El emisor NO puede emitir NC en este PV.</b>')
+            lines.append('<i>Si los PVs aparecen arriba como ✅, pero el test marca ❌, '
+                         'puede ser que estés en HOMOLOGACIÓN y no tengas los PVs '
+                         'registrados en ese entorno (son distintos a producción).</i>')
+
+        mb = QMessageBox(self)
+        mb.setWindowTitle('Permisos AFIP — Nota de Crédito')
+        mb.setIcon(QMessageBox.Information if r['puede_emitir_nc'] else QMessageBox.Warning)
+        mb.setTextFormat(Qt.RichText)
+        mb.setText('<br>'.join(lines))
+        mb.exec_()
 
     def _load_config_fields(self):
         """Carga los valores actuales de config en los campos."""
@@ -767,7 +1041,7 @@ class FiscalView(QWidget):
             prod_val = '1' if self.cfg_produccion_check.isChecked() else '0'
             db.execute_update(
                 "INSERT OR REPLACE INTO config (key, value, updated_at) VALUES (?, ?, ?)",
-                ('afip_produccion', prod_val, datetime.now().isoformat())
+                ('afip_produccion', prod_val, now_ar().isoformat())
             )
             QMessageBox.information(self, 'Guardado', 'Configuración AFIP guardada correctamente.')
         except Exception as e:
@@ -1084,7 +1358,7 @@ class FiscalView(QWidget):
                         nombre,
                         self.p_razon_input.text().strip() or nombre,
                         cuit,
-                        self.p_domicilio_input.text().strip(),
+            self.p_domicilio_input.text().strip(),
                         self.p_localidad_input.text().strip(),
                         self.p_telefono_input.text().strip(),
                         self.p_ing_brutos_input.text().strip(),
@@ -1122,7 +1396,7 @@ class FiscalView(QWidget):
 
     def _eliminar_perfil(self, perfil_id: int):
         resp = QMessageBox.question(
-            self, 'Confirmar', '¿Eliminar este perfil?',
+            self, 'Confirmar', 'Eliminar este perfil?',
             QMessageBox.Yes | QMessageBox.No
         )
         if resp != QMessageBox.Yes:

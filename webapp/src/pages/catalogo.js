@@ -1491,7 +1491,11 @@ export async function renderCatalogo(container, db) {
               <div>
                 <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:4px">TIPO</label>
                 <select id="ed_conj_tipo" style="width:100%;padding:8px 10px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit;background:#fff">
-                  ${['rollo','pack','caja','bobina','bolsa','plancha','otro'].map(t => `<option value="${t}" ${ (prod.conjunto_tipo||'rollo') === t ? 'selected':'' }>${t.charAt(0).toUpperCase()+t.slice(1)}</option>`).join('')}
+                  ${['rollo','pack','caja','bobina','bolsa','plancha','cartulina','papel','carton','goma_eva','cinta','tela','otro'].map(t => {
+                    const labels = {goma_eva:'Goma Eva', carton:'Cartón'};
+                    const lbl = labels[t] || (t.charAt(0).toUpperCase()+t.slice(1));
+                    return `<option value="${t}" ${ (prod.conjunto_tipo||'rollo') === t ? 'selected':'' }>${lbl}</option>`;
+                  }).join('')}
                 </select>
               </div>
               <div>
@@ -1513,11 +1517,24 @@ export async function renderCatalogo(container, db) {
                 <input id="ed_conj_restante" type="number" min="0" step="0.01" value="${prod.conjunto_restante ?? ''}" placeholder="Ej: 35.5" style="width:100%;padding:8px 10px;border:1.5px solid #ffe082;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit;background:#fffef7" />
               </div>
               <div>
-                <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:4px">PRECIO POR <span id="lbl_punidad">METRO</span> (opcional)</label>
-                <input id="ed_conj_precio_unidad" type="number" min="0" step="0.01" value="${prod.conjunto_precio_unidad ?? ''}" placeholder="Ej: 250" style="width:100%;padding:8px 10px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
+                <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:4px">PRECIO POR <span id="lbl_punidad">METRO</span> <span style="color:#9ca3af;font-weight:500">(auto)</span></label>
+                <input id="ed_conj_precio_unidad" type="number" min="0" step="0.01" value="${prod.conjunto_precio_unidad ?? ''}" placeholder="Auto" style="width:100%;padding:8px 10px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
+                <div id="ed_conj_precio_hint" style="font-size:10px;color:#6d28d9;margin-top:4px;line-height:1.3">
+                  Se calcula como <b>precio rollo / contenido × 1.15</b> (15 % margen).<br/>
+                  Editalo manualmente si querés un precio distinto.
+                </div>
               </div>
               <div style="grid-column:1/-1;background:#fff;border-radius:6px;padding:10px 12px;font-size:12px;color:#374151">
                 <span id="ed_conj_resumen">Completá los campos para ver el total</span>
+              </div>
+
+              <!-- Stock por color (opcional) -->
+              <div style="grid-column:1/-1;display:flex;flex-direction:column;gap:6px">
+                <div id="ed_colores_list" style="display:none;flex-direction:column;gap:4px"></div>
+                <button id="btn_add_color" type="button" style="align-self:flex-start;padding:4px 8px;border-radius:6px;border:none;background:transparent;color:#6d28d9;cursor:pointer;font-size:12px;font-weight:600">
+                  + agregar color
+                </button>
+                <span id="ed_colores_empty" style="display:none"></span>
               </div>
             </div>
           </div>
@@ -1580,20 +1597,50 @@ export async function renderCatalogo(container, db) {
     const conjU    = overlay.querySelector('#ed_conj_unidades');
     const conjC    = overlay.querySelector('#ed_conj_contenido');
     const conjR    = overlay.querySelector('#ed_conj_restante');
+    const conjPU   = overlay.querySelector('#ed_conj_precio_unidad');
+    const conjHint = overlay.querySelector('#ed_conj_precio_hint');
     const lblU     = overlay.querySelector('#lbl_unidades');
     const lblC     = overlay.querySelector('#lbl_contenido');
     const lblR     = overlay.querySelector('#lbl_restante');
     const lblPU    = overlay.querySelector('#lbl_punidad');
     const conjRes  = overlay.querySelector('#ed_conj_resumen');
 
+    // Margen de venta al detalle aplicado al precio por unidad fraccionada
+    // (ej. precio por metro de un rollo). Mismo número que en el POS.
+    const FRACCION_MARGIN = 1.15;
+    // Trackeo si el usuario tocó manualmente el precio por unidad. Si lo hizo,
+    // dejamos de auto-calcular para no pisar su valor.
+    let precioPUManual = !!(prod.conjunto_precio_unidad && Number(prod.conjunto_precio_unidad) > 0);
+    if (conjPU) {
+      conjPU.addEventListener('input', () => {
+        precioPUManual = (conjPU.value.trim() !== '');
+      });
+      // Doble-click sobre el hint vuelve al modo automático (vacía el campo)
+      if (conjHint) {
+        conjHint.style.cursor = 'pointer';
+        conjHint.title = 'Doble-click para volver al cálculo automático';
+        conjHint.addEventListener('dblclick', () => {
+          conjPU.value = '';
+          precioPUManual = false;
+          _refrescarConjunto();
+        });
+      }
+    }
+
     const NOMBRES_TIPO = {
-      rollo:   ['ROLLOS','ROLLO'],
-      pack:    ['PACKS','PACK'],
-      caja:    ['CAJAS','CAJA'],
-      bobina:  ['BOBINAS','BOBINA'],
-      bolsa:   ['BOLSAS','BOLSA'],
-      plancha: ['PLANCHAS','PLANCHA'],
-      otro:    ['UNIDADES','UNIDAD'],
+      rollo:     ['ROLLOS','ROLLO'],
+      pack:      ['PACKS','PACK'],
+      caja:      ['CAJAS','CAJA'],
+      bobina:    ['BOBINAS','BOBINA'],
+      bolsa:     ['BOLSAS','BOLSA'],
+      plancha:   ['PLANCHAS','PLANCHA'],
+      cartulina: ['CARTULINAS','CARTULINA'],
+      papel:     ['HOJAS','HOJA'],
+      carton:    ['CARTONES','CARTÓN'],
+      goma_eva:  ['PLANCHAS','PLANCHA'],
+      cinta:     ['ROLLOS','ROLLO'],
+      tela:      ['ROLLOS','ROLLO'],
+      otro:      ['UNIDADES','UNIDAD'],
     };
 
     function _refrescarConjunto() {
@@ -1615,6 +1662,35 @@ export async function renderCatalogo(container, db) {
       } else {
         conjRes.textContent = 'Completá los campos para ver el total';
       }
+
+      // ── Auto-calcular precio por unidad fraccionada ──
+      // precio_por_metro = (precio_rollo / contenido) × FRACCION_MARGIN
+      // Solo si el usuario no tocó manualmente el campo.
+      if (conjPU && conjHint) {
+        const precioRollo = parseFloat(inPrecio.value) || 0;
+        const contenido   = c;
+        if (precioRollo > 0 && contenido > 0) {
+          const sugerido = (precioRollo / contenido) * FRACCION_MARGIN;
+          const sugeridoTxt = sugerido.toLocaleString('es-AR', {
+            minimumFractionDigits: 2, maximumFractionDigits: 2,
+          });
+          if (!precioPUManual) {
+            // Auto-fill silencioso (no cuenta como edición manual)
+            conjPU.value = sugerido.toFixed(2);
+          }
+          conjHint.innerHTML =
+            `<b>Sugerido:</b> $${sugeridoTxt}/${umSg} ` +
+            `(rollo $${precioRollo.toLocaleString('es-AR')} / ${contenido} ${um} × 1.15).<br/>` +
+            (precioPUManual
+              ? '<span style="color:#a3441a">Estás usando un precio manual.</span> '
+                + 'Doble-click acá para volver al cálculo automático.'
+              : 'Editalo si querés un precio distinto.');
+        } else {
+          conjHint.innerHTML =
+            'Cargá <b>precio del rollo</b> y <b>contenido</b> para que se calcule '
+            + 'automáticamente como <b>precio rollo / contenido × 1.15</b>.';
+        }
+      }
     }
 
     cbConj.addEventListener('change', () => {
@@ -1622,7 +1698,87 @@ export async function renderCatalogo(container, db) {
       if (cbConj.checked) _refrescarConjunto();
     });
     [conjTipo, conjUM, conjU, conjC, conjR].forEach(el => el.addEventListener('input', _refrescarConjunto));
+    // El precio del rollo y el campo de precio por unidad también disparan recalculo
+    if (inPrecio) inPrecio.addEventListener('input', _refrescarConjunto);
+    if (conjPU)   conjPU.addEventListener('input', _refrescarConjunto);
     if (cbConj.checked) _refrescarConjunto();
+
+    // ── Stock por color ───────────────────────────────────────────────
+    const coloresList  = overlay.querySelector('#ed_colores_list');
+    const coloresEmpty = overlay.querySelector('#ed_colores_empty');
+    const btnAddColor  = overlay.querySelector('#btn_add_color');
+
+    function _addColorRow(nombre = '', unidades = '', restante = '') {
+      const row = document.createElement('div');
+      row.dataset.colorRow = '1';
+      row.style.cssText = 'display:grid;grid-template-columns:1fr 70px 70px 24px;gap:6px;align-items:center';
+      row.innerHTML = `
+        <input class="ed_color_nombre" type="text" placeholder="Color" value="${nombre || ''}" style="width:100%;padding:6px 8px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
+        <input class="ed_color_unidades" type="number" min="0" step="1" placeholder="Cant." title="Cantidad de rollos/packs/cajas de este color" value="${unidades !== '' && unidades != null ? unidades : ''}" style="width:100%;padding:6px 8px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
+        <input class="ed_color_restante" type="number" min="0" step="0.01" placeholder="Rest." title="Sobrante en el rollo abierto de este color" value="${restante !== '' && restante != null ? restante : ''}" style="width:100%;padding:6px 8px;border:1.5px solid #ffe082;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit;background:#fffef7" />
+        <button type="button" class="ed_color_remove" title="Quitar color" style="width:24px;height:24px;border-radius:50%;border:none;background:transparent;color:#dc2626;cursor:pointer;font-size:16px;line-height:1;padding:0">×</button>
+      `;
+      row.querySelectorAll('input').forEach(inp => inp.addEventListener('input', _refreshColoresState));
+      row.querySelector('.ed_color_remove').addEventListener('click', () => {
+        row.remove();
+        _refreshColoresState();
+      });
+      coloresList.appendChild(row);
+    }
+
+    function _getColoresFromUI() {
+      const rows = coloresList.querySelectorAll('[data-color-row]');
+      return Array.from(rows).map(r => ({
+        color:    (r.querySelector('.ed_color_nombre').value || '').trim(),
+        unidades: parseFloat(r.querySelector('.ed_color_unidades').value) || 0,
+        restante: parseFloat(r.querySelector('.ed_color_restante').value) || 0,
+      })).filter(c => c.color);
+    }
+
+    function _refreshColoresState() {
+      const colores = _getColoresFromUI();
+      const filasTotales = coloresList.children.length;
+      const hasColores = colores.length > 0;
+      coloresEmpty.style.display = filasTotales === 0 ? 'block' : 'none';
+      coloresList.style.display = filasTotales === 0 ? 'none' : 'flex';
+      // Si hay colores con nombre, los agregados se calculan como SUMA y los inputs viejos quedan readonly.
+      if (hasColores) {
+        const sumU = colores.reduce((a, c) => a + c.unidades, 0);
+        const sumR = colores.reduce((a, c) => a + c.restante, 0);
+        conjU.value = sumU;
+        conjR.value = sumR;
+        conjU.readOnly = true;
+        conjR.readOnly = true;
+        conjU.style.background = '#f3f4f6';
+        conjR.style.background = '#f3f4f6';
+        conjU.title = 'Calculado automáticamente: SUMA de todos los colores';
+        conjR.title = 'Calculado automáticamente: SUMA de todos los colores';
+      } else {
+        conjU.readOnly = false;
+        conjR.readOnly = false;
+        conjU.style.background = '';
+        conjR.style.background = '#fffef7';
+        conjU.title = '';
+        conjR.title = '';
+      }
+      _refrescarConjunto();
+    }
+
+    btnAddColor.addEventListener('click', () => {
+      _addColorRow();
+      const last = coloresList.lastElementChild;
+      if (last) last.querySelector('.ed_color_nombre').focus();
+      _refreshColoresState();
+    });
+
+    // Cargar colores existentes del producto (si Firestore los trae)
+    const coloresExistentes = Array.isArray(prod.conjunto_colores) ? prod.conjunto_colores : [];
+    coloresExistentes.forEach(c => _addColorRow(
+      c && c.color ? c.color : '',
+      c && c.unidades != null ? c.unidades : '',
+      c && c.restante != null ? c.restante : ''
+    ));
+    _refreshColoresState();
 
     // Actualizar sub-rubros disponibles al cambiar rubro
     overlay.querySelector('#ed_rubro').addEventListener('change', (e) => {
@@ -1690,14 +1846,55 @@ export async function renderCatalogo(container, db) {
       if (esConjunto) {
         const cTipo = overlay.querySelector('#ed_conj_tipo').value || 'rollo';
         const cUM   = overlay.querySelector('#ed_conj_unidad_medida').value || 'unidades';
-        const cU    = parseFloat(overlay.querySelector('#ed_conj_unidades').value) || 0;
         const cC    = parseFloat(overlay.querySelector('#ed_conj_contenido').value) || 0;
-        const cRraw = overlay.querySelector('#ed_conj_restante').value.trim();
-        const cR    = cRraw === '' ? null : (parseFloat(cRraw) || 0);
         const cPraw = overlay.querySelector('#ed_conj_precio_unidad').value.trim();
         const cP    = cPraw === '' ? null : (parseFloat(cPraw) || 0);
-        const cerrados = cR !== null && cR > 0 ? Math.max(0, cU - 1) : cU;
-        const cTotal   = cerrados * cC + (cR || 0);
+
+        // Stock por color: si hay colores cargados, los agregados son SUMA.
+        const coloresArr = _getColoresFromUI();
+        const tieneColores = coloresArr.length > 0;
+
+        // Validar duplicados (case-insensitive). Dos colores con el mismo
+        // nombre rompen el matching del POS al descontar stock.
+        if (tieneColores) {
+          const seen = new Map();
+          for (const c of coloresArr) {
+            const key = c.color.toLowerCase();
+            if (seen.has(key)) {
+              alert(`No podés cargar dos colores con el mismo nombre: "${c.color}".\nDejá uno solo o usá nombres distintos (ej: "Rojo claro" y "Rojo oscuro").`);
+              btn.disabled = false;
+              btn.innerHTML = '<span class="material-icons" style="font-size:16px">save</span>Guardar cambios';
+              return;
+            }
+            seen.set(key, true);
+          }
+        }
+
+        let cU, cR;
+        if (tieneColores) {
+          cU = coloresArr.reduce((a, c) => a + (c.unidades || 0), 0);
+          cR = coloresArr.reduce((a, c) => a + (c.restante || 0), 0);
+        } else {
+          cU = parseFloat(overlay.querySelector('#ed_conj_unidades').value) || 0;
+          const cRraw = overlay.querySelector('#ed_conj_restante').value.trim();
+          cR = cRraw === '' ? null : (parseFloat(cRraw) || 0);
+        }
+
+        // Total = sumatoria por color (cada color: cerrados*contenido + restante).
+        // En modo legacy queda equivalente a la fórmula anterior.
+        let cTotal;
+        if (tieneColores) {
+          cTotal = coloresArr.reduce((acc, c) => {
+            const u = c.unidades || 0;
+            const r = c.restante || 0;
+            const cerrados = r > 0 ? Math.max(0, u - 1) : u;
+            return acc + (cerrados * cC) + r;
+          }, 0);
+        } else {
+          const cerrados = cR !== null && cR > 0 ? Math.max(0, cU - 1) : cU;
+          cTotal = cerrados * cC + (cR || 0);
+        }
+
         conjuntoFields = {
           es_conjunto:           true,
           conjunto_tipo:         cTipo,
@@ -1707,6 +1904,7 @@ export async function renderCatalogo(container, db) {
           conjunto_restante:     cR,
           conjunto_precio_unidad: cP,
           conjunto_total:        cTotal,
+          conjunto_colores:      tieneColores ? coloresArr : null,
         };
       } else {
         conjuntoFields = {
@@ -1718,6 +1916,7 @@ export async function renderCatalogo(container, db) {
           conjunto_restante:     null,
           conjunto_precio_unidad: null,
           conjunto_total:        null,
+          conjunto_colores:      null,
         };
       }
 
@@ -4374,7 +4573,7 @@ export async function renderCatalogo(container, db) {
       `;
     });
 
-    document.getElementById('cfg_fix_espacios')?.addEventListener('click', async () => {
+        document.getElementById('cfg_fix_espacios')?.addEventListener('click', async () => {
       if (!_conEspacios.length) return;
       if (!confirm(`Corregir ${_conEspacios.length} producto(s)? Se eliminarán los espacios de los códigos.`)) return;
       const btn  = document.getElementById('cfg_fix_espacios');

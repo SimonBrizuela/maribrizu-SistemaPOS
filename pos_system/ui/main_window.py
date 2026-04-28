@@ -15,6 +15,7 @@ from pos_system.ui.sales_view import SalesView
 from pos_system.ui.cash_view import CashView
 from pos_system.ui.sales_history_view import SalesHistoryView
 from pos_system.ui.observations_view import ObservationsView
+from pos_system.ui.fiscal_view import FiscalView
 from pos_system.ui.components import MessageBox, Toast
 from pos_system.models.cash_register import CashRegister
 from pos_system.models.product import Product
@@ -114,7 +115,7 @@ class MainWindow(QMainWindow):
             self.products_view = ProductsView(self)
             # Promociones se gestionan desde la webapp (Firebase) — no hay tab local
             self.promotions_view = None
-            self.fiscal_view = None
+            self.fiscal_view = FiscalView(self)
             from pos_system.ui.users_view import UsersView
             self.users_view = UsersView(self, current_user=self.current_user)
         else:
@@ -136,6 +137,8 @@ class MainWindow(QMainWindow):
             self.tabs.addTab(self.products_view, 'Productos')
             # Promociones ya no tiene tab — se gestionan desde la webapp
             self.tabs.addTab(self.users_view, 'Cajeros')
+            # Vista Fiscal: facturación electrónica AFIP, NC/ND, historial
+            self.tabs.addTab(self.fiscal_view, 'Fiscal AFIP')
 
         main_layout.addWidget(self.tabs)
 

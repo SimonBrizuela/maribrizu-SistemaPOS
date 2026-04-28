@@ -171,6 +171,8 @@ class DatabaseManager:
                 "ALTER TABLE products ADD COLUMN conjunto_restante REAL DEFAULT NULL",
                 "ALTER TABLE products ADD COLUMN conjunto_precio_unidad REAL DEFAULT NULL",
                 "ALTER TABLE products ADD COLUMN conjunto_total REAL DEFAULT NULL",
+                # Stock por color (JSON: [{"color":"Rojo","unidades":5,"restante":35.5}, ...])
+                "ALTER TABLE products ADD COLUMN conjunto_colores TEXT DEFAULT NULL",
             ]:
                 try:
                     cursor.execute(col_def)
@@ -213,6 +215,13 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE sales ADD COLUMN turno_nombre TEXT DEFAULT ''")
             except Exception:
                 pass
+            # Migrar transfer_amount: parte de transferencia en pagos mixtos
+            # (cash_received guarda el efectivo, transfer_amount la transferencia,
+            #  total_amount = cash_received + transfer_amount cuando payment_type='mixed').
+            try:
+                cursor.execute("ALTER TABLE sales ADD COLUMN transfer_amount REAL DEFAULT 0")
+            except Exception:
+                pass
             
             # Tabla de items de venta (detalle)
             cursor.execute("""
@@ -240,6 +249,8 @@ class DatabaseManager:
                 "ALTER TABLE sale_items ADD COLUMN discount_value REAL DEFAULT 0",
                 "ALTER TABLE sale_items ADD COLUMN discount_amount REAL DEFAULT 0",
                 "ALTER TABLE sale_items ADD COLUMN promo_id INTEGER DEFAULT NULL",
+                # Color del producto conjunto vendido (para historial / reportes)
+                "ALTER TABLE sale_items ADD COLUMN conjunto_color TEXT DEFAULT NULL",
             ]:
                 try:
                     cursor.execute(col_def)
@@ -401,6 +412,25 @@ class DatabaseManager:
             # Marca facturas emitidas por items "Varios 2" (no afectan caja/historial/ventas)
             try:
                 cursor.execute("ALTER TABLE facturas ADD COLUMN es_varios_2 INTEGER DEFAULT 0")
+            except Exception:
+                pass
+            # Migración Nota de Crédito: vínculo a comprobante asociado.
+            # Cuando este registro es una NC, estos campos referencian la factura
+            # original que la NC está anulando (total o parcialmente).
+            try:
+                cursor.execute("ALTER TABLE facturas ADD COLUMN cbte_asoc_tipo TEXT DEFAULT ''")
+            except Exception:
+                pass
+            try:
+                cursor.execute("ALTER TABLE facturas ADD COLUMN cbte_asoc_pv INTEGER DEFAULT 0")
+            except Exception:
+                pass
+            try:
+                cursor.execute("ALTER TABLE facturas ADD COLUMN cbte_asoc_nro INTEGER DEFAULT 0")
+            except Exception:
+                pass
+            try:
+                cursor.execute("ALTER TABLE facturas ADD COLUMN motivo_nc TEXT DEFAULT ''")
             except Exception:
                 pass
 
@@ -607,7 +637,7 @@ class DatabaseManager:
             return False
 
     def remove_subcategory(self, rubro_name: str, sub_name: str) -> bool:
-        """Elimina una subcategoría de un rubro."""
+        """Elimina una subcategoria de un rubro."""
         self.execute_update(
             "DELETE FROM sub_categories WHERE rubro_name = ? AND sub_name = ?",
             (rubro_name, sub_name)
@@ -618,20 +648,16 @@ class DatabaseManager:
         """
         Sincroniza la lista de rubros desde Firebase.
         IMPORTANTE: Solo inserta entradas que vienen del documento de rubros de Firebase
-        (colección 'rubros'), NO categorías de productos. Agrega los nuevos, no borra los existentes.
+        (coleccion 'rubros'), NO categorias de productos. Agrega los nuevos, no borra los existentes.
         Los rubros de Firebase son objetos con campo 'nombre' o strings directos.
         """
         for rubro in rubros:
-            # Rubros de Firebase pueden ser dicts con campo 'nombre' o strings
             if isinstance(rubro, dict):
                 name = str(rubro.get('nombre') or rubro.get('name') or '').strip().upper()
             else:
                 name = str(rubro).strip().upper()
-            # Filtro de seguridad: los rubros son palabras cortas (max 30 chars)
-            # y no contienen números ni caracteres raros
             if not name or len(name) > 30:
                 continue
-            # Solo insertar si no existe ya (INSERT OR IGNORE)
             try:
                 self.execute_update("INSERT OR IGNORE INTO categories (name) VALUES (?)", (name,))
             except Exception:

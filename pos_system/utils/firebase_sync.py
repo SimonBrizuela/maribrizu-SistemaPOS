@@ -6,6 +6,7 @@ También escucha cambios en tiempo real desde la web (inventario).
 """
 
 import threading
+import time as _time
 import logging
 import socket as _socket
 import re as _re
@@ -18,6 +19,59 @@ _TZ_AR = timezone(timedelta(hours=-3))
 
 # Cache en memoria para no releer el archivo en cada llamada
 _PC_ID_CACHE: Optional[str] = None
+
+
+# ── Reintento ante 429 / cuota agotada ──────────────────────────────
+def _is_quota_error(e) -> bool:
+    """True si el error luce como un 429 / quota / rate-limit / resource exhausted."""
+    if e is None:
+        return False
+    s = (str(e) or '').lower()
+    if '429' in s or 'quota' in s or 'rate limit' in s or 'resource exhausted' in s:
+        return True
+    # google.api_core.exceptions.ResourceExhausted hereda de GoogleAPICallError
+    try:
+        from google.api_core.exceptions import ResourceExhausted, TooManyRequests  # type: ignore
+        if isinstance(e, (ResourceExhausted, TooManyRequests)):
+            return True
+    except Exception:
+        pass
+    return False
+
+
+def _retry_on_429(fn, *, attempts: int = 4, base_delay: float = 1.5,
+                  max_delay: float = 15.0, label: str = 'firestore'):
+    """Ejecuta fn() y reintenta con backoff exponencial ante errores de cuota.
+
+    - attempts: cantidad total de intentos (incluye el primero).
+    - base_delay/max_delay: backoff exponencial — 1.5s, 3s, 6s, 12s (capeado en 15s).
+    - label: descripción para los logs.
+
+    Si fn falla por 429, se loguea WARN y se reintenta. Si el último intento
+    también falla, re-lanza la excepción original. Otros errores (no-429) se
+    propagan inmediatamente.
+    """
+    delay = base_delay
+    last_e = None
+    for i in range(attempts):
+        try:
+            return fn()
+        except Exception as e:
+            last_e = e
+            if not _is_quota_error(e) or i == attempts - 1:
+                raise
+            wait = min(delay, max_delay)
+            try:
+                logging.getLogger(__name__).warning(
+                    f"Firebase: {label} 429/quota — reintentando en {wait:.1f}s "
+                    f"({i + 1}/{attempts - 1})"
+                )
+            except Exception:
+                pass
+            _time.sleep(wait)
+            delay *= 2
+    if last_e is not None:
+        raise last_e
 
 
 def _fmt_qty(q):
@@ -309,12 +363,31 @@ class FirebaseSync:
                     conjunto_restante = _to_float(d.get('conjunto_restante')) if es_conjunto else None
                     conjunto_precio_unidad = _to_float(d.get('conjunto_precio_unidad')) if es_conjunto else None
                     conjunto_total = _to_float(d.get('conjunto_total')) if es_conjunto else None
+                    # Stock por color: array → JSON string para guardar en SQLite
+                    conjunto_colores_raw = d.get('conjunto_colores') if es_conjunto else None
+                    if isinstance(conjunto_colores_raw, list) and conjunto_colores_raw:
+                        try:
+                            import json as _json
+                            conjunto_colores = _json.dumps([
+                                {
+                                    'color':    str(c.get('color', '') or ''),
+                                    'unidades': float(c.get('unidades') or 0),
+                                    'restante': float(c.get('restante') or 0),
+                                }
+                                for c in conjunto_colores_raw
+                                if isinstance(c, dict)
+                            ], ensure_ascii=False)
+                        except Exception:
+                            conjunto_colores = None
+                    else:
+                        conjunto_colores = None
 
                     try:
                         rows = db_manager.execute_query(
                             "SELECT id, name, price, cost, stock, barcode, category, rubro, stock_min, stock_max, "
                             "es_conjunto, conjunto_tipo, conjunto_unidad_medida, conjunto_unidades, "
-                            "conjunto_contenido, conjunto_restante, conjunto_precio_unidad, conjunto_total "
+                            "conjunto_contenido, conjunto_restante, conjunto_precio_unidad, conjunto_total, "
+                            "conjunto_colores "
                             "FROM products WHERE firebase_id = ?", (doc_id,)
                         ) or []
                     except Exception:
@@ -334,16 +407,16 @@ class FirebaseSync:
                                     stock_min, stock_max,
                                     es_conjunto, conjunto_tipo, conjunto_unidad_medida,
                                     conjunto_unidades, conjunto_contenido, conjunto_restante,
-                                    conjunto_precio_unidad, conjunto_total,
+                                    conjunto_precio_unidad, conjunto_total, conjunto_colores,
                                     created_at, updated_at)
                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                                           ?, ?, ?, ?, ?, ?, ?, ?,
+                                           ?, ?, ?, ?, ?, ?, ?, ?, ?,
                                            CURRENT_TIMESTAMP, ?)""",
                                 (nombre, categ, precio, costo, stock, barcode,
                                  desc, doc_id, rubro, stock_min, stock_max,
                                  es_conjunto, conjunto_tipo, conjunto_unidad_medida,
                                  conjunto_unidades, conjunto_contenido, conjunto_restante,
-                                 conjunto_precio_unidad, conjunto_total,
+                                 conjunto_precio_unidad, conjunto_total, conjunto_colores,
                                  now_local_str)
                             )
                             changed_any = True
@@ -379,7 +452,8 @@ class FirebaseSync:
                             not _eq_float(r.get('conjunto_contenido'),     conjunto_contenido) or
                             not _eq_float(r.get('conjunto_restante'),      conjunto_restante) or
                             not _eq_float(r.get('conjunto_precio_unidad'), conjunto_precio_unidad) or
-                            not _eq_float(r.get('conjunto_total'),         conjunto_total)
+                            not _eq_float(r.get('conjunto_total'),         conjunto_total) or
+                            (r.get('conjunto_colores') or None) != (conjunto_colores or None)
                         )
                         if not cambios:
                             continue
@@ -396,14 +470,14 @@ class FirebaseSync:
                                        stock_min=?, stock_max=?,
                                        es_conjunto=?, conjunto_tipo=?, conjunto_unidad_medida=?,
                                        conjunto_unidades=?, conjunto_contenido=?, conjunto_restante=?,
-                                       conjunto_precio_unidad=?, conjunto_total=?,
+                                       conjunto_precio_unidad=?, conjunto_total=?, conjunto_colores=?,
                                        updated_at=?
                                    WHERE id=?""",
                                 (nombre, categ, precio, costo, stock,
                                  barcode, desc, rubro, stock_min, stock_max,
                                  es_conjunto, conjunto_tipo, conjunto_unidad_medida,
                                  conjunto_unidades, conjunto_contenido, conjunto_restante,
-                                 conjunto_precio_unidad, conjunto_total,
+                                 conjunto_precio_unidad, conjunto_total, conjunto_colores,
                                  now_local_str, local_id)
                             )
                             changed_any = True
@@ -538,7 +612,7 @@ class FirebaseSync:
             return []
         try:
             col = self.db.collection('promociones')
-            docs = list(col.stream())
+            docs = _retry_on_429(lambda: list(col.stream()), label='download promociones')
             result = []
             for d in docs:
                 data = d.to_dict() or {}
@@ -640,6 +714,10 @@ class FirebaseSync:
                     'total_amount':     float(sale.get('total_amount', 0) or 0),
                     'cash_received':    float(sale.get('cash_received', 0) or 0),
                     'change_given':     float(sale.get('change_given', 0) or 0),
+                    # Parte de transferencia en pago mixto. Para ventas
+                    # comunes queda en 0; para 'mixed' contiene el monto
+                    # transferido. Permite a la web mostrar el desglose.
+                    'transfer_amount':  float(sale.get('transfer_amount', 0) or 0),
                     'items_count':      len(items) if items else int(sale.get('items_count', 0) or 0),
                     'productos':        productos_str,
                     'username':         cajero,
@@ -866,7 +944,8 @@ class FirebaseSync:
                     try:
                         rows = db_manager.execute_query(
                             "SELECT id, firebase_id, stock, es_conjunto, "
-                            "       conjunto_unidades, conjunto_restante, conjunto_total "
+                            "       conjunto_unidades, conjunto_restante, conjunto_total, "
+                            "       conjunto_colores "
                             "FROM products WHERE id = ?",
                             (int(pid),)
                         )
@@ -879,7 +958,8 @@ class FirebaseSync:
 
                     # Producto Conjunto: no se toca `stock`, se sincroniza el
                     # estado absoluto (unidades / restante / total) que el modelo
-                    # de venta ya actualizó en SQLite.
+                    # de venta ya actualizó en SQLite. Si tiene stock por color,
+                    # se sube el array completo a Firestore.
                     if int(row.get('es_conjunto') or 0) == 1:
                         payload_conj = {
                             'conjunto_unidades':    float(row.get('conjunto_unidades') or 0),
@@ -887,6 +967,13 @@ class FirebaseSync:
                             'conjunto_total':       float(row.get('conjunto_total') or 0),
                             'ultima_actualizacion': now_dt,
                         }
+                        colores_json = row.get('conjunto_colores')
+                        if colores_json:
+                            try:
+                                import json as _json
+                                payload_conj['conjunto_colores'] = _json.loads(colores_json)
+                            except Exception:
+                                pass
                         inv_ref = self.db.collection('inventario').document(str(pid))
                         batch.set(inv_ref, payload_conj, merge=True)
                         if firebase_id:
@@ -968,8 +1055,11 @@ class FirebaseSync:
                 if sync_file.exists():
                     last_local_ts = sync_file.read_text(encoding="utf-8").strip()
 
-                # 2. Consultar metadato (1 sola lectura Firestore)
-                meta_doc = self.db.collection('config').document('catalogo_meta').get()
+                # 2. Consultar metadato (1 sola lectura Firestore, con retry)
+                meta_doc = _retry_on_429(
+                    lambda: self.db.collection('config').document('catalogo_meta').get(),
+                    label='delta_sync meta read'
+                )
                 if not meta_doc.exists:
                     logger.debug("Delta sync: sin doc catalogo_meta — omitiendo.")
                     if on_done:
@@ -1015,11 +1105,15 @@ class FirebaseSync:
                         q = self.db.collection('catalogo').where(
                             'ultima_actualizacion', '>', last_local_dt
                         )
-                    docs = list(q.stream())
+                    docs = _retry_on_429(lambda: list(q.stream()),
+                                         label='delta query catalogo')
                     logger.info(f"Delta sync: bajando solo cambios desde {last_local_dt.isoformat()} → {len(docs)} docs")
                     full_sync = False
                 else:
-                    docs = list(self.db.collection('catalogo').stream())
+                    docs = _retry_on_429(
+                        lambda: list(self.db.collection('catalogo').stream()),
+                        label='full stream catalogo'
+                    )
                     logger.info(f"Delta sync: full sync (sin last_ts) → {len(docs)} docs")
                     full_sync = True
 
@@ -1207,8 +1301,28 @@ class FirebaseSync:
                 else:
                     _date = date
                 total        = sum(float(s.get('total_amount', 0) or 0) for s in sales)
-                efectivo     = sum(float(s.get('total_amount', 0) or 0) for s in sales if s.get('payment_type') == 'cash')
-                transferencia = total - efectivo
+                # Distribución por medio de pago, considerando 'mixed' (parte
+                # efectivo + parte transferencia) además de cash y transfer.
+                def _split(s):
+                    amt = float(s.get('total_amount', 0) or 0)
+                    pt  = s.get('payment_type')
+                    if pt == 'cash':
+                        return amt, 0.0
+                    if pt == 'mixed':
+                        cash = max(0.0, float(s.get('cash_received', 0) or 0) -
+                                         float(s.get('change_given', 0) or 0))
+                        tra  = float(s.get('transfer_amount', 0) or 0)
+                        # Si por algún motivo no suman al total, normalizar
+                        if cash + tra <= 0:
+                            return 0.0, amt
+                        return cash, tra
+                    return 0.0, amt
+                efectivo = 0.0
+                transferencia = 0.0
+                for s in sales:
+                    c, t = _split(s)
+                    efectivo += c
+                    transferencia += t
                 n            = len(sales)
                 promedio     = total / n if n > 0 else 0
                 fecha_str    = _date.strftime('%d/%m/%Y')
@@ -1283,7 +1397,13 @@ class FirebaseSync:
             try:
                 sale_id    = sale.get('id')
                 created_at = self._parse_dt(sale.get('created_at'))
-                tipo_pago  = 'Efectivo' if sale.get('payment_type') == 'cash' else 'Transferencia'
+                _ptype = sale.get('payment_type')
+                if _ptype == 'cash':
+                    tipo_pago = 'Efectivo'
+                elif _ptype == 'mixed':
+                    tipo_pago = 'Mixto'
+                else:
+                    tipo_pago = 'Transferencia'
                 cajero     = (
                     sale.get('turno_nombre')
                     or sale.get('cajero')
@@ -1300,7 +1420,8 @@ class FirebaseSync:
                                COALESCE(si.discount_type, '') as discount_type,
                                COALESCE(si.discount_value, 0) as discount_value,
                                COALESCE(si.discount_amount, 0) as discount_amount,
-                               COALESCE(si.promo_id, '') as promo_id
+                               COALESCE(si.promo_id, '') as promo_id,
+                               COALESCE(si.conjunto_color, '') as conjunto_color
                         FROM sale_items si
                         LEFT JOIN products p ON si.product_id = p.id
                         WHERE si.sale_id = ?
@@ -1328,6 +1449,7 @@ class FirebaseSync:
                         'descuento_valor':  float(item.get('discount_value', 0) or 0),
                         'descuento_monto':  float(item.get('discount_amount', 0) or 0),
                         'precio_original':  float(item.get('original_price', 0) or item.get('unit_price', 0) or 0),
+                        'conjunto_color':   (item.get('conjunto_color') or item.get('color') or ''),
                     }, merge=True)
                 batch.commit()
                 logger.debug(f"Firebase: Detalle de venta #{sale_id} ({len(items)} items) sincronizado.")
@@ -1428,8 +1550,26 @@ class FirebaseSync:
                 doc_id = f"{year}-{month:02d}_{_get_pc_id()}"
                 
                 total = sum(float(s.get('total_amount', 0) or 0) for s in sales)
-                efectivo = sum(float(s.get('total_amount', 0) or 0) for s in sales if s.get('payment_type') == 'cash')
-                transferencia = total - efectivo
+                # Considerar pago mixto al sumar por medio de pago
+                def _split_m(s):
+                    amt = float(s.get('total_amount', 0) or 0)
+                    pt  = s.get('payment_type')
+                    if pt == 'cash':
+                        return amt, 0.0
+                    if pt == 'mixed':
+                        cash = max(0.0, float(s.get('cash_received', 0) or 0) -
+                                         float(s.get('change_given', 0) or 0))
+                        tra  = float(s.get('transfer_amount', 0) or 0)
+                        if cash + tra <= 0:
+                            return 0.0, amt
+                        return cash, tra
+                    return 0.0, amt
+                efectivo = 0.0
+                transferencia = 0.0
+                for _s in sales:
+                    _c, _t = _split_m(_s)
+                    efectivo += _c
+                    transferencia += _t
                 descuentos = sum(float(s.get('discount', 0) or 0) for s in sales)
                 n = len(sales)
                 promedio = total / n if n > 0 else 0
@@ -1575,7 +1715,7 @@ class FirebaseSync:
             return []
         try:
             col = self.db.collection('rubros')
-            docs = list(col.stream())
+            docs = _retry_on_429(lambda: list(col.stream()), label='download rubros')
             rubros = []
             for doc in docs:
                 d = doc.to_dict() or {}
@@ -1605,9 +1745,18 @@ class FirebaseSync:
                 import datetime
                 last_dt = datetime.datetime.fromtimestamp(since_epoch, tz=datetime.timezone.utc)
                 try:
-                    docs = list(col.where('ultima_actualizacion', '>=', last_dt).stream())
+                    from google.cloud.firestore_v1.base_query import FieldFilter as _FF
+                    _q_pr = col.where(filter=_FF('ultima_actualizacion', '>=', last_dt))
+                except ImportError:
+                    _q_pr = col.where('ultima_actualizacion', '>=', last_dt)
+                try:
+                    docs = _retry_on_429(
+                        lambda: list(_q_pr.stream()),
+                        label='download productos_remotos delta'
+                    )
                 except Exception:
-                    docs = list(col.stream())
+                    docs = _retry_on_429(lambda: list(col.stream()),
+                                         label='download productos_remotos full')
             else:
                 docs = list(col.stream())
             total = len(docs)
@@ -1696,7 +1845,10 @@ class FirebaseSync:
         try:
             from pos_system.models.user import User, _hash_password
             user_model = User(db_manager)
-            docs = list(self.db.collection('cajeros').stream())
+            docs = _retry_on_429(
+                lambda: list(self.db.collection('cajeros').stream()),
+                label='download cajeros'
+            )
             # Lista de usernames que NO se sincronizan (datos viejos de prueba).
             # Si aparecen en Firebase, se ignoran y se borran localmente para que
             # no vuelvan a aparecer en la pantalla de cajeros.
@@ -2452,6 +2604,58 @@ class FirebaseSync:
         except Exception as e:
             logger.error(f"Firebase: No se pudo iniciar listener emisor_activo: {e}")
 
+    def _cliente_doc_id(self, cliente: dict) -> str:
+        """Genera un doc_id estable para un cliente: usa CUIT si está cargado
+        (compartible entre PCs sin colision), si no usa un prefijo con la PC + id local."""
+        cuit = str(cliente.get('cuit', '') or '').replace('-', '').replace(' ', '').strip()
+        if cuit and cuit.isdigit() and len(cuit) >= 7:
+            return f'cuit-{cuit}'
+        local_id = cliente.get('id')
+        if local_id is not None:
+            return f'pc-{_get_pc_id()}-{local_id}'
+        # ultimo recurso: timestamp + random
+        return f'pc-{_get_pc_id()}-{int(now_ar().timestamp() * 1000)}'
+
+    def sync_cliente_individual(self, cliente: dict, db_manager=None):
+        """Sube un único cliente a Firestore en background. Idempotente:
+        usa CUIT como doc_id cuando está disponible para que distintas PCs
+        compartan el mismo registro. Persiste el firebase_id en la fila local
+        para que el listener pueda hacer UPDATE en futuras ediciones."""
+        if not self.enabled:
+            return
+        def _do():
+            try:
+                doc_id = self._cliente_doc_id(cliente)
+                payload = {
+                    'id':            cliente.get('id'),
+                    'nombre':        cliente.get('nombre', ''),
+                    'razon_social':  cliente.get('razon_social', ''),
+                    'cuit':          cliente.get('cuit', ''),
+                    'domicilio':     cliente.get('domicilio', ''),
+                    'localidad':     cliente.get('localidad', ''),
+                    'condicion_iva': cliente.get('condicion_iva', 'Consumidor Final'),
+                    'activo':        True,
+                    'updated_at':    now_ar_iso(),
+                    'pc_origen':     _get_pc_id(),
+                }
+                self.db.collection('clientes_facturacion').document(doc_id).set(
+                    payload, merge=True
+                )
+                # Persistir el firebase_id local para que el listener no
+                # vuelva a insertarlo como duplicado.
+                if db_manager is not None and cliente.get('id'):
+                    try:
+                        db_manager.execute_update(
+                            "UPDATE clientes_facturacion SET firebase_id=? WHERE id=?",
+                            (doc_id, cliente['id'])
+                        )
+                    except Exception as _e:
+                        logger.debug(f"No se pudo persistir firebase_id local: {_e}")
+                logger.info(f"Firebase: cliente '{cliente.get('nombre','')}' sincronizado ({doc_id}).")
+            except Exception as e:
+                logger.error(f"Firebase: error sincronizando cliente individual: {e}")
+        self._run(_do)
+
     def sync_clientes(self, db_manager):
         """Sube todos los clientes de facturación activos a Firestore."""
         if not self.enabled:
@@ -2464,7 +2668,7 @@ class FirebaseSync:
                 col = self.db.collection('clientes_facturacion')
                 batch = self.db.batch()
                 for c in rows:
-                    doc_id = str(c['id'])
+                    doc_id = self._cliente_doc_id(c)
                     ref = col.document(doc_id)
                     batch.set(ref, {
                         'id':           c['id'],
@@ -2475,7 +2679,16 @@ class FirebaseSync:
                         'localidad':    c.get('localidad', ''),
                         'condicion_iva': c.get('condicion_iva', 'Consumidor Final'),
                         'activo':       True,
-                    })
+                        'pc_origen':    _get_pc_id(),
+                    }, merge=True)
+                    # Mantener referencia local del firebase_id para el listener
+                    try:
+                        db_manager.execute_update(
+                            "UPDATE clientes_facturacion SET firebase_id=? WHERE id=?",
+                            (doc_id, c['id'])
+                        )
+                    except Exception:
+                        pass
                 batch.commit()
                 logger.info(f"Firebase: {len(rows)} clientes de facturación sincronizados.")
             except Exception as e:
@@ -2553,6 +2766,105 @@ class FirebaseSync:
             logger.error(f"Firebase: No se pudo iniciar listener de clientes: {e}")
 
     # ══════════════════════════════════════════════════
+    #  REFRESH PUNTUAL DE UN PRODUCTO
+    # ══════════════════════════════════════════════════
+    def refresh_product_from_firestore(self, db_manager, firebase_id: str,
+                                        timeout: float = 2.5) -> bool:
+        """Baja un producto puntual del catálogo y refresca SQLite local.
+
+        Pensado para garantizar el dato más fresco antes de operar con un
+        producto (ej. abrir Vender Conjunto). Bloquea hasta 'timeout' segundos.
+        Solo actualiza campos que cambian con ventas: stock, price, conjunto_*.
+
+        Devuelve True si pudo aplicar el refresh, False si timeout/error.
+        """
+        if not self.enabled or not firebase_id:
+            return False
+        try:
+            done = threading.Event()
+            doc_holder, err_holder = {}, {}
+
+            def _fetch():
+                try:
+                    doc_holder['doc'] = self.db.collection('catalogo').document(
+                        str(firebase_id)
+                    ).get()
+                except Exception as ex:
+                    err_holder['err'] = ex
+                finally:
+                    done.set()
+
+            threading.Thread(target=_fetch, daemon=True).start()
+            done.wait(timeout=timeout)
+            if not done.is_set():
+                logger.debug(f"refresh_product: timeout ({timeout}s) fb_id={firebase_id}")
+                return False
+            if err_holder.get('err') is not None:
+                logger.debug(f"refresh_product: error fetch: {err_holder['err']}")
+                return False
+            doc = doc_holder.get('doc')
+            if doc is None or not doc.exists:
+                return False
+            d = doc.to_dict() or {}
+
+            # Convertir conjunto_colores (lista de dicts) a JSON string para SQLite
+            colores_raw = d.get('conjunto_colores')
+            colores_json = None
+            if isinstance(colores_raw, list) and colores_raw:
+                try:
+                    import json as _json
+                    colores_json = _json.dumps([
+                        {
+                            'color':    str(c.get('color', '') or ''),
+                            'unidades': float(c.get('unidades') or 0),
+                            'restante': float(c.get('restante') or 0),
+                        }
+                        for c in colores_raw if isinstance(c, dict)
+                    ], ensure_ascii=False)
+                except Exception:
+                    colores_json = None
+
+            def _to_float(v):
+                try:
+                    return float(v)
+                except (TypeError, ValueError):
+                    return None
+
+            stock      = int(_to_float(d.get('stock')) or 0)
+            price      = float(_to_float(
+                d.get('precio_venta') or d.get('precio') or d.get('price')
+            ) or 0)
+            c_unidades = _to_float(d.get('conjunto_unidades'))
+            c_restante = _to_float(d.get('conjunto_restante'))
+            c_total    = _to_float(d.get('conjunto_total'))
+            c_contenido= _to_float(d.get('conjunto_contenido'))
+            c_pu       = _to_float(d.get('conjunto_precio_unidad'))
+
+            try:
+                db_manager.execute_update(
+                    """UPDATE products SET
+                          stock = ?,
+                          price = ?,
+                          conjunto_unidades      = COALESCE(?, conjunto_unidades),
+                          conjunto_restante      = COALESCE(?, conjunto_restante),
+                          conjunto_total         = COALESCE(?, conjunto_total),
+                          conjunto_contenido     = COALESCE(?, conjunto_contenido),
+                          conjunto_precio_unidad = COALESCE(?, conjunto_precio_unidad),
+                          conjunto_colores       = ?,
+                          updated_at = (SELECT localtime_now())
+                       WHERE firebase_id = ?""",
+                    (stock, price, c_unidades, c_restante, c_total,
+                     c_contenido, c_pu, colores_json, str(firebase_id))
+                )
+                return True
+            except Exception as ex:
+                logger.warning(f"refresh_product: error UPDATE local: {ex}")
+                return False
+        except Exception as e:
+            logger.warning(f"refresh_product: {e}")
+            return False
+
+    # ══════════════════════════════════════════════════
     #  MIGRACION cierres_caja → esquema compartido
     # ══════════════════════════════════════════════════
     def migrate_cierres_caja_compartido_async(self):
@@ -2572,7 +2884,7 @@ class FirebaseSync:
         esto al mismo tiempo, las operaciones son seguras (set merge=True +
         delete son idempotentes en Firestore).
 
-        Solo migra cajas ABIERTAS (sin fecha_cierre). Los cierres historicos
+                Solo migra cajas ABIERTAS (sin fecha_cierre). Los cierres historicos
         cerrados quedan intactos.
         """
         try:

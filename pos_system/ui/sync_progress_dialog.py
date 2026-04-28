@@ -246,6 +246,23 @@ class DownloadWorker(QThread):
                 conj_restante = _to_float_safe(p.get('conjunto_restante')) if es_conjunto else None
                 conj_precio   = _to_float_safe(p.get('conjunto_precio_unidad')) if es_conjunto else None
                 conj_total    = _to_float_safe(p.get('conjunto_total')) if es_conjunto else None
+                # Stock por color: array de Firestore → JSON string para SQLite
+                _colores_raw = p.get('conjunto_colores') if es_conjunto else None
+                conj_colores = None
+                if isinstance(_colores_raw, list) and _colores_raw:
+                    try:
+                        import json as _json
+                        conj_colores = _json.dumps([
+                            {
+                                'color':    str(_c.get('color', '') or ''),
+                                'unidades': float(_c.get('unidades') or 0),
+                                'restante': float(_c.get('restante') or 0),
+                            }
+                            for _c in _colores_raw
+                            if isinstance(_c, dict)
+                        ], ensure_ascii=False)
+                    except Exception:
+                        conj_colores = None
 
                 # Saltar productos sin precio o inactivos
                 if precio <= 0 or estado == 'sin_precio':
@@ -294,7 +311,7 @@ class DownloadWorker(QThread):
                         def _do_update(bc):
                             conj_params = (es_conjunto, conj_tipo, conj_unidad,
                                            conj_unidades, conj_contenido, conj_restante,
-                                           conj_precio, conj_total)
+                                           conj_precio, conj_total, conj_colores)
                             if fb_ts:
                                 db.execute_update("""
                                     UPDATE products SET
@@ -303,7 +320,7 @@ class DownloadWorker(QThread):
                                         firebase_id = ?, rubro = ?, updated_at = ?,
                                         es_conjunto = ?, conjunto_tipo = ?, conjunto_unidad_medida = ?,
                                         conjunto_unidades = ?, conjunto_contenido = ?, conjunto_restante = ?,
-                                        conjunto_precio_unidad = ?, conjunto_total = ?
+                                        conjunto_precio_unidad = ?, conjunto_total = ?, conjunto_colores = ?
                                     WHERE id = ?
                                 """, (nombre, precio, costo, stock, cat, bc, desc,
                                       firebase_id, rubro, fb_ts,
@@ -317,7 +334,7 @@ class DownloadWorker(QThread):
                                         updated_at = CURRENT_TIMESTAMP,
                                         es_conjunto = ?, conjunto_tipo = ?, conjunto_unidad_medida = ?,
                                         conjunto_unidades = ?, conjunto_contenido = ?, conjunto_restante = ?,
-                                        conjunto_precio_unidad = ?, conjunto_total = ?
+                                        conjunto_precio_unidad = ?, conjunto_total = ?, conjunto_colores = ?
                                     WHERE id = ?
                                 """, (nombre, precio, costo, stock, cat, bc, desc,
                                       firebase_id, rubro,
@@ -342,15 +359,15 @@ class DownloadWorker(QThread):
                                  barcode, discount_value, firebase_id, rubro,
                                  es_conjunto, conjunto_tipo, conjunto_unidad_medida,
                                  conjunto_unidades, conjunto_contenido, conjunto_restante,
-                                 conjunto_precio_unidad, conjunto_total,
+                                 conjunto_precio_unidad, conjunto_total, conjunto_colores,
                                  created_at, updated_at)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?,
-                                    ?, ?, ?, ?, ?, ?, ?, ?,
+                                    ?, ?, ?, ?, ?, ?, ?, ?, ?,
                                     CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                         """, (nombre, precio, costo, stock, cat, barcode, desc, firebase_id or None, rubro,
                               es_conjunto, conj_tipo, conj_unidad,
                               conj_unidades, conj_contenido, conj_restante,
-                              conj_precio, conj_total))
+                              conj_precio, conj_total, conj_colores))
                         productos_nuevos += 1
                     except Exception:
                         pass
