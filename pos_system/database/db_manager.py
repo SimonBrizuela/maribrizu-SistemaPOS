@@ -644,6 +644,94 @@ class DatabaseManager:
         )
         return True
 
+    def cleanup_duplicate_products(self) -> dict:
+        """Detecta y limpia productos duplicados en la BD local.
+
+        Considera duplicados los rows con MISMO nombre (case-insensitive,
+        sin espacios extras). Para cada grupo de duplicados:
+          1. Elige sobreviviente: el que tiene firebase_id seteado.
+             Si más de uno → el que tiene updated_at más reciente.
+             Si ninguno → el más reciente.
+          2. Para los demás:
+             a. Si NO tienen ventas asociadas (sale_items) → DELETE limpio.
+             b. Si TIENEN ventas → soft-delete (stock=0, firebase_id=NULL,
+                name='[DUPLICADO] {name}') para no romper FKs y dejarlos
+                identificables.
+
+        Devuelve un dict con: {'grupos': N, 'borrados': N, 'soft_deleted': N}
+        """
+        import logging
+        log = logging.getLogger(__name__)
+        result = {'grupos': 0, 'borrados': 0, 'soft_deleted': 0}
+        try:
+            # Buscar grupos de nombres duplicados
+            grupos = self.execute_query(
+                "SELECT TRIM(LOWER(name)) as norm_name, COUNT(*) as cnt "
+                "FROM products "
+                "WHERE name IS NOT NULL AND TRIM(name) != '' "
+                "  AND (name NOT LIKE '[DUPLICADO]%')  "
+                "GROUP BY TRIM(LOWER(name)) HAVING cnt > 1"
+            ) or []
+            if not grupos:
+                return result
+            result['grupos'] = len(grupos)
+
+            for g in grupos:
+                norm = g['norm_name']
+                # Traer todos los rows del grupo, ordenados por: firebase_id presente,
+                # luego updated_at descendente.
+                rows = self.execute_query(
+                    "SELECT id, name, firebase_id, stock, updated_at, "
+                    "       COALESCE(LENGTH(COALESCE(firebase_id,'')),0) as fb_len "
+                    "FROM products "
+                    "WHERE TRIM(LOWER(name)) = ? "
+                    "  AND (name NOT LIKE '[DUPLICADO]%') "
+                    "ORDER BY fb_len DESC, "
+                    "         updated_at DESC, id DESC",
+                    (norm,)
+                ) or []
+                if len(rows) <= 1:
+                    continue
+                # El primero es el sobreviviente; los demás se eliminan
+                survivor = rows[0]
+                losers = rows[1:]
+                for loser in losers:
+                    lid = loser['id']
+                    # ¿Tiene ventas asociadas?
+                    sales_ref = self.execute_query(
+                        "SELECT 1 FROM sale_items WHERE product_id = ? LIMIT 1",
+                        (lid,)
+                    ) or []
+                    if sales_ref:
+                        # Soft-delete: preservar el row para no romper FKs
+                        try:
+                            self.execute_update(
+                                "UPDATE products SET stock = 0, firebase_id = NULL, "
+                                "name = '[DUPLICADO] ' || name, updated_at = (SELECT localtime_now()) "
+                                "WHERE id = ?",
+                                (lid,)
+                            )
+                            result['soft_deleted'] += 1
+                            log.info(f"Cleanup: soft-deleted duplicado #{lid} ({survivor['name']})")
+                        except Exception as e:
+                            log.warning(f"Cleanup: error soft-deleting #{lid}: {e}")
+                    else:
+                        try:
+                            self.execute_update("DELETE FROM products WHERE id = ?", (lid,))
+                            result['borrados'] += 1
+                            log.info(f"Cleanup: borrado duplicado #{lid} ({survivor['name']})")
+                        except Exception as e:
+                            log.warning(f"Cleanup: error borrando #{lid}: {e}")
+
+            if result['borrados'] or result['soft_deleted']:
+                log.info(
+                    f"Cleanup duplicados: {result['grupos']} grupos detectados, "
+                    f"{result['borrados']} borrados, {result['soft_deleted']} soft-deleted."
+                )
+        except Exception as e:
+            log.error(f"cleanup_duplicate_products falló: {e}")
+        return result
+
     def sync_rubros_from_firebase(self, rubros: list):
         """
         Sincroniza la lista de rubros desde Firebase.

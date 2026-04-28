@@ -335,6 +335,20 @@ def main():
         logger.info("Initializing database...")
         db.initialize_database()
 
+        # 1.b. Limpieza de productos duplicados (rápido, idempotente).
+        #      Se ejecuta cada arranque por las dudas, pero solo hace algo si
+        #      detecta nombres repetidos. Loggea lo que limpia.
+        try:
+            cleanup = db.cleanup_duplicate_products()
+            if cleanup.get('grupos'):
+                logger.info(
+                    f"Productos duplicados detectados: {cleanup['grupos']} grupo(s). "
+                    f"Borrados: {cleanup['borrados']}, "
+                    f"soft-deleted (con ventas): {cleanup['soft_deleted']}."
+                )
+        except Exception as _e:
+            logger.warning(f"Cleanup duplicados falló (no crítico): {_e}")
+
         # 2. Crear la app Qt inmediatamente (la ventana aparece lo antes posible)
         logger.info("Creating application...")
         # Estos atributos deben declararse ANTES de crear QApplication.
