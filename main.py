@@ -344,7 +344,8 @@ def main():
                 logger.info(
                     f"Productos duplicados detectados: {cleanup['grupos']} grupo(s). "
                     f"Borrados: {cleanup['borrados']}, "
-                    f"soft-deleted (con ventas): {cleanup['soft_deleted']}."
+                    f"soft-deleted (con ventas): {cleanup['soft_deleted']}, "
+                    f"sobrevivientes restaurados: {cleanup.get('restaurados', 0)}."
                 )
         except Exception as _e:
             logger.warning(f"Cleanup duplicados falló (no crítico): {_e}")
