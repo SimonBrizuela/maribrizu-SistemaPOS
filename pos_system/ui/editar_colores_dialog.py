@@ -61,7 +61,8 @@ class EditarColoresDialog(QDialog):
         colores = parse_colores(product.get('conjunto_colores'))
         if colores:
             for c in colores:
-                self._add_row(c['color'], c['unidades'], c['restante'])
+                self._add_row(c['color'], c['unidades'], c['restante'],
+                              precio=float(c.get('precio') or 0))
         else:
             # Si no había colores cargados, ofrecer una fila inicial vacía
             self._add_row('', 0, 0)
@@ -198,8 +199,12 @@ class EditarColoresDialog(QDialog):
         fh.addWidget(save, 2)
         root.addWidget(ft)
 
-    def _add_row(self, color_name, unidades, restante):
+    def _add_row(self, color_name, unidades, restante, precio=0):
         row = QFrame()
+        # Preservar el precio por variedad cargado desde el catálogo. Esta
+        # ventana no lo edita (se setea desde la webapp), pero hay que
+        # mantenerlo en el round-trip para no perderlo al guardar.
+        row._precio_variedad = float(precio or 0)
         row.setStyleSheet(
             f'QFrame {{ background: #fff; border: 1px solid {_GC["border_soft"]};'
             f'           border-radius: 8px; }}'
@@ -277,11 +282,15 @@ class EditarColoresDialog(QDialog):
             name = (nombre.text() or '').strip()
             if not name:
                 continue
-            out.append({
+            item = {
                 'color':    name,
                 'unidades': float(u.value()),
                 'restante': float(r.value()),
-            })
+            }
+            pr = float(getattr(_row, '_precio_variedad', 0) or 0)
+            if pr > 0:
+                item['precio'] = pr
+            out.append(item)
         return out
 
     def _refresh_total(self):

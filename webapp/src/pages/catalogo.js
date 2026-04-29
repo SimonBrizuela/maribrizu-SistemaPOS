@@ -1535,7 +1535,7 @@ export async function renderCatalogo(container, db) {
               <div style="grid-column:1/-1;display:flex;flex-direction:column;gap:6px">
                 <div id="ed_colores_list" style="display:none;flex-direction:column;gap:4px"></div>
                 <button id="btn_add_color" type="button" style="align-self:flex-start;padding:4px 8px;border-radius:6px;border:none;background:transparent;color:#6d28d9;cursor:pointer;font-size:12px;font-weight:600">
-                  + agregar color
+                  + agregar variedad
                 </button>
                 <span id="ed_colores_empty" style="display:none"></span>
               </div>
@@ -1661,18 +1661,47 @@ export async function renderCatalogo(container, db) {
       otro:      ['UNIDADES','UNIDAD'],
     };
 
+    // Mostrar/ocultar los campos fraccionables (CONTENIDO, RESTANTE, PRECIO POR
+     // METRO) según la unidad de medida. En modo 'unidades' no tienen sentido:
+     // cada variedad ya cuenta como N unidades enteras.
+    function _aplicarVisibilidadFraccion() {
+      const esUnidad = (conjUM.value || 'metros') === 'unidades';
+      const wrapC  = conjC  ? conjC.parentElement  : null;
+      const wrapR  = conjR  ? conjR.parentElement  : null;
+      const wrapPU = conjPU ? conjPU.parentElement : null;
+      [wrapC, wrapR, wrapPU].forEach(w => {
+        if (w) w.style.display = esUnidad ? 'none' : '';
+      });
+      if (esUnidad) {
+        // Forzar contenido = 1 internamente para que la suma sea por unidades.
+        if (conjC) conjC.value = 1;
+        if (conjR) conjR.value = 0;
+      } else if (conjC && parseFloat(conjC.value) === 1 && !conjC.dataset.userTouched) {
+        // Si volvió a fraccionable y no lo tocó el usuario, dejarlo vacío
+        conjC.value = '';
+      }
+    }
+
     function _refrescarConjunto() {
       const [pl, sg] = NOMBRES_TIPO[conjTipo.value] || NOMBRES_TIPO.otro;
       const um = conjUM.value || 'unidades';
       const umSg = um.endsWith('s') ? um.slice(0, -1) : um;
+      const esUnidad = um === 'unidades';
       lblU.textContent  = pl;
       lblC.textContent  = sg;
       lblR.textContent  = sg;
       lblPU.textContent = umSg.toUpperCase();
+      _aplicarVisibilidadFraccion();
       const u = parseFloat(conjU.value) || 0;
-      const c = parseFloat(conjC.value) || 0;
-      const r = parseFloat(conjR.value) || 0;
-      if (u > 0 && c > 0) {
+      const c = esUnidad ? 1 : (parseFloat(conjC.value) || 0);
+      const r = esUnidad ? 0 : (parseFloat(conjR.value) || 0);
+      if (esUnidad) {
+        if (u > 0) {
+          conjRes.innerHTML = `<b>Total disponible:</b> <b style="color:#6d28d9">${u.toLocaleString('es-AR')} unidades</b>`;
+        } else {
+          conjRes.textContent = 'Cargá la cantidad de unidades para ver el total';
+        }
+      } else if (u > 0 && c > 0) {
         const totalCerrados = Math.max(0, (u - (r > 0 ? 1 : 0))) * c;
         const total = totalCerrados + (r > 0 ? r : (r === 0 && u > 0 ? 0 : 0));
         const detalleR = r > 0 ? ` + ${r} ${um} restantes en ${sg.toLowerCase()} abierto` : '';
@@ -1682,9 +1711,9 @@ export async function renderCatalogo(container, db) {
       }
 
       // ── Auto-calcular precio por unidad fraccionada ──
-      // precio_por_metro = (precio_rollo / contenido) × FRACCION_MARGIN
-      // Solo si el usuario no tocó manualmente el campo.
-      if (conjPU && conjHint) {
+      // Solo aplica a productos fraccionables (rollo de metros, etc).
+      // En modo 'unidades' el PRECIO POR METRO está oculto.
+      if (!esUnidad && conjPU && conjHint) {
         const precioRollo = parseFloat(inPrecio.value) || 0;
         const contenido   = c;
         if (precioRollo > 0 && contenido > 0) {
@@ -1693,7 +1722,6 @@ export async function renderCatalogo(container, db) {
             minimumFractionDigits: 2, maximumFractionDigits: 2,
           });
           if (!precioPUManual) {
-            // Auto-fill silencioso (no cuenta como edición manual)
             conjPU.value = sugerido.toFixed(2);
           }
           conjHint.innerHTML =
@@ -1716,6 +1744,14 @@ export async function renderCatalogo(container, db) {
       if (cbConj.checked) _refrescarConjunto();
     });
     [conjTipo, conjUM, conjU, conjC, conjR].forEach(el => el.addEventListener('input', _refrescarConjunto));
+    // Cuando cambia la unidad de medida, reaplicar el layout de las variedades
+    // (con/sin "Restante") y refrescar el agregado.
+    conjUM.addEventListener('change', () => {
+      if (typeof _aplicarUnidadATodasVariedades === 'function') {
+        _aplicarUnidadATodasVariedades();
+      }
+      _refreshColoresState();
+    });
     // El precio del rollo y el campo de precio por unidad también disparan recalculo
     if (inPrecio) inPrecio.addEventListener('input', _refrescarConjunto);
     if (conjPU)   conjPU.addEventListener('input', _refrescarConjunto);
@@ -1726,15 +1762,17 @@ export async function renderCatalogo(container, db) {
     const coloresEmpty = overlay.querySelector('#ed_colores_empty');
     const btnAddColor  = overlay.querySelector('#btn_add_color');
 
-    function _addColorRow(nombre = '', unidades = '', restante = '') {
+    function _addColorRow(nombre = '', unidades = '', restante = '', precio = '') {
       const row = document.createElement('div');
       row.dataset.colorRow = '1';
-      row.style.cssText = 'display:grid;grid-template-columns:1fr 70px 70px 24px;gap:6px;align-items:center';
+      // Grid: nombre | unidades | restante | precio | quitar
+      row.style.cssText = 'display:grid;grid-template-columns:1fr 70px 70px 80px 24px;gap:6px;align-items:center';
       row.innerHTML = `
-        <input class="ed_color_nombre" type="text" placeholder="Color" value="${nombre || ''}" style="width:100%;padding:6px 8px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
-        <input class="ed_color_unidades" type="number" min="0" step="1" placeholder="Cant." title="Cantidad de rollos/packs/cajas de este color" value="${unidades !== '' && unidades != null ? unidades : ''}" style="width:100%;padding:6px 8px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
-        <input class="ed_color_restante" type="number" min="0" step="0.01" placeholder="Rest." title="Sobrante en el rollo abierto de este color" value="${restante !== '' && restante != null ? restante : ''}" style="width:100%;padding:6px 8px;border:1.5px solid #ffe082;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit;background:#fffef7" />
-        <button type="button" class="ed_color_remove" title="Quitar color" style="width:24px;height:24px;border-radius:50%;border:none;background:transparent;color:#dc2626;cursor:pointer;font-size:16px;line-height:1;padding:0">×</button>
+        <input class="ed_color_nombre" type="text" placeholder="Variedad" value="${nombre || ''}" style="width:100%;padding:6px 8px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
+        <input class="ed_color_unidades" type="number" min="0" step="1" placeholder="Cant." title="Cantidad de esta variedad" value="${unidades !== '' && unidades != null ? unidades : ''}" style="width:100%;padding:6px 8px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
+        <input class="ed_color_restante" type="number" min="0" step="0.01" placeholder="Rest." title="Sobrante en el rollo abierto de esta variedad" value="${restante !== '' && restante != null ? restante : ''}" style="width:100%;padding:6px 8px;border:1.5px solid #ffe082;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit;background:#fffef7" />
+        <input class="ed_color_precio" type="number" min="0" step="0.01" placeholder="Precio" title="Precio por unidad fraccionada de esta variedad (opcional). Si se deja vacío, se usa el precio global." value="${precio !== '' && precio != null ? precio : ''}" style="width:100%;padding:6px 8px;border:1.5px solid #c7d2fe;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit;background:#f5f3ff" />
+        <button type="button" class="ed_color_remove" title="Quitar variedad" style="width:24px;height:24px;border-radius:50%;border:none;background:transparent;color:#dc2626;cursor:pointer;font-size:16px;line-height:1;padding:0">×</button>
       `;
       row.querySelectorAll('input').forEach(inp => inp.addEventListener('input', _refreshColoresState));
       row.querySelector('.ed_color_remove').addEventListener('click', () => {
@@ -1742,15 +1780,43 @@ export async function renderCatalogo(container, db) {
         _refreshColoresState();
       });
       coloresList.appendChild(row);
+      _aplicarUnidadAVariedad(row);
     }
 
     function _getColoresFromUI() {
       const rows = coloresList.querySelectorAll('[data-color-row]');
-      return Array.from(rows).map(r => ({
-        color:    (r.querySelector('.ed_color_nombre').value || '').trim(),
-        unidades: parseFloat(r.querySelector('.ed_color_unidades').value) || 0,
-        restante: parseFloat(r.querySelector('.ed_color_restante').value) || 0,
-      })).filter(c => c.color);
+      const esUnidad = (conjUM.value || 'metros') === 'unidades';
+      return Array.from(rows).map(r => {
+        const precioRaw = (r.querySelector('.ed_color_precio').value || '').trim();
+        const out = {
+          color:    (r.querySelector('.ed_color_nombre').value || '').trim(),
+          unidades: parseFloat(r.querySelector('.ed_color_unidades').value) || 0,
+          restante: esUnidad ? 0 : (parseFloat(r.querySelector('.ed_color_restante').value) || 0),
+        };
+        // precio es opcional: solo se guarda si el usuario puso un valor > 0
+        const p = precioRaw === '' ? null : (parseFloat(precioRaw) || 0);
+        if (p && p > 0) out.precio = p;
+        return out;
+      }).filter(c => c.color);
+    }
+
+    // Si la unidad de medida del conjunto es 'unidades', no tiene sentido el
+    // campo "Restante" (no se fracciona) → lo ocultamos en la fila y achicamos
+    // la grilla a 4 columnas. Para metros/gramos/etc se ven las 5.
+    function _aplicarUnidadAVariedad(row) {
+      const esUnidad = (conjUM.value || 'metros') === 'unidades';
+      const restInp = row.querySelector('.ed_color_restante');
+      if (esUnidad) {
+        restInp.style.display = 'none';
+        row.style.gridTemplateColumns = '1fr 70px 80px 24px';
+      } else {
+        restInp.style.display = '';
+        row.style.gridTemplateColumns = '1fr 70px 70px 80px 24px';
+      }
+    }
+
+    function _aplicarUnidadATodasVariedades() {
+      coloresList.querySelectorAll('[data-color-row]').forEach(_aplicarUnidadAVariedad);
     }
 
     function _refreshColoresState() {
@@ -1794,7 +1860,8 @@ export async function renderCatalogo(container, db) {
     coloresExistentes.forEach(c => _addColorRow(
       c && c.color ? c.color : '',
       c && c.unidades != null ? c.unidades : '',
-      c && c.restante != null ? c.restante : ''
+      c && c.restante != null ? c.restante : '',
+      c && c.precio != null ? c.precio : ''
     ));
     _refreshColoresState();
 
@@ -1864,8 +1931,10 @@ export async function renderCatalogo(container, db) {
       if (esConjunto) {
         const cTipo = overlay.querySelector('#ed_conj_tipo').value || 'rollo';
         const cUM   = overlay.querySelector('#ed_conj_unidad_medida').value || 'unidades';
-        const cC    = parseFloat(overlay.querySelector('#ed_conj_contenido').value) || 0;
-        const cPraw = overlay.querySelector('#ed_conj_precio_unidad').value.trim();
+        const esUnidad = cUM === 'unidades';
+        // Modo unitario: cada unidad cuenta como 1, sin restante ni precio fraccionado.
+        const cC    = esUnidad ? 1 : (parseFloat(overlay.querySelector('#ed_conj_contenido').value) || 0);
+        const cPraw = esUnidad ? '' : overlay.querySelector('#ed_conj_precio_unidad').value.trim();
         const cP    = cPraw === '' ? null : (parseFloat(cPraw) || 0);
 
         // Stock por color: si hay colores cargados, los agregados son SUMA.
@@ -1891,17 +1960,23 @@ export async function renderCatalogo(container, db) {
         let cU, cR;
         if (tieneColores) {
           cU = coloresArr.reduce((a, c) => a + (c.unidades || 0), 0);
-          cR = coloresArr.reduce((a, c) => a + (c.restante || 0), 0);
+          cR = esUnidad ? 0 : coloresArr.reduce((a, c) => a + (c.restante || 0), 0);
         } else {
           cU = parseFloat(overlay.querySelector('#ed_conj_unidades').value) || 0;
-          const cRraw = overlay.querySelector('#ed_conj_restante').value.trim();
-          cR = cRraw === '' ? null : (parseFloat(cRraw) || 0);
+          if (esUnidad) {
+            cR = 0;
+          } else {
+            const cRraw = overlay.querySelector('#ed_conj_restante').value.trim();
+            cR = cRraw === '' ? null : (parseFloat(cRraw) || 0);
+          }
         }
 
-        // Total = sumatoria por color (cada color: cerrados*contenido + restante).
-        // En modo legacy queda equivalente a la fórmula anterior.
+        // Total: en modo unitario es la suma directa de unidades.
+        // En modo fraccionable es (cerrados × contenido) + restante.
         let cTotal;
-        if (tieneColores) {
+        if (esUnidad) {
+          cTotal = cU;
+        } else if (tieneColores) {
           cTotal = coloresArr.reduce((acc, c) => {
             const u = c.unidades || 0;
             const r = c.restante || 0;

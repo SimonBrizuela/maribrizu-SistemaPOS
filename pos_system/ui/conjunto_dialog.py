@@ -137,11 +137,20 @@ def parse_colores(raw):
         nombre = str(c.get('color', '') or '').strip()
         if not nombre:
             continue
-        out.append({
+        item = {
             'color':    nombre,
             'unidades': float(c.get('unidades') or 0),
             'restante': float(c.get('restante') or 0),
-        })
+        }
+        # Precio por variedad (opcional). Si > 0, sobreescribe al precio_unidad
+        # global cuando se vende esta variedad.
+        try:
+            pr = float(c.get('precio') or 0)
+        except (TypeError, ValueError):
+            pr = 0.0
+        if pr > 0:
+            item['precio'] = pr
+        out.append(item)
     return out
 
 
@@ -529,7 +538,13 @@ class ConjuntoDialog(QDialog):
 
         # Estado runtime: copia mutable por color, indexada por nombre
         self._color_state = {
-            c['color']: {'unidades': c['unidades'], 'restante': c['restante']}
+            c['color']: {
+                'unidades': c['unidades'],
+                'restante': c['restante'],
+                # Precio por variedad (opcional). Si > 0, sobreescribe al
+                # precio_unidad global cuando esta variedad está activa.
+                'precio':   float(c.get('precio') or 0),
+            }
             for c in self.colores_iniciales
         }
         self.current_color = self.colores_iniciales[0]['color']
@@ -549,19 +564,19 @@ class ConjuntoDialog(QDialog):
         precio_explicito = float(product.get('conjunto_precio_unidad') or 0)
         precio_conjunto  = float(product.get('price') or 0)
         if precio_explicito > 0:
-            self.precio_unidad = precio_explicito
+            self._precio_unidad_default = precio_explicito
         elif (
             self.contenido > 0
             and 'fraccion' in meta.get('vende_por', [])
         ):
             # precio_por_metro = precio_rollo / metros_rollo * (1 + margen)
-            self.precio_unidad = round(
+            self._precio_unidad_default = round(
                 precio_conjunto / self.contenido * FRACCION_MARGIN, 2
             )
         else:
             # Producto que se vende por unidad o sin contenido cargado:
             # el price ya es el unitario.
-            self.precio_unidad = precio_conjunto
+            self._precio_unidad_default = precio_conjunto
 
         self.cantidad_str = ''
         self.vender_por = meta['vende_por'][0]
@@ -627,6 +642,27 @@ class ConjuntoDialog(QDialog):
         s = self._color_state.get(self.current_color, {})
         return float(s.get('restante', 0))
 
+    @property
+    def precio_unidad(self):
+        # Si la variedad activa trae precio propio (> 0), tiene prioridad
+        # sobre el precio_unidad global / auto-calculado.
+        if self.has_colores and self.current_color:
+            s = self._color_state.get(self.current_color, {})
+            p = float(s.get('precio') or 0)
+            if p > 0:
+                return p
+        return self._precio_unidad_default
+
+    def _refresh_header_sub(self):
+        if not hasattr(self, '_header_sub'):
+            return
+        meta = TIPOS[self.tipo]
+        u_short = UNIDADES[self.unidad_base]['short']
+        self._header_sub.setText(
+            f'{self._header_codigo} · {meta["label"]} de {format_num(self.contenido)}{u_short} · '
+            f'${format_num(self.precio_unidad)}/{u_short}'
+        )
+
     # ---------------------------------------------------------------- UI ----
 
     def _build_ui(self):
@@ -654,11 +690,6 @@ class ConjuntoDialog(QDialog):
         nombre = self.product.get('name', '—')
         codigo = (self.product.get('barcode') or self.product.get('firebase_id') or
                   f'#{self.product.get("id", "")}')
-        sub_txt = (
-            f'{codigo} · {meta["label"]} de {format_num(self.contenido)}'
-            f'{UNIDADES[self.unidad_base]["short"]} · '
-            f'${format_num(self.precio_unidad)}/{UNIDADES[self.unidad_base]["short"]}'
-        )
 
         hdr = QFrame()
         hdr.setStyleSheet(
@@ -674,10 +705,14 @@ class ConjuntoDialog(QDialog):
             f'color: {TEXT_DARK}; font-size: 15px; font-weight: 700;'
             f' letter-spacing: -0.2px; font-family: {UI_FONT_CSS};'
         )
-        sub = QLabel(sub_txt)
-        sub.setStyleSheet(f'color: {TEXT_MUTED}; font-size: 11px; font-family: {UI_FONT_CSS};')
+        self._header_sub = QLabel('')
+        self._header_sub.setStyleSheet(
+            f'color: {TEXT_MUTED}; font-size: 11px; font-family: {UI_FONT_CSS};'
+        )
+        self._header_codigo = codigo
+        self._refresh_header_sub()
         col.addWidget(ttl)
-        col.addWidget(sub)
+        col.addWidget(self._header_sub)
         h.addLayout(col, 1)
 
         close = QPushButton('×')
@@ -790,14 +825,17 @@ class ConjuntoDialog(QDialog):
         chip0.setChecked(True)
         chip0.blockSignals(False)
 
-        # Estado inicial: NINGÚN chip visible. El cajero busca el color, lo
-        # selecciona, y recién ahí queda visible el chip elegido.
+        # Estado inicial: ningún chip visible Y el scroll oculto entero.
+        # Solo aparece el scroll cuando el buscador tiene matches.
         self._color_user_selected = False
         for chip in self._color_chips.values():
             chip.setVisible(False)
 
         scroll.setWidget(chips_w)
         outer.addWidget(scroll)
+        # Ref para mostrar/ocultar el scroll desde _on_color_search
+        self._color_scroll = scroll
+        scroll.setVisible(False)
         return wrap
 
     def _build_stock_row(self):
@@ -1291,19 +1329,22 @@ class ConjuntoDialog(QDialog):
 
     def _on_color_changed(self, color_name):
         self.current_color = color_name
-        # Marcar que ya hubo una selección manual del cajero — desde acá en
-        # adelante el chip del color activo queda visible aunque el buscador
-        # esté vacío.
         self._color_user_selected = True
         # Resetear cantidad: el stock disponible es otro
         self.cantidad_str = ''
         self._refresh_all()
-        # Limpiar buscador y volver a mostrar solo el chip del color seleccionado
+        # Limpiar el buscador y poner el color elegido como placeholder así
+        # el cajero ve cuál está activo sin necesidad de mostrar el chip.
         try:
             if hasattr(self, '_color_search') and self._color_search is not None:
                 self._color_search.blockSignals(True)
                 self._color_search.clear()
+                stock_txt = self._stock_text_for(color_name)
+                self._color_search.setPlaceholderText(
+                    f'{color_name} — {stock_txt}  (tocá para cambiar)'
+                )
                 self._color_search.blockSignals(False)
+            # Ocultar todos los chips + el scroll
             self._on_color_search('')
         except Exception:
             pass
@@ -1311,21 +1352,22 @@ class ConjuntoDialog(QDialog):
     def _on_color_search(self, txt: str):
         """Filtra los chips de color en vivo según el texto del buscador.
 
-        Estado inicial (sin selección previa) y buscador vacío → no muestra
-        ningún chip. Si ya hubo una selección, con buscador vacío queda
-        visible el chip seleccionado para que el cajero sepa cuál tiene
-        activo.
+        Estado por defecto: scroll completo OCULTO, solo se ve el buscador.
+        Al tipear, aparecen los chips matcheantes en un scroll desplegable.
+        Al borrar la búsqueda, vuelve a ocultarse todo.
         """
         import unicodedata as _ud
         def _norm(s):
             s = _ud.normalize('NFD', str(s or ''))
             return s.encode('ascii', 'ignore').decode('ascii').lower().strip()
         q = _norm(txt)
+        scroll = getattr(self, '_color_scroll', None)
         if not q:
-            # Sin búsqueda
-            already_selected = bool(getattr(self, '_color_user_selected', False))
-            for color, chip in self._color_chips.items():
-                chip.setVisible(already_selected and color == self.current_color)
+            # Sin búsqueda → ocultar todo (chips + scroll completo)
+            for chip in self._color_chips.values():
+                chip.setVisible(False)
+            if scroll is not None:
+                scroll.setVisible(False)
             return
         # Con búsqueda: mostrar matches
         any_match = False
@@ -1334,10 +1376,9 @@ class ConjuntoDialog(QDialog):
             chip.setVisible(visible)
             if visible:
                 any_match = True
-        # Sin matches → mantener todos ocultos (no forzar el seleccionado)
-        if not any_match:
-            for chip in self._color_chips.values():
-                chip.setVisible(False)
+        # Mostrar el scroll solo si hay al menos un match
+        if scroll is not None:
+            scroll.setVisible(any_match)
 
     # --- multi-linea (subtotal) -------------------------------------------
 
@@ -1610,6 +1651,9 @@ class ConjuntoDialog(QDialog):
     # --- refresh y confirmación -------------------------------------------
 
     def _refresh_all(self):
+        # Refrescar precio en el subtítulo del header (puede cambiar al
+        # seleccionar otra variedad si tiene precio propio).
+        self._refresh_header_sub()
         # Display de cantidad — sólo cambio el color y el borde según haya valor
         if self.cantidad_str == '':
             self.qty_label.setText('0')

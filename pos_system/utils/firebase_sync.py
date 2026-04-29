@@ -368,12 +368,24 @@ class FirebaseSync:
                     if isinstance(conjunto_colores_raw, list) and conjunto_colores_raw:
                         try:
                             import json as _json
-                            conjunto_colores = _json.dumps([
-                                {
+                            def _norm_color(c):
+                                out = {
                                     'color':    str(c.get('color', '') or ''),
                                     'unidades': float(c.get('unidades') or 0),
                                     'restante': float(c.get('restante') or 0),
                                 }
+                                # Precio por variedad (opcional). Si > 0, se incluye
+                                # y el POS lo usa en lugar del precio_unidad global.
+                                pr = c.get('precio')
+                                try:
+                                    pr_f = float(pr) if pr is not None else 0.0
+                                except (TypeError, ValueError):
+                                    pr_f = 0.0
+                                if pr_f > 0:
+                                    out['precio'] = pr_f
+                                return out
+                            conjunto_colores = _json.dumps([
+                                _norm_color(c)
                                 for c in conjunto_colores_raw
                                 if isinstance(c, dict)
                             ], ensure_ascii=False)
@@ -2813,14 +2825,24 @@ class FirebaseSync:
             if isinstance(colores_raw, list) and colores_raw:
                 try:
                     import json as _json
-                    colores_json = _json.dumps([
-                        {
+                    def _norm_c(c):
+                        out = {
                             'color':    str(c.get('color', '') or ''),
                             'unidades': float(c.get('unidades') or 0),
                             'restante': float(c.get('restante') or 0),
                         }
-                        for c in colores_raw if isinstance(c, dict)
-                    ], ensure_ascii=False)
+                        pr = c.get('precio')
+                        try:
+                            pr_f = float(pr) if pr is not None else 0.0
+                        except (TypeError, ValueError):
+                            pr_f = 0.0
+                        if pr_f > 0:
+                            out['precio'] = pr_f
+                        return out
+                    colores_json = _json.dumps(
+                        [_norm_c(c) for c in colores_raw if isinstance(c, dict)],
+                        ensure_ascii=False,
+                    )
                 except Exception:
                     colores_json = None
 

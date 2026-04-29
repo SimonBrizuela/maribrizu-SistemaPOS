@@ -3,7 +3,7 @@ import math
 import re
 import logging
 from PyQt5.QtWidgets import QApplication, QMessageBox
-from PyQt5.QtCore import Qt, QObject
+from PyQt5.QtCore import Qt
 
 from pos_system.config import APP_NAME, ORGANIZATION, APP_VERSION, DATABASE_PATH
 from pos_system.ui.main_window import MainWindow
@@ -321,72 +321,6 @@ def exception_hook(exctype, value, tb):
     sys.__excepthook__(exctype, value, tb)
 
 
-class _MsgBoxYesNoReorder(QObject):
-    """Event filter que detecta QMessageBox al mostrarse y, si tiene botones
-    Yes/No, los reetiqueta a 'Sí' / 'No' y los reordena para que Sí quede a
-    la izquierda. Funciona globalmente sin tocar las llamadas existentes."""
-    def eventFilter(self, obj, event):
-        try:
-            from PyQt5.QtWidgets import QMessageBox, QPushButton, QHBoxLayout
-            from PyQt5.QtCore import QEvent
-            if event.type() == QEvent.Show and isinstance(obj, QMessageBox):
-                self._fix(obj)
-        except Exception:
-            pass
-        return False
-
-    @staticmethod
-    def _fix(mb):
-        from PyQt5.QtWidgets import QMessageBox, QDialogButtonBox
-        from PyQt5.QtCore import QTimer
-        # Buscar botones Yes y No
-        yes_btn = mb.button(QMessageBox.Yes)
-        no_btn  = mb.button(QMessageBox.No)
-        if yes_btn is None or no_btn is None:
-            return
-        # Re-etiquetar a 'Sí' / 'No'
-        yes_btn.setText('Sí')
-        no_btn.setText('No')
-
-        # Reordenar en el QDialogButtonBox interno. Lo hacemos con un timer
-        # diferido para que corra DESPUÉS de que QMessageBox haya hecho su
-        # propio layout; si lo hacemos en el mismo Show event, el layout
-        # de Qt nos pisa el cambio.
-        def _do_reorder():
-            try:
-                bbox = mb.findChild(QDialogButtonBox)
-                if bbox is None:
-                    return
-                # Sacar ambos botones y re-agregarlos: AcceptRole (Sí) primero,
-                # RejectRole (No) después. En Windows, AcceptRole queda a la
-                # izquierda.
-                bbox.removeButton(yes_btn)
-                bbox.removeButton(no_btn)
-                bbox.addButton(yes_btn, QDialogButtonBox.AcceptRole)
-                bbox.addButton(no_btn,  QDialogButtonBox.RejectRole)
-                # Forzar relayout
-                bbox.update()
-                bbox.layout().activate()
-            except Exception:
-                pass
-        QTimer.singleShot(0, _do_reorder)
-
-
-def _patch_msgbox_yesno_order():
-    """Instala un event filter global que reordena Yes/No → Sí | No en
-    cada QMessageBox que aparezca, sin tocar las llamadas existentes.
-    """
-    from PyQt5.QtWidgets import QApplication
-    app = QApplication.instance()
-    if app is None:
-        return
-    # Mantener referencia para que no lo borre el GC
-    if not hasattr(app, '_msgbox_yesno_filter'):
-        f = _MsgBoxYesNoReorder()
-        app._msgbox_yesno_filter = f
-        app.installEventFilter(f)
-
-
 def main():
     """Application entry point"""
     sys.excepthook = exception_hook
@@ -425,8 +359,6 @@ def main():
         app = QApplication(sys.argv)
         app.setApplicationName(APP_NAME)
         app.setOrganizationName(ORGANIZATION)
-        # Instalar el filtro de reordenamiento Sí | No DESPUÉS de crear la app
-        _patch_msgbox_yesno_order()
 
         # Fuente global UI: prioriza Inter, cae a Segoe UI. Mejor render que default Qt.
         from PyQt5.QtGui import QFont, QFontDatabase
