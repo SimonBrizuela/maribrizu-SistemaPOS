@@ -248,6 +248,23 @@ class SalesHistoryView(QWidget):
         self.reprint_btn.setCursor(Qt.PointingHandCursor)
         self.reprint_btn.clicked.connect(self._reprint_ticket)
         detail_header.addWidget(self.reprint_btn)
+
+        self.facturar_btn = QPushButton('Facturar AFIP')
+        self.facturar_btn.setEnabled(False)
+        self.facturar_btn.setCursor(Qt.PointingHandCursor)
+        self.facturar_btn.setStyleSheet('''
+            QPushButton { background:#3d7a3a; color:white; border:none;
+                          border-radius:6px; padding:6px 14px; font-weight:bold; }
+            QPushButton:hover { background:#2f5e2c; }
+            QPushButton:disabled { background:#dcd6c8; color:#9b958a; }
+        ''')
+        self.facturar_btn.setToolTip(
+            'Emite una Factura Electrónica AFIP sobre esta venta histórica.\n'
+            'Te pide elegir el perfil ARCA y el cliente — no tenés que volver\n'
+            'a cargar los items.'
+        )
+        self.facturar_btn.clicked.connect(self._facturar_current_sale)
+        detail_header.addWidget(self.facturar_btn)
         detail_layout.addLayout(detail_header)
 
         self.detail_table = QTableWidget()
@@ -399,6 +416,8 @@ class SalesHistoryView(QWidget):
         self.detail_table.setRowCount(0)
         self.reprint_btn.setEnabled(False)
         self.edit_btn.setEnabled(False)
+        if hasattr(self, 'facturar_btn'):
+            self.facturar_btn.setEnabled(False)
         self._current_sale_id = None
 
     def _on_selection_changed(self):
@@ -482,6 +501,8 @@ class SalesHistoryView(QWidget):
 
         self.reprint_btn.setEnabled(True)
         self.edit_btn.setEnabled(True)
+        if hasattr(self, 'facturar_btn'):
+            self.facturar_btn.setEnabled(True)
 
     def _edit_current_sale(self):
         if not self._current_sale_id:
@@ -532,6 +553,55 @@ class SalesHistoryView(QWidget):
             f"Venta #{self._current_sale_id} actualizada.\n"
             f"Nuevo total: ${updated['total_amount']:.2f}\n"
             f"Pago: {'Efectivo' if updated['payment_type'] == 'cash' else 'Transferencia'}")
+
+    def _facturar_current_sale(self):
+        """Abre el FacturaDialog para emitir factura AFIP sobre una venta histórica.
+
+        Flujo:
+          1. Pre-diálogo: pide elegir perfil ARCA + cliente (de la BD local).
+          2. Abre el FacturaDialog con todo pre-cargado (items, total, perfil,
+             cliente, tipo C por defecto).
+          3. El usuario solo confirma y emite.
+        """
+        if not self._current_sale_id:
+            QMessageBox.information(self, 'Sin selección',
+                'Seleccioná una venta del historial para facturar.')
+            return
+        sale = self.sale_model.get_by_id(self._current_sale_id)
+        if not sale:
+            QMessageBox.warning(self, 'Venta', 'No se encontró la venta seleccionada.')
+            return
+        if not sale.get('items'):
+            QMessageBox.warning(self, 'Sin items',
+                'La venta no tiene items registrados — no se puede facturar.')
+            return
+
+        # Paso 1: pedir perfil + cliente
+        pre = _PreFacturaDialog(self)
+        if pre.exec_() != QDialog.Accepted:
+            return
+        perfil = pre.selected_perfil
+        cliente_data = pre.selected_cliente  # puede ser None (Consumidor Final)
+
+        if not perfil:
+            QMessageBox.warning(self, 'Sin perfil',
+                'Necesitás elegir un perfil ARCA para facturar.')
+            return
+
+        # Paso 2: abrir FacturaDialog con todo precargado
+        try:
+            from pos_system.ui.factura_dialog import FacturaDialog
+            auto_virt = (sale.get('payment_type') == 'transfer')
+            dlg = FacturaDialog(
+                self, sale=sale, auto_virtual=auto_virt,
+                perfil=perfil, cliente_data=cliente_data,
+            )
+            dlg.exec_()
+            self.refresh_data()
+        except Exception as e:
+            logger.exception('Error abriendo FacturaDialog desde historial')
+            QMessageBox.critical(self, 'Error',
+                f'No se pudo abrir el diálogo de facturación:\n{e}')
 
     def _reprint_ticket(self):
         if not self._current_sale_id:
@@ -711,4 +781,201 @@ class EditSaleDialog(QDialog):
             if abs(new_price - old_price) > 0.005:
                 updates.append({'id': iid, 'unit_price': new_price})
         self.items_updates = updates
+        self.accept()
+
+
+class _PreFacturaDialog(QDialog):
+    """Diálogo previo a FacturaDialog: pide elegir perfil ARCA + cliente.
+
+    - Perfil: combo cargado desde perfiles_facturacion (activos).
+    - Cliente: combo cargado desde clientes_facturacion (activos) +
+      opción "Sin cliente (Consumidor Final)".
+    - El cliente seleccionado pre-rellena la próxima pantalla con CUIT,
+      razón social, domicilio y condición IVA — sin gastar lookup AFIP.
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.selected_perfil  = None
+        self.selected_cliente = None
+        self._perfiles = []
+        self._clientes = []
+        self._load_data()
+        self._build_ui()
+
+    def _load_data(self):
+        try:
+            from pos_system.database.db_manager import DatabaseManager
+            db = DatabaseManager()
+            self._perfiles = db.execute_query(
+                "SELECT * FROM perfiles_facturacion "
+                "WHERE COALESCE(activo,1) = 1 ORDER BY nombre"
+            ) or []
+            self._clientes = db.execute_query(
+                "SELECT * FROM clientes_facturacion WHERE activo = 1 "
+                "ORDER BY nombre"
+            ) or []
+        except Exception:
+            self._perfiles = []
+            self._clientes = []
+
+    def _build_ui(self):
+        self.setWindowTitle('Facturar AFIP — Datos previos')
+        self.setModal(True)
+        self.setMinimumWidth(480)
+
+        from PyQt5.QtWidgets import QFormLayout
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(20, 18, 20, 18)
+        layout.setSpacing(12)
+
+        title = QLabel('Datos para emitir factura')
+        title.setFont(QFont('Segoe UI', 13, QFont.Bold))
+        title.setStyleSheet('color: #c1521f;')
+        layout.addWidget(title)
+
+        sub = QLabel('Elegí el perfil ARCA emisor y el cliente. Los items y el total '
+                     'se traen automáticamente de la venta seleccionada.')
+        sub.setFont(QFont('Segoe UI', 9))
+        sub.setStyleSheet('color: #6f6a5d;')
+        sub.setWordWrap(True)
+        layout.addWidget(sub)
+
+        form = QFormLayout()
+        form.setSpacing(10)
+
+        # ── Perfil ARCA ───────────────────────────────────────────────
+        self.perfil_combo = QComboBox()
+        self.perfil_combo.setFont(QFont('Segoe UI', 11))
+        self.perfil_combo.setMinimumHeight(36)
+        if not self._perfiles:
+            self.perfil_combo.addItem('— sin perfiles cargados —', None)
+        else:
+            for p in self._perfiles:
+                cuit = (p.get('cuit') or '').strip()
+                pv = int(p.get('punto_venta') or 1)
+                label = f"{p.get('nombre', '?')}  ·  CUIT {cuit}  ·  PV {pv}"
+                self.perfil_combo.addItem(label, int(p['id']))
+        form.addRow(QLabel('Perfil ARCA emisor:'), self.perfil_combo)
+
+        # ── Cliente: combo + botón "+ Nuevo" ──────────────────────────
+        self.cliente_combo = QComboBox()
+        self.cliente_combo.setFont(QFont('Segoe UI', 11))
+        self.cliente_combo.setMinimumHeight(36)
+        self._refrescar_clientes_combo()
+        cli_row = QHBoxLayout()
+        cli_row.setSpacing(6)
+        cli_row.addWidget(self.cliente_combo, 1)
+        btn_nuevo = QPushButton('+ Nuevo')
+        btn_nuevo.setMinimumHeight(36)
+        btn_nuevo.setCursor(Qt.PointingHandCursor)
+        btn_nuevo.setToolTip('Cargar un cliente nuevo (busca el CUIT en el padrón AFIP)')
+        btn_nuevo.setStyleSheet(
+            'QPushButton { background:#1877f2; color:white; border:none;'
+            ' border-radius:8px; padding:0 14px; font-weight:bold; }'
+            'QPushButton:hover { background:#0d5fc8; }'
+        )
+        btn_nuevo.clicked.connect(self._on_nuevo_cliente)
+        cli_row.addWidget(btn_nuevo)
+        form.addRow(QLabel('Cliente:'), cli_row)
+
+        layout.addLayout(form)
+
+        # ── Botones ────────────────────────────────────────────────────
+        btns = QHBoxLayout()
+        btns.addStretch()
+
+        cancel = QPushButton('Cancelar')
+        cancel.setMinimumHeight(36)
+        cancel.setCursor(Qt.PointingHandCursor)
+        cancel.setStyleSheet(
+            'QPushButton { background:#fafaf7; color:#6f6a5d;'
+            ' border:1px solid #dcd6c8; border-radius:8px; padding:0 18px; }'
+            'QPushButton:hover { background:#ece8df; }'
+        )
+        cancel.clicked.connect(self.reject)
+        btns.addWidget(cancel)
+
+        ok = QPushButton('Continuar →')
+        ok.setMinimumHeight(36)
+        ok.setCursor(Qt.PointingHandCursor)
+        ok.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        ok.setStyleSheet(
+            'QPushButton { background:#3d7a3a; color:white; border:none;'
+            ' border-radius:8px; padding:0 22px; }'
+            'QPushButton:hover { background:#2f5e2c; }'
+        )
+        ok.clicked.connect(self._on_accept)
+        btns.addWidget(ok)
+        layout.addLayout(btns)
+
+    def _refrescar_clientes_combo(self):
+        """Recarga el combo de clientes desde la base local."""
+        try:
+            from pos_system.database.db_manager import DatabaseManager
+            db = DatabaseManager()
+            self._clientes = db.execute_query(
+                "SELECT * FROM clientes_facturacion WHERE activo = 1 "
+                "ORDER BY nombre"
+            ) or []
+        except Exception:
+            self._clientes = []
+        if not hasattr(self, 'cliente_combo') or self.cliente_combo is None:
+            return
+        self.cliente_combo.blockSignals(True)
+        prev_id = self.cliente_combo.currentData()
+        self.cliente_combo.clear()
+        self.cliente_combo.addItem('Sin cliente (Consumidor Final)', None)
+        for c in self._clientes:
+            cuit = (c.get('cuit') or '').strip()
+            nombre = (c.get('razon_social') or c.get('nombre') or '—')
+            label = f"{nombre}  ·  CUIT {cuit}" if cuit else nombre
+            self.cliente_combo.addItem(label, int(c['id']))
+        if prev_id is not None:
+            for i in range(self.cliente_combo.count()):
+                if self.cliente_combo.itemData(i) == prev_id:
+                    self.cliente_combo.setCurrentIndex(i)
+                    break
+        self.cliente_combo.blockSignals(False)
+
+    def _on_nuevo_cliente(self):
+        """Abre ClientePerfilDialog para crear cliente con lookup AFIP."""
+        try:
+            from pos_system.ui.cliente_perfil_dialog import ClientePerfilDialog
+            dlg = ClientePerfilDialog(self)
+            if dlg.exec_() != QDialog.Accepted:
+                return
+            nuevo = getattr(dlg, 'selected_cliente', None)
+            if not nuevo:
+                return
+            self._refrescar_clientes_combo()
+            cuit_nuevo = (nuevo.get('cuit') or '').strip()
+            if cuit_nuevo:
+                for i, c in enumerate(self._clientes, start=1):
+                    if (c.get('cuit') or '').strip() == cuit_nuevo:
+                        self.cliente_combo.setCurrentIndex(i)
+                        break
+        except Exception as e:
+            QMessageBox.critical(self, 'Error',
+                f'No se pudo abrir el diálogo de cliente:\n{e}')
+
+    def _on_accept(self):
+        pid = self.perfil_combo.currentData()
+        if not pid:
+            QMessageBox.warning(self, 'Perfil',
+                'Elegí un perfil ARCA antes de continuar.')
+            return
+        perfil = next((dict(p) for p in self._perfiles if int(p['id']) == int(pid)), None)
+        if not perfil:
+            QMessageBox.warning(self, 'Perfil', 'No se encontró el perfil seleccionado.')
+            return
+        self.selected_perfil = perfil
+        cid = self.cliente_combo.currentData()
+        if cid:
+            self.selected_cliente = next(
+                (dict(c) for c in self._clientes if int(c['id']) == int(cid)),
+                None
+            )
+        else:
+            self.selected_cliente = None
         self.accept()

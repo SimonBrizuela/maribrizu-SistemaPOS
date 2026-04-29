@@ -296,11 +296,11 @@ class _ChipButton(QPushButton):
 
 
 class _ColorChip(QPushButton):
-    """Chip grande para selector de color: nombre arriba + stock disponible abajo.
+    """Chip compacto para selector de color: nombre y stock en una sola línea.
 
-    Dos QLabel separados con fuente en puntos (QFont), centrados, transparentes
-    a eventos de mouse para que el QPushButton padre reciba el click. Evita el
-    rich-text de QLabel que clipeaba con DPI alto en Windows.
+    Layout horizontal: "Negro · 4 m" en una sola línea para ahorrar espacio.
+    Dos QLabel separados (transparentes al mouse) para que el QPushButton
+    padre reciba el click correctamente y evitar problemas de clipping.
     """
     def __init__(self, color_name, stock_text, parent=None):
         super().__init__(parent)
@@ -308,29 +308,35 @@ class _ColorChip(QPushButton):
         self._stock_text = stock_text
         self.setCheckable(True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(54)
+        self.setMinimumHeight(34)
+        self.setMaximumHeight(40)
         self.setMinimumWidth(120)
-        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
 
-        v = QVBoxLayout(self)
-        v.setContentsMargins(8, 5, 8, 5)
-        v.setSpacing(0)
-        v.setAlignment(Qt.AlignCenter)
+        h = QHBoxLayout(self)
+        h.setContentsMargins(10, 4, 10, 4)
+        h.setSpacing(6)
+        h.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
 
         self._lbl_name = QLabel(color_name)
-        self._lbl_name.setAlignment(Qt.AlignCenter)
         self._lbl_name.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         fn = QFont(); fn.setPointSize(10); fn.setBold(True)
         self._lbl_name.setFont(fn)
 
-        self._lbl_stock = QLabel(stock_text)
-        self._lbl_stock.setAlignment(Qt.AlignCenter)
-        self._lbl_stock.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        fs = QFont(); fs.setPointSize(8); fs.setBold(False)
-        self._lbl_stock.setFont(fs)
+        self._lbl_sep = QLabel('·')
+        self._lbl_sep.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        fs = QFont(); fs.setPointSize(10); fs.setBold(True)
+        self._lbl_sep.setFont(fs)
 
-        v.addWidget(self._lbl_name, 0, Qt.AlignCenter)
-        v.addWidget(self._lbl_stock, 0, Qt.AlignCenter)
+        self._lbl_stock = QLabel(stock_text)
+        self._lbl_stock.setAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+        self._lbl_stock.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        fst = QFont(); fst.setPointSize(9); fst.setBold(False)
+        self._lbl_stock.setFont(fst)
+
+        h.addWidget(self._lbl_name, 0, Qt.AlignVCenter)
+        h.addWidget(self._lbl_sep,  0, Qt.AlignVCenter)
+        h.addWidget(self._lbl_stock, 1, Qt.AlignVCenter)
 
         self._refresh()
         self.toggled.connect(lambda _: self._refresh())
@@ -347,12 +353,15 @@ class _ColorChip(QPushButton):
         bord = TEXT_DARK if active else BORDER
         self.setStyleSheet(
             f'QPushButton {{ background: {bg}; border: 1.5px solid {bord};'
-            f'                border-radius: 10px; padding: 0; text-align: center; }}'
+            f'                border-radius: 8px; padding: 0; text-align: left; }}'
             f'QPushButton:hover {{ border-color: {TEXT_DARK}; }}'
         )
         self._lbl_name.setStyleSheet(
             f'color: {fg}; background: transparent; border: none;'
             f' font-family: {UI_FONT_CSS};'
+        )
+        self._lbl_sep.setStyleSheet(
+            f'color: {sub}; background: transparent; border: none;'
         )
         self._lbl_stock.setStyleSheet(
             f'color: {sub}; background: transparent; border: none;'
@@ -718,12 +727,32 @@ class ConjuntoDialog(QDialog):
         outer.setContentsMargins(14, 10, 14, 10)
         outer.setSpacing(8)
 
+        # Header: label COLOR + buscador a la derecha
+        head = QHBoxLayout()
+        head.setContentsMargins(0, 0, 0, 0)
+        head.setSpacing(8)
         lbl = QLabel('COLOR')
         lbl.setStyleSheet(
             f'color: {TEXT_MUTED}; font-size: 11px; font-weight: 700;'
             f' letter-spacing: 1px; font-family: {UI_FONT_CSS};'
         )
-        outer.addWidget(lbl)
+        head.addWidget(lbl)
+        head.addStretch(1)
+        # Buscador: filtra los chips por nombre. Útil cuando hay muchos colores.
+        from PyQt5.QtWidgets import QLineEdit as _QLE
+        self._color_search = _QLE()
+        self._color_search.setPlaceholderText('Buscar color...')
+        self._color_search.setMinimumWidth(160)
+        self._color_search.setMaximumWidth(220)
+        self._color_search.setStyleSheet(
+            f'QLineEdit {{ background: #fafaf7; border: 1px solid {BORDER};'
+            f'              border-radius: 8px; padding: 4px 10px;'
+            f'              font-size: 11px; font-family: {UI_FONT_CSS}; }}'
+            f'QLineEdit:focus {{ border-color: {ACCENT}; background: #fff; }}'
+        )
+        self._color_search.textChanged.connect(self._on_color_search)
+        head.addWidget(self._color_search)
+        outer.addLayout(head)
 
         # Scroll horizontal para muchos colores
         scroll = QScrollArea()
@@ -731,8 +760,8 @@ class ConjuntoDialog(QDialog):
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setMinimumHeight(68)
-        scroll.setMaximumHeight(82)
+        scroll.setMinimumHeight(48)
+        scroll.setMaximumHeight(58)
 
         chips_w = QWidget()
         h = QHBoxLayout(chips_w)
@@ -760,6 +789,12 @@ class ConjuntoDialog(QDialog):
         chip0.blockSignals(True)
         chip0.setChecked(True)
         chip0.blockSignals(False)
+
+        # Estado inicial: NINGÚN chip visible. El cajero busca el color, lo
+        # selecciona, y recién ahí queda visible el chip elegido.
+        self._color_user_selected = False
+        for chip in self._color_chips.values():
+            chip.setVisible(False)
 
         scroll.setWidget(chips_w)
         outer.addWidget(scroll)
@@ -1256,9 +1291,53 @@ class ConjuntoDialog(QDialog):
 
     def _on_color_changed(self, color_name):
         self.current_color = color_name
+        # Marcar que ya hubo una selección manual del cajero — desde acá en
+        # adelante el chip del color activo queda visible aunque el buscador
+        # esté vacío.
+        self._color_user_selected = True
         # Resetear cantidad: el stock disponible es otro
         self.cantidad_str = ''
         self._refresh_all()
+        # Limpiar buscador y volver a mostrar solo el chip del color seleccionado
+        try:
+            if hasattr(self, '_color_search') and self._color_search is not None:
+                self._color_search.blockSignals(True)
+                self._color_search.clear()
+                self._color_search.blockSignals(False)
+            self._on_color_search('')
+        except Exception:
+            pass
+
+    def _on_color_search(self, txt: str):
+        """Filtra los chips de color en vivo según el texto del buscador.
+
+        Estado inicial (sin selección previa) y buscador vacío → no muestra
+        ningún chip. Si ya hubo una selección, con buscador vacío queda
+        visible el chip seleccionado para que el cajero sepa cuál tiene
+        activo.
+        """
+        import unicodedata as _ud
+        def _norm(s):
+            s = _ud.normalize('NFD', str(s or ''))
+            return s.encode('ascii', 'ignore').decode('ascii').lower().strip()
+        q = _norm(txt)
+        if not q:
+            # Sin búsqueda
+            already_selected = bool(getattr(self, '_color_user_selected', False))
+            for color, chip in self._color_chips.items():
+                chip.setVisible(already_selected and color == self.current_color)
+            return
+        # Con búsqueda: mostrar matches
+        any_match = False
+        for color, chip in self._color_chips.items():
+            visible = q in _norm(color)
+            chip.setVisible(visible)
+            if visible:
+                any_match = True
+        # Sin matches → mantener todos ocultos (no forzar el seleccionado)
+        if not any_match:
+            for chip in self._color_chips.values():
+                chip.setVisible(False)
 
     # --- multi-linea (subtotal) -------------------------------------------
 
@@ -1697,19 +1776,22 @@ class ConjuntoDialog(QDialog):
         super().closeEvent(e)
 
     def _tiene_subtotal_pendiente(self):
-        """True si hay lineas committed que se perderian al cerrar."""
         return self.has_colores and bool(self.lineas) and self.result_data is None
 
-    # --- teclado fisico ---------------------------------------------------
-
     def keyPressEvent(self, e: QKeyEvent):
+        # Si el cajero está tipeando en el buscador de colores, no robar las
+        # teclas para el numpad (dejar que el QLineEdit las consuma).
+        try:
+            if hasattr(self, '_color_search') and self._color_search is not None and self._color_search.hasFocus():
+                super().keyPressEvent(e)
+                return
+        except Exception:
+            pass
         key = e.key()
         text = e.text()
-
         if key == Qt.Key_Escape:
             self.reject()
             return
-
         if key in (Qt.Key_Return, Qt.Key_Enter):
             if self.has_colores:
                 if self.cantidad_str and self._agregar_btn and self._agregar_btn.isEnabled():
@@ -1720,22 +1802,17 @@ class ConjuntoDialog(QDialog):
                 if self.confirm_btn.isEnabled():
                     self._on_confirm()
             return
-
         if key in (Qt.Key_Backspace, Qt.Key_Delete):
             self._on_key('del')
             return
-
         if key == Qt.Key_Plus:
             if self.has_colores and self._agregar_btn and self._agregar_btn.isEnabled():
                 self._on_agregar()
             return
-
         if text in ('.', ','):
             self._on_key('.')
             return
-
         if text and text.isdigit():
             self._on_key(text)
             return
-
         super().keyPressEvent(e)

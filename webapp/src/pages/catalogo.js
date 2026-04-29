@@ -1518,7 +1518,10 @@ export async function renderCatalogo(container, db) {
               </div>
               <div>
                 <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:4px">PRECIO POR <span id="lbl_punidad">METRO</span> <span style="color:#9ca3af;font-weight:500">(auto)</span></label>
-                <input id="ed_conj_precio_unidad" type="number" min="0" step="0.01" value="${prod.conjunto_precio_unidad ?? ''}" placeholder="Auto" style="width:100%;padding:8px 10px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
+                <div style="display:flex;gap:6px;align-items:center">
+                  <input id="ed_conj_precio_unidad" type="number" min="0" step="0.01" value="${prod.conjunto_precio_unidad ?? ''}" placeholder="Auto" style="width:100%;padding:8px 10px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
+                  <button id="btn_redondear_pu" type="button" title="Redondear al centena más cercano" style="flex-shrink:0;padding:8px 10px;border-radius:8px;border:1.5px solid #e4e6eb;background:#f0f2f5;cursor:pointer;font-size:11px;font-weight:700;color:#444;white-space:nowrap;line-height:1">±100</button>
+                </div>
                 <div id="ed_conj_precio_hint" style="font-size:10px;color:#6d28d9;margin-top:4px;line-height:1.3">
                   Se calcula como <b>precio rollo / contenido × 1.15</b> (15 % margen).<br/>
                   Editalo manualmente si querés un precio distinto.
@@ -1588,6 +1591,21 @@ export async function renderCatalogo(container, db) {
       const c = parseFloat(inCosto.value) || 0;
       if (c > 0) inMargen.value = Math.round(((redondeado - c) / c) * 100);
     });
+
+    // Botón ±100 para PRECIO POR METRO (mismo comportamiento que el del precio
+    // del rollo). Marca el precio como manual para no auto-recalcular después.
+    const btnRedondearPU = overlay.querySelector('#btn_redondear_pu');
+    if (btnRedondearPU) {
+      btnRedondearPU.addEventListener('click', () => {
+        const inPU = overlay.querySelector('#ed_conj_precio_unidad');
+        if (!inPU) return;
+        const v = parseFloat(inPU.value) || 0;
+        if (!v) return;
+        inPU.value = Math.round(v / 100) * 100;
+        precioPUManual = true;
+        if (typeof _refrescarConjunto === 'function') _refrescarConjunto();
+      });
+    }
 
     // ── Producto Conjunto: toggle + etiquetas dinámicas + resumen ──
     const cbConj   = overlay.querySelector('#ed_es_conjunto');

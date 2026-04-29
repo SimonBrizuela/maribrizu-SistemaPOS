@@ -733,5 +733,5 @@ QLabel[badge="danger"] {
 
 /* ── DialogButtonBox ──────────────────────────────────────────── */
 QDialogButtonBox {
-    button-layout: 3;  /* macOS-like: cancel left, ok right */
+    button-layout: 0;  /* WinLayout: accept (Sí/OK) izquierda, reject (No/Cancel) derecha */
 }

@@ -478,6 +478,17 @@ class DatabaseManager:
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_clientes_activo ON clientes_facturacion(activo)")
 
+            # Migración: convertir firebase_id='' a NULL en clientes/productos/observations.
+            # SQLite UNIQUE permite múltiples NULL pero solo un ''. Si dejamos '' como
+            # default, la 2da inserción sin firebase_id rompe.
+            for _tbl in ('clientes_facturacion', 'products', 'observations'):
+                try:
+                    cursor.execute(
+                        f"UPDATE {_tbl} SET firebase_id = NULL WHERE firebase_id = ''"
+                    )
+                except Exception:
+                    pass
+
             # Tabla de observaciones (notas compartidas entre cajeros)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS observations (
@@ -761,7 +772,7 @@ class DatabaseManager:
         Sincroniza la lista de rubros desde Firebase.
         IMPORTANTE: Solo inserta entradas que vienen del documento de rubros de Firebase
         (coleccion 'rubros'), NO categorias de productos. Agrega los nuevos, no borra los existentes.
-        Los rubros de Firebase son objetos con campo 'nombre' o strings directos.
+ Los rubros de Firebase son objetos con campo 'nombre' o strings directos.
         """
         for rubro in rubros:
             if isinstance(rubro, dict):

@@ -100,13 +100,35 @@ class NotaCreditoDialog(QDialog):
         self.setWindowTitle('Emitir Nota de Crédito')
         self.setModal(True)
         self.setMinimumWidth(560)
+        # Limitar alto al 85% de la pantalla para que en monitores chicos
+        # entre cómodo (el contenido se scrollea, los botones quedan fijos).
+        try:
+            from PyQt5.QtWidgets import QApplication
+            avail = QApplication.primaryScreen().availableGeometry()
+            self.setMaximumHeight(int(avail.height() * 0.85))
+        except Exception:
+            pass
         self._worker = None
         self._build_ui()
         self._poblar_datos_originales()
 
     # ────────────────────────────────────── UI ──────────────────────────────────
     def _build_ui(self):
-        layout = QVBoxLayout(self)
+        # Layout root: scroll arriba (contenido) + botones fijos abajo.
+        from PyQt5.QtWidgets import QScrollArea, QFrame as _QFrame, QWidget as _QWidget
+        root = QVBoxLayout(self)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+
+        # Área scrolleable (todo el contenido va acá)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(_QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        body = _QWidget()
+        layout = QVBoxLayout(body)
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(12)
 
@@ -120,6 +142,10 @@ class NotaCreditoDialog(QDialog):
         sub.setFont(QFont('Segoe UI', 9))
         sub.setStyleSheet('color: #6f6a5d;')
         layout.addWidget(sub)
+        # Guardamos refs para usar más abajo
+        self._root_layout = root
+        self._scroll_widget = scroll
+        self._body_widget = body
 
         # ── Datos de la factura original (read-only) ────────────────────────
         orig_box = QFrame()
@@ -200,8 +226,25 @@ class NotaCreditoDialog(QDialog):
 
         layout.addWidget(nc_box)
 
-        # ── Botones ─────────────────────────────────────────────────────────
-        btn_row = QHBoxLayout()
+        # Estado/Status (dentro del scroll)
+        self.lbl_status = QLabel('')
+        self.lbl_status.setStyleSheet('color:#5a5448;')
+        layout.addWidget(self.lbl_status)
+
+        layout.addStretch(1)
+
+        # Cerramos el scroll con el body
+        self._scroll_widget.setWidget(self._body_widget)
+        self._root_layout.addWidget(self._scroll_widget, 1)
+
+        # ── Botones FIJOS abajo (fuera del scroll, siempre visibles) ──────
+        from PyQt5.QtWidgets import QFrame as _QFrame
+        btn_bar = _QFrame()
+        btn_bar.setStyleSheet(
+            'QFrame { background: #fafaf7; border-top: 1px solid #dcd6c8; }'
+        )
+        btn_row = QHBoxLayout(btn_bar)
+        btn_row.setContentsMargins(16, 10, 16, 10)
         btn_row.addStretch()
 
         self.btn_cancel = QPushButton('Cancelar')
@@ -227,12 +270,7 @@ class NotaCreditoDialog(QDialog):
         self.btn_emit.clicked.connect(self._on_emitir)
         btn_row.addWidget(self.btn_emit)
 
-        layout.addLayout(btn_row)
-
-        # Estado/Status
-        self.lbl_status = QLabel('')
-        self.lbl_status.setStyleSheet('color:#5a5448;')
-        layout.addWidget(self.lbl_status)
+        self._root_layout.addWidget(btn_bar)
 
     # ──────────────────────────── Datos originales ──────────────────────────
     def _poblar_datos_originales(self):

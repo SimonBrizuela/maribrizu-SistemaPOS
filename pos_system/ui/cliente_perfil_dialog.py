@@ -389,8 +389,8 @@ class ClientePerfilDialog(QDialog):
             db = DatabaseManager()
             new_id = db.execute_update(
                 """INSERT INTO clientes_facturacion
-                   (nombre, razon_social, cuit, domicilio, localidad, condicion_iva, activo)
-                   VALUES (?, ?, ?, ?, ?, ?, 1)""",
+                   (firebase_id, nombre, razon_social, cuit, domicilio, localidad, condicion_iva, activo)
+                   VALUES (NULL, ?, ?, ?, ?, ?, ?, 1)""",
                 (
                     self.selected_cliente['nombre'],
                     self.selected_cliente['razon_social'],

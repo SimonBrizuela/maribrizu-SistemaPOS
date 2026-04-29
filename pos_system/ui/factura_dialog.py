@@ -603,10 +603,12 @@ class FacturaDialog(QDialog):
                 (razon, razon, dom, loc, cond, now, cliente_id)
             )
         else:
+            # firebase_id explícito como NULL: el UNIQUE permite múltiples NULL pero
+            # solo un '' (default), así que pasamos NULL para evitar colisiones.
             cliente_id = db.execute_update(
-                "INSERT INTO clientes_facturacion (nombre, razon_social, cuit, domicilio, "
+                "INSERT INTO clientes_facturacion (firebase_id, nombre, razon_social, cuit, domicilio, "
                 "localidad, condicion_iva, activo, created_at, updated_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, 1, ?, ?)",
+                "VALUES (NULL, ?, ?, ?, ?, ?, ?, 1, ?, ?)",
                 (razon, razon, cuit, dom, loc, cond, now, now)
             )
         # Subir el cliente a Firebase para que todas las PCs lo vean
@@ -980,9 +982,27 @@ class FacturaDialog(QDialog):
                     threading.Thread(
                         target=lambda: fb.sync_factura(factura_fb), daemon=True
                     ).start()
+            except Exception as e:
+                import logging
+                logging.getLogger(__name__).warning(f"sync_factura: {e}")
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            QMessageBox.critical(self, 'Error', f'Error al generar PDF:\n{str(e)}')
+            return
+
+        # PDF generado OK → mostrar mensaje y aceptar
+        reply = QMessageBox.question(
+            self, 'Factura generada',
+            f'Factura generada correctamente.\n\nCAE: {cae}\nVto: {vto_cae}\n\n¿Abrir el PDF?',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+        )
+        if reply == QMessageBox.Yes:
+            try:
+                if platform.system() == 'Windows':
+                    os.startfile(self.pdf_path)
+                else:
+                    subprocess.Popen(['xdg-open', self.pdf_path])
             except Exception:
                 pass
-
-            self.accept()
-        except Exception as e:
-            QMessageBox.critical(self, 'Error', f'Error al generar la factura:\n{str(e)}')
+        self.accept()

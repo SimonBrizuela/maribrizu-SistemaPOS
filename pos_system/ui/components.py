@@ -45,14 +45,17 @@ class MessageBox:
     
     @staticmethod
     def confirm(parent, title: str, message: str) -> bool:
-        """Show confirmation dialog"""
+        """Show confirmation dialog. Sí siempre a la izquierda, No a la derecha."""
         msg = QMessageBox(parent)
         msg.setIcon(QMessageBox.Question)
         msg.setWindowTitle(title)
         msg.setText(message)
-        msg.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
-        msg.setDefaultButton(QMessageBox.No)
-        return msg.exec_() == QMessageBox.Yes
+        # AcceptRole va primero en Windows → Sí queda a la izquierda
+        yes_btn = msg.addButton('Sí', QMessageBox.AcceptRole)
+        no_btn  = msg.addButton('No', QMessageBox.RejectRole)
+        msg.setDefaultButton(no_btn)
+        msg.exec_()
+        return msg.clickedButton() is yes_btn
 
 
 class PriceInput(QFrame):
