@@ -26,6 +26,7 @@ const pages = {
   perfiles:        { title: 'Perfiles ARCA',           loader: () => import('./pages/perfiles.js'),         render: 'renderPerfiles',        cacheKey: null },
   clientes:        { title: 'Perfiles de Clientes',    loader: () => import('./pages/clientes.js'),         render: 'renderClientes',        cacheKey: null },
   observaciones:   { title: 'Observaciones',           loader: () => import('./pages/observaciones.js'),    render: 'renderObservaciones',   cacheKey: null },
+  presupuestos:    { title: 'Presupuestos',            loader: () => import('./pages/presupuestos.js'),     render: 'renderPresupuestos',    cacheKey: null },
 };
 
 // Caché de módulos ya descargados (evita repetir import() tras la primera carga)

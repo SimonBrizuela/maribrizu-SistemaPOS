@@ -15,6 +15,7 @@ from pos_system.ui.sales_view import SalesView
 from pos_system.ui.cash_view import CashView
 from pos_system.ui.sales_history_view import SalesHistoryView
 from pos_system.ui.observations_view import ObservationsView
+from pos_system.ui.presupuestos_view import PresupuestosView
 from pos_system.ui.fiscal_view import FiscalView
 from pos_system.ui.components import MessageBox, Toast
 from pos_system.models.cash_register import CashRegister
@@ -105,6 +106,7 @@ class MainWindow(QMainWindow):
         self.cash_view = CashView(self, current_user=self.current_user)
         self.history_view = SalesHistoryView(self)
         self.observations_view = ObservationsView(self, current_user=self.current_user)
+        self.presupuestos_view = PresupuestosView(self, current_user=self.current_user)
 
         # Vista de promociones (solo lectura) — visible para todos
         from pos_system.ui.promos_readonly_view import PromosReadOnlyView
@@ -130,6 +132,7 @@ class MainWindow(QMainWindow):
         if is_admin:
             self.tabs.addTab(self.cash_view, 'Caja')
         self.tabs.addTab(self.promos_readonly_view, 'Promociones')
+        self.tabs.addTab(self.presupuestos_view, 'Presupuestos')
         self.tabs.addTab(self.observations_view, 'Observaciones')
 
         # Pestañas adicionales solo para admin
@@ -690,6 +693,15 @@ class MainWindow(QMainWindow):
                 except Exception as e:
                     logger.warning(f"Obs refresh emit: {e}")
             fb.start_observations_listener(self.db, on_change=_on_obs_change)
+
+            # 8. Listener de PRESUPUESTOS en tiempo real (POS ↔ webapp ↔ otras PCs).
+            def _on_pres_change():
+                try:
+                    if hasattr(self, 'presupuestos_view') and self.presupuestos_view is not None:
+                        self.presupuestos_view.refresh_requested.emit()
+                except Exception as e:
+                    logger.warning(f"Pres refresh emit: {e}")
+            fb.start_presupuestos_listener(self.db, on_change=_on_pres_change)
 
             logger.info("Listeners de sincronizacion en tiempo real activados (thread-safe).")
         except Exception as e:

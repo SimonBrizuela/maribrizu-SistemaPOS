@@ -2017,3 +2017,409 @@ class PDFGenerator:
         doc.build(story)
         return filepath
 
+    def generate_presupuesto_a4(self, presupuesto, libreria=None):
+        """Genera PDF A4 profesional para un presupuesto/cotización.
+
+        presupuesto: dict con keys numero, cliente_nombre, cliente_telefono,
+                     cliente_email, items[], subtotal, descuento, total,
+                     fecha_emision, fecha_validez, cajero_nombre, notas.
+        libreria: dict opcional con datos de la librería; defaults pre-cargados.
+        """
+        from reportlab.lib.pagesizes import A4
+        from reportlab.platypus import HRFlowable
+        from reportlab.lib.utils import ImageReader
+
+        # ── Datos librería (default Liceo) ───────────────────────────────────
+        L = libreria or {}
+        razon = L.get('razon_social', 'LIBRERIA LICEO')
+        cuit = L.get('cuit', '20-14921040-8')
+        domicilio = L.get('domicilio', 'Alfonsina Storni 168')
+        localidad = L.get('localidad', 'Córdoba')
+        telefono = L.get('telefono', '3517046684')
+        email = L.get('email', 'libreria.liceo@hotmail.com')
+
+        # ── Paleta de marca ──────────────────────────────────────────────────
+        BRAND = colors.HexColor('#7b3fa6')        # purple primary
+        BRAND_LIGHT = colors.HexColor('#b07acc')  # lighter
+        BRAND_BG = colors.HexColor('#faf6ff')     # very light bg
+        ACCENT = colors.HexColor('#f39c12')       # orange accent
+        SUCCESS = colors.HexColor('#2e7d32')
+        TEXT = colors.HexColor('#1c1e21')
+        MUTED = colors.HexColor('#65676b')
+        BORDER = colors.HexColor('#e4e6eb')
+
+        # ── Numeración + filename ────────────────────────────────────────────
+        numero = int(presupuesto.get('numero') or 0)
+        nro_fmt = f'P-{numero:05d}'
+        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+        filename = f'presupuesto_{numero:05d}_{timestamp}.pdf'
+        filepath = os.path.join(self.output_dir, filename)
+
+        # ── Layout ───────────────────────────────────────────────────────────
+        PAGE_W, PAGE_H = A4
+        ML = MR = 14 * mm
+        MT = 14 * mm
+        MB = 16 * mm
+        CONTENT_W = PAGE_W - ML - MR
+
+        styles = getSampleStyleSheet()
+        _sty_cache = {}
+        def S(name, **kw):
+            key = name + str(sorted(kw.items()))
+            if key not in _sty_cache:
+                _sty_cache[key] = ParagraphStyle(name, parent=styles['Normal'], **kw)
+            return _sty_cache[key]
+
+        # ── HEADER: logo + datos librería + bloque número ────────────────────
+        s_brand = S('PB', fontSize=18, fontName='Helvetica-Bold',
+                    alignment=TA_LEFT, textColor=BRAND, leading=20, spaceAfter=2)
+        s_tag = S('PT', fontSize=8.5, fontName='Helvetica-Oblique',
+                  alignment=TA_LEFT, textColor=MUTED, leading=11, spaceAfter=4)
+        s_data = S('PD', fontSize=8.5, fontName='Helvetica',
+                   alignment=TA_LEFT, textColor=TEXT, leading=11, spaceAfter=1)
+
+        logo_path = _asset_path('logo_liceo_ticket.png')
+        logo_cell = ''
+        logo_w = 32 * mm
+        if os.path.exists(logo_path):
+            try:
+                iw, ih = ImageReader(logo_path).getSize()
+                logo_h = logo_w * (ih / iw) if iw else logo_w
+                logo_img = RLImage(logo_path, width=logo_w, height=logo_h)
+                logo_img.hAlign = 'LEFT'
+                logo_cell = logo_img
+            except Exception:
+                pass
+
+        emisor_block = [
+            Paragraph(razon, s_brand),
+            Paragraph('Librería · Papelería · Juguetería · Mercería', s_tag),
+            Paragraph(f"<b>CUIT:</b> {cuit}", s_data),
+            Paragraph(f"<b>Domicilio:</b> {domicilio} — {localidad}", s_data),
+            Paragraph(f"<b>Tel:</b> {telefono} &nbsp;·&nbsp; <b>Email:</b> {email}", s_data),
+        ]
+
+        # Bloque derecho: número grande + fecha
+        s_pres_label = S('PL', fontSize=9, fontName='Helvetica-Bold',
+                         alignment=TA_CENTER, textColor=colors.white, leading=11)
+        s_pres_nro = S('PN', fontSize=22, fontName='Helvetica-Bold',
+                       alignment=TA_CENTER, textColor=colors.white, leading=24)
+        s_pres_date = S('PFD', fontSize=8, fontName='Helvetica',
+                        alignment=TA_CENTER, textColor=colors.white, leading=11)
+
+        fecha_em_raw = presupuesto.get('fecha_emision') or datetime.now(_TZ_AR).strftime('%Y-%m-%d %H:%M:%S')
+        fecha_em_dt = _parse_ar(fecha_em_raw)
+        fecha_em_str = fecha_em_dt.strftime('%d/%m/%Y')
+        hora_em_str = fecha_em_dt.strftime('%H:%M')
+
+        # Validez
+        validez_raw = str(presupuesto.get('fecha_validez') or '')
+        try:
+            validez_dt = datetime.strptime(validez_raw[:10], '%Y-%m-%d')
+            validez_str = validez_dt.strftime('%d/%m/%Y')
+        except Exception:
+            validez_str = validez_raw or '—'
+
+        nro_block = Table(
+            [
+                [Paragraph('PRESUPUESTO', s_pres_label)],
+                [Paragraph(nro_fmt, s_pres_nro)],
+                [Paragraph(f"Emitido {fecha_em_str} {hora_em_str}", s_pres_date)],
+            ],
+            colWidths=[55 * mm],
+            rowHeights=[6 * mm, 12 * mm, 6 * mm],
+        )
+        nro_block.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), BRAND),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 4),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+            ('TOPPADDING', (0, 0), (-1, -1), 1),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 1),
+            ('ROUNDEDCORNERS', [4, 4, 4, 4]),
+        ]))
+
+        # Tabla del header (logo | datos | nro_block)
+        header_inner = Table(
+            [[logo_cell, emisor_block, nro_block]],
+            colWidths=[logo_w + 4 * mm, CONTENT_W - logo_w - 4 * mm - 55 * mm, 55 * mm],
+        )
+        header_inner.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('TOPPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+            ('VALIGN', (2, 0), (2, 0), 'TOP'),
+        ]))
+
+        story = [header_inner, Spacer(1, 4 * mm)]
+        story.append(HRFlowable(width=CONTENT_W, thickness=2,
+                                color=BRAND, spaceBefore=0, spaceAfter=4 * mm))
+
+        # ── VALIDEZ destacada (banner full-width con accent) ──────────────────
+        s_val_lbl = S('VL', fontSize=8.5, fontName='Helvetica-Bold',
+                      alignment=TA_LEFT, textColor=colors.white, leading=11)
+        s_val_big = S('VB', fontSize=12, fontName='Helvetica-Bold',
+                      alignment=TA_LEFT, textColor=colors.white, leading=14)
+        validez_tbl = Table([[
+            Paragraph('VÁLIDO HASTA', s_val_lbl),
+            Paragraph(f"<b>{validez_str}</b>", s_val_big),
+            Paragraph(
+                'Precios sujetos a stock disponible al momento de la compra. '
+                'Pasada la fecha indicada los valores podrían modificarse.',
+                S('VS', fontSize=7.5, fontName='Helvetica',
+                  alignment=TA_LEFT, textColor=colors.white, leading=10)),
+        ]], colWidths=[28 * mm, 30 * mm, CONTENT_W - 28 * mm - 30 * mm])
+        validez_tbl.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), ACCENT),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 8),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('ROUNDEDCORNERS', [4, 4, 4, 4]),
+        ]))
+        story.append(validez_tbl)
+        story.append(Spacer(1, 5 * mm))
+
+        # ── CLIENTE ──────────────────────────────────────────────────────────
+        s_cli_h = S('CH', fontSize=9, fontName='Helvetica-Bold',
+                    alignment=TA_LEFT, textColor=BRAND, leading=11)
+        s_cli = S('CD', fontSize=10, fontName='Helvetica',
+                  alignment=TA_LEFT, textColor=TEXT, leading=13)
+        s_cli_b = S('CB', fontSize=10, fontName='Helvetica-Bold',
+                    alignment=TA_LEFT, textColor=TEXT, leading=13)
+
+        cli_nom = (presupuesto.get('cliente_nombre') or '').strip() or 'Consumidor Final'
+        cli_tel = (presupuesto.get('cliente_telefono') or '').strip()
+        cli_email = (presupuesto.get('cliente_email') or '').strip()
+
+        cli_extras = []
+        if cli_tel:
+            cli_extras.append(f"<b>Tel:</b> {cli_tel}")
+        if cli_email:
+            cli_extras.append(f"<b>Email:</b> {cli_email}")
+        cli_extra_str = '&nbsp;&nbsp;·&nbsp;&nbsp;'.join(cli_extras) if cli_extras else '—'
+
+        cliente_tbl = Table([
+            [Paragraph('PRESUPUESTADO PARA', s_cli_h)],
+            [Paragraph(cli_nom, s_cli_b)],
+            [Paragraph(cli_extra_str, s_cli)],
+        ], colWidths=[CONTENT_W])
+        cliente_tbl.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, -1), BRAND_BG),
+            ('LEFTPADDING', (0, 0), (-1, -1), 10),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 10),
+            ('TOPPADDING', (0, 0), (0, 0), 5),
+            ('TOPPADDING', (0, 1), (0, 1), 1),
+            ('BOTTOMPADDING', (0, 2), (0, 2), 6),
+            ('LINEBEFORE', (0, 0), (0, -1), 3, BRAND),
+        ]))
+        story.append(cliente_tbl)
+        story.append(Spacer(1, 5 * mm))
+
+        # ── TABLA DE ITEMS ───────────────────────────────────────────────────
+        items = presupuesto.get('items') or []
+        s_th = S('TH', fontSize=9, fontName='Helvetica-Bold',
+                 alignment=TA_CENTER, textColor=colors.white, leading=12)
+        s_th_l = S('THL', fontSize=9, fontName='Helvetica-Bold',
+                   alignment=TA_LEFT, textColor=colors.white, leading=12)
+        s_td = S('TD', fontSize=9, fontName='Helvetica',
+                 alignment=TA_LEFT, textColor=TEXT, leading=12)
+        s_td_c = S('TDC', fontSize=9, fontName='Helvetica',
+                   alignment=TA_CENTER, textColor=TEXT, leading=12)
+        s_td_r = S('TDR', fontSize=9, fontName='Helvetica',
+                   alignment=TA_RIGHT, textColor=TEXT, leading=12)
+
+        item_rows = [[
+            Paragraph('#', s_th),
+            Paragraph('Descripción', s_th_l),
+            Paragraph('Cant.', s_th),
+            Paragraph('P. Unit.', s_th),
+            Paragraph('Subtotal', s_th),
+        ]]
+        for i, it in enumerate(items, 1):
+            qty = float(it.get('quantity') or 0)
+            qty_str = str(int(qty)) if qty == int(qty) else f"{qty:.2f}".rstrip('0').rstrip('.')
+            up = float(it.get('unit_price') or 0)
+            sub = float(it.get('subtotal') or (qty * up))
+            item_rows.append([
+                Paragraph(str(i), s_td_c),
+                Paragraph(str(it.get('product_name') or '—'), s_td),
+                Paragraph(qty_str, s_td_c),
+                Paragraph(f"$ {up:,.2f}".replace(',', '#').replace('.', ',').replace('#', '.'), s_td_r),
+                Paragraph(f"$ {sub:,.2f}".replace(',', '#').replace('.', ',').replace('#', '.'), s_td_r),
+            ])
+
+        col_widths = [12 * mm, CONTENT_W - 12 * mm - 18 * mm - 28 * mm - 30 * mm,
+                      18 * mm, 28 * mm, 30 * mm]
+        items_tbl = Table(item_rows, colWidths=col_widths, repeatRows=1)
+        items_style = [
+            ('BACKGROUND', (0, 0), (-1, 0), BRAND),
+            ('LINEABOVE', (0, 0), (-1, 0), 1, BRAND),
+            ('LINEBELOW', (0, 0), (-1, 0), 1, BRAND),
+            ('LEFTPADDING', (0, 0), (-1, -1), 6),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 6),
+            ('TOPPADDING', (0, 0), (-1, -1), 6),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 6),
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ]
+        # Filas alternadas
+        for ri in range(1, len(item_rows)):
+            if ri % 2 == 0:
+                items_style.append(('BACKGROUND', (0, ri), (-1, ri), BRAND_BG))
+            items_style.append(('LINEBELOW', (0, ri), (-1, ri), 0.3, BORDER))
+        items_tbl.setStyle(TableStyle(items_style))
+        story.append(items_tbl)
+        story.append(Spacer(1, 4 * mm))
+
+        # ── TOTALES (caja a la derecha) ──────────────────────────────────────
+        subtotal_v = float(presupuesto.get('subtotal') or 0)
+        descuento_v = float(presupuesto.get('descuento') or 0)
+        total_v = float(presupuesto.get('total') or (subtotal_v - descuento_v))
+
+        def _money(v):
+            return f"$ {v:,.2f}".replace(',', '#').replace('.', ',').replace('#', '.')
+
+        s_tot_lbl = S('TL', fontSize=9.5, fontName='Helvetica',
+                      alignment=TA_RIGHT, textColor=MUTED, leading=12)
+        s_tot_val = S('TV', fontSize=9.5, fontName='Helvetica-Bold',
+                      alignment=TA_RIGHT, textColor=TEXT, leading=12)
+        s_tot_big_lbl = S('TBL', fontSize=11, fontName='Helvetica-Bold',
+                          alignment=TA_RIGHT, textColor=colors.white, leading=14)
+        s_tot_big_val = S('TBV', fontSize=16, fontName='Helvetica-Bold',
+                          alignment=TA_RIGHT, textColor=colors.white, leading=18)
+
+        tot_rows = [
+            [Paragraph('Subtotal', s_tot_lbl), Paragraph(_money(subtotal_v), s_tot_val)],
+        ]
+        if descuento_v > 0:
+            tot_rows.append([
+                Paragraph('Descuento', s_tot_lbl),
+                Paragraph(f"- {_money(descuento_v)}", s_tot_val),
+            ])
+        tot_rows.append([
+            Paragraph('TOTAL', s_tot_big_lbl),
+            Paragraph(_money(total_v), s_tot_big_val),
+        ])
+
+        totales_tbl = Table(tot_rows, colWidths=[40 * mm, 40 * mm])
+        tot_style = [
+            ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 8),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 8),
+            ('TOPPADDING', (0, 0), (-1, -1), 4),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 4),
+            ('LINEBELOW', (0, 0), (-1, len(tot_rows) - 2), 0.3, BORDER),
+            # Última fila (TOTAL) con fondo brand
+            ('BACKGROUND', (0, -1), (-1, -1), BRAND),
+            ('TOPPADDING', (0, -1), (-1, -1), 8),
+            ('BOTTOMPADDING', (0, -1), (-1, -1), 8),
+        ]
+        totales_tbl.setStyle(TableStyle(tot_style))
+
+        # Wrapper para alinear a la derecha
+        wrap = Table([['', totales_tbl]], colWidths=[CONTENT_W - 80 * mm, 80 * mm])
+        wrap.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('TOPPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        story.append(wrap)
+        story.append(Spacer(1, 8 * mm))
+
+        # ── NOTAS / CONDICIONES ──────────────────────────────────────────────
+        notas = (presupuesto.get('notas') or '').strip()
+        s_cond_h = S('NH', fontSize=8.5, fontName='Helvetica-Bold',
+                     alignment=TA_LEFT, textColor=BRAND, leading=11, spaceAfter=2)
+        s_cond = S('NC', fontSize=8, fontName='Helvetica',
+                   alignment=TA_LEFT, textColor=MUTED, leading=10.5)
+
+        cond_block = [
+            Paragraph('CONDICIONES', s_cond_h),
+            Paragraph(
+                '• Este documento <b>NO es válido como factura ni comprobante de pago</b>.',
+                s_cond),
+            Paragraph(
+                f'• Validez del presupuesto: hasta el {validez_str} (sujeto a stock).',
+                s_cond),
+            Paragraph(
+                '• Los precios pueden modificarse sin previo aviso fuera del período de validez.',
+                s_cond),
+            Paragraph(
+                '• Para concretar la compra acercate al local con este presupuesto.',
+                s_cond),
+        ]
+        if notas:
+            cond_block.append(Spacer(1, 2 * mm))
+            cond_block.append(Paragraph('OBSERVACIONES', s_cond_h))
+            cond_block.append(Paragraph(notas, s_cond))
+
+        # Bloque firma a la derecha
+        s_firma_lbl = S('FL', fontSize=8, fontName='Helvetica',
+                        alignment=TA_CENTER, textColor=MUTED, leading=10)
+        firma_block = [
+            Spacer(1, 12 * mm),
+            HRFlowable(width=55 * mm, thickness=0.6, color=TEXT,
+                       hAlign='CENTER', spaceBefore=0, spaceAfter=2),
+            Paragraph('Firma y aclaración', s_firma_lbl),
+        ]
+
+        bottom_tbl = Table(
+            [[cond_block, firma_block]],
+            colWidths=[CONTENT_W - 65 * mm, 65 * mm],
+        )
+        bottom_tbl.setStyle(TableStyle([
+            ('VALIGN', (0, 0), (-1, -1), 'TOP'),
+            ('LEFTPADDING', (0, 0), (-1, -1), 0),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 0),
+            ('TOPPADDING', (0, 0), (-1, -1), 0),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 0),
+        ]))
+        story.append(bottom_tbl)
+
+        # ── BUILD con marca de agua + footer ─────────────────────────────────
+        cajero_nombre = presupuesto.get('cajero_nombre') or ''
+
+        def _on_page(canvas_obj, doc_):
+            canvas_obj.saveState()
+            # Marca de agua diagonal "PRESUPUESTO"
+            canvas_obj.translate(PAGE_W / 2, PAGE_H / 2)
+            canvas_obj.rotate(35)
+            canvas_obj.setFont('Helvetica-Bold', 90)
+            canvas_obj.setFillColor(colors.HexColor('#7b3fa6'))
+            canvas_obj.setFillAlpha(0.05)
+            canvas_obj.drawCentredString(0, 0, 'PRESUPUESTO')
+            canvas_obj.setFillAlpha(1)
+            canvas_obj.restoreState()
+
+            # Footer
+            canvas_obj.saveState()
+            canvas_obj.setFont('Helvetica', 7.5)
+            canvas_obj.setFillColor(MUTED)
+            footer_l = f"{razon} · CUIT {cuit} · {domicilio}, {localidad}"
+            canvas_obj.drawString(ML, 8 * mm, footer_l)
+            footer_r = f"{nro_fmt}"
+            if cajero_nombre:
+                footer_r = f"Atendido por {cajero_nombre}  ·  {nro_fmt}"
+            footer_r += f"  ·  Pág. {doc_.page}"
+            canvas_obj.drawRightString(PAGE_W - MR, 8 * mm, footer_r)
+            # Línea sutil arriba del footer
+            canvas_obj.setStrokeColor(BORDER)
+            canvas_obj.setLineWidth(0.5)
+            canvas_obj.line(ML, 11 * mm, PAGE_W - MR, 11 * mm)
+            canvas_obj.restoreState()
+
+        doc = SimpleDocTemplate(
+            filepath, pagesize=A4,
+            topMargin=MT, bottomMargin=MB,
+            leftMargin=ML, rightMargin=MR,
+            title=f'Presupuesto {nro_fmt}',
+            author=razon,
+        )
+        doc.build(story, onFirstPage=_on_page, onLaterPages=_on_page)
+        return filepath
+

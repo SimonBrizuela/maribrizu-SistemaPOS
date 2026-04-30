@@ -157,6 +157,15 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // ── PRESUPUESTOS ──────────────────────────────────────────────────────────
+    // Cotizaciones generadas desde POS y webapp. Items embebidos como array.
+    match /presupuestos/{presId} {
+      allow read, write: if true;
+    }
+    match /presupuestos_meta/{docId} {
+      allow read, write: if true;
+    }
+
     // ── BLOQUEAR TODO LO DEMÁS ────────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;

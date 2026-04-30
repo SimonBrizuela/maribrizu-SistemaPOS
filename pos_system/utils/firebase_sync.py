@@ -881,6 +881,135 @@ class FirebaseSync:
 
         self._run(_do)
 
+    def upsert_presupuesto(self, presupuesto: dict) -> Optional[str]:
+        """Sube/actualiza un presupuesto en Firestore.
+
+        Si el presupuesto ya tiene firebase_id, hace merge sobre ese doc.
+        Sino, crea uno nuevo y devuelve el ID generado para que el llamador
+        lo persista en SQLite.
+
+        Items van como array dentro del doc (presupuestos no son grandes).
+        """
+        if not self.enabled or not presupuesto:
+            return None
+
+        # Normalizar items
+        items_arr = []
+        for it in (presupuesto.get('items') or []):
+            items_arr.append({
+                'product_id':   it.get('product_id'),
+                'product_name': str(it.get('product_name') or ''),
+                'quantity':     float(it.get('quantity') or 0),
+                'unit_price':   float(it.get('unit_price') or 0),
+                'subtotal':     float(it.get('subtotal') or 0),
+            })
+
+        payload = {
+            'numero':            int(presupuesto.get('numero') or 0),
+            'cliente_nombre':    str(presupuesto.get('cliente_nombre') or ''),
+            'cliente_telefono':  str(presupuesto.get('cliente_telefono') or ''),
+            'cliente_email':     str(presupuesto.get('cliente_email') or ''),
+            'subtotal':          float(presupuesto.get('subtotal') or 0),
+            'descuento':         float(presupuesto.get('descuento') or 0),
+            'total':             float(presupuesto.get('total') or 0),
+            'fecha_emision':     str(presupuesto.get('fecha_emision') or now_ar().strftime('%Y-%m-%dT%H:%M:%S')),
+            'fecha_validez':     str(presupuesto.get('fecha_validez') or ''),
+            'estado':            str(presupuesto.get('estado') or 'pendiente'),
+            'venta_id':          presupuesto.get('venta_id'),
+            'pc_id':             str(presupuesto.get('pc_id') or _get_pc_id()),
+            'cajero_nombre':     str(presupuesto.get('cajero_nombre') or ''),
+            'user_id':           presupuesto.get('user_id'),
+            'notas':             str(presupuesto.get('notas') or ''),
+            'deleted':           bool(presupuesto.get('deleted') or False),
+            'local_id':          int(presupuesto.get('id') or 0),
+            'items':             items_arr,
+            'updated_at':        now_ar().strftime('%Y-%m-%dT%H:%M:%S'),
+        }
+
+        fid = str(presupuesto.get('firebase_id') or '').strip()
+        col = self.db.collection('presupuestos')
+
+        # Esta llamada puede ser sincrónica para que el caller obtenga el firebase_id
+        # → la corremos en hilo solo si está dentro de _run; acá la hacemos directa
+        # con timeout protegido por self._safe_call.
+        def _do():
+            try:
+                nonlocal fid
+                if fid:
+                    col.document(fid).set(payload, merge=True)
+                else:
+                    ref = col.document()
+                    ref.set(payload)
+                    fid = ref.id
+                # Bumpear meta para listeners
+                try:
+                    self.db.collection('config').document('presupuestos_meta').set(
+                        {'last_updated': now_ar().strftime('%Y-%m-%dT%H:%M:%S')}, merge=True
+                    )
+                except Exception:
+                    pass
+                logger.info(f"Firebase: Presupuesto P-{payload['numero']:05d} sincronizado ({fid}).")
+            except Exception as e:
+                logger.error(f"Firebase: Error sync presupuesto: {e}")
+
+        # Sync inline (no bloqueante para casos típicos): el llamador necesita el fid
+        # para guardarlo en SQLite. Lo corremos en este hilo pero tolerante a errores.
+        try:
+            _do()
+        except Exception:
+            logger.exception("Firebase: upsert_presupuesto fallo")
+            return None
+        return fid or None
+
+    def start_presupuestos_listener(self, db_manager, on_change: Optional[Callable] = None):
+        """Listener en tiempo real de la colección 'presupuestos' — espeja a SQLite.
+        on_change() se llama si hubo cambios que la UI deba refrescar.
+        """
+        if not self.enabled:
+            return
+
+        from pos_system.models.presupuesto import Presupuesto as _Pres
+        pres_model = _Pres(db_manager)
+
+        def _watch(col_snapshot, changes, read_time):
+            try:
+                from google.cloud.firestore_v1.watch import ChangeType
+                changed = False
+                for change in changes:
+                    fid = change.document.id
+                    if change.type == ChangeType.REMOVED:
+                        try:
+                            db_manager.execute_update(
+                                "UPDATE presupuestos SET deleted = 1 WHERE firebase_id = ?",
+                                (fid,)
+                            )
+                            changed = True
+                        except Exception as e:
+                            logger.warning(f"Firebase pres listener REMOVED: {e}")
+                        continue
+                    d = change.document.to_dict() or {}
+                    try:
+                        pres_model.upsert_from_firebase(fid, d)
+                        changed = True
+                    except Exception as e:
+                        logger.warning(f"Firebase pres listener upsert: {e}")
+
+                if changed and on_change:
+                    try:
+                        on_change()
+                    except Exception as e:
+                        logger.warning(f"Firebase pres listener on_change: {e}")
+            except Exception as e:
+                logger.error(f"Firebase: error en listener de presupuestos: {e}")
+
+        try:
+            col_ref = self.db.collection('presupuestos')
+            watcher = col_ref.on_snapshot(_watch)
+            self._listeners.append(watcher)
+            logger.info("Firebase: Listener de presupuestos en tiempo real activado.")
+        except Exception as e:
+            logger.error(f"Firebase: No se pudo iniciar listener de presupuestos: {e}")
+
     def start_observations_listener(self, db_manager, on_change: Optional[Callable] = None):
         """Listener en tiempo real de la colección 'observaciones' — espeja a SQLite.
         on_change() se llama si hubo cambios que la UI deba refrescar.

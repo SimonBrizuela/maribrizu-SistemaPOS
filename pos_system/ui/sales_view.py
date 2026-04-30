@@ -21,6 +21,8 @@ from pos_system.models.cash_register import CashRegister
 from pos_system.models.promotion import Promotion
 from pos_system.utils.pdf_generator import PDFGenerator
 from pos_system.ui.conjunto_dialog import ConjuntoDialog, UNIDADES as _CONJ_UNIDADES, TIPOS as _CONJ_TIPOS
+from pos_system.models.presupuesto import Presupuesto
+from pos_system.ui.presupuesto_dialog import PresupuestoDialog
 
 
 def _fmt_qty(q):
@@ -995,6 +997,20 @@ class SalesView(QWidget):
         )
         clear_btn.clicked.connect(self.clear_cart)
         ft_l.addWidget(clear_btn)
+
+        presup_btn = QPushButton('Presupuesto')
+        presup_btn.setMinimumHeight(48); presup_btn.setMinimumWidth(120)
+        presup_btn.setFont(QFont('Segoe UI', 11, QFont.Bold))
+        presup_btn.setCursor(Qt.PointingHandCursor)
+        presup_btn.setToolTip('Generar PDF de presupuesto sin descontar stock')
+        presup_btn.setStyleSheet(
+            "QPushButton { background:#7b3fa6; color:white; border:none;"
+            " border-radius:8px; padding:6px 16px; font-weight:700; }"
+            "QPushButton:hover { background:#6a1b9a; }"
+            "QPushButton:disabled { background:#c9b6d6; color:white; }"
+        )
+        presup_btn.clicked.connect(self.generate_presupuesto)
+        ft_l.addWidget(presup_btn)
 
         cobrar_btn = QPushButton('Cobrar\nF2')
         cobrar_btn.setMinimumHeight(56); cobrar_btn.setMinimumWidth(180)
@@ -3115,6 +3131,95 @@ class SalesView(QWidget):
             if changed:
                 self.update_cart_display()
 
+    def generate_presupuesto(self):
+        """Genera un PDF de presupuesto con los items del carrito.
+        No descuenta stock ni crea venta."""
+        if not self.cart:
+            QMessageBox.warning(self, 'Carrito vacío',
+                                'Agregá productos al carrito antes de generar un presupuesto.')
+            return
+
+        total = sum(item.get('subtotal', 0) for item in self.cart)
+        items_count = sum(item.get('quantity', 0) for item in self.cart)
+
+        pres_model = Presupuesto(self.db)
+
+        dlg = PresupuestoDialog(
+            self, total=total, items_count=items_count,
+            sugerido_numero=pres_model.peek_next_numero()
+        )
+        if dlg.exec_() != QDialog.Accepted:
+            return
+
+        cajero_nombre = (
+            self.current_user.get('full_name')
+            or self.current_user.get('username', '')
+        )
+        pc_id = ''
+        try:
+            mw = self.get_main_window()
+            pc_id = getattr(mw, 'pc_id', '') if mw else ''
+        except Exception:
+            pass
+
+        items_for_pres = [{
+            'product_id': it.get('product_id'),
+            'product_name': it.get('product_name', ''),
+            'quantity': it.get('quantity', 0),
+            'unit_price': it.get('unit_price', 0),
+        } for it in self.cart]
+
+        try:
+            pres = pres_model.create(
+                items=items_for_pres,
+                cliente_nombre=dlg.cliente_nombre,
+                cliente_telefono=dlg.cliente_telefono,
+                cliente_email=dlg.cliente_email,
+                validez_dias=dlg.validez_dias,
+                cajero_nombre=cajero_nombre,
+                user_id=self.current_user.get('id'),
+                pc_id=pc_id,
+                notas=dlg.notas,
+            )
+        except Exception as e:
+            logger.exception('Error creando presupuesto')
+            QMessageBox.critical(self, 'Error',
+                                 f'No se pudo crear el presupuesto:\n{e}')
+            return
+
+        # Generar PDF
+        try:
+            pdf_gen = PDFGenerator()
+            pdf_path = pdf_gen.generate_presupuesto_a4(pres)
+            pres_model.set_pdf_path(pres['id'], pdf_path)
+        except Exception as e:
+            logger.exception('Error generando PDF de presupuesto')
+            QMessageBox.warning(self, 'Presupuesto creado',
+                                f'El presupuesto P-{pres["numero"]:05d} se guardó '
+                                f'pero falló la generación del PDF:\n{e}')
+            return
+
+        # Sync a Firebase (no bloqueante)
+        try:
+            from pos_system.utils.firebase_sync import get_firebase_sync
+            fb = get_firebase_sync()
+            if fb and hasattr(fb, 'upsert_presupuesto'):
+                fb_id = fb.upsert_presupuesto(pres)
+                if fb_id:
+                    pres_model.set_firebase_id(pres['id'], fb_id)
+        except Exception:
+            logger.exception('Error sincronizando presupuesto a Firebase')
+
+        # Abrir PDF
+        self.open_pdf(pdf_path)
+
+        QMessageBox.information(
+            self, 'Presupuesto generado',
+            f'Se generó el presupuesto <b>P-{pres["numero"]:05d}</b>\n\n'
+            f'Total: ${pres["total"]:,.2f}\n'
+            f'Válido hasta: {pres["fecha_validez"]}'
+        )
+
     def clear_cart(self):
         if self.cart:
             reply = QMessageBox.question(
@@ -3182,6 +3287,26 @@ class SalesView(QWidget):
             sale_id = self.sale_model.create(sale_data)
             if sale_id:
                 sale = self.sale_model.get_by_id(sale_id)
+
+                # ── Cerrar presupuesto si la venta se originó de uno ──
+                pres_id = getattr(self, '_pending_presupuesto_id', None)
+                if pres_id:
+                    try:
+                        Presupuesto(self.db).set_estado(int(pres_id), 'convertido', venta_id=sale_id)
+                        # Sync a Firebase
+                        try:
+                            from pos_system.utils.firebase_sync import get_firebase_sync
+                            fb = get_firebase_sync()
+                            if fb and hasattr(fb, 'upsert_presupuesto'):
+                                pres = Presupuesto(self.db).get_by_id(int(pres_id))
+                                if pres:
+                                    fb.upsert_presupuesto(pres)
+                        except Exception:
+                            logger.exception('Sync presupuesto convertido falló')
+                    except Exception:
+                        logger.exception(f'No se pudo marcar presupuesto {pres_id} como convertido')
+                    finally:
+                        self._pending_presupuesto_id = None
 
                 # ── Persistir observaciones de items (incluye VARIOS) ──
                 # Mira tanto 'observation' (items normales editados desde el carrito)

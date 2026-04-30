@@ -15,7 +15,7 @@ export async function renderVentas(container, db) {
       return snap.docs.map(d => ({ id: d.id, ...d.data() }));
     }),
     getCached('ventas:items', async () => {
-      const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('num_venta', 'asc'), limit(2000)));
+      const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('num_venta', 'desc'), limit(3000)));
       const map = {};
       snap.docs.forEach(d => {
         const data = d.data();

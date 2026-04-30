@@ -49,12 +49,12 @@ def _init_firebase(db=None):
         sync = init_firebase_sync()
         if sync:
             logger.info("Firebase: Sincronización activa.")
-            # Sincronizar cajeros: sube los locales y descarga los de Firebase
+            # Sincronizar cajeros: SOLO descargar de Firebase.
+            # NO subir al iniciar (anti-bug: una PC con datos viejos sobrescribía
+            # los nombres buenos del admin). El upload se dispara únicamente
+            # cuando el admin edita usuarios desde la pestaña Cajeros.
             if db:
                 try:
-                    # Primero subir los locales (para que la PC admin los publique)
-                    sync.sync_users(db)
-                    # Luego descargar (para recibir cajeros de otras PCs)
                     count = sync.download_users(db)
                     logger.info(f"Firebase: {count} cajeros sincronizados al iniciar.")
                     # Listener en tiempo real para actualizaciones futuras

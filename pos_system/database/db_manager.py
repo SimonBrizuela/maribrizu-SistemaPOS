@@ -509,6 +509,58 @@ class DatabaseManager:
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_observations_context ON observations(context)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_observations_sale ON observations(sale_id)")
 
+            # Tabla de presupuestos (cotizaciones previas a la venta).
+            # No descuenta stock; al "convertir a venta" se crea una sale normal
+            # y se setea estado='convertido' + venta_id.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS presupuestos (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    firebase_id TEXT DEFAULT '',
+                    numero INTEGER NOT NULL,
+                    cliente_nombre TEXT DEFAULT '',
+                    cliente_telefono TEXT DEFAULT '',
+                    cliente_email TEXT DEFAULT '',
+                    subtotal REAL NOT NULL DEFAULT 0,
+                    descuento REAL DEFAULT 0,
+                    total REAL NOT NULL DEFAULT 0,
+                    fecha_emision TIMESTAMP DEFAULT (localtime_now()),
+                    fecha_validez TEXT NOT NULL,
+                    estado TEXT NOT NULL DEFAULT 'pendiente',
+                    venta_id INTEGER DEFAULT NULL,
+                    pc_id TEXT DEFAULT '',
+                    cajero_nombre TEXT DEFAULT '',
+                    user_id INTEGER DEFAULT NULL,
+                    pdf_path TEXT DEFAULT '',
+                    notas TEXT DEFAULT '',
+                    deleted INTEGER NOT NULL DEFAULT 0,
+                    updated_at TIMESTAMP DEFAULT (localtime_now()),
+                    FOREIGN KEY (venta_id) REFERENCES sales(id)
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS presupuesto_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    presupuesto_id INTEGER NOT NULL,
+                    product_id INTEGER,
+                    product_name TEXT NOT NULL,
+                    quantity REAL NOT NULL,
+                    unit_price REAL NOT NULL,
+                    subtotal REAL NOT NULL,
+                    FOREIGN KEY (presupuesto_id) REFERENCES presupuestos(id) ON DELETE CASCADE
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_presupuestos_numero ON presupuestos(numero)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_presupuestos_estado ON presupuestos(estado)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_presupuestos_fecha ON presupuestos(fecha_emision)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_presupuesto_items_pres ON presupuesto_items(presupuesto_id)")
+            # Migración: en versiones tempranas firebase_id tenía UNIQUE sobre default '',
+            # lo que rompía la creación del 2do presupuesto. Normalizamos a NULL los vacíos
+            # (UNIQUE permite múltiples NULL en SQLite).
+            try:
+                cursor.execute("UPDATE presupuestos SET firebase_id = NULL WHERE firebase_id = ''")
+            except Exception:
+                pass
+
             # Índices para mejorar el rendimiento
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(created_at)")
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_sales_register ON sales(cash_register_id)")
