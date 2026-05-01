@@ -6,7 +6,7 @@ from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QPushButton, QMessageBox, QSizePolicy, QApplication)
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QFont, QKeySequence
+from PyQt5.QtGui import QFont, QKeySequence, QPixmap
 from datetime import datetime, timedelta, timezone
 from pos_system.utils.firebase_sync import now_ar
 
@@ -240,14 +240,22 @@ class MainWindow(QMainWindow):
         hl.setContentsMargins(16, 8, 16, 8)
         hl.setSpacing(10)
 
-        # ── Logo "P" naranja ───────────────────────────────────────────────
-        logo = QLabel('L')
-        logo.setFixedSize(32, 32)
+        # ── Logo Librería Liceo ────────────────────────────────────────────
+        from pos_system.config import ASSETS_DIR
+        logo = QLabel()
+        logo.setFixedSize(40, 40)
         logo.setAlignment(Qt.AlignCenter)
-        logo.setStyleSheet(
-            f'background: {COLORS["accent"]}; color: white; border-radius: 6px;'
-            f' font-weight: 700; font-size: 16px;'
-        )
+        logo_path = ASSETS_DIR / 'favicon-liceo-64.png'
+        pixmap = QPixmap(str(logo_path))
+        if not pixmap.isNull():
+            logo.setPixmap(pixmap.scaled(40, 40, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            logo.setStyleSheet('background: transparent;')
+        else:
+            logo.setText('L')
+            logo.setStyleSheet(
+                f'background: {COLORS["accent"]}; color: white; border-radius: 6px;'
+                f' font-weight: 700; font-size: 16px;'
+            )
         hl.addWidget(logo)
 
         # ── Título + subtítulo mono con info de turno/caja ─────────────────

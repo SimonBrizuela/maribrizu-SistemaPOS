@@ -773,7 +773,9 @@ class ConjuntoDialog(QDialog):
         )
         head.addWidget(lbl)
         head.addStretch(1)
-        # Buscador: filtra los chips por nombre. Útil cuando hay muchos colores.
+        # Buscador: solo aparece si hay muchos colores (>6). Si no, los chips
+        # alcanzan y el buscador es ruido visual.
+        muchos_colores = len(self.colores_iniciales) > 6
         from PyQt5.QtWidgets import QLineEdit as _QLE
         self._color_search = _QLE()
         self._color_search.setPlaceholderText('Buscar color...')
@@ -786,7 +788,10 @@ class ConjuntoDialog(QDialog):
             f'QLineEdit:focus {{ border-color: {ACCENT}; background: #fff; }}'
         )
         self._color_search.textChanged.connect(self._on_color_search)
-        head.addWidget(self._color_search)
+        if muchos_colores:
+            head.addWidget(self._color_search)
+        else:
+            self._color_search.setVisible(False)
         outer.addLayout(head)
 
         # Scroll horizontal para muchos colores
@@ -825,20 +830,24 @@ class ConjuntoDialog(QDialog):
         chip0.setChecked(True)
         chip0.blockSignals(False)
 
-        # Estado inicial: ningún chip visible Y el scroll oculto entero.
-        # Solo aparece el scroll cuando el buscador tiene matches.
+        # Chips visibles desde el inicio — el cajero ve todos los colores y
+        # toca el que quiere. Más rápido y menos confuso que un buscador vacío.
         self._color_user_selected = False
         for chip in self._color_chips.values():
-            chip.setVisible(False)
+            chip.setVisible(True)
 
         scroll.setWidget(chips_w)
         outer.addWidget(scroll)
-        # Ref para mostrar/ocultar el scroll desde _on_color_search
         self._color_scroll = scroll
-        scroll.setVisible(False)
         return wrap
 
     def _build_stock_row(self):
+        """Una sola línea: 'DISPONIBLE  45 m  ·  2 rollos + 5m abierto'.
+
+        Reemplaza el breakdown de 3 celdas (Cerrados/Abierto/Total) por algo
+        que el cajero pueda procesar de un vistazo: el dato grande es lo total
+        que puede vender; el detalle queda al costado en chico.
+        """
         wrap = QFrame()
         wrap.setStyleSheet(
             f'QFrame {{ background: #fff; border: 1px solid {BORDER};'
@@ -846,28 +855,40 @@ class ConjuntoDialog(QDialog):
         )
         h = QHBoxLayout(wrap)
         h.setContentsMargins(16, 10, 16, 10)
-        h.setSpacing(8)
+        h.setSpacing(10)
 
-        meta = TIPOS[self.tipo]
-        u_short = UNIDADES[self.unidad_base]['short']
+        cap = QLabel('DISPONIBLE')
+        cap.setStyleSheet(
+            f'color: {TEXT_MUTED}; font-size: 10px; font-weight: 700;'
+            f' letter-spacing: 1px; font-family: {UI_FONT_CSS};'
+        )
+        h.addWidget(cap, 0, Qt.AlignVCenter)
 
-        # Inicializa con valores del color actual; _refresh_all luego los redibuja.
-        self._cell_cerrados = _StockCell('Cerrados', format_num(self.unidades),
-                                         f'{meta["label"].lower()}(s)', self.mono)
-        self._cell_abierto = _StockCell('Abierto', format_num(self.restante),
-                                        f'{u_short} sueltos', self.mono, with_borders=True)
-        self._cell_total = _StockCell('Total', format_num(self._total_color()),
-                                      u_short, self.mono)
-        for c in (self._cell_cerrados, self._cell_abierto, self._cell_total):
-            c.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
-        h.addWidget(self._cell_cerrados, 1)
-        h.addWidget(self._cell_abierto, 1)
-        h.addWidget(self._cell_total, 1)
+        self._stock_total_lbl = QLabel('—')
+        tf = QFont(self.mono); tf.setPointSize(18); tf.setBold(True)
+        self._stock_total_lbl.setFont(tf)
+        self._stock_total_lbl.setStyleSheet(f'color: {TEXT_DARK}; background: transparent;')
+        h.addWidget(self._stock_total_lbl, 0, Qt.AlignVCenter)
+
+        h.addStretch(1)
+
+        self._stock_detail_lbl = QLabel('')
+        self._stock_detail_lbl.setStyleSheet(
+            f'color: {TEXT_MUTED}; font-size: 11px; font-family: {UI_FONT_CSS};'
+        )
+        self._stock_detail_lbl.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
+        h.addWidget(self._stock_detail_lbl, 0, Qt.AlignVCenter)
         return wrap
 
     def _build_modo_selector(self):
+        """Selector unificado: una sola fila con todas las opciones de venta.
+
+        Reemplaza el doble selector (modo + chips m/cm) por una sola decisión:
+        el cajero elige UN tab que combina (vender_por, unidad). Ej. para un
+        rollo en m: [1 m] [1 cm] [Rollo entero]. Más rápido de entender que
+        elegir primero el modo y después la unidad.
+        """
         meta = TIPOS[self.tipo]
-        u_short = UNIDADES[self.unidad_base]['short']
 
         wrap = QFrame()
         wrap.setStyleSheet(
@@ -878,27 +899,52 @@ class ConjuntoDialog(QDialog):
         h.setContentsMargins(8, 8, 8, 8)
         h.setSpacing(8)
 
-        self._modo_group = QButtonGroup(self)
-        self._modo_group.setExclusive(True)
-        self._modo_buttons = {}
+        self._tab_group = QButtonGroup(self)
+        self._tab_group.setExclusive(True)
+        # key: (vender_por, unidad_venta_or_None) → button
+        self._tab_buttons = {}
 
+        compat = unidades_compatibles(self.unidad_base)
         for v in meta['vende_por']:
-            if v == 'fraccion':
-                txt = f'Por {u_short}'
-            elif v == 'unidad':
-                txt = 'Por unidad'
-            else:
+            if v in ('fraccion', 'unidad'):
+                # Una pestaña por unidad compatible (m, cm, etc.).
+                # En productos cuya base es 'u' o similar sin compatibles
+                # múltiples, queda una sola pestaña.
+                for u in compat:
+                    u_short = UNIDADES[u]['short']
+                    if v == 'unidad' and u == 'u':
+                        txt = 'Por unidad'
+                    else:
+                        txt = f'1 {u_short}'
+                    btn = _PillButton(txt)
+                    btn.setFocusPolicy(Qt.NoFocus)
+                    self._tab_group.addButton(btn)
+                    self._tab_buttons[(v, u)] = btn
+                    h.addWidget(btn, 1)
+            else:  # 'conjunto'
                 txt = f'{meta["label"]} entero'
-            btn = _PillButton(txt)
-            btn.setFocusPolicy(Qt.NoFocus)
-            self._modo_group.addButton(btn)
-            self._modo_buttons[v] = btn
-            h.addWidget(btn, 1)
+                btn = _PillButton(txt)
+                btn.setFocusPolicy(Qt.NoFocus)
+                self._tab_group.addButton(btn)
+                self._tab_buttons[('conjunto', None)] = btn
+                h.addWidget(btn, 1)
 
-        self._modo_buttons[self.vender_por].setChecked(True)
-        for v, b in self._modo_buttons.items():
-            b.toggled.connect(lambda checked, vv=v: checked and self._on_modo_changed(vv))
+        # Activar el tab inicial según vender_por/unidad_venta
+        initial_key = self._current_tab_key()
+        if initial_key in self._tab_buttons:
+            btn0 = self._tab_buttons[initial_key]
+            btn0.blockSignals(True)
+            btn0.setChecked(True)
+            btn0.blockSignals(False)
+
+        for key, b in self._tab_buttons.items():
+            b.toggled.connect(lambda checked, k=key: checked and self._on_tab_changed(k))
         return wrap
+
+    def _current_tab_key(self):
+        if self.vender_por == 'conjunto':
+            return ('conjunto', None)
+        return (self.vender_por, self.unidad_venta)
 
     def _build_main_grid(self):
         grid = QHBoxLayout()
@@ -911,7 +957,7 @@ class ConjuntoDialog(QDialog):
         self.disp_frame = QFrame()
         self.disp_frame.setObjectName('qtyDisplay')
         self.disp_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        self.disp_frame.setFixedHeight(78)
+        self.disp_frame.setFixedHeight(58)
         self.disp_frame.setStyleSheet(
             f'QFrame#qtyDisplay {{ background: #fff; border: 2px dashed {BORDER};'
             f'                     border-radius: 12px; }}'
@@ -958,58 +1004,35 @@ class ConjuntoDialog(QDialog):
         dh.addLayout(val_row, 1)
         left.addWidget(self.disp_frame)
 
-        # Chips de unidades compatibles (solo en modo fracción)
-        self.chips_wrap = QFrame()
-        chips_h = QHBoxLayout(self.chips_wrap)
-        chips_h.setContentsMargins(0, 0, 0, 0)
-        chips_h.setSpacing(6)
-        self._chip_buttons = {}
-        self._chip_group = QButtonGroup(self)
-        self._chip_group.setExclusive(True)
-        for u in unidades_compatibles(self.unidad_base):
-            chip = _ChipButton(UNIDADES[u]['short'])
-            chip.setFocusPolicy(Qt.NoFocus)
-            self._chip_group.addButton(chip)
-            self._chip_buttons[u] = chip
-            chips_h.addWidget(chip)
-            chip.toggled.connect(lambda checked, uu=u: checked and self._on_unidad_venta_changed(uu))
-        chips_h.addStretch(1)
-        if self.unidad_venta in self._chip_buttons:
-            chip_v = self._chip_buttons[self.unidad_venta]
-            chip_v.blockSignals(True)
-            chip_v.setChecked(True)
-            chip_v.blockSignals(False)
-        left.addWidget(self.chips_wrap)
+        # Chips m/cm separados eliminados — la unidad ahora va integrada en
+        # las pestañas del selector unificado (`1 m` / `1 cm` / `Rollo entero`).
 
-        # Preview / error (alterna)
+        # Preview en una sola línea: "Queda 12 m  ·  $1.500"
+        # Reemplaza la caja oscura grande — para un cajero, lo único importante
+        # es cuánto queda y cuánto cobra. El precio va en grande a la derecha.
         self.preview_box = QFrame()
         self.preview_box.setStyleSheet(
-            f'QFrame {{ background: {PREVIEW_BG}; border-radius: 12px; }}'
+            f'QFrame {{ background: transparent; border: none; }}'
         )
-        pv = QVBoxLayout(self.preview_box)
-        pv.setContentsMargins(14, 12, 14, 14)
-        pv.setSpacing(4)
-        self.preview_title = QLabel('DESPUÉS DE LA VENTA')
-        self.preview_title.setStyleSheet(
-            f'color: {PREVIEW_DIM}; font-size: 11px; font-weight: 700;'
-            f' letter-spacing: 0.8px; font-family: {UI_FONT_CSS};'
-        )
-        self.preview_main = QLabel('—')
-        f2 = QFont(self.mono); f2.setPointSize(14); f2.setBold(True)
-        self.preview_main.setFont(f2)
-        self.preview_main.setStyleSheet('color: #fff;')
+        pv = QHBoxLayout(self.preview_box)
+        pv.setContentsMargins(4, 0, 4, 0)
+        pv.setSpacing(8)
         self.preview_sub = QLabel('')
         self.preview_sub.setStyleSheet(
-            f'color: {PREVIEW_DIM}; font-size: 12px; font-family: {UI_FONT_CSS};'
+            f'color: {TEXT_MUTED}; font-size: 12px; font-family: {UI_FONT_CSS};'
         )
         self.preview_price = QLabel('')
+        pp = QFont(self.mono); pp.setPointSize(15); pp.setBold(True)
+        self.preview_price.setFont(pp)
         self.preview_price.setStyleSheet(
-            f'color: #fff; font-size: 13px; font-weight: 600; font-family: {UI_FONT_CSS};'
+            f'color: {ACCENT}; background: transparent;'
         )
-        pv.addWidget(self.preview_title)
-        pv.addWidget(self.preview_main)
-        pv.addWidget(self.preview_sub)
-        pv.addWidget(self.preview_price)
+        self.preview_price.setAlignment(Qt.AlignVCenter | Qt.AlignRight)
+        pv.addWidget(self.preview_sub, 1)
+        pv.addWidget(self.preview_price, 0)
+        # Mantengo este atributo para no romper código que lo referencie.
+        self.preview_main = QLabel('')
+        self.preview_title = QLabel('')
         left.addWidget(self.preview_box)
 
         self.error_box = QFrame()
@@ -1027,27 +1050,27 @@ class ConjuntoDialog(QDialog):
         left.addWidget(self.error_box)
         self.error_box.hide()
 
-        # "+ Agregar al subtotal" — sólo en modo multi-color
+        # "+ Otro color" — link chico (no botón grande). Solo en modo multi-color.
+        # Para mezclar varias variedades en una venta: pulsás, se commitea la
+        # cantidad actual al subtotal y queda lista para elegir otro color.
         if self.has_colores:
-            self._agregar_btn = QPushButton('+  Agregar al subtotal')
-            self._agregar_btn.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-            self._agregar_btn.setFixedHeight(36)
+            self._agregar_btn = QPushButton('+ Otro color')
+            self._agregar_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
+            self._agregar_btn.setFixedHeight(28)
             self._agregar_btn.setCursor(Qt.PointingHandCursor)
             self._agregar_btn.setFocusPolicy(Qt.NoFocus)
             self._agregar_btn.setStyleSheet(
-                f'QPushButton {{ background: #fff; color: {ACCENT};'
-                f'                border: 1.5px solid {ACCENT};'
-                f'                border-radius: 10px;'
-                f'                font-size: 14px; font-weight: 700;'
-                f'                font-family: {UI_FONT_CSS};'
-                f'                padding: 0 16px; }}'
-                f'QPushButton:hover    {{ background: {ACCENT_SOFT}; }}'
-                f'QPushButton:pressed  {{ background: {ACCENT}; color: #fff; }}'
-                f'QPushButton:disabled {{ color: {TEXT_DIM}; border-color: {BORDER}; background: #faf8f3; }}'
+                f'QPushButton {{ background: transparent; color: {ACCENT};'
+                f'                border: none; font-size: 12px; font-weight: 700;'
+                f'                font-family: {UI_FONT_CSS}; padding: 0 8px;'
+                f'                text-decoration: underline; }}'
+                f'QPushButton:hover    {{ color: {ACCENT_HOVER}; }}'
+                f'QPushButton:disabled {{ color: {TEXT_DIM}; text-decoration: none; }}'
             )
             self._agregar_btn.clicked.connect(self._on_agregar)
-            btn_wrap = QVBoxLayout()
-            btn_wrap.setContentsMargins(0, 8, 0, 0)
+            btn_wrap = QHBoxLayout()
+            btn_wrap.setContentsMargins(0, 2, 0, 0)
+            btn_wrap.addStretch(1)
             btn_wrap.addWidget(self._agregar_btn)
             left.addLayout(btn_wrap)
 
@@ -1316,15 +1339,17 @@ class ConjuntoDialog(QDialog):
         self.cantidad_str = v
         self._refresh_all()
 
-    def _on_modo_changed(self, modo):
-        self.vender_por = modo
-        self.chips_wrap.setVisible(modo == 'fraccion')
-        # Resetear cantidad porque cambió la unidad de medida
+    def _on_tab_changed(self, key):
+        """Tab unificado: setea vender_por + unidad_venta de un solo click."""
+        vender_por, unidad = key
+        self.vender_por = vender_por
+        if unidad is not None:
+            self.unidad_venta = unidad
+        else:
+            # 'conjunto' — la unidad efectiva es la base
+            self.unidad_venta = self.unidad_base
+        # Resetear cantidad porque cambió la unidad/modo
         self.cantidad_str = ''
-        self._refresh_all()
-
-    def _on_unidad_venta_changed(self, u):
-        self.unidad_venta = u
         self._refresh_all()
 
     def _on_color_changed(self, color_name):
@@ -1333,52 +1358,23 @@ class ConjuntoDialog(QDialog):
         # Resetear cantidad: el stock disponible es otro
         self.cantidad_str = ''
         self._refresh_all()
-        # Limpiar el buscador y poner el color elegido como placeholder así
-        # el cajero ve cuál está activo sin necesidad de mostrar el chip.
-        try:
-            if hasattr(self, '_color_search') and self._color_search is not None:
-                self._color_search.blockSignals(True)
-                self._color_search.clear()
-                stock_txt = self._stock_text_for(color_name)
-                self._color_search.setPlaceholderText(
-                    f'{color_name} — {stock_txt}  (tocá para cambiar)'
-                )
-                self._color_search.blockSignals(False)
-            # Ocultar todos los chips + el scroll
-            self._on_color_search('')
-        except Exception:
-            pass
 
     def _on_color_search(self, txt: str):
         """Filtra los chips de color en vivo según el texto del buscador.
 
-        Estado por defecto: scroll completo OCULTO, solo se ve el buscador.
-        Al tipear, aparecen los chips matcheantes en un scroll desplegable.
-        Al borrar la búsqueda, vuelve a ocultarse todo.
+        Sin texto → todos visibles. Con texto → solo los que matchean.
         """
         import unicodedata as _ud
         def _norm(s):
             s = _ud.normalize('NFD', str(s or ''))
             return s.encode('ascii', 'ignore').decode('ascii').lower().strip()
         q = _norm(txt)
-        scroll = getattr(self, '_color_scroll', None)
         if not q:
-            # Sin búsqueda → ocultar todo (chips + scroll completo)
             for chip in self._color_chips.values():
-                chip.setVisible(False)
-            if scroll is not None:
-                scroll.setVisible(False)
+                chip.setVisible(True)
             return
-        # Con búsqueda: mostrar matches
-        any_match = False
         for color, chip in self._color_chips.items():
-            visible = q in _norm(color)
-            chip.setVisible(visible)
-            if visible:
-                any_match = True
-        # Mostrar el scroll solo si hay al menos un match
-        if scroll is not None:
-            scroll.setVisible(any_match)
+            chip.setVisible(q in _norm(color))
 
     # --- multi-linea (subtotal) -------------------------------------------
 
@@ -1574,6 +1570,15 @@ class ConjuntoDialog(QDialog):
     def _on_confirm(self):
         """Confirma la venta. En modo single (sin colores) toma la cantidad
         actual; en multi-color usa las líneas ya agregadas al subtotal."""
+        # Multi-color: si hay cantidad pendiente, commitearla antes de confirmar
+        # para que el cajero no tenga que tocar "+ Otro color" al final.
+        if self.has_colores and self.cantidad_str:
+            try:
+                pending = float(self.cantidad_str)
+            except ValueError:
+                pending = 0
+            if pending > 0:
+                self._on_agregar()
         # Si hay líneas committed (multi-color), confirmar todas
         if self.has_colores and self.lineas:
             total = round(sum(float(l.get('precio_total') or 0) for l in self.lineas), 2)
@@ -1674,31 +1679,15 @@ class ConjuntoDialog(QDialog):
                 f'                     border-radius: 12px; }}'
             )
 
-        # Unidad mostrada al lado del display + chips m/cm
-        # Las chips aparecen siempre que haya >1 unidad compatible (ej. m/cm),
-        # también en modo "Por unidad" — así el cajero puede tipear en cm o
-        # en m y el sistema convierte automáticamente.
-        chips_disponibles = len(unidades_compatibles(self.unidad_base)) > 1
-        if self.vender_por == 'fraccion':
-            self.unit_label.setText(UNIDADES[self.unidad_venta]['short'])
-            self.chips_wrap.setVisible(True)
-        elif self.vender_por == 'unidad':
-            chips_disponibles = len(unidades_compatibles(self.unidad_base)) > 1
-            if chips_disponibles:
-                # Producto con unidades compatibles (longitud, masa, etc.):
-                # mostrar la unidad seleccionada y permitir cambiar en vivo.
-                self.unit_label.setText(UNIDADES[self.unidad_venta]['short'])
-                self.chips_wrap.setVisible(True)
-            else:
-                self.unit_label.setText('u')
-                self.chips_wrap.setVisible(False)
-        else:
+        # Unidad mostrada al lado del display: la dicta el tab activo.
+        if self.vender_por == 'conjunto':
             self.unit_label.setText(TIPOS[self.tipo]['label'].lower())
-            self.chips_wrap.setVisible(False)
+        else:
+            self.unit_label.setText(UNIDADES[self.unidad_venta]['short'])
 
-        # Refrescar celdas de stock con el color actual.
+        # Refrescar línea de stock con el color actual.
         # Si el cajero seleccionó una unidad distinta a la base (cm vs m),
-        # mostrar Abierto y Total convertidos a esa unidad.
+        # mostrar Disponible y detalle convertidos a esa unidad.
         meta = TIPOS[self.tipo]
         u_view = self.unidad_venta if (
             self.unidad_venta and self.unidad_venta in UNIDADES
@@ -1710,12 +1699,16 @@ class ConjuntoDialog(QDialog):
         else:
             restante_view = self.restante
             total_view    = self._total_color()
-        self._cell_cerrados.set_value(format_num(self.unidades))
-        self._cell_cerrados.set_sub(f'{meta["label"].lower()}(s)')
-        self._cell_abierto.set_value(format_num(restante_view))
-        self._cell_abierto.set_sub(f'{u_short} sueltos')
-        self._cell_total.set_value(format_num(total_view))
-        self._cell_total.set_sub(u_short)
+
+        self._stock_total_lbl.setText(f'{format_num(total_view)} {u_short}')
+        # Detalle: solo cuando suma valor (cerrados + abierto). Si no hay
+        # cerrados o no hay abierto, mostrar lo que aplique nomás.
+        partes = []
+        if self.unidades > 0:
+            partes.append(f'{format_num(self.unidades)} {meta["label"].lower()}(s)')
+        if restante_view > 0:
+            partes.append(f'+ {format_num(restante_view)}{u_short} abierto')
+        self._stock_detail_lbl.setText(' '.join(partes) if partes else 'sin stock')
 
         # Stock por color en los chips (si hay)
         for name, chip in self._color_chips.items():
@@ -1757,18 +1750,14 @@ class ConjuntoDialog(QDialog):
                 u_view_short = UNIDADES[u_view]['short']
                 if u_view != self.unidad_base:
                     total_after_view = convertir(total_after, self.unidad_base, u_view) or total_after
-                    after_r_view     = convertir(after_r,     self.unidad_base, u_view) or after_r
                 else:
                     total_after_view = total_after
-                    after_r_view     = after_r
-                self.preview_main.setText(f'{format_num(total_after_view)} {u_view_short}')
                 self.preview_sub.setText(
-                    f'{format_num(after_u)} cerrado · '
-                    f'{format_num(after_r_view)}{u_view_short} abierto'
+                    f'Queda {format_num(total_after_view)} {u_view_short}'
                 )
                 precio_pendiente = self._calcular_precio(cantidad)
                 self.preview_price.setText(
-                    f'Esta línea: ${format_num(round(precio_pendiente, 2))}'
+                    f'${format_num(round(precio_pendiente, 2))}'
                 )
                 puede_agregar_pendiente = True
 
@@ -1837,14 +1826,10 @@ class ConjuntoDialog(QDialog):
             self.reject()
             return
         if key in (Qt.Key_Return, Qt.Key_Enter):
-            if self.has_colores:
-                if self.cantidad_str and self._agregar_btn and self._agregar_btn.isEnabled():
-                    self._on_agregar()
-                elif self.lineas:
-                    self._on_confirm()
-            else:
-                if self.confirm_btn.isEnabled():
-                    self._on_confirm()
+            # Enter siempre confirma la venta. Si hay cantidad pendiente
+            # (multi-color), `_on_confirm` se encarga de commiteala antes.
+            if self.confirm_btn.isEnabled():
+                self._on_confirm()
             return
         if key in (Qt.Key_Backspace, Qt.Key_Delete):
             self._on_key('del')
