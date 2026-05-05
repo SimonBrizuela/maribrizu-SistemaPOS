@@ -23,6 +23,8 @@ from pos_system.utils.pdf_generator import PDFGenerator
 from pos_system.ui.conjunto_dialog import ConjuntoDialog, UNIDADES as _CONJ_UNIDADES, TIPOS as _CONJ_TIPOS
 from pos_system.models.presupuesto import Presupuesto
 from pos_system.ui.presupuesto_dialog import PresupuestoDialog
+from pos_system.models.mother_product import MotherProduct, Node, Discount
+from pos_system.ui.mp_variant_dialog import MPVariantDialog
 
 
 def _fmt_qty(q):
@@ -475,27 +477,120 @@ class ProductSearchDialog(QDialog):
         self._search_timer.start()  # reinicia el timer en cada tecla
 
     def _ensure_catalog_cache(self):
-        """Carga el catálogo completo en memoria (lazy). Idéntico a la webapp."""
+        """Carga el catálogo completo en memoria (lazy). Catálogo plano + mp_*."""
         if getattr(self, '_catalog_cache', None) is not None:
             return
         import unicodedata as _ud
         def _norm(s):
             s = _ud.normalize('NFD', str(s or ''))
             return s.encode('ascii', 'ignore').decode('ascii').lower()
+
+        # 1) Catálogo plano clásico
         try:
             products = self.db.execute_query(
                 "SELECT * FROM products ORDER BY is_favorite DESC, name ASC"
             )
         except Exception:
             products = []
-        self._catalog_cache = products
-        self._catalog_haystack = [
+        cache = list(products)
+        haystacks = [
             _norm(' '.join(filter(None, [
                 p.get('name'), p.get('barcode'), p.get('firebase_id'),
                 p.get('description'), p.get('category'), p.get('rubro'),
             ])))
             for p in products
         ]
+
+        # 2) Productos Madre + sus hojas vendibles (mp_*).
+        # Cada entrada se marca con is_mp=True y mp_kind ('madre'|'hoja') para
+        # que la UI las pinte distinto y el handler de selección las rutee al
+        # diálogo de variantes en vez de add_to_cart directo.
+        try:
+            from pos_system.models.mother_product import MotherProduct, Node
+            mp_madres = MotherProduct(self.db).get_all() or []
+            mp_node_model = Node(self.db)
+        except Exception:
+            mp_madres = []
+            mp_node_model = None
+
+        for madre in mp_madres:
+            entry = {
+                'name':          madre.get('nombre') or '—',
+                'barcode':       madre.get('codigo_barras') or '',
+                'firebase_id':   '',
+                'description':   madre.get('descripcion') or '',
+                'category':      madre.get('categoria') or '',
+                'rubro':         madre.get('marca') or '',
+                'price':         None,
+                'stock':         None,
+                'is_mp':         True,
+                'mp_kind':       'madre',
+                'mp_doc':        madre,
+            }
+            cache.append(entry)
+            haystacks.append(_norm(' '.join(filter(None, [
+                entry['name'], entry['barcode'], entry['description'], entry['category'], entry['rubro'],
+            ]))))
+            # Hojas vendibles del madre
+            if mp_node_model is None:
+                continue
+            try:
+                hojas = mp_node_model.get_hojas_by_product(madre.get('id'))
+            except Exception:
+                hojas = []
+            for h in hojas or []:
+                pres_list = h.get('presentaciones') or []
+                # Sumar stock virtual: stock + sueltos (en unidad medida); aproximación visual
+                stock_total = 0.0
+                for p in pres_list:
+                    if p.get('stock_modo') == 'vinculado':
+                        continue  # no sumar (la fuente ya cuenta)
+                    stock_total += float(p.get('stock') or 0)
+                # Atributos legibles para haystack y nombre
+                attr_txt_parts = []
+                for k, v in (h.get('atributos') or {}).items():
+                    if isinstance(v, dict):
+                        lab = v.get('label') or v.get('value') or ''
+                    else:
+                        lab = str(v)
+                    if lab:
+                        attr_txt_parts.append(str(lab))
+                attr_txt = ' '.join(attr_txt_parts)
+                # Código de barras: el de la primera presentación (si hay)
+                primer_codigo = ''
+                for p in pres_list:
+                    if p.get('codigo_barras'):
+                        primer_codigo = p['codigo_barras']
+                        break
+                # Precio venta: del nodo. Si no, primero de las presentaciones
+                precio = h.get('precio_venta')
+                if precio in (None, 0):
+                    for p in pres_list:
+                        if p.get('precio_venta') not in (None, 0):
+                            precio = p['precio_venta']
+                            break
+                entry_h = {
+                    'name':          f"{madre.get('nombre','')} · {h.get('nombre','')}".strip(' ·'),
+                    'barcode':       primer_codigo or (h.get('sku_sufijo') or ''),
+                    'firebase_id':   '',
+                    'description':   attr_txt,
+                    'category':      madre.get('categoria') or '',
+                    'rubro':         madre.get('marca') or '',
+                    'price':         precio or 0,
+                    'stock':         stock_total,
+                    'is_mp':         True,
+                    'mp_kind':       'hoja',
+                    'mp_doc':        h,
+                    'mp_madre':      madre,
+                }
+                cache.append(entry_h)
+                haystacks.append(_norm(' '.join(filter(None, [
+                    entry_h['name'], entry_h['barcode'], h.get('sku_sufijo') or '',
+                    attr_txt, madre.get('nombre') or '',
+                ]))))
+
+        self._catalog_cache = cache
+        self._catalog_haystack = haystacks
 
     def _do_search(self):
         """Búsqueda en memoria, igual que la webapp (catálogo): AND de substrings sobre
@@ -534,19 +629,54 @@ class ProductSearchDialog(QDialog):
         self.table.clearSpans()
         self.table.setRowCount(0)
         self.table.setRowCount(len(results))
+        # Tonos para destacar resultados de Productos Madre (mp_*) — fácil de
+        # diferenciar del catálogo plano. Madres en violeta saturado, hojas en violeta claro.
+        MP_BG_MADRE = QColor('#ede9fe')   # violeta más fuerte
+        MP_BG_HOJA  = QColor('#f5f3ff')   # violeta más suave
+        MP_FG       = QColor('#5b21b6')   # texto violeta para nombre
         for row, p in enumerate(results):
-            name_item = QTableWidgetItem(str(p.get('name', '')))
+            is_mp     = bool(p.get('is_mp'))
+            mp_kind   = p.get('mp_kind') or ''
+            row_bg    = (MP_BG_MADRE if mp_kind == 'madre' else MP_BG_HOJA) if is_mp else None
+            # Columna 0: nombre con prefijo identificador para mp_*
+            display_name = str(p.get('name', ''))
+            if is_mp:
+                badge = '◆ MADRE  ' if mp_kind == 'madre' else '◇ '
+                display_name = badge + display_name
+            name_item = QTableWidgetItem(display_name)
             name_item.setData(Qt.UserRole, p)
+            if is_mp:
+                f = name_item.font(); f.setBold(True); name_item.setFont(f)
+                name_item.setForeground(MP_FG)
+                name_item.setBackground(row_bg)
             self.table.setItem(row, 0, name_item)
-            self.table.setItem(row, 1, QTableWidgetItem(str(p.get('barcode', '') or '')))
-            price_item = QTableWidgetItem(f"${float(p.get('price', 0)):,.2f}")
+
+            barcode_item = QTableWidgetItem(str(p.get('barcode', '') or ''))
+            if is_mp:
+                barcode_item.setBackground(row_bg)
+            self.table.setItem(row, 1, barcode_item)
+
+            # Precio: madre puede no tener precio agregable (depende de variante) → mostramos '—'
+            if is_mp and mp_kind == 'madre':
+                price_item = QTableWidgetItem('—')
+            else:
+                price_item = QTableWidgetItem(f"${float(p.get('price', 0)):,.2f}")
             price_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            if is_mp:
+                price_item.setBackground(row_bg)
             self.table.setItem(row, 2, price_item)
+
+            # Stock: sumamos para hojas. Madre: '—' para no engañar.
             stock = p.get('stock', 0)
-            stock_item = QTableWidgetItem(str(stock if stock is not None else 0))
+            if is_mp and mp_kind == 'madre':
+                stock_item = QTableWidgetItem('—')
+            else:
+                stock_item = QTableWidgetItem(str(int(stock) if isinstance(stock, (int, float)) and stock == int(stock or 0) else stock if stock is not None else 0))
             stock_item.setTextAlignment(Qt.AlignCenter)
-            if stock is not None and stock <= 0:
+            if stock is not None and not (is_mp and mp_kind == 'madre') and float(stock or 0) <= 0:
                 stock_item.setForeground(QColor('#a01616'))
+            if is_mp:
+                stock_item.setBackground(row_bg)
             self.table.setItem(row, 3, stock_item)
 
         n = len(results)
@@ -614,6 +744,14 @@ class SalesView(QWidget):
         self.current_user = current_user or {}
         self.cart = []
         self._all_products = []          # cache local de productos
+        # ── Productos Madre con variantes (mp_*): modelos contra SQLite local ──
+        # La data viene del listener de Firebase montado en main_window. Acá solo
+        # consultamos. reload_mp_cache() es un hook por compatibilidad con
+        # _on_mp_refresh_slot del MainWindow (no necesita cache propio porque
+        # los modelos consultan SQLite a demanda).
+        self._mp_products  = MotherProduct(self.db)
+        self._mp_nodes     = Node(self.db)
+        self._mp_discounts = Discount(self.db)
         # Catálogo completo en memoria para búsqueda fuzzy (igual que la webapp).
         # Se carga lazy y se invalida con inventory_updated/refresh_data.
         self._catalog_cache = None       # list[dict] o None si hay que recargar
@@ -1458,18 +1596,35 @@ class SalesView(QWidget):
         self._open_search_dialog_with_text(term)
 
     def _on_product_selected_from_dialog(self, product: dict):
-        """Agrega al carrito el producto seleccionado desde el diálogo ampliado."""
-        self.add_to_cart(product)
+        """Agrega al carrito el producto seleccionado desde el diálogo ampliado.
+
+        Productos Madre (mp_*) van por el flujo del diálogo táctil de variantes:
+          - Si es 'madre' (producto madre): abre el diálogo con todas sus hojas.
+          - Si es 'hoja' (variante específica): abre el diálogo del madre — el
+            cajero puede confirmar esa hoja directo o navegar a otras.
+        Si no es mp_*, flujo clásico add_to_cart.
+        """
+        # Cerrar el diálogo de búsqueda primero para que no quede tapando el modal
         if hasattr(self, '_search_dialog') and self._search_dialog:
-            # SpotlightDialog (el buscador actual) no tiene update_cart_display;
-            # solo lo tenía la versión vieja. Como igual cerramos el diálogo
-            # acto seguido, la actualización es innecesaria.
             try:
                 if hasattr(self._search_dialog, 'update_cart_display'):
                     self._search_dialog.update_cart_display(list(self.cart))
             except Exception:
                 pass
             self._search_dialog.close()
+
+        if product.get('is_mp'):
+            mp_kind = product.get('mp_kind')
+            mp_doc  = product.get('mp_doc') or {}
+            if mp_kind == 'madre':
+                self._open_mp_variant_dialog(mp_doc)
+            elif mp_kind == 'hoja':
+                madre = product.get('mp_madre') or self._mp_products.get_by_id(mp_doc.get('product_id'))
+                if madre:
+                    self._open_mp_variant_dialog(madre)
+            return
+
+        self.add_to_cart(product)
 
     def _products_table_key_press(self, event):
         """Enter agrega al carrito; chars imprimibles se redirigen al campo de búsqueda."""
@@ -1486,14 +1641,21 @@ class SalesView(QWidget):
     def _on_barcode_scanned(self, code: str):
         """Escáner automático: SOLO agrega si hay match EXACTO por barcode/firebase_id.
 
-        Si no, abre el Spotlight con el texto. Evita agregar el primer producto
-        que matchee por nombre cuando el usuario tipeó rápido un nombre exacto
-        (que el BarcodeScanner detectó como escaneo).
+        Orden de búsqueda:
+          1) Productos Madre (mp_*) — primero por código de presentación, después
+             por código del producto madre. Si hay match, agregamos directo o
+             abrimos el diálogo de variantes.
+          2) Catálogo plano clásico (products.barcode / firebase_id).
+          3) Si no, abrimos el Spotlight con el texto.
         """
         self.barcode_field.clear()
         self._hide_suggestions()
 
-        # Buscar por barcode o código interno (exacto)
+        # 1) Productos Madre (mp_*)
+        if self._handle_mp_barcode(code):
+            return
+
+        # 2) Catálogo plano: barcode o código interno (exacto)
         product = self.product_model.get_by_barcode(code)
         if not product:
             rows = self.db.execute_query(
@@ -1509,9 +1671,168 @@ class SalesView(QWidget):
             self.sync_indicator.setVisible(True)
             QTimer.singleShot(2000, lambda: self.sync_indicator.setVisible(False))
         else:
-            # No hay match exacto: abrir Spotlight con el texto, sin agregar
+            # 3) No hay match exacto: abrir Spotlight con el texto, sin agregar
             self._add_to_search_history(code)
             self._open_search_dialog_with_text(code)
+
+    # ── Productos Madre (mp_*) ──────────────────────────────────────────────
+    def _handle_mp_barcode(self, code: str) -> bool:
+        """Si el código matchea con una presentación o un producto madre, dispara
+        el flujo correspondiente y devuelve True. Si no, devuelve False para que
+        siga el flujo del catálogo plano.
+        """
+        if not code:
+            return False
+        # 1.a) Match en una presentación específica → agrega directo al ticket
+        match = self._mp_nodes.find_by_codigo(code)
+        if match:
+            nodo, pres = match
+            producto = self._mp_products.get_by_id(nodo.get('product_id'))
+            if producto:
+                self._add_mp_lineas_to_cart(self._linea_directa(producto, nodo, pres))
+                lbl = nodo.get('nombre') or '—'
+                if pres and (pres.get('label') or pres.get('tipo')):
+                    lbl += f" · {pres.get('label') or pres.get('tipo')}"
+                self.sync_indicator.setText(f'Agregado: {lbl}')
+                self.sync_indicator.setVisible(True)
+                QTimer.singleShot(2000, lambda: self.sync_indicator.setVisible(False))
+                return True
+        # 1.b) Match con el código del producto madre → abre el diálogo de variantes
+        producto = self._mp_products.get_by_codigo(code)
+        if producto:
+            self._open_mp_variant_dialog(producto)
+            return True
+        return False
+
+    def _open_mp_variant_dialog(self, producto: dict):
+        """Abre el diálogo táctil con las hojas vendibles del producto madre."""
+        product_id = producto.get('id')
+        hojas = self._mp_nodes.get_hojas_by_product(product_id)
+        if not hojas:
+            QMessageBox.information(
+                self, 'Sin variantes vendibles',
+                f'"{producto.get("nombre")}" no tiene hojas vendibles cargadas.'
+            )
+            return
+        descuentos = self._mp_discounts.get_by_product(product_id)
+        try:
+            dlg = MPVariantDialog(producto, hojas, descuentos, parent=self)
+        except Exception as e:
+            logger.error(f"MPVariantDialog: {e}")
+            QMessageBox.critical(self, 'Error', f'No se pudo abrir el diálogo de variantes:\n{e}')
+            return
+        if dlg.exec_() != QDialog.Accepted or not dlg.result_data:
+            return
+        lineas = dlg.result_data.get('lineas') or []
+        if lineas:
+            self._add_mp_lineas_to_cart(lineas)
+            self.sync_indicator.setText(f'Agregadas {len(lineas)} línea(s) al ticket')
+            self.sync_indicator.setVisible(True)
+            QTimer.singleShot(2000, lambda: self.sync_indicator.setVisible(False))
+
+    def _linea_directa(self, producto: dict, nodo: dict, presentacion: dict) -> list:
+        """Construye una sola línea como si viniera del MPVariantDialog (qty=1).
+        Útil cuando se escanea directamente el código de barras de una presentación.
+        """
+        from pos_system.models.mother_product import (
+            descuento_efectivo, aplicar_descuento, precio_efectivo_presentacion,
+            node_precio_venta,
+        )
+        product_id = producto.get('id')
+        descuentos = self._mp_discounts.get_by_product(product_id)
+        todos_los_nodos = self._mp_nodes.get_by_product(product_id)
+        precio_base = (precio_efectivo_presentacion(nodo, presentacion)
+                        if presentacion else node_precio_venta(nodo))
+        desc = descuento_efectivo(producto, nodo, presentacion, todos_los_nodos, descuentos, 1)
+        precio_final, _, etiqueta = aplicar_descuento(precio_base, desc, 1)
+        return [{
+            'product_id':         product_id,
+            'product_name':       producto.get('nombre'),
+            'node_id':            nodo.get('id'),
+            'node_name':          nodo.get('nombre'),
+            'presentation_id':    (presentacion or {}).get('id'),
+            'presentation_label': (presentacion or {}).get('label') if presentacion else None,
+            'qty':                1,
+            'precio_unit_base':   precio_base,
+            'precio_unit_final':  precio_final,
+            'descuento_etiqueta': etiqueta,
+            'subtotal':           precio_final,
+            'descuento_monto':    precio_base - precio_final,
+            'codigo_barras':      ((presentacion or {}).get('codigo_barras')
+                                    if presentacion else producto.get('codigo_barras')),
+        }]
+
+    def _add_mp_lineas_to_cart(self, lineas: list):
+        """Agrega cada línea devuelta por el diálogo (o construida ad-hoc) al cart.
+
+        Cada item tiene flag `is_mp=True` y los IDs necesarios para que la Fase 4
+        descuente stock de mp_nodes/mp_discounts y registre mp_stock_movements al
+        cobrar la venta.
+        """
+        if any(it.get('is_varios_2') for it in self.cart):
+            QMessageBox.warning(
+                self, 'Carrito en modo Varios 2',
+                'El carrito tiene items "Varios 2" (solo factura AFIP).\n'
+                'No se pueden mezclar con productos normales.\n\n'
+                'Cobrá los Varios 2 primero o limpiá el carrito.'
+            )
+            return
+        for r in lineas:
+            qty = float(r.get('qty') or 0)
+            if qty <= 0:
+                continue
+            unit = float(r.get('precio_unit_final') or 0)
+            base = float(r.get('precio_unit_base') or unit)
+            descuento_amt = max(0.0, base - unit) * qty
+            etiqueta_pres = r.get('presentation_label') or ''
+            # Nombre completo = "Producto Madre + Variante" para que el cajero y
+            # el ticket vean "Cartulina Escolar 50x70cm 180gr" en vez de sólo
+            # "50x70cm 180gr". Si el nodo se llama igual que el madre (single-leaf),
+            # no duplicamos.
+            prod_name = (r.get('product_name') or '').strip()
+            node_name = (r.get('node_name') or '').strip()
+            if prod_name and node_name and prod_name.lower() != node_name.lower():
+                nombre = f"{prod_name} {node_name}"
+            else:
+                nombre = node_name or prod_name or 'Producto'
+            if etiqueta_pres:
+                nombre = f"{nombre}  ·  {etiqueta_pres}"
+            if r.get('descuento_etiqueta'):
+                nombre = f"{nombre}  ({r['descuento_etiqueta']})"
+            self.cart.append({
+                # Campos legacy (sin product_id real porque mp_* no vive en `products`)
+                'product_id':       None,
+                'product_name':     nombre,
+                'quantity':         qty,
+                'unit_price':       unit,
+                'original_price':   base,
+                'discount_type':    'porcentaje' if r.get('descuento_etiqueta', '').endswith('%') else 'monto_fijo' if r.get('descuento_etiqueta', '').startswith('−$') else None,
+                'discount_value':   0,
+                'discount_amount':  descuento_amt,
+                'promo_id':         None,
+                'promo_label':      r.get('descuento_etiqueta') or '',
+                'subtotal':         float(r.get('subtotal') or unit * qty),
+                'max_stock':        9999,
+                'category':         None,
+                # Payload mp_* (consumido por Fase 4 al confirmar venta)
+                'is_mp':              True,
+                'mp_product_id':      r.get('product_id'),
+                'mp_node_id':         r.get('node_id'),
+                'mp_presentation_id': r.get('presentation_id'),
+                'mp_codigo_barras':   r.get('codigo_barras'),
+            })
+        self.update_cart_display()
+
+    def reload_mp_cache(self):
+        """Hook llamado por MainWindow._on_mp_refresh_slot cuando hay cambios en mp_*.
+
+        Invalida el catálogo en memoria así la próxima búsqueda incluye los
+        cambios (productos madre nuevos, presentaciones modificadas, etc.).
+        """
+        try:
+            self._invalidate_catalog_cache()
+        except Exception:
+            pass
 
     @staticmethod
     def _normalize(text: str) -> str:
@@ -1672,7 +1993,16 @@ class SalesView(QWidget):
             self._auto_open_timer.start(700)
 
     def _ensure_catalog_cache(self):
-        """Carga el catálogo completo en memoria (lazy). Se invalida con _invalidate_catalog_cache()."""
+        """Carga el catálogo completo en memoria (lazy). Se invalida con _invalidate_catalog_cache().
+
+        Combina:
+          1) Catálogo plano clásico (`products`).
+          2) Productos Madre (mp_*) — el madre como entry buscable + cada hoja
+             vendible con prefijo y atributos como haystack.
+        Las entradas mp_* llevan flags `is_mp`, `mp_kind` ('madre'|'hoja'),
+        `mp_doc` y `mp_madre`. Usan un `id` placeholder >0 para pasar el filtro
+        del SpotlightDialog (`p.get('id', 0) > 0`).
+        """
         if self._catalog_cache is not None:
             return
         try:
@@ -1681,15 +2011,89 @@ class SalesView(QWidget):
             )
         except Exception:
             products = []
-        self._catalog_cache = products
-        # Pre-computar haystack normalizado por producto (como hace la webapp)
-        self._catalog_haystack = [
+        cache = list(products)
+        haystacks = [
             self._norm_search(' '.join(filter(None, [
                 p.get('name'), p.get('barcode'), p.get('firebase_id'),
                 p.get('description'), p.get('category'), p.get('rubro'),
             ])))
             for p in products
         ]
+
+        # Entradas Productos Madre: van al final del cache para que aparezcan
+        # después del catálogo plano cuando no hay filtro de texto.
+        try:
+            from pos_system.models.mother_product import MotherProduct, Node
+            mp_mod = MotherProduct(self.db)
+            node_mod = Node(self.db)
+            madres = mp_mod.get_all() or []
+        except Exception:
+            madres = []
+            node_mod = None
+
+        # placeholder de ids: 9_000_000+ para no chocar con products.id reales
+        mp_id_seq = 9_000_000
+        for madre in madres:
+            mp_id_seq += 1
+            entry_m = {
+                'id':            mp_id_seq,
+                'name':          madre.get('nombre') or '—',
+                'barcode':       madre.get('codigo_barras') or '',
+                'firebase_id':   '',
+                'description':   madre.get('descripcion') or '',
+                'category':      madre.get('categoria') or '',
+                'rubro':         madre.get('marca') or '',
+                'price':         0,
+                'stock':         None,
+                'is_mp':         True,
+                'mp_kind':       'madre',
+                'mp_doc':        madre,
+            }
+            cache.append(entry_m)
+            haystacks.append(self._norm_search(' '.join(filter(None, [
+                entry_m['name'], entry_m['barcode'], entry_m['description'],
+                entry_m['category'], entry_m['rubro'],
+            ]))))
+
+            # Las HOJAS (variantes) NO se muestran en el buscador como filas separadas:
+            # se ven cuando el cajero hace click en la madre y abre el MPVariantDialog.
+            # Pero SÍ las indexamos en el haystack del madre para que la búsqueda
+            # por nombre de variante / código de presentación / atributo encuentre
+            # al madre correspondiente.
+            if node_mod is None:
+                continue
+            try:
+                hojas = node_mod.get_hojas_by_product(madre.get('id'))
+            except Exception:
+                hojas = []
+            extra_hay = []
+            for h in hojas or []:
+                pres_list = h.get('presentaciones') or []
+                # nombre + sku_sufijo
+                extra_hay.append(h.get('nombre') or '')
+                if h.get('sku_sufijo'):
+                    extra_hay.append(h['sku_sufijo'])
+                # atributos
+                for k, v in (h.get('atributos') or {}).items():
+                    if isinstance(v, dict):
+                        lab = v.get('label') or v.get('value') or ''
+                    else:
+                        lab = str(v or '')
+                    if lab:
+                        extra_hay.append(str(lab))
+                # códigos de barras de presentaciones (escanear código de presentación
+                # va por _on_barcode_scanned; acá es por si tipean el número en busqueda)
+                for pp in pres_list:
+                    if pp.get('codigo_barras'):
+                        extra_hay.append(pp['codigo_barras'])
+            if extra_hay:
+                # Re-armar el haystack del madre concatenando lo del madre + lo de hojas
+                haystacks[-1] = self._norm_search(' '.join(filter(None, [
+                    haystacks[-1], *extra_hay,
+                ])))
+
+        self._catalog_cache = cache
+        self._catalog_haystack = haystacks
 
     def _invalidate_catalog_cache(self):
         """Marca el cache como desactualizado para que se recargue en la próxima búsqueda."""
@@ -3903,21 +4307,32 @@ class SpotlightDialog(QDialog):
             cat = p.get('category') or 'Sin categoría'
             stock = p.get('stock', 0)
             es_conj = int(p.get('es_conjunto') or 0) == 1
-            if es_conj:
+            is_mp   = bool(p.get('is_mp'))
+            mp_kind = p.get('mp_kind') or ''
+            if is_mp and mp_kind == 'madre':
+                stock_txt = 'ver variantes'
+            elif es_conj:
                 stock_txt = f"{p.get('conjunto_total') or 0:.0f} {p.get('conjunto_unidad_medida') or ''}".strip()
             else:
                 stock_txt = f"{stock} un"
             barcode = p.get('barcode') or ''
-            price_txt = f"${p.get('price', 0):,.0f}"
-            # Texto principal (nombre) y subtexto (codigo/categoria/stock) van como
-            # un solo string con \n. Stylesheet del QListWidget pinta padding/border.
-            line1 = f"{p.get('name', '—')}"
+            if is_mp and mp_kind == 'madre':
+                price_txt = '—'
+            else:
+                price_txt = f"${p.get('price', 0):,.0f}"
+            # Solo el ícono ◆ (sin la palabra "MADRE"); el fondo violeta + barra
+            # lateral ya identifican que es un producto madre.
+            if is_mp and mp_kind == 'madre':
+                line1 = f"◆  {p.get('name', '—')}"
+            else:
+                line1 = f"{p.get('name', '—')}"
             sub = f"{barcode}  ·  {cat}  ·  stock: {stock_txt}"
             item = QListWidgetItem()
             item.setData(Qt.UserRole, p)
             item.setData(Qt.UserRole + 1, line1)
             item.setData(Qt.UserRole + 2, sub)
             item.setData(Qt.UserRole + 3, price_txt)
+            item.setData(Qt.UserRole + 4, mp_kind if is_mp else '')  # marca para el delegate
             item.setSizeHint(QSize(0, 56))
             self.list.addItem(item)
         # Custom paint via delegate
@@ -3930,23 +4345,35 @@ class SpotlightDialog(QDialog):
                     p_data = index.data(Qt.UserRole + 1) or ''
                     sub = index.data(Qt.UserRole + 2) or ''
                     price = index.data(Qt.UserRole + 3) or ''
+                    mp_kind = index.data(Qt.UserRole + 4) or ''
+                    is_mp = bool(mp_kind)
                     r = option.rect
                     selected = bool(option.state & QStyle.State_Selected)
                     hover = bool(option.state & QStyle.State_MouseOver)
                     painter.save()
-                    painter.fillRect(r,
-                        QColor(_C['accent_soft']) if selected else
-                        (QColor(_C['surface_alt']) if hover else QColor(_C['surface']))
-                    )
+                    # Productos Madre (mp_*): fondo violeta para diferenciar del catálogo plano.
+                    # Madres con tono más intenso, hojas más suave. Selected/hover overrides.
+                    if selected:
+                        bg = QColor(_C['accent_soft'])
+                    elif hover:
+                        bg = QColor('#ede9fe' if mp_kind == 'madre' else '#f5f3ff') if is_mp else QColor(_C['surface_alt'])
+                    elif is_mp:
+                        bg = QColor('#ede9fe' if mp_kind == 'madre' else '#f5f3ff')
+                    else:
+                        bg = QColor(_C['surface'])
+                    painter.fillRect(r, bg)
                     if selected:
                         painter.fillRect(r.x(), r.y(), 3, r.height(), QColor(_C['accent']))
+                    elif is_mp:
+                        # Barrita lateral violeta para reforzar identidad mp_*
+                        painter.fillRect(r.x(), r.y(), 3, r.height(), QColor('#7c3aed'))
                     # Bottom border
                     painter.setPen(QPen(QColor(_C['border_soft']), 1))
                     painter.drawLine(r.x(), r.y() + r.height() - 1, r.x() + r.width(), r.y() + r.height() - 1)
                     # Texto nombre
                     f1 = QFont('Segoe UI', 10, QFont.Bold)
                     painter.setFont(f1)
-                    painter.setPen(QColor(_C['text']))
+                    painter.setPen(QColor('#5b21b6' if is_mp else _C['text']))
                     name_rect = r.adjusted(16, 8, -120, -28)
                     painter.drawText(name_rect, Qt.AlignLeft | Qt.AlignTop, p_data)
                     # Sub

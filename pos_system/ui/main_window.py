@@ -42,6 +42,8 @@ class MainWindow(QMainWindow):
     _sig_delta_sync_done = pyqtSignal(int)  # n_updated
     # Señal thread-safe: listener de stock detectó cambios → refrescar UI
     _sig_stock_refresh = pyqtSignal()
+    # Señal thread-safe: listeners mp_* (productos madre) detectaron cambios
+    _sig_mp_refresh = pyqtSignal()
 
     def __init__(self, current_user: dict = None):
         super().__init__()
@@ -711,6 +713,20 @@ class MainWindow(QMainWindow):
                     logger.warning(f"Pres refresh emit: {e}")
             fb.start_presupuestos_listener(self.db, on_change=_on_pres_change)
 
+            # 9. Listeners de PRODUCTOS MADRE (mp_*) — sistema cargado desde la webapp.
+            # Espejan mp_products / mp_nodes / mp_discounts en SQLite local en tiempo real.
+            # La UI de venta consume desde local (rápido) y se refresca con _sig_mp_refresh.
+            self._sig_mp_refresh.connect(self._on_mp_refresh_slot)
+            def _on_mp_change():
+                self._sig_mp_refresh.emit()
+            fb.start_mp_products_listener(self.db,  on_refresh=_on_mp_change)
+            fb.start_mp_nodes_listener(self.db,     on_refresh=_on_mp_change)
+            fb.start_mp_discounts_listener(self.db, on_refresh=_on_mp_change)
+            # Espejo local de auditoría: mp_stock_movements. No dispara refresh
+            # porque la UI de venta no lo consume — sólo queda accesible para
+            # consultas/reportes offline (ej. Cierres → ver movimientos del día).
+            fb.start_mp_stock_movements_listener(self.db)
+
             logger.info("Listeners de sincronizacion en tiempo real activados (thread-safe).")
         except Exception as e:
             logger.warning(f"No se pudo activar listeners de sincronizacion: {e}")
@@ -745,6 +761,20 @@ class MainWindow(QMainWindow):
             self._check_low_stock_badge()
         except Exception:
             pass
+
+    def _on_mp_refresh_slot(self):
+        """Listener mp_* detectó cambios — refrescar caché en memoria de la venta.
+
+        En Fase 1 solo logueamos: la SQLite ya quedó sincronizada por el listener
+        antes de emitir la señal. En Fase 3 (integración a sales_view) usaremos
+        este slot para refrescar el catálogo en memoria que usa la búsqueda táctil.
+        """
+        try:
+            if hasattr(self, 'sales_view') and self.sales_view is not None and \
+               hasattr(self.sales_view, 'reload_mp_cache'):
+                self.sales_view.reload_mp_cache()
+        except Exception as e:
+            logger.warning(f"mp refresh: sales_view: {e}")
 
     def _on_caja_close_slot(self, session_id, register_id=0):
         logger.info(

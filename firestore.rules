@@ -139,6 +139,10 @@ service cloud.firestore {
     match /control_config/{docId} {
       allow read, write: if true;
     }
+    // Reasignación manual de transferencias por día (cuenta1 / cuenta2).
+    match /transfer_splits/{fechaId} {
+      allow read, write: if true;
+    }
 
     // ── FACTURAS ELECTRÓNICAS ─────────────────────────────────────────────────
     // El POS sube facturas generadas (FAC. ELEC. A/B/C) con sync_factura().
@@ -163,6 +167,26 @@ service cloud.firestore {
       allow read, write: if true;
     }
     match /presupuestos_meta/{docId} {
+      allow read, write: if true;
+    }
+
+    // ── LAB · PRODUCTOS MADRE (módulo aislado, NO toca el POS) ───────────────
+    // Esquema jerárquico de productos madre → raíces → sub-raíces con
+    // presentaciones, descuentos heredables y movimientos de stock.
+    // Colecciones prefijadas mp_* para no colisionar con el POS actual.
+    match /mp_products/{docId} {
+      allow read, write: if true;
+    }
+    match /mp_nodes/{docId} {
+      allow read, write: if true;
+    }
+    match /mp_presentations/{docId} {
+      allow read, write: if true;
+    }
+    match /mp_discounts/{docId} {
+      allow read, write: if true;
+    }
+    match /mp_stock_movements/{docId} {
       allow read, write: if true;
     }
 

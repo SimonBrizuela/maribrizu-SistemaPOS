@@ -61,8 +61,9 @@ export async function renderDashboard(container, db) {
   const hoyStr = todayAR();
   const hoy = new Date(hoyStr + 'T00:00:00-03:00');
   const ayer = new Date(hoy); ayer.setDate(ayer.getDate() - 1);
-  const inicioSemana = new Date(hoy); inicioSemana.setDate(inicioSemana.getDate() - 6);
   const inicioMes = new Date(hoyStr.slice(0, 7) + '-01T00:00:00-03:00');
+  const inicioSemanaRaw = new Date(hoy); inicioSemanaRaw.setDate(inicioSemanaRaw.getDate() - 6);
+  const inicioSemana = inicioSemanaRaw < inicioMes ? inicioMes : inicioSemanaRaw;
   const inicioMesAnt = new Date(inicioMes); inicioMesAnt.setMonth(inicioMesAnt.getMonth() - 1);
   const finMesAnt = new Date(inicioMes); finMesAnt.setSeconds(finMesAnt.getSeconds() - 1);
   const hace30 = new Date(hoy); hace30.setDate(hace30.getDate() - 29);
@@ -74,16 +75,32 @@ export async function renderDashboard(container, db) {
   const chartPromise = loadChartJs().catch(() => null);
 
   const [ventasRaw, itemsRaw, catalogo, historialRaw, saleNumMap] = await Promise.all([
-    // Ventas: TTL 1 min
+    // Ventas: TTL 1 min — 5000 cubre cómodamente "Mes actual vs Mes anterior" (~85 ventas/día × 60 días).
     getCached('dashboard:ventas', async () => {
-      const snap = await getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc'), limit(1500)));
+      const snap = await getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc'), limit(5000)));
       return snap.docs.map(d => ({ id: d.id, ...d.data() }));
     }, { ttl: 60 * 1000 }),
     // Items por día (para análisis por producto / categoría / costos)
+    // ~3 items × 85 ventas × 60 días ≈ 15k. Cap a 8000 para limitar transferencia,
+    // sólo guardamos los campos que el dashboard usa para que entre en localStorage.
     getCached('dashboard:items_full', async () => {
       const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('fecha', 'desc'), limit(8000)));
-      return snap.docs.map(d => d.data());
-    }, { ttl: 5 * 60 * 1000, memOnly: true }),
+      return snap.docs.map(d => {
+        const it = d.data();
+        // Sólo los campos que el dashboard realmente usa (reduce el tamaño en localStorage)
+        return {
+          fecha:        it.fecha,
+          producto:     it.producto || it.product_name || '',
+          categoria:    it.categoria,
+          subtotal:     Number(it.subtotal || 0),
+          cantidad:     Number(it.cantidad || it.quantity || 0),
+          deleted:      it.deleted === true,
+          is_varios_2:  it.is_varios_2 === true,
+          venta_id:     it.venta_id,
+          payment_type: it.payment_type,
+        };
+      });
+    }, { ttl: 5 * 60 * 1000 }),
     // Catálogo completo
     getCached('catalogo:all', async () => {
       const snap = await getDocs(collection(db, 'catalogo'));
@@ -91,7 +108,7 @@ export async function renderDashboard(container, db) {
     }, { ttl: 10 * 60 * 1000, memOnly: true }),
     // Historial diario (para legacy bar chart si chart.js falla)
     getCached('dashboard:historial', async () => {
-      const snap = await getDocs(query(collection(db, 'historial_diario'), orderBy('fecha', 'desc'), limit(60)));
+      const snap = await getDocs(query(collection(db, 'historial_diario'), orderBy('fecha', 'desc'), limit(30)));
       return snap.docs.map(d => d.data());
     }, { ttl: 3 * 60 * 1000 }),
     getSaleNumberMap(db),

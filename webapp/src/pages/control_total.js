@@ -59,8 +59,44 @@ function buildCatSelectOptions(categorias, tipoFiltro, selectedId) {
 function fmt(n) {
   return Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 }
+function fmtCompacto(v) {
+  const n = Number(v) || 0;
+  if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (Math.abs(n) >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'k';
+  return String(Math.round(n));
+}
+
+// ── Chart.js (compartido con Dashboard via window.Chart) ─────────────────────
+let _ctChartLoader = null;
+function loadChartJsCt() {
+  if (window.Chart) return Promise.resolve(window.Chart);
+  if (_ctChartLoader) return _ctChartLoader;
+  _ctChartLoader = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js';
+    s.async = true;
+    s.onload = () => resolve(window.Chart);
+    s.onerror = () => reject(new Error('No se pudo cargar Chart.js'));
+    document.head.appendChild(s);
+  });
+  return _ctChartLoader;
+}
+const _ctChartRefs = new Map();
+function destroyCtCharts() {
+  _ctChartRefs.forEach(ch => { try { ch.destroy(); } catch (_) {} });
+  _ctChartRefs.clear();
+}
+function ctMakeChart(id, el, config) {
+  if (!el || !window.Chart) return null;
+  const ch = new window.Chart(el.getContext('2d'), config);
+  _ctChartRefs.set(id, ch);
+  return ch;
+}
 function todayAR() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+}
+function dateToArYMD(d) {
+  return d.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
 }
 function parseArDate(raw) {
   if (!raw) return new Date(NaN);
@@ -70,37 +106,107 @@ function parseArDate(raw) {
   return new Date(raw);
 }
 
-function periodoRango(periodo) {
+function periodoRango(periodo, customRange) {
   const hoy = todayAR();
   const now = new Date(hoy + 'T00:00:00-03:00');
-  if (periodo === 'hoy')    return { desde: now, label: 'Hoy' };
-  if (periodo === 'semana') { const d = new Date(now); d.setDate(d.getDate() - 6); return { desde: d, label: 'Últimos 7 días' }; }
   const inicioMes = new Date(hoy.slice(0, 7) + '-01T00:00:00-03:00');
+  if (periodo === 'custom' && customRange?.desde) {
+    const desde = new Date(customRange.desde + 'T00:00:00-03:00');
+    const hastaStr = customRange.hasta || customRange.desde;
+    const hastaEnd = new Date(hastaStr + 'T00:00:00-03:00');
+    hastaEnd.setDate(hastaEnd.getDate() + 1); // exclusivo
+    const label = customRange.desde === hastaStr
+      ? customRange.desde
+      : `${customRange.desde} → ${hastaStr}`;
+    return { desde, hasta: hastaEnd, label };
+  }
+  if (periodo === 'hoy') return { desde: now, label: 'Hoy' };
+  if (periodo === 'semana') {
+    const d = new Date(now); d.setDate(d.getDate() - 6);
+    const desde = d < inicioMes ? inicioMes : d;
+    return { desde, label: 'Últimos 7 días' };
+  }
   return { desde: inicioMes, label: 'Este mes' };
 }
 
 // ── Render principal ──────────────────────────────────────────────────────────
 export async function renderControlTotal(container, db) {
   let periodo = localStorage.getItem('ct:periodo') || 'hoy';
+  let customRange = null;
+  try { customRange = JSON.parse(localStorage.getItem('ct:custom_range') || 'null'); } catch (_) {}
   const config = await loadConfig(db);
   const [categorias, rubros] = await Promise.all([loadCategorias(db), loadRubros(db)]);
 
   container.innerHTML = buildSkeleton(periodo, config, categorias, rubros);
 
+  const togglePanel = (visible) => {
+    const panel = container.querySelector('#ct-custom-panel');
+    if (panel) panel.style.display = visible ? '' : 'none';
+  };
+
   container.querySelectorAll('.ct-periodo-btn').forEach(btn => {
     btn.addEventListener('click', () => {
-      periodo = btn.dataset.p;
+      const p = btn.dataset.p;
+      if (p === 'custom') {
+        periodo = 'custom';
+        localStorage.setItem('ct:periodo', periodo);
+        container.querySelectorAll('.ct-periodo-btn').forEach(b => b.classList.toggle('active', b.dataset.p === periodo));
+        togglePanel(true);
+        if (customRange?.desde) refreshDatos(container, db, periodo, config, customRange);
+        return;
+      }
+      togglePanel(false);
+      periodo = p;
       localStorage.setItem('ct:periodo', periodo);
       container.querySelectorAll('.ct-periodo-btn').forEach(b => b.classList.toggle('active', b.dataset.p === periodo));
-      refreshDatos(container, db, periodo, config);
+      refreshDatos(container, db, periodo, config, customRange);
     });
   });
+
+  setupCustomPanel(container, customRange, config, (range) => {
+    customRange = range;
+    localStorage.setItem('ct:custom_range', JSON.stringify(range));
+    periodo = 'custom';
+    localStorage.setItem('ct:periodo', periodo);
+    container.querySelectorAll('.ct-periodo-btn').forEach(b => b.classList.toggle('active', b.dataset.p === 'custom'));
+    refreshDatos(container, db, periodo, config, customRange);
+  });
+
+  if (periodo === 'custom' && !customRange?.desde) togglePanel(true);
+  if (periodo === 'custom' && customRange?.desde) togglePanel(false);
 
   setupGastoForm(container, db, periodo, config);
   setupConfigCuentas(container, db, config);
   setupCategoriasBtn(container, db, periodo, config);
+  setupMainTabs(container);
 
-  await refreshDatos(container, db, periodo, config);
+  await refreshDatos(container, db, periodo, config, customRange);
+}
+
+// Tabs principales: Resumen / Días — persiste en localStorage
+function setupMainTabs(container) {
+  const tabs = container.querySelectorAll('.ct-main-tab');
+  const panes = {
+    resumen: container.querySelector('#ct-tab-resumen'),
+    dias:    container.querySelector('#ct-tab-dias'),
+  };
+  const aplicar = (activo) => {
+    tabs.forEach(t => {
+      const a = t.dataset.tab === activo;
+      t.classList.toggle('active', a);
+      t.style.color = a ? 'var(--primary)' : '#65676b';
+      t.style.fontWeight = a ? '700' : '600';
+      t.style.borderBottomColor = a ? 'var(--primary)' : 'transparent';
+    });
+    Object.entries(panes).forEach(([k, el]) => { if (el) el.style.display = k === activo ? '' : 'none'; });
+  };
+  const guardada = localStorage.getItem('ct:main_tab') || 'resumen';
+  aplicar(guardada);
+  tabs.forEach(t => t.addEventListener('click', () => {
+    const v = t.dataset.tab;
+    localStorage.setItem('ct:main_tab', v);
+    aplicar(v);
+  }));
 }
 
 // ── Config de cuentas ─────────────────────────────────────────────────────────
@@ -113,8 +219,10 @@ async function loadConfig(db) {
 }
 
 // ── Cargar datos y renderizar ─────────────────────────────────────────────────
-async function refreshDatos(container, db, periodo, config) {
-  const { desde: desdePeriodo } = periodoRango(periodo);
+async function refreshDatos(container, db, periodo, config, customRange) {
+  destroyCtCharts();
+  const chartLib = loadChartJsCt().catch(() => null);
+  const { desde: desdePeriodo, hasta } = periodoRango(periodo, customRange);
   const fechaInicio = await getFechaInicioDate(db);
   // La fecha efectiva = la más reciente entre el período elegido y la fecha_inicio global
   const desde = desdePeriodo > fechaInicio ? desdePeriodo : fechaInicio;
@@ -126,9 +234,11 @@ async function refreshDatos(container, db, periodo, config) {
   });
 
   // Cargar en paralelo — cache compartido con otras páginas
-  const [ventas, itemsMap, catalogo, gastos, categorias] = await Promise.all([
+  const [ventas, itemsMap, catalogo, gastos, categorias, transferSplits] = await Promise.all([
     getCached('dashboard:ventas', async () => {
-      const snap = await getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc'), limit(500)));
+      // limit alto: la vista "Este mes" puede tener 30 días × ~130 ventas/día.
+      // Con 500 sólo entraban ~4 días y se cortaban los más viejos del mes.
+      const snap = await getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc'), limit(5000)));
       return snap.docs.map(d => ({ id: d.id, ...d.data() }));
     }, { ttl: 60 * 1000 }),
     getCached('ct:items_rich', async () => {
@@ -158,8 +268,9 @@ async function refreshDatos(container, db, periodo, config) {
       const snap = await getDocs(collection(db, 'catalogo'));
       return snap.docs.map(d => ({ doc_id: d.id, ...d.data() }));
     }, { ttl: 10 * 60 * 1000, memOnly: true }),
-    getCached(`ct:gastos:${desde.toISOString().slice(0,10)}`, () => loadGastos(db, desde), { ttl: 30 * 1000 }),
+    getCached(`ct:gastos:${desde.toISOString().slice(0,10)}${hasta ? '_' + hasta.toISOString().slice(0,10) : ''}`, () => loadGastos(db, desde, hasta), { ttl: 30 * 1000 }),
     loadCategorias(db),
+    getCached('ct:transfer_splits:all', () => loadTransferSplits(db), { ttl: 30 * 1000 }),
   ]);
   const catById = Object.fromEntries(categorias.map(c => [c.id, c]));
 
@@ -175,18 +286,38 @@ async function refreshDatos(container, db, periodo, config) {
     if (v.deleted === true) return false;
     if (isVentaVarios2(v)) return false;
     const fecha = parseArDate(v.created_at);
-    return fecha >= desde;
+    if (fecha < desde) return false;
+    if (hasta && fecha >= hasta) return false;
+    return true;
   });
 
   // ── Totales de ventas ──
   const ingresoTotal   = ventasPeriodo.reduce((s, v) => s + (v.total_amount || 0), 0);
   const efectivoTotal  = ventasPeriodo.filter(v => v.payment_type === 'cash').reduce((s, v) => s + (v.total_amount || 0), 0);
 
-  let transCuenta1 = 0, transCuenta2 = 0;
+  // Transferencias por día (auto + override manual desde transfer_splits)
+  const transPorDia = {}; // { 'YYYY-MM-DD': { total, autoC1, autoC2 } }
   ventasPeriodo.filter(v => v.payment_type !== 'cash').forEach(v => {
+    const dt    = parseArDate(v.created_at);
+    const ymd   = dateToArYMD(dt);
+    const monto = v.total_amount || 0;
+    if (!transPorDia[ymd]) transPorDia[ymd] = { total: 0, autoC1: 0, autoC2: 0 };
+    transPorDia[ymd].total += monto;
     const cuenta = v.transfer_account || v.cuenta_id || 'cuenta1';
-    if (cuenta === 'cuenta2') transCuenta2 += (v.total_amount || 0);
-    else transCuenta1 += (v.total_amount || 0);
+    if (cuenta === 'cuenta2') transPorDia[ymd].autoC2 += monto;
+    else                       transPorDia[ymd].autoC1 += monto;
+  });
+
+  let transCuenta1 = 0, transCuenta2 = 0;
+  Object.entries(transPorDia).forEach(([ymd, d]) => {
+    const ov = transferSplits[ymd];
+    if (ov) {
+      transCuenta1 += Number(ov.cuenta1 || 0);
+      transCuenta2 += Number(ov.cuenta2 || 0);
+    } else {
+      transCuenta1 += d.autoC1;
+      transCuenta2 += d.autoC2;
+    }
   });
 
   // ── CMV con separación items con/sin costo + detección de pérdidas ──
@@ -199,6 +330,7 @@ async function refreshDatos(container, db, periodo, config) {
   const mapaSinCosto = {};   // { nombre: { cantidad, ingreso, doc_id, precio_venta } }
   const mapaPerdida  = {};   // { nombre: { cantidad, perdida, costo, precio, doc_id } }
   const mapaConCosto = {};   // { nombre: { cantidad, ingreso, cmv, costoUnit, precioUnit } } para detalle por producto
+  const porRubro = {};       // { rubro: { ingreso, cmv, ganancia, gasto } }
 
   ventasPeriodo.forEach(v => {
     const saleId = v.sale_id || v.id;
@@ -209,10 +341,15 @@ async function refreshDatos(container, db, periodo, config) {
       const costoUnit = cat?.costo || 0;
       const costoItem = costoUnit * item.cantidad;
       const ingresoItem = item.subtotal || (item.precio_unitario * item.cantidad) || 0;
+      const rubroItem = (cat?.rubro || cat?.categoria || '').trim() || 'Sin rubro';
 
       if (costoUnit > 0) {
         cmv += costoItem;
         ingresoConCosto += ingresoItem;
+        if (!porRubro[rubroItem]) porRubro[rubroItem] = { ingreso: 0, cmv: 0, ganancia: 0, gasto: 0 };
+        porRubro[rubroItem].ingreso  += ingresoItem;
+        porRubro[rubroItem].cmv      += costoItem;
+        porRubro[rubroItem].ganancia += (ingresoItem - costoItem);
         if (!mapaConCosto[item.nombre]) {
           mapaConCosto[item.nombre] = { cantidad: 0, ingreso: 0, cmv: 0, costoUnit, precioUnit: item.precio_unitario };
         }
@@ -249,6 +386,14 @@ async function refreshDatos(container, db, periodo, config) {
   // ── Separar gastos e ingresos manuales ──
   const soloGastos   = gastos.filter(g => !g.es_ingreso);
   const soloIngresos = gastos.filter(g =>  g.es_ingreso);
+
+  // Gastos imputables a rubro (suma al porRubro)
+  soloGastos.forEach(g => {
+    const r = (g.rubro || '').trim();
+    if (!r) return;
+    if (!porRubro[r]) porRubro[r] = { ingreso: 0, cmv: 0, ganancia: 0, gasto: 0 };
+    porRubro[r].gasto += (g.monto || 0);
+  });
 
   const gastoEfectivo = soloGastos.filter(g => g.tipo === 'efectivo').reduce((s, g) => s + (g.monto || 0), 0);
   const gastoCuenta1  = soloGastos.filter(g => g.tipo === 'cuenta1').reduce((s, g) => s + (g.monto || 0), 0);
@@ -348,6 +493,12 @@ async function refreshDatos(container, db, periodo, config) {
       </div>
 
       <!-- Desglose por cuenta -->
+      <div class="ct-cuentas-header">
+        <span class="ct-cuentas-titulo">Desglose por cuenta</span>
+        <button id="ct-reasignar-btn" class="ct-reasignar-btn" title="Reasignar transferencias entre cuentas">
+          <span class="material-icons" style="font-size:16px">tune</span> Reasignar transferencias
+        </button>
+      </div>
       <div class="ct-cuentas-row">
         <div class="ct-cuenta-item">
           <span class="material-icons" style="color:#2e7d32;font-size:18px">payments</span>
@@ -386,6 +537,9 @@ async function refreshDatos(container, db, periodo, config) {
           </div>
         </div>
       </div>
+
+      <!-- Charts -->
+      <div class="ct-charts-row" id="ct-charts-row"></div>
     `;
 
     // Click en bloques de la ecuación → modal con detalle
@@ -400,10 +554,36 @@ async function refreshDatos(container, db, periodo, config) {
     statsEl.querySelectorAll('.ct-clickable').forEach(el => {
       el.addEventListener('click', () => abrirDetalleControl(el.dataset.detalle, detalleData));
     });
+
+    const btnReasignar = statsEl.querySelector('#ct-reasignar-btn');
+    if (btnReasignar) {
+      btnReasignar.addEventListener('click', () => {
+        abrirReasignarModal({
+          db, transPorDia, transferSplits, config,
+          onSaved: () => refreshDatos(container, db, periodo, config, customRange),
+        });
+      });
+    }
+
+    // ── Mini gráficos (donut ingresos + ingresos vs gastos por día + categorías) ──
+    chartLib.then(Chart => {
+      if (!Chart) return;
+      const chartsRow = statsEl.querySelector('#ct-charts-row');
+      if (!chartsRow) return;
+      renderCtMiniCharts(chartsRow, {
+        efectivoTotal, transCuenta1, transCuenta2,
+        ingManualEfectivo, ingManualCuenta1, ingManualCuenta2,
+        ventasPeriodo, gastos, porCategoria, porRubro,
+        c1Nombre: c1, c2Nombre: c2,
+      });
+    });
   }
 
   // ── Resumen por categoría (bloque visible bajo la ecuación) ──
   renderResumenCategorias(container, porCategoria);
+
+  // ── Recompra predictiva: barra de aprendizaje + sugerencias al 100% ──
+  renderRecompra(container, ventas, itemsMap, catalogo, fechaInicio);
 
   // ── Banners de alerta: costos faltantes + pérdidas ──
   renderAlertas(container, db, mapaSinCosto, mapaPerdida, itemsSinCosto, montoPerdida, ingresoSinCosto, () => refreshDatos(container, db, periodo, config));
@@ -416,7 +596,7 @@ async function refreshDatos(container, db, periodo, config) {
     const f = parseArDate(v.created_at);
     return f >= fechaInicio;
   });
-  renderListaGanancia(container, ventasParaLista, itemsMap, catalogoPorNombre);
+  renderListaGanancia(container, ventasParaLista, itemsMap, catalogoPorNombre, gastos, config);
 
   // ── Lista de gastos (con filtros: tipo mov., categoría, búsqueda) ──
   renderGastosLista(container, db, gastos, categorias, catById, config, () => refreshDatos(container, db, periodo, config));
@@ -606,6 +786,222 @@ function renderResumenCategorias(container, porCategoria) {
           </div>
         </div>
       `).join('')}
+    </div>
+  `;
+}
+
+// ── Recompra predictiva ───────────────────────────────────────────────────────
+// Mientras la app aprende el movimiento del local, muestra una barra con el
+// progreso de "días de historia acumulados". Cuando llega a 60 días (2 meses),
+// activa las sugerencias de qué reponer antes de fin de mes.
+const RECOMPRA_DIAS_OBJETIVO = 60;       // 2 meses para que el cálculo sea estable
+const RECOMPRA_BUFFER_DIAS   = 5;        // colchón extra (envío del proveedor)
+const RECOMPRA_VENT_LOOKBACK = 30;       // ventana de cálculo de velocidad
+
+function renderRecompra(container, ventas, itemsMap, catalogo, fechaInicio) {
+  const el = container.querySelector('#ct-recompra');
+  if (!el) return;
+
+  // ── Días de historia disponibles ──
+  // El más reciente entre fecha_inicio config y la venta más vieja del cache.
+  let masVieja = null;
+  for (const v of ventas) {
+    if (v.deleted === true) continue;
+    const f = parseArDate(v.created_at);
+    if (isNaN(f)) continue;
+    if (!masVieja || f < masVieja) masVieja = f;
+  }
+  const inicio = masVieja && masVieja > fechaInicio ? masVieja : fechaInicio;
+  const hoy = new Date();
+  const diasHistoria = Math.max(0, Math.floor((hoy - inicio) / (1000 * 60 * 60 * 24)));
+  const progreso = Math.min(100, Math.round((diasHistoria / RECOMPRA_DIAS_OBJETIVO) * 100));
+  const completo = diasHistoria >= RECOMPRA_DIAS_OBJETIVO;
+
+  // Siempre calculamos las sugerencias, aunque la app esté aprendiendo.
+  // Por debajo del umbral, las mostramos como "vista previa" (datos limitados).
+  const sugerencias = calcularSugerenciasRecompra(ventas, itemsMap, catalogo);
+  let html = '';
+  if (!completo) {
+    html += renderRecompraProgreso(diasHistoria, progreso);
+  }
+  html += renderRecompraSugerencias(sugerencias, diasHistoria, completo);
+  el.innerHTML = html;
+}
+
+function renderRecompraProgreso(diasHistoria, progreso) {
+  const dias_faltan = Math.max(0, RECOMPRA_DIAS_OBJETIVO - diasHistoria);
+  return `
+    <div class="ct-card" style="background:linear-gradient(135deg,#fff 0%,#fff7f0 100%);border:1px solid var(--border);border-radius:var(--radius);padding:18px 22px;margin-bottom:16px;box-shadow:var(--shadow)">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+        <span class="material-icons" style="font-size:22px;color:#c97a35">auto_awesome</span>
+        <div style="font-weight:700;font-size:15px;color:#1c1e21">Recomendación de recompra</div>
+        <div style="margin-left:auto;font-size:11px;color:#65676b;background:#f0f2f5;padding:3px 8px;border-radius:6px;font-weight:600;letter-spacing:.4px">
+          APRENDIENDO
+        </div>
+      </div>
+      <div style="font-size:13px;color:#444;margin-bottom:12px;line-height:1.5">
+        Estoy estudiando el movimiento del local para sugerirte qué comprar antes de fin de mes.
+        Necesito ${RECOMPRA_DIAS_OBJETIVO} días de ventas para que las recomendaciones sean confiables.
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
+        <div style="flex:1;height:14px;background:#f0f2f5;border-radius:7px;overflow:hidden;position:relative">
+          <div style="position:absolute;inset:0;width:${progreso}%;background:linear-gradient(90deg,#f5a623 0%,#c97a35 100%);border-radius:7px;transition:width .4s"></div>
+        </div>
+        <div style="font-weight:800;font-size:18px;color:#c97a35;min-width:54px;text-align:right">${progreso}%</div>
+      </div>
+      <div style="font-size:12px;color:#65676b;display:flex;justify-content:space-between">
+        <span>${diasHistoria} ${diasHistoria === 1 ? 'día' : 'días'} de historia</span>
+        <span>Faltan ${dias_faltan} ${dias_faltan === 1 ? 'día' : 'días'} para activarse</span>
+      </div>
+    </div>
+  `;
+}
+
+function calcularSugerenciasRecompra(ventas, itemsMap, catalogo) {
+  // Velocidad por producto: cantidad vendida / días, en la ventana de lookback.
+  const ahora = new Date();
+  const desde = new Date(ahora);
+  desde.setDate(desde.getDate() - RECOMPRA_VENT_LOOKBACK);
+
+  // Agregar items vendidos en la ventana, y trackear el día más viejo
+  // efectivamente cubierto (puede ser < lookback si la app es nueva).
+  const ventasPorProducto = {};   // nombre upper → unidades
+  let masVieja = null;
+  for (const v of ventas) {
+    if (v.deleted === true) continue;
+    if (isVentaVarios2(v)) continue;
+    const f = parseArDate(v.created_at);
+    if (isNaN(f) || f < desde) continue;
+    if (!masVieja || f < masVieja) masVieja = f;
+    const saleId = v.sale_id || v.id;
+    const key = v.pc_id ? `${v.pc_id}_${saleId}` : String(saleId);
+    const items = itemsMap[key] || [];
+    for (const it of items) {
+      const k = (it.nombre || '').toUpperCase().trim();
+      if (!k) continue;
+      ventasPorProducto[k] = (ventasPorProducto[k] || 0) + Number(it.cantidad || 0);
+    }
+  }
+  // Días efectivamente cubiertos para no subestimar velocidad cuando la app
+  // todavía no acumuló RECOMPRA_VENT_LOOKBACK días de historia.
+  const diasEfectivos = masVieja
+    ? Math.max(1, Math.ceil((ahora - masVieja) / (1000 * 60 * 60 * 24)))
+    : RECOMPRA_VENT_LOOKBACK;
+  const divisor = Math.min(RECOMPRA_VENT_LOOKBACK, diasEfectivos);
+
+  // Días que faltan al fin del mes actual + buffer de envío
+  const finMes = new Date(ahora.getFullYear(), ahora.getMonth() + 1, 0);
+  const diasAlFin = Math.max(0, Math.ceil((finMes - ahora) / (1000 * 60 * 60 * 24)));
+  const diasACubrir = diasAlFin + RECOMPRA_BUFFER_DIAS;
+
+  // Para cada producto del catálogo: si tiene velocidad y stock no alcanza, sugerir
+  const out = [];
+  for (const p of (catalogo || [])) {
+    const k = (p.nombre || '').toUpperCase().trim();
+    if (!k) continue;
+    const unidades30 = ventasPorProducto[k] || 0;
+    if (unidades30 <= 0) continue;
+    const velocidadDia = unidades30 / divisor;
+    const stock = Number(p.stock || 0);
+    const necesidad = velocidadDia * diasACubrir;
+    const faltante = Math.ceil(necesidad - stock);
+    if (faltante <= 0) continue;
+    const costoUnit = Number(p.costo || 0);
+    const precioVenta = Number(p.precio_venta || p.precio || 0);
+    const margenPct = precioVenta > 0 && costoUnit > 0
+      ? ((precioVenta - costoUnit) / precioVenta) * 100
+      : null;
+    out.push({
+      nombre: p.nombre,
+      rubro: p.rubro || p.categoria || '—',
+      stock,
+      velocidadDia: Math.round(velocidadDia * 10) / 10,
+      faltante,
+      inversion: faltante * costoUnit,
+      precioVenta,
+      margenPct,
+    });
+  }
+  out.sort((a, b) => b.inversion - a.inversion || b.faltante - a.faltante);
+  return { sugerencias: out.slice(0, 20), diasAlFin, diasACubrir, divisor };
+}
+
+function renderRecompraSugerencias({ sugerencias, diasAlFin, diasACubrir, divisor }, diasHistoria, completo) {
+  const totalInversion = sugerencias.reduce((s, x) => s + x.inversion, 0);
+  const previewBadge = !completo
+    ? `<div style="font-size:10px;color:#fff;background:#c97a35;padding:3px 8px;border-radius:6px;font-weight:700;letter-spacing:.5px">VISTA PREVIA</div>`
+    : '';
+  if (sugerencias.length === 0) {
+    return `
+      <div class="ct-card" style="background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:18px 22px;margin-bottom:16px;box-shadow:var(--shadow)">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
+          <span class="material-icons" style="font-size:22px;color:#42b883">check_circle</span>
+          <div style="font-weight:700;font-size:15px;color:#1c1e21">Recompra de fin de mes</div>
+          ${previewBadge ? `<div style="margin-left:auto">${previewBadge}</div>` : ''}
+        </div>
+        <div style="font-size:13px;color:#65676b">El stock alcanza para los ${diasAlFin} días que faltan al fin de mes. No detecté faltantes.</div>
+      </div>
+    `;
+  }
+  const filas = sugerencias.map(s => {
+    const margenTxt = s.margenPct == null
+      ? '<span style="color:#b0b3b8">—</span>'
+      : `${s.margenPct.toFixed(0)}%`;
+    const margenColor = s.margenPct == null
+      ? '#65676b'
+      : s.margenPct >= 40 ? '#42b883'
+      : s.margenPct >= 20 ? '#1c1e21'
+      : '#e74c3c';
+    return `
+    <tr style="border-bottom:1px solid #f0f2f5">
+      <td style="padding:8px 12px;font-size:13px;color:#1c1e21">
+        <div style="font-weight:600">${escapeHtmlCt(s.nombre)}</div>
+        <div style="font-size:11px;color:#65676b">${escapeHtmlCt(s.rubro)}</div>
+      </td>
+      <td style="padding:8px 12px;font-size:13px;color:#1c1e21;text-align:right">${s.precioVenta > 0 ? '$' + fmt(s.precioVenta) : '<span style="color:#b0b3b8">—</span>'}</td>
+      <td style="padding:8px 12px;font-size:13px;color:${margenColor};text-align:right;font-weight:600">${margenTxt}</td>
+      <td style="padding:8px 12px;font-size:12px;color:#65676b;text-align:right">${s.stock}</td>
+      <td style="padding:8px 12px;font-size:14px;color:#c97a35;text-align:right;font-weight:700">${s.faltante}</td>
+      <td style="padding:8px 12px;font-size:13px;color:#1c1e21;text-align:right;font-weight:600">$${fmt(s.inversion)}</td>
+    </tr>
+  `;
+  }).join('');
+  return `
+    <div class="ct-card" style="background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:0;margin-bottom:16px;box-shadow:var(--shadow);overflow:hidden">
+      <div style="padding:16px 22px;background:linear-gradient(135deg,#fff7f0 0%,#fff 100%);border-bottom:1px solid var(--border)">
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;flex-wrap:wrap">
+          <span class="material-icons" style="font-size:22px;color:#c97a35">auto_awesome</span>
+          <div style="font-weight:700;font-size:15px;color:#1c1e21">Recompra de fin de mes</div>
+          ${previewBadge}
+          <div style="margin-left:auto;font-size:11px;color:#65676b">${diasHistoria} días de historia · cubre ${diasACubrir} días</div>
+        </div>
+        <div style="font-size:12px;color:#65676b">${
+          completo
+            ? `Productos con stock insuficiente para llegar al fin de mes (basado en velocidad de venta de los últimos ${RECOMPRA_VENT_LOOKBACK} días).`
+            : `Vista previa con datos limitados (${divisor} ${divisor === 1 ? 'día' : 'días'} de ventas analizados). Las cantidades se vuelven más confiables cuando se complete la barra de aprendizaje.`
+        }</div>
+      </div>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse">
+          <thead>
+            <tr style="background:#fafbfc;text-align:left">
+              <th style="padding:10px 12px;font-size:11px;color:#65676b;font-weight:700;letter-spacing:.5px">PRODUCTO</th>
+              <th style="padding:10px 12px;font-size:11px;color:#65676b;font-weight:700;letter-spacing:.5px;text-align:right">PRECIO</th>
+              <th style="padding:10px 12px;font-size:11px;color:#65676b;font-weight:700;letter-spacing:.5px;text-align:right">MARGEN</th>
+              <th style="padding:10px 12px;font-size:11px;color:#65676b;font-weight:700;letter-spacing:.5px;text-align:right">STOCK</th>
+              <th style="padding:10px 12px;font-size:11px;color:#65676b;font-weight:700;letter-spacing:.5px;text-align:right">COMPRAR</th>
+              <th style="padding:10px 12px;font-size:11px;color:#65676b;font-weight:700;letter-spacing:.5px;text-align:right">INVERSIÓN</th>
+            </tr>
+          </thead>
+          <tbody>${filas}</tbody>
+          <tfoot>
+            <tr style="background:#fafbfc;border-top:2px solid var(--border)">
+              <td colspan="5" style="padding:10px 12px;font-size:13px;font-weight:700;color:#1c1e21">Inversión total estimada</td>
+              <td style="padding:10px 12px;font-size:14px;font-weight:800;color:#c97a35;text-align:right">$${fmt(totalInversion)}</td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
     </div>
   `;
 }
@@ -1069,12 +1465,502 @@ function abrirPanelPerdidas(db, list, onRefresh) {
 }
 
 // ── Gastos ────────────────────────────────────────────────────────────────────
-async function loadGastos(db, desde) {
+// ── Reasignación manual de transferencias ─────────────────────────────────────
+// Colección: transfer_splits, doc.id = 'YYYY-MM-DD'
+// { fecha, cuenta1, cuenta2, total_dia, updated_at }
+function abrirReasignarModal({ db, transPorDia, transferSplits, config, onSaved }) {
+  const c1Nombre = config.cuenta1_nombre || 'Cuenta 1';
+  const c2Nombre = config.cuenta2_nombre || 'Cuenta 2';
+
+  // Días con transferencias en el período, orden descendente.
+  const dias = Object.entries(transPorDia)
+    .map(([ymd, d]) => ({
+      ymd,
+      total: d.total,
+      autoC1: d.autoC1,
+      autoC2: d.autoC2,
+      override: transferSplits[ymd] || null,
+    }))
+    .sort((a, b) => b.ymd.localeCompare(a.ymd));
+
+  const fmtFechaCorta = (ymd) => {
+    const [y, m, d] = ymd.split('-');
+    return `${d}/${m}/${y}`;
+  };
+
+  const overlay = document.createElement('div');
+  overlay.className = 'ct-modal-overlay';
+  overlay.innerHTML = `
+    <div class="ct-modal ct-reasignar-modal" role="dialog">
+      <div class="ct-modal-header">
+        <span class="material-icons" style="color:#1877f2">swap_horiz</span>
+        <h3>Reasignar transferencias</h3>
+        <button class="ct-modal-close" title="Cerrar"><span class="material-icons">close</span></button>
+      </div>
+      <div class="ct-modal-desc">
+        Editá cuánto fue a <b>${escapeHtmlCt(c1Nombre)}</b> y cuánto a <b>${escapeHtmlCt(c2Nombre)}</b> por día.
+        El sistema asigna automático cuando no hay edición manual.
+      </div>
+      <div class="ct-modal-body">
+        ${dias.length === 0
+          ? `<div class="empty-state" style="padding:24px"><span class="material-icons">info</span><p>No hay transferencias en el período seleccionado.</p></div>`
+          : `
+          <table class="ct-reasignar-table">
+            <thead>
+              <tr>
+                <th>Fecha</th>
+                <th class="text-right">Total transf.</th>
+                <th class="text-right">${escapeHtmlCt(c1Nombre)}</th>
+                <th class="text-right">${escapeHtmlCt(c2Nombre)}</th>
+                <th class="text-right">Suma</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${dias.map(d => {
+                const c1Val = d.override ? d.override.cuenta1 : d.autoC1;
+                const c2Val = d.override ? d.override.cuenta2 : d.autoC2;
+                return `
+                  <tr data-ymd="${d.ymd}" data-total="${d.total}" data-autoc1="${d.autoC1}" data-autoc2="${d.autoC2}" data-last="" class="${d.override ? 'is-override' : ''}">
+                    <td class="ct-r-fecha">${fmtFechaCorta(d.ymd)}</td>
+                    <td class="text-right ct-r-total">$${fmt(d.total)}</td>
+                    <td class="text-right">
+                      <input type="number" step="0.01" min="0" class="ct-r-input ct-r-c1" value="${c1Val.toFixed(2)}">
+                    </td>
+                    <td class="text-right">
+                      <input type="number" step="0.01" min="0" class="ct-r-input ct-r-c2" value="${c2Val.toFixed(2)}">
+                    </td>
+                    <td class="text-right ct-r-suma">$${fmt(c1Val + c2Val)}</td>
+                    <td class="ct-r-actions">
+                      <button type="button" class="ct-r-fill" title="Auto-completar la otra cuenta con el restante">auto</button>
+                      ${d.override
+                        ? `<button class="ct-r-reset" title="Volver al reparto automático original"><span class="material-icons" style="font-size:16px">restart_alt</span></button>`
+                        : ''}
+                    </td>
+                  </tr>
+                `;
+              }).join('')}
+            </tbody>
+          </table>
+          <div class="ct-r-tip">
+            <span class="material-icons" style="font-size:14px;vertical-align:-2px">lightbulb</span>
+            Tip: si el total transferido cambia (porque agregás o anulás ventas), la suma puede no coincidir; volvé a editar.
+          </div>
+        `}
+      </div>
+      <div class="ct-modal-footer" style="gap:8px">
+        ${dias.length === 0
+          ? `<button class="ct-btn-primary" id="ct-r-close">Cerrar</button>`
+          : `
+            <button class="ct-btn-secondary" id="ct-r-cancel">Cancelar</button>
+            <button class="ct-btn-primary" id="ct-r-save"><span class="material-icons" style="font-size:16px;vertical-align:-3px">save</span> Guardar cambios</button>
+          `}
+      </div>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+
+  const closeModal = () => overlay.remove();
+  overlay.querySelector('.ct-modal-close').addEventListener('click', closeModal);
+  overlay.addEventListener('click', e => { if (e.target === overlay) closeModal(); });
+  overlay.querySelector('#ct-r-close')?.addEventListener('click', closeModal);
+  overlay.querySelector('#ct-r-cancel')?.addEventListener('click', closeModal);
+
+  const tbody = overlay.querySelector('tbody');
+  if (tbody) {
+    const recalcRow = (tr) => {
+      const c1 = Number(tr.querySelector('.ct-r-c1').value) || 0;
+      const c2 = Number(tr.querySelector('.ct-r-c2').value) || 0;
+      const total = Number(tr.dataset.total) || 0;
+      tr.querySelector('.ct-r-suma').textContent = '$' + fmt(c1 + c2);
+      tr.classList.toggle('mismatch', Math.abs((c1 + c2) - total) > 0.01);
+      tr.classList.add('edited');
+    };
+
+    // Recalcular suma en vivo al editar manualmente
+    // y recordar cuál input fue el último tocado (para el botón "auto")
+    tbody.addEventListener('input', e => {
+      if (!e.target.classList.contains('ct-r-input')) return;
+      const tr = e.target.closest('tr');
+      tr.dataset.last = e.target.classList.contains('ct-r-c1') ? 'c1' : 'c2';
+      recalcRow(tr);
+    });
+    tbody.addEventListener('focusin', e => {
+      if (!e.target.classList.contains('ct-r-input')) return;
+      const tr = e.target.closest('tr');
+      tr.dataset.last = e.target.classList.contains('ct-r-c1') ? 'c1' : 'c2';
+    });
+
+    // "auto" → completa la OTRA cuenta con (total − cuenta editada).
+    // Si todavía no se editó nada, completa la cuenta que esté en 0.
+    // Reset → borra el override del día y vuelve al reparto automático original
+    tbody.addEventListener('click', async e => {
+      const fillBtn = e.target.closest('.ct-r-fill');
+      if (fillBtn) {
+        const tr    = fillBtn.closest('tr');
+        const total = Number(tr.dataset.total) || 0;
+        const c1    = Number(tr.querySelector('.ct-r-c1').value) || 0;
+        const c2    = Number(tr.querySelector('.ct-r-c2').value) || 0;
+        let target  = tr.dataset.last === 'c1' ? 'c2' : (tr.dataset.last === 'c2' ? 'c1' : null);
+        if (!target) target = c1 === 0 ? 'c1' : (c2 === 0 ? 'c2' : 'c2');
+        if (target === 'c1') tr.querySelector('.ct-r-c1').value = Math.max(0, total - c2).toFixed(2);
+        else                 tr.querySelector('.ct-r-c2').value = Math.max(0, total - c1).toFixed(2);
+        recalcRow(tr);
+        return;
+      }
+
+      const resetBtn = e.target.closest('.ct-r-reset');
+      if (!resetBtn) return;
+      const tr  = resetBtn.closest('tr');
+      const ymd = tr.dataset.ymd;
+      resetBtn.disabled = true;
+      resetBtn.innerHTML = '<span class="material-icons" style="font-size:16px">hourglass_empty</span>';
+      try {
+        await deleteTransferSplit(db, ymd);
+        const autoC1 = Number(tr.dataset.autoc1) || 0;
+        const autoC2 = Number(tr.dataset.autoc2) || 0;
+        tr.querySelector('.ct-r-c1').value = autoC1.toFixed(2);
+        tr.querySelector('.ct-r-c2').value = autoC2.toFixed(2);
+        tr.querySelector('.ct-r-suma').textContent = '$' + fmt(autoC1 + autoC2);
+        tr.classList.remove('is-override', 'edited', 'mismatch');
+        tr.lastElementChild.innerHTML = '';
+      } catch (err) {
+        alert('Error al resetear: ' + err.message);
+        resetBtn.disabled = false;
+        resetBtn.innerHTML = '<span class="material-icons" style="font-size:16px">restart_alt</span>';
+      }
+    });
+  }
+
+  overlay.querySelector('#ct-r-save')?.addEventListener('click', async () => {
+    const btn = overlay.querySelector('#ct-r-save');
+    btn.disabled = true;
+    btn.textContent = 'Guardando...';
+    try {
+      const filas = overlay.querySelectorAll('tbody tr.edited');
+      const ops = [];
+      filas.forEach(tr => {
+        const ymd   = tr.dataset.ymd;
+        const total = Number(tr.dataset.total) || 0;
+        const c1    = Number(tr.querySelector('.ct-r-c1').value) || 0;
+        const c2    = Number(tr.querySelector('.ct-r-c2').value) || 0;
+        ops.push(saveTransferSplit(db, ymd, c1, c2, total));
+      });
+      await Promise.all(ops);
+      closeModal();
+      onSaved?.();
+    } catch (err) {
+      alert('Error al guardar: ' + err.message);
+      btn.disabled = false;
+      btn.innerHTML = '<span class="material-icons" style="font-size:16px;vertical-align:-3px">save</span> Guardar cambios';
+    }
+  });
+}
+
+// ── Mini gráficos del Resumen ────────────────────────────────────────────────
+function renderCtMiniCharts(container, data) {
+  const {
+    efectivoTotal, transCuenta1, transCuenta2,
+    ingManualEfectivo, ingManualCuenta1, ingManualCuenta2,
+    ventasPeriodo, gastos, porCategoria, porRubro,
+    c1Nombre, c2Nombre,
+  } = data;
+
+  const efectivo = (efectivoTotal || 0) + (ingManualEfectivo || 0);
+  const cta1     = (transCuenta1  || 0) + (ingManualCuenta1  || 0);
+  const cta2     = (transCuenta2  || 0) + (ingManualCuenta2  || 0);
+  const totalIng = efectivo + cta1 + cta2;
+  const hayIngresos = totalIng > 0;
+
+  const ingPorDia = {};
+  const gastoPorDia = {};
+  ventasPeriodo.forEach(v => {
+    const ymd = dateToArYMD(parseArDate(v.created_at));
+    ingPorDia[ymd] = (ingPorDia[ymd] || 0) + (v.total_amount || 0);
+  });
+  (gastos || []).forEach(g => {
+    if (g.es_ingreso || !g.fecha) return;
+    gastoPorDia[g.fecha] = (gastoPorDia[g.fecha] || 0) + (g.monto || 0);
+  });
+  const dias = Array.from(new Set([...Object.keys(ingPorDia), ...Object.keys(gastoPorDia)])).sort();
+  const mostrarBars = dias.length >= 2;
+
+  const cats = Object.values(porCategoria || {})
+    .map(c => ({ nombre: c.nombre, gasto: c.gasto || 0, color: c.color || '#90a4ae' }))
+    .filter(c => c.gasto > 0)
+    .sort((a, b) => b.gasto - a.gasto);
+  const topCats = cats.slice(0, 6);
+  const restoSum = cats.slice(6).reduce((s, c) => s + c.gasto, 0);
+  if (restoSum > 0) topCats.push({ nombre: 'Otras', gasto: restoSum, color: '#cfd8dc' });
+  const hayCats = topCats.length > 0;
+
+  // Ganancia vs gasto por rubro
+  const rubrosArr = Object.entries(porRubro || {})
+    .map(([nombre, d]) => ({ nombre, ganancia: d.ganancia || 0, gasto: d.gasto || 0 }))
+    .filter(r => r.ganancia !== 0 || r.gasto > 0)
+    .sort((a, b) => (Math.abs(b.ganancia) + b.gasto) - (Math.abs(a.ganancia) + a.gasto));
+  const topRubros = rubrosArr.slice(0, 8);
+  const hayRubros = topRubros.length > 0;
+
+  if (!hayIngresos && !mostrarBars && !hayCats && !hayRubros) {
+    container.innerHTML = '';
+    return;
+  }
+
+  container.innerHTML = `
+    ${hayIngresos ? `
+      <div class="ct-chart-card">
+        <div class="ct-chart-title"><span class="material-icons">pie_chart</span>Distribución de ingresos</div>
+        <div class="ct-chart-body"><canvas id="ct-ch-ingresos"></canvas></div>
+      </div>` : ''}
+    ${mostrarBars ? `
+      <div class="ct-chart-card ct-chart-card-wide">
+        <div class="ct-chart-title"><span class="material-icons">bar_chart</span>Ingresos vs gastos por día</div>
+        <div class="ct-chart-body"><canvas id="ct-ch-flujo"></canvas></div>
+      </div>` : ''}
+    ${hayCats ? `
+      <div class="ct-chart-card">
+        <div class="ct-chart-title"><span class="material-icons">category</span>Gastos por categoría</div>
+        <div class="ct-chart-body"><canvas id="ct-ch-cats"></canvas></div>
+      </div>` : ''}
+    ${hayRubros ? `
+      <div class="ct-chart-card ct-chart-card-wide">
+        <div class="ct-chart-title"><span class="material-icons">inventory_2</span>Ganancia vs gasto por rubro</div>
+        <div class="ct-chart-body" style="height:${Math.max(200, topRubros.length * 28 + 50)}px"><canvas id="ct-ch-rubros"></canvas></div>
+      </div>` : ''}
+  `;
+
+  const fmtMoney = v => '$' + Number(v || 0).toLocaleString('es-AR', { maximumFractionDigits: 0 });
+  const legendCfg = {
+    position: 'bottom',
+    labels: { boxWidth: 10, padding: 8, font: { size: 11 }, color: '#65676b' },
+  };
+
+  if (hayIngresos) {
+    ctMakeChart('ct-ingresos', container.querySelector('#ct-ch-ingresos'), {
+      type: 'doughnut',
+      data: {
+        labels: ['Efectivo', c1Nombre, c2Nombre],
+        datasets: [{
+          data: [efectivo, cta1, cta2],
+          backgroundColor: ['#2e7d32', '#1877f2', '#6a1b9a'],
+          borderWidth: 0,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, cutout: '62%',
+        plugins: {
+          legend: legendCfg,
+          tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${fmtMoney(ctx.parsed)}` } },
+        },
+      },
+    });
+  }
+
+  if (mostrarBars) {
+    const labels = dias.map(d => { const [, m, dd] = d.split('-'); return `${dd}/${m}`; });
+    ctMakeChart('ct-flujo', container.querySelector('#ct-ch-flujo'), {
+      type: 'bar',
+      data: {
+        labels,
+        datasets: [
+          { label: 'Ingresos', data: dias.map(d => ingPorDia[d]   || 0), backgroundColor: 'rgba(46,125,50,0.85)', borderRadius: 4 },
+          { label: 'Gastos',   data: dias.map(d => gastoPorDia[d] || 0), backgroundColor: 'rgba(198,40,40,0.85)', borderRadius: 4 },
+        ],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: legendCfg,
+          tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmtMoney(ctx.parsed.y)}` } },
+        },
+        scales: {
+          x: { grid: { display: false }, ticks: { font: { size: 10 }, color: '#65676b' } },
+          y: { ticks: { callback: (v) => fmtCompacto(v), font: { size: 10 }, color: '#65676b' }, grid: { color: 'rgba(0,0,0,0.06)' } },
+        },
+      },
+    });
+  }
+
+  if (hayRubros) {
+    ctMakeChart('ct-rubros', container.querySelector('#ct-ch-rubros'), {
+      type: 'bar',
+      data: {
+        labels: topRubros.map(r => r.nombre),
+        datasets: [
+          { label: 'Ganancia', data: topRubros.map(r => r.ganancia), backgroundColor: topRubros.map(r => r.ganancia >= 0 ? 'rgba(46,125,50,0.85)' : 'rgba(198,40,40,0.85)'), borderRadius: 4 },
+          { label: 'Gasto',    data: topRubros.map(r => r.gasto),    backgroundColor: 'rgba(245,124,0,0.85)', borderRadius: 4 },
+        ],
+      },
+      options: {
+        indexAxis: 'y',
+        responsive: true, maintainAspectRatio: false,
+        plugins: {
+          legend: legendCfg,
+          tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmtMoney(ctx.parsed.x)}` } },
+        },
+        scales: {
+          x: { ticks: { callback: (v) => fmtCompacto(v), font: { size: 10 }, color: '#65676b' }, grid: { color: 'rgba(0,0,0,0.06)' } },
+          y: { grid: { display: false }, ticks: { font: { size: 11 }, color: '#65676b' } },
+        },
+      },
+    });
+  }
+
+  if (hayCats) {
+    ctMakeChart('ct-cats', container.querySelector('#ct-ch-cats'), {
+      type: 'doughnut',
+      data: {
+        labels: topCats.map(c => c.nombre),
+        datasets: [{
+          data: topCats.map(c => c.gasto),
+          backgroundColor: topCats.map(c => c.color),
+          borderWidth: 0,
+        }],
+      },
+      options: {
+        responsive: true, maintainAspectRatio: false, cutout: '62%',
+        plugins: {
+          legend: legendCfg,
+          tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${fmtMoney(ctx.parsed)}` } },
+        },
+      },
+    });
+  }
+}
+
+async function loadTransferSplits(db) {
+  const snap = await getDocs(collection(db, 'transfer_splits'));
+  const map = {};
+  snap.forEach(d => {
+    const data = d.data();
+    const f = data.fecha || d.id;
+    map[f] = {
+      cuenta1:  Number(data.cuenta1  || 0),
+      cuenta2:  Number(data.cuenta2  || 0),
+      total_dia: Number(data.total_dia || 0),
+    };
+  });
+  return map;
+}
+
+async function saveTransferSplit(db, fecha, cuenta1, cuenta2, total_dia) {
+  await setDoc(doc(db, 'transfer_splits', fecha), {
+    fecha,
+    cuenta1: Number(cuenta1) || 0,
+    cuenta2: Number(cuenta2) || 0,
+    total_dia: Number(total_dia) || 0,
+    updated_at: serverTimestamp(),
+  });
+  invalidateCache('ct:transfer_splits:all');
+}
+
+async function deleteTransferSplit(db, fecha) {
+  await deleteDoc(doc(db, 'transfer_splits', fecha));
+  invalidateCache('ct:transfer_splits:all');
+}
+
+async function loadGastos(db, desde, hasta) {
   const snap = await getDocs(query(collection(db, 'gastos'), orderBy('created_at', 'desc')));
   const desdeStr = desde.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+  let hastaStr = null;
+  if (hasta) {
+    const lastDay = new Date(hasta.getTime() - 24 * 60 * 60 * 1000);
+    hastaStr = lastDay.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+  }
   return snap.docs
     .map(d => ({ _id: d.id, ...d.data() }))
-    .filter(g => (g.fecha || '') >= desdeStr);
+    .filter(g => {
+      const f = g.fecha || '';
+      if (f < desdeStr) return false;
+      if (hastaStr && f > hastaStr) return false;
+      return true;
+    });
+}
+
+function setupCustomPanel(container, customRange, config, onApply) {
+  const panel = container.querySelector('#ct-custom-panel');
+  if (!panel) return;
+
+  const inpDesde = panel.querySelector('#ct-custom-desde');
+  const inpHasta = panel.querySelector('#ct-custom-hasta');
+  const btnApply = panel.querySelector('#ct-custom-apply');
+  const selMes   = panel.querySelector('#ct-custom-mes');
+  const selAnio  = panel.querySelector('#ct-custom-anio');
+  const btnMes   = panel.querySelector('#ct-custom-mes-apply');
+  const selRmesD = panel.querySelector('#ct-custom-rmes-desde');
+  const selRanD  = panel.querySelector('#ct-custom-ranio-desde');
+  const selRmesH = panel.querySelector('#ct-custom-rmes-hasta');
+  const selRanH  = panel.querySelector('#ct-custom-ranio-hasta');
+  const btnRmes  = panel.querySelector('#ct-custom-rmes-apply');
+
+  const hoyStr = todayAR();
+  const hoyAnio = parseInt(hoyStr.slice(0, 4), 10);
+  const hoyMes  = parseInt(hoyStr.slice(5, 7), 10);
+  const fiAnio  = parseInt((config.fecha_inicio || hoyStr).slice(0, 4), 10) || hoyAnio;
+
+  const meses = ['Enero','Febrero','Marzo','Abril','Mayo','Junio','Julio','Agosto','Septiembre','Octubre','Noviembre','Diciembre'];
+  const mesOpts = meses.map((m, i) => `<option value="${i + 1}">${m}</option>`).join('');
+  const anios = [];
+  for (let y = fiAnio; y <= hoyAnio; y++) anios.push(y);
+  const anioOpts = anios.map(y => `<option value="${y}">${y}</option>`).join('');
+
+  selMes.innerHTML   = mesOpts;
+  selAnio.innerHTML  = anioOpts;
+  selRmesD.innerHTML = mesOpts;
+  selRmesH.innerHTML = mesOpts;
+  selRanD.innerHTML  = anioOpts;
+  selRanH.innerHTML  = anioOpts;
+
+  // Pre-cargar valores actuales o defaults
+  const r = customRange || {};
+  inpDesde.value = r.desde || hoyStr;
+  inpHasta.value = r.hasta || hoyStr;
+  inpDesde.max = hoyStr;
+  inpHasta.max = hoyStr;
+  selMes.value   = String(hoyMes);
+  selAnio.value  = String(hoyAnio);
+  selRmesD.value = '1';
+  selRanD.value  = String(hoyAnio);
+  selRmesH.value = String(hoyMes);
+  selRanH.value  = String(hoyAnio);
+
+  btnApply.addEventListener('click', () => {
+    let desde = inpDesde.value;
+    let hasta = inpHasta.value || desde;
+    if (!desde) return;
+    if (hasta < desde) hasta = desde;
+    onApply({ desde, hasta });
+  });
+
+  btnMes.addEventListener('click', () => {
+    const m = parseInt(selMes.value, 10);
+    const y = parseInt(selAnio.value, 10);
+    if (!m || !y) return;
+    const mm = String(m).padStart(2, '0');
+    const desde = `${y}-${mm}-01`;
+    const lastDay = new Date(y, m, 0).getDate();
+    let hasta = `${y}-${mm}-${String(lastDay).padStart(2, '0')}`;
+    if (hasta > hoyStr) hasta = hoyStr;
+    onApply({ desde, hasta });
+  });
+
+  btnRmes.addEventListener('click', () => {
+    const md = parseInt(selRmesD.value, 10);
+    const yd = parseInt(selRanD.value, 10);
+    let mh = parseInt(selRmesH.value, 10);
+    let yh = parseInt(selRanH.value, 10);
+    if (!md || !yd || !mh || !yh) return;
+    // Asegurar desde <= hasta
+    if (yh < yd || (yh === yd && mh < md)) { yh = yd; mh = md; }
+    const mmd = String(md).padStart(2, '0');
+    const mmh = String(mh).padStart(2, '0');
+    const desde = `${yd}-${mmd}-01`;
+    const lastDay = new Date(yh, mh, 0).getDate();
+    let hasta = `${yh}-${mmh}-${String(lastDay).padStart(2, '0')}`;
+    if (hasta > hoyStr) hasta = hoyStr;
+    onApply({ desde, hasta });
+  });
 }
 
 function setupGastoForm(container, db, periodo, config) {
@@ -1413,18 +2299,29 @@ function setupConfigCuentas(container, db, config) {
 // modal con el "detalle" (mejor producto, mejor categoría, hora pico, etc).
 // Los items VARIOS no tienen costo cargado → no contribuyen al CMV ni a la
 // ganancia bruta (se cuentan en ingreso total pero quedan marcados como s/c).
-function renderListaGanancia(container, ventas, itemsMap, catalogoPorNombre) {
+function renderListaGanancia(container, ventas, itemsMap, catalogoPorNombre, gastosArr, config) {
   const el = container.querySelector('#ct-ganancia-lista');
   if (!el) return;
 
   // ── Agregación por día (YYYY-MM-DD en zona AR) ──
-  const porDia = {};   // { '2026-04-23': {fecha, ingreso, cmv, ventas:[], items:[]} }
+  const porDia = {};   // { '2026-04-23': {fecha, ingreso, cmv, ventas:[], items:[], gastos:[], ingresosManuales:[]} }
+  const ensureDia = (key) => {
+    if (!porDia[key]) {
+      porDia[key] = {
+        fecha: key, ingreso: 0, cmv: 0, ingresoConCosto: 0,
+        ventas: [], items: [],
+        gastos: [], ingresosManuales: [],
+        totalGastos: 0, totalIngresosManuales: 0,
+      };
+    }
+    return porDia[key];
+  };
+
   for (const v of ventas) {
     const f = parseArDate(v.created_at);
     if (isNaN(f)) continue;
     const key = f.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
-    if (!porDia[key]) porDia[key] = { fecha: key, ingreso: 0, cmv: 0, ingresoConCosto: 0, ventas: [], items: [] };
-    const d = porDia[key];
+    const d = ensureDia(key);
     d.ingreso += (v.total_amount || 0);
     d.ventas.push(v);
 
@@ -1442,25 +2339,142 @@ function renderListaGanancia(container, ventas, itemsMap, catalogoPorNombre) {
       d.items.push({ ...it, costoUnit, categoria: cat?.categoria || null, hora: f.getHours() });
     }
   }
+
+  // Bucketear gastos/ingresos manuales por fecha (campo `fecha` YYYY-MM-DD)
+  for (const g of (gastosArr || [])) {
+    const key = g.fecha;
+    if (!key) continue;
+    const d = ensureDia(key);
+    if (g.es_ingreso) {
+      d.ingresosManuales.push(g);
+      d.totalIngresosManuales += (g.monto || 0);
+    } else {
+      d.gastos.push(g);
+      d.totalGastos += (g.monto || 0);
+    }
+  }
+
   const dias = Object.values(porDia).sort((a, b) => b.fecha.localeCompare(a.fecha));
 
   // ── Agregación por mes (YYYY-MM) ──
   const porMes = {};
   for (const d of dias) {
     const k = d.fecha.slice(0, 7);
-    if (!porMes[k]) porMes[k] = { mes: k, ingreso: 0, cmv: 0, ingresoConCosto: 0, ventas: [], items: [], dias: [] };
-    porMes[k].ingreso         += d.ingreso;
-    porMes[k].cmv             += d.cmv;
-    porMes[k].ingresoConCosto += d.ingresoConCosto;
+    if (!porMes[k]) porMes[k] = {
+      mes: k, ingreso: 0, cmv: 0, ingresoConCosto: 0,
+      ventas: [], items: [], dias: [],
+      gastos: [], ingresosManuales: [],
+      totalGastos: 0, totalIngresosManuales: 0,
+    };
+    porMes[k].ingreso                += d.ingreso;
+    porMes[k].cmv                    += d.cmv;
+    porMes[k].ingresoConCosto        += d.ingresoConCosto;
+    porMes[k].totalGastos            += d.totalGastos;
+    porMes[k].totalIngresosManuales  += d.totalIngresosManuales;
     porMes[k].ventas.push(...d.ventas);
     porMes[k].items.push(...d.items);
+    porMes[k].gastos.push(...d.gastos);
+    porMes[k].ingresosManuales.push(...d.ingresosManuales);
     porMes[k].dias.push(d);
   }
   const meses = Object.values(porMes).sort((a, b) => b.mes.localeCompare(a.mes));
 
-  // Estado de la vista (día/mes) — persistido en localStorage
-  let vista = localStorage.getItem('ct:lg_vista') || 'dia';
+  // Estado de la vista (día/mes/agrupado) — persistido en localStorage
+  let vista = localStorage.getItem('ct:lg_vista') || 'agrupado';
+  // Set de meses expandidos en vista "agrupado" — persistido
+  const expandidosKey = 'ct:lg_meses_expandidos';
+  let mesesExpandidos = new Set();
+  try { mesesExpandidos = new Set(JSON.parse(localStorage.getItem(expandidosKey) || '[]')); } catch (_) {}
+  const persistirExpandidos = () => {
+    localStorage.setItem(expandidosKey, JSON.stringify([...mesesExpandidos]));
+  };
+
+  const renderAgrupado = () => {
+    if (!meses.length) {
+      el.innerHTML = `<div class="empty-state" style="padding:32px"><span class="material-icons">insights</span><p>Sin ventas en el rango configurado.</p></div>`;
+      return;
+    }
+    // Por defecto, expandir el primer mes si no hay nada guardado
+    if (mesesExpandidos.size === 0 && meses[0]) mesesExpandidos.add(meses[0].mes);
+
+    el.innerHTML = `
+      <div class="ct-lg-acordeon" style="display:flex;flex-direction:column;gap:8px;margin-top:6px">
+        ${meses.map(m => {
+          const ganM = m.ingresoConCosto - m.cmv;
+          const margenM = m.ingresoConCosto > 0 ? Math.round((ganM / m.ingresoConCosto) * 100) : 0;
+          const expanded = mesesExpandidos.has(m.mes);
+          return `
+            <div class="ct-lg-mes" data-mes="${m.mes}" style="border:1px solid var(--border);border-radius:10px;overflow:hidden;background:#fff">
+              <button type="button" class="ct-lg-mes-header" data-mes="${m.mes}"
+                style="display:flex;align-items:center;gap:10px;width:100%;padding:12px 14px;border:none;background:${expanded?'#f7f8fa':'#fff'};cursor:pointer;text-align:left;font-family:inherit">
+                <span class="material-icons ct-lg-chev" style="font-size:20px;color:#65676b;transition:transform .18s;transform:${expanded?'rotate(90deg)':'rotate(0deg)'}">chevron_right</span>
+                <b style="font-size:14px;flex:1">${formatMes(m.mes)}</b>
+                <span style="font-size:11px;color:#65676b">${m.dias.length} ${m.dias.length===1?'día':'días'} · ${m.ventas.length} ventas</span>
+                <span style="font-size:13px;color:#1877f2;font-weight:600;min-width:110px;text-align:right">$${fmt(m.ingreso)}</span>
+                <span style="font-size:13px;font-weight:700;min-width:110px;text-align:right;color:${ganM>=0?'#00695c':'#c62828'}">$${fmt(ganM)} <span style="font-weight:500;font-size:11px">(${margenM}%)</span></span>
+              </button>
+              <div class="ct-lg-mes-body" style="display:${expanded?'block':'none'};border-top:1px solid var(--border);background:#fafbfc">
+                <div style="overflow-x:auto">
+                  <table class="ct-costos-table" style="margin:0">
+                    <thead><tr>
+                      <th>Día</th>
+                      <th style="text-align:right">Ingreso</th>
+                      <th style="text-align:right">CMV</th>
+                      <th style="text-align:right">Gan. bruta</th>
+                      <th style="text-align:right">Gastos</th>
+                      <th style="text-align:right">Ing. extra</th>
+                      <th style="text-align:right">Ventas</th>
+                      <th style="text-align:center">Detalle</th>
+                    </tr></thead>
+                    <tbody>
+                      ${m.dias.map(d => {
+                        const ganD = d.ingresoConCosto - d.cmv;
+                        return `
+                          <tr class="ct-lg-row-dia" data-fecha="${d.fecha}" style="cursor:pointer">
+                            <td><b style="font-size:13px">${formatDia(d.fecha)}</b></td>
+                            <td style="text-align:right;font-weight:600">$${fmt(d.ingreso)}</td>
+                            <td style="text-align:right;color:#e65100">$${fmt(d.cmv)}</td>
+                            <td style="text-align:right;font-weight:700;color:${ganD>=0?'#00695c':'#c62828'}">$${fmt(ganD)}</td>
+                            <td style="text-align:right;color:${d.totalGastos>0?'#c62828':'#94a3b8'}">${d.totalGastos>0?'-$'+fmt(d.totalGastos):'—'}</td>
+                            <td style="text-align:right;color:${d.totalIngresosManuales>0?'#2e7d32':'#94a3b8'}">${d.totalIngresosManuales>0?'+$'+fmt(d.totalIngresosManuales):'—'}</td>
+                            <td style="text-align:right;color:#65676b">${d.ventas.length}</td>
+                            <td style="text-align:center"><span class="material-icons" style="font-size:18px;color:#65676b">chevron_right</span></td>
+                          </tr>
+                        `;
+                      }).join('')}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join('')}
+      </div>
+    `;
+
+    el.querySelectorAll('.ct-lg-mes-header').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const mesKey = btn.dataset.mes;
+        if (mesesExpandidos.has(mesKey)) mesesExpandidos.delete(mesKey);
+        else mesesExpandidos.add(mesKey);
+        persistirExpandidos();
+        renderAgrupado();
+      });
+    });
+    el.querySelectorAll('.ct-lg-row-dia').forEach(tr => {
+      tr.addEventListener('click', e => {
+        e.stopPropagation();
+        const fecha = tr.dataset.fecha;
+        const dia = porDia[fecha];
+        if (dia) abrirDetalleGanancia(dia, 'dia', config);
+      });
+      tr.addEventListener('mouseenter', () => tr.style.background = '#f0f2f5');
+      tr.addEventListener('mouseleave', () => tr.style.background = '');
+    });
+  };
+
   const renderTabla = () => {
+    if (vista === 'agrupado') { renderAgrupado(); return; }
     const data = vista === 'mes' ? meses : dias;
     if (!data.length) {
       el.innerHTML = `<div class="empty-state" style="padding:32px"><span class="material-icons">insights</span><p>Sin ventas en el rango configurado.</p></div>`;
@@ -1504,7 +2518,7 @@ function renderListaGanancia(container, ventas, itemsMap, catalogoPorNombre) {
     el.querySelectorAll('.ct-lg-row').forEach(tr => {
       tr.addEventListener('click', () => {
         const idx = parseInt(tr.dataset.idx);
-        abrirDetalleGanancia(data[idx], vista);
+        abrirDetalleGanancia(data[idx], vista, config);
       });
       tr.addEventListener('mouseenter', () => tr.style.background = '#f7f8fa');
       tr.addEventListener('mouseleave', () => tr.style.background = '');
@@ -1528,6 +2542,16 @@ function renderListaGanancia(container, ventas, itemsMap, catalogoPorNombre) {
     };
   });
 
+  // Activar visualmente la tab guardada
+  container.querySelectorAll('.ct-lg-tab').forEach(b => {
+    const active = b.dataset.vista === vista;
+    b.classList.toggle('active', active);
+    b.style.background = active ? '#fff' : 'transparent';
+    b.style.color      = active ? '#1c1e21' : '#65676b';
+    b.style.fontWeight = active ? '700' : '600';
+    b.style.boxShadow  = active ? '0 1px 2px rgba(0,0,0,0.05)' : 'none';
+  });
+
   renderTabla();
 }
 
@@ -1546,10 +2570,58 @@ function formatMes(yyyymm) {
 }
 
 // ── Modal: detalle de un día/mes (lo mejor del período) ───────────────────────
-function abrirDetalleGanancia(row, vista) {
+function abrirDetalleGanancia(row, vista, config) {
   const titulo  = vista === 'mes' ? formatMes(row.mes) : formatDia(row.fecha);
   const ganancia = row.ingresoConCosto - row.cmv;
   const margen   = row.ingresoConCosto > 0 ? (ganancia / row.ingresoConCosto) * 100 : 0;
+
+  const c1 = config?.cuenta1_nombre || 'Cuenta 1';
+  const c2 = config?.cuenta2_nombre || 'Cuenta 2';
+  const tipoLabel = { efectivo: 'Efectivo', cuenta1: c1, cuenta2: c2 };
+  const gastosRow    = row.gastos || [];
+  const ingresosRow  = row.ingresosManuales || [];
+  const totalGastosRow   = row.totalGastos || 0;
+  const totalIngresosRow = row.totalIngresosManuales || 0;
+  const gananciaNeta = ganancia - totalGastosRow + totalIngresosRow;
+
+  const renderMovsTable = (movs, tipo) => {
+    if (!movs.length) return '';
+    const isGasto = tipo === 'gasto';
+    const color = isGasto ? '#c62828' : '#2e7d32';
+    const icon  = isGasto ? 'remove_circle_outline' : 'add_circle_outline';
+    const label = isGasto ? 'Gastos del ' + (vista === 'mes' ? 'mes' : 'día') : 'Ingresos manuales del ' + (vista === 'mes' ? 'mes' : 'día');
+    const total = movs.reduce((s, g) => s + (g.monto || 0), 0);
+    const ordenados = [...movs].sort((a, b) => (b.fecha || '').localeCompare(a.fecha || ''));
+    return `
+      <div style="margin-bottom:16px">
+        <div style="font-size:12px;font-weight:700;color:${color};margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px;display:flex;align-items:center;gap:6px">
+          <span class="material-icons" style="font-size:16px">${icon}</span>
+          ${label} <span style="color:#65676b;font-weight:500">· ${movs.length}</span>
+          <span style="margin-left:auto;color:${color}">${isGasto?'-':'+'}$${fmt(total)}</span>
+        </div>
+        <table class="ct-costos-table">
+          <thead><tr>
+            ${vista === 'mes' ? '<th>Fecha</th>' : ''}
+            <th>Descripción</th>
+            <th>Categoría</th>
+            <th>Medio</th>
+            <th style="text-align:right">Monto</th>
+          </tr></thead>
+          <tbody>
+            ${ordenados.map(g => `
+              <tr>
+                ${vista === 'mes' ? `<td style="font-size:12px;color:#65676b">${formatDia(g.fecha || '')}</td>` : ''}
+                <td><b style="font-size:13px">${escapeHtmlCt(g.descripcion || '(sin descripción)')}</b></td>
+                <td style="font-size:12px;color:#475569">${escapeHtmlCt(g.categoria_nombre || 'Sin categoría')}</td>
+                <td style="font-size:12px;color:#475569">${escapeHtmlCt(tipoLabel[g.tipo] || g.tipo || '—')}</td>
+                <td style="text-align:right;font-weight:700;color:${color}">${isGasto?'-':'+'}$${fmt(g.monto || 0)}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  };
 
   // Agregación de items: por nombre, cantidad y ingreso total
   const porProducto = {};
@@ -1624,6 +2696,7 @@ function abrirDetalleGanancia(row, vista) {
       <div class="ct-modal-desc">
         <b style="color:${ganancia>=0?'#00695c':'#c62828'}">$${fmt(ganancia)}</b> de ganancia bruta
         (${Math.round(margen)}% margen) sobre <b>$${fmt(row.ingreso)}</b> en ventas.
+        ${(totalGastosRow > 0 || totalIngresosRow > 0) ? `<div style="margin-top:4px;font-size:12px;color:#65676b">Neto tras movimientos: <b style="color:${gananciaNeta>=0?'#00695c':'#c62828'}">$${fmt(gananciaNeta)}</b></div>` : ''}
       </div>
 
       <div class="ct-modal-body">
@@ -1636,7 +2709,14 @@ function abrirDetalleGanancia(row, vista) {
           <div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">Margen</span><b style="color:${margen>=0?'#00695c':'#c62828'}">${Math.round(margen)}%</b></div>
           <div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">Ventas</span><b>${row.ventas.length}</b></div>
           <div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">Ticket prom.</span><b>$${fmt(ticketProm)}</b></div>
+          ${totalGastosRow > 0 ? `<div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">Gastos anotados</span><b style="color:#c62828">-$${fmt(totalGastosRow)}</b></div>` : ''}
+          ${totalIngresosRow > 0 ? `<div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">Ingresos extra</span><b style="color:#2e7d32">+$${fmt(totalIngresosRow)}</b></div>` : ''}
+          ${(totalGastosRow > 0 || totalIngresosRow > 0) ? `<div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">Ganancia neta</span><b style="color:${gananciaNeta>=0?'#00695c':'#c62828'}">$${fmt(gananciaNeta)}</b></div>` : ''}
         </div>
+
+        <!-- Movimientos manuales (gastos / ingresos) anotados ese día/mes -->
+        ${renderMovsTable(gastosRow, 'gasto')}
+        ${renderMovsTable(ingresosRow, 'ingreso')}
 
         <!-- Highlights -->
         <div style="background:#f7f8fa;border-radius:10px;padding:14px;margin-bottom:16px">
@@ -1856,8 +2936,13 @@ function buildSkeleton(periodo, config, categorias, rubros) {
   const c1 = config.cuenta1_nombre || 'Cuenta 1';
   const c2 = config.cuenta2_nombre || 'Cuenta 2';
   const fi = config.fecha_inicio || '2026-04-18';
-  const periodos = ['hoy', 'semana', 'mes'];
-  const labels   = { hoy: 'Hoy', semana: '7 días', mes: 'Este mes' };
+  const periodos = ['hoy', 'semana', 'mes', 'custom'];
+  const labels   = {
+    hoy: 'Hoy',
+    semana: '7 días',
+    mes: 'Este mes',
+    custom: '<span class="material-icons" style="font-size:15px;vertical-align:-3px;margin-right:3px">date_range</span>Personalizado',
+  };
   const catOpts  = buildCatSelectOptions(categorias || [], 'gasto', '');
   const rubroOpts = '<option value="">— Sin rubro —</option>' +
     (rubros || []).map(r => `<option value="${escapeHtmlCt(r)}">${escapeHtmlCt(r)}</option>`).join('');
@@ -1871,6 +2956,48 @@ function buildSkeleton(periodo, config, categorias, rubros) {
         </div>
         <button id="ct-config-btn" class="ct-config-btn" title="Configurar cuentas">
           <span class="material-icons" style="font-size:18px">settings</span> Configurar cuentas
+        </button>
+      </div>
+
+      <div id="ct-custom-panel" class="ct-custom-panel" style="display:none">
+        <div class="ct-custom-grp">
+          <div class="ct-custom-title">Rango por días</div>
+          <div class="ct-custom-row">
+            <label>Desde<input type="date" id="ct-custom-desde"></label>
+            <label>Hasta<input type="date" id="ct-custom-hasta"></label>
+            <button id="ct-custom-apply" class="ct-custom-apply">Aplicar</button>
+          </div>
+        </div>
+        <div class="ct-custom-sep"></div>
+        <div class="ct-custom-grp">
+          <div class="ct-custom-title">Mes específico</div>
+          <div class="ct-custom-row">
+            <label>Mes<select id="ct-custom-mes"></select></label>
+            <label>Año<select id="ct-custom-anio"></select></label>
+            <button id="ct-custom-mes-apply" class="ct-custom-apply">Aplicar mes</button>
+          </div>
+        </div>
+        <div class="ct-custom-sep"></div>
+        <div class="ct-custom-grp">
+          <div class="ct-custom-title">Rango de meses</div>
+          <div class="ct-custom-row">
+            <label>Desde mes<select id="ct-custom-rmes-desde"></select></label>
+            <label>Año<select id="ct-custom-ranio-desde"></select></label>
+            <label>Hasta mes<select id="ct-custom-rmes-hasta"></select></label>
+            <label>Año<select id="ct-custom-ranio-hasta"></select></label>
+            <button id="ct-custom-rmes-apply" class="ct-custom-apply">Aplicar rango</button>
+          </div>
+        </div>
+      </div>
+
+      <div class="ct-main-tabs" style="display:flex;gap:6px;margin-bottom:14px;border-bottom:2px solid var(--border);padding-bottom:0">
+        <button type="button" class="ct-main-tab active" data-tab="resumen"
+          style="padding:10px 20px;border:none;background:transparent;border-bottom:3px solid var(--primary);font-weight:700;font-size:14px;cursor:pointer;color:var(--primary);margin-bottom:-2px;display:flex;align-items:center;gap:6px;font-family:inherit">
+          <span class="material-icons" style="font-size:18px">dashboard</span> Resumen
+        </button>
+        <button type="button" class="ct-main-tab" data-tab="dias"
+          style="padding:10px 20px;border:none;background:transparent;border-bottom:3px solid transparent;font-weight:600;font-size:14px;cursor:pointer;color:#65676b;margin-bottom:-2px;display:flex;align-items:center;gap:6px;font-family:inherit">
+          <span class="material-icons" style="font-size:18px">calendar_month</span> Días
         </button>
       </div>
 
@@ -1894,6 +3021,7 @@ function buildSkeleton(periodo, config, categorias, rubros) {
         <button type="submit" class="btn-primary" style="padding:8px 20px;background:var(--primary);color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-size:14px">Guardar</button>
       </form>
 
+      <div id="ct-tab-resumen" class="ct-tab-pane">
       <div id="ct-stats">
         <div class="ct-loading"><div class="spinner" style="width:24px;height:24px;border-width:3px"></div></div>
       </div>
@@ -1901,6 +3029,8 @@ function buildSkeleton(periodo, config, categorias, rubros) {
       <div id="ct-alertas"></div>
 
       <div id="ct-resumen-categorias"></div>
+
+      <div id="ct-recompra"></div>
 
       <div class="ct-gasto-section">
         <div class="ct-section-title" style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:8px">
@@ -1958,24 +3088,27 @@ function buildSkeleton(periodo, config, categorias, rubros) {
           <div class="ct-loading"><div class="spinner" style="width:24px;height:24px;border-width:3px"></div></div>
         </div>
       </div>
+      </div><!-- /#ct-tab-resumen -->
 
-      <!-- Lista Ganancia: agregaciones por día / mes -->
-      <div class="ct-gastos-card" style="margin-top:16px">
-        <div class="ct-section-title" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-          <div>
-            <span class="material-icons" style="font-size:16px;vertical-align:middle">insights</span>
-            Lista de Ganancia
-            <span style="font-size:11px;color:#65676b;margin-left:8px;font-weight:400">Click en una fila para ver el detalle</span>
+      <div id="ct-tab-dias" class="ct-tab-pane" style="display:none">
+        <div class="ct-gastos-card">
+          <div class="ct-section-title" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+            <div>
+              <span class="material-icons" style="font-size:16px;vertical-align:middle">calendar_month</span>
+              Lista por días
+              <span style="font-size:11px;color:#65676b;margin-left:8px;font-weight:400">Click en una fila para ver el detalle del día</span>
+            </div>
+            <div class="ct-lg-tabs" style="display:flex;gap:4px;background:#f0f2f5;padding:3px;border-radius:8px">
+              <button class="ct-lg-tab" data-vista="agrupado" style="padding:5px 14px;border:none;background:transparent;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;color:#65676b">Mes → días</button>
+              <button class="ct-lg-tab" data-vista="dia" style="padding:5px 14px;border:none;background:transparent;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;color:#65676b">Por día</button>
+              <button class="ct-lg-tab" data-vista="mes" style="padding:5px 14px;border:none;background:transparent;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;color:#65676b">Por mes</button>
+            </div>
           </div>
-          <div class="ct-lg-tabs" style="display:flex;gap:4px;background:#f0f2f5;padding:3px;border-radius:8px">
-            <button class="ct-lg-tab active" data-vista="dia" style="padding:5px 14px;border:none;background:#fff;border-radius:6px;font-weight:700;font-size:12px;cursor:pointer;color:#1c1e21;box-shadow:0 1px 2px rgba(0,0,0,0.05)">Por día</button>
-            <button class="ct-lg-tab" data-vista="mes" style="padding:5px 14px;border:none;background:transparent;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;color:#65676b">Por mes</button>
+          <div id="ct-ganancia-lista">
+            <div class="ct-loading"><div class="spinner" style="width:24px;height:24px;border-width:3px"></div></div>
           </div>
         </div>
-        <div id="ct-ganancia-lista">
-          <div class="ct-loading"><div class="spinner" style="width:24px;height:24px;border-width:3px"></div></div>
-        </div>
-      </div>
+      </div><!-- /#ct-tab-dias -->
 
     </div>
   `;

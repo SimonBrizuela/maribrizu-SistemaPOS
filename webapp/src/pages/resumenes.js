@@ -7,17 +7,23 @@ export async function renderResumenes(container, db) {
   const fechaInicioStr = await getFechaInicio(db);
   const [inicioYear, inicioMonth] = fechaInicioStr.split('-').map(Number);
 
-  // Los docs de 'resumenes_mensuales' son por PC (doc_id incluye pc_id), asi que
-  // listarlos daria una fila por PC/mes. Computamos el resumen desde 'ventas' (monto,
-  // pago, descuento, ticket) y 'ventas_por_dia' (top productos), que son compartidas.
-  const [ventasRaw, itemsRaw] = await Promise.all([
+  // Fuente única: `ventas_por_dia` (mismo dataset que Historial Diario). Antes tomábamos
+  // total/efectivo/transferencia desde la colección `ventas`, pero quedaba inconsistente
+  // con Historial cuando `ventas` no tenía todos los registros sincronizados.
+  // descuento se mantiene desde `ventas` (no está a nivel de item).
+  const [itemsRaw, ventasRaw] = await Promise.all([
+    getCached('historial:ventas_dia:v3', async () => {
+      const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('fecha', 'desc')));
+      return snap.docs.map(d => {
+        const data  = d.data();
+        const parts = d.id.split('_');
+        const pcId  = parts.length >= 3 ? parts.slice(0, -2).join('_') : '';
+        return { ...data, _pc_id: pcId };
+      });
+    }, { ttl: 60 * 1000 }),
     getCached('ventas:lista', async () => {
       const snap = await getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc')));
       return snap.docs.map(d => ({ id: d.id, ...d.data() }));
-    }),
-    getCached('historial:ventas_dia', async () => {
-      const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('fecha', 'desc')));
-      return snap.docs.map(d => d.data());
     }),
   ]);
 
@@ -25,15 +31,15 @@ export async function renderResumenes(container, db) {
   const monthNames = ['enero','febrero','marzo','abril','mayo','junio',
                       'julio','agosto','septiembre','octubre','noviembre','diciembre'];
 
-  const ventasFiltradas = ventasRaw.filter(v =>
-    v.deleted !== true && !isVentaVarios2(v) && parseArDate(v.created_at) >= fechaInicio
-  );
   const itemsFiltrados = itemsRaw.filter(v => {
     if (v.deleted === true) return false;
     if (isItemVarios2(v)) return false;
     const f = (v.fecha || '').split('/').reverse().join('-');
     return f >= fechaInicioStr;
   });
+  const ventasFiltradas = ventasRaw.filter(v =>
+    v.deleted !== true && !isVentaVarios2(v) && parseArDate(v.created_at) >= fechaInicio
+  );
 
   // Agrupar por YYYY-MM
   const mesesMap = {};
@@ -43,48 +49,55 @@ export async function renderResumenes(container, db) {
       mesesMap[key] = {
         anio, mes_num,
         mes_nombre: `${monthNames[mes_num-1]} ${anio}`,
-        num_ventas: 0, total: 0, efectivo: 0, transferencia: 0, descuentos_total: 0,
+        total: 0, efectivo: 0, transferencia: 0, descuentos_total: 0,
+        _ventas: new Set(),  // unique (pc_id|num_venta) — recuento real de ventas
         _prods: {},
       };
     }
     return mesesMap[key];
   };
 
+  // Agregados de monto/pago/conteo y top productos desde ventas_por_dia (single source).
+  for (const it of itemsFiltrados) {
+    const [dd, mm, yy] = (it.fecha || '').split('/');
+    if (!yy || !mm) continue;
+    const g = getMes(Number(yy), Number(mm));
+    const sub = Number(it.subtotal || 0);
+    g.total += sub;
+    if ((it.tipo_pago || '') === 'Transferencia') g.transferencia += sub;
+    else g.efectivo += sub;
+    g._ventas.add(`${it._pc_id || ''}|${it.num_venta}`);
+
+    const name = it.producto || it.product_name || '?';
+    if (!g._prods[name]) g._prods[name] = { producto: name, cantidad: 0, total: 0 };
+    g._prods[name].cantidad += Number(it.cantidad || 1);
+    g._prods[name].total    += sub;
+  }
+
+  // Descuentos: solo este campo se toma de `ventas` (no está a nivel de item en ventas_por_dia).
   for (const v of ventasFiltradas) {
     const dt = parseArDate(v.created_at);
     const arStr = dt.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
     const [y, m] = arStr.split('-').map(Number);
     const g = getMes(y, m);
-    const monto = Number(v.total_amount || 0);
-    g.num_ventas++;
-    g.total += monto;
-    if (v.payment_type === 'cash') g.efectivo += monto;
-    else g.transferencia += monto;
     g.descuentos_total += Number(v.discount || 0);
   }
 
-  for (const it of itemsFiltrados) {
-    const [dd, mm, yy] = (it.fecha || '').split('/');
-    if (!yy || !mm) continue;
-    const g = getMes(Number(yy), Number(mm));
-    const name = it.producto || it.product_name || '?';
-    if (!g._prods[name]) g._prods[name] = { producto: name, cantidad: 0, total: 0 };
-    g._prods[name].cantidad += Number(it.cantidad || 1);
-    g._prods[name].total    += Number(it.subtotal || 0);
-  }
-
-  const meses = Object.values(mesesMap).map(g => ({
-    anio: g.anio,
-    mes_num: g.mes_num,
-    mes_nombre: g.mes_nombre,
-    num_ventas: g.num_ventas,
-    total: g.total,
-    efectivo: g.efectivo,
-    transferencia: g.transferencia,
-    descuentos_total: g.descuentos_total,
-    ticket_promedio: g.num_ventas > 0 ? g.total / g.num_ventas : 0,
-    top_productos: Object.values(g._prods).sort((a,b) => b.total - a.total).slice(0, 10),
-  })).filter(m => {
+  const meses = Object.values(mesesMap).map(g => {
+    const numVentas = g._ventas.size;
+    return {
+      anio: g.anio,
+      mes_num: g.mes_num,
+      mes_nombre: g.mes_nombre,
+      num_ventas: numVentas,
+      total: g.total,
+      efectivo: g.efectivo,
+      transferencia: g.transferencia,
+      descuentos_total: g.descuentos_total,
+      ticket_promedio: numVentas > 0 ? g.total / numVentas : 0,
+      top_productos: Object.values(g._prods).sort((a,b) => b.total - a.total).slice(0, 10),
+    };
+  }).filter(m => {
     if (m.anio > inicioYear) return true;
     if (m.anio < inicioYear) return false;
     return m.mes_num >= inicioMonth;
@@ -193,24 +206,96 @@ export async function renderResumenes(container, db) {
     });
   });
 
-  // Exportar CSV/Excel
+  // Exportar Excel (.xls) \u2014 HTML que Excel parsea con formato (negrita, totales, n\u00FAmeros).
+  // Mejor que CSV: respeta formato es-AR, headers destacados y fila de totales sin
+  // depender de la config regional del Excel del usuario.
   document.getElementById('btnExportCSV').addEventListener('click', () => {
-    const headers = ['Mes','Num Ventas','Total','Efectivo','Transferencia','Descuentos','Ticket Promedio'];
-    const rows = meses.map(m => [
-      m.mes_nombre || '',
-      m.num_ventas || 0,
-      (m.total || 0).toFixed(2),
-      (m.efectivo || 0).toFixed(2),
-      (m.transferencia || 0).toFixed(2),
-      (m.descuentos_total || 0).toFixed(2),
-      (m.ticket_promedio || 0).toFixed(2),
-    ]);
-    const csv = [headers, ...rows].map(r => r.join(',')).join('\n');
-    const blob = new Blob(['\uFEFF' + csv], { type: 'text/csv;charset=utf-8;' });
+    const ahora = new Date().toLocaleString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires' });
+    const fechaSlug = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+    const periodoStr = meses.length > 0
+      ? `${capFirst(meses[meses.length-1].mes_nombre)} \u2014 ${capFirst(meses[0].mes_nombre)}`
+      : 'Sin datos';
+    const totalGen = meses.reduce((a, m) => a + (m.total || 0), 0);
+    const efectivoGen = meses.reduce((a, m) => a + (m.efectivo || 0), 0);
+    const transferGen = meses.reduce((a, m) => a + (m.transferencia || 0), 0);
+    const descuentosGen = meses.reduce((a, m) => a + (m.descuentos_total || 0), 0);
+    const ventasGen = meses.reduce((a, m) => a + (m.num_ventas || 0), 0);
+    const ticketGen = ventasGen > 0 ? totalGen / ventasGen : 0;
+
+    // mso-number-format hace que Excel trate la celda como n\u00FAmero (no texto)
+    const numFmt = 'mso-number-format:"#,##0.00"';
+    const intFmt = 'mso-number-format:"0"';
+    const cellStyle = 'padding:6px 10px;border:1px solid #d0d7de;font-family:Calibri,Arial,sans-serif;font-size:11pt';
+    const headStyle = `${cellStyle};background:#1a3a5c;color:#fff;font-weight:700;text-align:center`;
+    const totStyle  = `${cellStyle};background:#e8eef5;font-weight:700;border-top:2px solid #1a3a5c`;
+
+    const dataRows = meses.map((m, i) => {
+      const bg = i % 2 === 0 ? '#ffffff' : '#f7f9fb';
+      const cs = `${cellStyle};background:${bg}`;
+      return `
+        <tr>
+          <td style="${cs};font-weight:600">${capFirst(m.mes_nombre || '-')}</td>
+          <td style="${cs};text-align:center;${intFmt}">${m.num_ventas || 0}</td>
+          <td style="${cs};text-align:right;${numFmt};color:#198754;font-weight:600">${(m.total||0).toFixed(2)}</td>
+          <td style="${cs};text-align:right;${numFmt}">${(m.efectivo||0).toFixed(2)}</td>
+          <td style="${cs};text-align:right;${numFmt}">${(m.transferencia||0).toFixed(2)}</td>
+          <td style="${cs};text-align:right;${numFmt};color:#dc3545">${(m.descuentos_total||0).toFixed(2)}</td>
+          <td style="${cs};text-align:right;${numFmt}">${(m.ticket_promedio||0).toFixed(2)}</td>
+        </tr>`;
+    }).join('');
+
+    const html = `<!DOCTYPE html>
+<html xmlns:o="urn:schemas-microsoft-com:office:office"
+      xmlns:x="urn:schemas-microsoft-com:office:excel"
+      xmlns="http://www.w3.org/TR/REC-html40">
+<head>
+  <meta charset="UTF-8">
+  <!--[if gte mso 9]><xml>
+    <x:ExcelWorkbook><x:ExcelWorksheets><x:ExcelWorksheet>
+      <x:Name>Res\u00FAmenes Mensuales</x:Name>
+      <x:WorksheetOptions><x:DisplayGridlines/></x:WorksheetOptions>
+    </x:ExcelWorksheet></x:ExcelWorksheets></x:ExcelWorkbook>
+  </xml><![endif]-->
+  <style>
+    table { border-collapse:collapse; }
+    .title { font-family:Calibri,Arial,sans-serif; font-size:18pt; font-weight:700; color:#1a3a5c; }
+    .subtitle { font-family:Calibri,Arial,sans-serif; font-size:10pt; color:#666; }
+  </style>
+</head>
+<body>
+  <table>
+    <tr><td colspan="7" class="title" style="padding:10px 0">Res\u00FAmenes Mensuales</td></tr>
+    <tr><td colspan="7" class="subtitle">Per\u00EDodo: ${periodoStr}</td></tr>
+    <tr><td colspan="7" class="subtitle">Generado: ${ahora}</td></tr>
+    <tr><td colspan="7" style="height:8px"></td></tr>
+    <tr>
+      <th style="${headStyle};text-align:left">Mes</th>
+      <th style="${headStyle}"># Ventas</th>
+      <th style="${headStyle}">Total</th>
+      <th style="${headStyle}">Efectivo</th>
+      <th style="${headStyle}">Transferencia</th>
+      <th style="${headStyle}">Descuentos</th>
+      <th style="${headStyle}">Ticket Prom.</th>
+    </tr>
+    ${dataRows || `<tr><td colspan="7" style="${cellStyle};text-align:center;color:#94a3b8">Sin datos</td></tr>`}
+    <tr>
+      <td style="${totStyle}">TOTAL GENERAL</td>
+      <td style="${totStyle};text-align:center;${intFmt}">${ventasGen}</td>
+      <td style="${totStyle};text-align:right;${numFmt};color:#198754">${totalGen.toFixed(2)}</td>
+      <td style="${totStyle};text-align:right;${numFmt}">${efectivoGen.toFixed(2)}</td>
+      <td style="${totStyle};text-align:right;${numFmt}">${transferGen.toFixed(2)}</td>
+      <td style="${totStyle};text-align:right;${numFmt};color:#dc3545">${descuentosGen.toFixed(2)}</td>
+      <td style="${totStyle};text-align:right;${numFmt}">${ticketGen.toFixed(2)}</td>
+    </tr>
+  </table>
+</body>
+</html>`;
+
+    const blob = new Blob(['\uFEFF' + html], { type: 'application/vnd.ms-excel;charset=utf-8;' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `resumenes_mensuales_${new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' })}.csv`;
+    a.download = `resumenes_mensuales_${fechaSlug}.xls`;
     a.click();
     URL.revokeObjectURL(url);
   });

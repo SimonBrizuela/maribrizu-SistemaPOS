@@ -55,6 +55,7 @@ export async function renderVentas(container, db) {
         <option value="mixed">Mixto</option>
       </select>
       <input type="text" id="filtroCajero" placeholder="Cajero..." style="width:140px" />
+      <input type="text" id="filtroProducto" placeholder="Buscar producto..." style="width:200px" />
     </div>
     <div class="table-card">
       <div class="table-card-header">
@@ -71,17 +72,42 @@ export async function renderVentas(container, db) {
           <tbody id="ventasBody"></tbody>
         </table>
       </div>
+      <div id="ventasLoadMoreWrap" style="display:none;text-align:center;padding:16px">
+        <button id="ventasLoadMoreBtn" class="btn-secondary" style="background:var(--primary);color:#fff;border:none;padding:10px 24px;border-radius:8px;cursor:pointer;font-size:14px;font-weight:600">
+          Cargar más ventas
+        </button>
+        <div id="ventasLoadMoreInfo" style="margin-top:8px;font-size:12px;color:var(--text-muted)"></div>
+      </div>
     </div>
   `;
 
+  // Paginación: arranca mostrando PAGE_SIZE y crece de a PAGE_SIZE en cada click
+  const PAGE_SIZE = 50;
+  let renderedCount = PAGE_SIZE;
+  let currentData = [];
+
   function renderRows(data) {
+    currentData = data;
     const tbody = document.getElementById('ventasBody');
+    const loadMoreWrap = document.getElementById('ventasLoadMoreWrap');
+    const loadMoreInfo = document.getElementById('ventasLoadMoreInfo');
+
     document.getElementById('ventasCount').textContent = data.length + ' ventas — click en una fila para ver el detalle';
     if (!data.length) {
       tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text-muted)">Sin ventas para mostrar</td></tr>`;
+      loadMoreWrap.style.display = 'none';
       return;
     }
-    tbody.innerHTML = data.map((v, i) => {
+
+    const slice = data.slice(0, renderedCount);
+    if (data.length > renderedCount) {
+      loadMoreWrap.style.display = 'block';
+      loadMoreInfo.textContent = `Mostrando ${slice.length} de ${data.length}`;
+    } else {
+      loadMoreWrap.style.display = 'none';
+    }
+
+    tbody.innerHTML = slice.map((v, i) => {
       const dt = parseArDate(v.created_at);
       const esEfectivo = v.payment_type === 'cash';
       const esMixto    = v.payment_type === 'mixed';
@@ -128,21 +154,21 @@ export async function renderVentas(container, db) {
       </tr>`;
     }).join('');
 
-    // Eventos click en filas
+    // Eventos click en filas (idx es relativo al slice visible)
     tbody.querySelectorAll('.clickable-row').forEach(row => {
       row.addEventListener('click', (e) => {
         if (e.target.closest('.btn-delete-venta')) return;
         const idx = parseInt(row.dataset.idx);
-        openSaleModal(data[idx], db);
+        openSaleModal(slice[idx], db);
       });
     });
 
-    // Eventos click en botones eliminar
+    // Eventos click en botones eliminar (idx es relativo al slice visible)
     tbody.querySelectorAll('.btn-delete-venta').forEach(btn => {
       btn.addEventListener('click', async (e) => {
         e.stopPropagation();
         const idx = parseInt(btn.dataset.idx);
-        const venta = data[idx];
+        const venta = slice[idx];
         await handleDeleteVenta(venta, saleNumMap);
       });
     });
@@ -207,6 +233,7 @@ export async function renderVentas(container, db) {
     const hasta = document.getElementById('filtroHasta').value;
     const pago  = document.getElementById('filtroPago').value;
     const cajero = document.getElementById('filtroCajero').value.toLowerCase();
+    const producto = document.getElementById('filtroProducto').value.toLowerCase();
 
     if (desde) data = data.filter(v => {
       const dt = parseArDate(v.created_at);
@@ -220,11 +247,22 @@ export async function renderVentas(container, db) {
     if (cajero) data = data.filter(v =>
       (v.cajero || v.username || '').toLowerCase().includes(cajero)
     );
+    if (producto) data = data.filter(v =>
+      (v._productosTexto || '').toLowerCase().includes(producto)
+    );
+    // Cualquier cambio de filtro → resetear paginación
+    renderedCount = PAGE_SIZE;
     renderRows(data);
   }
 
-  ['filtroDesde','filtroHasta','filtroPago','filtroCajero'].forEach(id => {
+  ['filtroDesde','filtroHasta','filtroPago','filtroCajero','filtroProducto'].forEach(id => {
     document.getElementById(id).addEventListener('input', applyFilters);
+  });
+
+  // Botón "Cargar más" → suma PAGE_SIZE filas más
+  document.getElementById('ventasLoadMoreBtn').addEventListener('click', () => {
+    renderedCount += PAGE_SIZE;
+    renderRows(currentData);
   });
 
   renderRows(ventas);

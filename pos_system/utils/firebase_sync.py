@@ -637,6 +637,190 @@ class FirebaseSync:
             logger.error(f"Firebase: Error descargando promociones: {e}")
             return []
 
+    # ══════════════════════════════════════════════════════════════════
+    # PRODUCTOS MADRE (mp_*) — sync con SQLite local + UI refresh
+    # ══════════════════════════════════════════════════════════════════
+    def _start_mp_listener(self, collection: str, db_manager, model_cls,
+                            on_refresh: Optional[Callable] = None, label: str = ''):
+        """Listener genérico para colecciones mp_*: hace upsert local en cada cambio."""
+        if not self.enabled:
+            return
+        from google.cloud.firestore_v1.watch import ChangeType
+        model = model_cls(db_manager)
+
+        def _watch(col_snapshot, changes, read_time):
+            try:
+                changed = 0
+                for change in changes:
+                    doc_id = change.document.id
+                    d = (change.document.to_dict() or {})
+                    d['id'] = doc_id
+                    if change.type == ChangeType.REMOVED:
+                        try:
+                            model.delete(doc_id)
+                        except Exception as e:
+                            logger.warning(f"Firebase mp[{label}]: borrar {doc_id} falló: {e}")
+                    else:
+                        try:
+                            model.upsert(d)
+                        except Exception as e:
+                            logger.warning(f"Firebase mp[{label}]: upsert {doc_id} falló: {e}")
+                    changed += 1
+                if changed:
+                    logger.info(f"Firebase mp[{label}]: {changed} cambio(s) sincronizado(s).")
+                    if on_refresh:
+                        try:
+                            on_refresh()
+                        except Exception as e:
+                            logger.warning(f"Firebase mp[{label}]: on_refresh falló: {e}")
+            except Exception as e:
+                logger.error(f"Firebase mp[{label}]: error en _watch: {e}")
+
+        try:
+            col_ref = self.db.collection(collection)
+            watcher = col_ref.on_snapshot(_watch)
+            self._listeners.append(watcher)
+            logger.info(f"Firebase: listener mp[{label}] activo en {collection}.")
+        except Exception as e:
+            logger.error(f"Firebase: no se pudo iniciar listener mp[{label}]: {e}")
+
+    def start_mp_products_listener(self, db_manager, on_refresh: Optional[Callable] = None):
+        """Escucha mp_products y sincroniza a la SQLite local."""
+        from pos_system.models.mother_product import MotherProduct
+        self._start_mp_listener('mp_products', db_manager, MotherProduct,
+                                 on_refresh=on_refresh, label='products')
+
+    def start_mp_nodes_listener(self, db_manager, on_refresh: Optional[Callable] = None):
+        """Escucha mp_nodes (incluye presentaciones embebidas) y sincroniza a la SQLite local."""
+        from pos_system.models.mother_product import Node
+        self._start_mp_listener('mp_nodes', db_manager, Node,
+                                 on_refresh=on_refresh, label='nodes')
+
+    def start_mp_discounts_listener(self, db_manager, on_refresh: Optional[Callable] = None):
+        """Escucha mp_discounts y sincroniza a la SQLite local."""
+        from pos_system.models.mother_product import Discount
+        self._start_mp_listener('mp_discounts', db_manager, Discount,
+                                 on_refresh=on_refresh, label='discounts')
+
+    def start_mp_stock_movements_listener(self, db_manager, on_refresh: Optional[Callable] = None):
+        """Escucha mp_stock_movements y mantiene un espejo local para auditoría offline.
+
+        Recibe tanto los movimientos que escribe el POS al vender (vía
+        deduct_mp_stock — el id es estable, así que el upsert es idempotente)
+        como los ajustes manuales que hace la webapp al editar stock.
+        """
+        from pos_system.models.mother_product import StockMovement
+        self._start_mp_listener('mp_stock_movements', db_manager, StockMovement,
+                                 on_refresh=on_refresh, label='stock_movements')
+
+    def deduct_mp_stock(self, node_id: str, presentation_id: str, delta_qty: float,
+                        product_id: str = '', motivo: str = 'venta',
+                        user: str = '', db_manager=None) -> bool:
+        """
+        Descuenta stock de una presentación de mp_nodes (sueltos primero, luego abre
+        contenedores de a equivalencia_base) y graba un movimiento en mp_stock_movements.
+
+        Read-modify-write ATÓMICO usando una transacción Firestore: si dos PCs venden
+        el mismo nodo en simultáneo, Firestore aborta la transacción que perdió la
+        carrera y la reintenta automáticamente con la data fresca. Cierra la ventana
+        de "lost update" que existía antes con el `doc.update()` plano.
+
+        Devuelve True si se aplicó. Si la presentación no existe, registra warning y
+        devuelve False (la venta sigue OK localmente).
+        """
+        if not self.enabled or not node_id or not presentation_id:
+            return False
+        qty_orig = float(delta_qty or 0)
+        if qty_orig <= 0:
+            return False
+
+        from google.cloud.firestore_v1.transaction import transactional
+
+        doc_ref = self.db.collection('mp_nodes').document(node_id)
+        # Pre-generar el ref del movimiento para que su id sea estable aunque la
+        # transacción retre por contención. Idempotente: re-escribe el mismo doc.
+        mov_ref = self.db.collection('mp_stock_movements').document()
+
+        @transactional
+        def _txn(transaction):
+            snap = doc_ref.get(transaction=transaction)
+            if not snap.exists:
+                logger.warning(f"deduct_mp_stock: nodo {node_id} no existe en Firestore.")
+                return False
+            data = snap.to_dict() or {}
+            presentaciones = list(data.get('presentaciones') or [])
+            idx = next((i for i, p in enumerate(presentaciones)
+                        if (p.get('id') or '') == presentation_id), -1)
+            if idx < 0:
+                logger.warning(f"deduct_mp_stock: presentación {presentation_id} no encontrada en {node_id}.")
+                return False
+            p = dict(presentaciones[idx])
+            qty = qty_orig
+            # 1) Descontar de sueltos primero
+            sueltos = float(p.get('stock_sueltos') or 0)
+            if sueltos > 0:
+                usar = min(qty, sueltos)
+                p['stock_sueltos'] = sueltos - usar
+                qty -= usar
+            # 2) Si queda pendiente, abrir contenedores enteros
+            if qty > 0:
+                equiv = float(p.get('equivalencia_base') or 0)
+                if equiv > 0:
+                    contenedores = int(-(-qty // equiv))  # ceil
+                    p['stock'] = max(0, float(p.get('stock') or 0) - contenedores)
+                    sobrante = (contenedores * equiv) - qty
+                    p['stock_sueltos'] = float(p.get('stock_sueltos') or 0) + sobrante
+                else:
+                    p['stock'] = max(0, float(p.get('stock') or 0) - qty)
+            presentaciones[idx] = p
+
+            now_ar_dt = datetime.now(_TZ_AR)
+            transaction.update(doc_ref, {
+                'presentaciones': presentaciones,
+                'actualizado': now_ar_dt,
+            })
+            # Movimiento dentro de la MISMA transacción → si revierte el update,
+            # también revierte el movimiento (no quedan logs de ventas que no pasaron).
+            transaction.set(mov_ref, {
+                'product_id':      product_id or data.get('product_id') or '',
+                'node_id':         node_id,
+                'presentation_id': presentation_id,
+                'delta':           -qty_orig,
+                'motivo':          motivo,
+                'usuario':         user or '',
+                'ts':              now_ar_dt,
+            })
+            return True
+
+        def _do():
+            return _txn(self.db.transaction())
+
+        try:
+            ok = bool(_retry_on_429(_do, label='deduct_mp_stock'))
+        except Exception as e:
+            logger.error(f"deduct_mp_stock falló: {e}")
+            return False
+
+        # Espejo local del movimiento — usa el MISMO id que Firestore (mov_ref.id)
+        # para que cuando el listener pulle, el ON CONFLICT(id) lo dedupe en vez
+        # de duplicarlo. Si el espejo falla no rompe la venta.
+        if ok and db_manager is not None:
+            try:
+                from pos_system.models.mother_product import StockMovement
+                StockMovement(db_manager).upsert({
+                    'id':              mov_ref.id,
+                    'product_id':      product_id or '',
+                    'node_id':         node_id,
+                    'presentation_id': presentation_id,
+                    'delta':           -qty_orig,
+                    'motivo':          motivo,
+                    'usuario':         user or '',
+                    'ts':              datetime.now(_TZ_AR).strftime('%Y-%m-%d %H:%M:%S'),
+                })
+            except Exception as e:
+                logger.warning(f"deduct_mp_stock: espejo local falló: {e}")
+        return ok
+
     def stop_all_listeners(self):
         """Detiene todos los listeners activos."""
         for watcher in self._listeners:

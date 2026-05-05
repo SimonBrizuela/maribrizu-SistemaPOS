@@ -511,17 +511,76 @@ function parseProveedorCSV(text) {
 }
 
 // ── Render principal ──────────────────────────────────────────────────────────
+// Ventana donde el listener de catalogo_meta debe ignorar cambios (causados por
+// esta misma pestaña). Evita que un edit/borrado local dispare un re-render del
+// tab que pisaría el filtro de búsqueda y la página actual.
+let _localMetaTouchUntil = 0;
+
 /**
  * Escribe un timestamp en config/catalogo_meta para que el POS sepa
  * que el catálogo cambió y deba re-sincronizar en el próximo arranque.
  * Fire-and-forget: no bloquea la UI si Firebase está lento.
  */
 async function _touchCatalogoMeta(db) {
+  _localMetaTouchUntil = Date.now() + 8000;
   try {
     await setDoc(doc(db, 'config', 'catalogo_meta'), {
       last_updated: serverTimestamp(),
     }, { merge: true });
   } catch(e) { /* silently ignore */ }
+}
+
+/**
+ * Modal de confirmación estilizado. Reemplaza al confirm() nativo del navegador.
+ * Devuelve Promise<boolean>: true = aceptar, false = cancelar/Esc/click afuera.
+ */
+function _escHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => (
+    { '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]
+  ));
+}
+
+function confirmModal({ title = 'Confirmar', message = '', confirmText = 'Aceptar', cancelText = 'Cancelar', danger = false } = {}) {
+  return new Promise(resolve => {
+    document.querySelector('.confirm-modal-overlay')?.remove();
+    const accent = danger ? '#dc2626' : '#7c3aed';
+    const icon   = danger ? 'warning'  : 'help_outline';
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay confirm-modal-overlay';
+    overlay.innerHTML = `
+      <div class="modal" style="max-width:440px">
+        <div class="modal-header" style="border-bottom:none;padding-bottom:8px">
+          <h3 style="display:flex;align-items:center;gap:10px;margin:0">
+            <span class="material-icons" style="color:${accent};font-size:26px">${icon}</span>
+            ${_escHtml(title)}
+          </h3>
+        </div>
+        <div class="modal-body" style="padding:4px 24px 20px;font-size:14px;color:var(--text);line-height:1.5">
+          ${message}
+        </div>
+        <div style="display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid var(--border);background:#f8fafc">
+          <button class="cm-cancel" style="padding:9px 18px;border-radius:8px;border:1px solid var(--border);background:#fff;cursor:pointer;font-size:13px;font-weight:600;color:#475569">${_escHtml(cancelText)}</button>
+          <button class="cm-ok" style="padding:9px 18px;border-radius:8px;border:none;background:${accent};color:#fff;cursor:pointer;font-size:13px;font-weight:700">${_escHtml(confirmText)}</button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const cleanup = (val) => {
+      document.removeEventListener('keydown', onKey);
+      overlay.remove();
+      resolve(val);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); cleanup(false); }
+      else if (e.key === 'Enter') { e.preventDefault(); cleanup(true); }
+    };
+    document.addEventListener('keydown', onKey);
+    overlay.querySelector('.cm-ok').addEventListener('click', () => cleanup(true));
+    overlay.querySelector('.cm-cancel').addEventListener('click', () => cleanup(false));
+    overlay.addEventListener('click', e => { if (e.target === overlay) cleanup(false); });
+    setTimeout(() => overlay.querySelector('.cm-ok')?.focus(), 30);
+  });
 }
 
 /**
@@ -715,6 +774,9 @@ export async function renderCatalogo(container, db) {
           </button>
           <button class="tab-btn nav-pill" data-tab="reportes" style="display:flex;align-items:center;gap:6px;padding:7px 14px;border-radius:8px;border:none;background:none;color:#65676b;cursor:pointer;font-family:inherit;font-size:13px;font-weight:500;white-space:nowrap;transition:all 0.2s;flex-shrink:0">
             <span class="material-icons" style="font-size:16px">bar_chart</span>Reportes
+          </button>
+          <button class="tab-btn nav-pill" data-tab="etiquetas" style="display:flex;align-items:center;gap:6px;padding:7px 14px;border-radius:8px;border:none;background:none;color:#65676b;cursor:pointer;font-family:inherit;font-size:13px;font-weight:500;white-space:nowrap;transition:all 0.2s;flex-shrink:0">
+            <span class="material-icons" style="font-size:16px">qr_code_2</span>Etiquetas
           </button>
           <button class="tab-btn nav-pill" data-tab="config" style="display:flex;align-items:center;gap:6px;padding:7px 14px;border-radius:8px;border:none;background:none;color:#65676b;cursor:pointer;font-family:inherit;font-size:13px;font-weight:500;white-space:nowrap;transition:all 0.2s;flex-shrink:0">
             <span class="material-icons" style="font-size:16px">settings</span>Config.
@@ -977,6 +1039,7 @@ export async function renderCatalogo(container, db) {
     else if (tab === 'nuevo') renderTabNuevo(tc);
     else if (tab === 'margenes') renderTabMargenes(tc);
     else if (tab === 'reportes') renderTabReportes(tc);
+    else if (tab === 'etiquetas') renderTabEtiquetas(tc);
     else if (tab === 'config') renderTabConfig(tc);
   }
 
@@ -1275,15 +1338,46 @@ export async function renderCatalogo(container, db) {
     // Eliminar
     document.querySelectorAll('.btn-eliminar').forEach(btn => {
       btn.addEventListener('click', async () => {
-        if (!confirm('¿Eliminar este producto del catálogo?')) return;
+        if (btn.classList.contains('is-deleting')) return;
         const id = btn.dataset.id;
-        await deleteDoc(doc(db, 'catalogo', id));
-        await _registerCatalogoDeleted(db, id);
-        invalidateCacheByPrefix('catalogo');
-        _touchCatalogoMeta(db).catch(() => {});
+        const prev = allProductos.find(p => p.doc_id === id);
+        const nombreSafe = _escHtml(prev?.nombre || 'este producto');
+        const ok = await confirmModal({
+          title: 'Eliminar producto',
+          message: `¿Seguro que querés eliminar <b>${nombreSafe}</b> del catálogo?<br><span style="color:var(--text-muted);font-size:12px">Esta acción no se puede deshacer.</span>`,
+          confirmText: 'Eliminar',
+          cancelText: 'Cancelar',
+          danger: true,
+        });
+        if (!ok) return;
+        const tr = btn.closest('tr');
+
+        // Feedback visual inmediato + red en paralelo
+        btn.classList.add('is-deleting');
+        if (tr) tr.classList.add('row-removing');
+        const netPromise = Promise.all([
+          deleteDoc(doc(db, 'catalogo', id)),
+          _registerCatalogoDeleted(db, id),
+        ]);
+
+        // Esperar animación corta y luego quitar de memoria + re-render
+        await new Promise(r => setTimeout(r, 160));
         allProductos = allProductos.filter(p => p.doc_id !== id);
+        invalidateCacheByPrefix('catalogo');
         aplicarFiltros();
         renderStats();
+
+        try {
+          await netPromise;
+          _touchCatalogoMeta(db).catch(() => {});
+        } catch(e) {
+          if (prev) {
+            allProductos.push(prev);
+            aplicarFiltros();
+            renderStats();
+          }
+          alert('Error al eliminar: ' + (e?.message || e));
+        }
       });
     });
 
@@ -1455,29 +1549,36 @@ export async function renderCatalogo(container, db) {
             </div>
           </div>
 
-          <!-- Stock + Alertas -->
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:12px;align-items:end">
-            <div>
-              <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:6px">STOCK</label>
-              <input id="ed_stock" type="number" step="1" min="-1" value="${prod.stock ?? 0}" style="width:100%;padding:10px 12px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit" />
+          <!-- Stock + Alertas (oculto cuando "Producto Conjunto" está activado) -->
+          <div id="ed_stock_bloque" style="display:flex;flex-direction:column;gap:8px">
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:12px;align-items:end">
+              <div>
+                <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:6px">STOCK</label>
+                <input id="ed_stock" type="number" step="1" min="-1" value="${prod.stock ?? 0}" style="width:100%;padding:10px 12px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit" />
+              </div>
+              <div>
+                <label style="font-size:11px;font-weight:700;color:#b45309;letter-spacing:0.5px;display:block;margin-bottom:6px">STOCK MÍN. (avisar)</label>
+                <input id="ed_stock_min" type="number" step="1" min="0" placeholder="Sin alerta"
+                       value="${prod.stock_min ?? ''}"
+                       style="width:100%;padding:10px 12px;border:1.5px solid #ffe082;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit;background:#fffef7" />
+              </div>
+              <div>
+                <label style="font-size:11px;font-weight:700;color:#b45309;letter-spacing:0.5px;display:block;margin-bottom:6px">STOCK MÁX. (ideal)</label>
+                <input id="ed_stock_max" type="number" step="1" min="0" placeholder="Sin tope"
+                       value="${prod.stock_max ?? ''}"
+                       style="width:100%;padding:10px 12px;border:1.5px solid #ffe082;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit;background:#fffef7" />
+              </div>
             </div>
-            <div>
-              <label style="font-size:11px;font-weight:700;color:#b45309;letter-spacing:0.5px;display:block;margin-bottom:6px">STOCK MÍN. (avisar)</label>
-              <input id="ed_stock_min" type="number" step="1" min="0" placeholder="Sin alerta"
-                     value="${prod.stock_min ?? ''}"
-                     style="width:100%;padding:10px 12px;border:1.5px solid #ffe082;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit;background:#fffef7" />
-            </div>
-            <div>
-              <label style="font-size:11px;font-weight:700;color:#b45309;letter-spacing:0.5px;display:block;margin-bottom:6px">STOCK MÁX. (ideal)</label>
-              <input id="ed_stock_max" type="number" step="1" min="0" placeholder="Sin tope"
-                     value="${prod.stock_max ?? ''}"
-                     style="width:100%;padding:10px 12px;border:1.5px solid #ffe082;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit;background:#fffef7" />
+            <div style="color:#65676b;font-size:12px">
+              <span style="background:#f0f2f5;border-radius:6px;padding:8px 12px;display:block">
+                💡 <b>STOCK -1</b> = servicio/ilimitado &nbsp;|&nbsp; <b>0</b> = agotado &nbsp;|&nbsp; <b>&gt;0</b> = disponible. Dejá MÍN/MÁX vacío para desactivar alerta.
+              </span>
             </div>
           </div>
-          <div style="color:#65676b;font-size:12px;margin-top:-8px">
-            <span style="background:#f0f2f5;border-radius:6px;padding:8px 12px;display:block">
-              💡 <b>STOCK -1</b> = servicio/ilimitado &nbsp;|&nbsp; <b>0</b> = agotado &nbsp;|&nbsp; <b>&gt;0</b> = disponible. Dejá MÍN/MÁX vacío para desactivar alerta.
-            </span>
+
+          <!-- Aviso cuando "Producto Conjunto" está activo: el stock se calcula -->
+          <div id="ed_stock_conjunto_aviso" style="display:none;background:#f5f3ff;border:1.5px solid #c4b5fd;border-radius:10px;padding:10px 14px;color:#5b21b6;font-size:12.5px;line-height:1.4">
+            <b>Stock automático:</b> al estar activado <b>Producto Conjunto</b>, el stock se calcula a partir del desglose de abajo (cajas/rollos × contenido + sueltos). No hace falta cargar el campo STOCK clásico.
           </div>
 
           <!-- Producto Conjunto (pack / rollo / caja) -->
@@ -1487,6 +1588,9 @@ export async function renderCatalogo(container, db) {
               <span class="material-icons" style="font-size:18px">inventory_2</span>
               PRODUCTO CONJUNTO (pack / rollo / caja / metros)
             </label>
+            <!-- Resumen GRANDE arriba: siempre visible para que el usuario vea el desglose -->
+            <div id="ed_conj_resumen_top" style="${prod.es_conjunto ? 'display:block' : 'display:none'};margin-top:12px;background:#fff;border-left:4px solid #7c3aed;border-radius:8px;padding:12px 14px;font-size:13px;color:#1f2937;line-height:1.5"></div>
+
             <div id="ed_conjunto_fields" style="margin-top:12px;${prod.es_conjunto ? 'display:grid' : 'display:none'};grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
               <div>
                 <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:4px">TIPO</label>
@@ -1505,25 +1609,25 @@ export async function renderCatalogo(container, db) {
                 </select>
               </div>
               <div>
-                <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:4px">CANTIDAD DE <span id="lbl_unidades">ROLLOS</span></label>
+                <label id="lbl_titulo_unidades" style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:4px">ROLLOS ENTEROS</label>
                 <input id="ed_conj_unidades" type="number" min="0" step="1" value="${prod.conjunto_unidades ?? ''}" placeholder="Ej: 5" style="width:100%;padding:8px 10px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
               </div>
               <div>
-                <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:4px">CONTENIDO POR <span id="lbl_contenido">ROLLO</span></label>
+                <label id="lbl_titulo_contenido" style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:4px">METROS POR ROLLO</label>
                 <input id="ed_conj_contenido" type="number" min="0" step="0.01" value="${prod.conjunto_contenido ?? ''}" placeholder="Ej: 100" style="width:100%;padding:8px 10px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
               </div>
               <div>
-                <label style="font-size:11px;font-weight:700;color:#b45309;letter-spacing:0.5px;display:block;margin-bottom:4px">RESTANTE EN <span id="lbl_restante">ROLLO</span> ABIERTO (opcional)</label>
+                <label id="lbl_titulo_restante" style="font-size:11px;font-weight:700;color:#b45309;letter-spacing:0.5px;display:block;margin-bottom:4px">METROS SUELTOS EN ROLLO ABIERTO (opcional)</label>
                 <input id="ed_conj_restante" type="number" min="0" step="0.01" value="${prod.conjunto_restante ?? ''}" placeholder="Ej: 35.5" style="width:100%;padding:8px 10px;border:1.5px solid #ffe082;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit;background:#fffef7" />
               </div>
               <div>
-                <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:4px">PRECIO POR <span id="lbl_punidad">METRO</span> <span style="color:#9ca3af;font-weight:500">(auto)</span></label>
+                <label id="lbl_titulo_punidad" style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:4px">PRECIO POR METRO <span style="color:#9ca3af;font-weight:500">(auto)</span></label>
                 <div style="display:flex;gap:6px;align-items:center">
                   <input id="ed_conj_precio_unidad" type="number" min="0" step="0.01" value="${prod.conjunto_precio_unidad ?? ''}" placeholder="Auto" style="width:100%;padding:8px 10px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
                   <button id="btn_redondear_pu" type="button" title="Redondear al centena más cercano" style="flex-shrink:0;padding:8px 10px;border-radius:8px;border:1.5px solid #e4e6eb;background:#f0f2f5;cursor:pointer;font-size:11px;font-weight:700;color:#444;white-space:nowrap;line-height:1">±100</button>
                 </div>
                 <div id="ed_conj_precio_hint" style="font-size:10px;color:#6d28d9;margin-top:4px;line-height:1.3">
-                  Se calcula como <b>precio rollo / contenido × 1.15</b> (15 % margen).<br/>
+                  Se calcula como <b>precio ÷ contenido × 1.15</b> (15 % margen al detalle).<br/>
                   Editalo manualmente si querés un precio distinto.
                 </div>
               </div>
@@ -1567,15 +1671,27 @@ export async function renderCatalogo(container, db) {
     const inMargen = overlay.querySelector('#ed_margen');
     const inPrecio = overlay.querySelector('#ed_precio');
 
+    // Cuando se modifica programáticamente inPrecio (desde costo/margen o ±100),
+    // hay que avisarle al resumen del Producto Conjunto. Setear .value no dispara
+    // 'input' por sí solo, así que disparamos el evento manualmente.
+    function _emitInput(el) {
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+    }
     inCosto.addEventListener('input', () => {
       const c = parseFloat(inCosto.value) || 0;
       const m = parseFloat(inMargen.value) || 0;
-      if (c > 0) inPrecio.value = (c * (1 + m / 100)).toFixed(2);
+      if (c > 0) {
+        inPrecio.value = (c * (1 + m / 100)).toFixed(2);
+        _emitInput(inPrecio);
+      }
     });
     inMargen.addEventListener('input', () => {
       const c = parseFloat(inCosto.value) || 0;
       const m = parseFloat(inMargen.value) || 0;
-      if (c > 0) inPrecio.value = (c * (1 + m / 100)).toFixed(2);
+      if (c > 0) {
+        inPrecio.value = (c * (1 + m / 100)).toFixed(2);
+        _emitInput(inPrecio);
+      }
     });
     inPrecio.addEventListener('input', () => {
       const c = parseFloat(inCosto.value) || 0;
@@ -1588,6 +1704,7 @@ export async function renderCatalogo(container, db) {
       if (!p) return;
       const redondeado = Math.round(p / 100) * 100;
       inPrecio.value = redondeado;
+      _emitInput(inPrecio);
       const c = parseFloat(inCosto.value) || 0;
       if (c > 0) inMargen.value = Math.round(((redondeado - c) / c) * 100);
     });
@@ -1608,23 +1725,26 @@ export async function renderCatalogo(container, db) {
     }
 
     // ── Producto Conjunto: toggle + etiquetas dinámicas + resumen ──
-    const cbConj   = overlay.querySelector('#ed_es_conjunto');
-    const conjBox  = overlay.querySelector('#ed_conjunto_fields');
-    const conjTipo = overlay.querySelector('#ed_conj_tipo');
-    const conjUM   = overlay.querySelector('#ed_conj_unidad_medida');
-    const conjU    = overlay.querySelector('#ed_conj_unidades');
-    const conjC    = overlay.querySelector('#ed_conj_contenido');
-    const conjR    = overlay.querySelector('#ed_conj_restante');
-    const conjPU   = overlay.querySelector('#ed_conj_precio_unidad');
-    const conjHint = overlay.querySelector('#ed_conj_precio_hint');
-    const lblU     = overlay.querySelector('#lbl_unidades');
-    const lblC     = overlay.querySelector('#lbl_contenido');
-    const lblR     = overlay.querySelector('#lbl_restante');
-    const lblPU    = overlay.querySelector('#lbl_punidad');
-    const conjRes  = overlay.querySelector('#ed_conj_resumen');
+    const cbConj      = overlay.querySelector('#ed_es_conjunto');
+    const conjBox     = overlay.querySelector('#ed_conjunto_fields');
+    const conjTipo    = overlay.querySelector('#ed_conj_tipo');
+    const conjUM      = overlay.querySelector('#ed_conj_unidad_medida');
+    const conjU       = overlay.querySelector('#ed_conj_unidades');
+    const conjC       = overlay.querySelector('#ed_conj_contenido');
+    const conjR       = overlay.querySelector('#ed_conj_restante');
+    const conjPU      = overlay.querySelector('#ed_conj_precio_unidad');
+    const conjHint    = overlay.querySelector('#ed_conj_precio_hint');
+    const lblTitU     = overlay.querySelector('#lbl_titulo_unidades');
+    const lblTitC     = overlay.querySelector('#lbl_titulo_contenido');
+    const lblTitR     = overlay.querySelector('#lbl_titulo_restante');
+    const lblTitPU    = overlay.querySelector('#lbl_titulo_punidad');
+    const conjRes     = overlay.querySelector('#ed_conj_resumen');
+    const conjResTop  = overlay.querySelector('#ed_conj_resumen_top');
+    const stockBloque = overlay.querySelector('#ed_stock_bloque');
+    const stockAviso  = overlay.querySelector('#ed_stock_conjunto_aviso');
 
-    // Margen de venta al detalle aplicado al precio por unidad fraccionada
-    // (ej. precio por metro de un rollo). Mismo número que en el POS.
+    // Margen del 15% al detalle aplicado al precio por unidad sugerido.
+    // Ej: caja $8000 con 12 unidades → ($8000 / 12) × 1.15 = $766,67 por unidad.
     const FRACCION_MARGIN = 1.15;
     // Trackeo si el usuario tocó manualmente el precio por unidad. Si lo hizo,
     // dejamos de auto-calcular para no pisar su valor.
@@ -1645,79 +1765,96 @@ export async function renderCatalogo(container, db) {
       }
     }
 
+    // [plural, singular, género ('m'|'f')]. El género se usa para concordar adjetivos
+    // como "ENTERAS"/"ENTEROS", "ABIERTA"/"ABIERTO" en las etiquetas dinámicas.
     const NOMBRES_TIPO = {
-      rollo:     ['ROLLOS','ROLLO'],
-      pack:      ['PACKS','PACK'],
-      caja:      ['CAJAS','CAJA'],
-      bobina:    ['BOBINAS','BOBINA'],
-      bolsa:     ['BOLSAS','BOLSA'],
-      plancha:   ['PLANCHAS','PLANCHA'],
-      cartulina: ['CARTULINAS','CARTULINA'],
-      papel:     ['HOJAS','HOJA'],
-      carton:    ['CARTONES','CARTÓN'],
-      goma_eva:  ['PLANCHAS','PLANCHA'],
-      cinta:     ['ROLLOS','ROLLO'],
-      tela:      ['ROLLOS','ROLLO'],
-      otro:      ['UNIDADES','UNIDAD'],
+      rollo:     ['ROLLOS','ROLLO','m'],
+      pack:      ['PACKS','PACK','m'],
+      caja:      ['CAJAS','CAJA','f'],
+      bobina:    ['BOBINAS','BOBINA','f'],
+      bolsa:     ['BOLSAS','BOLSA','f'],
+      plancha:   ['PLANCHAS','PLANCHA','f'],
+      cartulina: ['CARTULINAS','CARTULINA','f'],
+      papel:     ['HOJAS','HOJA','f'],
+      carton:    ['CARTONES','CARTÓN','m'],
+      goma_eva:  ['PLANCHAS','PLANCHA','f'],
+      cinta:     ['ROLLOS','ROLLO','m'],
+      tela:      ['ROLLOS','ROLLO','m'],
+      otro:      ['UNIDADES','UNIDAD','f'],
     };
 
-    // Mostrar/ocultar los campos fraccionables (CONTENIDO, RESTANTE, PRECIO POR
-     // METRO) según la unidad de medida. En modo 'unidades' no tienen sentido:
-     // cada variedad ya cuenta como N unidades enteras.
+    // En modo "unidades" no tiene sentido el campo "sueltas en X abierta"
+     // (las unidades no se fraccionan). El contenido y el precio por unidad
+     // sí siguen vigentes: una caja con 80 lápices tiene contenido = 80 y
+     // precio unitario = precio_caja / 80 × 1.15.
     function _aplicarVisibilidadFraccion() {
       const esUnidad = (conjUM.value || 'metros') === 'unidades';
-      const wrapC  = conjC  ? conjC.parentElement  : null;
-      const wrapR  = conjR  ? conjR.parentElement  : null;
-      const wrapPU = conjPU ? conjPU.parentElement : null;
-      [wrapC, wrapR, wrapPU].forEach(w => {
-        if (w) w.style.display = esUnidad ? 'none' : '';
-      });
-      if (esUnidad) {
-        // Forzar contenido = 1 internamente para que la suma sea por unidades.
-        if (conjC) conjC.value = 1;
-        if (conjR) conjR.value = 0;
-      } else if (conjC && parseFloat(conjC.value) === 1 && !conjC.dataset.userTouched) {
-        // Si volvió a fraccionable y no lo tocó el usuario, dejarlo vacío
-        conjC.value = '';
-      }
+      const wrapR = conjR ? conjR.parentElement : null;
+      if (wrapR) wrapR.style.display = esUnidad ? 'none' : '';
+      if (esUnidad && conjR) conjR.value = 0;
     }
 
     function _refrescarConjunto() {
-      const [pl, sg] = NOMBRES_TIPO[conjTipo.value] || NOMBRES_TIPO.otro;
+      const [pl, sg, gen] = NOMBRES_TIPO[conjTipo.value] || NOMBRES_TIPO.otro;
       const um = conjUM.value || 'unidades';
       const umSg = um.endsWith('s') ? um.slice(0, -1) : um;
       const esUnidad = um === 'unidades';
-      lblU.textContent  = pl;
-      lblC.textContent  = sg;
-      lblR.textContent  = sg;
-      lblPU.textContent = umSg.toUpperCase();
+      // Concordancia gramatical: "CAJAS ENTERAS" vs "ROLLOS ENTEROS",
+      // "CAJA ABIERTA" vs "ROLLO ABIERTO", "SUELTAS" vs "SUELTOS".
+      const enteros = gen === 'f' ? 'ENTERAS' : 'ENTEROS';
+      const abierto = gen === 'f' ? 'ABIERTA' : 'ABIERTO';
+      const sueltos = gen === 'f' ? 'SUELTAS' : 'SUELTOS';
+      // Labels del bloque de inputs ("CAJAS ENTERAS", "UNIDADES POR CAJA", etc.)
+      lblTitU.textContent  = `${pl} ${enteros}`;
+      lblTitC.textContent  = `${um.toUpperCase()} POR ${sg}`;
+      lblTitR.innerHTML    = `${um.toUpperCase()} ${sueltos} EN ${sg} ${abierto} <span style="color:#9ca3af;font-weight:500">(opcional)</span>`;
+      lblTitPU.innerHTML   = `PRECIO POR ${umSg.toUpperCase()} <span style="color:#9ca3af;font-weight:500">(auto)</span>`;
       _aplicarVisibilidadFraccion();
       const u = parseFloat(conjU.value) || 0;
-      const c = esUnidad ? 1 : (parseFloat(conjC.value) || 0);
+      const c = parseFloat(conjC.value) || 0;
       const r = esUnidad ? 0 : (parseFloat(conjR.value) || 0);
-      if (esUnidad) {
-        if (u > 0) {
-          conjRes.innerHTML = `<b>Total disponible:</b> <b style="color:#6d28d9">${u.toLocaleString('es-AR')} unidades</b>`;
-        } else {
-          conjRes.textContent = 'Cargá la cantidad de unidades para ver el total';
-        }
-      } else if (u > 0 && c > 0) {
-        const totalCerrados = Math.max(0, (u - (r > 0 ? 1 : 0))) * c;
-        const total = totalCerrados + (r > 0 ? r : (r === 0 && u > 0 ? 0 : 0));
-        const detalleR = r > 0 ? ` + ${r} ${um} restantes en ${sg.toLowerCase()} abierto` : '';
-        conjRes.innerHTML = `<b>Total disponible:</b> ${u} ${pl.toLowerCase()} × ${c} ${um}${detalleR} = <b style="color:#6d28d9">${(total).toLocaleString('es-AR')} ${um}</b>`;
-      } else {
-        conjRes.textContent = 'Completá los campos para ver el total';
-      }
+      const precioPack = parseFloat(inPrecio.value) || 0;
+      const precioU    = parseFloat(conjPU && conjPU.value) || 0;
 
-      // ── Auto-calcular precio por unidad fraccionada ──
-      // Solo aplica a productos fraccionables (rollo de metros, etc).
-      // En modo 'unidades' el PRECIO POR METRO está oculto.
-      if (!esUnidad && conjPU && conjHint) {
-        const precioRollo = parseFloat(inPrecio.value) || 0;
-        const contenido   = c;
-        if (precioRollo > 0 && contenido > 0) {
-          const sugerido = (precioRollo / contenido) * FRACCION_MARGIN;
+      // Texto del resumen (versión corta para el campo viejo + versión grande arriba)
+      let resumenCorto = '';
+      let resumenLargo = '';
+      if (u > 0 && c > 0) {
+        const cerrados = Math.max(0, (u - (r > 0 ? 1 : 0)));
+        const totalCerrados = cerrados * c;
+        const total = totalCerrados + r;
+        const detalleR = r > 0 ? ` + ${r} ${um} ${sueltos.toLowerCase()} en ${sg.toLowerCase()} ${abierto.toLowerCase()}` : '';
+        resumenCorto = `<b>Total disponible:</b> ${cerrados} ${cerrados === 1 ? sg.toLowerCase() : pl.toLowerCase()} × ${c} ${um}${detalleR} = <b style="color:#6d28d9">${total.toLocaleString('es-AR')} ${um}</b>`;
+        const partes = [];
+        if (cerrados > 0) partes.push(`<b>${cerrados}</b> ${cerrados === 1 ? sg.toLowerCase() : pl.toLowerCase()} × <b>${c}</b> ${um}`);
+        if (r > 0)        partes.push(`<b>${r}</b> ${um} ${sueltos.toLowerCase()} en ${sg.toLowerCase()} ${abierto.toLowerCase()}`);
+        const desglose = partes.join(' + ');
+        const lineasPrecio = [];
+        if (precioPack > 0) lineasPrecio.push(`Precio ${sg.toLowerCase()}: <b>$${precioPack.toLocaleString('es-AR')}</b>`);
+        if (precioU    > 0) lineasPrecio.push(`Precio ${umSg}: <b>$${precioU.toLocaleString('es-AR', {minimumFractionDigits:2, maximumFractionDigits:2})}</b>`);
+        const lineaPrecio = lineasPrecio.length
+          ? `<div style="margin-top:6px;color:#374151">${lineasPrecio.join(' &nbsp;·&nbsp; ')}</div>`
+          : '';
+        resumenLargo =
+          `<div style="font-size:12px;color:#6d28d9;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Tenés disponible</div>` +
+          `<div style="font-size:18px;font-weight:800;color:#1f2937">${total.toLocaleString('es-AR')} ${um}</div>` +
+          (desglose ? `<div style="margin-top:2px;color:#4b5563;font-size:12.5px">${desglose}</div>` : '') +
+          lineaPrecio;
+      } else {
+        resumenCorto = 'Completá los campos para ver el total';
+        resumenLargo = `<div style="color:#6b7280">Completá <b>${pl.toLowerCase()} ${enteros.toLowerCase()}</b> y <b>${um} por ${sg.toLowerCase()}</b> para ver el total disponible.</div>`;
+      }
+      conjRes.innerHTML = resumenCorto;
+      if (conjResTop) conjResTop.innerHTML = resumenLargo;
+
+      // ── Auto-calcular precio por unidad ──
+      // Aplica también al modo "unidades": una caja con 80 lápices a $5000
+      // sugiere $5000 / 80 × 1.15 = $71.88 por unidad.
+      if (conjPU && conjHint) {
+        const precioPaquete = parseFloat(inPrecio.value) || 0;
+        const contenido     = c;
+        if (precioPaquete > 0 && contenido > 0) {
+          const sugerido = (precioPaquete / contenido) * FRACCION_MARGIN;
           const sugeridoTxt = sugerido.toLocaleString('es-AR', {
             minimumFractionDigits: 2, maximumFractionDigits: 2,
           });
@@ -1726,23 +1863,32 @@ export async function renderCatalogo(container, db) {
           }
           conjHint.innerHTML =
             `<b>Sugerido:</b> $${sugeridoTxt}/${umSg} ` +
-            `(rollo $${precioRollo.toLocaleString('es-AR')} / ${contenido} ${um} × 1.15).<br/>` +
+            `(${sg.toLowerCase()} $${precioPaquete.toLocaleString('es-AR')} ÷ ${contenido} ${um} × 1.15).<br/>` +
             (precioPUManual
               ? '<span style="color:#a3441a">Estás usando un precio manual.</span> '
                 + 'Doble-click acá para volver al cálculo automático.'
               : 'Editalo si querés un precio distinto.');
         } else {
           conjHint.innerHTML =
-            'Cargá <b>precio del rollo</b> y <b>contenido</b> para que se calcule '
-            + 'automáticamente como <b>precio rollo / contenido × 1.15</b>.';
+            `Cargá <b>precio del ${sg.toLowerCase()}</b> y <b>${um} por ${sg.toLowerCase()}</b> ` +
+            `para que se calcule automáticamente como <b>precio ÷ ${um} × 1.15</b> (15 % margen al detalle).`;
         }
       }
     }
 
+    function _aplicarVisibilidadConjunto() {
+      const on = cbConj.checked;
+      conjBox.style.display    = on ? 'grid'  : 'none';
+      if (conjResTop)  conjResTop.style.display  = on ? 'block' : 'none';
+      if (stockBloque) stockBloque.style.display = on ? 'none'  : 'flex';
+      if (stockAviso)  stockAviso.style.display  = on ? 'block' : 'none';
+    }
     cbConj.addEventListener('change', () => {
-      conjBox.style.display = cbConj.checked ? 'grid' : 'none';
+      _aplicarVisibilidadConjunto();
       if (cbConj.checked) _refrescarConjunto();
     });
+    // Estado inicial (cuando el producto ya viene marcado como conjunto)
+    _aplicarVisibilidadConjunto();
     [conjTipo, conjUM, conjU, conjC, conjR].forEach(el => el.addEventListener('input', _refrescarConjunto));
     // Cuando cambia la unidad de medida, reaplicar el layout de las variedades
     // (con/sin "Restante") y refrescar el agregado.
@@ -1825,7 +1971,7 @@ export async function renderCatalogo(container, db) {
       const hasColores = colores.length > 0;
       coloresEmpty.style.display = filasTotales === 0 ? 'block' : 'none';
       coloresList.style.display = filasTotales === 0 ? 'none' : 'flex';
-      // Si hay colores con nombre, los agregados se calculan como SUMA y los inputs viejos quedan readonly.
+      // Si hay variedades con nombre, los agregados se calculan como SUMA y los inputs principales quedan readonly.
       if (hasColores) {
         const sumU = colores.reduce((a, c) => a + c.unidades, 0);
         const sumR = colores.reduce((a, c) => a + c.restante, 0);
@@ -1835,8 +1981,8 @@ export async function renderCatalogo(container, db) {
         conjR.readOnly = true;
         conjU.style.background = '#f3f4f6';
         conjR.style.background = '#f3f4f6';
-        conjU.title = 'Calculado automáticamente: SUMA de todos los colores';
-        conjR.title = 'Calculado automáticamente: SUMA de todos los colores';
+        conjU.title = 'Calculado automáticamente: SUMA de las variedades. Editá las cantidades en cada fila de variedad.';
+        conjR.title = 'Calculado automáticamente: SUMA de las variedades. Editá las cantidades en cada fila de variedad.';
       } else {
         conjU.readOnly = false;
         conjR.readOnly = false;
@@ -1845,7 +1991,15 @@ export async function renderCatalogo(container, db) {
         conjU.title = '';
         conjR.title = '';
       }
+      // Refrescar labels y resumen, y luego sufijar las labels de cantidad/sueltas
+      // si están bloqueadas por la suma de variedades.
       _refrescarConjunto();
+      if (hasColores && lblTitU) {
+        lblTitU.innerHTML += ' <span style="color:#6d28d9;font-weight:500">(suma de variedades)</span>';
+      }
+      if (hasColores && lblTitR) {
+        lblTitR.innerHTML += ' <span style="color:#6d28d9;font-weight:500">(suma de variedades)</span>';
+      }
     }
 
     btnAddColor.addEventListener('click', () => {
@@ -1881,7 +2035,11 @@ export async function renderCatalogo(container, db) {
     const cerrar = () => overlay.remove();
     overlay.querySelector('#cerrarEditor').addEventListener('click', cerrar);
     overlay.querySelector('#ed_cancelar').addEventListener('click', cerrar);
-    overlay.addEventListener('click', e => { if (e.target === overlay) cerrar(); });
+    // Cerrar al click fuera, pero sólo si el mousedown también fue en el fondo
+    // (evita cierres accidentales al drag-select texto desde el modal hacia afuera).
+    let _mdEnFondo = false;
+    overlay.addEventListener('mousedown', e => { _mdEnFondo = (e.target === overlay); });
+    overlay.addEventListener('click', e => { if (e.target === overlay && _mdEnFondo) cerrar(); });
 
     // Descargar etiqueta (barcode PNG con nombre + codigo)
     overlay.querySelector('#ed_etiqueta').addEventListener('click', async () => {
@@ -1911,7 +2069,7 @@ export async function renderCatalogo(container, db) {
       const nuevoBarra    = /^[A-Za-z0-9\-_]{3,50}$/.test(barraRaw) ? barraRaw : '';
       const nuevoCosto    = parseFloat(inCosto.value) || 0;
       const nuevoPrecio   = parseFloat(inPrecio.value) || 0;
-      const nuevoStock    = Math.max(0, parseInt(overlay.querySelector('#ed_stock').value) || 0);
+      let nuevoStock      = Math.max(0, parseInt(overlay.querySelector('#ed_stock').value) || 0);
       const rawSMin       = overlay.querySelector('#ed_stock_min').value.trim();
       const rawSMax       = overlay.querySelector('#ed_stock_max').value.trim();
       const nuevoStockMin = rawSMin === '' ? null : Math.max(0, parseInt(rawSMin) || 0);
@@ -1932,9 +2090,12 @@ export async function renderCatalogo(container, db) {
         const cTipo = overlay.querySelector('#ed_conj_tipo').value || 'rollo';
         const cUM   = overlay.querySelector('#ed_conj_unidad_medida').value || 'unidades';
         const esUnidad = cUM === 'unidades';
-        // Modo unitario: cada unidad cuenta como 1, sin restante ni precio fraccionado.
-        const cC    = esUnidad ? 1 : (parseFloat(overlay.querySelector('#ed_conj_contenido').value) || 0);
-        const cPraw = esUnidad ? '' : overlay.querySelector('#ed_conj_precio_unidad').value.trim();
+        // Contenido y precio unitario funcionan igual en modo "unidades": una caja
+        // con 80 lápices tiene contenido = 80 y precio unitario = precio_caja / 80 × 1.15.
+        // Si el usuario no carga contenido, asumimos 1 (cada item es una unidad suelta).
+        const cCraw = (overlay.querySelector('#ed_conj_contenido').value || '').trim();
+        const cC    = cCraw === '' ? 1 : (parseFloat(cCraw) || 1);
+        const cPraw = (overlay.querySelector('#ed_conj_precio_unidad').value || '').trim();
         const cP    = cPraw === '' ? null : (parseFloat(cPraw) || 0);
 
         // Stock por color: si hay colores cargados, los agregados son SUMA.
@@ -1971,12 +2132,10 @@ export async function renderCatalogo(container, db) {
           }
         }
 
-        // Total: en modo unitario es la suma directa de unidades.
-        // En modo fraccionable es (cerrados × contenido) + restante.
+        // Total = (cajas/rollos cerrados × contenido por caja) + sueltos en abierto.
+        // Para UM=unidades, cR vale 0 y se reduce a cU × cC (ej: 5 cajas × 80 = 400 unidades).
         let cTotal;
-        if (esUnidad) {
-          cTotal = cU;
-        } else if (tieneColores) {
+        if (tieneColores) {
           cTotal = coloresArr.reduce((acc, c) => {
             const u = c.unidades || 0;
             const r = c.restante || 0;
@@ -1999,6 +2158,10 @@ export async function renderCatalogo(container, db) {
           conjunto_total:        cTotal,
           conjunto_colores:      tieneColores ? coloresArr : null,
         };
+        // Sincronizar el stock clásico con el total calculado del conjunto.
+        // Así el POS que aún no soporta "Producto Conjunto" sigue viendo un stock
+        // razonable, y el campo no queda con basura del input oculto.
+        nuevoStock = Math.max(0, Math.floor(Number(cTotal) || 0));
       } else {
         conjuntoFields = {
           es_conjunto:           false,
@@ -3423,8 +3586,10 @@ export async function renderCatalogo(container, db) {
       document.body.removeChild(overlay);
     });
 
+    let _mdEnFondoMg = false;
+    overlay.addEventListener('mousedown', e => { _mdEnFondoMg = (e.target === overlay); });
     overlay.addEventListener('click', (e) => {
-      if (e.target === overlay) document.body.removeChild(overlay);
+      if (e.target === overlay && _mdEnFondoMg) document.body.removeChild(overlay);
     });
   }
 
@@ -3529,7 +3694,9 @@ export async function renderCatalogo(container, db) {
     document.body.appendChild(overlay);
 
     document.getElementById('cerrarDetalle').addEventListener('click', () => overlay.remove());
-    overlay.addEventListener('click', e => { if (e.target === overlay) overlay.remove(); });
+    let _mdEnFondoDet = false;
+    overlay.addEventListener('mousedown', e => { _mdEnFondoDet = (e.target === overlay); });
+    overlay.addEventListener('click', e => { if (e.target === overlay && _mdEnFondoDet) overlay.remove(); });
 
     // Sincronización % ↔ precio
     const detPct    = document.getElementById('det_pct');
@@ -4504,6 +4671,379 @@ export async function renderCatalogo(container, db) {
   }
 
 
+  // ── Tab Etiquetas: selección masiva → PDF imprimible con códigos de barra ──
+  // Estado interno (sobrevive a re-renders del tab mientras no se salga de catálogo)
+  const etqSel = new Set();           // doc_ids seleccionados
+  let   etqOpts = {                   // opciones de layout — persisten en localStorage
+    cols: 4, rows: 10, copias: 1,
+    mostrarPrecio: false, mostrarCodigo: true,
+  };
+  try {
+    const saved = JSON.parse(localStorage.getItem('cat:etq_opts') || '{}');
+    Object.assign(etqOpts, saved);
+  } catch (_) {}
+  const persistirOpts = () => localStorage.setItem('cat:etq_opts', JSON.stringify(etqOpts));
+
+  function renderTabEtiquetas(tc) {
+    const base = getBaseRubro();
+    const cats  = [...new Set(base.map(p => p.categoria).filter(Boolean))].sort();
+    const provs = [...new Set(base.map(p => p.proveedor).filter(Boolean))].sort();
+    let etqBusq = '', etqFiltCat = '', etqFiltProv = '', etqFiltSinCodigo = false;
+
+    tc.innerHTML = `
+      <div class="table-card" style="padding:14px 16px;margin-bottom:14px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+          <span class="material-icons" style="color:#1877f2">qr_code_2</span>
+          <h3 style="margin:0;flex:1;min-width:200px">Etiquetas para imprimir</h3>
+          <span id="etqContador" style="font-size:13px;color:#65676b;background:#f0f2f5;padding:6px 12px;border-radius:8px;font-weight:600">0 seleccionados</span>
+        </div>
+        <p style="margin:0;font-size:13px;color:#65676b">Marcá los productos, ajustá el layout y generá una hoja A4 lista para imprimir y recortar.</p>
+      </div>
+
+      <!-- FILTROS + OPCIONES -->
+      <div class="table-card" style="padding:12px 14px;margin-bottom:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:end">
+        <div style="flex:1;min-width:200px">
+          <label style="font-size:11px;font-weight:700;color:#65676b;display:block;margin-bottom:4px">Buscar por nombre / código</label>
+          <input id="etqBusq" type="search" placeholder="Buscar..." style="width:100%;padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit"/>
+        </div>
+        <div style="min-width:160px">
+          <label style="font-size:11px;font-weight:700;color:#65676b;display:block;margin-bottom:4px">Categoría</label>
+          <select id="etqFiltCat" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit;background:#fff">
+            <option value="">Todas</option>${cats.map(c => `<option value="${escapeHtmlAttr(c)}">${escapeHtmlAttr(c)}</option>`).join('')}
+          </select>
+        </div>
+        <div style="min-width:160px">
+          <label style="font-size:11px;font-weight:700;color:#65676b;display:block;margin-bottom:4px">Proveedor</label>
+          <select id="etqFiltProv" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit;background:#fff">
+            <option value="">Todos</option>${provs.map(p => `<option value="${escapeHtmlAttr(p)}">${escapeHtmlAttr(p)}</option>`).join('')}
+          </select>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#65676b;font-weight:600;cursor:pointer">
+          <input id="etqSoloSinCodigo" type="checkbox"/> Solo sin código
+        </label>
+      </div>
+
+      <!-- LAYOUT -->
+      <div class="table-card" style="padding:12px 14px;margin-bottom:12px;display:flex;gap:14px;flex-wrap:wrap;align-items:end">
+        <div style="font-size:11px;font-weight:700;color:#65676b;flex:0 0 100%;margin-bottom:-4px;display:flex;align-items:center;gap:6px">
+          <span class="material-icons" style="font-size:16px">tune</span> Layout de la hoja A4
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#65676b;display:block;margin-bottom:4px">Columnas</label>
+          <input id="etqCols" type="number" min="1" max="8" value="${etqOpts.cols}" style="width:80px;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit"/>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#65676b;display:block;margin-bottom:4px">Filas</label>
+          <input id="etqRows" type="number" min="1" max="20" value="${etqOpts.rows}" style="width:80px;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit"/>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#65676b;display:block;margin-bottom:4px">Copias x prod.</label>
+          <input id="etqCopias" type="number" min="1" max="50" value="${etqOpts.copias}" style="width:90px;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit"/>
+        </div>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#65676b;font-weight:600;cursor:pointer">
+          <input id="etqMostrarPrecio" type="checkbox" ${etqOpts.mostrarPrecio?'checked':''}/> Mostrar precio
+        </label>
+        <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#65676b;font-weight:600;cursor:pointer">
+          <input id="etqMostrarCodigo" type="checkbox" ${etqOpts.mostrarCodigo?'checked':''}/> Mostrar código
+        </label>
+        <span style="margin-left:auto;font-size:12px;color:#65676b" id="etqLayoutInfo"></span>
+      </div>
+
+      <!-- TABLA DE PRODUCTOS -->
+      <div class="table-card">
+        <div style="padding:10px 14px;display:flex;align-items:center;gap:10px;border-bottom:1px solid var(--border);flex-wrap:wrap">
+          <button id="etqSelTodos" class="btn-sec" style="padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:#fff;cursor:pointer;font-size:12px;font-weight:600">Marcar todos los visibles</button>
+          <button id="etqDesmTodos" class="btn-sec" style="padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:#fff;cursor:pointer;font-size:12px;font-weight:600">Desmarcar todo</button>
+          <span id="etqVisibles" style="margin-left:auto;font-size:12px;color:#65676b"></span>
+        </div>
+        <div class="table-wrap" style="max-height:540px;overflow:auto">
+          <table style="min-width:680px">
+            <thead style="position:sticky;top:0;background:var(--surface);z-index:1"><tr>
+              <th style="width:42px;text-align:center"><input type="checkbox" id="etqSelHeader" title="Marcar/desmarcar visibles"/></th>
+              <th>Producto</th>
+              <th style="width:140px">Categoría</th>
+              <th style="width:130px">Código</th>
+              <th style="width:90px;text-align:right">Precio</th>
+            </tr></thead>
+            <tbody id="etqTbody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- BARRA FIJA DE GENERACIÓN -->
+      <div id="etqBarra" style="position:sticky;bottom:0;margin-top:14px;background:#fff;border:1px solid var(--border);border-radius:12px;padding:14px 16px;box-shadow:0 -4px 16px rgba(0,0,0,0.06);display:flex;gap:10px;align-items:center;flex-wrap:wrap;z-index:5">
+        <span style="font-size:13px;color:#65676b">Total etiquetas: <b id="etqTotalEt" style="color:#1c1e21">0</b></span>
+        <span style="font-size:13px;color:#65676b">Hojas A4: <b id="etqTotalHojas" style="color:#1c1e21">0</b></span>
+        <button id="etqVistaPrev" style="margin-left:auto;padding:9px 16px;border-radius:8px;border:1.5px solid var(--border);background:#fff;cursor:pointer;font-size:13px;font-weight:600;display:flex;align-items:center;gap:6px">
+          <span class="material-icons" style="font-size:16px">visibility</span> Vista previa
+        </button>
+        <button id="etqGenerar" style="padding:10px 18px;border-radius:8px;border:none;background:#1877f2;color:#fff;cursor:pointer;font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px">
+          <span class="material-icons" style="font-size:16px">print</span> Generar e imprimir
+        </button>
+      </div>
+    `;
+
+    // ── Helpers ──
+    const norm = s => (s||'').toString().normalize('NFD').replace(/[̀-ͯ]/g,'').toLowerCase();
+    const tieneCodigo = p => !!(p.codigo_barra || p.codigo);
+    const codigoDe    = p => (p.codigo_barra || p.codigo || '').toString().trim();
+
+    function listaFiltrada() {
+      const q = norm(etqBusq);
+      return base.filter(p => {
+        if (etqFiltCat && p.categoria !== etqFiltCat) return false;
+        if (etqFiltProv && p.proveedor !== etqFiltProv) return false;
+        if (etqFiltSinCodigo && tieneCodigo(p)) return false;
+        if (q) {
+          const hay = norm(p.nombre) + ' ' + norm(p.codigo || '') + ' ' + norm(p.codigo_barra || '');
+          if (!hay.includes(q)) return false;
+        }
+        return true;
+      });
+    }
+
+    function actualizarContadores() {
+      const cont = tc.querySelector('#etqContador');
+      if (cont) cont.textContent = `${etqSel.size} seleccionado${etqSel.size===1?'':'s'}`;
+      const totalEt = etqSel.size * (etqOpts.copias || 1);
+      const porHoja = (etqOpts.cols || 1) * (etqOpts.rows || 1);
+      const hojas = porHoja > 0 ? Math.ceil(totalEt / porHoja) : 0;
+      tc.querySelector('#etqTotalEt').textContent  = totalEt;
+      tc.querySelector('#etqTotalHojas').textContent = hojas;
+      tc.querySelector('#etqLayoutInfo').textContent = `${porHoja} etiquetas por hoja`;
+    }
+
+    function renderTbody() {
+      const lista = listaFiltrada();
+      const tbody = tc.querySelector('#etqTbody');
+      tc.querySelector('#etqVisibles').textContent = `${lista.length} producto${lista.length===1?'':'s'} visible${lista.length===1?'':'s'}`;
+      if (!lista.length) {
+        tbody.innerHTML = `<tr><td colspan="5" style="padding:30px;text-align:center;color:#65676b">Sin productos que coincidan con el filtro.</td></tr>`;
+        return;
+      }
+      tbody.innerHTML = lista.map(p => {
+        const cod = codigoDe(p);
+        const sin = !cod;
+        const checked = etqSel.has(p.doc_id) ? 'checked' : '';
+        return `
+          <tr data-id="${p.doc_id}" style="${sin?'background:#fff8e1':''}">
+            <td style="text-align:center"><input type="checkbox" class="etq-row-chk" data-id="${p.doc_id}" ${checked} ${sin?'disabled title="Sin código de barras"':''}/></td>
+            <td><b style="font-size:13px">${escapeHtmlAttr(p.nombre || '')}</b></td>
+            <td style="font-size:12px;color:#65676b">${escapeHtmlAttr(p.categoria || '—')}</td>
+            <td style="font-size:12px;font-family:monospace;color:${sin?'#c62828':'#1c1e21'}">${sin?'(sin código)':escapeHtmlAttr(cod)}</td>
+            <td style="text-align:right;font-size:12px">${p.precio_venta ? '$'+Number(p.precio_venta).toLocaleString('es-AR',{minimumFractionDigits:0}) : '—'}</td>
+          </tr>
+        `;
+      }).join('');
+      tbody.querySelectorAll('.etq-row-chk').forEach(chk => {
+        chk.addEventListener('change', () => {
+          const id = chk.dataset.id;
+          if (chk.checked) etqSel.add(id); else etqSel.delete(id);
+          actualizarContadores();
+          actualizarSelHeader();
+        });
+      });
+      actualizarSelHeader();
+    }
+
+    function actualizarSelHeader() {
+      const lista = listaFiltrada().filter(tieneCodigo);
+      const header = tc.querySelector('#etqSelHeader');
+      if (!header) return;
+      const todos = lista.length > 0 && lista.every(p => etqSel.has(p.doc_id));
+      const algunos = lista.some(p => etqSel.has(p.doc_id));
+      header.checked = todos;
+      header.indeterminate = !todos && algunos;
+    }
+
+    // ── Listeners ──
+    tc.querySelector('#etqBusq').addEventListener('input', e => { etqBusq = e.target.value; renderTbody(); });
+    tc.querySelector('#etqFiltCat').addEventListener('change', e => { etqFiltCat = e.target.value; renderTbody(); });
+    tc.querySelector('#etqFiltProv').addEventListener('change', e => { etqFiltProv = e.target.value; renderTbody(); });
+    tc.querySelector('#etqSoloSinCodigo').addEventListener('change', e => { etqFiltSinCodigo = e.target.checked; renderTbody(); });
+
+    tc.querySelector('#etqSelTodos').addEventListener('click', () => {
+      listaFiltrada().filter(tieneCodigo).forEach(p => etqSel.add(p.doc_id));
+      renderTbody();
+      actualizarContadores();
+    });
+    tc.querySelector('#etqDesmTodos').addEventListener('click', () => {
+      etqSel.clear();
+      renderTbody();
+      actualizarContadores();
+    });
+    tc.querySelector('#etqSelHeader').addEventListener('change', e => {
+      const lista = listaFiltrada().filter(tieneCodigo);
+      if (e.target.checked) lista.forEach(p => etqSel.add(p.doc_id));
+      else                  lista.forEach(p => etqSel.delete(p.doc_id));
+      renderTbody();
+      actualizarContadores();
+    });
+
+    const onOptChange = () => {
+      etqOpts.cols    = Math.max(1, Math.min(8,  parseInt(tc.querySelector('#etqCols').value)    || 1));
+      etqOpts.rows    = Math.max(1, Math.min(20, parseInt(tc.querySelector('#etqRows').value)    || 1));
+      etqOpts.copias  = Math.max(1, Math.min(50, parseInt(tc.querySelector('#etqCopias').value)  || 1));
+      etqOpts.mostrarPrecio = tc.querySelector('#etqMostrarPrecio').checked;
+      etqOpts.mostrarCodigo = tc.querySelector('#etqMostrarCodigo').checked;
+      persistirOpts();
+      actualizarContadores();
+    };
+    ['etqCols','etqRows','etqCopias','etqMostrarPrecio','etqMostrarCodigo'].forEach(id => {
+      tc.querySelector('#'+id).addEventListener('change', onOptChange);
+      tc.querySelector('#'+id).addEventListener('input',  onOptChange);
+    });
+
+    tc.querySelector('#etqGenerar').addEventListener('click', () => generarEtiquetasPDF(false));
+    tc.querySelector('#etqVistaPrev').addEventListener('click', () => generarEtiquetasPDF(true));
+
+    renderTbody();
+    actualizarContadores();
+  }
+
+  // Genera la hoja A4 imprimible en una ventana nueva.
+  // soloVista=true: no dispara el diálogo de impresión, solo abre la ventana.
+  async function generarEtiquetasPDF(soloVista) {
+    if (etqSel.size === 0) { alert('Marcá al menos un producto.'); return; }
+
+    try { await _ensureJsBarcode(); }
+    catch (e) { alert('No se pudo cargar el generador de códigos de barra: ' + e.message); return; }
+
+    const seleccionados = allProductos.filter(p => etqSel.has(p.doc_id) && (p.codigo_barra || p.codigo));
+    if (!seleccionados.length) { alert('Ningún producto seleccionado tiene código de barras.'); return; }
+
+    // Expandir por copias, manteniendo el orden por nombre
+    seleccionados.sort((a,b) => (a.nombre||'').localeCompare(b.nombre||'', 'es'));
+    const items = [];
+    for (const p of seleccionados) {
+      for (let i = 0; i < (etqOpts.copias || 1); i++) items.push(p);
+    }
+
+    const cols = etqOpts.cols, rows = etqOpts.rows;
+    const mostrarPrecio = etqOpts.mostrarPrecio, mostrarCodigo = etqOpts.mostrarCodigo;
+
+    // Renderizar cada barcode a dataURL desde un canvas off-screen
+    const cache = new Map(); // codigo → dataURL
+    function barcodeDataURL(codigo) {
+      if (cache.has(codigo)) return cache.get(codigo);
+      const c = document.createElement('canvas');
+      try {
+        window.JsBarcode(c, String(codigo), {
+          format: 'CODE128', width: 2, height: 50, fontSize: 14, margin: 0, displayValue: false,
+        });
+        const url = c.toDataURL('image/png');
+        cache.set(codigo, url);
+        return url;
+      } catch (_) {
+        return '';
+      }
+    }
+
+    const cells = items.map(p => {
+      const cod = (p.codigo_barra || p.codigo || '').toString().trim();
+      const img = barcodeDataURL(cod);
+      const nombre = (p.nombre || '').toString();
+      const precio = p.precio_venta ? '$'+Number(p.precio_venta).toLocaleString('es-AR',{minimumFractionDigits:0}) : '';
+      return `
+        <div class="cell">
+          <div class="cell-name">${escapeHtmlAttr(nombre)}</div>
+          ${img ? `<img class="cell-bc" src="${img}" alt=""/>` : '<div class="cell-bc-fallback">sin código</div>'}
+          ${mostrarCodigo ? `<div class="cell-code">${escapeHtmlAttr(cod)}</div>` : ''}
+          ${mostrarPrecio && precio ? `<div class="cell-price">${precio}</div>` : ''}
+        </div>
+      `;
+    }).join('');
+
+    const html = `<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8"/>
+<title>Etiquetas — ${seleccionados.length} productos</title>
+<style>
+  @page { size: A4; margin: 8mm; }
+  * { box-sizing: border-box; }
+  body { font-family: Arial, Helvetica, sans-serif; margin: 0; padding: 0; background: #f0f2f5; color: #000; }
+  .toolbar {
+    position: sticky; top: 0; z-index: 10;
+    background: #1877f2; color: #fff; padding: 10px 16px;
+    display: flex; align-items: center; gap: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.15);
+  }
+  .toolbar h1 { font-size: 14px; margin: 0; flex: 1; font-weight: 600; }
+  .toolbar button {
+    padding: 8px 14px; border: none; border-radius: 6px; cursor: pointer;
+    font-size: 13px; font-weight: 600; background: #fff; color: #1877f2;
+    display: inline-flex; align-items: center; gap: 6px;
+  }
+  .toolbar button.sec { background: rgba(255,255,255,0.15); color: #fff; }
+  .sheet {
+    width: 210mm; min-height: 297mm; margin: 12px auto;
+    background: #fff; padding: 8mm;
+    display: grid;
+    grid-template-columns: repeat(${cols}, 1fr);
+    grid-auto-rows: minmax(0, calc((297mm - 16mm) / ${rows}));
+    gap: 1mm;
+    box-shadow: 0 2px 12px rgba(0,0,0,0.08);
+    page-break-after: always;
+  }
+  .cell {
+    border: 1px dashed #cbd5e1; padding: 2mm;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    text-align: center; overflow: hidden;
+    page-break-inside: avoid;
+  }
+  .cell-name { font-size: 9pt; font-weight: 700; line-height: 1.15; max-height: 2.4em; overflow: hidden; margin-bottom: 1mm; word-break: break-word; }
+  .cell-bc { max-width: 100%; max-height: 14mm; height: auto; }
+  .cell-bc-fallback { font-size: 8pt; color: #c62828; font-style: italic; padding: 4mm 0; }
+  .cell-code { font-family: 'Courier New', monospace; font-size: 8pt; margin-top: 0.5mm; letter-spacing: 1px; }
+  .cell-price { font-size: 11pt; font-weight: 700; margin-top: 1mm; color: #000; }
+  @media print {
+    body { background: #fff; }
+    .toolbar { display: none; }
+    .sheet { margin: 0; box-shadow: none; padding: 0; }
+    .cell { border: 1px dashed #999; }
+  }
+</style></head>
+<body>
+  <div class="toolbar">
+    <h1>${seleccionados.length} producto${seleccionados.length===1?'':'s'} · ${items.length} etiqueta${items.length===1?'':'s'} · ${cols}×${rows} por hoja</h1>
+    <button class="sec" onclick="window.close()">Cerrar</button>
+    <button onclick="window.print()">Imprimir / Guardar PDF</button>
+  </div>
+  <div class="grid-wrap">${wrapInSheets(cells, cols * rows)}</div>
+</body></html>`;
+
+    const w = window.open('', '_blank');
+    if (!w) { alert('El navegador bloqueó la ventana emergente. Permití pop-ups para esta página.'); return; }
+    w.document.open();
+    w.document.write(html);
+    w.document.close();
+    if (!soloVista) {
+      // Esperar a que las imágenes terminen de cargar antes de imprimir
+      w.addEventListener('load', () => setTimeout(() => w.print(), 250));
+    }
+  }
+
+  // Divide las celdas en hojas A4 (uno o varios <div class="sheet">) según cant. por hoja.
+  function wrapInSheets(cellsHTML, porHoja) {
+    // cellsHTML viene como un solo string de N divs ya formados, así que rearmamos en chunks
+    const tmp = document.createElement('div');
+    tmp.innerHTML = cellsHTML;
+    const arr = Array.from(tmp.children);
+    const out = [];
+    for (let i = 0; i < arr.length; i += porHoja) {
+      const chunk = arr.slice(i, i + porHoja).map(el => el.outerHTML).join('');
+      out.push(`<section class="sheet">${chunk}</section>`);
+    }
+    return out.join('');
+  }
+
+  // Helper local para escapar atributos en HTML inline (la página usa escapeHtmlAttr de otros tabs;
+  // si no existe globalmente, definimos uno seguro acá).
+  function escapeHtmlAttr(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+      '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[c]));
+  }
+
+
   // ── Tab Configuración ─────────────────────────────────────────────────────────
   function renderTabConfig(tc) {
     const cats   = [...new Set(allProductos.map(p => p.categoria).filter(Boolean))].sort();
@@ -4715,23 +5255,87 @@ export async function renderCatalogo(container, db) {
   // ── Listener real-time: cuando el POS o cualquier otra PC actualiza el
   // catálogo (ej. venta de producto conjunto descuenta stock), Firestore
   // toca config/catalogo_meta. Refrescamos la vista sin que el usuario
-  // tenga que apretar F5.
+  // tenga que apretar F5 — pero NO si está editando un producto, llenando
+  // un input o tiene un modal abierto, para no perder lo que estaba haciendo.
   let _lastMetaTs = null;
+  let _refrescoPendiente = false;
+
+  function usuarioInteractuando() {
+    const ae = document.activeElement;
+    if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return true;
+    if (ae?.isContentEditable) return true;
+    // Cualquier overlay/modal abierto como hijo directo del body (los modales
+    // de catálogo se appendan así, con position:fixed sobre todo).
+    for (const c of document.body.children) {
+      const id = c.id || '';
+      if (id === 'app' || id === 'login' || id === 'sidebarOverlay' ||
+          c.tagName === 'SCRIPT' || c.tagName === 'STYLE' || c.tagName === 'NOSCRIPT' ||
+          c.tagName === 'LINK' || c.tagName === 'META') continue;
+      // Sólo cuenta si está visible
+      const cs = getComputedStyle(c);
+      if (cs.display !== 'none' && cs.visibility !== 'hidden') return true;
+    }
+    return false;
+  }
+
+  async function refrescarSiCorresponde() {
+    const activeTab = document.querySelector('.tab-btn.active')?.dataset?.tab;
+    if (activeTab !== 'catalogo' && activeTab !== 'inventario') return;
+    if (usuarioInteractuando()) {
+      // Reintentar más tarde, cuando ya no esté ocupado
+      _refrescoPendiente = true;
+      return;
+    }
+    // Snapshot del estado de filtros + página antes de re-renderizar.
+    // El renderTab vuelve a crear el HTML del tab, así que sin esto se
+    // pierde el texto del buscador y los selects.
+    const filtrosPrev = {
+      buscar:       document.getElementById('buscar')?.value       ?? '',
+      filtroCat:    document.getElementById('filtroCat')?.value    ?? '',
+      filtroProv:   document.getElementById('filtroProv')?.value   ?? '',
+      filtroMarca:  document.getElementById('filtroMarca')?.value  ?? '',
+      filtroEstado: document.getElementById('filtroEstado')?.value ?? '',
+    };
+    const pageAnterior = currentPage;
+    try {
+      invalidateCache('catalogo:all');
+      await cargarDatos({ silent: true });
+      renderTab(activeTab);
+      // Restaurar filtros + página después del re-render
+      if (activeTab === 'catalogo') {
+        for (const [id, v] of Object.entries(filtrosPrev)) {
+          if (!v) continue;
+          const el = document.getElementById(id);
+          if (el) el.value = v;
+        }
+        currentPage = pageAnterior;
+        aplicarFiltros();
+      }
+    } catch (err) {
+      console.error('Refresco automático de catálogo falló:', err);
+    }
+  }
+
+  // Reintentar el refresco cuando el usuario libere el foco / cierre el modal.
+  document.addEventListener('focusout', () => {
+    if (!_refrescoPendiente) return;
+    setTimeout(() => {
+      if (_refrescoPendiente && !usuarioInteractuando()) {
+        _refrescoPendiente = false;
+        refrescarSiCorresponde();
+      }
+    }, 250);
+  });
+
   onSnapshot(doc(db, 'config', 'catalogo_meta'), async (snap) => {
     if (!snap.exists()) return;
     const ts = snap.data().last_updated;
     if (_lastMetaTs === null) { _lastMetaTs = ts; return; }
     if (ts === _lastMetaTs) return;
     _lastMetaTs = ts;
-    try {
-      invalidateCache('catalogo:all');
-      await cargarDatos({ silent: true });
-      const activeTab = document.querySelector('.tab-btn.active')?.dataset?.tab;
-      if (activeTab === 'catalogo' || activeTab === 'inventario') {
-        renderTab(activeTab);
-      }
-    } catch (err) {
-      console.error('Refresco automático de catálogo falló:', err);
-    }
+    // Si el cambio fue disparado por esta misma pestaña, ya tenemos el estado
+    // actualizado en memoria. Saltamos el refresco para no pisar el filtro/scroll.
+    if (Date.now() < _localMetaTouchUntil) return;
+    refrescarSiCorresponde();
   }, (err) => console.warn('Listener catalogo_meta:', err));
 }

@@ -1,4 +1,7 @@
+import json
 import logging
+import math
+import threading
 from datetime import datetime
 from pos_system.utils.firebase_sync import now_ar
 from typing import List, Dict, Optional
@@ -67,6 +70,7 @@ class Sale:
 
             # 2. Insertar items y actualizar stock
             now_iso = datetime.now().isoformat()
+            mp_para_sync_remoto = []   # items mp_* a sincronizar con Firestore después del commit
             for item in items:
                 subtotal       = item['quantity'] * item['unit_price']
                 original_price = item.get('original_price', item['unit_price'])
@@ -75,18 +79,40 @@ class Sale:
                 discount_amount= item.get('discount_amount', 0) or 0
                 promo_id       = item.get('promo_id') or None
                 conjunto_color = (item.get('conjunto_color') or '').strip() or None
+                # Productos Madre (mp_*) — usan product_id=0 (sentinel "Varios") en sale_items
+                # y los IDs reales viven en columnas mp_* dedicadas.
+                is_mp                  = bool(item.get('is_mp'))
+                mp_product_id          = item.get('mp_product_id') if is_mp else None
+                mp_node_id_val         = item.get('mp_node_id') if is_mp else None
+                mp_presentation_id_val = item.get('mp_presentation_id') if is_mp else None
+                product_id_for_db      = 0 if is_mp else item['product_id']
                 cursor.execute(
                     """INSERT INTO sale_items
                        (sale_id, product_id, product_name, quantity,
                         unit_price, original_price, discount_type,
                         discount_value, discount_amount, promo_id, subtotal,
-                        conjunto_color)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                    (sale_id, item['product_id'], item['product_name'],
+                        conjunto_color, mp_product_id, mp_node_id, mp_presentation_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                    (sale_id, product_id_for_db, item['product_name'],
                      item['quantity'], item['unit_price'], original_price,
                      discount_type, discount_value, discount_amount,
-                     promo_id, subtotal, conjunto_color)
+                     promo_id, subtotal, conjunto_color,
+                     mp_product_id, mp_node_id_val, mp_presentation_id_val)
                 )
+                if is_mp:
+                    # Producto Madre: descontar stock de mp_nodes.presentaciones (sueltos
+                    # primero, abrir contenedor cuando se agotan). Resolvemos la presentación
+                    # efectiva (si es vinculada al rollo/pack, descuenta de la fuente).
+                    target_pres_id = self._deduct_mp_stock_local(cursor, item, now_iso)
+                    if target_pres_id:
+                        mp_para_sync_remoto.append({
+                            'node_id':         mp_node_id_val,
+                            'presentation_id': target_pres_id,
+                            'qty':             float(item['quantity'] or 0),
+                            'product_id':      mp_product_id or '',
+                            'user':            turno_nombre or '',
+                        })
+                    continue  # no descontar `products.stock` para mp_*
                 if item.get('is_conjunto'):
                     # Producto conjunto: no se descuenta stock clásico.
                     # Si el item viene con `conjunto_color`, actualizamos el
@@ -190,7 +216,19 @@ class Sale:
                     )
 
         logger.info(f"Venta creada: ID={sale_id}, total=${total_amount:.2f}, pago={payment_type}")
-        
+
+        # ── Sync remoto de mp_* (best-effort, en background) ─────────────────
+        # Ya descontamos stock localmente (atómico con la venta). Acá empujamos
+        # los cambios a Firestore y registramos los movimientos. Si falla por red,
+        # la venta queda consistente local; el listener de Firebase corregirá la
+        # diferencia cuando la otra punta vuelva a estar online.
+        if mp_para_sync_remoto:
+            threading.Thread(
+                target=self._sync_mp_to_firebase,
+                args=(mp_para_sync_remoto,),
+                daemon=True,
+            ).start()
+
         # Sincronizar resumen mensual
         try:
             from pos_system.utils.firebase_sync import get_firebase_sync
@@ -208,7 +246,112 @@ class Sale:
             logging.getLogger(__name__).error(f'Error syncing monthly summary: {e}')
         
         return sale_id
-    
+
+    # ── Productos Madre (mp_*) ────────────────────────────────────────────
+    def _deduct_mp_stock_local(self, cursor, item: Dict, now_iso: str) -> Optional[str]:
+        """Aplica el descuento de stock sobre mp_nodes.presentaciones (JSON) en la
+        misma transacción de la venta. Devuelve el id de la presentación target
+        (la fuente, si la presentación vendida es vinculada) para que el caller
+        sincronice ese mismo a Firestore. None si el nodo o presentación no se
+        encuentra (la venta sigue OK; queda warning en log).
+
+        Lógica de descuento:
+          1) Tomar primero de stock_sueltos.
+          2) Si quedó cantidad pendiente, abrir contenedores enteros
+             (decrementar `stock` de a 1, sumar equivalencia_base a sueltos).
+          3) Si la presentación vendida tiene stock_modo='vinculado' y
+             vinculada_a, redirigimos el descuento a la fuente.
+        """
+        node_id = item.get('mp_node_id')
+        pres_id = item.get('mp_presentation_id')
+        qty     = float(item.get('quantity') or 0)
+        if not node_id or not pres_id or qty <= 0:
+            return None
+
+        row = cursor.execute(
+            "SELECT presentaciones FROM mp_nodes WHERE id = ?",
+            (node_id,),
+        ).fetchone()
+        if not row or not row[0]:
+            logger.warning(f"_deduct_mp_stock_local: nodo {node_id} no encontrado en mp_nodes")
+            return None
+        try:
+            presentaciones = json.loads(row[0])
+            if not isinstance(presentaciones, list):
+                presentaciones = []
+        except Exception as e:
+            logger.warning(f"_deduct_mp_stock_local: presentaciones JSON inválido en {node_id}: {e}")
+            return None
+
+        # Localizar la presentación vendida y resolver fuente si es vinculada
+        pres = next((p for p in presentaciones if (p.get('id') or '') == pres_id), None)
+        if not pres:
+            logger.warning(f"_deduct_mp_stock_local: presentación {pres_id} no existe en {node_id}")
+            return None
+        target = pres
+        if pres.get('stock_modo') == 'vinculado' and pres.get('vinculada_a'):
+            fuente = next(
+                (p for p in presentaciones if (p.get('id') or '') == pres['vinculada_a']),
+                None,
+            )
+            if fuente:
+                target = fuente
+
+        # Aplicar la lógica sueltos → contenedores
+        target_idx = next(
+            i for i, p in enumerate(presentaciones)
+            if (p.get('id') or '') == (target.get('id') or '')
+        )
+        t = dict(presentaciones[target_idx])
+        pendiente = qty
+        sueltos = float(t.get('stock_sueltos') or 0)
+        if sueltos > 0:
+            usar = min(pendiente, sueltos)
+            t['stock_sueltos'] = sueltos - usar
+            pendiente -= usar
+        if pendiente > 0:
+            equiv = float(t.get('equivalencia_base') or 0)
+            if equiv > 0:
+                contenedores = int(math.ceil(pendiente / equiv))
+                t['stock'] = max(0.0, float(t.get('stock') or 0) - contenedores)
+                sobrante = (contenedores * equiv) - pendiente
+                t['stock_sueltos'] = float(t.get('stock_sueltos') or 0) + sobrante
+            else:
+                t['stock'] = max(0.0, float(t.get('stock') or 0) - pendiente)
+        presentaciones[target_idx] = t
+
+        # Persistir en SQLite local (en la misma transacción)
+        cursor.execute(
+            "UPDATE mp_nodes SET presentaciones = ?, actualizado = ? WHERE id = ?",
+            (json.dumps(presentaciones, ensure_ascii=False), now_iso, node_id),
+        )
+        return target.get('id')
+
+    def _sync_mp_to_firebase(self, items_to_sync: List[Dict]) -> None:
+        """Empuja a Firestore el descuento de stock + registra mp_stock_movements
+        de cada item mp_* vendido. Llamado en background tras commit local.
+        """
+        try:
+            from pos_system.utils.firebase_sync import get_firebase_sync
+            fb = get_firebase_sync()
+            if not fb or not getattr(fb, 'enabled', False):
+                return
+            for it in items_to_sync:
+                try:
+                    fb.deduct_mp_stock(
+                        node_id=it['node_id'],
+                        presentation_id=it['presentation_id'],
+                        delta_qty=it['qty'],
+                        product_id=it.get('product_id') or '',
+                        motivo='venta',
+                        user=it.get('user') or '',
+                        db_manager=self.db,  # espejo local del movimiento
+                    )
+                except Exception as e:
+                    logger.warning(f"_sync_mp_to_firebase: item {it} falló: {e}")
+        except Exception as e:
+            logger.warning(f"_sync_mp_to_firebase: error general: {e}")
+
     def update(self, sale_id: int, payment_type: Optional[str] = None,
                items_updates: Optional[List[Dict]] = None) -> Optional[Dict]:
         """Edita una venta existente: tipo de pago y/o precios unitarios de items.

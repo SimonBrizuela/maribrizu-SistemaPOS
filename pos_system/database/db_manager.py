@@ -251,6 +251,10 @@ class DatabaseManager:
                 "ALTER TABLE sale_items ADD COLUMN promo_id INTEGER DEFAULT NULL",
                 # Color del producto conjunto vendido (para historial / reportes)
                 "ALTER TABLE sale_items ADD COLUMN conjunto_color TEXT DEFAULT NULL",
+                # Productos Madre (mp_*): identificadores extra cuando product_id=0 (sentinel)
+                "ALTER TABLE sale_items ADD COLUMN mp_product_id TEXT DEFAULT NULL",
+                "ALTER TABLE sale_items ADD COLUMN mp_node_id TEXT DEFAULT NULL",
+                "ALTER TABLE sale_items ADD COLUMN mp_presentation_id TEXT DEFAULT NULL",
             ]:
                 try:
                     cursor.execute(col_def)
@@ -560,6 +564,99 @@ class DatabaseManager:
                 cursor.execute("UPDATE presupuestos SET firebase_id = NULL WHERE firebase_id = ''")
             except Exception:
                 pass
+
+            # ── PRODUCTOS MADRE (mp_*) ─────────────────────────────────────
+            # Sistema jerárquico cargado desde la webapp (`webapp/src/pages/lab_productos_madre.js`).
+            # Tablas espejo de Firestore: mp_products / mp_nodes / mp_discounts.
+            # Las presentaciones por nodo viven embebidas como JSON en mp_nodes.presentaciones.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS mp_products (
+                    id TEXT PRIMARY KEY,
+                    nombre TEXT NOT NULL,
+                    slug TEXT,
+                    codigo_barras TEXT,
+                    categoria TEXT,
+                    marca TEXT,
+                    descripcion TEXT,
+                    atributos_definidos TEXT,
+                    is_seed INTEGER DEFAULT 0,
+                    creado TIMESTAMP,
+                    actualizado TIMESTAMP,
+                    raw_json TEXT
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS mp_nodes (
+                    id TEXT PRIMARY KEY,
+                    product_id TEXT NOT NULL,
+                    parent_id TEXT,
+                    nombre TEXT NOT NULL,
+                    sku_sufijo TEXT,
+                    atributos TEXT,
+                    precio_costo REAL,
+                    precio_venta REAL,
+                    presentaciones TEXT,
+                    hereda_de_padre TEXT,
+                    overrides TEXT,
+                    es_hoja INTEGER DEFAULT 1,
+                    depth INTEGER DEFAULT 0,
+                    path TEXT,
+                    is_seed INTEGER DEFAULT 0,
+                    creado TIMESTAMP,
+                    actualizado TIMESTAMP,
+                    raw_json TEXT
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS mp_discounts (
+                    id TEXT PRIMARY KEY,
+                    product_id TEXT NOT NULL,
+                    scope_type TEXT NOT NULL,
+                    scope_id TEXT NOT NULL,
+                    tipo TEXT NOT NULL,
+                    valor REAL NOT NULL,
+                    cantidad_min REAL,
+                    desde TEXT,
+                    hasta TEXT,
+                    prioridad INTEGER DEFAULT 0,
+                    activo INTEGER DEFAULT 1,
+                    stackable INTEGER DEFAULT 0,
+                    etiqueta TEXT,
+                    is_seed INTEGER DEFAULT 0,
+                    creado TIMESTAMP,
+                    actualizado TIMESTAMP,
+                    raw_json TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_mp_products_codigo ON mp_products(codigo_barras)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_mp_nodes_product ON mp_nodes(product_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_mp_nodes_parent ON mp_nodes(parent_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_mp_nodes_es_hoja ON mp_nodes(es_hoja)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_mp_discounts_scope ON mp_discounts(scope_type, scope_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_mp_discounts_product ON mp_discounts(product_id)")
+
+            # Espejo local de mp_stock_movements (auditoría de stock).
+            # Escribe el POS al vender (vía firebase_sync.deduct_mp_stock) y
+            # también el listener cuando otros clientes (webapp / otra PC) ajustan
+            # stock. El id es el doc_id de Firestore para que ambos lados
+            # converjan idempotentemente.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS mp_stock_movements (
+                    id TEXT PRIMARY KEY,
+                    product_id TEXT,
+                    node_id TEXT NOT NULL,
+                    presentation_id TEXT,
+                    delta REAL DEFAULT 0,
+                    delta_sueltos REAL DEFAULT 0,
+                    motivo TEXT,
+                    usuario TEXT,
+                    ts TIMESTAMP,
+                    raw_json TEXT
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_mp_mov_node ON mp_stock_movements(node_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_mp_mov_product ON mp_stock_movements(product_id)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_mp_mov_ts ON mp_stock_movements(ts DESC)")
 
             # Índices para mejorar el rendimiento
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_sales_date ON sales(created_at)")

@@ -27,6 +27,7 @@ const pages = {
   clientes:        { title: 'Perfiles de Clientes',    loader: () => import('./pages/clientes.js'),         render: 'renderClientes',        cacheKey: null },
   observaciones:   { title: 'Observaciones',           loader: () => import('./pages/observaciones.js'),    render: 'renderObservaciones',   cacheKey: null },
   presupuestos:    { title: 'Presupuestos',            loader: () => import('./pages/presupuestos.js'),     render: 'renderPresupuestos',    cacheKey: null },
+  lab_productos:   { title: 'Productos Madre',          loader: () => import('./pages/lab_productos_madre.js'), render: 'renderLabProductos', cacheKey: null },
 };
 
 // Caché de módulos ya descargados (evita repetir import() tras la primera carga)
@@ -252,9 +253,17 @@ function initApp(session) {
   navigate(lastPage && pages[lastPage] ? lastPage : 'dashboard');
 
   // Prefetch en idle de las páginas más usadas (no bloquea la carga inicial)
-  const prefetch = ['ventas', 'historial', 'control_total', 'catalogo'];
+  prefetchPageModules(['ventas', 'historial', 'control_total', 'catalogo']);
+}
+
+// Precarga los módulos JS de páginas pasadas, en idle, sin bloquear nada.
+function prefetchPageModules(pageList) {
   const runIdle = window.requestIdleCallback || (cb => setTimeout(cb, 1500));
-  runIdle(() => { prefetch.forEach(p => { if (!pageModules[p]) loadPageModule(p).catch(() => {}); }); });
+  runIdle(() => {
+    pageList.forEach(p => {
+      if (pages[p] && !pageModules[p]) loadPageModule(p).catch(() => {});
+    });
+  });
 }
 
 // ── Init ──

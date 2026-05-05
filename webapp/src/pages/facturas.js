@@ -95,7 +95,6 @@ export async function renderFacturas(container, db) {
 
       <!-- TAB: HISTORIAL -->
       <div class="fact-panel hidden" id="tab-historial">
-        <div class="fact-section-title">Historial de comprobantes</div>
         <div id="factHistorial">
           <div class="loader"><div class="spinner"></div><span>Cargando...</span></div>
         </div>
@@ -541,69 +540,157 @@ function showStatus(container, type, msg) {
 
 // ── Historial ─────────────────────────────────────────────────────────────────
 
+const HIST_PAGE_SIZE = 50;
+const HIST_STATE = { tipo: '', q: '', page: 1, all: [] };
+
 async function loadHistorial(db, container) {
   const el = container.querySelector('#factHistorial');
   el.innerHTML = '<div class="loader"><div class="spinner"></div><span>Cargando...</span></div>';
   try {
-    const all = await getCached('facturas:all:2000', async () => {
+    HIST_STATE.all = await getCached('facturas:all:2000', async () => {
       const snap = await getDocs(query(collection(db, 'facturas'), orderBy('created_at', 'desc'), limit(2000)));
       const arr = [];
       snap.forEach(d => arr.push({ id: d.id, ...d.data() }));
       return arr;
     }, { ttl: 60 * 1000 });
-    const rows = all.slice(0, 100);
 
-    if (!rows.length) {
-      el.innerHTML = '<div class="empty-state"><span class="material-icons">receipt_long</span><p>Sin comprobantes emitidos aún.</p></div>';
+    if (!HIST_STATE.all.length) {
+      el.innerHTML = `
+        <div class="fact-hist-header">
+          <div>
+            <h2 class="fact-hist-title"><span class="material-icons">receipt_long</span> Historial de comprobantes</h2>
+            <div class="fact-hist-sub">Sin comprobantes emitidos aún</div>
+          </div>
+        </div>
+        <div class="empty-state"><span class="material-icons">receipt_long</span><p>Cuando emitas la primera factura aparecerá acá.</p></div>
+      `;
       return;
     }
 
-    // Totales por Punto de Venta (suma de 'total' agrupado por punto_venta)
-    const porPV = {};
-    rows.forEach(r => {
-      const pv = parseInt(r.punto_venta) || 1;
-      if (!porPV[pv]) porPV[pv] = { total: 0, count: 0 };
-      porPV[pv].total += Number(r.total || 0);
-      porPV[pv].count++;
-    });
-    const pvsOrdenados = Object.keys(porPV).map(n => parseInt(n)).sort((a, b) => a - b);
-    const totalGeneral = rows.reduce((s, r) => s + Number(r.total || 0), 0);
+    HIST_STATE.page = 1;
+    renderHistorial(el);
+    bindHistorialEvents(el);
+  } catch (err) {
+    el.innerHTML = `<div class="empty-state"><span class="material-icons">error_outline</span><p>Error: ${err.message}</p></div>`;
+  }
+}
 
-    const resumenPV = `
-      <div class="fact-pv-resumen">
-        ${pvsOrdenados.map(pv => `
-          <div class="fact-pv-card">
-            <div class="fact-pv-label">PV ${pv}</div>
-            <div class="fact-pv-total">$${porPV[pv].total.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-            <div class="fact-pv-count">${porPV[pv].count} ${porPV[pv].count === 1 ? 'comprobante' : 'comprobantes'}</div>
+function tipoBadgeClass(tipo) {
+  const t = (tipo || '').toUpperCase();
+  if (t.includes('NOTA CRED') || t.includes('NC')) return 'fact-badge-nc';
+  if (t.includes('NOTA DEB')  || t.includes('ND')) return 'fact-badge-nd';
+  if (t.includes(' A'))                            return 'fact-badge-a';
+  if (t.includes(' B'))                            return 'fact-badge-b';
+  if (t.includes(' C'))                            return 'fact-badge-c';
+  return '';
+}
+
+function aplicarFiltros(arr) {
+  const tipo = (HIST_STATE.tipo || '').toUpperCase();
+  const q    = norm(HIST_STATE.q || '');
+  return arr.filter(r => {
+    if (tipo && !((r.tipo_comprobante || '').toUpperCase().includes(tipo))) return false;
+    if (q) {
+      const hay = norm(`${r.cliente || ''} ${r.cuit_cliente || ''} ${r.razon_social_cliente || ''} ${r.nro_comprobante || ''}`);
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+}
+
+function renderHistorial(el) {
+  const all       = HIST_STATE.all;
+  const filtrados = aplicarFiltros(all);
+  const totalRows = filtrados.length;
+  const pages     = Math.max(1, Math.ceil(totalRows / HIST_PAGE_SIZE));
+  if (HIST_STATE.page > pages) HIST_STATE.page = pages;
+  const ini  = (HIST_STATE.page - 1) * HIST_PAGE_SIZE;
+  const rows = filtrados.slice(ini, ini + HIST_PAGE_SIZE);
+
+  // KPIs sobre los filtrados (no sólo la página visible)
+  const porPV = {};
+  filtrados.forEach(r => {
+    const pv = parseInt(r.punto_venta) || 1;
+    if (!porPV[pv]) porPV[pv] = { total: 0, count: 0 };
+    porPV[pv].total += Number(r.total || 0);
+    porPV[pv].count++;
+  });
+  const pvs   = Object.keys(porPV).map(n => parseInt(n)).sort((a, b) => a - b);
+  const totalGen = filtrados.reduce((s, r) => s + Number(r.total || 0), 0);
+
+  const fmtMoney = v => '$' + Number(v || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+  const kpis = `
+    <div class="fact-kpis">
+      ${pvs.map(pv => `
+        <div class="fact-kpi">
+          <div class="fact-kpi-icon"><span class="material-icons">storefront</span></div>
+          <div class="fact-kpi-body">
+            <div class="fact-kpi-label">Punto de Venta ${pv}</div>
+            <div class="fact-kpi-val">${fmtMoney(porPV[pv].total)}</div>
+            <div class="fact-kpi-sub">${porPV[pv].count} ${porPV[pv].count === 1 ? 'comprobante' : 'comprobantes'}</div>
           </div>
-        `).join('')}
-        <div class="fact-pv-card fact-pv-total-general">
-          <div class="fact-pv-label">Total general</div>
-          <div class="fact-pv-total">$${totalGeneral.toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</div>
-          <div class="fact-pv-count">${rows.length} comprobantes</div>
+        </div>
+      `).join('')}
+      <div class="fact-kpi fact-kpi-total">
+        <div class="fact-kpi-icon"><span class="material-icons">summarize</span></div>
+        <div class="fact-kpi-body">
+          <div class="fact-kpi-label">Total general</div>
+          <div class="fact-kpi-val">${fmtMoney(totalGen)}</div>
+          <div class="fact-kpi-sub">${totalRows} ${totalRows === 1 ? 'comprobante' : 'comprobantes'}</div>
         </div>
       </div>
-    `;
+    </div>
+  `;
 
-    el.innerHTML = `
-      ${resumenPV}
-      <div class="table-wrapper">
-        <table class="fact-table">
+  const filtrosBar = `
+    <div class="fact-hist-filters">
+      <div class="fact-search">
+        <span class="material-icons">search</span>
+        <input id="fhist-q" type="text" placeholder="Buscar cliente, CUIT, razón social, nro..." value="${escapeAttr(HIST_STATE.q)}">
+        ${HIST_STATE.q ? `<button id="fhist-q-clear" class="fact-search-clear" title="Limpiar"><span class="material-icons">close</span></button>` : ''}
+      </div>
+      <div class="fact-tipo-chips">
+        ${[
+          { v: '',        l: 'Todos'   },
+          { v: 'FAC',     l: 'Facturas'},
+          { v: ' B',      l: 'B'       },
+          { v: ' C',      l: 'C'       },
+          { v: ' A',      l: 'A'       },
+          { v: 'NOTA CRED', l: 'Notas Crédito' },
+          { v: 'NOTA DEB',  l: 'Notas Débito'  },
+        ].map(c => `<button class="fact-chip${HIST_STATE.tipo === c.v ? ' active' : ''}" data-tipo="${escapeAttr(c.v)}">${c.l}</button>`).join('')}
+      </div>
+    </div>
+  `;
+
+  const tabla = totalRows === 0
+    ? `<div class="empty-state"><span class="material-icons">filter_alt_off</span><p>Ningún comprobante coincide con el filtro.</p></div>`
+    : `
+      <div class="fact-table-wrap">
+        <table class="fact-table fact-table-pro">
           <thead><tr>
-            <th>#</th><th>Tipo</th><th>Nro.</th><th>Fecha</th>
-            <th>Cliente</th><th>Total</th><th>CAE</th><th></th>
+            <th style="width:34px">#</th>
+            <th>Tipo</th>
+            <th>Comprobante</th>
+            <th>Fecha</th>
+            <th>Cliente</th>
+            <th class="text-right">Total</th>
+            <th>CAE</th>
+            <th style="width:48px"></th>
           </tr></thead>
           <tbody>
             ${rows.map((r, i) => `
               <tr>
-                <td>${i + 1}</td>
-                <td><span class="fact-badge">${r.tipo_comprobante || ''}</span></td>
-                <td>${String(r.punto_venta || 1).padStart(5, '0')}-${String(r.nro_comprobante || 0).padStart(8, '0')}</td>
+                <td class="fact-cell-idx">${ini + i + 1}</td>
+                <td><span class="fact-badge ${tipoBadgeClass(r.tipo_comprobante)}">${r.tipo_comprobante || '—'}</span></td>
+                <td class="fact-cell-mono">${String(r.punto_venta || 1).padStart(5, '0')}-${String(r.nro_comprobante || 0).padStart(8, '0')}</td>
                 <td>${fmtFecha(r.fecha)}</td>
-                <td>${r.cliente || '—'}</td>
-                <td class="text-right"><b>$${Number(r.total || 0).toLocaleString('es-AR', { minimumFractionDigits: 2 })}</b></td>
-                <td><span class="${r.cae ? 'cae-ok' : 'cae-no'}">${r.cae ? r.cae.slice(0, 6) + '…' : 'Sin CAE'}</span></td>
+                <td class="fact-cell-cli" title="${escapeAttr(r.cliente || '')}">${r.cliente || '—'}</td>
+                <td class="text-right fact-cell-money">${fmtMoney(r.total)}</td>
+                <td>${r.cae
+                  ? `<span class="cae-ok" title="${escapeAttr(r.cae)}"><span class="material-icons" style="font-size:14px;vertical-align:-2px">verified</span> ${r.cae.slice(0, 6)}…</span>`
+                  : `<span class="cae-no">— sin CAE —</span>`}</td>
                 <td>
                   <button class="fact-btn-reprint" data-id="${r.id}" title="Reimprimir">
                     <span class="material-icons">print</span>
@@ -614,32 +701,94 @@ async function loadHistorial(db, container) {
           </tbody>
         </table>
       </div>
+      ${pages > 1 ? `
+        <div class="fact-pagination">
+          <button class="fact-page-btn" data-page="prev" ${HIST_STATE.page === 1 ? 'disabled' : ''}>
+            <span class="material-icons">chevron_left</span> Anterior
+          </button>
+          <div class="fact-page-info">Página <b>${HIST_STATE.page}</b> de ${pages} · ${totalRows} resultados</div>
+          <button class="fact-page-btn" data-page="next" ${HIST_STATE.page === pages ? 'disabled' : ''}>
+            Siguiente <span class="material-icons">chevron_right</span>
+          </button>
+        </div>
+      ` : ''}
     `;
 
-    el.querySelectorAll('.fact-btn-reprint').forEach(btn => {
-      btn.addEventListener('click', () => {
-        const row = rows.find(r => r.id === btn.dataset.id);
-        if (!row) return;
-        // Facturas viejas no tienen `emisor` snapshot → reconstruir desde los
-        // campos root que sync_factura del POS subió flat.
-        const emisor = row.emisor || {
-          razon_social:       row.razon_social       || '',
-          cuit:               row.cuit               || '',
-          domicilio:          row.domicilio          || '',
-          localidad:          row.localidad          || '',
-          telefono:           row.telefono           || '',
-          email:              row.email              || '',
-          ing_brutos:         row.ing_brutos         || '',
-          inicio_actividades: row.inicio_actividades || '',
-          condicion_iva:      row.condicion_iva      || '',
-          punto_venta:        row.punto_venta        || 1,
-        };
-        printFactura({ ...row, vtoCae: row.vto_cae, emisor });
-      });
-    });
-  } catch (err) {
-    el.innerHTML = `<div class="empty-state"><span class="material-icons">error_outline</span><p>Error: ${err.message}</p></div>`;
-  }
+  el.innerHTML = `
+    <div class="fact-hist-header">
+      <div>
+        <h2 class="fact-hist-title"><span class="material-icons">receipt_long</span> Historial de comprobantes</h2>
+        <div class="fact-hist-sub">${HIST_STATE.all.length} comprobantes en total · mostrando ${totalRows} filtrados</div>
+      </div>
+    </div>
+    ${kpis}
+    ${filtrosBar}
+    ${tabla}
+  `;
+}
+
+function bindHistorialEvents(el) {
+  el.addEventListener('click', (e) => {
+    const chip = e.target.closest('.fact-chip');
+    if (chip) {
+      HIST_STATE.tipo = chip.dataset.tipo;
+      HIST_STATE.page = 1;
+      renderHistorial(el);
+      return;
+    }
+    const pageBtn = e.target.closest('.fact-page-btn');
+    if (pageBtn && !pageBtn.disabled) {
+      HIST_STATE.page += pageBtn.dataset.page === 'next' ? 1 : -1;
+      renderHistorial(el);
+      return;
+    }
+    const clearBtn = e.target.closest('#fhist-q-clear');
+    if (clearBtn) {
+      HIST_STATE.q = '';
+      HIST_STATE.page = 1;
+      renderHistorial(el);
+      return;
+    }
+    const reprint = e.target.closest('.fact-btn-reprint');
+    if (reprint) {
+      const row = HIST_STATE.all.find(r => r.id === reprint.dataset.id);
+      if (!row) return;
+      const emisor = row.emisor || {
+        razon_social:       row.razon_social       || '',
+        cuit:               row.cuit               || '',
+        domicilio:          row.domicilio          || '',
+        localidad:          row.localidad          || '',
+        telefono:           row.telefono           || '',
+        email:              row.email              || '',
+        ing_brutos:         row.ing_brutos         || '',
+        inicio_actividades: row.inicio_actividades || '',
+        condicion_iva:      row.condicion_iva      || '',
+        punto_venta:        row.punto_venta        || 1,
+      };
+      printFactura({ ...row, vtoCae: row.vto_cae, emisor });
+    }
+  });
+
+  let qTimer = null;
+  el.addEventListener('input', (e) => {
+    if (e.target.id === 'fhist-q') {
+      clearTimeout(qTimer);
+      qTimer = setTimeout(() => {
+        HIST_STATE.q = e.target.value;
+        HIST_STATE.page = 1;
+        renderHistorial(el);
+        const focus = el.querySelector('#fhist-q');
+        if (focus) {
+          focus.focus();
+          focus.setSelectionRange(focus.value.length, focus.value.length);
+        }
+      }, 180);
+    }
+  });
+}
+
+function escapeAttr(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 }
 
 function fmtFecha(f) {

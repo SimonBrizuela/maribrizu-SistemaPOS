@@ -158,3 +158,21 @@ libreria-liceo-512.png
 
 # Settings locales de Claude Code (cada PC tiene su propio)
 .claude/settings.local.json
+.claude/worktrees/
+
+# Webapp local Claude config
+webapp/.claude/
+
+# Scratchpads / notas / scripts utilitarios sueltos (no van al repo)
+prompp.txt
+prompt_claude_code_productos_madre.md
+resd.txt
+Nuevo.txt
+CAMBIOS_PRODUCTO_CONJUNTO.txt
+last_ts_catalogo.txt
+check_codigo.py
+detectar_borrados_hoy.py
+restaurar_borrados.py
+restaurar_por_id.py
+test_mp_dialog_firebase.py
+test_mp_variant_dialog.py

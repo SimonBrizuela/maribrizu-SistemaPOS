@@ -5,9 +5,13 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>Librería Liceo · POS</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-  <link rel="apple-touch-icon" href="/logo-liceo.png" />
+  <link rel="apple-touch-icon" href="/libreria-liceo-512.png" />
   <link rel="stylesheet" href="/src/styles/main.css" />
   <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin>
+  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
+  <link rel="dns-prefetch" href="https://firebaseinstallations.googleapis.com">
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
   <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 </head>
@@ -18,7 +22,7 @@
     <!-- Sidebar -->
     <nav class="sidebar" id="sidebar">
       <div class="sidebar-header">
-        <img src="/logo-liceo.png" alt="Librería Liceo" class="sidebar-logo-img" />
+        <img src="/libreria-liceo-512.png" alt="Librería Liceo" class="sidebar-logo-img" loading="eager" decoding="async" />
       </div>
 
       <div class="nav-links">
@@ -52,6 +56,18 @@
             <a href="#" class="nav-link" data-page="productos"><span class="material-icons">trending_up</span> Más Vendidos</a>
             <a href="#" class="nav-link" data-page="articulos_unicos"><span class="material-icons">link</span> Artículos Únicos</a>
             <a href="#" class="nav-link" data-page="promociones"><span class="material-icons">local_offer</span> Promociones</a>
+          </div>
+        </div>
+
+        <!-- Grupo: LAB (zona de pruebas, aislada del POS) -->
+        <div class="nav-group" data-group="lab">
+          <button class="nav-group-header">
+            <span class="material-icons">science</span>
+            <span class="nav-group-label">LAB</span>
+            <span class="material-icons nav-group-arrow">expand_more</span>
+          </button>
+          <div class="nav-group-items">
+            <a href="#" class="nav-link" data-page="lab_productos"><span class="material-icons">account_tree</span> Productos Madre</a>
           </div>
         </div>
 
