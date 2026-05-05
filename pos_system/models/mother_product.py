@@ -202,8 +202,19 @@ class Node:
         return [_row_to_node(r) for r in rows]
 
     def get_hojas_by_product(self, product_id: str) -> List[Dict]:
+        # "Vendible" = es_hoja=1 OR tiene presentaciones cargadas. Esto último
+        # cubre el caso en que el usuario agrega un hijo a un nodo que ya
+        # vendía: el padre pierde es_hoja pero conserva sus presentaciones,
+        # así que igual debe seguir siendo vendible (UX intuitiva — si tiene
+        # presentaciones, es vendible).
         rows = self.db.execute_query(
-            "SELECT * FROM mp_nodes WHERE product_id = ? AND es_hoja = 1 ORDER BY nombre",
+            """SELECT * FROM mp_nodes
+               WHERE product_id = ?
+                 AND ( es_hoja = 1
+                       OR (presentaciones IS NOT NULL
+                           AND presentaciones != ''
+                           AND presentaciones != '[]') )
+               ORDER BY depth, nombre""",
             (product_id,))
         return [_row_to_node(r) for r in rows]
 
