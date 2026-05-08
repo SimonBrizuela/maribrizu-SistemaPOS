@@ -21,6 +21,17 @@ function parseNum(str) {
   return parseFloat(String(str).replace(/\./g, '').replace(',', '.')) || 0;
 }
 
+// Redondea al múltiplo de 100 más cercano. Si el valor es chico y eso daría 0,
+// cae a múltiplo de 10 (24 → 20, 26 → 30) para no romper precios baratos.
+function redondearCentena(v) {
+  v = Number(v) || 0;
+  if (v <= 0) return 0;
+  const r100 = Math.round(v / 100) * 100;
+  if (r100 > 0) return r100;
+  const r10 = Math.round(v / 10) * 10;
+  return r10 > 0 ? r10 : Math.round(v);
+}
+
 
 // ── Parsear CSV de librería ───────────────────────────────────────────────────
 // ── Normalización de categorías ───────────────────────────────────────────────
@@ -1130,6 +1141,7 @@ export async function renderCatalogo(container, db) {
               <th class="cat-col-proveedor">Proveedor</th>
               <th>Costo</th>
               <th>Precio Venta</th>
+              <th>Precio Und</th>
               <th>Stock</th>
               <th>Estado</th>
               <th>Acciones</th>
@@ -1141,7 +1153,14 @@ export async function renderCatalogo(container, db) {
       </div>
     `;
 
-    ['buscar','filtroCat','filtroProv','filtroMarca','filtroEstado'].forEach(id => {
+    // Debounce sólo para #buscar: evita rerender de la grilla con 12k+ productos
+    // en cada keystroke (causaba que se "comieran" letras al tipear rápido).
+    let _buscarDebounce = null;
+    document.getElementById('buscar')?.addEventListener('input', () => {
+      if (_buscarDebounce) clearTimeout(_buscarDebounce);
+      _buscarDebounce = setTimeout(() => { currentPage = 1; aplicarFiltros(); }, 120);
+    });
+    ['filtroCat','filtroProv','filtroMarca','filtroEstado'].forEach(id => {
       document.getElementById(id)?.addEventListener('input', () => { currentPage = 1; aplicarFiltros(); });
     });
     document.getElementById('btnLimpiar')?.addEventListener('click', () => {
@@ -1238,7 +1257,7 @@ export async function renderCatalogo(container, db) {
     if (countEl) countEl.textContent = `${total} productos (pág ${currentPage}/${pages})`;
 
     if (!chunk.length) {
-      tbody.innerHTML = `<tr><td colspan="10" style="text-align:center;padding:40px;color:var(--text-muted)">Sin productos</td></tr>`;
+      tbody.innerHTML = `<tr><td colspan="11" style="text-align:center;padding:40px;color:var(--text-muted)">Sin productos</td></tr>`;
       renderPaginacion(pages);
       return;
     }
@@ -1284,19 +1303,104 @@ export async function renderCatalogo(container, db) {
             ? '#7c3aed'
             : (stockNum <= 3 ? 'var(--warning)' : 'var(--text)'));
 
+      // Datos pre-calculados para los tooltips de variedades del producto conjunto.
+      // Se usan en 3 columnas (Costo, Precio Venta, Precio Und) — los calculo
+      // una vez para no repetir la lógica.
+      const _esConj = !!p.es_conjunto;
+      const FRACCION = 1.15;
+      const um = p.conjunto_unidad_medida || 'unidades';
+      const umSg = um.endsWith('s') ? um.slice(0, -1) : um;
+      const globalPack = Number(p.precio_venta) || 0;
+      const globalCont = Number(p.conjunto_contenido) || 0;
+      const globalCosto= Number(p.costo) || 0;
+      const globalUnit = (Number(p.conjunto_precio_unidad) > 0)
+        ? Number(p.conjunto_precio_unidad)
+        : (globalPack > 0 && globalCont > 0 ? (globalPack / globalCont) * FRACCION : 0);
+      const variedades = Array.isArray(p.conjunto_colores) ? p.conjunto_colores : [];
+
+      // Helper que arma un botoncito violeta con tooltip rich (HTML).
+      const tipBtn = (htmlLines) => {
+        const tip = htmlLines.join('<br/>').replace(/"/g, '&quot;');
+        return `<span class="precio-unit-info" data-tip="${tip}" style="margin-left:4px;display:inline-flex;align-items:center;color:#7c3aed;cursor:help" title="">
+          <span class="material-icons" style="font-size:14px">info</span>
+        </span>`;
+      };
+
+      // Tooltip de COSTO por variedad: muestra el costo propio si lo tiene,
+      // o el costo global como fallback.
+      let costoTipHtml = '';
+      if (_esConj && variedades.length > 0) {
+        const lineas = variedades.map(c => {
+          const co = (c.costo && c.costo > 0) ? c.costo : globalCosto;
+          return co > 0
+            ? `${_escHtml(c.color)}: $${fmt(co)}`
+            : `${_escHtml(c.color)}: —`;
+        });
+        if (lineas.length) costoTipHtml = tipBtn(lineas);
+      }
+
+      // Tooltip de PRECIO VENTA: muestra el precio del PACK/ROLLO por variedad
+      // (precio_pack si lo tiene, si no el global).
+      let packTipHtml = '';
+      if (_esConj) {
+        const lineas = variedades.length > 0
+          ? variedades.map(c => {
+              const pack = (c.precio_pack && c.precio_pack > 0) ? c.precio_pack : globalPack;
+              return pack > 0
+                ? `${_escHtml(c.color)}: $${fmt(pack)}/pack`
+                : `${_escHtml(c.color)}: —`;
+            })
+          : (globalPack > 0 ? [`Precio pack: <b>$${fmt(globalPack)}</b>`] : []);
+        if (lineas.length) packTipHtml = tipBtn(lineas);
+      }
+
+      // Tooltip de PRECIO UND: precio por unidad/metro/etc. de cada variedad.
+      let unitTipHtml = '';
+      let unitDisplay = '—';
+      if (_esConj) {
+        if (variedades.length > 0) {
+          const valores = variedades.map(c => {
+            const pack = (c.precio_pack && c.precio_pack > 0) ? c.precio_pack : globalPack;
+            const cont = (c.contenido   && c.contenido   > 0) ? c.contenido   : globalCont;
+            const unit = (c.precio      && c.precio      > 0)
+              ? c.precio
+              : (pack > 0 && cont > 0 ? (pack / cont) * FRACCION : 0);
+            return { color: c.color, unit };
+          });
+          const lineas = valores.map(v => v.unit > 0
+            ? `${_escHtml(v.color)}: $${fmt(v.unit)}/${umSg}`
+            : `${_escHtml(v.color)}: —`);
+          unitTipHtml = tipBtn(lineas);
+          // Display compacto en celda: usa el menor precio (representativo "desde")
+          const positivos = valores.map(v => v.unit).filter(x => x > 0);
+          if (positivos.length) unitDisplay = `desde $${fmt(Math.min(...positivos))}`;
+        } else if (globalUnit > 0) {
+          unitDisplay = `$${fmt(globalUnit)}`;
+          unitTipHtml = tipBtn([`Precio por ${umSg}: <b>$${fmt(globalUnit)}</b>`]);
+        }
+      }
+
       return `<tr>
         <td class="cat-col-codigo" style="color:var(--text-muted);font-size:12px">${p.codigo || '-'}</td>
         <td><b style="font-size:13px">${p.nombre || '-'}</b><br><span style="color:var(--text-muted);font-size:11px">${p.cod_barra || ''}</span></td>
         <td><span class="badge badge-gray">${p.categoria || '-'}</span></td>
         <td class="cat-col-marca" style="font-size:12px">${p.marca || '-'}</td>
         <td class="cat-col-proveedor" style="font-size:12px">${p.proveedor || '-'}</td>
-        <td class="precio-cell" data-id="${p.doc_id}" data-field="costo" style="cursor:pointer" title="Click para editar">$${fmt(p.costo)}</td>
-        <td class="precio-cell" data-id="${p.doc_id}" data-field="precio_venta" style="cursor:pointer;display:flex;align-items:center;gap:4px" title="Click para editar">
-          <span>$${fmt(p.precio_venta)}</span>
-          ${(() => {
-            const margenPct = p.costo > 0 ? Math.round(((p.precio_venta - p.costo)/p.costo)*100) : 0;
-            return `<span style="font-size:10px;color:#7b1fa2;font-weight:700;margin-left:4px">(${margenPct}%)</span>`;
-          })()}
+        <td class="precio-cell" data-id="${p.doc_id}" data-field="costo" style="cursor:pointer" title="Click para editar">
+          <div style="display:inline-flex;align-items:center;gap:4px"><span>$${fmt(p.costo)}</span>${costoTipHtml}</div>
+        </td>
+        <td class="precio-cell" data-id="${p.doc_id}" data-field="precio_venta" style="cursor:pointer" title="Click para editar">
+          <div style="display:inline-flex;align-items:center;gap:4px">
+            <span>$${fmt(p.precio_venta)}</span>
+            ${(() => {
+              const margenPct = p.costo > 0 ? Math.round(((p.precio_venta - p.costo)/p.costo)*100) : 0;
+              return `<span style="font-size:10px;color:#7b1fa2;font-weight:700;margin-left:4px">(${margenPct}%)</span>`;
+            })()}
+            ${packTipHtml}
+          </div>
+        </td>
+        <td style="font-size:13px;color:${_esConj ? '#7c3aed' : 'var(--text-muted)'};font-weight:${_esConj ? '600' : '400'}">
+          <div style="display:inline-flex;align-items:center;gap:4px"><span>${unitDisplay}</span>${unitTipHtml}</div>
         </td>
         <td style="text-align:center;font-weight:700;color:${stockColor}" class="${esConj ? '' : 'precio-cell'}" data-id="${p.doc_id}" data-field="stock" title="${esConj ? 'Stock conjunto — editá desde el modal' : 'Click para editar'}">${stockText}</td>
         <td>${estadoBadge}</td>
@@ -1316,8 +1420,15 @@ export async function renderCatalogo(container, db) {
 
     // Edición inline
     document.querySelectorAll('.precio-cell').forEach(cell => {
-      cell.addEventListener('click', () => editarCampo(cell));
+      cell.addEventListener('click', (e) => {
+        // No abrir editor si se clickeó el ícono de info de precio unitario
+        if (e.target.closest('.precio-unit-info')) return;
+        editarCampo(cell);
+      });
     });
+
+    // Tooltip rich (HTML) para los íconos de precio unitario
+    _setupPrecioUnitTooltip();
 
     // Editar producto completo
     document.querySelectorAll('.btn-editar').forEach(btn => {
@@ -1398,7 +1509,7 @@ export async function renderCatalogo(container, db) {
             for (let i = 0; i < filtrados.length; i += BATCH) {
               const batch = writeBatch(db);
               filtrados.slice(i, i + BATCH).forEach(p => {
-                const redondeado = Math.round(p.precio_venta / 100) * 100;
+                const redondeado = redondearCentena(p.precio_venta);
                 const nuevoMargen = p.costo > 0 ? Math.round(((redondeado - p.costo) / p.costo) * 100) : p.margen || 0;
                 batch.update(doc(db, 'catalogo', p.doc_id), {
                   precio_venta: redondeado,
@@ -1469,7 +1580,15 @@ export async function renderCatalogo(container, db) {
     const margenActual = prod.costo > 0 ? Math.round(((prod.precio_venta - prod.costo) / prod.costo) * 100) : 0;
 
     overlay.innerHTML = `
-      <div style="background:#fff;border-radius:18px;padding:0;max-width:520px;width:100%;max-height:96vh;display:flex;flex-direction:column;box-shadow:0 12px 48px rgba(0,0,0,0.22);overflow:hidden">
+      <style>
+        /* Sacar flechas de number input en variedades — más limpio */
+        [data-color-row] input[type=number]::-webkit-outer-spin-button,
+        [data-color-row] input[type=number]::-webkit-inner-spin-button {
+          -webkit-appearance: none; margin: 0;
+        }
+        [data-color-row] input[type=number] { -moz-appearance: textfield; }
+      </style>
+      <div style="background:#fff;border-radius:18px;padding:0;max-width:760px;width:100%;max-height:96vh;display:flex;flex-direction:column;box-shadow:0 12px 48px rgba(0,0,0,0.22);overflow:hidden">
 
         <!-- Header -->
         <div style="background:linear-gradient(135deg,#1877f2,#0d5db5);padding:16px 20px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0">
@@ -1530,10 +1649,12 @@ export async function renderCatalogo(container, db) {
             </div>
           </div>
 
-          <!-- Costo + Precio venta -->
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:12px">
+          <!-- Placeholder donde vive el bloque de precio cuando el Conjunto está OFF -->
+          <div id="ed_precio_home"></div>
+          <!-- Costo + Precio venta (se mueve al bloque Conjunto cuando está activo) -->
+          <div id="ed_precio_block" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:12px">
             <div>
-              <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:6px">COSTO $</label>
+              <label id="lbl_ed_costo" style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:6px">COSTO $</label>
               <input id="ed_costo" type="number" step="0.01" min="0" value="${prod.costo || 0}" style="width:100%;padding:10px 12px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit" />
             </div>
             <div>
@@ -1541,7 +1662,7 @@ export async function renderCatalogo(container, db) {
               <input id="ed_margen" type="number" step="1" min="0" value="${margenActual}" style="width:100%;padding:10px 12px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit" />
             </div>
             <div>
-              <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:6px">PRECIO VENTA $</label>
+              <label id="lbl_ed_precio" style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:6px">PRECIO VENTA $</label>
               <div style="display:flex;gap:6px;align-items:center">
                 <input id="ed_precio" type="number" step="0.01" min="0" value="${prod.precio_venta || 0}" style="width:100%;padding:10px 12px;border:1.5px solid #1877f2;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit;font-weight:700" />
                 <button id="btn_redondear" type="button" title="Redondear al centena más cercano" style="flex-shrink:0;padding:10px 10px;border-radius:8px;border:1.5px solid #e4e6eb;background:#f0f2f5;cursor:pointer;font-size:12px;font-weight:700;color:#444;white-space:nowrap;line-height:1">±100</button>
@@ -1590,6 +1711,8 @@ export async function renderCatalogo(container, db) {
             </label>
             <!-- Resumen GRANDE arriba: siempre visible para que el usuario vea el desglose -->
             <div id="ed_conj_resumen_top" style="${prod.es_conjunto ? 'display:block' : 'display:none'};margin-top:12px;background:#fff;border-left:4px solid #7c3aed;border-radius:8px;padding:12px 14px;font-size:13px;color:#1f2937;line-height:1.5"></div>
+            <!-- Anchor: cuando el conjunto está activo, acá se inserta el bloque costo/margen/precio del pack -->
+            <div id="ed_precio_block_anchor" style="margin-top:12px"></div>
 
             <div id="ed_conjunto_fields" style="margin-top:12px;${prod.es_conjunto ? 'display:grid' : 'display:none'};grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px">
               <div>
@@ -1635,9 +1758,16 @@ export async function renderCatalogo(container, db) {
                 <span id="ed_conj_resumen">Completá los campos para ver el total</span>
               </div>
 
-              <!-- Stock por color (opcional) -->
-              <div style="grid-column:1/-1;display:flex;flex-direction:column;gap:6px">
-                <div id="ed_colores_list" style="display:none;flex-direction:column;gap:4px"></div>
+              <!-- Variedades (opcional) -->
+              <div style="grid-column:1/-1;display:flex;flex-direction:column;gap:8px">
+                <div id="ed_colores_toggle_wrap" style="display:none;align-items:center;gap:8px;background:#fff;border:1px dashed #c4b5fd;border-radius:8px;padding:8px 12px;font-size:12px;color:#4b5563">
+                  <input id="ed_colores_mismo_precio" type="checkbox" checked style="width:16px;height:16px;cursor:pointer;accent-color:#7c3aed;flex-shrink:0">
+                  <label for="ed_colores_mismo_precio" style="cursor:pointer;line-height:1.3">
+                    <b>Mismo precio del pack para todas las variedades</b>
+                    <span style="display:block;color:#6b7280;font-size:11.5px;margin-top:2px">Si las variedades tienen precios distintos (rollos diferentes, etc.), destildá esto y cargá el precio por fila.</span>
+                  </label>
+                </div>
+                <div id="ed_colores_list" style="display:none;flex-direction:column;gap:8px"></div>
                 <button id="btn_add_color" type="button" style="align-self:flex-start;padding:4px 8px;border-radius:6px;border:none;background:transparent;color:#6d28d9;cursor:pointer;font-size:12px;font-weight:600">
                   + agregar variedad
                 </button>
@@ -1702,7 +1832,7 @@ export async function renderCatalogo(container, db) {
     overlay.querySelector('#btn_redondear').addEventListener('click', () => {
       const p = parseFloat(inPrecio.value) || 0;
       if (!p) return;
-      const redondeado = Math.round(p / 100) * 100;
+      const redondeado = redondearCentena(p);
       inPrecio.value = redondeado;
       _emitInput(inPrecio);
       const c = parseFloat(inCosto.value) || 0;
@@ -1718,7 +1848,7 @@ export async function renderCatalogo(container, db) {
         if (!inPU) return;
         const v = parseFloat(inPU.value) || 0;
         if (!v) return;
-        inPU.value = Math.round(v / 100) * 100;
+        inPU.value = redondearCentena(v);
         precioPUManual = true;
         if (typeof _refrescarConjunto === 'function') _refrescarConjunto();
       });
@@ -1783,15 +1913,12 @@ export async function renderCatalogo(container, db) {
       otro:      ['UNIDADES','UNIDAD','f'],
     };
 
-    // En modo "unidades" no tiene sentido el campo "sueltas en X abierta"
-     // (las unidades no se fraccionan). El contenido y el precio por unidad
-     // sí siguen vigentes: una caja con 80 lápices tiene contenido = 80 y
-     // precio unitario = precio_caja / 80 × 1.15.
+    // El campo "sueltas en X abierta" sí tiene sentido también cuando UM=unidades:
+    // un pack de 15 lápices puede tener 7 sueltos del pack abierto. Por eso lo
+    // mostramos siempre (mientras haya contenido > 1).
     function _aplicarVisibilidadFraccion() {
-      const esUnidad = (conjUM.value || 'metros') === 'unidades';
       const wrapR = conjR ? conjR.parentElement : null;
-      if (wrapR) wrapR.style.display = esUnidad ? 'none' : '';
-      if (esUnidad && conjR) conjR.value = 0;
+      if (wrapR) wrapR.style.display = '';
     }
 
     function _refrescarConjunto() {
@@ -1812,14 +1939,45 @@ export async function renderCatalogo(container, db) {
       _aplicarVisibilidadFraccion();
       const u = parseFloat(conjU.value) || 0;
       const c = parseFloat(conjC.value) || 0;
-      const r = esUnidad ? 0 : (parseFloat(conjR.value) || 0);
+      const r = parseFloat(conjR.value) || 0;
       const precioPack = parseFloat(inPrecio.value) || 0;
       const precioU    = parseFloat(conjPU && conjPU.value) || 0;
 
       // Texto del resumen (versión corta para el campo viejo + versión grande arriba)
       let resumenCorto = '';
       let resumenLargo = '';
-      if (u > 0 && c > 0) {
+      // Si hay variedades, el total se calcula sumando por variedad (cada una
+      // puede tener su propio contenido y/o sueltos). Si no, fórmula clásica.
+      // Guard: en el primer render, _getColoresFromUI puede no estar disponible
+      // todavía (TDZ sobre `coloresList`). Capturamos errores para no romper la UI.
+      let variedadesUI = [];
+      try {
+        if (typeof _getColoresFromUI === 'function') variedadesUI = _getColoresFromUI();
+      } catch (_e) {
+        variedadesUI = [];
+      }
+      const hayVariedades = variedadesUI.length > 0;
+
+      if (hayVariedades) {
+        let total = 0;
+        const lineasVar = variedadesUI.map(v => {
+          const vu = Number(v.unidades) || 0;
+          const vr = Number(v.restante) || 0;
+          const vc = (Number(v.contenido) > 0) ? Number(v.contenido) : c;
+          const cerr = Math.max(0, vu - (vr > 0 ? 1 : 0));
+          const t = cerr * vc + vr;
+          total += t;
+          return { nombre: v.color, cerr, vc, vr, t };
+        });
+        resumenCorto = `<b>Total disponible:</b> <b style="color:#6d28d9">${total.toLocaleString('es-AR')} ${um}</b> · ${variedadesUI.length} ${variedadesUI.length === 1 ? 'variedad' : 'variedades'}`;
+        const detalleHtml = lineasVar.map(L =>
+          `<div style="font-size:12px;color:#4b5563"><b>${_escHtml(L.nombre)}:</b> ${L.cerr} × ${L.vc} ${um}${L.vr > 0 ? ` + ${L.vr} ${sueltos.toLowerCase()}` : ''} = <b style="color:#1f2937">${L.t} ${um}</b></div>`
+        ).join('');
+        resumenLargo =
+          `<div style="font-size:12px;color:#6d28d9;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px">Tenés disponible</div>` +
+          `<div style="font-size:18px;font-weight:800;color:#1f2937">${total.toLocaleString('es-AR')} ${um}</div>` +
+          (detalleHtml ? `<div style="margin-top:6px;display:flex;flex-direction:column;gap:2px">${detalleHtml}</div>` : '');
+      } else if (u > 0 && c > 0) {
         const cerrados = Math.max(0, (u - (r > 0 ? 1 : 0)));
         const totalCerrados = cerrados * c;
         const total = totalCerrados + r;
@@ -1876,12 +2034,74 @@ export async function renderCatalogo(container, db) {
       }
     }
 
+    // Mueve el bloque costo/margen/precio entre su "home" (afuera, modo simple)
+    // y el anchor adentro del cuadro Conjunto. Renombra labels acorde.
+    const precioBlock  = overlay.querySelector('#ed_precio_block');
+    const precioHome   = overlay.querySelector('#ed_precio_home');
+    const precioAnchor = overlay.querySelector('#ed_precio_block_anchor');
+    const lblEdCosto   = overlay.querySelector('#lbl_ed_costo');
+    const lblEdPrecio  = overlay.querySelector('#lbl_ed_precio');
+    const btnRedondear = overlay.querySelector('#btn_redondear');
+    function _aplicarUbicacionPrecio(on) {
+      if (on) {
+        if (precioBlock.parentElement !== precioAnchor) precioAnchor.appendChild(precioBlock);
+        if (lblEdCosto)  lblEdCosto.textContent  = 'COSTO DEL PACK $';
+        if (lblEdPrecio) lblEdPrecio.textContent = 'PRECIO DEL PACK $';
+      } else {
+        if (precioBlock.parentElement !== precioHome) precioHome.appendChild(precioBlock);
+        if (lblEdCosto)  lblEdCosto.textContent  = 'COSTO $';
+        if (lblEdPrecio) lblEdPrecio.textContent = 'PRECIO VENTA $';
+      }
+    }
+
+    // Cuando el conjunto está activo y "Mismo precio del pack" está OFF, el
+    // bloque de costo/margen/precio queda readonly+gris: el precio se carga
+    // por variedad abajo. Cuando está ON (o no aplica), queda editable normal.
+    // Además, en modo per-variedad ocultamos los globales que ya no aplican:
+    // "Unidades por pack" y "Precio por unidad" (cada variedad tiene los suyos).
+    function _aplicarEstadoPrecioGlobal() {
+      const conjOn = !!cbConj.checked;
+      // Query directo en cada llamada para evitar TDZ (esta función puede correr
+      // antes de la declaración de cbMismoPrecio en la función abrirEditor).
+      const cbMP   = overlay.querySelector('#ed_colores_mismo_precio');
+      const mismo  = cbMP ? !!cbMP.checked : true;
+      const disabled = conjOn && !mismo;
+      const inputs = [inCosto, inMargen, inPrecio];
+      inputs.forEach(inp => {
+        if (!inp) return;
+        inp.readOnly = disabled;
+        inp.style.background = disabled ? '#f3f4f6' : '';
+        inp.style.color      = disabled ? '#9ca3af' : '';
+        inp.style.cursor     = disabled ? 'not-allowed' : '';
+        inp.title = disabled ? 'Cargá el precio en cada variedad de abajo' : '';
+        // El precio venta tiene borde azul para destacarlo. Cuando se desactiva
+        // (modo per-variedad) lo igualamos al gris de los otros para que se vea
+        // claramente que está bloqueado.
+        if (inp === inPrecio) {
+          inp.style.borderColor = disabled ? '#e4e6eb' : '#1877f2';
+          inp.style.fontWeight  = disabled ? '400' : '700';
+        }
+      });
+      if (btnRedondear) {
+        btnRedondear.disabled = disabled;
+        btnRedondear.style.opacity = disabled ? '0.4' : '';
+        btnRedondear.style.cursor  = disabled ? 'not-allowed' : 'pointer';
+      }
+      // Ocultar inputs globales redundantes en modo per-variedad
+      const wrapContenido    = conjC  ? conjC.parentElement  : null;
+      const wrapPrecioUnidad = conjPU ? conjPU.parentElement?.parentElement : null;
+      if (wrapContenido)    wrapContenido.style.display    = disabled ? 'none' : '';
+      if (wrapPrecioUnidad) wrapPrecioUnidad.style.display = disabled ? 'none' : '';
+    }
+
     function _aplicarVisibilidadConjunto() {
       const on = cbConj.checked;
       conjBox.style.display    = on ? 'grid'  : 'none';
       if (conjResTop)  conjResTop.style.display  = on ? 'block' : 'none';
       if (stockBloque) stockBloque.style.display = on ? 'none'  : 'flex';
       if (stockAviso)  stockAviso.style.display  = on ? 'block' : 'none';
+      _aplicarUbicacionPrecio(on);
+      _aplicarEstadoPrecioGlobal();
     }
     cbConj.addEventListener('change', () => {
       _aplicarVisibilidadConjunto();
@@ -1904,65 +2124,304 @@ export async function renderCatalogo(container, db) {
     if (cbConj.checked) _refrescarConjunto();
 
     // ── Stock por color ───────────────────────────────────────────────
-    const coloresList  = overlay.querySelector('#ed_colores_list');
-    const coloresEmpty = overlay.querySelector('#ed_colores_empty');
-    const btnAddColor  = overlay.querySelector('#btn_add_color');
+    const coloresList   = overlay.querySelector('#ed_colores_list');
+    const coloresEmpty  = overlay.querySelector('#ed_colores_empty');
+    const btnAddColor   = overlay.querySelector('#btn_add_color');
+    const togglePrecioWrap = overlay.querySelector('#ed_colores_toggle_wrap');
+    const cbMismoPrecio    = overlay.querySelector('#ed_colores_mismo_precio');
 
-    function _addColorRow(nombre = '', unidades = '', restante = '', precio = '') {
+    // Convención de colores para los inputs de variedad:
+    // - NARANJA (USER): el usuario tiene que completar (Costo, Margen, U/pack)
+    // - BLANCO (AUTO):  se completa solo a partir de los anteriores (Pack, Unit)
+    // - VERDE  (MANUAL): tiene un valor cargado por el usuario
+    const STYLE_USER   = 'border:1.5px solid #fb923c;background:#fff7ed';   // naranja: completar
+    const STYLE_AUTO   = 'border:1.5px solid #cbd5e1;background:#fff';     // blanco: automático
+    const STYLE_MANUAL = 'border:1.5px solid #16a34a;background:#fff';     // verde: manual
+
+    function _aplicarEstiloAutoManual(input, kind = 'user') {
+      // kind: 'user'  → naranja vacío / verde lleno
+      //       'auto'  → blanco vacío / verde lleno
+      const tieneValor = (input.value || '').trim() !== '';
+      const baseStyle = 'width:100%;padding:7px 10px;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit;-moz-appearance:textfield;outline:none;';
+      const empty = (kind === 'auto') ? STYLE_AUTO : STYLE_USER;
+      input.setAttribute('style', baseStyle + (tieneValor ? STYLE_MANUAL : empty));
+    }
+
+    function _addColorRow(nombre = '', unidades = '', restante = '', precio = '', contenido = '', precioPack = '', costo = '', margen = '', codigo = '') {
       const row = document.createElement('div');
       row.dataset.colorRow = '1';
-      // Grid: nombre | unidades | restante | precio | quitar
-      row.style.cssText = 'display:grid;grid-template-columns:1fr 70px 70px 80px 24px;gap:6px;align-items:center';
-      row.innerHTML = `
+      row.style.cssText = 'display:flex;flex-direction:column;gap:10px;background:#fff;border:1.5px solid #e5e7eb;border-radius:12px;padding:12px 14px;box-shadow:0 1px 3px rgba(0,0,0,0.04)';
+
+      // Línea 1: stock + nombre + quitar
+      const linea1 = document.createElement('div');
+      linea1.style.cssText = 'display:grid;grid-template-columns:1fr 70px 70px 24px;gap:6px;align-items:center';
+      linea1.innerHTML = `
         <input class="ed_color_nombre" type="text" placeholder="Variedad" value="${nombre || ''}" style="width:100%;padding:6px 8px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
-        <input class="ed_color_unidades" type="number" min="0" step="1" placeholder="Cant." title="Cantidad de esta variedad" value="${unidades !== '' && unidades != null ? unidades : ''}" style="width:100%;padding:6px 8px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
-        <input class="ed_color_restante" type="number" min="0" step="0.01" placeholder="Rest." title="Sobrante en el rollo abierto de esta variedad" value="${restante !== '' && restante != null ? restante : ''}" style="width:100%;padding:6px 8px;border:1.5px solid #ffe082;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit;background:#fffef7" />
-        <input class="ed_color_precio" type="number" min="0" step="0.01" placeholder="Precio" title="Precio por unidad fraccionada de esta variedad (opcional). Si se deja vacío, se usa el precio global." value="${precio !== '' && precio != null ? precio : ''}" style="width:100%;padding:6px 8px;border:1.5px solid #c7d2fe;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit;background:#f5f3ff" />
+        <input class="ed_color_unidades" type="number" min="0" step="1" placeholder="Packs" title="Packs/rollos enteros de esta variedad" value="${unidades !== '' && unidades != null ? unidades : ''}" style="width:100%;padding:6px 8px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
+        <input class="ed_color_restante" type="number" min="0" step="0.01" placeholder="Sueltos" title="Sobrantes en el pack/rollo abierto de esta variedad" value="${restante !== '' && restante != null ? restante : ''}" style="width:100%;padding:6px 8px;border:1.5px solid #ffe082;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit;background:#fffef7" />
         <button type="button" class="ed_color_remove" title="Quitar variedad" style="width:24px;height:24px;border-radius:50%;border:none;background:transparent;color:#dc2626;cursor:pointer;font-size:16px;line-height:1;padding:0">×</button>
       `;
-      row.querySelectorAll('input').forEach(inp => inp.addEventListener('input', _refreshColoresState));
+      row.appendChild(linea1);
+
+      // Línea CÓDIGO: un solo campo que sirve tanto para código interno como
+      // código de barras (mismo string). El POS busca por este campo cuando
+      // escanean o tipean.
+      const lineaCodigo = document.createElement('div');
+      lineaCodigo.dataset.subrow = 'codigo';
+      lineaCodigo.style.cssText = 'display:grid;grid-template-columns:60px 1fr;gap:6px;align-items:center;padding-left:4px';
+      lineaCodigo.innerHTML = `
+        <span style="font-size:10px;font-weight:700;color:#9ca3af;letter-spacing:0.5px;text-transform:uppercase">CÓDIGO</span>
+        <input class="ed_color_codigo" type="text" placeholder="Código interno o de barras (opcional)" title="Código único de esta variedad. Funciona tanto para código interno como de barras." value="${codigo || ''}" />
+      `;
+      row.appendChild(lineaCodigo);
+
+      // Línea 2 (calc costo→pack): Costo · Margen % · Pack $ · ±100
+      // Cuando se cargan Costo + Margen, Pack $ se autocompleta. Si el usuario
+      // toca Pack a mano, queda fijo (verde) y no lo pisa el cálculo.
+      const linea2 = document.createElement('div');
+      linea2.dataset.subrow = 'costo';
+      linea2.style.cssText = 'display:grid;grid-template-columns:60px 1fr 1fr 1fr 36px;gap:6px;align-items:center;padding-left:4px';
+      linea2.innerHTML = `
+        <span style="font-size:10px;font-weight:700;color:#9ca3af;letter-spacing:0.5px;text-transform:uppercase">PRECIO</span>
+        <input class="ed_color_costo" type="number" min="0" step="0.01" placeholder="Costo $" title="Costo por pack de esta variedad." value="${costo !== '' && costo != null ? costo : ''}" />
+        <input class="ed_color_margen" type="number" min="0" step="1" placeholder="Margen %" title="Margen de ganancia por variedad. Vacío = hereda del margen global del producto." value="${margen !== '' && margen != null ? margen : ''}" />
+        <input class="ed_color_precio_pack" type="number" min="0" step="0.01" placeholder="Pack $" title="Precio del pack. Auto = Costo × (1 + Margen). Naranja = auto, verde = manual." value="${precioPack !== '' && precioPack != null ? precioPack : ''}" />
+        <button type="button" class="ed_color_redondear_pack" title="Redondear precio del pack al centena" style="width:36px;height:28px;padding:0;border-radius:6px;border:1.5px solid #fb923c;background:#fff7ed;cursor:pointer;font-size:11px;font-weight:700;color:#9a3412;line-height:1;white-space:nowrap">±100</button>
+      `;
+      row.appendChild(linea2);
+
+      // Línea 3 (calc pack→unit): U/pack · Unit $ · ±100
+      const linea3 = document.createElement('div');
+      linea3.dataset.subrow = 'precios';
+      linea3.style.cssText = 'display:grid;grid-template-columns:60px 1fr 1fr 36px;gap:6px;align-items:center;padding-left:4px';
+      linea3.innerHTML = `
+        <span style="font-size:10px;font-weight:700;color:#9ca3af;letter-spacing:0.5px;text-transform:uppercase">UNIDAD</span>
+        <div style="display:flex;gap:4px;align-items:stretch;min-width:0">
+          <input class="ed_color_contenido" type="number" min="0" step="0.01" placeholder="U/pack" title="Unidades por pack. Vinculado = sigue al global. Click en la cadena para desvincular." value="${contenido !== '' && contenido != null ? contenido : ''}" style="flex:1;min-width:0" />
+          <button type="button" class="ed_color_link" title="Vinculado al valor global. Click para desvincular." style="width:28px;height:28px;padding:0;border-radius:6px;border:1.5px solid #c4b5fd;background:#f5f3ff;cursor:pointer;color:#6d28d9;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+            <span class="material-icons" style="font-size:16px">link</span>
+          </button>
+        </div>
+        <input class="ed_color_precio" type="number" min="0" step="0.01" placeholder="Unit. $" title="Precio por unidad. Auto = Pack ÷ U/pack × 1.15. Naranja = auto, verde = manual." value="${precio !== '' && precio != null ? precio : ''}" />
+        <button type="button" class="ed_color_redondear" title="Redondear precio unitario al centena" style="width:36px;height:28px;padding:0;border-radius:6px;border:1.5px solid #fb923c;background:#fff7ed;cursor:pointer;font-size:11px;font-weight:700;color:#9a3412;line-height:1;white-space:nowrap">±100</button>
+      `;
+      row.appendChild(linea2);
+      row.appendChild(linea3);
+
+      // Aplicar estilo según convención:
+      // - 'user' (naranja): inputs que el cajero tiene que cargar.
+      // - 'auto' (blanco):  inputs que se calculan a partir de los otros.
+      const inpNombre      = linea1.querySelector('.ed_color_nombre');
+      const inpUnidades    = linea1.querySelector('.ed_color_unidades');
+      const inpRestante    = linea1.querySelector('.ed_color_restante');
+      const inpCodigo      = lineaCodigo.querySelector('.ed_color_codigo');
+      const inpCosto       = linea2.querySelector('.ed_color_costo');
+      const inpMargen      = linea2.querySelector('.ed_color_margen');
+      const inpPrecioPack  = linea2.querySelector('.ed_color_precio_pack');
+      const inpContenido   = linea3.querySelector('.ed_color_contenido');
+      const inpPrecioUnit  = linea3.querySelector('.ed_color_precio');
+      const btnLinkContenido = linea3.querySelector('.ed_color_link');
+      [inpNombre, inpUnidades, inpRestante, inpCodigo, inpCosto, inpMargen, inpContenido]
+        .forEach(i => _aplicarEstiloAutoManual(i, 'user'));
+      [inpPrecioPack, inpPrecioUnit].forEach(i => _aplicarEstiloAutoManual(i, 'auto'));
+
+      // Vincular UNIDAD al global: por defecto DESVINCULADO. El usuario tiene
+      // que clickear la cadena explícitamente para que la fila siga al global.
+      row.dataset.contenidoLinked = '0';
+
+      function _aplicarContenidoLinked() {
+        const linked = row.dataset.contenidoLinked === '1';
+        const icon = btnLinkContenido.querySelector('.material-icons');
+        if (linked) {
+          const g = parseFloat(conjC.value) || 0;
+          inpContenido.value = g > 0 ? g : '';
+          inpContenido.readOnly = true;
+          inpContenido.setAttribute('style',
+            'width:100%;padding:7px 10px;border-radius:8px;font-size:13px;box-sizing:border-box;' +
+            'font-family:inherit;outline:none;border:1.5px solid #c4b5fd;background:#f5f3ff;color:#6d28d9'
+          );
+          icon.textContent = 'link';
+          btnLinkContenido.style.background = '#f5f3ff';
+          btnLinkContenido.style.borderColor = '#c4b5fd';
+          btnLinkContenido.style.color = '#6d28d9';
+          btnLinkContenido.title = 'Vinculado al valor global. Click para desvincular.';
+        } else {
+          inpContenido.readOnly = false;
+          // Re-aplicar el estilo user/manual estándar (naranja vacío, verde lleno)
+          _aplicarEstiloAutoManual(inpContenido, 'user');
+          icon.textContent = 'link_off';
+          btnLinkContenido.style.background = '#fff7ed';
+          btnLinkContenido.style.borderColor = '#fb923c';
+          btnLinkContenido.style.color = '#9a3412';
+          btnLinkContenido.title = 'Desvinculado. Click para volver a usar el global.';
+        }
+      }
+
+      btnLinkContenido.addEventListener('click', () => {
+        row.dataset.contenidoLinked = row.dataset.contenidoLinked === '1' ? '0' : '1';
+        _aplicarContenidoLinked();
+        _refreshColoresState();
+      });
+
+      _aplicarContenidoLinked();
+
+      // Trackear si el usuario tocó manualmente Pack$ y/o Unit$.
+      // Cualquier `input` del usuario (tipear, borrar) lo marca como manual:
+      // así el campo no se re-rellena solo aunque quede vacío. La forma de
+      // volver al modo "auto" es modificar Costo, Margen, U/pack, etc.
+      row.dataset.precioUnitManual = (precio     !== '' && precio     != null) ? '1' : '0';
+      row.dataset.packManual       = (precioPack !== '' && precioPack != null) ? '1' : '0';
+      inpPrecioUnit.addEventListener('input', () => {
+        row.dataset.precioUnitManual = '1';
+      });
+      inpPrecioPack.addEventListener('input', () => {
+        row.dataset.packManual = '1';
+      });
+
+      // Auto-cálculo Costo + Margen → Pack $ → Unit $.
+      // Si hay Costo + Margen (local o global heredado), Pack se recalcula
+      // SIEMPRE y arrastra el cálculo de Unit. La forma de tener Pack/Unit
+      // "manual" es no cargar Costo (o no cargar Margen).
+      // Margen: si la variedad trae el suyo, gana; si no, hereda el global.
+      const _recalcPackFromCosto = () => {
+        const c = parseFloat(inpCosto.value) || 0;
+        const mLocal = inpMargen.value.trim();
+        const m = mLocal !== '' ? parseFloat(mLocal) : (parseFloat(inMargen.value) || 0);
+        if (c > 0 && !isNaN(m) && m >= 0) {
+          inpPrecioPack.value = (c * (1 + m / 100)).toFixed(2);
+          row.dataset.packManual = '0';
+          // También limpiamos el flag manual del unitario para que se recalcule
+          // automáticamente desde el nuevo Pack.
+          row.dataset.precioUnitManual = '0';
+          _aplicarEstiloAutoManual(inpPrecioPack, 'auto');
+        }
+      };
+      inpCosto.addEventListener('input', _recalcPackFromCosto);
+      inpMargen.addEventListener('input', _recalcPackFromCosto);
+
+      // Botón redondeo del precio unitario
+      linea3.querySelector('.ed_color_redondear').addEventListener('click', () => {
+        const v = parseFloat(inpPrecioUnit.value) || 0;
+        if (!(v > 0)) return;
+        inpPrecioUnit.value = redondearCentena(v).toFixed(2);
+        row.dataset.precioUnitManual = '1';
+        _aplicarEstiloAutoManual(inpPrecioUnit, 'auto');
+        _refreshColoresState();
+      });
+
+      // Botón redondeo del precio del pack — fija pack como manual y arrastra
+      // recalc del unitario desde ese pack redondeado.
+      linea2.querySelector('.ed_color_redondear_pack').addEventListener('click', () => {
+        const v = parseFloat(inpPrecioPack.value) || 0;
+        if (!(v > 0)) return;
+        inpPrecioPack.value = redondearCentena(v).toFixed(2);
+        row.dataset.packManual = '1';
+        _aplicarEstiloAutoManual(inpPrecioPack, 'auto');
+        _refreshColoresState();
+      });
+
+      // Cambios en cualquier input → re-pintar estilos + refrescar
+      const _userInputs = [inpNombre, inpUnidades, inpRestante, inpCodigo, inpCosto, inpMargen, inpContenido];
+      const _autoInputs = [inpPrecioPack, inpPrecioUnit];
+      row.querySelectorAll('input').forEach(inp => {
+        inp.addEventListener('input', () => {
+          if (_userInputs.includes(inp))      _aplicarEstiloAutoManual(inp, 'user');
+          else if (_autoInputs.includes(inp)) _aplicarEstiloAutoManual(inp, 'auto');
+          _refreshColoresState();
+        });
+      });
+
       row.querySelector('.ed_color_remove').addEventListener('click', () => {
         row.remove();
         _refreshColoresState();
       });
       coloresList.appendChild(row);
       _aplicarUnidadAVariedad(row);
+      _aplicarTogglePrecioARow(row);
     }
 
     function _getColoresFromUI() {
       const rows = coloresList.querySelectorAll('[data-color-row]');
-      const esUnidad = (conjUM.value || 'metros') === 'unidades';
       return Array.from(rows).map(r => {
-        const precioRaw = (r.querySelector('.ed_color_precio').value || '').trim();
+        const precioRaw       = (r.querySelector('.ed_color_precio').value || '').trim();
+        const contenidoRaw    = (r.querySelector('.ed_color_contenido').value || '').trim();
+        const precioPackRaw   = (r.querySelector('.ed_color_precio_pack').value || '').trim();
+        const costoRaw        = (r.querySelector('.ed_color_costo')?.value || '').trim();
+        const margenRaw       = (r.querySelector('.ed_color_margen')?.value || '').trim();
+        const codigoRaw       = (r.querySelector('.ed_color_codigo')?.value || '').trim();
         const out = {
           color:    (r.querySelector('.ed_color_nombre').value || '').trim(),
           unidades: parseFloat(r.querySelector('.ed_color_unidades').value) || 0,
-          restante: esUnidad ? 0 : (parseFloat(r.querySelector('.ed_color_restante').value) || 0),
+          restante: parseFloat(r.querySelector('.ed_color_restante').value) || 0,
         };
-        // precio es opcional: solo se guarda si el usuario puso un valor > 0
-        const p = precioRaw === '' ? null : (parseFloat(precioRaw) || 0);
-        if (p && p > 0) out.precio = p;
+        // Campos opcionales: solo se guardan si el usuario puso un valor > 0
+        const p  = precioRaw === ''     ? null : (parseFloat(precioRaw) || 0);
+        const c  = contenidoRaw === ''  ? null : (parseFloat(contenidoRaw) || 0);
+        const pp = precioPackRaw === '' ? null : (parseFloat(precioPackRaw) || 0);
+        const co = costoRaw === ''      ? null : (parseFloat(costoRaw) || 0);
+        const mg = margenRaw === ''     ? null : (parseFloat(margenRaw) || 0);
+        // Si la variedad está vinculada al global, no guardamos `contenido`
+        // (queda usando el global por fallback). Solo se persiste cuando el
+        // usuario lo desvinculó y le puso un valor propio.
+        const contenidoLinked = r.dataset.contenidoLinked === '1';
+        if (p  && p  > 0) out.precio       = p;
+        if (!contenidoLinked && c && c > 0) out.contenido = c;
+        if (pp && pp > 0) out.precio_pack  = pp;
+        if (co && co > 0) out.costo        = co;
+        if (mg !== null && mg >= 0) out.margen = mg;
+        if (codigoRaw)    out.codigo       = codigoRaw;
         return out;
       }).filter(c => c.color);
     }
 
-    // Si la unidad de medida del conjunto es 'unidades', no tiene sentido el
-    // campo "Restante" (no se fracciona) → lo ocultamos en la fila y achicamos
-    // la grilla a 4 columnas. Para metros/gramos/etc se ven las 5.
+    // Mostrar siempre el campo "Sueltos" en la fila de variedad: aplica
+    // tanto a metros (sobrante en rollo abierto) como a unidades (sueltas
+    // de un pack abierto que no completa un pack entero).
     function _aplicarUnidadAVariedad(row) {
-      const esUnidad = (conjUM.value || 'metros') === 'unidades';
       const restInp = row.querySelector('.ed_color_restante');
-      if (esUnidad) {
-        restInp.style.display = 'none';
-        row.style.gridTemplateColumns = '1fr 70px 80px 24px';
-      } else {
-        restInp.style.display = '';
-        row.style.gridTemplateColumns = '1fr 70px 70px 80px 24px';
-      }
+      const linea1 = restInp.parentElement;
+      restInp.style.display = '';
+      linea1.style.gridTemplateColumns = '1fr 70px 70px 24px';
     }
 
     function _aplicarUnidadATodasVariedades() {
       coloresList.querySelectorAll('[data-color-row]').forEach(_aplicarUnidadAVariedad);
+    }
+
+    // Si toggle "mismo precio" está ON, ocultar la sub-línea de costo→pack
+    // (Costo · Margen · Pack $) entera. La línea de precios (U/pack · Unit ·
+    // ±100) sigue visible: el unitario se autocalcula desde el precio global.
+    function _aplicarTogglePrecioARow(row) {
+      const mismoPrecio = !!cbMismoPrecio.checked;
+      const subCosto = row.querySelector('[data-subrow="costo"]');
+      if (subCosto) subCosto.style.display = mismoPrecio ? 'none' : 'grid';
+    }
+
+    function _aplicarTogglePrecioATodas() {
+      coloresList.querySelectorAll('[data-color-row]').forEach(_aplicarTogglePrecioARow);
+    }
+
+    // Recalcula el precio unitario auto de cada fila cuyo dataset.precioUnitManual === '0'.
+    // Auto = (precioPack o global) / (contenido o global) × 1.15
+    function _recalcularPrecioUnitarioAuto() {
+      const FRACCION = 1.15;
+      const globalPack       = parseFloat(inPrecio.value) || 0;
+      const globalContenido  = parseFloat(conjC.value) || 0;
+      coloresList.querySelectorAll('[data-color-row]').forEach(row => {
+        if (row.dataset.precioUnitManual === '1') return;
+        const pp = parseFloat(row.querySelector('.ed_color_precio_pack').value) || 0;
+        const cc = parseFloat(row.querySelector('.ed_color_contenido').value) || 0;
+        const pack      = pp > 0 ? pp : globalPack;
+        const contenido = cc > 0 ? cc : globalContenido;
+        const inpPU = row.querySelector('.ed_color_precio');
+        if (pack > 0 && contenido > 0) {
+          const sugerido = (pack / contenido) * FRACCION;
+          inpPU.value = sugerido.toFixed(2);
+        } else {
+          inpPU.value = '';
+        }
+        _aplicarEstiloAutoManual(inpPU, 'auto');
+      });
     }
 
     function _refreshColoresState() {
@@ -1971,6 +2430,7 @@ export async function renderCatalogo(container, db) {
       const hasColores = colores.length > 0;
       coloresEmpty.style.display = filasTotales === 0 ? 'block' : 'none';
       coloresList.style.display = filasTotales === 0 ? 'none' : 'flex';
+      togglePrecioWrap.style.display = filasTotales === 0 ? 'none' : 'flex';
       // Si hay variedades con nombre, los agregados se calculan como SUMA y los inputs principales quedan readonly.
       if (hasColores) {
         const sumU = colores.reduce((a, c) => a + c.unidades, 0);
@@ -1991,6 +2451,8 @@ export async function renderCatalogo(container, db) {
         conjU.title = '';
         conjR.title = '';
       }
+      // Recalcular precios unitarios auto antes del resumen
+      _recalcularPrecioUnitarioAuto();
       // Refrescar labels y resumen, y luego sufijar las labels de cantidad/sueltas
       // si están bloqueadas por la suma de variedades.
       _refrescarConjunto();
@@ -2009,15 +2471,56 @@ export async function renderCatalogo(container, db) {
       _refreshColoresState();
     });
 
+    // Toggle "mismo precio para todas"
+    cbMismoPrecio.addEventListener('change', () => {
+      _aplicarTogglePrecioATodas();
+      // Si volvemos al modo "mismo precio", limpiar overrides de pack por fila
+      if (cbMismoPrecio.checked) {
+        coloresList.querySelectorAll('[data-color-row]').forEach(row => {
+          const inpPP = row.querySelector('.ed_color_precio_pack');
+          inpPP.value = '';
+          _aplicarEstiloAutoManual(inpPP, 'auto');
+        });
+      }
+      _aplicarEstadoPrecioGlobal();
+      _refreshColoresState();
+    });
+
+    // Propagar el contenido global a todas las variedades vinculadas (linked = 1).
+    function _propagarContenidoGlobal() {
+      const g = parseFloat(conjC.value) || 0;
+      coloresList.querySelectorAll('[data-color-row]').forEach(row => {
+        if (row.dataset.contenidoLinked !== '1') return;
+        const inp = row.querySelector('.ed_color_contenido');
+        if (inp) inp.value = g > 0 ? g : '';
+      });
+    }
+
+    // Cuando cambia el precio o el contenido global, recalcular los precios unitarios auto
+    inPrecio.addEventListener('input', _recalcularPrecioUnitarioAuto);
+    conjC.addEventListener('input', () => {
+      _propagarContenidoGlobal();
+      _recalcularPrecioUnitarioAuto();
+    });
+
     // Cargar colores existentes del producto (si Firestore los trae)
     const coloresExistentes = Array.isArray(prod.conjunto_colores) ? prod.conjunto_colores : [];
+    // Si alguna variedad existente trae precio_pack propio, arrancamos con el toggle desactivado
+    const algunaConPrecioPack = coloresExistentes.some(c => c && c.precio_pack != null && c.precio_pack > 0);
+    if (algunaConPrecioPack) cbMismoPrecio.checked = false;
     coloresExistentes.forEach(c => _addColorRow(
       c && c.color ? c.color : '',
       c && c.unidades != null ? c.unidades : '',
       c && c.restante != null ? c.restante : '',
-      c && c.precio != null ? c.precio : ''
+      c && c.precio != null ? c.precio : '',
+      c && c.contenido != null ? c.contenido : '',
+      c && c.precio_pack != null ? c.precio_pack : '',
+      c && c.costo != null ? c.costo : '',
+      c && c.margen != null ? c.margen : '',
+      c && c.codigo ? c.codigo : ''
     ));
     _refreshColoresState();
+    _aplicarEstadoPrecioGlobal();
 
     // Actualizar sub-rubros disponibles al cambiar rubro
     overlay.querySelector('#ed_rubro').addEventListener('change', (e) => {
@@ -2121,26 +2624,24 @@ export async function renderCatalogo(container, db) {
         let cU, cR;
         if (tieneColores) {
           cU = coloresArr.reduce((a, c) => a + (c.unidades || 0), 0);
-          cR = esUnidad ? 0 : coloresArr.reduce((a, c) => a + (c.restante || 0), 0);
+          cR = coloresArr.reduce((a, c) => a + (c.restante || 0), 0);
         } else {
           cU = parseFloat(overlay.querySelector('#ed_conj_unidades').value) || 0;
-          if (esUnidad) {
-            cR = 0;
-          } else {
-            const cRraw = overlay.querySelector('#ed_conj_restante').value.trim();
-            cR = cRraw === '' ? null : (parseFloat(cRraw) || 0);
-          }
+          const cRraw = overlay.querySelector('#ed_conj_restante').value.trim();
+          cR = cRraw === '' ? null : (parseFloat(cRraw) || 0);
         }
 
         // Total = (cajas/rollos cerrados × contenido por caja) + sueltos en abierto.
         // Para UM=unidades, cR vale 0 y se reduce a cU × cC (ej: 5 cajas × 80 = 400 unidades).
+        // Si una variedad tiene su propio `contenido`, se usa ese; si no, el global.
         let cTotal;
         if (tieneColores) {
           cTotal = coloresArr.reduce((acc, c) => {
             const u = c.unidades || 0;
             const r = c.restante || 0;
+            const contenidoFila = (c.contenido && c.contenido > 0) ? c.contenido : cC;
             const cerrados = r > 0 ? Math.max(0, u - 1) : u;
-            return acc + (cerrados * cC) + r;
+            return acc + (cerrados * contenidoFila) + r;
           }, 0);
         } else {
           const cerrados = cR !== null && cR > 0 ? Math.max(0, cU - 1) : cU;
@@ -2232,6 +2733,33 @@ export async function renderCatalogo(container, db) {
         btn.disabled = false;
         btn.innerHTML = '<span class="material-icons" style="font-size:16px">save</span>Guardar cambios';
       }
+    });
+  }
+
+  function _setupPrecioUnitTooltip() {
+    // Tooltip flotante para los íconos `info` con data-tip (soporta HTML)
+    let tip = document.getElementById('cat-tip-precio-unit');
+    if (!tip) {
+      tip = document.createElement('div');
+      tip.id = 'cat-tip-precio-unit';
+      tip.style.cssText = 'position:fixed;display:none;background:#1f2937;color:#fff;padding:8px 12px;border-radius:8px;font-size:12.5px;line-height:1.5;box-shadow:0 6px 20px rgba(0,0,0,0.25);z-index:10001;max-width:260px;pointer-events:none;white-space:nowrap';
+      document.body.appendChild(tip);
+    }
+    document.querySelectorAll('.precio-unit-info').forEach(el => {
+      el.addEventListener('mouseenter', () => {
+        const html = el.getAttribute('data-tip') || '';
+        if (!html) return;
+        tip.innerHTML = '<b style="display:block;margin-bottom:4px;color:#c4b5fd">Precio unitario</b>' + html;
+        tip.style.display = 'block';
+        const r = el.getBoundingClientRect();
+        const top = r.bottom + 6;
+        const left = Math.min(r.left, window.innerWidth - 280);
+        tip.style.top = top + 'px';
+        tip.style.left = Math.max(8, left) + 'px';
+      });
+      el.addEventListener('mouseleave', () => {
+        tip.style.display = 'none';
+      });
     });
   }
 

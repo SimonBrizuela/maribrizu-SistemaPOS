@@ -20,7 +20,7 @@ from pos_system.models.sale import Sale
 from pos_system.models.cash_register import CashRegister
 from pos_system.models.promotion import Promotion
 from pos_system.utils.pdf_generator import PDFGenerator
-from pos_system.ui.conjunto_dialog import ConjuntoDialog, UNIDADES as _CONJ_UNIDADES, TIPOS as _CONJ_TIPOS
+from pos_system.ui.conjunto_dialog import ConjuntoDialog, UNIDADES as _CONJ_UNIDADES, TIPOS as _CONJ_TIPOS, parse_colores as _conj_parse_colores
 from pos_system.models.presupuesto import Presupuesto
 from pos_system.ui.presupuesto_dialog import PresupuestoDialog
 from pos_system.models.mother_product import MotherProduct, Node, Discount
@@ -97,95 +97,63 @@ class CartQuantitySpinBox(QDoubleSpinBox):
 
 class BarcodeScanner(QLineEdit):
     """
-    Campo de entrada que detecta automáticamente escaneos de código de barras.
-    Un escáner envía caracteres muy rápido (< 50ms entre teclas) y termina con Enter.
-    Si la entrada es lenta (tipeo manual) se muestra en el campo de búsqueda normal.
+    Campo de entrada que detecta escaneos de código de barras sin bloquear el tipeo manual.
+
+    Estrategia: todas las teclas se muestran en el campo normalmente. Se trackean
+    los timestamps de cada char tipeado, y recién al recibir Enter se decide si
+    el contenido parece un scan (texto >=6 chars, solo dígitos, intervalos
+    promedio <30ms entre teclas) y se emite barcode_scanned. Si no, el Enter
+    pasa al padre como búsqueda manual.
     """
     barcode_scanned = pyqtSignal(str)
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._scan_buffer = ""
-        self._last_key_time = 0
-        self._scan_timer = QTimer()
-        self._scan_timer.setSingleShot(True)
-        self._scan_timer.timeout.connect(self._flush_buffer)
-        # Umbral: escáneres reales tipean a ~5-15ms entre chars; humanos rápidos a >40ms.
-        # Threshold conservador: 30ms — solo desvía al buffer entradas extremadamente rápidas.
-        self._threshold_ms = 30
+        self._key_times = []
+        self._threshold_avg_ms = 30  # promedio entre teclas debajo de esto = scanner
 
     def keyPressEvent(self, event):
         import time
-        now = int(time.time() * 1000)
-        elapsed = now - self._last_key_time
-        self._last_key_time = now
-
         key = event.key()
-        modifiers = event.modifiers()
 
-        # Ctrl+V (pegar): pasar directo al campo normal, sin pasar por el buffer del scanner
-        if modifiers == Qt.ControlModifier and key == Qt.Key_V:
-            if self._scan_buffer:
-                self._scan_buffer = ""
-                self._scan_timer.stop()
+        if key in (Qt.Key_Return, Qt.Key_Enter):
+            text = self.text().strip()
+            if self._looks_like_scan(text):
+                self._key_times = []
+                self.barcode_scanned.emit(text)
+                return
+            self._key_times = []
             super().keyPressEvent(event)
             return
 
-        # Ctrl+A, Ctrl+C, Ctrl+X, teclas de navegación, Delete, Backspace → directo al campo
-        if modifiers == Qt.ControlModifier or key in (
-            Qt.Key_Backspace, Qt.Key_Delete, Qt.Key_Left, Qt.Key_Right,
-            Qt.Key_Home, Qt.Key_End, Qt.Key_Tab
-        ):
-            if self._scan_buffer:
-                self._scan_buffer = ""
-                self._scan_timer.stop()
+        # Edición/navegación: resetear tracking — el texto deja de ser candidato a scan
+        if key in (Qt.Key_Backspace, Qt.Key_Delete, Qt.Key_Left, Qt.Key_Right,
+                   Qt.Key_Home, Qt.Key_End, Qt.Key_Tab):
+            self._key_times = []
             super().keyPressEvent(event)
             return
 
-        if key == Qt.Key_Return or key == Qt.Key_Enter:
-            if self._scan_buffer:
-                code = self._scan_buffer.strip()
-                self._scan_buffer = ""
-                self._scan_timer.stop()
-                if len(code) >= 3:
-                    self.barcode_scanned.emit(code)
-                return
-            else:
-                # Enter con tipeo manual — pasar al padre (búsqueda normal)
-                super().keyPressEvent(event)
-                return
-
+        # Char visible: registrar timestamp y dejar pasar al campo
         char = event.text()
-        if not char:
-            super().keyPressEvent(event)
-            return
+        if char:
+            self._key_times.append(int(time.time() * 1000))
+            if len(self._key_times) > 40:
+                self._key_times = self._key_times[-40:]
 
-        # Los códigos de barras nunca tienen espacios → espacio es siempre tipeo manual
-        if char == ' ':
-            if self._scan_buffer:
-                self._scan_buffer = ""
-                self._scan_timer.stop()
-            super().keyPressEvent(event)
-            return
+        super().keyPressEvent(event)
 
-        if elapsed < self._threshold_ms:
-            # Entrada rápida → acumular en buffer de escáner
-            self._scan_buffer += char
-            self._scan_timer.start(200)
-        else:
-            # Tipeo manual → limpiar buffer y pasar al campo
-            if self._scan_buffer:
-                self._scan_buffer = ""
-                self._scan_timer.stop()
-            super().keyPressEvent(event)
-
-    def _flush_buffer(self):
-        """Si el buffer no terminó en Enter dentro del tiempo, pasa al campo normal."""
-        if self._scan_buffer:
-            text = self._scan_buffer
-            self._scan_buffer = ""
-            # Solo pasar al campo si parece tipeo manual (texto corto o con espacios)
-            self.setText(self.text() + text)
+    def _looks_like_scan(self, text: str) -> bool:
+        if len(text) < 6 or not text.isdigit():
+            return False
+        n = min(len(text), len(self._key_times))
+        if n < 6:
+            return False
+        recent = self._key_times[-n:]
+        intervals = [recent[i] - recent[i-1] for i in range(1, len(recent))]
+        if not intervals:
+            return False
+        avg = sum(intervals) / len(intervals)
+        return avg < self._threshold_avg_ms
 
 
 class ProductSearchDialog(QDialog):
@@ -1604,6 +1572,14 @@ class SalesView(QWidget):
             cajero puede confirmar esa hoja directo o navegar a otras.
         Si no es mp_*, flujo clásico add_to_cart.
         """
+        # Capturar el texto que el cajero tipeó (lo usamos para preseleccionar
+        # variedad si matchea el código de una variante de un producto conjunto).
+        spotlight_text = ''
+        if hasattr(self, '_search_dialog') and self._search_dialog:
+            try:
+                spotlight_text = (self._search_dialog.search_input.text() or '').strip()
+            except Exception:
+                spotlight_text = ''
         # Cerrar el diálogo de búsqueda primero para que no quede tapando el modal
         if hasattr(self, '_search_dialog') and self._search_dialog:
             try:
@@ -1623,6 +1599,21 @@ class SalesView(QWidget):
                 if madre:
                     self._open_mp_variant_dialog(madre)
             return
+
+        # Producto conjunto cuyo texto de búsqueda matchea un código de variedad:
+        # abrir directo el ConjuntoDialog con esa variante preseleccionada.
+        if int(product.get('es_conjunto') or 0) == 1 and spotlight_text:
+            preselect = None
+            try:
+                for c in _conj_parse_colores(product.get('conjunto_colores')):
+                    if str(c.get('codigo') or '').strip() == spotlight_text:
+                        preselect = c.get('color') or ''
+                        break
+            except Exception:
+                preselect = None
+            if preselect:
+                self._add_conjunto_to_cart(product, preselect_color=preselect)
+                return
 
         self.add_to_cart(product)
 
@@ -1670,10 +1661,50 @@ class SalesView(QWidget):
             self.sync_indicator.setText(f'Agregado: {product["name"]}')
             self.sync_indicator.setVisible(True)
             QTimer.singleShot(2000, lambda: self.sync_indicator.setVisible(False))
-        else:
-            # 3) No hay match exacto: abrir Spotlight con el texto, sin agregar
-            self._add_to_search_history(code)
-            self._open_search_dialog_with_text(code)
+            return
+
+        # 3) Código de variedad dentro de un producto conjunto
+        match = self._find_conjunto_color_by_codigo(code)
+        if match:
+            prod_conj, color_name = match
+            self._add_conjunto_to_cart(prod_conj, preselect_color=color_name)
+            return
+
+        # 4) No hay match exacto: abrir Spotlight con el texto, sin agregar
+        self._add_to_search_history(code)
+        self._open_search_dialog_with_text(code)
+
+    def _find_conjunto_color_by_codigo(self, code: str):
+        """Busca un producto conjunto cuya `conjunto_colores` tenga una variedad
+        con `codigo` == `code`. Devuelve (product_dict, color_name) o None.
+
+        Filtra primero por LIKE en SQL para no parsear todo el catálogo, y
+        después confirma parseando el JSON (evita falsos positivos del LIKE).
+        """
+        if not code:
+            return None
+        code = code.strip()
+        if not code:
+            return None
+        try:
+            rows = self.db.execute_query(
+                "SELECT * FROM products "
+                "WHERE es_conjunto = 1 AND conjunto_colores IS NOT NULL "
+                "AND conjunto_colores LIKE ?",
+                (f'%{code}%',)
+            ) or []
+        except Exception as e:
+            logger.warning(f'find_conjunto_color_by_codigo: {e}')
+            return None
+        for row in rows:
+            try:
+                colores = _conj_parse_colores(row.get('conjunto_colores'))
+            except Exception:
+                continue
+            for c in colores:
+                if str(c.get('codigo') or '').strip() == code:
+                    return dict(row), c.get('color') or ''
+        return None
 
     # ── Productos Madre (mp_*) ──────────────────────────────────────────────
     def _handle_mp_barcode(self, code: str) -> bool:
@@ -2012,13 +2043,27 @@ class SalesView(QWidget):
         except Exception:
             products = []
         cache = list(products)
-        haystacks = [
-            self._norm_search(' '.join(filter(None, [
+        haystacks = []
+        for p in products:
+            parts = [
                 p.get('name'), p.get('barcode'), p.get('firebase_id'),
                 p.get('description'), p.get('category'), p.get('rubro'),
-            ])))
-            for p in products
-        ]
+            ]
+            # Productos conjunto: indexar también los nombres y códigos de las
+            # variedades para que tipear el código de una variedad encuentre
+            # al producto padre en el spotlight.
+            if int(p.get('es_conjunto') or 0) == 1 and p.get('conjunto_colores'):
+                try:
+                    for c in _conj_parse_colores(p.get('conjunto_colores')):
+                        col = (c.get('color') or '').strip()
+                        if col:
+                            parts.append(col)
+                        cod = (c.get('codigo') or '').strip()
+                        if cod:
+                            parts.append(cod)
+                except Exception:
+                    pass
+            haystacks.append(self._norm_search(' '.join(filter(None, parts))))
 
         # Entradas Productos Madre: van al final del cache para que aparezcan
         # después del catálogo plano cuando no hay filtro de texto.
@@ -2137,6 +2182,15 @@ class SalesView(QWidget):
         """Abre el diálogo de búsqueda ampliada si no está ya abierto."""
         text = self.barcode_field.text().strip()
         if len(text) < 2:
+            return
+        # Si el texto matchea exactamente el código de una variedad de producto
+        # conjunto, abrir directamente el ConjuntoDialog con esa variante.
+        match = self._find_conjunto_color_by_codigo(text)
+        if match:
+            prod_conj, color_name = match
+            self._add_to_search_history(text)
+            self.barcode_field.clear()
+            self._add_conjunto_to_cart(prod_conj, preselect_color=color_name)
             return
         self._add_to_search_history(text)
         self._open_search_dialog_with_text(text)
@@ -2646,6 +2700,17 @@ class SalesView(QWidget):
             self._open_search_dialog_with_text(search_text)
             return
 
+        # Match por código de variedad dentro de un producto conjunto
+        match = self._find_conjunto_color_by_codigo(search_text)
+        if match:
+            prod_conj, color_name = match
+            if hasattr(self, '_auto_open_timer'):
+                self._auto_open_timer.stop()
+            self._add_to_search_history(search_text)
+            self.barcode_field.clear()
+            self._add_conjunto_to_cart(prod_conj, preselect_color=color_name)
+            return
+
         # Sin match exacto → abrir diálogo ampliado instantáneo con el texto
         # (cancela el timer de auto-apertura para evitar doble ventana)
         if hasattr(self, '_auto_open_timer'):
@@ -2847,7 +2912,7 @@ class SalesView(QWidget):
 
         self.update_cart_display()
 
-    def _add_conjunto_to_cart(self, product):
+    def _add_conjunto_to_cart(self, product, preselect_color=None):
         """Abre el ConjuntoDialog y agrega cada línea (1 por color) al carrito.
 
         En modo legacy (producto sin colores) el dialog devuelve una sola línea,
@@ -2887,7 +2952,7 @@ class SalesView(QWidget):
             logger.warning(f"ConjuntoDialog: no se pudo refrescar producto: {_e}")
 
         try:
-            dlg = ConjuntoDialog(product, parent=self)
+            dlg = ConjuntoDialog(product, parent=self, preselect_color=preselect_color)
         except Exception as e:
             logger.error(f"ConjuntoDialog: {e}")
             QMessageBox.critical(self, 'Error', f'No se pudo abrir el diálogo de producto conjunto:\n{e}')

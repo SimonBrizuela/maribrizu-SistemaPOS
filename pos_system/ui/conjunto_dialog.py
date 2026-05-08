@@ -17,7 +17,7 @@ Esc para Cancelar). Funciona en simultáneo con el pad táctil.
 import json as _json
 import logging
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import Qt, pyqtSignal, QTimer
 from PyQt5.QtGui import QFont, QFontDatabase, QKeyEvent, QGuiApplication
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QGridLayout, QLabel, QPushButton,
@@ -150,6 +150,27 @@ def parse_colores(raw):
             pr = 0.0
         if pr > 0:
             item['precio'] = pr
+        # Contenido por variedad (opcional). Permite que cada variante tenga
+        # su propio "U/pack" distinto al global. Vacío = usa el global.
+        try:
+            cont = float(c.get('contenido') or 0)
+        except (TypeError, ValueError):
+            cont = 0.0
+        if cont > 0:
+            item['contenido'] = cont
+        # Precio del pack por variedad (opcional). Sirve para auto-calcular el
+        # precio unitario de esta variedad cuando no viene `precio` explícito.
+        try:
+            pp = float(c.get('precio_pack') or 0)
+        except (TypeError, ValueError):
+            pp = 0.0
+        if pp > 0:
+            item['precio_pack'] = pp
+        # Código por variedad (opcional). Permite escanear/buscar la variedad
+        # directamente desde el POS y abrir el dialog ya posicionado en ella.
+        cod = str(c.get('codigo') or '').strip()
+        if cod:
+            item['codigo'] = cod
         out.append(item)
     return out
 
@@ -250,31 +271,56 @@ def _ui_family():
 # ---------- Widgets ---------------------------------------------------------
 
 class _PillButton(QPushButton):
-    """Botón con estado activo/inactivo (fondo accent/transparente)."""
+    """Botón con estado activo/inactivo (fondo accent/blanco con borde).
+
+    Inactivo: blanco con borde — se ve claramente que es un botón clickeable.
+    Activo: relleno accent con borde más oscuro, texto blanco grande y negrita.
+    Hover: cambia el fondo notoriamente.
+    Pressed: oscurece para feedback táctil al click.
+    """
     def __init__(self, text, parent=None):
         super().__init__(text, parent)
         self.setCheckable(True)
         self.setFlat(True)
         self.setCursor(Qt.PointingHandCursor)
-        self.setMinimumHeight(36)
+        self.setMinimumHeight(40)
         self._refresh()
         self.toggled.connect(lambda _: self._refresh())
 
     def _refresh(self):
         active = self.isChecked()
-        self.setStyleSheet(
-            f'QPushButton {{'
-            f'  background: {ACCENT if active else "transparent"};'
-            f'  color: {"#fff" if active else TEXT_DIM};'
-            f'  border-radius: 8px;'
-            f'  font-weight: 700;'
-            f'  font-size: 13px;'
-            f'  font-family: {UI_FONT_CSS};'
-            f'  padding: 6px 14px;'
-            f'  border: none;'
-            f'}}'
-            f'QPushButton:hover {{ background: {ACCENT_HOVER if active else PILL_BG}; }}'
-        )
+        if active:
+            self.setStyleSheet(
+                f'QPushButton {{'
+                f'  background: {ACCENT};'
+                f'  color: #fff;'
+                f'  border-radius: 8px;'
+                f'  font-weight: 800;'
+                f'  font-size: 14px;'
+                f'  font-family: {UI_FONT_CSS};'
+                f'  padding: 6px 14px;'
+                f'  border: 2px solid {ACCENT_HOVER};'
+                f'}}'
+                f'QPushButton:hover  {{ background: {ACCENT_HOVER}; }}'
+                f'QPushButton:pressed{{ background: {ACCENT_HOVER}; '
+                f'                       padding-top: 7px; padding-bottom: 5px; }}'
+            )
+        else:
+            self.setStyleSheet(
+                f'QPushButton {{'
+                f'  background: #fff;'
+                f'  color: {TEXT_DARK};'
+                f'  border-radius: 8px;'
+                f'  font-weight: 700;'
+                f'  font-size: 13px;'
+                f'  font-family: {UI_FONT_CSS};'
+                f'  padding: 6px 14px;'
+                f'  border: 1.5px solid {BORDER};'
+                f'}}'
+                f'QPushButton:hover  {{ background: {PILL_BG}; border-color: {TEXT_MUTED}; }}'
+                f'QPushButton:pressed{{ background: {ACCENT_SOFT}; '
+                f'                       padding-top: 7px; padding-bottom: 5px; }}'
+            )
 
 
 class _ChipButton(QPushButton):
@@ -356,15 +402,22 @@ class _ColorChip(QPushButton):
 
     def _refresh(self):
         active = self.isChecked()
-        bg   = TEXT_DARK if active else '#fff'
+        bg   = ACCENT    if active else '#fff'
         fg   = '#fff'    if active else TEXT_DARK
-        sub  = '#d6d2c8' if active else TEXT_MUTED
-        bord = TEXT_DARK if active else BORDER
+        sub  = '#d6d6f5' if active else TEXT_MUTED
+        bord = ACCENT_HOVER if active else BORDER
+        # Borde más grueso cuando está seleccionado para que sea bien visible.
+        bord_width = 2 if active else 1.5
         self.setStyleSheet(
-            f'QPushButton {{ background: {bg}; border: 1.5px solid {bord};'
+            f'QPushButton {{ background: {bg}; border: {bord_width}px solid {bord};'
             f'                border-radius: 8px; padding: 0; text-align: left; }}'
-            f'QPushButton:hover {{ border-color: {TEXT_DARK}; }}'
+            f'QPushButton:hover  {{ border-color: {ACCENT}; background: '
+            f'                       {ACCENT_HOVER if active else PILL_BG}; }}'
+            f'QPushButton:pressed{{ background: {ACCENT_HOVER if active else ACCENT_SOFT}; }}'
         )
+        # Bold + agrandado cuando está activo para que destaque
+        fn = QFont(); fn.setPointSize(11 if active else 10); fn.setBold(True)
+        self._lbl_name.setFont(fn)
         self._lbl_name.setStyleSheet(
             f'color: {fg}; background: transparent; border: none;'
             f' font-family: {UI_FONT_CSS};'
@@ -511,10 +564,11 @@ class ConjuntoDialog(QDialog):
     }
     """
 
-    def __init__(self, product, parent=None):
+    def __init__(self, product, parent=None, preselect_color=None):
         super().__init__(parent)
         self.product = product
         self.result_data = None
+        self._preselect_color = (preselect_color or '').strip() or None
 
         self.tipo = (product.get('conjunto_tipo') or 'otro').lower()
         if self.tipo not in TIPOS:
@@ -524,7 +578,8 @@ class ConjuntoDialog(QDialog):
         self.unidad_base = normalizar_unidad(product.get('conjunto_unidad_medida') or meta['unidad_default'])
         if self.unidad_base not in UNIDADES:
             self.unidad_base = 'u'
-        self.contenido = float(product.get('conjunto_contenido') or 0)
+        # Contenido global (default cuando una variedad no especifica el suyo).
+        self._contenido_global = float(product.get('conjunto_contenido') or 0)
 
         # Modo: por color (multi) vs legacy (1 sólo color implícito)
         self.colores_iniciales = parse_colores(product.get('conjunto_colores'))
@@ -543,11 +598,21 @@ class ConjuntoDialog(QDialog):
                 'restante': c['restante'],
                 # Precio por variedad (opcional). Si > 0, sobreescribe al
                 # precio_unidad global cuando esta variedad está activa.
-                'precio':   float(c.get('precio') or 0),
+                'precio':      float(c.get('precio') or 0),
+                # Contenido por variedad (U/pack). 0 = hereda del global.
+                'contenido':   float(c.get('contenido') or 0),
+                # Precio del pack por variedad. 0 = hereda del precio del producto.
+                'precio_pack': float(c.get('precio_pack') or 0),
             }
             for c in self.colores_iniciales
         }
         self.current_color = self.colores_iniciales[0]['color']
+        # Preselección por código de variedad (entró por escaneo).
+        if self._preselect_color:
+            for c in self.colores_iniciales:
+                if c.get('color') == self._preselect_color:
+                    self.current_color = self._preselect_color
+                    break
 
         # Líneas committed (subtotal interno)
         self.lineas = []
@@ -566,12 +631,12 @@ class ConjuntoDialog(QDialog):
         if precio_explicito > 0:
             self._precio_unidad_default = precio_explicito
         elif (
-            self.contenido > 0
+            self._contenido_global > 0
             and 'fraccion' in meta.get('vende_por', [])
         ):
             # precio_por_metro = precio_rollo / metros_rollo * (1 + margen)
             self._precio_unidad_default = round(
-                precio_conjunto / self.contenido * FRACCION_MARGIN, 2
+                precio_conjunto / self._contenido_global * FRACCION_MARGIN, 2
             )
         else:
             # Producto que se vende por unidad o sin contenido cargado:
@@ -643,15 +708,56 @@ class ConjuntoDialog(QDialog):
         return float(s.get('restante', 0))
 
     @property
+    def contenido(self):
+        # Si la variedad activa trae contenido propio (> 0), tiene prioridad
+        # sobre el contenido global. Permite "U/pack" distinto por variedad.
+        if self.has_colores and self.current_color:
+            s = self._color_state.get(self.current_color, {})
+            c = float(s.get('contenido') or 0)
+            if c > 0:
+                return c
+        return self._contenido_global
+
+    def _contenido_for(self, color_name):
+        """Contenido aplicable a una variedad puntual (con fallback al global)."""
+        s = self._color_state.get(color_name, {})
+        c = float(s.get('contenido') or 0)
+        return c if c > 0 else self._contenido_global
+
+    @property
     def precio_unidad(self):
-        # Si la variedad activa trae precio propio (> 0), tiene prioridad
-        # sobre el precio_unidad global / auto-calculado.
+        # 1) Si la variedad activa trae `precio` (precio unitario) propio: gana.
+        # 2) Si trae `precio_pack` propio: derivar precio unit = pack / contenido × margen.
+        # 3) Caída al precio_unidad_default (global / auto desde el price).
         if self.has_colores and self.current_color:
             s = self._color_state.get(self.current_color, {})
             p = float(s.get('precio') or 0)
             if p > 0:
                 return p
+            pp = float(s.get('precio_pack') or 0)
+            cont = self.contenido
+            meta = TIPOS[self.tipo]
+            if pp > 0 and cont > 0 and 'fraccion' in meta.get('vende_por', []):
+                return round(pp / cont * FRACCION_MARGIN, 2)
+            if pp > 0 and 'fraccion' not in meta.get('vende_por', []):
+                # Tipo que vende por unidad: el "pack" es el unitario directo
+                return pp
         return self._precio_unidad_default
+
+    @property
+    def precio_pack(self):
+        """Precio del pack/conjunto entero para la variedad activa.
+
+        Si la variedad trae `precio_pack` propio: lo usamos directo (es el precio
+        que el dueño cargó para vender el pack). Si no, caemos al precio del
+        producto global (`product['price']`).
+        """
+        if self.has_colores and self.current_color:
+            s = self._color_state.get(self.current_color, {})
+            pp = float(s.get('precio_pack') or 0)
+            if pp > 0:
+                return pp
+        return float(self.product.get('price') or 0)
 
     def _refresh_header_sub(self):
         if not hasattr(self, '_header_sub'):
@@ -762,51 +868,103 @@ class ConjuntoDialog(QDialog):
         outer.setContentsMargins(14, 10, 14, 10)
         outer.setSpacing(8)
 
-        # Header: label COLOR + buscador a la derecha
+        # Header: label VARIANTES + chevron toggle + buscador a la derecha
+        # El chevron despliega/colapsa la pestaña como en la sidebar de la webapp.
         head = QHBoxLayout()
         head.setContentsMargins(0, 0, 0, 0)
         head.setSpacing(8)
-        lbl = QLabel('COLOR')
+        lbl = QLabel('VARIANTES')
         lbl.setStyleSheet(
             f'color: {TEXT_MUTED}; font-size: 11px; font-weight: 700;'
             f' letter-spacing: 1px; font-family: {UI_FONT_CSS};'
         )
         head.addWidget(lbl)
-        head.addStretch(1)
-        # Buscador: solo aparece si hay muchos colores (>6). Si no, los chips
-        # alcanzan y el buscador es ruido visual.
-        muchos_colores = len(self.colores_iniciales) > 6
-        from PyQt5.QtWidgets import QLineEdit as _QLE
-        self._color_search = _QLE()
-        self._color_search.setPlaceholderText('Buscar color...')
-        self._color_search.setMinimumWidth(160)
-        self._color_search.setMaximumWidth(220)
-        self._color_search.setStyleSheet(
-            f'QLineEdit {{ background: #fafaf7; border: 1px solid {BORDER};'
-            f'              border-radius: 8px; padding: 4px 10px;'
-            f'              font-size: 11px; font-family: {UI_FONT_CSS}; }}'
-            f'QLineEdit:focus {{ border-color: {ACCENT}; background: #fff; }}'
+
+        # Resumen al lado del label cuando está colapsado: "→ Textil"
+        self._color_summary_lbl = QLabel('')
+        self._color_summary_lbl.setStyleSheet(
+            f'color: {TEXT_DARK}; font-size: 12px; font-weight: 600;'
+            f' font-family: {UI_FONT_CSS};'
         )
-        self._color_search.textChanged.connect(self._on_color_search)
-        if muchos_colores:
-            head.addWidget(self._color_search)
-        else:
-            self._color_search.setVisible(False)
+        self._color_summary_lbl.setVisible(False)
+        head.addWidget(self._color_summary_lbl)
+
+        head.addStretch(1)
+
+        from PyQt5.QtWidgets import QLineEdit as _QLE, QToolButton as _QTB
+
+        # Chevron toggle (^/v). Default colapsado. Se hace grande y con fondo
+        # al hover para que sea bien visible y clickeable (zona táctil amplia).
+        self._color_chevron = _QTB()
+        self._color_chevron.setText('▾')
+        self._color_chevron.setCursor(Qt.PointingHandCursor)
+        self._color_chevron.setFocusPolicy(Qt.NoFocus)
+        self._color_chevron.setMinimumSize(40, 32)
+        self._color_chevron.setStyleSheet(
+            f'QToolButton {{ background: {PILL_BG}; border: 1.5px solid {BORDER};'
+            f'                color: {TEXT_DARK}; font-size: 22px;'
+            f'                padding: 2px 10px; font-weight: 800;'
+            f'                border-radius: 8px; }}'
+            f'QToolButton:hover  {{ background: {ACCENT_SOFT}; border-color: {ACCENT}; }}'
+            f'QToolButton:pressed{{ background: {ACCENT}; color: #fff; }}'
+        )
+        self._color_chevron.clicked.connect(self._toggle_color_expanded)
+        head.addWidget(self._color_chevron)
+
         outer.addLayout(head)
 
-        # Scroll horizontal para muchos colores
+        # Buscador full-width — solo visible cuando la pestaña está expandida.
+        # Sirve para filtrar variantes en vivo (útil para listas largas).
+        # Usa un QLabel con ícono SVG inline en vez de un emoji para que se
+        # vea profesional y no "AI-generated".
+        from PyQt5.QtWidgets import QLineEdit as _QLE2  # noqa: F401
+        search_wrap = QFrame()
+        search_wrap.setStyleSheet(
+            f'QFrame {{ background: {PILL_BG}; border: 1.5px solid {BORDER};'
+            f'           border-radius: 8px; }}'
+            f'QFrame:focus-within {{ border-color: {ACCENT}; background: #fff; }}'
+        )
+        sh = QHBoxLayout(search_wrap)
+        sh.setContentsMargins(10, 4, 10, 4)
+        sh.setSpacing(8)
+        # Ícono lupa: caracteres geométricos sin recurrir a emoji
+        ico = QLabel('⌕')
+        ico_font = QFont(); ico_font.setPointSize(16); ico_font.setBold(True)
+        ico.setFont(ico_font)
+        ico.setStyleSheet(f'color: {TEXT_MUTED}; background: transparent; border: none;')
+        sh.addWidget(ico, 0, Qt.AlignVCenter)
+        self._color_search = _QLE()
+        self._color_search.setPlaceholderText('Buscar variante')
+        self._color_search.setFrame(False)
+        self._color_search.setMinimumHeight(28)
+        self._color_search.setStyleSheet(
+            f'QLineEdit {{ background: transparent; border: none;'
+            f'              padding: 2px 0; font-size: 13px;'
+            f'              font-family: {UI_FONT_CSS}; color: {TEXT_DARK}; }}'
+        )
+        self._color_search.textChanged.connect(self._on_color_search)
+        sh.addWidget(self._color_search, 1)
+        outer.addWidget(search_wrap)
+        self._color_search_wrap = search_wrap
+
+        # Lista vertical de variantes (una por fila). Altura adaptable: si hay
+        # pocas no sobra espacio, si hay muchas activa scroll.
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
-        scroll.setMinimumHeight(48)
-        scroll.setMaximumHeight(58)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        # Altura por chip ≈ 44px (38 alto + 6 spacing). Tope a 5 visibles ~ 220.
+        n = len(self.colores_iniciales)
+        per_row = 44
+        target = min(max(n, 1), 5) * per_row + 8
+        scroll.setMinimumHeight(target)
+        scroll.setMaximumHeight(min(n * per_row + 16, 5 * per_row + 16))
 
         chips_w = QWidget()
-        h = QHBoxLayout(chips_w)
+        h = QVBoxLayout(chips_w)
         h.setContentsMargins(0, 2, 0, 2)
-        h.setSpacing(8)
+        h.setSpacing(6)
 
         self._color_group = QButtonGroup(self)
         self._color_group.setExclusive(True)
@@ -814,6 +972,9 @@ class ConjuntoDialog(QDialog):
         for c in self.colores_iniciales:
             chip = _ColorChip(c['color'], self._stock_text_for(c['color']))
             chip.setFocusPolicy(Qt.NoFocus)
+            # Que cada chip ocupe todo el ancho disponible (apilados como filas)
+            chip.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            chip.setMinimumHeight(38)
             self._color_group.addButton(chip)
             self._color_chips[c['color']] = chip
             h.addWidget(chip)
@@ -822,16 +983,16 @@ class ConjuntoDialog(QDialog):
             )
         h.addStretch(1)
 
-        # Activar el primero (sin disparar signals — _refresh_all corre al final
-        # de __init__ cuando ya están todos los widgets)
-        first_color = self.colores_iniciales[0]['color']
-        chip0 = self._color_chips[first_color]
-        chip0.blockSignals(True)
-        chip0.setChecked(True)
-        chip0.blockSignals(False)
+        # Activar el chip que corresponde a self.current_color (puede ser el
+        # primero, o uno preseleccionado por escaneo de código de variedad).
+        active_color = self.current_color or self.colores_iniciales[0]['color']
+        chip_active = self._color_chips.get(active_color) or self._color_chips[self.colores_iniciales[0]['color']]
+        chip_active.blockSignals(True)
+        chip_active.setChecked(True)
+        chip_active.blockSignals(False)
 
-        # Chips visibles desde el inicio — el cajero ve todos los colores y
-        # toca el que quiere. Más rápido y menos confuso que un buscador vacío.
+        # Chips visibles desde el inicio — el cajero ve todas las variantes y
+        # toca la que quiere. Más rápido y menos confuso que un buscador vacío.
         self._color_user_selected = False
         for chip in self._color_chips.values():
             chip.setVisible(True)
@@ -839,7 +1000,37 @@ class ConjuntoDialog(QDialog):
         scroll.setWidget(chips_w)
         outer.addWidget(scroll)
         self._color_scroll = scroll
+        # Estado inicial: COLAPSADO por default; EXPANDIDO si entró por
+        # escaneo de un código de variedad (preselect_color), así el cajero
+        # ve cuál fue seleccionada automáticamente.
+        start_expanded = bool(self._preselect_color)
+        self._color_expanded = start_expanded
+        scroll.setVisible(start_expanded)
+        self._color_chevron.setText('▾' if start_expanded else '▸')
+        if hasattr(self, '_color_search_wrap'):
+            self._color_search_wrap.setVisible(start_expanded)
         return wrap
+
+    def _toggle_color_expanded(self):
+        """Despliega/colapsa la pestaña de variantes."""
+        self._color_expanded = not getattr(self, '_color_expanded', False)
+        scroll  = getattr(self, '_color_scroll', None)
+        chevron = getattr(self, '_color_chevron', None)
+        search  = getattr(self, '_color_search', None)
+        wrap    = getattr(self, '_color_search_wrap', None)
+        if scroll:
+            scroll.setVisible(self._color_expanded)
+        if chevron:
+            chevron.setText('▾' if self._color_expanded else '▸')
+        # El buscador acompaña al expand: visible cuando se ven las variantes.
+        if wrap:
+            wrap.setVisible(self._color_expanded)
+        if search:
+            if self._color_expanded:
+                search.setFocus()
+            else:
+                # Limpiar filtro al colapsar para que la próxima vez se vean todas
+                search.clear()
 
     def _build_stock_row(self):
         """Una sola línea: 'DISPONIBLE  45 m  ·  2 rollos + 5m abierto'.
@@ -1317,7 +1508,7 @@ class ConjuntoDialog(QDialog):
     def _stock_text_for(self, color_name):
         """Texto de stock disponible para mostrar en el chip de color."""
         s = self._color_state.get(color_name, {'unidades': 0, 'restante': 0})
-        total = total_conjunto(s['unidades'], self.contenido, s['restante'])
+        total = total_conjunto(s['unidades'], self._contenido_for(color_name), s['restante'])
         u_short = UNIDADES[self.unidad_base]['short']
         return f'{format_num(total)} {u_short}'
 
@@ -1338,6 +1529,34 @@ class ConjuntoDialog(QDialog):
                 v = v + k
         self.cantidad_str = v
         self._refresh_all()
+        # Feedback visual de tecla: el display "pulsa" brevemente para que el
+        # cajero vea que la tecla pegó. Sin animación: solo bump del border.
+        self._pulse_qty_display()
+
+    def _pulse_qty_display(self):
+        """Resalta el border del display de cantidad por 120ms al apretar tecla."""
+        if not hasattr(self, 'disp_frame'):
+            return
+        self.disp_frame.setStyleSheet(
+            f'QFrame#qtyDisplay {{ background: {ACCENT_SOFT}; border: 3px solid {ACCENT};'
+            f'                     border-radius: 12px; }}'
+        )
+        QTimer.singleShot(120, self._refresh_qty_display_style)
+
+    def _refresh_qty_display_style(self):
+        """Restaura el estilo normal del display según haya o no valor."""
+        if not hasattr(self, 'disp_frame'):
+            return
+        if self.cantidad_str == '':
+            self.disp_frame.setStyleSheet(
+                f'QFrame#qtyDisplay {{ background: #fff; border: 2px dashed {BORDER};'
+                f'                     border-radius: 12px; }}'
+            )
+        else:
+            self.disp_frame.setStyleSheet(
+                f'QFrame#qtyDisplay {{ background: #fff; border: 2.5px solid {ACCENT};'
+                f'                     border-radius: 12px; }}'
+            )
 
     def _on_tab_changed(self, key):
         """Tab unificado: setea vender_por + unidad_venta de un solo click."""
@@ -1461,7 +1680,13 @@ class ConjuntoDialog(QDialog):
     def _recalc_color_state(self):
         """Recompila _color_state desde colores_iniciales + lineas."""
         self._color_state = {
-            c['color']: {'unidades': c['unidades'], 'restante': c['restante']}
+            c['color']: {
+                'unidades':    c['unidades'],
+                'restante':    c['restante'],
+                'precio':      float(c.get('precio') or 0),
+                'contenido':   float(c.get('contenido') or 0),
+                'precio_pack': float(c.get('precio_pack') or 0),
+            }
             for c in self.colores_iniciales
         }
         for ln in self.lineas:
@@ -1470,7 +1695,7 @@ class ConjuntoDialog(QDialog):
             if s is None:
                 continue
             ok, _err, after_u, after_r = aplicar_venta(
-                s['unidades'], self.contenido, s['restante'],
+                s['unidades'], self._contenido_for(color), s['restante'],
                 ln['cantidad'], ln['vender_por'],
                 self.unidad_base, ln['unidad_venta']
             )
@@ -1560,8 +1785,10 @@ class ConjuntoDialog(QDialog):
         """
         cantidad = float(cantidad or 0)
         if self.vender_por == 'conjunto':
-            # Por conjunto entero = precio_unidad × contenido × cant_conjuntos
-            return self.precio_unidad * self.contenido * cantidad
+            # Por conjunto entero: usar precio_pack directo (de la variedad o
+            # global). Si la variedad tiene `precio_pack` cargado en el catálogo,
+            # ese es EL precio del pack — no hay que multiplicarlo por contenido.
+            return self.precio_pack * cantidad
         if self.unidad_venta and self.unidad_venta != self.unidad_base:
             cantidad_base = convertir(cantidad, self.unidad_venta, self.unidad_base) or 0
             return self.precio_unidad * cantidad_base

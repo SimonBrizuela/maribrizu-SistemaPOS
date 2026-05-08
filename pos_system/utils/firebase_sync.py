@@ -374,8 +374,8 @@ class FirebaseSync:
                                     'unidades': float(c.get('unidades') or 0),
                                     'restante': float(c.get('restante') or 0),
                                 }
-                                # Precio por variedad (opcional). Si > 0, se incluye
-                                # y el POS lo usa en lugar del precio_unidad global.
+                                # Precio unitario por variedad (opcional). Si > 0,
+                                # el POS lo usa en lugar del precio_unidad global.
                                 pr = c.get('precio')
                                 try:
                                     pr_f = float(pr) if pr is not None else 0.0
@@ -383,6 +383,47 @@ class FirebaseSync:
                                     pr_f = 0.0
                                 if pr_f > 0:
                                     out['precio'] = pr_f
+                                # Contenido por variedad (U/pack). Si > 0,
+                                # sobreescribe al `conjunto_contenido` global.
+                                cont = c.get('contenido')
+                                try:
+                                    cont_f = float(cont) if cont is not None else 0.0
+                                except (TypeError, ValueError):
+                                    cont_f = 0.0
+                                if cont_f > 0:
+                                    out['contenido'] = cont_f
+                                # Precio del pack por variedad. Si > 0, el POS lo
+                                # usa para auto-derivar el precio unitario cuando
+                                # `precio` no está cargado explícitamente.
+                                pp = c.get('precio_pack')
+                                try:
+                                    pp_f = float(pp) if pp is not None else 0.0
+                                except (TypeError, ValueError):
+                                    pp_f = 0.0
+                                if pp_f > 0:
+                                    out['precio_pack'] = pp_f
+                                # Costo por variedad
+                                co = c.get('costo')
+                                try:
+                                    co_f = float(co) if co is not None else 0.0
+                                except (TypeError, ValueError):
+                                    co_f = 0.0
+                                if co_f > 0:
+                                    out['costo'] = co_f
+                                # Margen por variedad
+                                mg = c.get('margen')
+                                try:
+                                    mg_f = float(mg) if mg is not None else -1.0
+                                except (TypeError, ValueError):
+                                    mg_f = -1.0
+                                if mg_f >= 0:
+                                    out['margen'] = mg_f
+                                # Código por variedad (interno o de barras)
+                                cod = c.get('codigo')
+                                if cod is not None:
+                                    cod_s = str(cod).strip()
+                                    if cod_s:
+                                        out['codigo'] = cod_s
                                 return out
                             conjunto_colores = _json.dumps([
                                 _norm_color(c)
@@ -3151,6 +3192,44 @@ class FirebaseSync:
                             pr_f = 0.0
                         if pr_f > 0:
                             out['precio'] = pr_f
+                        # Contenido por variedad (U/pack)
+                        cont = c.get('contenido')
+                        try:
+                            cont_f = float(cont) if cont is not None else 0.0
+                        except (TypeError, ValueError):
+                            cont_f = 0.0
+                        if cont_f > 0:
+                            out['contenido'] = cont_f
+                        # Precio del pack por variedad
+                        pp = c.get('precio_pack')
+                        try:
+                            pp_f = float(pp) if pp is not None else 0.0
+                        except (TypeError, ValueError):
+                            pp_f = 0.0
+                        if pp_f > 0:
+                            out['precio_pack'] = pp_f
+                        # Costo por variedad
+                        co = c.get('costo')
+                        try:
+                            co_f = float(co) if co is not None else 0.0
+                        except (TypeError, ValueError):
+                            co_f = 0.0
+                        if co_f > 0:
+                            out['costo'] = co_f
+                        # Margen por variedad
+                        mg = c.get('margen')
+                        try:
+                            mg_f = float(mg) if mg is not None else -1.0
+                        except (TypeError, ValueError):
+                            mg_f = -1.0
+                        if mg_f >= 0:
+                            out['margen'] = mg_f
+                        # Código por variedad (interno o de barras)
+                        cod = c.get('codigo')
+                        if cod is not None:
+                            cod_s = str(cod).strip()
+                            if cod_s:
+                                out['codigo'] = cod_s
                         return out
                     colores_json = _json.dumps(
                         [_norm_c(c) for c in colores_raw if isinstance(c, dict)],
