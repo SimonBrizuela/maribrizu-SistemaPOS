@@ -16,19 +16,27 @@ export async function renderVentas(container, db) {
     }),
     getCached('ventas:items', async () => {
       const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('num_venta', 'desc'), limit(3000)));
-      const map = {};
+      // Dos mapas:
+      //  - byKey: clave estricta `${pcId}_${num_venta}` (o solo `num_venta` si el doc id no tiene pcId)
+      //  - byNum: agrupado solo por num_venta, con el pcId origen de cada item — sirve de fallback
+      //    cuando el pc_id de la venta no matchea (machine_id regenerado, ventas legacy, etc).
+      const byKey = {};
+      const byNum = {};
       snap.docs.forEach(d => {
         const data = d.data();
         if (data.deleted === true) return;
         const parts = d.id.split('_');
         const pcId  = parts.length >= 3 ? parts.slice(0, -2).join('_') : '';
-        const key   = pcId ? `${pcId}_${data.num_venta}` : String(data.num_venta);
-        if (!map[key]) map[key] = [];
+        const numV  = String(data.num_venta);
+        const key   = pcId ? `${pcId}_${numV}` : numV;
         const nombre = data.producto || data.product_name || '';
         const cant   = data.cantidad || data.quantity || 1;
-        if (nombre) map[key].push(`${nombre}${cant > 1 ? ` x${cant}` : ''}`);
+        if (!nombre) return;
+        const txt = `${nombre}${cant > 1 ? ` x${cant}` : ''}`;
+        (byKey[key] = byKey[key] || []).push(txt);
+        (byNum[numV] = byNum[numV] || []).push({ pcId, txt });
       });
-      return map;
+      return { byKey, byNum };
     })
   ]);
 
@@ -37,11 +45,30 @@ export async function renderVentas(container, db) {
     v.deleted !== true && !isVentaVarios2(v) && parseArDate(v.created_at) >= fechaInicio
   );
 
-  // Enriquecer cada venta con sus productos
+  // Enriquecer cada venta con sus productos. Primero match estricto por
+  // (pc_id + sale_id); si queda vacío, fallback por num_venta solo (cubre
+  // desincronía cuando los items quedaron con un pc_id distinto al de la venta).
+  const { byKey, byNum } = itemsPorVenta;
   ventas.forEach(v => {
-    const saleId = v.sale_id || v.id;
-    const key = v.pc_id ? `${v.pc_id}_${saleId}` : String(saleId);
-    v._productosTexto = (itemsPorVenta[key] || []).join(', ');
+    const saleId = String(v.sale_id || v.id);
+    const pcId   = v.pc_id || '';
+    const strictKey = pcId ? `${pcId}_${saleId}` : saleId;
+    let items = byKey[strictKey];
+    if (!items || items.length === 0) {
+      const lista = byNum[saleId] || [];
+      // Si la venta tiene pc_id, prefiero items del mismo pcId o con pcId vacío (legacy);
+      // si no, agarro todos los items de ese num_venta.
+      const filtrados = pcId
+        ? lista.filter(x => x.pcId === pcId || x.pcId === '')
+        : lista;
+      items = filtrados.map(x => x.txt);
+    }
+    let texto = (items || []).join(', ');
+    // Último fallback: el doc `ventas` guarda un campo `productos` con el resumen
+    // armado al momento del sync. Cubre ventas cuyo detalle (`ventas_por_dia`)
+    // nunca llegó a sincronizar.
+    if (!texto && v.productos) texto = String(v.productos);
+    v._productosTexto = texto;
   });
 
   container.innerHTML = `

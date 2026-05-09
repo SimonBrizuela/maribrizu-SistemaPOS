@@ -880,21 +880,10 @@ class ConjuntoDialog(QDialog):
         )
         head.addWidget(lbl)
 
-        # Resumen al lado del label cuando está colapsado: "→ Textil"
-        self._color_summary_lbl = QLabel('')
-        self._color_summary_lbl.setStyleSheet(
-            f'color: {TEXT_DARK}; font-size: 12px; font-weight: 600;'
-            f' font-family: {UI_FONT_CSS};'
-        )
-        self._color_summary_lbl.setVisible(False)
-        head.addWidget(self._color_summary_lbl)
-
-        head.addStretch(1)
-
         from PyQt5.QtWidgets import QLineEdit as _QLE, QToolButton as _QTB
 
-        # Chevron toggle (^/v). Default colapsado. Se hace grande y con fondo
-        # al hover para que sea bien visible y clickeable (zona táctil amplia).
+        # Chevron toggle (^/v). Default colapsado. Lo ponemos pegado al label
+        # "VARIANTES" para que el usuario asocie visualmente label + control.
         self._color_chevron = _QTB()
         self._color_chevron.setText('▾')
         self._color_chevron.setCursor(Qt.PointingHandCursor)
@@ -910,6 +899,17 @@ class ConjuntoDialog(QDialog):
         )
         self._color_chevron.clicked.connect(self._toggle_color_expanded)
         head.addWidget(self._color_chevron)
+
+        # Resumen al lado del label cuando está colapsado: "→ Textil"
+        self._color_summary_lbl = QLabel('')
+        self._color_summary_lbl.setStyleSheet(
+            f'color: {TEXT_DARK}; font-size: 12px; font-weight: 600;'
+            f' font-family: {UI_FONT_CSS};'
+        )
+        self._color_summary_lbl.setVisible(False)
+        head.addWidget(self._color_summary_lbl)
+
+        head.addStretch(1)
 
         outer.addLayout(head)
 

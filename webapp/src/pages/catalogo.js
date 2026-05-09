@@ -665,12 +665,14 @@ export async function renderCatalogo(container, db) {
 
   // Inventario: velocidad de venta (lazy-load cuando se abre la pestaña o el banner)
   let ventasProd = null;      // { 'NOMBRE': { u30, u7 } }
+  let ventasPorDia = null;    // { 'dd/mm/yyyy': total_unidades } últimos 14d para el sparkline
   let invEstadoFiltro = '';   // filtro de estado activo en tab Inventario
   let invMovFiltro = '';
   let invNombreFiltro = '';
   let invCatFiltro = '';
   let invListaActual = [];    // productos con estado (refresco progresivo)
   const invExcluidos = new Set(); // doc_ids desmarcados en la lista de compras
+  let invTablaVisible = false; // tabla detallada colapsada por defecto en el dashboard
 
   // Rubros disponibles — persistidos en Firebase config
   // Los nuevos rubros se cargan dinámicamente desde config/rubros en Firebase
@@ -1269,16 +1271,29 @@ export async function renderCatalogo(container, db) {
     };
 
     tbody.innerHTML = chunk.map(p => {
-      // Producto Conjunto: el stock real es conjunto_total, no `stock`.
+      // Producto Conjunto: el stock real se computa en vivo desde las variedades
+      // (unidades × contenido_variedad + restante), porque `p.conjunto_total`
+      // puede quedar desactualizado en DB tras editar variedades.
       const esConj = !!p.es_conjunto;
-      const cTotal = Number(p.conjunto_total || 0);
       const cContenido = Number(p.conjunto_contenido || 0);
       const cUShort = _UCONJ_SHORT[p.conjunto_unidad_medida] || '';
+      const _variedadesGrid = Array.isArray(p.conjunto_colores) ? p.conjunto_colores : [];
 
+      let cTotal = Number(p.conjunto_total || 0);
+      let _stockDesglose = null;
+      if (esConj && _variedadesGrid.length > 0) {
+        _stockDesglose = _variedadesGrid.map(c => {
+          const cont = (Number(c.contenido) > 0) ? Number(c.contenido) : cContenido;
+          const u = Number(c.unidades) || 0;
+          const r = Number(c.restante) || 0;
+          return { color: c.color, u, r, cont, total: u * cont + r };
+        });
+        cTotal = _stockDesglose.reduce((s, d) => s + d.total, 0);
+      }
+
+      const _fmtStock = (n) => (Number.isInteger(n) ? `${n}${cUShort}` : `${Number(n).toFixed(2)}${cUShort}`);
       const stockNum = esConj ? cTotal : (p.stock || 0);
-      const stockText = esConj
-        ? (Number.isInteger(cTotal) ? `${cTotal}${cUShort}` : `${cTotal.toFixed(2)}${cUShort}`)
-        : String(p.stock || 0);
+      const stockText = esConj ? _fmtStock(cTotal) : String(p.stock || 0);
 
       let estadoBadge;
       if (p.duplicado) {
@@ -1325,6 +1340,20 @@ export async function renderCatalogo(container, db) {
           <span class="material-icons" style="font-size:14px">info</span>
         </span>`;
       };
+
+      // Tooltip de STOCK por variedad: desglose unidades × contenido + sueltos.
+      let stockTipHtml = '';
+      if (_esConj && _stockDesglose && _stockDesglose.length > 0) {
+        const _fmtN = (n) => Number.isInteger(n) ? n : Number(Number(n).toFixed(2));
+        const lineas = _stockDesglose.map(d => {
+          const partes = [];
+          if (d.u > 0 && d.cont > 0) partes.push(`${_fmtN(d.u)} × ${_fmtN(d.cont)}${cUShort}`);
+          if (d.r > 0) partes.push(`${_fmtN(d.r)} sueltos`);
+          const sum = partes.length ? partes.join(' + ') : '0';
+          return `${_escHtml(d.color)}: ${sum} = <b>${_fmtN(d.total)}${cUShort}</b>`;
+        });
+        if (lineas.length) stockTipHtml = tipBtn(lineas);
+      }
 
       // Tooltip de COSTO por variedad: muestra el costo propio si lo tiene,
       // o el costo global como fallback.
@@ -1402,7 +1431,9 @@ export async function renderCatalogo(container, db) {
         <td style="font-size:13px;color:${_esConj ? '#7c3aed' : 'var(--text-muted)'};font-weight:${_esConj ? '600' : '400'}">
           <div style="display:inline-flex;align-items:center;gap:4px"><span>${unitDisplay}</span>${unitTipHtml}</div>
         </td>
-        <td style="text-align:center;font-weight:700;color:${stockColor}" class="${esConj ? '' : 'precio-cell'}" data-id="${p.doc_id}" data-field="stock" title="${esConj ? 'Stock conjunto — editá desde el modal' : 'Click para editar'}">${stockText}</td>
+        <td style="text-align:center;font-weight:700;color:${stockColor}" class="${esConj ? '' : 'precio-cell'}" data-id="${p.doc_id}" data-field="stock" title="${esConj ? 'Stock conjunto — editá desde el modal' : 'Click para editar'}">
+          <div style="display:inline-flex;align-items:center;gap:4px;justify-content:center"><span>${stockText}</span>${stockTipHtml}</div>
+        </td>
         <td>${estadoBadge}</td>
         <td style="display:flex;gap:4px;align-items:center">
           <button class="btn-editar" data-id="${p.doc_id}" style="background:none;border:none;cursor:pointer;color:var(--primary);padding:4px" title="Editar producto">
@@ -2141,87 +2172,72 @@ export async function renderCatalogo(container, db) {
     function _aplicarEstiloAutoManual(input, kind = 'user') {
       // kind: 'user'  → naranja vacío / verde lleno
       //       'auto'  → blanco vacío / verde lleno
+      // Modificamos sólo borde/fondo, dejando width/padding/font-size que cada
+      // input ya trae en su style inline (importante para el layout de una sola
+      // línea de las variedades, donde cada input tiene un ancho fijo distinto).
       const tieneValor = (input.value || '').trim() !== '';
-      const baseStyle = 'width:100%;padding:7px 10px;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit;-moz-appearance:textfield;outline:none;';
-      const empty = (kind === 'auto') ? STYLE_AUTO : STYLE_USER;
-      input.setAttribute('style', baseStyle + (tieneValor ? STYLE_MANUAL : empty));
+      let border, bg;
+      if (tieneValor) {
+        border = '1.5px solid #16a34a';
+        bg = '#fff';
+      } else if (kind === 'auto') {
+        border = '1.5px solid #cbd5e1';
+        bg = '#fff';
+      } else {
+        border = '1.5px solid #fb923c';
+        bg = '#fff7ed';
+      }
+      input.style.border = border;
+      input.style.background = bg;
+      input.style.outline = 'none';
     }
 
     function _addColorRow(nombre = '', unidades = '', restante = '', precio = '', contenido = '', precioPack = '', costo = '', margen = '', codigo = '') {
       const row = document.createElement('div');
       row.dataset.colorRow = '1';
-      row.style.cssText = 'display:flex;flex-direction:column;gap:10px;background:#fff;border:1.5px solid #e5e7eb;border-radius:12px;padding:12px 14px;box-shadow:0 1px 3px rgba(0,0,0,0.04)';
+      // Preservamos el código existente (si lo trae) sin UI: el campo se sacó
+      // para ahorrar espacio, pero no queremos perder los códigos ya cargados
+      // al guardar. Si la variedad no tenía código, queda vacío.
+      if (codigo) row.dataset.codigo = codigo;
+      row.style.cssText = 'background:#fff;border:1.5px solid #e5e7eb;border-radius:10px;padding:6px 6px;box-shadow:0 1px 2px rgba(0,0,0,0.03)';
 
-      // Línea 1: stock + nombre + quitar
-      const linea1 = document.createElement('div');
-      linea1.style.cssText = 'display:grid;grid-template-columns:1fr 70px 70px 24px;gap:6px;align-items:center';
-      linea1.innerHTML = `
-        <input class="ed_color_nombre" type="text" placeholder="Variedad" value="${nombre || ''}" style="width:100%;padding:6px 8px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
-        <input class="ed_color_unidades" type="number" min="0" step="1" placeholder="Packs" title="Packs/rollos enteros de esta variedad" value="${unidades !== '' && unidades != null ? unidades : ''}" style="width:100%;padding:6px 8px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
-        <input class="ed_color_restante" type="number" min="0" step="0.01" placeholder="Sueltos" title="Sobrantes en el pack/rollo abierto de esta variedad" value="${restante !== '' && restante != null ? restante : ''}" style="width:100%;padding:6px 8px;border:1.5px solid #ffe082;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit;background:#fffef7" />
-        <button type="button" class="ed_color_remove" title="Quitar variedad" style="width:24px;height:24px;border-radius:50%;border:none;background:transparent;color:#dc2626;cursor:pointer;font-size:16px;line-height:1;padding:0">×</button>
+      // Una sola línea con todos los campos. El bloque de PRECIO (costo, margen,
+      // pack $, ±100) se oculta cuando el toggle "mismo precio" está activo.
+      const linea = document.createElement('div');
+      linea.style.cssText = 'display:flex;gap:3px;align-items:center;flex-wrap:nowrap';
+      linea.innerHTML = `
+        <input class="ed_color_nombre" type="text" placeholder="Variedad" value="${nombre || ''}" style="width:96px;padding:5px 6px;border:1.5px solid #e4e6eb;border-radius:6px;font-size:11.5px;box-sizing:border-box;font-family:inherit" />
+        <input class="ed_color_unidades" type="number" min="0" step="1" placeholder="Packs" title="Packs/rollos enteros de esta variedad" value="${unidades !== '' && unidades != null ? unidades : ''}" style="width:44px;padding:5px 4px;border:1.5px solid #e4e6eb;border-radius:6px;font-size:11.5px;box-sizing:border-box;font-family:inherit" />
+        <input class="ed_color_restante" type="number" min="0" step="0.01" placeholder="Sueltos" title="Sobrantes en el pack/rollo abierto de esta variedad" value="${restante !== '' && restante != null ? restante : ''}" style="width:48px;padding:5px 4px;border:1.5px solid #ffe082;border-radius:6px;font-size:11.5px;box-sizing:border-box;font-family:inherit;background:#fffef7" />
+        <span data-sep="costo" style="width:1px;height:20px;background:#e5e7eb;flex-shrink:0;margin:0 1px"></span>
+        <input class="ed_color_costo" data-subrow="costo" type="number" min="0" step="0.01" placeholder="Costo" title="Costo por pack de esta variedad." value="${costo !== '' && costo != null ? costo : ''}" style="width:50px;padding:5px 4px;border-radius:6px;font-size:11.5px;box-sizing:border-box;font-family:inherit" />
+        <input class="ed_color_margen" data-subrow="costo" type="number" min="0" step="1" placeholder="Marg%" title="Margen de ganancia por variedad. Vacío = hereda del margen global del producto." value="${margen !== '' && margen != null ? margen : ''}" style="width:44px;padding:5px 4px;border-radius:6px;font-size:11.5px;box-sizing:border-box;font-family:inherit" />
+        <input class="ed_color_precio_pack" data-subrow="costo" type="number" min="0" step="0.01" placeholder="Pack $" title="Precio del pack. Auto = Costo × (1 + Margen). Naranja = auto, verde = manual." value="${precioPack !== '' && precioPack != null ? precioPack : ''}" style="width:52px;padding:5px 4px;border-radius:6px;font-size:11.5px;box-sizing:border-box;font-family:inherit" />
+        <button type="button" class="ed_color_redondear_pack" data-subrow="costo" title="Redondear precio del pack al centena" style="width:28px;height:26px;padding:0;border-radius:5px;border:1.5px solid #fb923c;background:#fff7ed;cursor:pointer;font-size:9.5px;font-weight:700;color:#9a3412;line-height:1;flex-shrink:0">±100</button>
+        <span style="width:1px;height:20px;background:#e5e7eb;flex-shrink:0;margin:0 1px"></span>
+        <input class="ed_color_contenido" type="number" min="0" step="0.01" placeholder="U/pack" title="Unidades por pack. Vinculado = sigue al global. Click en la cadena para desvincular." value="${contenido !== '' && contenido != null ? contenido : ''}" style="width:48px;padding:5px 4px;border-radius:6px;font-size:11.5px;box-sizing:border-box;font-family:inherit" />
+        <button type="button" class="ed_color_link" title="Vinculado al valor global. Click para desvincular." style="width:22px;height:26px;padding:0;border-radius:5px;border:1.5px solid #c4b5fd;background:#f5f3ff;cursor:pointer;color:#6d28d9;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+          <span class="material-icons" style="font-size:13px">link</span>
+        </button>
+        <input class="ed_color_precio" type="number" min="0" step="0.01" placeholder="Unit. $" title="Precio por unidad. Auto = Pack ÷ U/pack × 1.15. Naranja = auto, verde = manual." value="${precio !== '' && precio != null ? precio : ''}" style="width:52px;padding:5px 4px;border-radius:6px;font-size:11.5px;box-sizing:border-box;font-family:inherit" />
+        <button type="button" class="ed_color_redondear" title="Redondear precio unitario al centena" style="width:28px;height:26px;padding:0;border-radius:5px;border:1.5px solid #fb923c;background:#fff7ed;cursor:pointer;font-size:9.5px;font-weight:700;color:#9a3412;line-height:1;flex-shrink:0">±100</button>
+        <button type="button" class="ed_color_remove" title="Quitar variedad" style="width:20px;height:20px;border-radius:50%;border:none;background:transparent;color:#dc2626;cursor:pointer;font-size:16px;line-height:1;padding:0;flex-shrink:0;margin-left:1px">×</button>
       `;
-      row.appendChild(linea1);
-
-      // Línea CÓDIGO: un solo campo que sirve tanto para código interno como
-      // código de barras (mismo string). El POS busca por este campo cuando
-      // escanean o tipean.
-      const lineaCodigo = document.createElement('div');
-      lineaCodigo.dataset.subrow = 'codigo';
-      lineaCodigo.style.cssText = 'display:grid;grid-template-columns:60px 1fr;gap:6px;align-items:center;padding-left:4px';
-      lineaCodigo.innerHTML = `
-        <span style="font-size:10px;font-weight:700;color:#9ca3af;letter-spacing:0.5px;text-transform:uppercase">CÓDIGO</span>
-        <input class="ed_color_codigo" type="text" placeholder="Código interno o de barras (opcional)" title="Código único de esta variedad. Funciona tanto para código interno como de barras." value="${codigo || ''}" />
-      `;
-      row.appendChild(lineaCodigo);
-
-      // Línea 2 (calc costo→pack): Costo · Margen % · Pack $ · ±100
-      // Cuando se cargan Costo + Margen, Pack $ se autocompleta. Si el usuario
-      // toca Pack a mano, queda fijo (verde) y no lo pisa el cálculo.
-      const linea2 = document.createElement('div');
-      linea2.dataset.subrow = 'costo';
-      linea2.style.cssText = 'display:grid;grid-template-columns:60px 1fr 1fr 1fr 36px;gap:6px;align-items:center;padding-left:4px';
-      linea2.innerHTML = `
-        <span style="font-size:10px;font-weight:700;color:#9ca3af;letter-spacing:0.5px;text-transform:uppercase">PRECIO</span>
-        <input class="ed_color_costo" type="number" min="0" step="0.01" placeholder="Costo $" title="Costo por pack de esta variedad." value="${costo !== '' && costo != null ? costo : ''}" />
-        <input class="ed_color_margen" type="number" min="0" step="1" placeholder="Margen %" title="Margen de ganancia por variedad. Vacío = hereda del margen global del producto." value="${margen !== '' && margen != null ? margen : ''}" />
-        <input class="ed_color_precio_pack" type="number" min="0" step="0.01" placeholder="Pack $" title="Precio del pack. Auto = Costo × (1 + Margen). Naranja = auto, verde = manual." value="${precioPack !== '' && precioPack != null ? precioPack : ''}" />
-        <button type="button" class="ed_color_redondear_pack" title="Redondear precio del pack al centena" style="width:36px;height:28px;padding:0;border-radius:6px;border:1.5px solid #fb923c;background:#fff7ed;cursor:pointer;font-size:11px;font-weight:700;color:#9a3412;line-height:1;white-space:nowrap">±100</button>
-      `;
-      row.appendChild(linea2);
-
-      // Línea 3 (calc pack→unit): U/pack · Unit $ · ±100
-      const linea3 = document.createElement('div');
-      linea3.dataset.subrow = 'precios';
-      linea3.style.cssText = 'display:grid;grid-template-columns:60px 1fr 1fr 36px;gap:6px;align-items:center;padding-left:4px';
-      linea3.innerHTML = `
-        <span style="font-size:10px;font-weight:700;color:#9ca3af;letter-spacing:0.5px;text-transform:uppercase">UNIDAD</span>
-        <div style="display:flex;gap:4px;align-items:stretch;min-width:0">
-          <input class="ed_color_contenido" type="number" min="0" step="0.01" placeholder="U/pack" title="Unidades por pack. Vinculado = sigue al global. Click en la cadena para desvincular." value="${contenido !== '' && contenido != null ? contenido : ''}" style="flex:1;min-width:0" />
-          <button type="button" class="ed_color_link" title="Vinculado al valor global. Click para desvincular." style="width:28px;height:28px;padding:0;border-radius:6px;border:1.5px solid #c4b5fd;background:#f5f3ff;cursor:pointer;color:#6d28d9;display:flex;align-items:center;justify-content:center;flex-shrink:0">
-            <span class="material-icons" style="font-size:16px">link</span>
-          </button>
-        </div>
-        <input class="ed_color_precio" type="number" min="0" step="0.01" placeholder="Unit. $" title="Precio por unidad. Auto = Pack ÷ U/pack × 1.15. Naranja = auto, verde = manual." value="${precio !== '' && precio != null ? precio : ''}" />
-        <button type="button" class="ed_color_redondear" title="Redondear precio unitario al centena" style="width:36px;height:28px;padding:0;border-radius:6px;border:1.5px solid #fb923c;background:#fff7ed;cursor:pointer;font-size:11px;font-weight:700;color:#9a3412;line-height:1;white-space:nowrap">±100</button>
-      `;
-      row.appendChild(linea2);
-      row.appendChild(linea3);
+      row.appendChild(linea);
 
       // Aplicar estilo según convención:
       // - 'user' (naranja): inputs que el cajero tiene que cargar.
       // - 'auto' (blanco):  inputs que se calculan a partir de los otros.
-      const inpNombre      = linea1.querySelector('.ed_color_nombre');
-      const inpUnidades    = linea1.querySelector('.ed_color_unidades');
-      const inpRestante    = linea1.querySelector('.ed_color_restante');
-      const inpCodigo      = lineaCodigo.querySelector('.ed_color_codigo');
-      const inpCosto       = linea2.querySelector('.ed_color_costo');
-      const inpMargen      = linea2.querySelector('.ed_color_margen');
-      const inpPrecioPack  = linea2.querySelector('.ed_color_precio_pack');
-      const inpContenido   = linea3.querySelector('.ed_color_contenido');
-      const inpPrecioUnit  = linea3.querySelector('.ed_color_precio');
-      const btnLinkContenido = linea3.querySelector('.ed_color_link');
-      [inpNombre, inpUnidades, inpRestante, inpCodigo, inpCosto, inpMargen, inpContenido]
+      const inpNombre      = linea.querySelector('.ed_color_nombre');
+      const inpUnidades    = linea.querySelector('.ed_color_unidades');
+      const inpRestante    = linea.querySelector('.ed_color_restante');
+      const inpCosto       = linea.querySelector('.ed_color_costo');
+      const inpMargen      = linea.querySelector('.ed_color_margen');
+      const inpPrecioPack  = linea.querySelector('.ed_color_precio_pack');
+      const inpContenido   = linea.querySelector('.ed_color_contenido');
+      const inpPrecioUnit  = linea.querySelector('.ed_color_precio');
+      const btnLinkContenido = linea.querySelector('.ed_color_link');
+      [inpNombre, inpUnidades, inpRestante, inpCosto, inpMargen, inpContenido]
         .forEach(i => _aplicarEstiloAutoManual(i, 'user'));
       [inpPrecioPack, inpPrecioUnit].forEach(i => _aplicarEstiloAutoManual(i, 'auto'));
 
@@ -2236,10 +2252,12 @@ export async function renderCatalogo(container, db) {
           const g = parseFloat(conjC.value) || 0;
           inpContenido.value = g > 0 ? g : '';
           inpContenido.readOnly = true;
-          inpContenido.setAttribute('style',
-            'width:100%;padding:7px 10px;border-radius:8px;font-size:13px;box-sizing:border-box;' +
-            'font-family:inherit;outline:none;border:1.5px solid #c4b5fd;background:#f5f3ff;color:#6d28d9'
-          );
+          // Sólo cambiamos color/borde/fondo: el ancho/padding ya están en el
+          // style inline original del input (no queremos pisarlo).
+          inpContenido.style.border = '1.5px solid #c4b5fd';
+          inpContenido.style.background = '#f5f3ff';
+          inpContenido.style.color = '#6d28d9';
+          inpContenido.style.outline = 'none';
           icon.textContent = 'link';
           btnLinkContenido.style.background = '#f5f3ff';
           btnLinkContenido.style.borderColor = '#c4b5fd';
@@ -2247,6 +2265,7 @@ export async function renderCatalogo(container, db) {
           btnLinkContenido.title = 'Vinculado al valor global. Click para desvincular.';
         } else {
           inpContenido.readOnly = false;
+          inpContenido.style.color = '';
           // Re-aplicar el estilo user/manual estándar (naranja vacío, verde lleno)
           _aplicarEstiloAutoManual(inpContenido, 'user');
           icon.textContent = 'link_off';
@@ -2300,7 +2319,7 @@ export async function renderCatalogo(container, db) {
       inpMargen.addEventListener('input', _recalcPackFromCosto);
 
       // Botón redondeo del precio unitario
-      linea3.querySelector('.ed_color_redondear').addEventListener('click', () => {
+      linea.querySelector('.ed_color_redondear').addEventListener('click', () => {
         const v = parseFloat(inpPrecioUnit.value) || 0;
         if (!(v > 0)) return;
         inpPrecioUnit.value = redondearCentena(v).toFixed(2);
@@ -2311,7 +2330,7 @@ export async function renderCatalogo(container, db) {
 
       // Botón redondeo del precio del pack — fija pack como manual y arrastra
       // recalc del unitario desde ese pack redondeado.
-      linea2.querySelector('.ed_color_redondear_pack').addEventListener('click', () => {
+      linea.querySelector('.ed_color_redondear_pack').addEventListener('click', () => {
         const v = parseFloat(inpPrecioPack.value) || 0;
         if (!(v > 0)) return;
         inpPrecioPack.value = redondearCentena(v).toFixed(2);
@@ -2321,7 +2340,7 @@ export async function renderCatalogo(container, db) {
       });
 
       // Cambios en cualquier input → re-pintar estilos + refrescar
-      const _userInputs = [inpNombre, inpUnidades, inpRestante, inpCodigo, inpCosto, inpMargen, inpContenido];
+      const _userInputs = [inpNombre, inpUnidades, inpRestante, inpCosto, inpMargen, inpContenido];
       const _autoInputs = [inpPrecioPack, inpPrecioUnit];
       row.querySelectorAll('input').forEach(inp => {
         inp.addEventListener('input', () => {
@@ -2348,7 +2367,9 @@ export async function renderCatalogo(container, db) {
         const precioPackRaw   = (r.querySelector('.ed_color_precio_pack').value || '').trim();
         const costoRaw        = (r.querySelector('.ed_color_costo')?.value || '').trim();
         const margenRaw       = (r.querySelector('.ed_color_margen')?.value || '').trim();
-        const codigoRaw       = (r.querySelector('.ed_color_codigo')?.value || '').trim();
+        // El input visible de código se sacó: preservamos el valor original
+        // si la variedad ya lo traía, así no perdemos códigos al guardar.
+        const codigoRaw       = (r.dataset.codigo || '').trim();
         const out = {
           color:    (r.querySelector('.ed_color_nombre').value || '').trim(),
           unidades: parseFloat(r.querySelector('.ed_color_unidades').value) || 0,
@@ -2374,27 +2395,26 @@ export async function renderCatalogo(container, db) {
       }).filter(c => c.color);
     }
 
-    // Mostrar siempre el campo "Sueltos" en la fila de variedad: aplica
-    // tanto a metros (sobrante en rollo abierto) como a unidades (sueltas
-    // de un pack abierto que no completa un pack entero).
+    // El campo "Sueltos" se muestra siempre — placeholder para mantener compat
+    // con el resto del código que llama a esta función.
     function _aplicarUnidadAVariedad(row) {
       const restInp = row.querySelector('.ed_color_restante');
-      const linea1 = restInp.parentElement;
-      restInp.style.display = '';
-      linea1.style.gridTemplateColumns = '1fr 70px 70px 24px';
+      if (restInp) restInp.style.display = '';
     }
 
     function _aplicarUnidadATodasVariedades() {
       coloresList.querySelectorAll('[data-color-row]').forEach(_aplicarUnidadAVariedad);
     }
 
-    // Si toggle "mismo precio" está ON, ocultar la sub-línea de costo→pack
-    // (Costo · Margen · Pack $) entera. La línea de precios (U/pack · Unit ·
-    // ±100) sigue visible: el unitario se autocalcula desde el precio global.
+    // Si toggle "mismo precio" está ON, ocultar Costo · Margen · Pack $ · ±100
+    // (todos los elementos con data-subrow="costo" + el separador previo). El
+    // unitario se autocalcula desde el precio global.
     function _aplicarTogglePrecioARow(row) {
       const mismoPrecio = !!cbMismoPrecio.checked;
-      const subCosto = row.querySelector('[data-subrow="costo"]');
-      if (subCosto) subCosto.style.display = mismoPrecio ? 'none' : 'grid';
+      const display = mismoPrecio ? 'none' : '';
+      row.querySelectorAll('[data-subrow="costo"]').forEach(el => { el.style.display = display; });
+      const sep = row.querySelector('[data-sep="costo"]');
+      if (sep) sep.style.display = display;
     }
 
     function _aplicarTogglePrecioATodas() {
@@ -2829,51 +2849,136 @@ export async function renderCatalogo(container, db) {
   // ── Inventario integrado: velocidad + estado + tab ──
   // ══════════════════════════════════════════════════════════════════
   async function cargarVelocidadVentas() {
-    if (ventasProd) return ventasProd;
-    ventasProd = await getCached('inventario:velocidad', async () => {
+    if (ventasProd && ventasPorDia) return ventasProd;
+    const data = await getCached('inventario:velocidad_v2', async () => {
       const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('fecha', 'desc'), limit(5000))).catch(() => ({ docs: [] }));
       const map = {};
+      const porDia = {};
       const hace30 = new Date(); hace30.setDate(hace30.getDate() - 30);
+      const hace14 = new Date(); hace14.setDate(hace14.getDate() - 14);
       const hace7  = new Date(); hace7.setDate(hace7.getDate() - 7);
       snap.docs.forEach(d => {
         const v = d.data();
         const nombre = (v.producto || '').toUpperCase().trim();
-        if (!nombre) return;
-        if (!map[nombre]) map[nombre] = { u30: 0, u7: 0 };
         const parts = (v.fecha || '').split('/');
         let fechaV = null;
         if (parts.length === 3) fechaV = new Date(`${parts[2]}-${parts[1].padStart(2,'0')}-${parts[0].padStart(2,'0')}`);
-        if (fechaV && fechaV >= hace30) {
+        if (fechaV && fechaV >= hace14) {
+          porDia[v.fecha] = (porDia[v.fecha] || 0) + (v.cantidad || 1);
+        }
+        if (!nombre || !fechaV) return;
+        if (!map[nombre]) map[nombre] = { u30: 0, u7: 0 };
+        if (fechaV >= hace30) {
           map[nombre].u30 += (v.cantidad || 1);
           if (fechaV >= hace7) map[nombre].u7 += (v.cantidad || 1);
         }
       });
-      return map;
+      return { porProducto: map, porDia };
     }, { ttl: 20 * 60 * 1000, memOnly: true });
+    ventasProd   = data.porProducto;
+    ventasPorDia = data.porDia;
     return ventasProd;
   }
 
+  // ── Helpers de inventario consciente de variantes ─────────────────────────
+  // Para productos conjunto, el stock real se computa desde las variedades
+  // (unidades × contenido + restante por color), no desde p.stock que queda en 0.
+  function _stockEfectivoInv(p) {
+    if (p && (p.es_conjunto === true || p.es_conjunto === 1)) {
+      const variedades = Array.isArray(p.conjunto_colores) ? p.conjunto_colores : [];
+      if (variedades.length > 0) {
+        const globalCont = Number(p.conjunto_contenido || 0);
+        const total = variedades.reduce((acc, c) => {
+          const u  = Number(c.unidades) || 0;
+          const r  = Number(c.restante) || 0;
+          const cc = (Number(c.contenido) > 0) ? Number(c.contenido) : globalCont;
+          return acc + (u * cc + r);
+        }, 0);
+        return Math.round(total);
+      }
+      return Math.round(Number(p.conjunto_total || 0));
+    }
+    return Number(p.stock) || 0;
+  }
+
+  function _variedadesDesgloseInv(p) {
+    if (!p || !(p.es_conjunto === true || p.es_conjunto === 1)) return [];
+    const variedades = Array.isArray(p.conjunto_colores) ? p.conjunto_colores : [];
+    if (!variedades.length) return [];
+    const globalCont = Number(p.conjunto_contenido || 0);
+    return variedades.map(c => {
+      const u  = Number(c.unidades) || 0;
+      const r  = Number(c.restante) || 0;
+      const cc = (Number(c.contenido) > 0) ? Number(c.contenido) : globalCont;
+      return { color: c.color || '-', u, r, cont: cc, total: u * cc + r };
+    });
+  }
+
+  // Devuelve {sg, pl, sym} según el tipo del producto (rollo/pack/caja/metros/items).
+  function _unidadInv(p) {
+    if (p && (p.es_conjunto === true || p.es_conjunto === 1)) {
+      const um = (p.conjunto_unidad_medida || '').toLowerCase();
+      if (um === 'metros' || um === 'metro') return { sg: 'metro',  pl: 'metros',   sym: 'm' };
+      const tipo = (p.conjunto_tipo || '').toLowerCase();
+      if (tipo === 'rollo') return { sg: 'rollo', pl: 'rollos', sym: 'r' };
+      if (tipo === 'pack')  return { sg: 'pack',  pl: 'packs',  sym: 'p' };
+      if (tipo === 'caja')  return { sg: 'caja',  pl: 'cajas',  sym: 'c' };
+      return { sg: 'unidad', pl: 'unidades', sym: 'u' };
+    }
+    return { sg: 'item', pl: 'items', sym: 'u' };
+  }
+
   function calcularEstadoInv(p) {
-    const stock = p.stock || 0;
+    const stock = _stockEfectivoInv(p);
+    const u = _unidadInv(p);
     const nombre = (p.nombre || '').toUpperCase().trim();
     const vData = ventasProd?.[nombre];
     const u30 = vData?.u30 || 0;
     const velocidadDiaria = u30 / 30;
+    const stockMin = Math.max(0, Number(p.stock_min) || 0);
 
-    if (stock === 0) return { label: 'Agotado', key: 'agotado', cls: 'badge-red', color: '#c62828', dias: 0, velocidad: velocidadDiaria, pct: 0 };
+    const desglose = _variedadesDesgloseInv(p);
+    const varAgotadas = desglose.filter(v => v.total === 0).map(v => v.color);
 
-    if (velocidadDiaria > 0) {
-      const dias = Math.floor(stock / velocidadDiaria);
-      const pct  = Math.min(100, Math.round((dias / 30) * 100));
-      if (dias <= 3)  return { label: `Crítico (${dias}d)`,  key: 'critico',  cls: 'badge-red',    color: '#c62828', dias, velocidad: velocidadDiaria, pct };
-      if (dias <= 10) return { label: `Bajo (${dias}d)`,     key: 'bajo',     cls: 'badge-orange', color: '#f57c00', dias, velocidad: velocidadDiaria, pct };
-      if (dias <= 20) return { label: `Regular (${dias}d)`,  key: 'regular',  cls: 'badge-orange', color: '#e65100', dias, velocidad: velocidadDiaria, pct };
-      return                 { label: `OK (${dias}d)`,        key: 'ok',       cls: 'badge-green',  color: '#2e7d32', dias, velocidad: velocidadDiaria, pct };
+    const tieneVel = velocidadDiaria > 0;
+    const dias = tieneVel ? Math.floor(stock / velocidadDiaria) : null;
+    const rellenarPorMin       = stockMin > 0 && stock <= stockMin;
+    const rellenarPorVelocidad = tieneVel && dias !== null && dias <= 10;
+    const rellenarPorVariedad  = varAgotadas.length > 0;
+    const rellenar = rellenarPorMin || rellenarPorVelocidad || rellenarPorVariedad;
+
+    const extra = { unidad: u, rellenar, varAgotadas, stockMin };
+
+    if (stock === 0) return { ...extra, label: `Sin ${u.pl}`, key: 'agotado', cls: 'badge-red', color: '#c62828', dias: 0, velocidad: velocidadDiaria, pct: 0 };
+
+    if (tieneVel) {
+      const pct = Math.min(100, Math.round((dias / 30) * 100));
+      if (dias <= 3)  return { ...extra, label: `Pocos ${u.pl} · ${dias}d`,  key: 'critico',  cls: 'badge-red',    color: '#c62828', dias, velocidad: velocidadDiaria, pct };
+      if (dias <= 10) return { ...extra, label: `Bajo · ${dias}d`,           key: 'bajo',     cls: 'badge-orange', color: '#f57c00', dias, velocidad: velocidadDiaria, pct };
+      if (dias <= 20) return { ...extra, label: `Regular · ${dias}d`,        key: 'regular',  cls: 'badge-orange', color: '#e65100', dias, velocidad: velocidadDiaria, pct };
+      return                 { ...extra, label: `OK · ${dias}d`,             key: 'ok',       cls: 'badge-green',  color: '#2e7d32', dias, velocidad: velocidadDiaria, pct };
     }
-    if (stock <= 2)  return { label: 'Crítico', key: 'critico', cls: 'badge-red',    color: '#c62828', dias: null, velocidad: 0, pct: 10 };
-    if (stock <= 5)  return { label: 'Bajo',    key: 'bajo',    cls: 'badge-orange', color: '#f57c00', dias: null, velocidad: 0, pct: 40 };
-    if (stock <= 15) return { label: 'Regular', key: 'regular', cls: 'badge-orange', color: '#e65100', dias: null, velocidad: 0, pct: 65 };
-    return                 { label: 'OK',       key: 'ok',      cls: 'badge-green',  color: '#2e7d32', dias: null, velocidad: 0, pct: 100 };
+    if (stockMin > 0) {
+      if (stock <= stockMin)       return { ...extra, label: `Rellenar (${stock}/${stockMin})`, key: 'critico', cls: 'badge-red',    color: '#c62828', dias: null, velocidad: 0, pct: 10 };
+      if (stock <= stockMin * 1.5) return { ...extra, label: 'Rellenar pronto',                 key: 'bajo',    cls: 'badge-orange', color: '#f57c00', dias: null, velocidad: 0, pct: 40 };
+      return                              { ...extra, label: 'OK',                              key: 'ok',      cls: 'badge-green',  color: '#2e7d32', dias: null, velocidad: 0, pct: 100 };
+    }
+    if (stock <= 2)  return { ...extra, label: `Pocos ${u.pl}`, key: 'critico', cls: 'badge-red',    color: '#c62828', dias: null, velocidad: 0, pct: 10 };
+    if (stock <= 5)  return { ...extra, label: 'Bajo',          key: 'bajo',    cls: 'badge-orange', color: '#f57c00', dias: null, velocidad: 0, pct: 40 };
+    if (stock <= 15) return { ...extra, label: 'Regular',       key: 'regular', cls: 'badge-orange', color: '#e65100', dias: null, velocidad: 0, pct: 65 };
+    return                 { ...extra, label: 'OK',             key: 'ok',      cls: 'badge-green',  color: '#2e7d32', dias: null, velocidad: 0, pct: 100 };
+  }
+
+  // Serie de 14 días en orden cronológico para el sparkline.
+  function _serieVentas14d() {
+    const out = [];
+    const hoy = new Date(); hoy.setHours(0,0,0,0);
+    for (let i = 13; i >= 0; i--) {
+      const d = new Date(hoy); d.setDate(d.getDate() - i);
+      const k = `${d.getDate().toString().padStart(2,'0')}/${(d.getMonth()+1).toString().padStart(2,'0')}/${d.getFullYear()}`;
+      out.push({ fecha: k, label: `${d.getDate()}/${d.getMonth()+1}`, total: (ventasPorDia && ventasPorDia[k]) || 0 });
+    }
+    return out;
   }
 
   function renderBannerCriticos() {
@@ -2922,23 +3027,42 @@ export async function renderCatalogo(container, db) {
     tc.innerHTML = `
       <div style="display:flex;flex-direction:column;gap:14px">
 
-        <!-- A. ACCIÓN: LISTA DE COMPRAS -->
-        <div id="invListaCompras"></div>
-
-        <!-- B. RESUMEN (stats) -->
+        <!-- A. RESUMEN (stats) -->
         <div style="display:flex;flex-direction:column;gap:6px">
           <div style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;padding:0 4px">RESUMEN DEL INVENTARIO</div>
           <div class="cards-grid" id="invStatsGrid"></div>
         </div>
 
+        <!-- B. SPARKLINE 14 DÍAS -->
+        <div id="invSparkline"></div>
+
+        <!-- C. DOS COLUMNAS: TOP MOVERS + VARIANTES EN 0 -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(360px, 1fr));gap:14px">
+          <div id="invTopMovers"></div>
+          <div id="invVariantesAgotadas"></div>
+        </div>
+
+        <!-- D. ACCIÓN: LISTA DE COMPRAS -->
+        <div id="invListaCompras"></div>
+
         <!-- Indicador de carga de velocidad -->
         <div id="invVelLoading"></div>
 
-        <!-- C. DETALLE: filtros + tabla -->
-        <div style="display:flex;flex-direction:column;gap:8px">
-          <div style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;padding:0 4px">DETALLE DE PRODUCTOS</div>
+        <!-- E. BÚSQUEDA + BOTÓN DETALLE -->
+        <div class="filter-bar" style="flex-wrap:wrap;gap:8px;align-items:center">
+          <div style="position:relative;flex:1;min-width:220px;display:flex;align-items:center">
+            <span class="material-icons" style="position:absolute;left:10px;font-size:20px;color:#65676b;pointer-events:none">search</span>
+            <input type="text" id="invFiltroNombre" placeholder="Buscar cualquier producto..." style="width:100%;padding:8px 12px 8px 38px;box-sizing:border-box" value="${invNombreFiltro}" />
+          </div>
+          <button id="btnInvToggleTabla" type="button" style="padding:8px 14px;border-radius:8px;border:2px solid #1877f2;background:${invTablaVisible?'#1877f2':'#fff'};color:${invTablaVisible?'#fff':'#1877f2'};cursor:pointer;font-size:12px;font-weight:700;white-space:nowrap;display:flex;align-items:center;gap:6px;font-family:inherit">
+            <span class="material-icons" style="font-size:16px">${invTablaVisible?'expand_less':'view_list'}</span>
+            ${invTablaVisible?'Ocultar detalle':'Ver detalle completo'}
+          </button>
+        </div>
+
+        <!-- F. DETALLE: filtros + tabla (collapsable) -->
+        <div id="invTablaWrap" style="display:${invTablaVisible?'block':'none'};flex-direction:column;gap:8px">
           <div class="filter-bar" style="flex-wrap:wrap;gap:8px">
-            <input type="text" id="invFiltroNombre" placeholder="Buscar producto..." style="min-width:200px;flex:1" value="${invNombreFiltro}" />
             <select id="invFiltroCat">
               <option value="">Todas las categorías</option>
               ${cats.map(c => `<option value="${c}" ${invCatFiltro===c?'selected':''}>${c}</option>`).join('')}
@@ -2960,7 +3084,7 @@ export async function renderCatalogo(container, db) {
 
           <div class="table-card">
             <div class="table-card-header">
-              <h3>Inventario Inteligente${rubroActivo !== 'TODOS' ? ' — ' + rubroActivo.charAt(0) + rubroActivo.slice(1).toLowerCase() : ''}</h3>
+              <h3>Detalle de productos${rubroActivo !== 'TODOS' ? ' — ' + rubroActivo.charAt(0) + rubroActivo.slice(1).toLowerCase() : ''}</h3>
               <span id="invCount" style="color:var(--text-muted);font-size:13px"></span>
             </div>
             <div class="table-wrap">
@@ -2996,11 +3120,28 @@ export async function renderCatalogo(container, db) {
     }
 
     renderInvStats();
+    renderInvSparkline();
+    renderInvTopMovers();
+    renderInvVariantesAgotadas();
     renderListaCompras();
 
-    ['invFiltroNombre','invFiltroCat','invFiltroEstado','invFiltroMov'].forEach(id => {
-      document.getElementById(id)?.addEventListener('input', () => {
-        invNombreFiltro = document.getElementById('invFiltroNombre')?.value || '';
+    // Búsqueda: si hay texto, abrimos la tabla automáticamente (es donde se ve
+    // el resultado). Al limpiar la búsqueda no la cerramos, queda como el
+    // usuario la dejó.
+    const inpBuscar = document.getElementById('invFiltroNombre');
+    if (inpBuscar) {
+      inpBuscar.addEventListener('input', () => {
+        invNombreFiltro = inpBuscar.value || '';
+        if (invNombreFiltro.trim() && !invTablaVisible) {
+          invTablaVisible = true;
+          mostrarTablaInv(true);
+        }
+        applyInvFilters();
+      });
+    }
+
+    ['invFiltroCat','invFiltroEstado','invFiltroMov'].forEach(id => {
+      document.getElementById(id)?.addEventListener('change', () => {
         invCatFiltro    = document.getElementById('invFiltroCat')?.value || '';
         invEstadoFiltro = document.getElementById('invFiltroEstado')?.value || '';
         invMovFiltro    = document.getElementById('invFiltroMov')?.value || '';
@@ -3008,7 +3149,14 @@ export async function renderCatalogo(container, db) {
       });
     });
 
-    applyInvFilters();
+    // Toggle "Ver detalle completo" — muestra/oculta la tabla detallada.
+    document.getElementById('btnInvToggleTabla')?.addEventListener('click', () => {
+      invTablaVisible = !invTablaVisible;
+      mostrarTablaInv(invTablaVisible);
+      if (invTablaVisible) applyInvFilters();
+    });
+
+    if (invTablaVisible) applyInvFilters();
 
     // Si la velocidad no estaba precargada, la traemos en background y refrescamos
     if (!velocidadLista) {
@@ -3017,36 +3165,60 @@ export async function renderCatalogo(container, db) {
         const indic = document.getElementById('invVelLoading');
         if (indic) indic.innerHTML = '';
         renderInvStats();
+        renderInvSparkline();
+        renderInvTopMovers();
+        renderInvVariantesAgotadas();
         renderListaCompras();
-        applyInvFilters();
+        if (invTablaVisible) applyInvFilters();
       });
+    }
+  }
+
+  function mostrarTablaInv(visible) {
+    const wrap = document.getElementById('invTablaWrap');
+    const btn  = document.getElementById('btnInvToggleTabla');
+    if (wrap) wrap.style.display = visible ? 'flex' : 'none';
+    if (btn) {
+      btn.style.background = visible ? '#1877f2' : '#fff';
+      btn.style.color      = visible ? '#fff'    : '#1877f2';
+      btn.innerHTML = `
+        <span class="material-icons" style="font-size:16px">${visible?'expand_less':'view_list'}</span>
+        ${visible?'Ocultar detalle':'Ver detalle completo'}`;
     }
   }
 
   function renderInvStats() {
     const grid = document.getElementById('invStatsGrid');
     if (!grid) return;
-    const total     = invListaActual.length;
-    const ok        = invListaActual.filter(p => p._estado.key === 'ok').length;
-    const bajos     = invListaActual.filter(p => p._estado.key === 'bajo' || p._estado.key === 'regular').length;
-    const criticos  = invListaActual.filter(p => p._estado.key === 'critico').length;
-    const agotados  = invListaActual.filter(p => p._estado.key === 'agotado').length;
-    const conVentas = invListaActual.filter(p => p._estado.velocidad > 0).length;
+    const total       = invListaActual.length;
+    const enMovim     = invListaActual.filter(p => p._estado.velocidad > 0).length;
+    const sinStock    = invListaActual.filter(p => _stockEfectivoInv(p) === 0).length;
+    const aRellenar   = invListaActual.filter(p => p._estado.rellenar).length;
+    const variantes0  = invListaActual.reduce((acc, p) => acc + (p._estado.varAgotadas?.length || 0), 0);
     const cs = 'cursor:pointer;transition:transform 0.15s,box-shadow 0.15s';
 
     grid.innerHTML = `
-      <div class="card stat-card inv-stat" data-filtro="" style="${cs}" title="Ver todos"><div class="icon-wrap bg-blue"><span class="material-icons">inventory_2</span></div><div class="label">Total</div><div class="value">${total}</div></div>
-      <div class="card stat-card inv-stat" data-filtro="ok" style="${cs}"><div class="icon-wrap bg-green"><span class="material-icons">check_circle</span></div><div class="label">Stock OK</div><div class="value">${ok}</div></div>
-      <div class="card stat-card inv-stat" data-filtro="bajo" style="${cs}"><div class="icon-wrap bg-orange"><span class="material-icons">warning</span></div><div class="label">Stock Bajo</div><div class="value">${bajos}</div></div>
-      <div class="card stat-card inv-stat" data-filtro="critico" style="${cs}"><div class="icon-wrap bg-red"><span class="material-icons">error</span></div><div class="label">Críticos</div><div class="value">${criticos}</div></div>
-      <div class="card stat-card inv-stat" data-filtro="agotado" style="${cs}"><div class="icon-wrap" style="background:#424242"><span class="material-icons">remove_shopping_cart</span></div><div class="label">Agotados</div><div class="value">${agotados}</div></div>
-      <div class="card stat-card inv-stat" data-filtro="con" style="${cs}"><div class="icon-wrap" style="background:#7b1fa2"><span class="material-icons">trending_up</span></div><div class="label">En movimiento</div><div class="value">${conVentas}</div></div>
+      <div class="card stat-card inv-stat" data-filtro="" style="${cs}" title="Ver todos"><div class="icon-wrap bg-blue"><span class="material-icons">inventory_2</span></div><div class="label">Total productos</div><div class="value">${total}</div></div>
+      <div class="card stat-card inv-stat" data-filtro="con" style="${cs}" title="Ver en movimiento"><div class="icon-wrap" style="background:#7b1fa2"><span class="material-icons">trending_up</span></div><div class="label">En movimiento</div><div class="value">${enMovim}</div></div>
+      <div class="card stat-card inv-stat" data-filtro="rellenar" style="${cs}" title="Productos a rellenar"><div class="icon-wrap bg-orange"><span class="material-icons">notifications_active</span></div><div class="label">A rellenar</div><div class="value">${aRellenar}</div></div>
+      <div class="card stat-card inv-stat" data-filtro="agotado" style="${cs}" title="Sin stock"><div class="icon-wrap bg-red"><span class="material-icons">remove_shopping_cart</span></div><div class="label">Sin stock</div><div class="value">${sinStock}</div></div>
+      <div class="card stat-card inv-stat" data-filtro="variantes" style="${cs}" title="Variedades específicas en 0"><div class="icon-wrap" style="background:#d32f2f"><span class="material-icons">palette</span></div><div class="label">Variantes en 0</div><div class="value">${variantes0}</div></div>
     `;
     grid.querySelectorAll('.inv-stat').forEach(card => {
       card.addEventListener('mouseenter', () => { card.style.transform='translateY(-3px)'; card.style.boxShadow='0 6px 20px rgba(0,0,0,0.1)'; });
       card.addEventListener('mouseleave', () => { card.style.transform=''; card.style.boxShadow=''; });
       card.addEventListener('click', () => {
         const f = card.dataset.filtro;
+        if (f === 'variantes') {
+          document.getElementById('invVariantesAgotadas')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          return;
+        }
+        if (f === 'rellenar') {
+          document.getElementById('invListaCompras')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          return;
+        }
+        // Otros filtros abren la tabla detallada y aplican el filtro.
+        if (!invTablaVisible) { invTablaVisible = true; mostrarTablaInv(true); }
         const selE = document.getElementById('invFiltroEstado');
         const selM = document.getElementById('invFiltroMov');
         if (f === 'con') { if (selE) selE.value=''; if (selM) selM.value='con'; invEstadoFiltro=''; invMovFiltro='con'; }
@@ -3054,6 +3226,157 @@ export async function renderCatalogo(container, db) {
         applyInvFilters();
         document.querySelector('.table-card')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
       });
+    });
+  }
+
+  // Sparkline SVG — barras de ventas por día (14 días). Una sola barra por día,
+  // labels solo cada 3 días para no saturar, hover muestra cantidad exacta.
+  function renderInvSparkline() {
+    const el = document.getElementById('invSparkline');
+    if (!el) return;
+    const serie = _serieVentas14d();
+    const total14d = serie.reduce((a, d) => a + d.total, 0);
+    if (total14d === 0) { el.innerHTML = ''; return; }
+    const max = Math.max(...serie.map(d => d.total), 1);
+    const ult7 = serie.slice(-7).reduce((a, d) => a + d.total, 0);
+    const prev7 = serie.slice(0, 7).reduce((a, d) => a + d.total, 0);
+    const trendPct = prev7 > 0 ? Math.round(((ult7 - prev7) / prev7) * 100) : 0;
+    const tColor = trendPct > 0 ? '#2e7d32' : trendPct < 0 ? '#c62828' : '#65676b';
+    const tIco = trendPct > 0 ? 'trending_up' : trendPct < 0 ? 'trending_down' : 'trending_flat';
+    const totalFmt = Math.round(total14d).toLocaleString('es-AR');
+    const promedio = Math.round(total14d / serie.length).toLocaleString('es-AR');
+
+    // Barras con DOM real (más fáciles de mostrar tooltips en CSS).
+    const bars = serie.map((d, i) => {
+      const pct = (d.total / max) * 100;
+      const isToday = i === serie.length - 1;
+      const showLabel = (i === 0) || (i === serie.length - 1) || (i % 3 === 0);
+      return `
+        <div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:3px;min-width:0" title="${d.label}: ${Math.round(d.total)} items">
+          <div style="width:100%;height:60px;display:flex;align-items:flex-end;justify-content:center">
+            <div style="width:80%;height:${Math.max(pct, 2)}%;background:${isToday ? '#7b1fa2' : '#c4b5fd'};border-radius:3px 3px 0 0;transition:opacity 0.15s"></div>
+          </div>
+          <div style="font-size:9px;color:${isToday ? '#7b1fa2' : '#9ca3af'};font-weight:${isToday ? '700' : '500'};line-height:1;height:10px">${showLabel ? d.label : ''}</div>
+        </div>`;
+    }).join('');
+
+    el.innerHTML = `
+      <div style="background:#fff;border:1px solid #e4e6eb;border-radius:12px;padding:14px 16px;display:flex;align-items:center;gap:20px;flex-wrap:wrap">
+        <div style="flex-shrink:0;min-width:160px">
+          <div style="font-size:11px;font-weight:700;color:#65676b;text-transform:uppercase;letter-spacing:0.5px">Ventas últimos 14 días</div>
+          <div style="display:flex;align-items:baseline;gap:6px;margin-top:4px">
+            <div style="font-size:28px;font-weight:800;color:#1c1e21;line-height:1">${totalFmt}</div>
+            <div style="font-size:11px;color:#65676b">items</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:4px;margin-top:4px;font-size:11px;color:${tColor};font-weight:600">
+            <span class="material-icons" style="font-size:14px">${tIco}</span>
+            ${trendPct > 0 ? '+' : ''}${trendPct}% vs 7d previos
+          </div>
+          <div style="font-size:11px;color:#65676b;margin-top:1px">${promedio} items/día promedio</div>
+        </div>
+        <div style="flex:1;min-width:240px;display:flex;gap:2px;align-items:flex-end;height:80px">
+          ${bars}
+        </div>
+      </div>`;
+  }
+
+  function renderInvTopMovers() {
+    const el = document.getElementById('invTopMovers');
+    if (!el) return;
+    const top = invListaActual
+      .filter(p => p._estado.velocidad > 0)
+      .sort((a, b) => (b._estado.velocidad || 0) - (a._estado.velocidad || 0))
+      .slice(0, 10);
+    if (!top.length) {
+      el.innerHTML = `
+        <div style="background:#fff;border:1px solid #e4e6eb;border-radius:12px;padding:14px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <span class="material-icons" style="color:#7b1fa2;font-size:18px">trending_up</span>
+            <b style="font-size:13px;color:#7b1fa2">Top en movimiento</b>
+          </div>
+          <div style="font-size:12px;color:#65676b">${ventasProd ? 'Sin ventas registradas todavía.' : 'Cargando velocidad...'}</div>
+        </div>`;
+      return;
+    }
+    const max = Math.max(...top.map(p => p._estado.velocidad || 0), 0.01);
+    el.innerHTML = `
+      <div style="background:#fff;border:1px solid #e4e6eb;border-radius:12px;padding:14px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+          <span class="material-icons" style="color:#7b1fa2;font-size:18px">trending_up</span>
+          <b style="font-size:13px;color:#7b1fa2">Top en movimiento</b>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:5px">
+          ${top.map((p, i) => {
+            const u = p._estado.unidad || _unidadInv(p);
+            const stk = _stockEfectivoInv(p);
+            const vel = p._estado.velocidad || 0;
+            const w = Math.round((vel / max) * 100);
+            const lowStock = p._estado.key === 'critico' || p._estado.key === 'agotado';
+            return `
+            <div style="display:flex;align-items:center;gap:8px;padding:5px 8px;border-radius:6px;background:${lowStock?'#fff3f3':'#fafafa'}">
+              <div style="width:18px;font-size:11px;font-weight:700;color:#7b1fa2;flex-shrink:0">${i+1}</div>
+              <div style="flex:1;min-width:0">
+                <div style="font-size:12px;font-weight:600;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.nombre}</div>
+                <div style="display:flex;align-items:center;gap:6px;margin-top:2px">
+                  <div style="flex:1;background:#ede9fe;border-radius:99px;height:4px;overflow:hidden">
+                    <div style="width:${w}%;height:100%;background:#7b1fa2"></div>
+                  </div>
+                  <span style="font-size:10px;color:#7b1fa2;font-weight:700;min-width:46px;text-align:right">${vel.toFixed(1)} ${u.pl}/d</span>
+                </div>
+              </div>
+              <div style="text-align:right;flex-shrink:0;font-size:10px;color:${lowStock?'#c62828':'#65676b'};font-weight:${lowStock?'700':'500'}">${stk} ${u.sym}</div>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+  }
+
+  function renderInvVariantesAgotadas() {
+    const el = document.getElementById('invVariantesAgotadas');
+    if (!el) return;
+    const productos = invListaActual
+      .filter(p => (p._estado.varAgotadas?.length || 0) > 0)
+      .slice(0, 12);
+    if (!productos.length) {
+      el.innerHTML = `
+        <div style="background:#fff;border:1px solid #e4e6eb;border-radius:12px;padding:14px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <span class="material-icons" style="color:#e65100;font-size:18px">palette</span>
+            <b style="font-size:13px;color:#e65100">Variantes en cero</b>
+          </div>
+          <div style="font-size:12px;color:#65676b">Ninguna variedad puntual está agotada.</div>
+        </div>`;
+      return;
+    }
+    el.innerHTML = `
+      <div style="background:#fff;border:1.5px solid #ffcc80;border-radius:12px;padding:14px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+          <span class="material-icons" style="color:#e65100;font-size:18px">palette</span>
+          <b style="font-size:13px;color:#e65100">Variantes en cero</b>
+          <span style="font-size:11px;color:#65676b">— qué color/talle reponer</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:6px">
+          ${productos.map(p => {
+            const vars = p._estado.varAgotadas || [];
+            return `
+            <div style="background:#fff8e1;border:1px solid #ffcc80;border-radius:8px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+              <div style="flex:1;min-width:0">
+                <div style="font-size:12px;font-weight:700;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.nombre}</div>
+                <div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:3px">
+                  ${vars.slice(0, 8).map(v => `<span style="background:#fff;border:1px solid #fb8c00;color:#e65100;padding:2px 7px;border-radius:99px;font-size:10px;font-weight:600">${v}</span>`).join('')}
+                  ${vars.length > 8 ? `<span style="font-size:10px;color:#65676b;align-self:center">+${vars.length - 8}</span>` : ''}
+                </div>
+              </div>
+              <button class="btn-rellenar-var" data-id="${p.doc_id}" style="background:#2e7d32;border:none;color:#fff;cursor:pointer;padding:5px 10px;border-radius:6px;font-size:11px;font-weight:700;display:flex;align-items:center;gap:4px;font-family:inherit;flex-shrink:0">
+                <span class="material-icons" style="font-size:14px">add</span>
+                Rellenar
+              </button>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>`;
+    el.querySelectorAll('.btn-rellenar-var').forEach(btn => {
+      btn.addEventListener('click', () => abrirModalRellenarInv(btn.dataset.id));
     });
   }
 
@@ -3143,6 +3466,7 @@ export async function renderCatalogo(container, db) {
                 <th style="padding:8px 10px;text-align:center;font-size:11px;color:#65676b">Días</th>
                 <th style="padding:8px 10px;text-align:right;font-size:11px;color:#65676b">Costo un.</th>
                 <th style="padding:8px 10px;text-align:left;font-size:11px;color:#65676b">Estado</th>
+                <th style="padding:8px 10px;text-align:center;font-size:11px;color:#65676b">Acción</th>
               </tr>
             </thead>
             <tbody>
@@ -3156,7 +3480,7 @@ export async function renderCatalogo(container, db) {
                   const headerRow = mostrarHeaders ? `
                     <tr class="inv-rubro-row" style="background:#eef4ff;border-top:2px solid #1877f2">
                       <td style="padding:8px 10px;text-align:center"><input type="checkbox" class="inv-chk-rubro" data-rubro="${g.rubro}" ${todosOn?'checked':''} ${!todosOn && algunoOn ? 'data-indeterminate="1"' : ''} title="Marcar/desmarcar rubro" /></td>
-                      <td colspan="4" style="padding:8px 10px;font-size:12px;font-weight:800;color:#1877f2;letter-spacing:0.3px">
+                      <td colspan="5" style="padding:8px 10px;font-size:12px;font-weight:800;color:#1877f2;letter-spacing:0.3px">
                         ${g.rubro === 'SIN RUBRO' ? 'Sin rubro' : g.rubro.charAt(0) + g.rubro.slice(1).toLowerCase()}
                         <span style="color:#65676b;font-weight:500;margin-left:6px">· ${g.items.length} ítem${g.items.length!==1?'s':''}</span>
                       </td>
@@ -3167,16 +3491,29 @@ export async function renderCatalogo(container, db) {
                     const diasTxt = p._estado.dias !== null && p._estado.dias !== undefined
                       ? `<b style="color:${p._estado.color}">${p._estado.dias}d</b>`
                       : `<span style="color:#bbb">—</span>`;
+                    const stk = _stockEfectivoInv(p);
+                    const u = p._estado.unidad || _unidadInv(p);
+                    const varAgot = p._estado.varAgotadas || [];
+                    const varInfo = varAgot.length > 0
+                      ? `<div style="font-size:10px;color:#c62828;margin-top:2px;font-weight:600">⚠ Sin: ${varAgot.slice(0, 4).join(', ')}${varAgot.length > 4 ? ` +${varAgot.length - 4}` : ''}</div>`
+                      : '';
                     return `<tr style="border-top:1px solid #f0f0f0;${exc?'opacity:0.45;background:#fafafa':''}">
                       <td style="padding:7px 10px;text-align:center"><input type="checkbox" class="inv-chk-item" data-id="${p.doc_id}" ${exc?'':'checked'} /></td>
                       <td style="padding:7px 10px${mostrarHeaders?';padding-left:26px':''}">
                         <b style="font-size:12px">${p.nombre || '-'}</b>
                         <div style="font-size:10px;color:#65676b">${p.categoria || p.rubro || '-'}</div>
+                        ${varInfo}
                       </td>
-                      <td style="padding:7px 10px;text-align:center;font-weight:700;color:${(p.stock||0)===0?'#c62828':'#1c1e21'}">${p.stock || 0}</td>
+                      <td style="padding:7px 10px;text-align:center;font-weight:700;color:${stk===0?'#c62828':'#1c1e21'}">${stk}<span style="font-size:9px;color:#65676b;font-weight:500;margin-left:2px">${u.sym}</span></td>
                       <td style="padding:7px 10px;text-align:center">${diasTxt}</td>
                       <td style="padding:7px 10px;text-align:right;color:#1c1e21">$${fmt(p.costo || 0)}</td>
                       <td style="padding:7px 10px"><span class="badge ${p._estado.cls}" style="font-size:10px">${p._estado.label}</span></td>
+                      <td style="padding:7px 10px;text-align:center">
+                        <button class="inv-btn-rellenar" data-id="${p.doc_id}" title="Rellenar stock" style="background:#2e7d32;border:none;color:#fff;cursor:pointer;padding:4px 8px;border-radius:6px;font-size:10px;font-weight:700;display:inline-flex;align-items:center;gap:3px;font-family:inherit">
+                          <span class="material-icons" style="font-size:12px">add</span>
+                          Rellenar
+                        </button>
+                      </td>
                     </tr>`;
                   }).join('');
                   return headerRow + itemRows;
@@ -3211,6 +3548,269 @@ export async function renderCatalogo(container, db) {
     });
     document.getElementById('btnPdfCompras')?.addEventListener('click', () => generarPDFCompras(lista));
     document.getElementById('btnCopiarWsp')?.addEventListener('click', () => copiarWhatsAppCompras(lista));
+    host.querySelectorAll('.inv-btn-rellenar').forEach(btn => {
+      btn.addEventListener('click', (ev) => {
+        ev.stopPropagation();
+        abrirModalRellenarInv(btn.dataset.id);
+      });
+    });
+  }
+
+  // ── Modal de RELLENAR (variant-aware) ─────────────────────────────────────
+  // Producto suelto: input con +/- que SUMA al stock actual.
+  // Producto conjunto: lista de variedades con "Packs +" y "Sueltos +" por
+  // color, agregar variedad nueva, suma al existente sin perder precio/costo.
+  function abrirModalRellenarInv(docId) {
+    const p = (allProductos || []).find(x => (x.doc_id || x.id) === docId);
+    if (!p) return;
+    const u = _unidadInv(p);
+    const esConj = p.es_conjunto === true || p.es_conjunto === 1;
+    const stockActual = _stockEfectivoInv(p);
+
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;padding:20px';
+
+    if (esConj) {
+      const desglose = _variedadesDesgloseInv(p);
+      const globalCont = Number(p.conjunto_contenido || 0);
+      const tipoLabel = (p.conjunto_tipo || 'pack');
+
+      overlay.innerHTML = `
+        <div style="background:#fff;border-radius:18px;max-width:640px;width:100%;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 12px 48px rgba(0,0,0,0.22);overflow:hidden">
+          <div style="background:linear-gradient(135deg,#2e7d32,#1b5e20);padding:18px 22px;color:#fff;display:flex;align-items:center;justify-content:space-between">
+            <div>
+              <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;opacity:0.9">Rellenar stock</div>
+              <div style="font-size:16px;font-weight:700;margin-top:2px">${p.nombre}</div>
+              <div style="font-size:11px;opacity:0.9;margin-top:2px">${stockActual} ${stockActual===1?u.sg:u.pl} disponibles · ${desglose.length} ${desglose.length===1?'variedad':'variedades'}</div>
+            </div>
+            <button id="rellInv_cerrar" style="background:rgba(255,255,255,0.18);border:none;cursor:pointer;color:#fff;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center">
+              <span class="material-icons">close</span>
+            </button>
+          </div>
+          <div style="padding:16px 22px;flex:1;overflow-y:auto">
+            <div style="font-size:12px;color:#65676b;margin-bottom:10px;background:#f5f5f5;border-radius:8px;padding:10px 12px;line-height:1.4">
+              Sumá los <b>${tipoLabel}s</b> que recibiste por variedad. ${globalCont > 0 ? `Cada ${tipoLabel} = ${globalCont} ${u.pl}.` : ''} Lo que cargues acá se <b>suma</b> al stock actual.
+            </div>
+            <div id="rellInv_lista" style="display:flex;flex-direction:column;gap:6px"></div>
+            <button id="rellInv_add" type="button" style="margin-top:10px;background:none;border:1.5px dashed #cfd8dc;color:#7b1fa2;padding:8px 12px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;display:flex;align-items:center;gap:4px;font-family:inherit">
+              <span class="material-icons" style="font-size:16px">add</span>
+              Agregar variedad nueva
+            </button>
+            <div id="rellInv_resumen" style="margin-top:14px;padding:10px 12px;background:#e8f5e9;border:1.5px solid #2e7d32;border-radius:8px;font-size:13px;color:#1b5e20;display:none"></div>
+          </div>
+          <div style="padding:14px 22px;border-top:1px solid #e4e6eb;display:flex;justify-content:flex-end;gap:8px;background:#fafafa">
+            <button id="rellInv_cancel" style="padding:9px 18px;border-radius:8px;border:1.5px solid #e4e6eb;background:#fff;cursor:pointer;font-size:13px;font-weight:600;color:#65676b">Cancelar</button>
+            <button id="rellInv_guardar" style="padding:9px 22px;border-radius:8px;border:none;background:#2e7d32;color:#fff;cursor:pointer;font-size:13px;font-weight:700">Sumar al stock</button>
+          </div>
+        </div>`;
+
+      document.body.appendChild(overlay);
+      const lista = overlay.querySelector('#rellInv_lista');
+      const resumenEl = overlay.querySelector('#rellInv_resumen');
+
+      function _addRow(color = '', existente = null, esNueva = false) {
+        const row = document.createElement('div');
+        row.dataset.varRow = '1';
+        row.dataset.esNueva = esNueva ? '1' : '0';
+        row.style.cssText = 'display:grid;grid-template-columns:1fr 90px 90px;gap:8px;align-items:center;background:#fff;border:1.5px solid #e5e7eb;border-radius:10px;padding:8px 10px';
+        const stkExistente = existente ? `${existente.total} ${u.pl}` : 'nueva';
+        row.innerHTML = `
+          <div style="min-width:0">
+            ${esNueva
+              ? `<input class="r_color" type="text" placeholder="Nombre variedad" value="${color}" style="width:100%;padding:6px 8px;border:1.5px solid #fb923c;border-radius:6px;font-size:12px;box-sizing:border-box;font-family:inherit;background:#fff7ed" />`
+              : `<div style="font-size:13px;font-weight:700">${color}</div>
+                 <div style="font-size:10px;color:#65676b">Tenés: ${stkExistente}</div>`}
+          </div>
+          <div>
+            <div style="font-size:9px;font-weight:700;color:#9ca3af;letter-spacing:0.5px;text-align:center">${tipoLabel.toUpperCase()}S +</div>
+            <input class="r_packs" type="number" min="0" step="1" placeholder="0" style="width:100%;padding:6px;border:1.5px solid #cfd8dc;border-radius:6px;font-size:14px;text-align:center;box-sizing:border-box;font-family:inherit;font-weight:700" />
+          </div>
+          <div>
+            <div style="font-size:9px;font-weight:700;color:#9ca3af;letter-spacing:0.5px;text-align:center">SUELTOS +</div>
+            <input class="r_sueltos" type="number" min="0" step="0.01" placeholder="0" style="width:100%;padding:6px;border:1.5px solid #cfd8dc;border-radius:6px;font-size:14px;text-align:center;box-sizing:border-box;font-family:inherit" />
+          </div>`;
+        lista.appendChild(row);
+        row.querySelectorAll('input').forEach(i => i.addEventListener('input', actualizarResumen));
+      }
+
+      desglose.forEach(d => _addRow(d.color, d));
+      overlay.querySelector('#rellInv_add').addEventListener('click', () => _addRow('', null, true));
+
+      function actualizarResumen() {
+        let totP = 0, totS = 0, nuevas = 0;
+        overlay.querySelectorAll('[data-var-row]').forEach(r => {
+          const packs   = parseInt(r.querySelector('.r_packs').value) || 0;
+          const sueltos = parseFloat(r.querySelector('.r_sueltos').value) || 0;
+          if (r.dataset.esNueva === '1' && (packs > 0 || sueltos > 0)) nuevas += 1;
+          totP += packs; totS += sueltos;
+        });
+        const totalUn = (totP * (globalCont || 1)) + totS;
+        if (totP === 0 && totS === 0) {
+          resumenEl.style.display = 'none';
+        } else {
+          resumenEl.style.display = 'block';
+          resumenEl.innerHTML = `
+            <b>Vas a sumar:</b> ${totP} ${tipoLabel}${totP===1?'':'s'}${totS>0?` + ${totS} sueltos`:''}
+            ${globalCont > 0 ? ` = <b>${totalUn} ${u.pl}</b>` : ''}
+            ${nuevas > 0 ? `<br><span style="font-size:11px">(${nuevas} ${nuevas===1?'variedad nueva':'variedades nuevas'})</span>` : ''}`;
+        }
+      }
+
+      const cerrar = () => overlay.remove();
+      overlay.querySelector('#rellInv_cerrar').addEventListener('click', cerrar);
+      overlay.querySelector('#rellInv_cancel').addEventListener('click', cerrar);
+      overlay.addEventListener('click', e => { if (e.target === overlay) cerrar(); });
+
+      overlay.querySelector('#rellInv_guardar').addEventListener('click', async () => {
+        const btn = overlay.querySelector('#rellInv_guardar');
+        btn.disabled = true; btn.textContent = 'Guardando...';
+
+        const filas = Array.from(overlay.querySelectorAll('[data-var-row]'));
+        const existentesActualizadas = [];
+        const nuevasACrear = [];
+        let huboCambios = false;
+
+        filas.forEach((r, idx) => {
+          const packs   = parseInt(r.querySelector('.r_packs').value) || 0;
+          const sueltos = parseFloat(r.querySelector('.r_sueltos').value) || 0;
+          const esNueva = r.dataset.esNueva === '1';
+          if (esNueva) {
+            const nombre = (r.querySelector('.r_color')?.value || '').trim();
+            if (nombre && (packs > 0 || sueltos > 0)) {
+              huboCambios = true;
+              nuevasACrear.push({ color: nombre, unidades: packs, restante: sueltos });
+            }
+            return;
+          }
+          const original = desglose[idx];
+          const orig = (Array.isArray(p.conjunto_colores) ? p.conjunto_colores : [])
+            .find(c => (c.color || '').toLowerCase() === (original?.color || '').toLowerCase()) || {};
+          if (packs > 0 || sueltos > 0) huboCambios = true;
+          existentesActualizadas.push({
+            ...orig,
+            unidades: (Number(orig.unidades) || 0) + packs,
+            restante: (Number(orig.restante) || 0) + sueltos,
+          });
+        });
+
+        if (!huboCambios) {
+          alert('No cargaste nada para sumar.');
+          btn.disabled = false; btn.textContent = 'Sumar al stock';
+          return;
+        }
+
+        const nombresEditados = new Set(existentesActualizadas.map(c => (c.color || '').toLowerCase()));
+        const restoOriginal = (Array.isArray(p.conjunto_colores) ? p.conjunto_colores : [])
+          .filter(c => !nombresEditados.has((c.color || '').toLowerCase()));
+        const nuevoConjunto = [...existentesActualizadas, ...restoOriginal, ...nuevasACrear];
+
+        try {
+          const totalNuevo = nuevoConjunto.reduce((acc, c) => {
+            const uu = Number(c.unidades) || 0;
+            const rr = Number(c.restante) || 0;
+            const cc = (Number(c.contenido) > 0) ? Number(c.contenido) : globalCont;
+            return acc + (uu * cc + rr);
+          }, 0);
+          await updateDoc(doc(db, 'catalogo', p.doc_id || p.id), {
+            conjunto_colores: nuevoConjunto,
+            conjunto_total: Math.round(totalNuevo),
+            ultima_actualizacion: serverTimestamp(),
+          });
+          invalidateCacheByPrefix('catalogo');
+          // Reflejar el cambio en memoria sin re-fetchear todo Firestore.
+          const idx2 = (allProductos || []).findIndex(x => (x.doc_id || x.id) === (p.doc_id || p.id));
+          if (idx2 !== -1) {
+            allProductos[idx2].conjunto_colores = nuevoConjunto;
+            allProductos[idx2].conjunto_total = Math.round(totalNuevo);
+          }
+          cerrar();
+          // Refrescar dashboard
+          const tc = document.getElementById('tabContent');
+          if (tc) renderTabInventario(tc);
+        } catch (err) {
+          alert('Error al guardar: ' + err.message);
+          btn.disabled = false; btn.textContent = 'Sumar al stock';
+        }
+      });
+      return;
+    }
+
+    // === Modal RELLENAR simple (suelto) ======================================
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:16px;max-width:380px;width:100%;box-shadow:0 12px 48px rgba(0,0,0,0.22);overflow:hidden">
+        <div style="background:linear-gradient(135deg,#2e7d32,#1b5e20);padding:16px 20px;color:#fff;display:flex;align-items:center;justify-content:space-between">
+          <div>
+            <div style="font-size:11px;text-transform:uppercase;letter-spacing:1px;opacity:0.9">Rellenar stock</div>
+            <div style="font-size:15px;font-weight:700;margin-top:2px">${p.nombre}</div>
+          </div>
+          <button id="rellInv_cerrar2" style="background:rgba(255,255,255,0.18);border:none;cursor:pointer;color:#fff;width:32px;height:32px;border-radius:50%;display:flex;align-items:center;justify-content:center">
+            <span class="material-icons">close</span>
+          </button>
+        </div>
+        <div style="padding:16px 20px">
+          <div style="font-size:12px;color:#65676b;margin-bottom:8px">Stock actual: <b>${stockActual} ${stockActual===1?u.sg:u.pl}</b></div>
+          <label style="font-size:11px;font-weight:700;color:#65676b;text-transform:uppercase;letter-spacing:0.5px">¿Cuántos llegaron?</label>
+          <div style="display:flex;align-items:center;gap:6px;margin-top:6px">
+            <button type="button" data-step="-10" style="width:38px;height:42px;border-radius:8px;border:1.5px solid #e4e6eb;background:#fff;cursor:pointer;font-size:11px;font-weight:700">-10</button>
+            <button type="button" data-step="-1" style="width:38px;height:42px;border-radius:8px;border:1.5px solid #e4e6eb;background:#fff;cursor:pointer;font-size:18px;font-weight:700">−</button>
+            <input id="rellInv_qty" type="number" min="0" step="1" value="1" style="flex:1;text-align:center;padding:9px;border:1.5px solid #2e7d32;border-radius:8px;font-size:20px;font-weight:800;font-family:inherit;box-sizing:border-box" />
+            <button type="button" data-step="1" style="width:38px;height:42px;border-radius:8px;border:1.5px solid #e4e6eb;background:#fff;cursor:pointer;font-size:18px;font-weight:700">+</button>
+            <button type="button" data-step="10" style="width:38px;height:42px;border-radius:8px;border:1.5px solid #e4e6eb;background:#fff;cursor:pointer;font-size:11px;font-weight:700">+10</button>
+          </div>
+          <div id="rellInv_resumen2" style="margin-top:12px;padding:10px 12px;background:#e8f5e9;border:1.5px solid #2e7d32;border-radius:8px;font-size:13px;color:#1b5e20"></div>
+        </div>
+        <div style="padding:12px 20px;border-top:1px solid #e4e6eb;display:flex;justify-content:flex-end;gap:8px;background:#fafafa">
+          <button id="rellInv_cancel2" style="padding:8px 16px;border-radius:8px;border:1.5px solid #e4e6eb;background:#fff;cursor:pointer;font-size:13px;font-weight:600;color:#65676b">Cancelar</button>
+          <button id="rellInv_guardar2" style="padding:8px 18px;border-radius:8px;border:none;background:#2e7d32;color:#fff;cursor:pointer;font-size:13px;font-weight:700">Sumar al stock</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    const inp = overlay.querySelector('#rellInv_qty');
+    const resumenEl = overlay.querySelector('#rellInv_resumen2');
+    const refresh = () => {
+      const q = parseInt(inp.value) || 0;
+      resumenEl.textContent = q > 0
+        ? `Te van a quedar: ${stockActual + q} ${(stockActual + q) === 1 ? u.sg : u.pl}`
+        : 'Ingresá una cantidad mayor a 0.';
+    };
+    inp.addEventListener('input', refresh);
+    inp.focus(); inp.select();
+    refresh();
+
+    overlay.querySelectorAll('button[data-step]').forEach(b => {
+      b.addEventListener('click', () => {
+        const cur = parseInt(inp.value) || 0;
+        inp.value = Math.max(0, cur + parseInt(b.dataset.step));
+        refresh();
+      });
+    });
+
+    const cerrar = () => overlay.remove();
+    overlay.querySelector('#rellInv_cerrar2').addEventListener('click', cerrar);
+    overlay.querySelector('#rellInv_cancel2').addEventListener('click', cerrar);
+    overlay.addEventListener('click', e => { if (e.target === overlay) cerrar(); });
+
+    overlay.querySelector('#rellInv_guardar2').addEventListener('click', async () => {
+      const q = parseInt(inp.value);
+      if (!q || q <= 0) { alert('Cantidad inválida.'); return; }
+      const btn = overlay.querySelector('#rellInv_guardar2');
+      btn.disabled = true; btn.textContent = 'Guardando...';
+      const nuevoStock = stockActual + q;
+      try {
+        await updateDoc(doc(db, 'catalogo', p.doc_id || p.id), { stock: nuevoStock, ultima_actualizacion: serverTimestamp() });
+        invalidateCacheByPrefix('catalogo');
+        const idx2 = (allProductos || []).findIndex(x => (x.doc_id || x.id) === (p.doc_id || p.id));
+        if (idx2 !== -1) allProductos[idx2].stock = nuevoStock;
+        cerrar();
+        const tc = document.getElementById('tabContent');
+        if (tc) renderTabInventario(tc);
+      } catch (err) {
+        alert('Error al guardar: ' + err.message);
+        btn.disabled = false; btn.textContent = 'Sumar al stock';
+      }
+    });
   }
 
   function generarPDFCompras(lista) {
