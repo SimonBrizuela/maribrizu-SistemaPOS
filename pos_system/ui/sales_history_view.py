@@ -45,7 +45,7 @@ _COLOR_GRAY      = QColor('#9b958a')
 # Máximo de ventas a cargar por refresh — protege la UI cuando el rango
 # de fechas devuelve miles de filas. La paginación se hace por filtro de
 # fecha (los rangos rápidos ya filtran).
-_MAX_SALES_LOAD = 500
+_MAX_SALES_LOAD = 50
 
 from pos_system.models.sale import Sale
 from pos_system.database.db_manager import DatabaseManager

@@ -63,17 +63,91 @@ except ImportError:
 
 
 def _find_chrome():
-    """Devuelve la ruta a chrome.exe o msedge.exe para imprimir HTML a PDF."""
-    candidates = [
+    """Devuelve la ruta a chrome.exe para imprimir HTML a PDF."""
+    for p in (
         r'C:\Program Files\Google\Chrome\Application\chrome.exe',
         r'C:\Program Files (x86)\Google\Chrome\Application\chrome.exe',
-        r'C:\Program Files\Microsoft\Edge\Application\msedge.exe',
-        r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
-    ]
-    for p in candidates:
+    ):
         if os.path.exists(p):
             return p
     return None
+
+
+def _find_edge():
+    """Devuelve la ruta a msedge.exe (fallback si Chrome no existe o falla)."""
+    for p in (
+        r'C:\Program Files\Microsoft\Edge\Application\msedge.exe',
+        r'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe',
+    ):
+        if os.path.exists(p):
+            return p
+    return None
+
+
+def _html_to_pdf(html_text, output_pdf_path):
+    """Convierte HTML→PDF con Chrome headless (Edge como fallback).
+
+    Usa --user-data-dir único para evitar el conflicto de profile lock cuando
+    el usuario ya tiene Chrome abierto (causa principal de fallos intermitentes).
+    Si Chrome falla, reintenta con Edge.
+    """
+    import subprocess
+    import tempfile
+    from pathlib import Path
+
+    tmp_html = tempfile.NamedTemporaryFile(
+        mode='w', suffix='.html', delete=False, encoding='utf-8'
+    )
+    tmp_html.write(html_text)
+    tmp_html.close()
+
+    user_data_dir = tempfile.mkdtemp(prefix='posticket_')
+
+    def _run(browser_path):
+        subprocess.run(
+            [
+                browser_path,
+                '--headless=new', '--disable-gpu', '--no-sandbox',
+                '--no-pdf-header-footer',
+                f'--user-data-dir={user_data_dir}',
+                f'--print-to-pdf={output_pdf_path}',
+                Path(tmp_html.name).as_uri(),
+            ],
+            check=True, capture_output=True, timeout=45,
+        )
+
+    try:
+        chrome = _find_chrome()
+        edge   = _find_edge()
+        if not chrome and not edge:
+            raise RuntimeError('No se encontro Chrome ni Edge para generar el ticket PDF.')
+
+        last_err = None
+        for browser in (chrome, edge):
+            if not browser:
+                continue
+            try:
+                _run(browser)
+                return
+            except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+                last_err = e
+                # PDF parcial puede haber quedado: borrarlo antes de reintentar
+                try:
+                    if os.path.exists(output_pdf_path):
+                        os.remove(output_pdf_path)
+                except OSError:
+                    pass
+                continue
+        raise RuntimeError(f'Chrome/Edge fallaron al generar el PDF: {last_err}')
+    finally:
+        try: os.unlink(tmp_html.name)
+        except OSError: pass
+        # Limpiar el user-data-dir temporal en background — no bloquea
+        try:
+            import shutil
+            shutil.rmtree(user_data_dir, ignore_errors=True)
+        except Exception:
+            pass
 
 
 def _render_mustache(template, ctx):
@@ -424,10 +498,6 @@ class PDFGenerator:
     # logo como data-URI y lo convierte a PDF con Chrome headless (no agrega
     # deps de Python). Si no encuentra Chrome/Edge, tira excepción.
     def generate_non_fiscal_ticket(self, sale, cajero_name='', cliente_name='Consumidor Final'):
-        import subprocess
-        import tempfile
-        from pathlib import Path
-
         # ── Paths de assets ────────────────────────────────────────────────
         assets_base = os.path.dirname(__file__)
         tpl_path = os.path.join(assets_base, '..', 'assets', 'ticket_nofiscal.html')
@@ -547,37 +617,12 @@ class PDFGenerator:
         # ── Render Mustache (mini) ─────────────────────────────────────────
         html = _render_mustache(template, ctx)
 
-        # ── Escribir HTML temporal y convertir a PDF con Chrome headless ───
+        # ── Convertir a PDF con Chrome (Edge como fallback) ────────────────
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f'ticket_{sale.get("id", "x")}_{timestamp}.pdf'
         filepath = os.path.join(self.output_dir, filename)
 
-        tmp_html = tempfile.NamedTemporaryFile(
-            mode='w', suffix='.html', delete=False, encoding='utf-8'
-        )
-        tmp_html.write(html)
-        tmp_html.close()
-
-        chrome = _find_chrome()
-        if not chrome:
-            os.unlink(tmp_html.name)
-            raise RuntimeError('No se encontro Chrome ni Edge para generar el ticket PDF.')
-
-        try:
-            subprocess.run(
-                [
-                    chrome,
-                    '--headless=new', '--disable-gpu', '--no-sandbox',
-                    '--no-pdf-header-footer',
-                    f'--print-to-pdf={filepath}',
-                    Path(tmp_html.name).as_uri(),
-                ],
-                check=True, capture_output=True, timeout=30,
-            )
-        finally:
-            try: os.unlink(tmp_html.name)
-            except OSError: pass
-
+        _html_to_pdf(html, filepath)
         return filepath
 
     def generate_withdrawal_ticket(self, withdrawal):

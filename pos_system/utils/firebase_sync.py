@@ -1796,6 +1796,16 @@ class FirebaseSync:
                 batch = self.db.batch()
                 col = self.db.collection('ventas_por_dia')
                 pc_id = _get_pc_id()
+                # cash_register_id: clave para que la webapp atribuya cada item
+                # a su caja correcta y no haya doble suma cuando se solapan
+                # cajas (ej: una PC abre caja 4 días sin cerrar). Si la venta
+                # no lo trae, lo dejamos en None — fallback compatible con docs
+                # viejos en la webapp.
+                cash_register_id = sale.get('cash_register_id')
+                try:
+                    cash_register_id = int(cash_register_id) if cash_register_id else None
+                except (TypeError, ValueError):
+                    cash_register_id = None
                 for idx, item in enumerate(items):
                     doc_id = f"{pc_id}_{sale_id}_{idx}"
                     ref = col.document(doc_id)
@@ -1816,6 +1826,8 @@ class FirebaseSync:
                         'descuento_monto':  float(item.get('discount_amount', 0) or 0),
                         'precio_original':  float(item.get('original_price', 0) or item.get('unit_price', 0) or 0),
                         'conjunto_color':   (item.get('conjunto_color') or item.get('color') or ''),
+                        'cash_register_id': cash_register_id,
+                        'pc_id':            pc_id,
                     }, merge=True)
                 batch.commit()
                 logger.debug(f"Firebase: Detalle de venta #{sale_id} ({len(items)} items) sincronizado.")
