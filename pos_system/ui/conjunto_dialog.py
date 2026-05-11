@@ -47,6 +47,7 @@ TIPOS = {
     'goma_eva':  {'label': 'Goma Eva',  'unidad_default': 'u',  'vende_por': ['unidad', 'conjunto']},
     'cinta':     {'label': 'Cinta',     'unidad_default': 'm',  'vende_por': ['fraccion', 'conjunto']},
     'tela':      {'label': 'Tela',      'unidad_default': 'm',  'vende_por': ['fraccion', 'conjunto']},
+    'unidad':    {'label': 'Unidad',    'unidad_default': 'u',  'vende_por': ['unidad', 'conjunto']},
     'otro':      {'label': 'Otro',      'unidad_default': 'u',  'vende_por': ['unidad', 'conjunto']},
 }
 
