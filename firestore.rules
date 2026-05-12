@@ -190,6 +190,20 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // ── ESTADO DE PCs (heartbeat) ────────────────────────────────────────────
+    // Cada PC escribe su propio doc pcs/{pc_id} cada 30s con version, last_seen,
+    // cajero, caja activa, etc. La webapp lo lee para mostrar Estado de PCs.
+    match /pcs/{pcId} {
+      allow read, write: if true;
+    }
+
+    // ── COMANDOS REMOTOS POR PC ──────────────────────────────────────────────
+    // La webapp escribe pc_commands/{pc_id} con command/issued_at; el POS
+    // escucha su propio doc, ejecuta y actualiza status (running/done/failed).
+    match /pc_commands/{pcId} {
+      allow read, write: if true;
+    }
+
     // ── BLOQUEAR TODO LO DEMÁS ────────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;

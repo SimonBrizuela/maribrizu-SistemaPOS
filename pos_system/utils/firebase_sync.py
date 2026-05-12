@@ -629,6 +629,195 @@ class FirebaseSync:
         except Exception as e:
             logger.error(f"Firebase: No se pudo iniciar listener de rubros: {e}")
 
+    def start_catalogo_deleted_listener(self, db_manager,
+                                         on_change: Optional[Callable] = None):
+        """
+        Listener en tiempo real sobre la coleccion 'catalogo_deleted'.
+
+        Cubre el caso donde start_stock_sync_listener (filtrado por
+        ultima_actualizacion) NO recibe el REMOVED de un producto cuyo
+        timestamp era anterior al filtro. Aca escuchamos los tombstones
+        directos: cada vez que la web crea un doc en catalogo_deleted/{id},
+        borramos ese product en SQLite local.
+
+        Es idempotente (DELETE WHERE firebase_id=X), asi que recibir el
+        mismo evento varias veces no causa problemas.
+        """
+        if not self.enabled:
+            return
+
+        # Para evitar reprocesar tombstones viejos a cada reinicio, llevamos
+        # el ultimo deleted_at procesado en disco. En primer arranque tomamos
+        # el snapshot completo y aplicamos lo que falte.
+        from pos_system.config import DATA_DIR
+        ts_file = DATA_DIR / "last_ts_catalogo_deleted.txt"
+        last_seen: Optional[datetime] = None
+        if ts_file.exists():
+            try:
+                raw = ts_file.read_text(encoding="utf-8").strip()
+                if raw:
+                    last_seen = datetime.fromisoformat(raw)
+                    if last_seen.tzinfo is None:
+                        last_seen = last_seen.replace(tzinfo=timezone.utc)
+            except Exception as e:
+                logger.debug(f"Listener tombstones: no se pudo leer ts: {e}")
+
+        def _doc_dt(v):
+            if isinstance(v, datetime):
+                return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+            if isinstance(v, str) and v.strip():
+                for _f in ('%Y-%m-%dT%H:%M:%S.%f%z','%Y-%m-%dT%H:%M:%S%z',
+                           '%Y-%m-%dT%H:%M:%S.%f','%Y-%m-%dT%H:%M:%S'):
+                    try:
+                        dt = datetime.strptime(v.strip(), _f)
+                        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+                    except ValueError:
+                        continue
+            return None
+
+        def _watch(col_snapshot, changes, read_time):
+            nonlocal last_seen
+            try:
+                from google.cloud.firestore_v1.watch import ChangeType
+                deleted = 0
+                softdeleted = 0
+                max_ts = last_seen
+
+                for change in changes:
+                    # Solo nos interesan tombstones nuevos (ADDED) o
+                    # actualizaciones (MODIFIED si la web re-escribe el doc).
+                    if change.type not in (ChangeType.ADDED, ChangeType.MODIFIED):
+                        continue
+
+                    doc_id = change.document.id
+                    d = change.document.to_dict() or {}
+                    doc_ts = _doc_dt(d.get('deleted_at'))
+
+                    # Si ya procesamos este tombstone en una sesion previa,
+                    # saltarlo. La comparacion contra last_seen evita reborrar
+                    # productos en el snapshot inicial.
+                    if last_seen and doc_ts and doc_ts <= last_seen:
+                        continue
+
+                    # Intentar DELETE; si falla por FK, soft-delete (stock=0).
+                    try:
+                        existed = db_manager.execute_query(
+                            "SELECT id FROM products WHERE firebase_id = ?", (doc_id,)
+                        )
+                        if not existed:
+                            # El producto ya no existe local: no hay nada que borrar.
+                            if doc_ts and (max_ts is None or doc_ts > max_ts):
+                                max_ts = doc_ts
+                            continue
+                        db_manager.execute_update(
+                            "DELETE FROM products WHERE firebase_id = ?", (doc_id,)
+                        )
+                        deleted += 1
+                    except Exception:
+                        try:
+                            db_manager.execute_update(
+                                "UPDATE products SET stock=0, firebase_id=NULL WHERE firebase_id = ?",
+                                (doc_id,)
+                            )
+                            softdeleted += 1
+                        except Exception as e:
+                            logger.warning(f"Listener tombstones: no se pudo borrar {doc_id}: {e}")
+
+                    if doc_ts and (max_ts is None or doc_ts > max_ts):
+                        max_ts = doc_ts
+
+                if max_ts and max_ts != last_seen:
+                    last_seen = max_ts
+                    try:
+                        ts_file.write_text(max_ts.isoformat(), encoding="utf-8")
+                    except Exception as e:
+                        logger.debug(f"Listener tombstones: no se pudo escribir ts: {e}")
+
+                if deleted or softdeleted:
+                    logger.info(
+                        f"Tombstones: {deleted} productos eliminados, "
+                        f"{softdeleted} soft-delete (con ventas)."
+                    )
+                    if on_change:
+                        try:
+                            on_change()
+                        except Exception as e:
+                            logger.debug(f"Tombstones on_change: {e}")
+            except Exception as e:
+                logger.error(f"Listener tombstones: error procesando snapshot: {e}")
+
+        try:
+            col_ref = self.db.collection('catalogo_deleted')
+            watcher = col_ref.on_snapshot(_watch)
+            self._listeners.append(watcher)
+            logger.info("Firebase: Listener de catalogo_deleted activado.")
+        except Exception as e:
+            logger.error(f"Firebase: No se pudo iniciar listener de catalogo_deleted: {e}")
+
+    def reconcile_all_orphans(self, db_manager) -> dict:
+        """
+        Reconciliacion completa eficiente: 1 stream del catalogo trae solo
+        los doc IDs (~12K), comparamos contra firebase_id local y borramos
+        los huerfanos. Pensado para el comando remoto 'reconcile_orphans'.
+
+        Retorna {'deleted': n, 'softdeleted': n, 'checked': n}.
+        """
+        out = {'deleted': 0, 'softdeleted': 0, 'checked': 0}
+        if not self.enabled:
+            return out
+        try:
+            # 1. Mapa local: firebase_id -> local_id
+            rows = db_manager.execute_query(
+                "SELECT id, firebase_id FROM products WHERE firebase_id IS NOT NULL"
+            ) or []
+            local_by_fid = {str(r['firebase_id']): r['id'] for r in rows}
+            out['checked'] = len(local_by_fid)
+            if not local_by_fid:
+                return out
+
+            # 2. Stream del catalogo trayendo SOLO el ID (select([]) ahorra ancho de banda).
+            #    Fallback al stream completo si select no esta soportado.
+            firestore_ids = set()
+            try:
+                stream = self.db.collection('catalogo').select([]).stream()
+                for doc in stream:
+                    firestore_ids.add(doc.id)
+            except Exception:
+                for doc in self.db.collection('catalogo').stream():
+                    firestore_ids.add(doc.id)
+
+            # 3. Huerfanos = productos locales con firebase_id que ya no esta en catalogo.
+            orphans = [fid for fid in local_by_fid if fid not in firestore_ids]
+            logger.info(
+                f"reconcile_all_orphans: {len(local_by_fid)} locales, "
+                f"{len(firestore_ids)} en Firestore, {len(orphans)} huerfanos."
+            )
+
+            for fid in orphans:
+                lid = local_by_fid[fid]
+                try:
+                    db_manager.execute_update(
+                        "DELETE FROM products WHERE id = ?", (lid,)
+                    )
+                    out['deleted'] += 1
+                except Exception:
+                    try:
+                        db_manager.execute_update(
+                            "UPDATE products SET stock=0, firebase_id=NULL WHERE id = ?",
+                            (lid,)
+                        )
+                        out['softdeleted'] += 1
+                    except Exception as e:
+                        logger.warning(f"reconcile_all_orphans: no se pudo limpiar {lid}: {e}")
+
+            logger.info(
+                f"reconcile_all_orphans: borrados {out['deleted']}, "
+                f"soft-delete {out['softdeleted']}."
+            )
+        except Exception as e:
+            logger.error(f"reconcile_all_orphans: {e}")
+        return out
+
     def start_promotions_listener(self, on_change: Callable):
         """
         Escucha la colección 'promociones' de Firestore en tiempo real.

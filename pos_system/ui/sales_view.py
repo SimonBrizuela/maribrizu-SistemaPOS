@@ -2978,16 +2978,32 @@ class SalesView(QWidget):
             color_prefix = f'[{color}]  ' if color else ''
             nombre_largo = f'{color_prefix}{product["name"]}  ·  {descripcion}'
             precio_total = float(r['precio_total'])
+            cantidad_r   = float(r.get('cantidad') or 0)
+
+            # Si la cantidad es entera, mostramos quantity=N con
+            # unit_price=total/N (mejor UX en el cart). Funciona para
+            # vender_por 'unidad', 'conjunto' o 'fraccion' con N entero.
+            # Si es decimal (1.5 m) seguimos mostrando 1 x precio_total
+            # porque el spinner del cart asume cantidad entera.
+            es_entera = (cantidad_r > 0
+                         and abs(cantidad_r - round(cantidad_r)) < 1e-9)
+            if es_entera:
+                qty_cart   = int(round(cantidad_r))
+                unit_cart  = round(precio_total / cantidad_r, 2)
+            else:
+                qty_cart   = 1
+                unit_cart  = precio_total
 
             self.cart.append({
                 'product_id':    product['id'],
                 'product_name':  nombre_largo,
-                # Los items conjunto siempre cuentan como 1 línea (la cantidad real
-                # está en conjunto_cantidad). Esto evita romper el resto de la UI
-                # que asume quantity entera.
-                'quantity':         1,
-                'unit_price':       precio_total,
-                'original_price':   precio_total,
+                # Para conjuntos, el descuento real de stock se hace via
+                # conjunto_after_unidades / conjunto_after_restante (validados
+                # por el dialog). El quantity del cart es sólo visual: el
+                # spinner queda readonly para evitar desincronización.
+                'quantity':         qty_cart,
+                'unit_price':       unit_cart,
+                'original_price':   unit_cart,
                 'discount_type':    None,
                 'discount_value':   0,
                 'discount_amount':  0,
@@ -3077,6 +3093,14 @@ class SalesView(QWidget):
                 f"QDoubleSpinBox::down-button, QSpinBox::down-button {{ width:16px; }}"
             )
             qty_spin.valueChanged.connect(lambda v, r=row: self.update_quantity(r, v))
+            # Conjuntos: el stock se descuenta via conjunto_after_*; cambiar
+            # quantity post-dialog desincronizaria. Bloqueamos edicion (el
+            # cajero puede quitar y volver a agregar si quiere otra cantidad).
+            if item.get('is_conjunto'):
+                qty_spin.setReadOnly(True)
+                qty_spin.setButtonSymbols(qty_spin.NoButtons)
+                qty_spin.setToolTip('Para cambiar la cantidad de un conjunto, '
+                                    'quitá el item y volvé a agregarlo.')
             self.cart_table.setCellWidget(row, 1, qty_spin)
 
             # Col 2: Precio unitario (clickable — abre editor de precio)
@@ -3330,6 +3354,13 @@ class SalesView(QWidget):
             # antes del "0,5"). Ignoramos sin reconstruir para no matar el foco.
             return
         item = self.cart[row]
+        # Conjuntos: el precio y el descuento de stock dependen de los
+        # after_unidades/after_restante calculados por el dialog. No
+        # recalculamos via promos del producto base.
+        if item.get('is_conjunto'):
+            item['quantity'] = quantity
+            item['subtotal'] = round(quantity * item['unit_price'], 2)
+            return
         item['quantity'] = quantity
         # Siempre recalcular precio — las promos de Firebase dependen de la cantidad
         promo_changed = False

@@ -695,6 +695,12 @@ class MainWindow(QMainWindow):
                 self._sig_stock_refresh.emit()
             fb.start_stock_sync_listener(self.db, on_refresh=_on_stock_refresh)
 
+            # 6b. Listener dedicado de TOMBSTONES (catalogo_deleted).
+            # El listener de stock (6) puede no recibir REMOVED cuando el doc
+            # borrado tenia ultima_actualizacion anterior al filtro temporal.
+            # Esto cubre ese hueco: cada tombstone nuevo dispara un DELETE local.
+            fb.start_catalogo_deleted_listener(self.db, on_change=_on_stock_refresh)
+
             # 7. Listener de OBSERVACIONES en tiempo real (compartidas entre PCs).
             def _on_obs_change():
                 try:
@@ -728,8 +734,172 @@ class MainWindow(QMainWindow):
             fb.start_mp_stock_movements_listener(self.db)
 
             logger.info("Listeners de sincronizacion en tiempo real activados (thread-safe).")
+
+            # 10. PC Status reporter (heartbeat + listener de comandos remotos)
+            self._start_pc_status_reporter()
         except Exception as e:
             logger.warning(f"No se pudo activar listeners de sincronizacion: {e}")
+
+    def _start_pc_status_reporter(self):
+        """Inicia el reporter de heartbeat y handlers de comandos remotos."""
+        try:
+            from pos_system.utils.pc_status import init_reporter
+
+            def _get_context():
+                cajero = (self.current_user or {}).get('full_name') \
+                         or (self.current_user or {}).get('username') or ''
+                turno = (self.current_user or {}).get('turno_nombre') or ''
+                try:
+                    reg = self.cash_register.get_current()
+                    cr_id = reg['id'] if reg else None
+                except Exception:
+                    cr_id = None
+                return {'cajero': cajero, 'turno_nombre': turno,
+                        'cash_register_id': cr_id}
+
+            handlers = {
+                'sync_upload':        self._cmd_sync_upload,
+                'sync_download':      self._cmd_sync_download,
+                'reconcile_orphans':  self._cmd_reconcile_orphans,
+                'restart':            self._cmd_restart,
+                'ping':               lambda _p: (True, 'pong'),
+            }
+            init_reporter(self.db, _get_context, handlers)
+        except Exception as e:
+            logger.warning(f"PC Status: no se pudo iniciar reporter: {e}")
+
+    # ── Handlers de comandos remotos (corren en thread propio) ──────────
+    def _write_cmd_progress(self, kind: str, step_text: str = None,
+                             step: int = None, total: int = None):
+        """Escribe el progreso al doc pc_commands/{pc_id} para que la
+        webapp lo muestre en vivo. No bloquea si Firebase no responde."""
+        try:
+            from pos_system.utils.firebase_sync import get_firebase_sync, _get_pc_id, now_ar_iso
+            fb = get_firebase_sync()
+            if not fb or not fb.enabled:
+                return
+            payload = {'progress_at': now_ar_iso()}
+            if step_text is not None: payload['progress'] = step_text
+            if step is not None:      payload['progress_step'] = int(step)
+            if total is not None:     payload['progress_total'] = int(total)
+            payload['progress_kind'] = kind
+            fb.db.collection('pc_commands').document(_get_pc_id()).set(
+                payload, merge=True)
+        except Exception as e:
+            logger.debug(f"_write_cmd_progress: {e}")
+
+    def _run_sync_worker(self, kind: str, worker_factory):
+        """Lanza un Sync/Download worker y reporta cada etapa a Firestore."""
+        done_event = threading.Event()
+        result_box = {'ok': False, 'msg': '', 'last_step': '', 'total': 0}
+
+        def _on_step(text):
+            result_box['last_step'] = text
+            self._write_cmd_progress(kind, step_text=text)
+
+        def _on_progress(step, total):
+            result_box['total'] = total
+            self._write_cmd_progress(kind, step=step, total=total)
+
+        def _on_finish(ok, msg):
+            result_box['ok'] = bool(ok)
+            result_box['msg'] = str(msg or '')
+            done_event.set()
+
+        # QThread.start() puede llamarse desde cualquier thread. Las senales
+        # del worker se conectan con Qt.DirectConnection: los callbacks se
+        # ejecutan en el thread del worker, sin necesidad de event loop.
+        try:
+            worker = worker_factory()
+            worker.step_changed.connect(_on_step,     Qt.DirectConnection)
+            worker.progress.connect(_on_progress,     Qt.DirectConnection)
+            worker.finished.connect(_on_finish,       Qt.DirectConnection)
+            worker.start()
+            self._silent_sync_worker = worker
+        except Exception as e:
+            logger.error(f"_run_sync_worker[{kind}]: error creando worker: {e}")
+            return (False, f'error creando worker: {e}')
+
+        if not done_event.wait(timeout=600):
+            logger.warning(f"_run_sync_worker[{kind}]: TIMEOUT a los 600s")
+        try:
+            from pos_system.utils.pc_status import get_reporter
+            rep = get_reporter()
+            if rep:
+                rep.record_sync({'kind': kind, 'ok': result_box['ok'],
+                                 'msg': result_box['msg'][:200]})
+        except Exception:
+            pass
+        QTimer.singleShot(0, self.refresh_all_views)
+        return (result_box['ok'], result_box['msg'] or 'ok')
+
+    def _cmd_sync_upload(self, _param=None):
+        from pos_system.ui.sync_progress_dialog import SyncWorker
+        return self._run_sync_worker(
+            'upload',
+            lambda: SyncWorker(self, full_history=True, write_trigger=False),
+        )
+
+    def _cmd_sync_download(self, _param=None):
+        from pos_system.ui.sync_progress_dialog import DownloadWorker
+        return self._run_sync_worker(
+            'download',
+            lambda: DownloadWorker(main_window=self, write_trigger=False),
+        )
+
+    def _cmd_reconcile_orphans(self, _param=None):
+        """Reconciliación FULL: revisa todos los tombstones y huérfanos sin
+        depender del cache de last_local_dt. Usado cuando alguna PC quedó
+        desfasada y necesita una limpieza exhaustiva."""
+        from pos_system.utils.firebase_sync import get_firebase_sync
+        fb = get_firebase_sync()
+        if not fb:
+            return (False, 'Firebase no disponible')
+
+        try:
+            result = fb.reconcile_all_orphans(self.db)
+        except Exception as e:
+            return (False, f'error: {e}')
+
+        deleted     = int(result.get('deleted', 0))
+        softdeleted = int(result.get('softdeleted', 0))
+        checked     = int(result.get('checked', 0))
+
+        try:
+            from pos_system.utils.pc_status import get_reporter
+            rep = get_reporter()
+            if rep:
+                rep.record_sync({
+                    'kind':        'reconcile',
+                    'deleted':     deleted,
+                    'softdeleted': softdeleted,
+                    'checked':     checked,
+                })
+        except Exception:
+            pass
+
+        QTimer.singleShot(0, self.refresh_all_views)
+        return (True,
+                f"locales={checked}, eliminados={deleted}, soft-delete={softdeleted}")
+
+    def _cmd_restart(self, _param=None):
+        """Reinicia la app: lanza una instancia nueva y cierra la actual."""
+        import sys as _sys
+        import subprocess as _sp
+
+        def _do_restart():
+            try:
+                if getattr(_sys, 'frozen', False):
+                    _sp.Popen([_sys.executable], cwd=str(Path(_sys.executable).parent))
+                else:
+                    _sp.Popen([_sys.executable, '-m', 'pos_system'])
+            except Exception as e:
+                logger.error(f"Restart: no se pudo lanzar instancia nueva: {e}")
+            QApplication.instance().quit()
+
+        # Dar 1500ms para que el comando llegue a 'done' antes de salir
+        QTimer.singleShot(1500, _do_restart)
+        return (True, 'reinicio agendado')
 
 
     def check_cash_register_status(self):
@@ -1406,12 +1576,25 @@ class MainWindow(QMainWindow):
                     'Recomendación: cierre la caja antes de salir.'
                 ):
                     logger.info("Application closed with open cash register")
+                    self._shutdown_pc_status()
                     event.accept()
                 else:
                     event.ignore()
             else:
                 logger.info("Application closed normally")
+                self._shutdown_pc_status()
                 event.accept()
         except Exception as e:
             logger.error(f"Error during close: {e}")
+            try:
+                self._shutdown_pc_status()
+            except Exception:
+                pass
             event.accept()
+
+    def _shutdown_pc_status(self):
+        try:
+            from pos_system.utils.pc_status import stop_reporter
+            stop_reporter()
+        except Exception:
+            pass
