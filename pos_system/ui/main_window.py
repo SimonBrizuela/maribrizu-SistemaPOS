@@ -761,6 +761,7 @@ class MainWindow(QMainWindow):
                 'sync_upload':        self._cmd_sync_upload,
                 'sync_download':      self._cmd_sync_download,
                 'reconcile_orphans':  self._cmd_reconcile_orphans,
+                'purge_by_codes':     self._cmd_purge_by_codes,
                 'restart':            self._cmd_restart,
                 'ping':               lambda _p: (True, 'pong'),
             }
@@ -881,6 +882,60 @@ class MainWindow(QMainWindow):
         QTimer.singleShot(0, self.refresh_all_views)
         return (True,
                 f"locales={checked}, eliminados={deleted}, soft-delete={softdeleted}")
+
+    def _cmd_purge_by_codes(self, param=None):
+        """Borra productos locales matcheando por firebase_id O barcode.
+
+        param admite dos formas:
+          {'codes': ['LI5858', '2504023', ...]}  -> usa esa lista
+          {'from_tombstones': True}              -> lee catalogo_deleted
+
+        A diferencia de reconcile_orphans, alcanza productos viejos cuyo
+        firebase_id quedo NULL (PCs que nunca corrieron un sync_download
+        completo).
+        """
+        from pos_system.utils.firebase_sync import get_firebase_sync
+        fb = get_firebase_sync()
+        if not fb:
+            return (False, 'Firebase no disponible')
+
+        codes = []
+        if isinstance(param, dict):
+            codes = list(param.get('codes') or [])
+            if param.get('from_tombstones'):
+                codes.extend(fb.fetch_catalogo_deleted_ids())
+        elif isinstance(param, list):
+            codes = list(param)
+
+        codes = list({str(c) for c in codes if c})
+        if not codes:
+            return (False, 'lista de codigos vacia')
+
+        try:
+            result = fb.purge_products_by_codes(self.db, codes)
+        except Exception as e:
+            return (False, f'error: {e}')
+
+        deleted     = int(result.get('deleted', 0))
+        softdeleted = int(result.get('softdeleted', 0))
+        checked     = int(result.get('checked', 0))
+
+        try:
+            from pos_system.utils.pc_status import get_reporter
+            rep = get_reporter()
+            if rep:
+                rep.record_sync({
+                    'kind':        'purge',
+                    'deleted':     deleted,
+                    'softdeleted': softdeleted,
+                    'checked':     checked,
+                })
+        except Exception:
+            pass
+
+        QTimer.singleShot(0, self.refresh_all_views)
+        return (True,
+                f"codigos={checked}, eliminados={deleted}, soft-delete={softdeleted}")
 
     def _cmd_restart(self, _param=None):
         """Reinicia la app: lanza una instancia nueva y cierra la actual."""

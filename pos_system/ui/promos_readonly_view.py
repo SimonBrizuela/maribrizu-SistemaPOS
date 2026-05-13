@@ -192,15 +192,17 @@ class PromosReadOnlyView(QWidget):
             cant_item.setTextAlignment(Qt.AlignCenter)
             self.table.setItem(row, 3, cant_item)
 
-            # Col 4: Productos (resuelve códigos a nombres)
+            # Col 4: Productos + variantes (resuelve refs a nombres)
             productos = p.get('productos') or p.get('products') or []
             if isinstance(productos, str):
                 productos = [productos]
-            prods_txt = self._resolve_product_names(productos)
+            variantes = p.get('variantes') or []
+            prods_txt = self._resolve_product_names(productos, variantes)
             self.table.setItem(row, 4, QTableWidgetItem(prods_txt))
 
-    def _resolve_product_names(self, productos: list) -> str:
-        if not productos:
+    def _resolve_product_names(self, productos: list, variantes: list = None) -> str:
+        variantes = variantes or []
+        if not productos and not variantes:
             return 'Todos los productos'
         nombres = []
         for ref in productos[:5]:
@@ -210,15 +212,36 @@ class PromosReadOnlyView(QWidget):
             found = None
             try:
                 rows = self.db.execute_query(
-                    "SELECT name FROM products WHERE barcode = ? OR CAST(id AS TEXT) = ? OR UPPER(name) = UPPER(?) LIMIT 1",
-                    (ref_str, ref_str, ref_str)
+                    "SELECT name FROM products WHERE firebase_id = ? OR barcode = ? OR CAST(id AS TEXT) = ? OR UPPER(name) = UPPER(?) LIMIT 1",
+                    (ref_str, ref_str, ref_str, ref_str)
                 )
                 if rows:
                     found = rows[0]['name']
             except Exception:
                 pass
             nombres.append(found if found else ref_str)
+        # Variantes: "Producto · Color"
+        remaining = max(0, 5 - len(nombres))
+        for v in variantes[:remaining]:
+            if not isinstance(v, dict):
+                continue
+            pid = str(v.get('producto_id') or '').strip()
+            color = str(v.get('color') or '').strip()
+            pname = pid
+            if pid:
+                try:
+                    rows = self.db.execute_query(
+                        "SELECT name FROM products WHERE firebase_id = ? OR barcode = ? OR CAST(id AS TEXT) = ? LIMIT 1",
+                        (pid, pid, pid)
+                    )
+                    if rows:
+                        pname = rows[0]['name']
+                except Exception:
+                    pass
+            nombres.append(f'{pname} · {color}'.strip(' ·'))
         result = ', '.join(nombres)
-        if len(productos) > 5:
-            result += f' (+{len(productos)-5} más)'
+        total = len(productos) + len(variantes)
+        shown = len(nombres)
+        if total > shown:
+            result += f' (+{total - shown} más)'
         return result

@@ -123,7 +123,7 @@ export async function renderTurnos(container, db) {
     .btn-period {
       padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 600;
       cursor: pointer; border: 1.5px solid var(--border);
-      background: var(--bg-card); color: var(--text-muted); transition: all 0.15s;
+      background: var(--card-bg); color: var(--text-muted); transition: all 0.15s;
     }
     .btn-period.active, .btn-period:hover {
       background: var(--primary); color: white; border-color: var(--primary);

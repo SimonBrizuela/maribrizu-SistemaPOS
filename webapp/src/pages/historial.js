@@ -37,7 +37,7 @@ export async function renderHistorial(container, db) {
   // que rompe en el cambio de mes ("30/04" > "02/05" alfabéticamente).
   const resumenMap = {};
   for (const v of ventasDia) {
-    const f = v.fecha || 'Sin fecha';
+    const f = fechaCanonica(v.fecha) || 'Sin fecha';
     if (!(f in resumenMap)) {
       resumenMap[f] = { fecha: f, total: 0, efectivo: 0, transferencia: 0, _ventas: new Set() };
     }
@@ -171,7 +171,7 @@ export async function renderHistorial(container, db) {
     const groups = [];
     const idxByDate = {};
     for (const v of data) {
-      const key = v.fecha || 'Sin fecha';
+      const key = fechaCanonica(v.fecha) || 'Sin fecha';
       if (!(key in idxByDate)) {
         idxByDate[key] = groups.length;
         groups.push({ fecha: key, rows: [] });
@@ -404,23 +404,39 @@ function fmt(n) { return Number(n || 0).toLocaleString('es-AR', { minimumFractio
 
 const MESES_ES = ['enero','febrero','marzo','abril','mayo','junio','julio','agosto','septiembre','octubre','noviembre','diciembre'];
 
+// Acepta "DD/MM/YYYY" y "D/M/YYYY" (sin padding). Datos viejos a veces
+// vienen sin ceros → si no normalizamos, "6/5/2026" y "06/05/2026" se
+// agrupan como días distintos y duplican filas.
+function _parseDMY(f) {
+  const m = /^(\d{1,2})\/(\d{1,2})\/(\d{4})$/.exec((f || '').trim());
+  if (!m) return null;
+  return { d: m[1].padStart(2,'0'), mo: m[2].padStart(2,'0'), y: m[3] };
+}
+
 // "DD/MM/YYYY" → "abril 2026"
 function mesDesdeFecha(f) {
-  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(f || '');
-  if (!m) return '';
-  return `${MESES_ES[parseInt(m[2],10)-1]} ${m[3]}`;
+  const p = _parseDMY(f);
+  if (!p) return '';
+  return `${MESES_ES[parseInt(p.mo,10)-1]} ${p.y}`;
 }
 
 // "DD/MM/YYYY" → "YYYY-MM-DD" (para sort cronológico real)
 function ymdFromDMY(f) {
-  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(f || '');
-  return m ? `${m[3]}-${m[2]}-${m[1]}` : '';
+  const p = _parseDMY(f);
+  return p ? `${p.y}-${p.mo}-${p.d}` : '';
 }
 
 // "DD/MM/YYYY" → "YYYY-MM" (clave de mes para agrupar)
 function mesAnioKey(f) {
-  const m = /^(\d{2})\/(\d{2})\/(\d{4})$/.exec(f || '');
-  return m ? `${m[3]}-${m[2]}` : '0000-00';
+  const p = _parseDMY(f);
+  return p ? `${p.y}-${p.mo}` : '0000-00';
+}
+
+// Devuelve la fecha en formato canónico "DD/MM/YYYY" (con padding).
+// Si no parsea, devuelve el original tal cual (para no perder "Sin fecha").
+function fechaCanonica(f) {
+  const p = _parseDMY(f);
+  return p ? `${p.d}/${p.mo}/${p.y}` : (f || '');
 }
 
 // "YYYY-MM" → "Abril 2026" (label capitalizado)

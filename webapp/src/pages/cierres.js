@@ -40,9 +40,11 @@ export async function renderCierres(container, db) {
     getDoc(doc(db, 'caja_activa', 'current')).then(s => s.exists() ? s.data() : null),
   ]);
 
-  // ── Items normalizados para agregar por rango [apertura, cierre] ──
-  // fecha_dt se guarda desde el desktop como Timestamp UTC. Algunos items viejos
-  // pueden no tenerlo → caemos a componer fecha (DD/MM/YYYY) + hora (HH:MM:SS) AR.
+  // ── Items normalizados ────────────────────────────────────────────────
+  // Cada item de `ventas_por_dia` lleva su `cash_register_id` (las ventas
+  // nuevas) → permite atribuir el item a SU caja sin doble suma cuando hay
+  // cajas que se solapan. Items viejos no tienen ese campo → fallback al
+  // rango temporal por día.
   const items = itemsRaw
     .filter(it => {
       if (it.deleted === true) return false;
@@ -66,18 +68,70 @@ export async function renderCierres(container, db) {
           if (!isNaN(parsed)) dt = parsed;
         }
       }
+      // cash_register_id puede venir como number, string, o ausente (ventas viejas).
+      let crId = it.cash_register_id;
+      if (crId !== null && crId !== undefined && crId !== '') {
+        const n = Number(crId);
+        crId = Number.isFinite(n) ? n : null;
+      } else {
+        crId = null;
+      }
       return {
-        pc_id:     it._pc_id || '',
-        num_venta: it.num_venta,
-        subtotal:  Number(it.subtotal || 0),
-        cantidad:  Number(it.cantidad || 0),
-        tipo_pago: it.tipo_pago || '',
-        producto:  it.producto || it.product_name || '-',
-        fecha_dt:  dt,
+        pc_id:             it._pc_id || it.pc_id || '',
+        num_venta:         it.num_venta,
+        subtotal:          Number(it.subtotal || 0),
+        cantidad:          Number(it.cantidad || 0),
+        tipo_pago:         it.tipo_pago || '',
+        producto:          it.producto || it.product_name || '-',
+        fecha_dt:          dt,
+        fecha_ymd:         fechaDMYtoYMD(it.fecha),  // 'YYYY-MM-DD' del día de la venta
+        cash_register_id:  crId,
       };
     });
 
-  // Agrega items cuyo `fecha_dt` cae en [apertura, cierre]. cierre=null → hasta ahora.
+  // Agrega items pertenecientes a una sesión de caja:
+  //  - Si `registerIds` viene (y el item tiene `cash_register_id`), filtra por eso
+  //  - Caen al fallback por DÍA: items con fecha_ymd == dayYmd
+  //    (esto evita que reg=26 abierta 4 días sume 4 días de ventas)
+  // Ventas con cash_register_id presente ignoran el fallback de día → no doble cuentan.
+  function aggregateForSession(dayYmd, registerIds) {
+    const regSet = (registerIds && registerIds.length) ? new Set(registerIds.map(Number)) : null;
+    let total_efectivo = 0, total_transferencia = 0;
+    const ventasEf = new Set();
+    const ventasTr = new Set();
+    const prodMap  = {};
+    for (const it of items) {
+      let belongs = false;
+      if (it.cash_register_id != null && regSet) {
+        belongs = regSet.has(it.cash_register_id);
+      } else if (it.cash_register_id == null) {
+        // Item viejo (sin atribución) → cae por día de apertura
+        belongs = (it.fecha_ymd === dayYmd);
+      }
+      if (!belongs) continue;
+      const esTr = it.tipo_pago === 'Transferencia';
+      const key  = `${it.pc_id}|${it.num_venta}`;
+      if (esTr) { total_transferencia += it.subtotal; ventasTr.add(key); }
+      else      { total_efectivo      += it.subtotal; ventasEf.add(key); }
+      if (!prodMap[it.producto]) {
+        prodMap[it.producto] = { product_name: it.producto, total_quantity: 0, total_amount: 0 };
+      }
+      prodMap[it.producto].total_quantity += it.cantidad || 1;
+      prodMap[it.producto].total_amount   += it.subtotal;
+    }
+    return {
+      total_ventas:             total_efectivo + total_transferencia,
+      total_efectivo,
+      total_transferencia,
+      num_ventas_efectivo:      ventasEf.size,
+      num_ventas_transferencia: ventasTr.size,
+      total_transacciones:      ventasEf.size + ventasTr.size,
+      productos_vendidos:       Object.values(prodMap).sort((a, b) => b.total_amount - a.total_amount),
+    };
+  }
+
+  // Agrega items cuyo `fecha_dt` cae en [apertura, cierre] (caja abierta actual).
+  // Solo se usa para la tarjeta "Caja Abierta" — ahí sí queremos rango temporal.
   function aggregateInRange(apertura, cierre) {
     const ini = apertura && !isNaN(apertura) ? apertura.getTime() : -Infinity;
     const fin = cierre   && !isNaN(cierre)   ? cierre.getTime()   : Infinity;
@@ -226,10 +280,21 @@ export async function renderCierres(container, db) {
   const sesiones = Object.values(sesionesMap).sort((a, b) => toDate(b.fecha_cierre) - toDate(a.fecha_cierre));
   for (const s of sesiones) {
     s.cajero = s.cajero.join(', ') || '-';
-    // Recomputar totales desde ventas_por_dia en el rango [apertura, cierre].
-    // Esto evita que una caja multi-PC cerrada desde una sola PC muestre totales
-    // rotos porque las otras PCs siguieron vendiendo sin tocar el doc del cierre.
-    const agg = aggregateInRange(toDate(s.fecha_apertura), toDate(s.fecha_cierre));
+    // Recomputar totales desde ventas_por_dia atado a la caja:
+    //  - Items nuevos (con cash_register_id) → solo los de esta sesión
+    //  - Items viejos → caen por DÍA de apertura (como Historial Diario)
+    // Antes usábamos el rango [apertura, cierre] → si una caja quedaba abierta
+    // 4 días sumaba 4 días + se pisaba con otras cajas → "$3M" falso.
+    const aperturaDt = toDate(s.fecha_apertura);
+    const dayYmd     = aperturaDayKey(s.fecha_apertura);  // 'YYYY-MM-DD'
+    const registerIds = s._docs
+      .map(d => d.register_id)
+      .filter(r => r != null && r !== '');
+    const agg = (aperturaDt && !isNaN(aperturaDt))
+      ? aggregateForSession(dayYmd, registerIds)
+      : { total_ventas: 0, total_efectivo: 0, total_transferencia: 0,
+          num_ventas_efectivo: 0, num_ventas_transferencia: 0,
+          total_transacciones: 0, productos_vendidos: [] };
     s.total_ventas             = agg.total_ventas;
     s.total_efectivo           = agg.total_efectivo;
     s.total_transferencia      = agg.total_transferencia;
@@ -241,9 +306,19 @@ export async function renderCierres(container, db) {
   }
 
   const totalCierres = sesiones.length;
-  const totalVentas  = sesiones.reduce((s, c) => s + (c.total_ventas || 0), 0);
-  const totalEfect   = sesiones.reduce((s, c) => s + (c.total_efectivo || 0), 0);
-  const totalTransf  = sesiones.reduce((s, c) => s + (c.total_transferencia || 0), 0);
+  // Tarjetas "TOTAL ACUMULADO": sumar items únicos del rango visible.
+  // No sumamos por sesión porque con datos viejos (sin cash_register_id) cada
+  // item se atribuye a TODAS las sesiones de su día → triplicaría los totales.
+  // Aquí cada item se suma una sola vez. Coincide con el Detalle Diario.
+  const _ymdsVisibles = new Set(sesiones.map(s => aperturaDayKey(s.fecha_apertura)).filter(Boolean));
+  let totalVentas = 0, totalEfect = 0, totalTransf = 0;
+  for (const it of items) {
+    if (!_ymdsVisibles.has(it.fecha_ymd)) continue;
+    const sub = it.subtotal || 0;
+    totalVentas += sub;
+    if (it.tipo_pago === 'Transferencia') totalTransf += sub;
+    else                                  totalEfect  += sub;
+  }
 
   // Calcular tiempo abierta
   function tiempoAbierto(apertura) {
@@ -1228,16 +1303,16 @@ function toDate(val) {
 
 // Returns 'YYYY-MM-DD' in AR timezone from a fecha_apertura value.
 // Strings (naive AR local time) are sliced directly; Firestore Timestamps
-// are shifted +3h before extracting the date.
+// se restan 3h (AR = UTC-3) para que el slice del ISO devuelva el día AR.
 function aperturaDayKey(val) {
   if (!val) return '';
   if (typeof val === 'string') return val.slice(0, 10);
   if (typeof val.toDate === 'function') {
-    const ar = new Date(val.toDate().getTime() + 3 * 3600000);
+    const ar = new Date(val.toDate().getTime() - 3 * 3600000);
     return ar.toISOString().slice(0, 10);
   }
   if (typeof val === 'object' && val.seconds !== undefined) {
-    const ar = new Date(val.seconds * 1000 + 3 * 3600000);
+    const ar = new Date(val.seconds * 1000 - 3 * 3600000);
     return ar.toISOString().slice(0, 10);
   }
   return '';

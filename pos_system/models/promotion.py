@@ -219,19 +219,25 @@ class Promotion:
         dval  = float(promo.get('discount_value', 0))
         req   = int(promo.get('required_quantity', 1))
         free  = int(promo.get('free_quantity', 0))
+        # Tope opcional. 0/None = sin tope.
+        # Para percentage/fixed: cantidad máxima de UNIDADES con descuento.
+        # Para 2x1/nxm/bundle: cantidad máxima de PACKS (grupos) con descuento.
+        max_q = int(promo.get('max_quantity') or 0)
 
         if ptype == 'percentage':
             pct = min(dval, 100.0)
             discount_per_unit = round(unit_price * pct / 100, 2)
-            discount_total    = round(discount_per_unit * quantity, 2)
-            eff_price         = unit_price - discount_per_unit
-            label             = f"-{pct:.0f}%"
+            qty_disc = quantity if max_q <= 0 else min(quantity, max_q)
+            discount_total    = round(discount_per_unit * qty_disc, 2)
+            eff_price         = (quantity * unit_price - discount_total) / quantity if quantity else unit_price
+            label             = f"-{pct:.0f}%" + (f" (tope {max_q}u)" if max_q > 0 and quantity > max_q else "")
 
         elif ptype == 'fixed':
             discount_per_unit = min(dval, unit_price)
-            discount_total    = round(discount_per_unit * quantity, 2)
-            eff_price         = unit_price - discount_per_unit
-            label             = f"-${dval:.2f} c/u"
+            qty_disc = quantity if max_q <= 0 else min(quantity, max_q)
+            discount_total    = round(discount_per_unit * qty_disc, 2)
+            eff_price         = (quantity * unit_price - discount_total) / quantity if quantity else unit_price
+            label             = f"-${dval:.2f} c/u" + (f" (tope {max_q}u)" if max_q > 0 and quantity > max_q else "")
 
         elif ptype in ('2x1', 'nxm'):
             # Para NxM: lleva `req`, paga (req - free)
@@ -240,26 +246,35 @@ class Promotion:
             pays = req - free
             if pays <= 0 or req <= 0:
                 return unit_price, 0.0, ""
-            # grupos completos + resto
-            groups     = quantity // req
-            remainder  = quantity % req
-            paid_units = groups * pays + min(remainder, pays)
-            total_paid = paid_units * unit_price
+            # grupos completos + resto, acotados por el tope de packs
+            groups_natural = quantity // req
+            groups         = groups_natural if max_q <= 0 else min(groups_natural, max_q)
+            units_in_promo = groups * req
+            units_out      = quantity - units_in_promo
+            paid_in_promo  = groups * pays * unit_price
+            paid_out       = units_out * unit_price
+            total_paid     = paid_in_promo + paid_out
             discount_total = round(quantity * unit_price - total_paid, 2)
             eff_price      = total_paid / quantity if quantity else unit_price
             label          = promo.get('name', f"{req}x{pays}")
+            if max_q > 0 and groups_natural > max_q:
+                label += f" (tope {max_q} packs)"
 
         elif ptype == 'bundle':
             # Precio especial para pack: discount_value es el precio total del pack
-            # Si no hay suficientes productos, no aplica
             if quantity >= req and dval > 0:
-                groups         = quantity // req
+                groups_natural = quantity // req
+                groups         = groups_natural if max_q <= 0 else min(groups_natural, max_q)
+                units_in_promo = groups * req
+                units_out      = quantity - units_in_promo
                 bundle_total   = groups * dval
-                rest_total     = (quantity % req) * unit_price
+                rest_total     = units_out * unit_price
                 total_paid     = bundle_total + rest_total
                 discount_total = round(quantity * unit_price - total_paid, 2)
                 eff_price      = total_paid / quantity if quantity else unit_price
                 label          = f"Pack ${dval:.2f}"
+                if max_q > 0 and groups_natural > max_q:
+                    label += f" (tope {max_q} packs)"
             else:
                 return unit_price, 0.0, ""
 

@@ -699,29 +699,37 @@ class FirebaseSync:
                     if last_seen and doc_ts and doc_ts <= last_seen:
                         continue
 
-                    # Intentar DELETE; si falla por FK, soft-delete (stock=0).
+                    # Matchear por firebase_id O barcode (cubre productos viejos
+                    # cuyo firebase_id quedo NULL pero el doc_id Firestore coincide
+                    # con el barcode local).
                     try:
-                        existed = db_manager.execute_query(
-                            "SELECT id FROM products WHERE firebase_id = ?", (doc_id,)
-                        )
-                        if not existed:
-                            # El producto ya no existe local: no hay nada que borrar.
+                        rows = db_manager.execute_query(
+                            "SELECT id FROM products "
+                            "WHERE firebase_id = ? OR barcode = ?",
+                            (doc_id, doc_id)
+                        ) or []
+                        if not rows:
                             if doc_ts and (max_ts is None or doc_ts > max_ts):
                                 max_ts = doc_ts
                             continue
-                        db_manager.execute_update(
-                            "DELETE FROM products WHERE firebase_id = ?", (doc_id,)
-                        )
-                        deleted += 1
-                    except Exception:
-                        try:
-                            db_manager.execute_update(
-                                "UPDATE products SET stock=0, firebase_id=NULL WHERE firebase_id = ?",
-                                (doc_id,)
-                            )
-                            softdeleted += 1
-                        except Exception as e:
-                            logger.warning(f"Listener tombstones: no se pudo borrar {doc_id}: {e}")
+                        for r in rows:
+                            lid = r['id']
+                            try:
+                                db_manager.execute_update(
+                                    "DELETE FROM products WHERE id = ?", (lid,)
+                                )
+                                deleted += 1
+                            except Exception:
+                                try:
+                                    db_manager.execute_update(
+                                        "UPDATE products SET stock=0, firebase_id=NULL WHERE id = ?",
+                                        (lid,)
+                                    )
+                                    softdeleted += 1
+                                except Exception as e:
+                                    logger.warning(f"Listener tombstones: no se pudo limpiar {lid} ({doc_id}): {e}")
+                    except Exception as e:
+                        logger.warning(f"Listener tombstones: error matcheando {doc_id}: {e}")
 
                     if doc_ts and (max_ts is None or doc_ts > max_ts):
                         max_ts = doc_ts
@@ -756,9 +764,17 @@ class FirebaseSync:
 
     def reconcile_all_orphans(self, db_manager) -> dict:
         """
-        Reconciliacion completa eficiente: 1 stream del catalogo trae solo
-        los doc IDs (~12K), comparamos contra firebase_id local y borramos
-        los huerfanos. Pensado para el comando remoto 'reconcile_orphans'.
+        Reconciliacion profunda: trae del catalogo Firestore los doc IDs
+        y los campos identificadores (cod_barra, codigo) y compara contra
+        firebase_id Y barcode locales. Borra todo lo que no aparezca en
+        Firestore, incluso productos con firebase_id NULL (PCs viejas que
+        nunca corrieron un sync_download completo).
+
+        No depende de catalogo_deleted/tombstones: el matcheo se hace
+        contra el catalogo activo de Firestore.
+
+        Productos locales SIN firebase_id Y SIN barcode no se tocan
+        (productos cargados a mano sin codigo, ej. 'VARIOS').
 
         Retorna {'deleted': n, 'softdeleted': n, 'checked': n}.
         """
@@ -766,35 +782,48 @@ class FirebaseSync:
         if not self.enabled:
             return out
         try:
-            # 1. Mapa local: firebase_id -> local_id
-            rows = db_manager.execute_query(
-                "SELECT id, firebase_id FROM products WHERE firebase_id IS NOT NULL"
-            ) or []
-            local_by_fid = {str(r['firebase_id']): r['id'] for r in rows}
-            out['checked'] = len(local_by_fid)
-            if not local_by_fid:
-                return out
-
-            # 2. Stream del catalogo trayendo SOLO el ID (select([]) ahorra ancho de banda).
-            #    Fallback al stream completo si select no esta soportado.
+            # 1. Stream del catalogo: doc.id + cod_barra + codigo.
             firestore_ids = set()
-            try:
-                stream = self.db.collection('catalogo').select([]).stream()
-                for doc in stream:
-                    firestore_ids.add(doc.id)
-            except Exception:
-                for doc in self.db.collection('catalogo').stream():
-                    firestore_ids.add(doc.id)
+            firestore_codes = set()
+            for doc in self.db.collection('catalogo').stream():
+                firestore_ids.add(doc.id)
+                d = doc.to_dict() or {}
+                cb = d.get('cod_barra')
+                if cb is not None and str(cb).strip():
+                    firestore_codes.add(str(cb).strip())
+                c = d.get('codigo')
+                if c is not None and str(c).strip():
+                    firestore_codes.add(str(c).strip())
 
-            # 3. Huerfanos = productos locales con firebase_id que ya no esta en catalogo.
-            orphans = [fid for fid in local_by_fid if fid not in firestore_ids]
+            # 2. Todos los productos locales con algun identificador.
+            rows = db_manager.execute_query(
+                "SELECT id, firebase_id, barcode FROM products"
+            ) or []
+            out['checked'] = len(rows)
+
+            orphans = []
+            for r in rows:
+                fid = (str(r['firebase_id']).strip()
+                       if r['firebase_id'] is not None else '')
+                bc = (str(r['barcode']).strip()
+                      if r['barcode'] is not None else '')
+                # Sin identificadores fiables: nunca tocar.
+                if not fid and not bc:
+                    continue
+                # Aparece en Firestore por cualquier camino: keep.
+                if fid and (fid in firestore_ids or fid in firestore_codes):
+                    continue
+                if bc and (bc in firestore_codes or bc in firestore_ids):
+                    continue
+                orphans.append(r['id'])
+
             logger.info(
-                f"reconcile_all_orphans: {len(local_by_fid)} locales, "
-                f"{len(firestore_ids)} en Firestore, {len(orphans)} huerfanos."
+                f"reconcile_all_orphans: {len(rows)} locales, "
+                f"{len(firestore_ids)} ids + {len(firestore_codes)} codigos "
+                f"en Firestore, {len(orphans)} huerfanos."
             )
 
-            for fid in orphans:
-                lid = local_by_fid[fid]
+            for lid in orphans:
                 try:
                     db_manager.execute_update(
                         "DELETE FROM products WHERE id = ?", (lid,)
@@ -817,6 +846,73 @@ class FirebaseSync:
         except Exception as e:
             logger.error(f"reconcile_all_orphans: {e}")
         return out
+
+    def purge_products_by_codes(self, db_manager, codes) -> dict:
+        """
+        Borra productos locales cuyo firebase_id O barcode coincida con
+        algun codigo de la lista. A diferencia de reconcile_all_orphans,
+        tambien limpia productos con firebase_id NULL (sincronizados antes
+        del sistema de tombstones).
+
+        codes: iterable de strings (firebase_ids o barcodes).
+        Retorna {'deleted': n, 'softdeleted': n, 'checked': n}.
+        """
+        out = {'deleted': 0, 'softdeleted': 0, 'checked': 0}
+        if not self.enabled:
+            return out
+        codes = [str(c).strip() for c in (codes or []) if c and str(c).strip()]
+        if not codes:
+            return out
+        out['checked'] = len(codes)
+
+        try:
+            CHUNK = 400
+            matched_ids = set()
+            for i in range(0, len(codes), CHUNK):
+                chunk = codes[i:i + CHUNK]
+                ph = ','.join(['?'] * len(chunk))
+                rows = db_manager.execute_query(
+                    f"SELECT id FROM products "
+                    f"WHERE firebase_id IN ({ph}) OR barcode IN ({ph})",
+                    tuple(chunk) + tuple(chunk)
+                ) or []
+                for r in rows:
+                    matched_ids.add(r['id'])
+
+            for lid in matched_ids:
+                try:
+                    db_manager.execute_update(
+                        "DELETE FROM products WHERE id = ?", (lid,)
+                    )
+                    out['deleted'] += 1
+                except Exception:
+                    try:
+                        db_manager.execute_update(
+                            "UPDATE products SET stock=0, firebase_id=NULL WHERE id = ?",
+                            (lid,)
+                        )
+                        out['softdeleted'] += 1
+                    except Exception as e:
+                        logger.warning(f"purge_products_by_codes: no se pudo limpiar {lid}: {e}")
+
+            logger.info(
+                f"purge_products_by_codes: {len(codes)} codigos, "
+                f"{len(matched_ids)} matches, borrados {out['deleted']}, "
+                f"soft-delete {out['softdeleted']}."
+            )
+        except Exception as e:
+            logger.error(f"purge_products_by_codes: {e}")
+        return out
+
+    def fetch_catalogo_deleted_ids(self) -> list:
+        """Lee todos los doc IDs de catalogo_deleted (tombstones de productos)."""
+        if not self.enabled:
+            return []
+        try:
+            return [d.id for d in self.db.collection('catalogo_deleted').stream()]
+        except Exception as e:
+            logger.error(f"fetch_catalogo_deleted_ids: {e}")
+            return []
 
     def start_promotions_listener(self, on_change: Callable):
         """

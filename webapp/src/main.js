@@ -3,6 +3,8 @@ import { invalidateCacheByPrefix, peekCache } from './cache.js';
 import './styles/login.css';
 import { renderLogin } from './pages/login.js';
 import { isLoggedIn, getSession, logout } from './auth.js';
+import { initNotifications, obtenerAlertasActivas, onAlertasCambian } from './notifications.js';
+import { initConsumiblesWatcher } from './consumibles_watcher.js';
 
 // ── Estado global ──
 let currentPage = 'dashboard';
@@ -28,6 +30,8 @@ const pages = {
   observaciones:   { title: 'Observaciones',           loader: () => import('./pages/observaciones.js'),    render: 'renderObservaciones',   cacheKey: null },
   presupuestos:    { title: 'Presupuestos',            loader: () => import('./pages/presupuestos.js'),     render: 'renderPresupuestos',    cacheKey: null },
   lab_productos:   { title: 'Productos Madre',          loader: () => import('./pages/lab_productos_madre.js'), render: 'renderLabProductos', cacheKey: null },
+  pcs:             { title: 'Estado de PCs',           loader: () => import('./pages/pcs.js'),              render: 'renderPcs',             cacheKey: null },
+  notificaciones:  { title: 'Notificaciones',          loader: () => import('./pages/notificaciones.js'),   render: 'renderNotificaciones',  cacheKey: null },
 };
 
 // Caché de módulos ya descargados (evita repetir import() tras la primera carga)
@@ -36,6 +40,27 @@ async function loadPageModule(page) {
   if (!pageModules[page]) pageModules[page] = await pages[page].loader();
   return pageModules[page];
 }
+
+// Reload automático cuando un chunk lazy ya no existe en el deploy actual
+// (sesión vieja en caché + deploy nuevo invalidó los hashes de los assets).
+// Se limita a un reload por sesión para evitar loops si el error es por otra causa.
+function reloadIfStaleChunk(err) {
+  const msg = String((err && (err.message || err)) || '');
+  const isChunkError =
+    /Failed to fetch dynamically imported module/i.test(msg) ||
+    /error loading dynamically imported module/i.test(msg) ||
+    /Importing a module script failed/i.test(msg) ||
+    /MIME type of ("|')text\/html/i.test(msg);
+  if (!isChunkError) return false;
+  if (sessionStorage.getItem('staleChunkReloaded') === '1') return false;
+  sessionStorage.setItem('staleChunkReloaded', '1');
+  location.reload();
+  return true;
+}
+window.addEventListener('vite:preloadError', (event) => {
+  event.preventDefault();
+  reloadIfStaleChunk(event.payload || event);
+});
 
 // Páginas con tablas que suelen necesitar scroll horizontal en mobile
 const PAGES_CON_TABLA_ANCHA = new Set([
@@ -117,6 +142,12 @@ function openGroupForPage(page) {
 async function loadPage(page, forceRefresh = false) {
   const content = document.getElementById('pageContent');
 
+  // Si la página anterior expuso un cleanup (ej. pcs.js cancela onSnapshot), ejecutarlo
+  // La nueva página la vuelve a inicializar si la necesita.
+  if (typeof window._pcsCleanup === 'function') {
+    try { window._pcsCleanup(); } catch {}
+  }
+
   // Si se fuerza refresh → limpiar cache de datos de esa página
   if (forceRefresh) {
     invalidateCacheByPrefix(page);
@@ -139,6 +170,7 @@ async function loadPage(page, forceRefresh = false) {
     updateLastTime();
   } catch (err) {
     console.error(err);
+    if (reloadIfStaleChunk(err)) return;
     content.innerHTML = `<div class="empty-state"><span class="material-icons">error_outline</span><p>Error cargando datos: ${err.message}</p></div>`;
     setStatus('offline');
   }
@@ -254,6 +286,33 @@ function initApp(session) {
 
   // Prefetch en idle de las páginas más usadas (no bloquea la carga inicial)
   prefetchPageModules(['ventas', 'historial', 'control_total', 'catalogo']);
+
+  // Notificaciones globales de stock: se inicializan una vez por sesión y
+  // monitorean el catálogo para mostrar toasts arriba en cualquier página.
+  initNotifications(db);
+  window.navigateToPage = navigate;
+  actualizarBadgeNotif(obtenerAlertasActivas());
+  onAlertasCambian(actualizarBadgeNotif);
+
+  // Watcher de consumibles: escucha ventas y descuenta stock de productos
+  // vinculados (ej: vender "Fotocopia A4" descuenta automáticamente "Hojas A4").
+  // Se difiere a idle para no apilar dos fetches pesados del catálogo (~12k
+  // docs) con notifications al arrancar — eso ralentizaba la carga inicial.
+  const initWatcher = () => initConsumiblesWatcher(db);
+  if (window.requestIdleCallback) {
+    window.requestIdleCallback(initWatcher, { timeout: 5000 });
+  } else {
+    setTimeout(initWatcher, 2000);
+  }
+}
+
+function actualizarBadgeNotif(alertas) {
+  const badge = document.getElementById('navNotifBadge');
+  if (!badge) return;
+  const n = (alertas || []).length;
+  if (n === 0) { badge.style.display = 'none'; return; }
+  badge.textContent = n > 99 ? '99+' : String(n);
+  badge.style.display = 'inline-flex';
 }
 
 // Precarga los módulos JS de páginas pasadas, en idle, sin bloquear nada.

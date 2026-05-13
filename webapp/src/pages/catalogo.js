@@ -1045,6 +1045,7 @@ export async function renderCatalogo(container, db) {
 
   function renderTab(tab) {
     const tc = document.getElementById('tabContent');
+    if (!tc) return; // DOM en transición (ej: el usuario navegó a otra página antes de que un refresh asíncrono terminara)
     if (tab === 'catalogo') renderTabCatalogo(tc);
     else if (tab === 'inventario') renderTabInventario(tc);
     else if (tab === 'importar') renderTabImportar(tc);
@@ -1137,7 +1138,7 @@ export async function renderCatalogo(container, db) {
           <table>
             <thead><tr>
               <th class="cat-col-codigo">Código</th>
-              <th>Producto</th>
+              <th class="cat-col-producto">Producto</th>
               <th>Categoría</th>
               <th class="cat-col-marca">Marca</th>
               <th class="cat-col-proveedor">Proveedor</th>
@@ -1322,7 +1323,9 @@ export async function renderCatalogo(container, db) {
       // Se usan en 3 columnas (Costo, Precio Venta, Precio Und) — los calculo
       // una vez para no repetir la lógica.
       const _esConj = !!p.es_conjunto;
-      const FRACCION = 1.15;
+      // Si el tipo del conjunto es "unidad", no se aplica el 15% al detalle
+      // (la venta es directa por unidad, sin margen adicional).
+      const FRACCION = (p.conjunto_tipo === 'unidad') ? 1 : 1.15;
       const um = p.conjunto_unidad_medida || 'unidades';
       const umSg = um.endsWith('s') ? um.slice(0, -1) : um;
       const globalPack = Number(p.precio_venta) || 0;
@@ -1411,7 +1414,7 @@ export async function renderCatalogo(container, db) {
 
       return `<tr>
         <td class="cat-col-codigo" style="color:var(--text-muted);font-size:12px">${p.codigo || '-'}</td>
-        <td><b style="font-size:13px">${p.nombre || '-'}</b><br><span style="color:var(--text-muted);font-size:11px">${p.cod_barra || ''}</span></td>
+        <td class="cat-col-producto"><b style="font-size:13px">${p.nombre || '-'}</b><br><span style="color:var(--text-muted);font-size:11px">${p.cod_barra || ''}</span></td>
         <td><span class="badge badge-gray">${p.categoria || '-'}</span></td>
         <td class="cat-col-marca" style="font-size:12px">${p.marca || '-'}</td>
         <td class="cat-col-proveedor" style="font-size:12px">${p.proveedor || '-'}</td>
@@ -1710,13 +1713,13 @@ export async function renderCatalogo(container, db) {
               </div>
               <div>
                 <label style="font-size:11px;font-weight:700;color:#b45309;letter-spacing:0.5px;display:block;margin-bottom:6px">STOCK MÍN. (avisar)</label>
-                <input id="ed_stock_min" type="number" step="1" min="0" placeholder="Sin alerta"
+                <input id="ed_stock_min" type="number" step="any" min="0" placeholder="Sin alerta"
                        value="${prod.stock_min ?? ''}"
                        style="width:100%;padding:10px 12px;border:1.5px solid #ffe082;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit;background:#fffef7" />
               </div>
               <div>
                 <label style="font-size:11px;font-weight:700;color:#b45309;letter-spacing:0.5px;display:block;margin-bottom:6px">STOCK MÁX. (ideal)</label>
-                <input id="ed_stock_max" type="number" step="1" min="0" placeholder="Sin tope"
+                <input id="ed_stock_max" type="number" step="any" min="0" placeholder="Sin tope"
                        value="${prod.stock_max ?? ''}"
                        style="width:100%;padding:10px 12px;border:1.5px solid #ffe082;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit;background:#fffef7" />
               </div>
@@ -1731,6 +1734,27 @@ export async function renderCatalogo(container, db) {
           <!-- Aviso cuando "Producto Conjunto" está activo: el stock se calcula -->
           <div id="ed_stock_conjunto_aviso" style="display:none;background:#f5f3ff;border:1.5px solid #c4b5fd;border-radius:10px;padding:10px 14px;color:#5b21b6;font-size:12.5px;line-height:1.4">
             <b>Stock automático:</b> al estar activado <b>Producto Conjunto</b>, el stock se calcula a partir del desglose de abajo (cajas/rollos × contenido + sueltos). No hace falta cargar el campo STOCK clásico.
+          </div>
+
+          <!-- Vinculado a otro producto (consumibles) — SOLO para no-conjunto.
+               Cuando se activa el conjunto, cada variedad maneja su propio vínculo. -->
+          <div id="ed_vinc_bloque" style="border:1.5px dashed #90caf9;border-radius:10px;padding:12px 14px;background:#f3faff">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
+              <span class="material-icons" style="color:#1565c0;font-size:18px">link</span>
+              <div style="flex:1">
+                <div style="font-size:13px;font-weight:700;color:#0d47a1">Vincular a producto de stock</div>
+                <div style="font-size:11.5px;color:#1565c0;margin-top:1px">Al vender este ítem, se descuenta automáticamente del producto vinculado (ej: Fotocopia A4 → Hojas A4).</div>
+              </div>
+            </div>
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <span id="ed_vinc_chip" style="font-size:12px"></span>
+              <button type="button" id="ed_vinc_btn" style="padding:6px 12px;border-radius:8px;border:1.5px solid #1565c0;background:#1565c0;color:#fff;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">+ vincular</button>
+              <button type="button" id="ed_vinc_clear" style="padding:6px 10px;border-radius:8px;border:1.5px solid #ef9a9a;background:#fff;color:#c62828;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;display:none">Quitar</button>
+            </div>
+            <div style="margin-top:8px;display:flex;align-items:center;gap:8px;font-size:12px;color:#65676b">
+              <span>Cantidad a descontar por venta:</span>
+              <input id="ed_vinc_cantidad" type="number" min="0" step="any" value="${prod.vinculado_cantidad || 1}" style="width:80px;padding:5px 10px;border:1.5px solid #1565c0;border-radius:8px;font-size:13px;font-weight:700;color:#0d47a1;background:#e3f2fd;font-family:inherit;box-sizing:border-box" />
+            </div>
           </div>
 
           <!-- Producto Conjunto (pack / rollo / caja) -->
@@ -1749,7 +1773,7 @@ export async function renderCatalogo(container, db) {
               <div>
                 <label style="font-size:11px;font-weight:700;color:#65676b;letter-spacing:0.5px;display:block;margin-bottom:4px">TIPO</label>
                 <select id="ed_conj_tipo" style="width:100%;padding:8px 10px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit;background:#fff">
-                  ${['rollo','pack','caja','bobina','bolsa','plancha','cartulina','papel','carton','goma_eva','cinta','tela','otro'].map(t => {
+                  ${['rollo','pack','caja','bobina','bolsa','plancha','cartulina','papel','carton','goma_eva','cinta','tela','unidad','otro'].map(t => {
                     const labels = {goma_eva:'Goma Eva', carton:'Cartón'};
                     const lbl = labels[t] || (t.charAt(0).toUpperCase()+t.slice(1));
                     return `<option value="${t}" ${ (prod.conjunto_tipo||'rollo') === t ? 'selected':'' }>${lbl}</option>`;
@@ -1941,6 +1965,7 @@ export async function renderCatalogo(container, db) {
       goma_eva:  ['PLANCHAS','PLANCHA','f'],
       cinta:     ['ROLLOS','ROLLO','m'],
       tela:      ['ROLLOS','ROLLO','m'],
+      unidad:    ['UNIDADES','UNIDAD','f'],
       otro:      ['UNIDADES','UNIDAD','f'],
     };
 
@@ -2039,28 +2064,38 @@ export async function renderCatalogo(container, db) {
       // ── Auto-calcular precio por unidad ──
       // Aplica también al modo "unidades": una caja con 80 lápices a $5000
       // sugiere $5000 / 80 × 1.15 = $71.88 por unidad.
+      // Excepción: si TIPO === 'unidad', no se aplica el 15% extra (la venta es
+      // directa por unidad, sin margen al detalle).
       if (conjPU && conjHint) {
+        const esTipoUnidad  = conjTipo.value === 'unidad';
+        const margen        = esTipoUnidad ? 1 : FRACCION_MARGIN;
         const precioPaquete = parseFloat(inPrecio.value) || 0;
         const contenido     = c;
         if (precioPaquete > 0 && contenido > 0) {
-          const sugerido = (precioPaquete / contenido) * FRACCION_MARGIN;
+          const sugerido = (precioPaquete / contenido) * margen;
           const sugeridoTxt = sugerido.toLocaleString('es-AR', {
             minimumFractionDigits: 2, maximumFractionDigits: 2,
           });
           if (!precioPUManual) {
             conjPU.value = sugerido.toFixed(2);
           }
+          const formula = esTipoUnidad
+            ? `(${sg.toLowerCase()} $${precioPaquete.toLocaleString('es-AR')} ÷ ${contenido} ${um}, sin 15% detalle).`
+            : `(${sg.toLowerCase()} $${precioPaquete.toLocaleString('es-AR')} ÷ ${contenido} ${um} × 1.15).`;
           conjHint.innerHTML =
             `<b>Sugerido:</b> $${sugeridoTxt}/${umSg} ` +
-            `(${sg.toLowerCase()} $${precioPaquete.toLocaleString('es-AR')} ÷ ${contenido} ${um} × 1.15).<br/>` +
+            formula + `<br/>` +
             (precioPUManual
               ? '<span style="color:#a3441a">Estás usando un precio manual.</span> '
                 + 'Doble-click acá para volver al cálculo automático.'
               : 'Editalo si querés un precio distinto.');
         } else {
+          const formulaHint = esTipoUnidad
+            ? `<b>precio ÷ ${um}</b> (sin 15 % adicional, venta por unidad)`
+            : `<b>precio ÷ ${um} × 1.15</b> (15 % margen al detalle)`;
           conjHint.innerHTML =
             `Cargá <b>precio del ${sg.toLowerCase()}</b> y <b>${um} por ${sg.toLowerCase()}</b> ` +
-            `para que se calcule automáticamente como <b>precio ÷ ${um} × 1.15</b> (15 % margen al detalle).`;
+            `para que se calcule automáticamente como ${formulaHint}.`;
         }
       }
     }
@@ -2131,6 +2166,10 @@ export async function renderCatalogo(container, db) {
       if (conjResTop)  conjResTop.style.display  = on ? 'block' : 'none';
       if (stockBloque) stockBloque.style.display = on ? 'none'  : 'flex';
       if (stockAviso)  stockAviso.style.display  = on ? 'block' : 'none';
+      // Vinculado a producto: solo visible para no-conjunto. Cuando es
+      // conjunto, cada variedad maneja su propio vínculo en su sub-fila.
+      const vincBloque = overlay.querySelector('#ed_vinc_bloque');
+      if (vincBloque) vincBloque.style.display = on ? 'none' : 'block';
       _aplicarUbicacionPrecio(on);
       _aplicarEstadoPrecioGlobal();
     }
@@ -2147,6 +2186,20 @@ export async function renderCatalogo(container, db) {
       if (typeof _aplicarUnidadATodasVariedades === 'function') {
         _aplicarUnidadATodasVariedades();
       }
+      _refreshColoresState();
+    });
+    // Cuando cambia el TIPO (rollo/pack/.../unidad), la fórmula del precio
+    // por unidad cambia (15% al detalle vs sin 15% si tipo='unidad'). Forzamos
+    // recalcular para que los precios viejos guardados con la otra fórmula no
+    // queden "pegados" como manual. El usuario puede volver a ponerlo manual
+    // si quiere (editando el input).
+    conjTipo.addEventListener('change', () => {
+      precioPUManual = false;
+      if (conjPU) conjPU.value = '';
+      coloresList.querySelectorAll('[data-color-row]').forEach(row => {
+        row.dataset.precioUnitManual = '0';
+      });
+      _refrescarConjunto();
       _refreshColoresState();
     });
     // El precio del rollo y el campo de precio por unidad también disparan recalculo
@@ -2192,14 +2245,114 @@ export async function renderCatalogo(container, db) {
       input.style.outline = 'none';
     }
 
-    function _addColorRow(nombre = '', unidades = '', restante = '', precio = '', contenido = '', precioPack = '', costo = '', margen = '', codigo = '') {
+    // Modal para elegir un producto fuente al cual descontar stock cuando se
+    // vende este (variedad o producto). Devuelve {doc_id, nombre, cantidad}
+    // o null si se canceló. Excluye `excludeId` para no vincularse a sí mismo.
+    function abrirVinculadorProducto(currentId = '', currentQty = '1', excludeId = '') {
+      return new Promise(resolve => {
+        const overlay = document.createElement('div');
+        overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:2500;display:flex;align-items:center;justify-content:center;padding:12px';
+        const panel = document.createElement('div');
+        panel.style.cssText = 'background:#fff;border-radius:14px;width:min(560px,100%);max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,0.2)';
+        panel.innerHTML = `
+          <div style="padding:14px 18px;background:#1565c0;color:#fff;display:flex;align-items:center;gap:10px">
+            <span class="material-icons">link</span>
+            <div style="flex:1">
+              <div style="font-size:15px;font-weight:700">Vincular a producto de stock</div>
+              <div style="font-size:11.5px;opacity:0.85;margin-top:1px">Al vender este ítem, se descuenta del producto vinculado.</div>
+            </div>
+            <button id="vinc_close" style="background:transparent;border:none;color:#fff;cursor:pointer;padding:4px;line-height:1"><span class="material-icons">close</span></button>
+          </div>
+          <div style="padding:14px 18px;display:flex;flex-direction:column;gap:10px;border-bottom:1px solid #e4e6eb">
+            <input id="vinc_buscar" type="text" placeholder="Buscar producto por nombre, código o marca..." autocomplete="off" style="width:100%;padding:10px 12px;border:1.5px solid #e4e6eb;border-radius:8px;font-size:14px;font-family:inherit;box-sizing:border-box" />
+            <div style="display:flex;align-items:center;gap:10px;font-size:13px;color:#65676b">
+              <span>Cantidad a descontar por venta:</span>
+              <input id="vinc_qty" type="number" min="0" step="any" value="${currentQty}" style="width:80px;padding:6px 10px;border:1.5px solid #1565c0;border-radius:8px;font-size:14px;font-weight:700;color:#0d47a1;background:#e3f2fd;font-family:inherit;box-sizing:border-box" />
+              <span style="color:#9e9e9e">unidades</span>
+            </div>
+          </div>
+          <div id="vinc_lista" style="flex:1;overflow-y:auto;padding:6px 8px"></div>
+        `;
+        overlay.appendChild(panel);
+        document.body.appendChild(overlay);
+
+        const buscarInp = panel.querySelector('#vinc_buscar');
+        const qtyInp = panel.querySelector('#vinc_qty');
+        const lista = panel.querySelector('#vinc_lista');
+        let seleccionId = currentId || '';
+        let seleccionNombre = '';
+
+        function _close(result) { overlay.remove(); resolve(result); }
+        panel.querySelector('#vinc_close').addEventListener('click', () => _close(null));
+        overlay.addEventListener('click', e => { if (e.target === overlay) _close(null); });
+
+        function renderResultados(filtro) {
+          const f = (filtro || '').toLowerCase().trim();
+          const candidatos = allProductos
+            .filter(p => p.doc_id !== excludeId)
+            .filter(p => {
+              if (!f) return true;
+              const blob = ((p.nombre || '') + ' ' + (p.codigo || '') + ' ' + (p.cod_barra || '') + ' ' + (p.marca || '')).toLowerCase();
+              return blob.includes(f);
+            })
+            .slice(0, 80);
+
+          if (candidatos.length === 0) {
+            lista.innerHTML = '<div style="text-align:center;padding:30px 12px;color:#9e9e9e;font-size:13px">Sin resultados.</div>';
+            return;
+          }
+          lista.innerHTML = candidatos.map(p => {
+            const selected = p.doc_id === seleccionId;
+            const stock = Number(p.stock) || 0;
+            const stockBadge = stock === -1
+              ? '<span style="background:#f3e5f5;color:#7b1fa2;padding:2px 6px;border-radius:6px;font-size:10.5px;font-weight:600">∞</span>'
+              : `<span style="background:${stock <= 0 ? '#ffebee' : '#f0f2f5'};color:${stock <= 0 ? '#c62828' : '#1c1e21'};padding:2px 6px;border-radius:6px;font-size:10.5px;font-weight:600">${stock}</span>`;
+            return `
+              <button type="button" data-doc="${p.doc_id}" data-nombre="${(p.nombre || '').replace(/"/g, '&quot;')}" class="vinc-row" style="
+                width:100%;text-align:left;background:${selected ? '#e3f2fd' : '#fff'};
+                border:1.5px solid ${selected ? '#1565c0' : '#e4e6eb'};
+                border-radius:10px;padding:8px 10px;margin:4px 2px;cursor:pointer;
+                display:flex;align-items:center;gap:10px;font-family:inherit
+              ">
+                <span class="material-icons" style="color:${selected ? '#1565c0' : '#9e9e9e'};font-size:18px">${selected ? 'check_circle' : 'inventory_2'}</span>
+                <div style="flex:1;min-width:0">
+                  <div style="font-size:13px;font-weight:700;color:#1c1e21">${p.nombre || '(sin nombre)'}</div>
+                  <div style="font-size:11px;color:#65676b;margin-top:1px">
+                    ${p.codigo ? `#${p.codigo} · ` : ''}${p.marca || 'SIN MARCA'} · ${p.rubro || 'sin rubro'}
+                  </div>
+                </div>
+                ${stockBadge}
+              </button>
+            `;
+          }).join('');
+          lista.querySelectorAll('.vinc-row').forEach(btn => {
+            btn.addEventListener('click', () => {
+              seleccionId = btn.dataset.doc;
+              seleccionNombre = btn.dataset.nombre;
+              const qty = parseFloat(qtyInp.value) || 1;
+              _close({ doc_id: seleccionId, nombre: seleccionNombre, cantidad: qty });
+            });
+          });
+        }
+
+        renderResultados('');
+        let _t = null;
+        buscarInp.addEventListener('input', () => {
+          clearTimeout(_t);
+          _t = setTimeout(() => renderResultados(buscarInp.value), 80);
+        });
+        setTimeout(() => buscarInp.focus(), 50);
+      });
+    }
+
+    function _addColorRow(nombre = '', unidades = '', restante = '', precio = '', contenido = '', precioPack = '', costo = '', margen = '', codigo = '', stockMin = '', stockMax = '', vinculadoA = '', vinculadoCantidad = '', vinculadoNombre = '') {
       const row = document.createElement('div');
       row.dataset.colorRow = '1';
       // Preservamos el código existente (si lo trae) sin UI: el campo se sacó
       // para ahorrar espacio, pero no queremos perder los códigos ya cargados
       // al guardar. Si la variedad no tenía código, queda vacío.
       if (codigo) row.dataset.codigo = codigo;
-      row.style.cssText = 'background:#fff;border:1.5px solid #e5e7eb;border-radius:10px;padding:6px 6px;box-shadow:0 1px 2px rgba(0,0,0,0.03)';
+      row.style.cssText = 'background:#fff;border:1.5px solid #e5e7eb;border-radius:10px;padding:6px 6px;box-shadow:0 1px 2px rgba(0,0,0,0.03);display:flex;flex-direction:column;gap:4px';
 
       // Una sola línea con todos los campos. El bloque de PRECIO (costo, margen,
       // pack $, ±100) se oculta cuando el toggle "mismo precio" está activo.
@@ -2224,6 +2377,71 @@ export async function renderCatalogo(container, db) {
         <button type="button" class="ed_color_remove" title="Quitar variedad" style="width:20px;height:20px;border-radius:50%;border:none;background:transparent;color:#dc2626;cursor:pointer;font-size:16px;line-height:1;padding:0;flex-shrink:0;margin-left:1px">×</button>
       `;
       row.appendChild(linea);
+
+      // Sub-fila: alertas de stock POR variedad (mín / máx propios).
+      // Si la variedad no las tiene, hereda del global del producto.
+      const alertaLinea = document.createElement('div');
+      alertaLinea.style.cssText = 'display:flex;align-items:center;gap:6px;padding:2px 4px 0;font-size:10.5px;color:#b45309;flex-wrap:wrap';
+      alertaLinea.innerHTML = `
+        <span class="material-icons" style="font-size:13px;color:#b45309">notifications_active</span>
+        <span style="font-weight:700;letter-spacing:0.3px">Stock mín</span>
+        <input class="ed_color_stock_min" type="number" min="0" step="any" placeholder="—" title="Stock mínimo de esta variedad. Avisa cuando el total baja. Vacío = hereda del global." value="${stockMin !== '' && stockMin != null ? stockMin : ''}" style="width:56px;padding:4px 6px;border:1.5px solid #ffe082;border-radius:6px;font-size:11px;box-sizing:border-box;font-family:inherit;background:#fffef7;color:#b45309;font-weight:600" />
+        <span style="font-weight:700;letter-spacing:0.3px">máx</span>
+        <input class="ed_color_stock_max" type="number" min="0" step="any" placeholder="—" title="Stock máximo de esta variedad (ideal). Vacío = sin tope." value="${stockMax !== '' && stockMax != null ? stockMax : ''}" style="width:56px;padding:4px 6px;border:1.5px solid #ffe082;border-radius:6px;font-size:11px;box-sizing:border-box;font-family:inherit;background:#fffef7;color:#b45309;font-weight:600" />
+      `;
+      row.appendChild(alertaLinea);
+
+      // Sub-fila: VINCULAR A OTRO PRODUCTO de stock.
+      // Cuando se vende esta variedad, el watcher de webapp descuenta unidades
+      // del producto vinculado (ej: vender "Fotocopia A4" descuenta 1 de "Hojas A4").
+      const vincLinea = document.createElement('div');
+      vincLinea.style.cssText = 'display:flex;align-items:center;gap:6px;padding:2px 4px 0;font-size:10.5px;color:#1565c0;flex-wrap:wrap';
+      // Estado del link guardado en dataset (se persiste al guardar el producto)
+      row.dataset.vinculadoA = vinculadoA || '';
+      row.dataset.vinculadoCantidad = vinculadoCantidad !== '' && vinculadoCantidad != null ? String(vinculadoCantidad) : '';
+      row.dataset.vinculadoNombre = vinculadoNombre || '';
+      vincLinea.innerHTML = `
+        <span class="material-icons" style="font-size:13px;color:#1565c0">link</span>
+        <span style="font-weight:700;letter-spacing:0.3px">Vinculado a stock</span>
+        <span class="ed_color_vinc_chip" style="font-size:10.5px"></span>
+        <button type="button" class="ed_color_vinc_btn" style="padding:3px 8px;border-radius:6px;border:1.5px solid #90caf9;background:#e3f2fd;color:#1565c0;font-size:10.5px;font-weight:600;cursor:pointer;font-family:inherit">+ vincular</button>
+        <button type="button" class="ed_color_vinc_clear" style="padding:3px 6px;border-radius:6px;border:none;background:transparent;color:#dc2626;font-size:12px;cursor:pointer;display:none">×</button>
+      `;
+      row.appendChild(vincLinea);
+
+      const vincChip = vincLinea.querySelector('.ed_color_vinc_chip');
+      const vincBtn = vincLinea.querySelector('.ed_color_vinc_btn');
+      const vincClear = vincLinea.querySelector('.ed_color_vinc_clear');
+      function _renderVincChip() {
+        const id = row.dataset.vinculadoA;
+        const nombreLink = row.dataset.vinculadoNombre;
+        const qty = row.dataset.vinculadoCantidad;
+        if (id) {
+          vincChip.innerHTML = `<span style="background:#e3f2fd;border:1px solid #90caf9;border-radius:6px;padding:2px 8px;color:#0d47a1;font-weight:600">→ ${(nombreLink || id).slice(0, 30)} <b style="color:#1565c0">× ${qty || 1}</b></span>`;
+          vincBtn.textContent = 'cambiar';
+          vincClear.style.display = '';
+        } else {
+          vincChip.innerHTML = '<span style="color:#9e9e9e">descontar stock de otro producto al vender</span>';
+          vincBtn.textContent = '+ vincular';
+          vincClear.style.display = 'none';
+        }
+      }
+      _renderVincChip();
+
+      vincBtn.addEventListener('click', async () => {
+        const result = await abrirVinculadorProducto(row.dataset.vinculadoA, row.dataset.vinculadoCantidad || '1', prod.doc_id);
+        if (!result) return;
+        row.dataset.vinculadoA = result.doc_id || '';
+        row.dataset.vinculadoNombre = result.nombre || '';
+        row.dataset.vinculadoCantidad = result.cantidad || '1';
+        _renderVincChip();
+      });
+      vincClear.addEventListener('click', () => {
+        row.dataset.vinculadoA = '';
+        row.dataset.vinculadoNombre = '';
+        row.dataset.vinculadoCantidad = '';
+        _renderVincChip();
+      });
 
       // Aplicar estilo según convención:
       // - 'user' (naranja): inputs que el cajero tiene que cargar.
@@ -2367,6 +2585,8 @@ export async function renderCatalogo(container, db) {
         const precioPackRaw   = (r.querySelector('.ed_color_precio_pack').value || '').trim();
         const costoRaw        = (r.querySelector('.ed_color_costo')?.value || '').trim();
         const margenRaw       = (r.querySelector('.ed_color_margen')?.value || '').trim();
+        const stockMinRaw     = (r.querySelector('.ed_color_stock_min')?.value || '').trim();
+        const stockMaxRaw     = (r.querySelector('.ed_color_stock_max')?.value || '').trim();
         // El input visible de código se sacó: preservamos el valor original
         // si la variedad ya lo traía, así no perdemos códigos al guardar.
         const codigoRaw       = (r.dataset.codigo || '').trim();
@@ -2381,6 +2601,8 @@ export async function renderCatalogo(container, db) {
         const pp = precioPackRaw === '' ? null : (parseFloat(precioPackRaw) || 0);
         const co = costoRaw === ''      ? null : (parseFloat(costoRaw) || 0);
         const mg = margenRaw === ''     ? null : (parseFloat(margenRaw) || 0);
+        const sMin = stockMinRaw === '' ? null : Math.max(0, parseFloat(stockMinRaw.replace(',', '.')) || 0);
+        const sMax = stockMaxRaw === '' ? null : Math.max(0, parseFloat(stockMaxRaw.replace(',', '.')) || 0);
         // Si la variedad está vinculada al global, no guardamos `contenido`
         // (queda usando el global por fallback). Solo se persiste cuando el
         // usuario lo desvinculó y le puso un valor propio.
@@ -2391,6 +2613,19 @@ export async function renderCatalogo(container, db) {
         if (co && co > 0) out.costo        = co;
         if (mg !== null && mg >= 0) out.margen = mg;
         if (codigoRaw)    out.codigo       = codigoRaw;
+        if (sMin !== null && sMin > 0) out.stock_min = sMin;
+        if (sMax !== null && sMax > 0) out.stock_max = sMax;
+        // Producto vinculado (consumibles): cuando se vende esta variedad,
+        // el watcher descuenta unidades del producto fuente. Persistimos
+        // doc_id, cantidad y nombre (cache de display).
+        const vincA = (r.dataset.vinculadoA || '').trim();
+        const vincQ = parseFloat((r.dataset.vinculadoCantidad || '').toString().replace(',', '.')) || 0;
+        const vincN = (r.dataset.vinculadoNombre || '').trim();
+        if (vincA && vincQ > 0) {
+          out.vinculado_a = vincA;
+          out.vinculado_cantidad = vincQ;
+          if (vincN) out.vinculado_nombre = vincN;
+        }
         return out;
       }).filter(c => c.color);
     }
@@ -2423,8 +2658,9 @@ export async function renderCatalogo(container, db) {
 
     // Recalcula el precio unitario auto de cada fila cuyo dataset.precioUnitManual === '0'.
     // Auto = (precioPack o global) / (contenido o global) × 1.15
+    // Si TIPO === 'unidad', no se aplica el 15% extra (venta directa por unidad).
     function _recalcularPrecioUnitarioAuto() {
-      const FRACCION = 1.15;
+      const FRACCION = conjTipo.value === 'unidad' ? 1 : 1.15;
       const globalPack       = parseFloat(inPrecio.value) || 0;
       const globalContenido  = parseFloat(conjC.value) || 0;
       coloresList.querySelectorAll('[data-color-row]').forEach(row => {
@@ -2537,10 +2773,52 @@ export async function renderCatalogo(container, db) {
       c && c.precio_pack != null ? c.precio_pack : '',
       c && c.costo != null ? c.costo : '',
       c && c.margen != null ? c.margen : '',
-      c && c.codigo ? c.codigo : ''
+      c && c.codigo ? c.codigo : '',
+      c && c.stock_min != null ? c.stock_min : '',
+      c && c.stock_max != null ? c.stock_max : '',
+      c && c.vinculado_a ? c.vinculado_a : '',
+      c && c.vinculado_cantidad != null ? c.vinculado_cantidad : '',
+      c && c.vinculado_nombre ? c.vinculado_nombre : ''
     ));
     _refreshColoresState();
     _aplicarEstadoPrecioGlobal();
+
+    // ── Vincular a producto (nivel producto, para no-conjunto) ──────────────
+    const vincChipEl   = overlay.querySelector('#ed_vinc_chip');
+    const vincBtnEl    = overlay.querySelector('#ed_vinc_btn');
+    const vincClearEl  = overlay.querySelector('#ed_vinc_clear');
+    const vincCantEl   = overlay.querySelector('#ed_vinc_cantidad');
+    // Estado guardado en dataset del overlay
+    overlay.dataset.vincA = prod.vinculado_a || '';
+    overlay.dataset.vincNombre = prod.vinculado_nombre || '';
+
+    function _renderVincProductoChip() {
+      const id = overlay.dataset.vincA;
+      const nombreLink = overlay.dataset.vincNombre;
+      if (id) {
+        vincChipEl.innerHTML = `<span style="background:#e3f2fd;border:1px solid #90caf9;border-radius:8px;padding:4px 10px;color:#0d47a1;font-weight:600">→ ${(nombreLink || id)}</span>`;
+        vincBtnEl.textContent = 'Cambiar';
+        vincClearEl.style.display = '';
+      } else {
+        vincChipEl.innerHTML = '<span style="color:#9e9e9e;font-size:12px">No vinculado.</span>';
+        vincBtnEl.textContent = '+ vincular';
+        vincClearEl.style.display = 'none';
+      }
+    }
+    _renderVincProductoChip();
+    vincBtnEl.addEventListener('click', async () => {
+      const result = await abrirVinculadorProducto(overlay.dataset.vincA, vincCantEl.value || '1', prod.doc_id);
+      if (!result) return;
+      overlay.dataset.vincA = result.doc_id || '';
+      overlay.dataset.vincNombre = result.nombre || '';
+      if (result.cantidad) vincCantEl.value = String(result.cantidad);
+      _renderVincProductoChip();
+    });
+    vincClearEl.addEventListener('click', () => {
+      overlay.dataset.vincA = '';
+      overlay.dataset.vincNombre = '';
+      _renderVincProductoChip();
+    });
 
     // Actualizar sub-rubros disponibles al cambiar rubro
     overlay.querySelector('#ed_rubro').addEventListener('change', (e) => {
@@ -2595,8 +2873,8 @@ export async function renderCatalogo(container, db) {
       let nuevoStock      = Math.max(0, parseInt(overlay.querySelector('#ed_stock').value) || 0);
       const rawSMin       = overlay.querySelector('#ed_stock_min').value.trim();
       const rawSMax       = overlay.querySelector('#ed_stock_max').value.trim();
-      const nuevoStockMin = rawSMin === '' ? null : Math.max(0, parseInt(rawSMin) || 0);
-      const nuevoStockMax = rawSMax === '' ? null : Math.max(0, parseInt(rawSMax) || 0);
+      const nuevoStockMin = rawSMin === '' ? null : Math.max(0, parseFloat(rawSMin.replace(',', '.')) || 0);
+      const nuevoStockMax = rawSMax === '' ? null : Math.max(0, parseFloat(rawSMax.replace(',', '.')) || 0);
 
       if (!nuevoNombre) { alert('El nombre no puede estar vacío'); btn.disabled = false; btn.innerHTML = '<span class="material-icons" style="font-size:16px">save</span>Guardar cambios'; return; }
       if (barraRaw && !nuevoBarra) { alert('El código de barras solo puede tener letras, números, guiones y guiones bajos (mínimo 3 caracteres).'); btn.disabled = false; btn.innerHTML = '<span class="material-icons" style="font-size:16px">save</span>Guardar cambios'; return; }
@@ -2697,6 +2975,21 @@ export async function renderCatalogo(container, db) {
         };
       }
 
+      // Vínculo a producto fuente (consumibles, nivel producto — sólo se usa
+      // cuando NO es conjunto; si es conjunto, el vínculo vive por variedad).
+      const vincAProducto = (overlay.dataset.vincA || '').trim();
+      const vincCantProducto = parseFloat((vincCantEl.value || '').replace(',', '.')) || 0;
+      const vincNombreProducto = (overlay.dataset.vincNombre || '').trim();
+      const vinculadoFields = (vincAProducto && vincCantProducto > 0 && !esConjunto) ? {
+        vinculado_a:        vincAProducto,
+        vinculado_cantidad: vincCantProducto,
+        vinculado_nombre:   vincNombreProducto || null,
+      } : {
+        vinculado_a:        null,
+        vinculado_cantidad: null,
+        vinculado_nombre:   null,
+      };
+
       const update = {
         nombre:               nuevoNombre,
         rubro:                nuevoRubro,
@@ -2712,6 +3005,7 @@ export async function renderCatalogo(container, db) {
         stock_max:            nuevoStockMax,
         estado:               nuevoCosto === 0 ? 'sin_precio' : 'activo',
         ...conjuntoFields,
+        ...vinculadoFields,
         ultima_actualizacion: serverTimestamp(),
       };
 
@@ -2939,15 +3233,19 @@ export async function renderCatalogo(container, db) {
 
     const desglose = _variedadesDesgloseInv(p);
     const varAgotadas = desglose.filter(v => v.total === 0).map(v => v.color);
+    // Variantes "cerca de 0": no agotadas pero con total <= 2 (unidades o metros).
+    const varCriticas = desglose
+      .filter(v => v.total > 0 && v.total <= 2)
+      .map(v => ({ color: v.color, total: v.total }));
 
     const tieneVel = velocidadDiaria > 0;
     const dias = tieneVel ? Math.floor(stock / velocidadDiaria) : null;
     const rellenarPorMin       = stockMin > 0 && stock <= stockMin;
     const rellenarPorVelocidad = tieneVel && dias !== null && dias <= 10;
-    const rellenarPorVariedad  = varAgotadas.length > 0;
+    const rellenarPorVariedad  = varAgotadas.length > 0 || varCriticas.length > 0;
     const rellenar = rellenarPorMin || rellenarPorVelocidad || rellenarPorVariedad;
 
-    const extra = { unidad: u, rellenar, varAgotadas, stockMin };
+    const extra = { unidad: u, rellenar, varAgotadas, varCriticas, stockMin };
 
     if (stock === 0) return { ...extra, label: `Sin ${u.pl}`, key: 'agotado', cls: 'badge-red', color: '#c62828', dias: 0, velocidad: velocidadDiaria, pct: 0 };
 
@@ -3194,7 +3492,7 @@ export async function renderCatalogo(container, db) {
     const enMovim     = invListaActual.filter(p => p._estado.velocidad > 0).length;
     const sinStock    = invListaActual.filter(p => _stockEfectivoInv(p) === 0).length;
     const aRellenar   = invListaActual.filter(p => p._estado.rellenar).length;
-    const variantes0  = invListaActual.reduce((acc, p) => acc + (p._estado.varAgotadas?.length || 0), 0);
+    const variantes0  = invListaActual.reduce((acc, p) => acc + (p._estado.varAgotadas?.length || 0) + (p._estado.varCriticas?.length || 0), 0);
     const cs = 'cursor:pointer;transition:transform 0.15s,box-shadow 0.15s';
 
     grid.innerHTML = `
@@ -3202,7 +3500,7 @@ export async function renderCatalogo(container, db) {
       <div class="card stat-card inv-stat" data-filtro="con" style="${cs}" title="Ver en movimiento"><div class="icon-wrap" style="background:#7b1fa2"><span class="material-icons">trending_up</span></div><div class="label">En movimiento</div><div class="value">${enMovim}</div></div>
       <div class="card stat-card inv-stat" data-filtro="rellenar" style="${cs}" title="Productos a rellenar"><div class="icon-wrap bg-orange"><span class="material-icons">notifications_active</span></div><div class="label">A rellenar</div><div class="value">${aRellenar}</div></div>
       <div class="card stat-card inv-stat" data-filtro="agotado" style="${cs}" title="Sin stock"><div class="icon-wrap bg-red"><span class="material-icons">remove_shopping_cart</span></div><div class="label">Sin stock</div><div class="value">${sinStock}</div></div>
-      <div class="card stat-card inv-stat" data-filtro="variantes" style="${cs}" title="Variedades específicas en 0"><div class="icon-wrap" style="background:#d32f2f"><span class="material-icons">palette</span></div><div class="label">Variantes en 0</div><div class="value">${variantes0}</div></div>
+      <div class="card stat-card inv-stat" data-filtro="variantes" style="${cs}" title="Variedades en 0 o cerca de 0"><div class="icon-wrap" style="background:#d32f2f"><span class="material-icons">palette</span></div><div class="label">Variantes bajas</div><div class="value">${variantes0}</div></div>
     `;
     grid.querySelectorAll('.inv-stat').forEach(card => {
       card.addEventListener('mouseenter', () => { card.style.transform='translateY(-3px)'; card.style.boxShadow='0 6px 20px rgba(0,0,0,0.1)'; });
@@ -3335,36 +3633,55 @@ export async function renderCatalogo(container, db) {
     const el = document.getElementById('invVariantesAgotadas');
     if (!el) return;
     const productos = invListaActual
-      .filter(p => (p._estado.varAgotadas?.length || 0) > 0)
+      .filter(p => (p._estado.varAgotadas?.length || 0) > 0 || (p._estado.varCriticas?.length || 0) > 0)
+      .sort((a, b) => {
+        const aAg = a._estado.varAgotadas?.length || 0;
+        const bAg = b._estado.varAgotadas?.length || 0;
+        if (aAg !== bAg) return bAg - aAg;
+        return (b._estado.varCriticas?.length || 0) - (a._estado.varCriticas?.length || 0);
+      })
       .slice(0, 12);
     if (!productos.length) {
       el.innerHTML = `
         <div style="background:#fff;border:1px solid #e4e6eb;border-radius:12px;padding:14px">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:6px">
             <span class="material-icons" style="color:#e65100;font-size:18px">palette</span>
-            <b style="font-size:13px;color:#e65100">Variantes en cero</b>
+            <b style="font-size:13px;color:#e65100">Variantes bajas</b>
           </div>
-          <div style="font-size:12px;color:#65676b">Ninguna variedad puntual está agotada.</div>
+          <div style="font-size:12px;color:#65676b">Ninguna variedad puntual está agotada o cerca de cero.</div>
         </div>`;
       return;
     }
     el.innerHTML = `
       <div style="background:#fff;border:1.5px solid #ffcc80;border-radius:12px;padding:14px">
-        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
           <span class="material-icons" style="color:#e65100;font-size:18px">palette</span>
-          <b style="font-size:13px;color:#e65100">Variantes en cero</b>
+          <b style="font-size:13px;color:#e65100">Variantes bajas</b>
           <span style="font-size:11px;color:#65676b">— qué color/talle reponer</span>
+          <span style="display:inline-flex;align-items:center;gap:4px;font-size:10px;color:#65676b;margin-left:auto">
+            <span style="display:inline-block;width:10px;height:10px;border-radius:99px;background:#c62828"></span> Sin stock
+            <span style="display:inline-block;width:10px;height:10px;border-radius:99px;background:#fb8c00;margin-left:6px"></span> Casi sin stock
+          </span>
         </div>
         <div style="display:flex;flex-direction:column;gap:6px">
           ${productos.map(p => {
-            const vars = p._estado.varAgotadas || [];
+            const agot = p._estado.varAgotadas || [];
+            const crit = p._estado.varCriticas || [];
+            const um = (p._estado.unidad || _unidadInv(p)).sym;
+            const chipsAgot = agot.slice(0, 8).map(v =>
+              `<span style="background:#ffebee;border:1px solid #c62828;color:#c62828;padding:2px 7px;border-radius:99px;font-size:10px;font-weight:700">${v} · 0</span>`
+            ).join('');
+            const chipsCrit = crit.slice(0, 8).map(v =>
+              `<span style="background:#fff;border:1px solid #fb8c00;color:#e65100;padding:2px 7px;border-radius:99px;font-size:10px;font-weight:600">${v.color} · ${v.total}${um}</span>`
+            ).join('');
+            const extra = Math.max(0, (agot.length - 8) + (crit.length - 8));
             return `
             <div style="background:#fff8e1;border:1px solid #ffcc80;border-radius:8px;padding:8px 10px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
               <div style="flex:1;min-width:0">
                 <div style="font-size:12px;font-weight:700;line-height:1.3;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${p.nombre}</div>
                 <div style="display:flex;flex-wrap:wrap;gap:3px;margin-top:3px">
-                  ${vars.slice(0, 8).map(v => `<span style="background:#fff;border:1px solid #fb8c00;color:#e65100;padding:2px 7px;border-radius:99px;font-size:10px;font-weight:600">${v}</span>`).join('')}
-                  ${vars.length > 8 ? `<span style="font-size:10px;color:#65676b;align-self:center">+${vars.length - 8}</span>` : ''}
+                  ${chipsAgot}${chipsCrit}
+                  ${extra > 0 ? `<span style="font-size:10px;color:#65676b;align-self:center">+${extra}</span>` : ''}
                 </div>
               </div>
               <button class="btn-rellenar-var" data-id="${p.doc_id}" style="background:#2e7d32;border:none;color:#fff;cursor:pointer;padding:5px 10px;border-radius:6px;font-size:11px;font-weight:700;display:flex;align-items:center;gap:4px;font-family:inherit;flex-shrink:0">
@@ -3494,9 +3811,17 @@ export async function renderCatalogo(container, db) {
                     const stk = _stockEfectivoInv(p);
                     const u = p._estado.unidad || _unidadInv(p);
                     const varAgot = p._estado.varAgotadas || [];
-                    const varInfo = varAgot.length > 0
-                      ? `<div style="font-size:10px;color:#c62828;margin-top:2px;font-weight:600">⚠ Sin: ${varAgot.slice(0, 4).join(', ')}${varAgot.length > 4 ? ` +${varAgot.length - 4}` : ''}</div>`
-                      : '';
+                    const varCrit = p._estado.varCriticas || [];
+                    const umSym   = (p._estado.unidad || _unidadInv(p)).sym;
+                    const lineas = [];
+                    if (varAgot.length > 0) {
+                      lineas.push(`<div style="font-size:10px;color:#c62828;margin-top:2px;font-weight:600">⚠ Sin: ${varAgot.slice(0, 4).join(', ')}${varAgot.length > 4 ? ` +${varAgot.length - 4}` : ''}</div>`);
+                    }
+                    if (varCrit.length > 0) {
+                      const list = varCrit.slice(0, 4).map(v => `${v.color} (${v.total}${umSym})`).join(', ');
+                      lineas.push(`<div style="font-size:10px;color:#e65100;margin-top:2px;font-weight:600">⚠ Bajo: ${list}${varCrit.length > 4 ? ` +${varCrit.length - 4}` : ''}</div>`);
+                    }
+                    const varInfo = lineas.join('');
                     return `<tr style="border-top:1px solid #f0f0f0;${exc?'opacity:0.45;background:#fafafa':''}">
                       <td style="padding:7px 10px;text-align:center"><input type="checkbox" class="inv-chk-item" data-id="${p.doc_id}" ${exc?'':'checked'} /></td>
                       <td style="padding:7px 10px${mostrarHeaders?';padding-left:26px':''}">
@@ -3590,7 +3915,7 @@ export async function renderCatalogo(container, db) {
           </div>
           <div style="padding:16px 22px;flex:1;overflow-y:auto">
             <div style="font-size:12px;color:#65676b;margin-bottom:10px;background:#f5f5f5;border-radius:8px;padding:10px 12px;line-height:1.4">
-              Sumá los <b>${tipoLabel}s</b> que recibiste por variedad. ${globalCont > 0 ? `Cada ${tipoLabel} = ${globalCont} ${u.pl}.` : ''} Lo que cargues acá se <b>suma</b> al stock actual.
+              Editá la cantidad actual de cada variedad. ${globalCont > 0 ? `Cada ${tipoLabel} = ${globalCont} ${u.pl}.` : ''} Los valores que dejes <b>reemplazan</b> al stock actual.
             </div>
             <div id="rellInv_lista" style="display:flex;flex-direction:column;gap:6px"></div>
             <button id="rellInv_add" type="button" style="margin-top:10px;background:none;border:1.5px dashed #cfd8dc;color:#7b1fa2;padding:8px 12px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;display:flex;align-items:center;gap:4px;font-family:inherit">
@@ -3601,7 +3926,7 @@ export async function renderCatalogo(container, db) {
           </div>
           <div style="padding:14px 22px;border-top:1px solid #e4e6eb;display:flex;justify-content:flex-end;gap:8px;background:#fafafa">
             <button id="rellInv_cancel" style="padding:9px 18px;border-radius:8px;border:1.5px solid #e4e6eb;background:#fff;cursor:pointer;font-size:13px;font-weight:600;color:#65676b">Cancelar</button>
-            <button id="rellInv_guardar" style="padding:9px 22px;border-radius:8px;border:none;background:#2e7d32;color:#fff;cursor:pointer;font-size:13px;font-weight:700">Sumar al stock</button>
+            <button id="rellInv_guardar" style="padding:9px 22px;border-radius:8px;border:none;background:#2e7d32;color:#fff;cursor:pointer;font-size:13px;font-weight:700">Guardar stock</button>
           </div>
         </div>`;
 
@@ -3613,22 +3938,28 @@ export async function renderCatalogo(container, db) {
         const row = document.createElement('div');
         row.dataset.varRow = '1';
         row.dataset.esNueva = esNueva ? '1' : '0';
+        const origPacks = existente ? (Number(existente.u) || 0) : 0;
+        const origSuelt = existente ? (Number(existente.r) || 0) : 0;
+        row.dataset.origPacks = String(origPacks);
+        row.dataset.origSueltos = String(origSuelt);
         row.style.cssText = 'display:grid;grid-template-columns:1fr 90px 90px;gap:8px;align-items:center;background:#fff;border:1.5px solid #e5e7eb;border-radius:10px;padding:8px 10px';
         const stkExistente = existente ? `${existente.total} ${u.pl}` : 'nueva';
+        const valPacks   = esNueva ? '' : String(origPacks);
+        const valSueltos = esNueva ? '' : String(origSuelt);
         row.innerHTML = `
           <div style="min-width:0">
             ${esNueva
               ? `<input class="r_color" type="text" placeholder="Nombre variedad" value="${color}" style="width:100%;padding:6px 8px;border:1.5px solid #fb923c;border-radius:6px;font-size:12px;box-sizing:border-box;font-family:inherit;background:#fff7ed" />`
               : `<div style="font-size:13px;font-weight:700">${color}</div>
-                 <div style="font-size:10px;color:#65676b">Tenés: ${stkExistente}</div>`}
+                 <div style="font-size:10px;color:#65676b">Actual: ${stkExistente}</div>`}
           </div>
           <div>
-            <div style="font-size:9px;font-weight:700;color:#9ca3af;letter-spacing:0.5px;text-align:center">${tipoLabel.toUpperCase()}S +</div>
-            <input class="r_packs" type="number" min="0" step="1" placeholder="0" style="width:100%;padding:6px;border:1.5px solid #cfd8dc;border-radius:6px;font-size:14px;text-align:center;box-sizing:border-box;font-family:inherit;font-weight:700" />
+            <div style="font-size:9px;font-weight:700;color:#9ca3af;letter-spacing:0.5px;text-align:center">${tipoLabel.toUpperCase()}S</div>
+            <input class="r_packs" type="number" min="0" step="1" placeholder="0" value="${valPacks}" style="width:100%;padding:6px;border:1.5px solid #cfd8dc;border-radius:6px;font-size:14px;text-align:center;box-sizing:border-box;font-family:inherit;font-weight:700" />
           </div>
           <div>
-            <div style="font-size:9px;font-weight:700;color:#9ca3af;letter-spacing:0.5px;text-align:center">SUELTOS +</div>
-            <input class="r_sueltos" type="number" min="0" step="0.01" placeholder="0" style="width:100%;padding:6px;border:1.5px solid #cfd8dc;border-radius:6px;font-size:14px;text-align:center;box-sizing:border-box;font-family:inherit" />
+            <div style="font-size:9px;font-weight:700;color:#9ca3af;letter-spacing:0.5px;text-align:center">SUELTOS</div>
+            <input class="r_sueltos" type="number" min="0" step="0.01" placeholder="0" value="${valSueltos}" style="width:100%;padding:6px;border:1.5px solid #cfd8dc;border-radius:6px;font-size:14px;text-align:center;box-sizing:border-box;font-family:inherit" />
           </div>`;
         lista.appendChild(row);
         row.querySelectorAll('input').forEach(i => i.addEventListener('input', actualizarResumen));
@@ -3638,20 +3969,23 @@ export async function renderCatalogo(container, db) {
       overlay.querySelector('#rellInv_add').addEventListener('click', () => _addRow('', null, true));
 
       function actualizarResumen() {
-        let totP = 0, totS = 0, nuevas = 0;
+        let totP = 0, totS = 0, nuevas = 0, hayCambio = false;
         overlay.querySelectorAll('[data-var-row]').forEach(r => {
           const packs   = parseInt(r.querySelector('.r_packs').value) || 0;
           const sueltos = parseFloat(r.querySelector('.r_sueltos').value) || 0;
+          const oP = Number(r.dataset.origPacks)   || 0;
+          const oS = Number(r.dataset.origSueltos) || 0;
+          if (packs !== oP || sueltos !== oS) hayCambio = true;
           if (r.dataset.esNueva === '1' && (packs > 0 || sueltos > 0)) nuevas += 1;
           totP += packs; totS += sueltos;
         });
         const totalUn = (totP * (globalCont || 1)) + totS;
-        if (totP === 0 && totS === 0) {
+        if (!hayCambio) {
           resumenEl.style.display = 'none';
         } else {
           resumenEl.style.display = 'block';
           resumenEl.innerHTML = `
-            <b>Vas a sumar:</b> ${totP} ${tipoLabel}${totP===1?'':'s'}${totS>0?` + ${totS} sueltos`:''}
+            <b>Total nuevo:</b> ${totP} ${tipoLabel}${totP===1?'':'s'}${totS>0?` + ${totS} sueltos`:''}
             ${globalCont > 0 ? ` = <b>${totalUn} ${u.pl}</b>` : ''}
             ${nuevas > 0 ? `<br><span style="font-size:11px">(${nuevas} ${nuevas===1?'variedad nueva':'variedades nuevas'})</span>` : ''}`;
         }
@@ -3674,6 +4008,8 @@ export async function renderCatalogo(container, db) {
         filas.forEach((r, idx) => {
           const packs   = parseInt(r.querySelector('.r_packs').value) || 0;
           const sueltos = parseFloat(r.querySelector('.r_sueltos').value) || 0;
+          const oP = Number(r.dataset.origPacks)   || 0;
+          const oS = Number(r.dataset.origSueltos) || 0;
           const esNueva = r.dataset.esNueva === '1';
           if (esNueva) {
             const nombre = (r.querySelector('.r_color')?.value || '').trim();
@@ -3686,17 +4022,17 @@ export async function renderCatalogo(container, db) {
           const original = desglose[idx];
           const orig = (Array.isArray(p.conjunto_colores) ? p.conjunto_colores : [])
             .find(c => (c.color || '').toLowerCase() === (original?.color || '').toLowerCase()) || {};
-          if (packs > 0 || sueltos > 0) huboCambios = true;
+          if (packs !== oP || sueltos !== oS) huboCambios = true;
           existentesActualizadas.push({
             ...orig,
-            unidades: (Number(orig.unidades) || 0) + packs,
-            restante: (Number(orig.restante) || 0) + sueltos,
+            unidades: packs,
+            restante: sueltos,
           });
         });
 
         if (!huboCambios) {
-          alert('No cargaste nada para sumar.');
-          btn.disabled = false; btn.textContent = 'Sumar al stock';
+          alert('No cambiaste ninguna cantidad.');
+          btn.disabled = false; btn.textContent = 'Guardar stock';
           return;
         }
 
@@ -3730,7 +4066,7 @@ export async function renderCatalogo(container, db) {
           if (tc) renderTabInventario(tc);
         } catch (err) {
           alert('Error al guardar: ' + err.message);
-          btn.disabled = false; btn.textContent = 'Sumar al stock';
+          btn.disabled = false; btn.textContent = 'Guardar stock';
         }
       });
       return;
@@ -4779,13 +5115,13 @@ export async function renderCatalogo(container, db) {
         <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
           <div style="display:flex;flex-direction:column;gap:4px">
             <label style="font-size:11px;font-weight:600;color:#65676b">STOCK MÍNIMO (avisar)</label>
-            <input id="det_stock_min" type="number" min="0" step="1" placeholder="Sin alerta"
+            <input id="det_stock_min" type="number" min="0" step="any" placeholder="Sin alerta"
                    value="${p.stock_min ?? ''}"
                    style="width:130px;padding:8px 12px;border:1px solid #ffe082;border-radius:8px;font-size:14px;font-weight:700;color:#b45309;background:#fff" />
           </div>
           <div style="display:flex;flex-direction:column;gap:4px">
             <label style="font-size:11px;font-weight:600;color:#65676b">STOCK MÁXIMO (ideal)</label>
-            <input id="det_stock_max" type="number" min="0" step="1" placeholder="Sin tope"
+            <input id="det_stock_max" type="number" min="0" step="any" placeholder="Sin tope"
                    value="${p.stock_max ?? ''}"
                    style="width:130px;padding:8px 12px;border:1px solid #ffe082;border-radius:8px;font-size:14px;font-weight:700;color:#b45309;background:#fff" />
           </div>
@@ -4859,8 +5195,8 @@ export async function renderCatalogo(container, db) {
       const msg = document.getElementById('det_stock_alert_msg');
       const rawMin = document.getElementById('det_stock_min').value.trim();
       const rawMax = document.getElementById('det_stock_max').value.trim();
-      const sMin = rawMin === '' ? null : Math.max(0, parseInt(rawMin) || 0);
-      const sMax = rawMax === '' ? null : Math.max(0, parseInt(rawMax) || 0);
+      const sMin = rawMin === '' ? null : Math.max(0, parseFloat(rawMin.replace(',', '.')) || 0);
+      const sMax = rawMax === '' ? null : Math.max(0, parseFloat(rawMax.replace(',', '.')) || 0);
       if (sMin !== null && sMax !== null && sMax > 0 && sMax < sMin) {
         msg.innerHTML = `<span style="color:#c62828">El máximo no puede ser menor al mínimo.</span>`;
         return;
@@ -6373,6 +6709,17 @@ export async function renderCatalogo(container, db) {
     renderTab('catalogo');
     // Banner de alertas: velocity en background → al completar, dibuja banner
     cargarVelocidadVentas().then(() => renderBannerCriticos()).catch(() => {});
+
+    // Deep-link desde la página de Notificaciones: si nos pidieron abrir un
+    // producto al entrar al catálogo, lo abrimos en el editor completo.
+    if (window.__pendingCatalogoOpen) {
+      const targetId = window.__pendingCatalogoOpen;
+      window.__pendingCatalogoOpen = null;
+      const prod = allProductos.find(p => p.doc_id === targetId);
+      if (prod) {
+        setTimeout(() => { try { abrirEditorCompleto(prod); } catch (e) { console.warn('Deep-link a editor falló:', e); } }, 50);
+      }
+    }
   } catch(e) {
     const tc = document.getElementById('tabContent');
     if (tc) tc.innerHTML = `<div style="padding:20px;color:var(--danger)">Error: Error cargando catálogo: ${e.message}<br><br><i>Si el catálogo está vacío, usá la pestaña "Importar CSV" para cargar los productos.</i></div>`;
