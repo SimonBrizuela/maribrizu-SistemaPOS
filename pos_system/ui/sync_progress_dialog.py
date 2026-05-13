@@ -217,6 +217,7 @@ class DownloadWorker(QThread):
                     return None
 
             total_fb = len(productos_fb)
+            firebase_ids_seen = set()
             for i, p in enumerate(productos_fb):
                 # firebase_id = doc_id del documento en Firestore (identificador único)
                 firebase_id = str(p.get('doc_id') or p.get('_doc_id') or '').strip()
@@ -267,6 +268,9 @@ class DownloadWorker(QThread):
                 # Saltar productos sin precio o inactivos
                 if precio <= 0 or estado == 'sin_precio':
                     continue
+
+                if firebase_id:
+                    firebase_ids_seen.add(firebase_id)
 
                 # NOTA: NO insertar cat en categories — esa tabla es solo para RUBROS.
 
@@ -383,6 +387,42 @@ class DownloadWorker(QThread):
                 f'Inventario: {productos_nuevos} nuevos · '
                 f'{productos_actualizados} actualizados · '
                 f'(total Firebase: {total_fb})', 'ok')
+
+            # ── PASO 3.5a: Reconciliación — solo en sync completo ────────
+            # En delta sync la lista descargada es parcial, por lo que
+            # firebase_ids_seen está incompleta y no se puede usar para
+            # detectar fantasmas. Solo aplica cuando _local_epoch == 0.
+            if _local_epoch == 0 and firebase_ids_seen:
+                try:
+                    local_con_fb = db.execute_query(
+                        "SELECT id, name, firebase_id FROM products "
+                        "WHERE firebase_id IS NOT NULL AND firebase_id != ''"
+                    ) or []
+                    ghost_ids = [
+                        (r['id'], r['name'], r['firebase_id'])
+                        for r in local_con_fb
+                        if r['firebase_id'] not in firebase_ids_seen
+                    ]
+                    if ghost_ids:
+                        from firebase_admin import firestore as _fs
+                        for local_id, nombre_ghost, fid in ghost_ids:
+                            db.execute_update(
+                                "DELETE FROM products WHERE id = ?", (local_id,)
+                            )
+                            try:
+                                fb.db.collection('catalogo_deleted').document(fid).set(
+                                    {'deleted_at': _fs.SERVER_TIMESTAMP}
+                                )
+                            except Exception:
+                                pass
+                        self.log_message.emit(
+                            f'Reconciliacion: {len(ghost_ids)} producto(s) fantasma eliminados', 'ok')
+                    else:
+                        self.log_message.emit(
+                            'Reconciliacion: sin fantasmas locales.', 'info')
+                except Exception as e_rec:
+                    self.log_message.emit(
+                        f'Reconciliacion: error (no critico): {e_rec}', 'warn')
 
             # ── PASO 3.5: Aplicar tombstones de productos eliminados ─────
             # La webapp escribe un doc en catalogo_deleted/{id} con deleted_at
