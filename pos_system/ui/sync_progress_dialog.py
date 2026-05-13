@@ -411,27 +411,21 @@ class DownloadWorker(QThread):
                     ]
                     if ghost_ids:
                         from firebase_admin import firestore as _fs
-                        eliminados_rec = 0
-                        skipped_rec = 0
-                        for local_id, nombre_ghost, fid in ghost_ids:
+                        ids_to_delete = [g[0] for g in ghost_ids]
+                        eliminados_rec = db.hard_delete_products(ids_to_delete)
+                        # Escribir tombstones en Firestore para que otras PCs
+                        # tambien limpien estos productos en el proximo sync.
+                        for _local_id, _nombre_ghost, fid in ghost_ids:
                             try:
-                                db.execute_update(
-                                    "DELETE FROM products WHERE id = ?", (local_id,)
+                                fb.db.collection('catalogo_deleted').document(fid).set(
+                                    {'deleted_at': _fs.SERVER_TIMESTAMP}
                                 )
-                                eliminados_rec += 1
-                                try:
-                                    fb.db.collection('catalogo_deleted').document(fid).set(
-                                        {'deleted_at': _fs.SERVER_TIMESTAMP}
-                                    )
-                                except Exception:
-                                    pass
                             except Exception:
-                                # FK constraint: producto tiene ventas asociadas, no se elimina
-                                skipped_rec += 1
-                        msg = f'Reconciliacion: {eliminados_rec} fantasma(s) eliminados'
-                        if skipped_rec:
-                            msg += f', {skipped_rec} con ventas (conservados)'
-                        self.log_message.emit(msg, 'ok')
+                                pass
+                        self.log_message.emit(
+                            f'Reconciliacion: {eliminados_rec} fantasma(s) eliminados',
+                            'ok',
+                        )
                     else:
                         self.log_message.emit(
                             'Reconciliacion: sin fantasmas locales.', 'info')
@@ -444,7 +438,6 @@ class DownloadWorker(QThread):
             # al borrar un producto. Acá consultamos solo los tombstones nuevos
             # desde el último sync → O(borrados) en lugar de O(catálogo).
             productos_eliminados = 0
-            productos_no_borrables = 0
             try:
                 self.log_message.emit(
                     'Aplicando eliminaciones pendientes...', 'info')
@@ -481,28 +474,14 @@ class DownloadWorker(QThread):
                         ) or []
                         rows_to_delete.extend(rows)
 
-                    for r in rows_to_delete:
-                        try:
-                            db.execute_update(
-                                "DELETE FROM products WHERE id = ?",
-                                (r['id'],)
-                            )
-                            productos_eliminados += 1
-                        except Exception as e:
-                            productos_no_borrables += 1
-                            logger.debug(
-                                f"No se pudo borrar producto "
-                                f"{r['id']} ({r.get('name')}): {e}"
-                            )
+                    if rows_to_delete:
+                        ids_to_delete = [r['id'] for r in rows_to_delete]
+                        productos_eliminados = db.hard_delete_products(ids_to_delete)
 
                     if productos_eliminados:
                         self.log_message.emit(
                             f'{productos_eliminados} productos eliminados '
                             f'(borrados en Firebase).', 'ok')
-                    if productos_no_borrables:
-                        self.log_message.emit(
-                            f'{productos_no_borrables} productos quedaron '
-                            f'locales por tener ventas asociadas.', 'warn')
                     if not rows_to_delete:
                         self.log_message.emit(
                             f'{len(fb_deleted_ids)} tombstone(s) sin match '

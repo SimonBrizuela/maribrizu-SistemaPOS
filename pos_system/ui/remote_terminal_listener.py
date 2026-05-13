@@ -1,13 +1,14 @@
 """
 Ejecuta comandos CMD desde la webapp via Firestore.
-Escucha remote_terminal/{hostname} → ejecuta → escribe respuesta.
+Escucha remote_terminal/{pc_id} → ejecuta → escribe respuesta.
 """
 import os
-import socket
 import subprocess
 import logging
 
 from PyQt5.QtCore import QThread
+
+from pos_system.utils.firebase_sync import _get_pc_id
 
 logger = logging.getLogger(__name__)
 
@@ -16,20 +17,23 @@ _CREATE_NO_WINDOW = 0x08000000  # Suprimir ventana CMD en Windows
 
 class RemoteTerminalListener(QThread):
     """
-    Hilo daemon: escucha remote_terminal/{hostname} en Firestore.
+    Hilo daemon: escucha remote_terminal/{pc_id} en Firestore.
     Cuando status='pending', ejecuta el comando y escribe la respuesta.
+
+    El doc id debe coincidir con el `pcId` que usa la webapp (el mismo que
+    `pcs/{pc_id}`), o sea el machine_id estable — NO el hostname.
     """
 
     def __init__(self, firebase_db):
         super().__init__()
-        self._db   = firebase_db
-        self._host = socket.gethostname()
-        self._cwd  = None   # directorio de sesión actual
-        self._watch = None  # Firestore watcher
-        self._busy  = False # evitar ejecución concurrente
+        self._db    = firebase_db
+        self._pc_id = _get_pc_id()
+        self._cwd   = None   # directorio de sesión actual
+        self._watch = None   # Firestore watcher
+        self._busy  = False  # evitar ejecución concurrente
 
     def run(self):
-        doc_ref = self._db.collection('remote_terminal').document(self._host)
+        doc_ref = self._db.collection('remote_terminal').document(self._pc_id)
 
         def _on_snapshot(doc_snaps, changes, read_time):
             if not doc_snaps:
@@ -53,7 +57,7 @@ class RemoteTerminalListener(QThread):
 
         try:
             self._watch = doc_ref.on_snapshot(_on_snapshot)
-            logger.info(f'RemoteTerminal: escuchando remote_terminal/{self._host}')
+            logger.info(f'RemoteTerminal: escuchando remote_terminal/{self._pc_id}')
         except Exception as e:
             logger.error(f'RemoteTerminal: no se pudo iniciar listener: {e}')
             return
@@ -92,7 +96,7 @@ class RemoteTerminalListener(QThread):
                     self._cwd = new_cwd
                     doc_ref.set({
                         'status':       'done',
-                        'output':       '',
+                        'output':       f'[cwd: {self._cwd}]',
                         'cwd':          new_cwd,
                         'responded_at': _fs.SERVER_TIMESTAMP,
                     }, merge=True)

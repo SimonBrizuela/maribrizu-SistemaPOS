@@ -309,23 +309,19 @@ class FirebaseSync:
                     if doc_ts and (max_ts_batch is None or doc_ts > max_ts_batch):
                         max_ts_batch = doc_ts
 
-                    # ── REMOVED: borrar del SQLite local ──
+                    # ── REMOVED: borrar del SQLite local (hard delete) ──
                     if change.type == ChangeType.REMOVED:
                         try:
-                            db_manager.execute_update(
-                                "DELETE FROM products WHERE firebase_id = ?", (doc_id,)
-                            )
-                            changed_any = True
-                        except Exception:
-                            # FK error → soft delete (preserva ventas históricas)
-                            try:
-                                db_manager.execute_update(
-                                    "UPDATE products SET stock=0, firebase_id=NULL WHERE firebase_id = ?",
-                                    (doc_id,)
-                                )
+                            rows = db_manager.execute_query(
+                                "SELECT id FROM products WHERE firebase_id = ?",
+                                (doc_id,),
+                            ) or []
+                            ids = [r['id'] for r in rows]
+                            if ids:
+                                db_manager.hard_delete_products(ids)
                                 changed_any = True
-                            except Exception as e:
-                                logger.warning(f"Listener catalogo: no pude borrar {doc_id}: {e}")
+                        except Exception as e:
+                            logger.warning(f"Listener catalogo: no pude borrar {doc_id}: {e}")
                         continue
 
                     # ── ADDED / MODIFIED ──
@@ -712,22 +708,9 @@ class FirebaseSync:
                             if doc_ts and (max_ts is None or doc_ts > max_ts):
                                 max_ts = doc_ts
                             continue
-                        for r in rows:
-                            lid = r['id']
-                            try:
-                                db_manager.execute_update(
-                                    "DELETE FROM products WHERE id = ?", (lid,)
-                                )
-                                deleted += 1
-                            except Exception:
-                                try:
-                                    db_manager.execute_update(
-                                        "UPDATE products SET stock=0, firebase_id=NULL WHERE id = ?",
-                                        (lid,)
-                                    )
-                                    softdeleted += 1
-                                except Exception as e:
-                                    logger.warning(f"Listener tombstones: no se pudo limpiar {lid} ({doc_id}): {e}")
+                        ids = [r['id'] for r in rows]
+                        n = db_manager.hard_delete_products(ids)
+                        deleted += n
                     except Exception as e:
                         logger.warning(f"Listener tombstones: error matcheando {doc_id}: {e}")
 
@@ -817,31 +800,42 @@ class FirebaseSync:
                     continue
                 orphans.append(r['id'])
 
+            # 3. Fantasmas legacy: productos que quedaron de soft-deletes
+            #    viejos (firebase_id NULL/'', stock=0, con barcode). Las
+            #    versiones anteriores caían a soft-delete cuando el DELETE
+            #    real fallaba por FK; ahora los limpiamos definitivamente.
+            #    Excluye '[DUPLICADO] %' (workflow de cleanup de duplicados).
+            try:
+                ghost_rows = db_manager.execute_query(
+                    "SELECT id FROM products "
+                    "WHERE (firebase_id IS NULL OR firebase_id = '') "
+                    "AND COALESCE(stock, 0) = 0 "
+                    "AND barcode IS NOT NULL AND TRIM(barcode) != '' "
+                    "AND (name IS NULL OR name NOT LIKE '[DUPLICADO]%')"
+                ) or []
+                ghost_ids = {r['id'] for r in ghost_rows}
+                # Evitar duplicar ids ya marcados como orphan.
+                already = set(orphans)
+                new_ghosts = [gid for gid in ghost_ids if gid not in already]
+                if new_ghosts:
+                    orphans.extend(new_ghosts)
+                logger.info(
+                    f"reconcile_all_orphans: +{len(new_ghosts)} fantasmas legacy "
+                    f"(soft-delete previo)."
+                )
+            except Exception as e:
+                logger.warning(f"reconcile_all_orphans: fantasmas legacy: {e}")
+
             logger.info(
                 f"reconcile_all_orphans: {len(rows)} locales, "
                 f"{len(firestore_ids)} ids + {len(firestore_codes)} codigos "
                 f"en Firestore, {len(orphans)} huerfanos."
             )
 
-            for lid in orphans:
-                try:
-                    db_manager.execute_update(
-                        "DELETE FROM products WHERE id = ?", (lid,)
-                    )
-                    out['deleted'] += 1
-                except Exception:
-                    try:
-                        db_manager.execute_update(
-                            "UPDATE products SET stock=0, firebase_id=NULL WHERE id = ?",
-                            (lid,)
-                        )
-                        out['softdeleted'] += 1
-                    except Exception as e:
-                        logger.warning(f"reconcile_all_orphans: no se pudo limpiar {lid}: {e}")
+            out['deleted'] = db_manager.hard_delete_products(orphans)
 
             logger.info(
-                f"reconcile_all_orphans: borrados {out['deleted']}, "
-                f"soft-delete {out['softdeleted']}."
+                f"reconcile_all_orphans: borrados {out['deleted']}."
             )
         except Exception as e:
             logger.error(f"reconcile_all_orphans: {e}")
@@ -879,26 +873,11 @@ class FirebaseSync:
                 for r in rows:
                     matched_ids.add(r['id'])
 
-            for lid in matched_ids:
-                try:
-                    db_manager.execute_update(
-                        "DELETE FROM products WHERE id = ?", (lid,)
-                    )
-                    out['deleted'] += 1
-                except Exception:
-                    try:
-                        db_manager.execute_update(
-                            "UPDATE products SET stock=0, firebase_id=NULL WHERE id = ?",
-                            (lid,)
-                        )
-                        out['softdeleted'] += 1
-                    except Exception as e:
-                        logger.warning(f"purge_products_by_codes: no se pudo limpiar {lid}: {e}")
+            out['deleted'] = db_manager.hard_delete_products(matched_ids)
 
             logger.info(
                 f"purge_products_by_codes: {len(codes)} codigos, "
-                f"{len(matched_ids)} matches, borrados {out['deleted']}, "
-                f"soft-delete {out['softdeleted']}."
+                f"{len(matched_ids)} matches, borrados {out['deleted']}."
             )
         except Exception as e:
             logger.error(f"purge_products_by_codes: {e}")
@@ -1891,26 +1870,11 @@ class FirebaseSync:
                     logger.warning(f"Delta sync: error detectando borrados: {e}")
 
                 deleted = 0
-                softdeleted = 0
-                for lid, fid in stale_fids:
-                    try:
-                        local_db.execute_update("DELETE FROM products WHERE id=?", (lid,))
-                        deleted += 1
-                    except Exception as _e:
-                        # Probablemente FK: hay ventas apuntando a este producto.
-                        try:
-                            local_db.execute_update(
-                                "UPDATE products SET stock=0, firebase_id=NULL WHERE id=?",
-                                (lid,)
-                            )
-                            softdeleted += 1
-                        except Exception as _e2:
-                            logger.debug(f"Delta sync: no se pudo limpiar producto {lid}: {_e2}")
-                if deleted or softdeleted:
-                    logger.info(
-                        f"Delta sync: {deleted} productos eliminados, "
-                        f"{softdeleted} conservados (con ventas) y marcados stock=0."
-                    )
+                if stale_fids:
+                    ids = [lid for lid, _fid in stale_fids]
+                    deleted = local_db.hard_delete_products(ids)
+                if deleted:
+                    logger.info(f"Delta sync: {deleted} productos eliminados (hard delete).")
 
                 # 7. Guardar timestamp del sync exitoso
                 now_str = now_ar().strftime('%Y-%m-%dT%H:%M:%S')

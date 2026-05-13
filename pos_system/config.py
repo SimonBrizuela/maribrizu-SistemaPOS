@@ -28,7 +28,7 @@ DATABASE_BACKUP_DIR = DATA_DIR / "backups"
 
 # Application settings
 APP_NAME = "Sistema POS"
-APP_VERSION = "3.0.31"
+APP_VERSION = "3.0.33"
 ORGANIZATION = "POS System"
 
 # UI Settings

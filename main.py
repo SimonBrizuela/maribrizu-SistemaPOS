@@ -72,6 +72,49 @@ def _init_firebase(db=None):
         logger.error(f"Firebase: Error al inicializar: {e}")
 
 
+def _reconcile_orphans_on_startup(db):
+    """
+    Limpia productos huérfanos del SQLite local al arrancar el POS.
+    Compara contra Firestore: si un producto no está en el catálogo activo,
+    lo borra (hard delete). Tambien barre fantasmas legacy (soft-deletes
+    previos al fix de FK).
+
+    Guard de 12hs para no leer todo el catálogo en cada reinicio.
+    """
+    try:
+        from pos_system.utils.firebase_sync import get_firebase_sync
+        from pos_system.config import DATA_DIR
+        import time as _t
+
+        fb = get_firebase_sync()
+        if not fb or not fb.enabled:
+            return
+
+        flag_file = DATA_DIR / "last_orphan_reconcile.txt"
+        last_run = 0.0
+        if flag_file.exists():
+            try:
+                last_run = float(flag_file.read_text(encoding='utf-8').strip())
+            except Exception:
+                last_run = 0.0
+
+        if (_t.time() - last_run) < (12 * 3600):
+            logger.info("Reconcile orphans: omitido (ultima corrida <12hs).")
+            return
+
+        result = fb.reconcile_all_orphans(db)
+        try:
+            flag_file.write_text(str(_t.time()), encoding='utf-8')
+        except Exception:
+            pass
+        logger.info(
+            f"Reconcile orphans (startup): {result.get('checked', 0)} locales, "
+            f"{result.get('deleted', 0)} borrados."
+        )
+    except Exception as e:
+        logger.warning(f"Reconcile orphans (startup): error {e}")
+
+
 def _sync_inventory_from_firebase(db):
     """
     Descarga el catálogo desde Firestore y lo aplica a la BD local.
@@ -412,6 +455,8 @@ def main():
             _t.sleep(1.5)
             logger.info("Background: Syncing inventory from Firebase...")
             _sync_inventory_from_firebase(db)
+            logger.info("Background: Reconcile orphans...")
+            _reconcile_orphans_on_startup(db)
 
         threading.Thread(target=_background_init, daemon=True).start()
 

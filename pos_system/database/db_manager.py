@@ -703,6 +703,50 @@ class DatabaseManager:
         except sqlite3.Error as e:
             logger.error(f"Batch execution failed: {e}")
             raise
+
+    def hard_delete_products(self, ids) -> int:
+        """
+        Borra productos del SQLite local SIN respetar foreign keys.
+        Pensado para reconciliación con el catálogo Firestore: si el
+        producto ya no está en el catálogo, hay que sacarlo aunque
+        tenga ventas o ajustes de stock históricos.
+
+        - sale_items: NO se tocan. sale_items.product_name está embebido
+          en cada fila → el historial de ventas queda legible.
+        - stock_adjustments: se eliminan (no aportan historial visible).
+        - promotion_products: se eliminan (referencias internas).
+
+        Devuelve la cantidad de filas eliminadas de la tabla products.
+        """
+        ids = [i for i in (ids or []) if i is not None]
+        if not ids:
+            return 0
+        deleted = 0
+        try:
+            with self.get_connection() as conn:
+                conn.execute("PRAGMA foreign_keys = OFF")
+                cur = conn.cursor()
+                CHUNK = 500
+                for i in range(0, len(ids), CHUNK):
+                    chunk = ids[i:i + CHUNK]
+                    ph = ','.join(['?'] * len(chunk))
+                    cur.execute(
+                        f"DELETE FROM stock_adjustments WHERE product_id IN ({ph})",
+                        tuple(chunk),
+                    )
+                    cur.execute(
+                        f"DELETE FROM promotion_products WHERE product_id IN ({ph})",
+                        tuple(chunk),
+                    )
+                    cur.execute(
+                        f"DELETE FROM products WHERE id IN ({ph})",
+                        tuple(chunk),
+                    )
+                    deleted += cur.rowcount
+        except sqlite3.Error as e:
+            logger.error(f"hard_delete_products failed: {e}")
+            raise
+        return deleted
     
     def get_current_cash_register(self) -> Optional[Dict]:
         """Obtiene la caja actual abierta"""
