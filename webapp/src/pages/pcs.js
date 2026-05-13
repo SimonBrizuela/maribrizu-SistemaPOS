@@ -404,11 +404,15 @@ export async function renderPcs(container, db) {
     if (termEl) termEl.style.display = _termOpen[pcId] ? 'flex' : 'none';
     if (_termOpen[pcId] && !_termUnsubs[pcId]) {
       _termOpenedAt[pcId] = Math.floor(Date.now() / 1000);
+      setDoc(doc(_dbRef, 'remote_terminal', pcId), { status: 'idle', reset_at: serverTimestamp() }, { merge: true }).catch(() => {});
       _termUnsubs[pcId] = onSnapshot(doc(_dbRef, 'remote_terminal', pcId), snap => {
         if (!snap.exists()) return;
         const data = snap.data() || {};
         const respondedAt = data.responded_at?.seconds || 0;
-        const busy = data.status === 'pending' || data.status === 'running';
+        const issuedAt = data.issued_at?.seconds || 0;
+        const nowSec = Math.floor(Date.now() / 1000);
+        const isStale = (nowSec - issuedAt) > 30;
+        const busy = !isStale && (data.status === 'pending' || data.status === 'running');
         const inp = document.getElementById(`term-inp-${pcId}`);
         const btn = document.getElementById(`term-btn-${pcId}`);
         if (inp) inp.disabled = busy;
@@ -446,6 +450,11 @@ export async function renderPcs(container, db) {
     inp.value = '';
     inp.disabled = true;
     document.getElementById(`term-btn-${pcId}`)?.setAttribute('disabled', '');
+    setTimeout(() => {
+      const inp2 = document.getElementById(`term-inp-${pcId}`);
+      const btn2 = document.getElementById(`term-btn-${pcId}`);
+      if (inp2 && inp2.disabled) { inp2.disabled = false; if (btn2) btn2.disabled = false; }
+    }, 30000);
     try {
       await setDoc(doc(_dbRef, 'remote_terminal', pcId), {
         cmd,
