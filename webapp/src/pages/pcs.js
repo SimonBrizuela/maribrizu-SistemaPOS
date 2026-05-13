@@ -423,8 +423,7 @@ export async function renderPcs(container, db) {
           if (cwdEl) cwdEl.textContent = data.cwd + '>';
         }
         if ((data.status === 'done' || data.status === 'error')
-            && respondedAt > (_termLastAt[pcId] || 0)
-            && respondedAt >= (_termOpenedAt[pcId] || 0)) {
+            && respondedAt > (_termLastAt[pcId] || 0)) {
           _termLastAt[pcId] = respondedAt;
           if (!_termHistories[pcId]) _termHistories[pcId] = [];
           _termHistories[pcId].push({
