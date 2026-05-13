@@ -20,11 +20,21 @@ let _unsubCmds = null;
 let _pcs = {};         // pc_id -> data
 let _cmds = {};        // pc_id -> last command data
 let _refreshTimer = null;
+let _termOpen     = {};  // pcId -> bool
+let _termHistories = {}; // pcId -> [{cmd, output, error, cwd}]
+let _termCwds     = {};  // pcId -> string (current dir)
+let _termStatus   = {};  // pcId -> status string
+let _termUnsubs   = {};  // pcId -> unsubscribe fn
+let _termLastAt   = {};  // pcId -> responded_at.seconds (de-dupe)
+let _termOpenedAt = {};  // pcId -> seconds when terminal was opened
+let _termPendingCmd = {}; // pcId -> last cmd sent (for labeling output)
+let _dbRef = null;       // db reference stored for use in handlers
 
 // ── Entry point ──────────────────────────────────────────────────────────
 export async function renderPcs(container, db) {
   // Cleanup de listeners de visita anterior
   cleanup();
+  _dbRef = db;
 
   const session = getSession();
   const isAdmin = (session?.role === 'admin');
@@ -135,6 +145,48 @@ export async function renderPcs(container, db) {
         padding: 0 4px; line-height: 1; font-family: inherit;
       }
       .pc-cmd-cancel:hover { opacity: 1; }
+
+      /* ── Terminal ─────────────────────────────────────────────── */
+      .pc-terminal {
+        display: flex; flex-direction: column;
+        background: #0f172a; border-radius: 8px; overflow: hidden;
+        border: 1px solid #1e293b; margin-top: 4px;
+      }
+      .pc-term-out {
+        overflow-y: auto; padding: 10px 12px;
+        min-height: 140px; max-height: 240px;
+        font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
+        font-size: 12px; color: #94a3b8; line-height: 1.5;
+      }
+      .pc-term-entry { margin-bottom: 8px; }
+      .pc-term-prompt { color: #4ade80; white-space: pre-wrap; word-break: break-all; }
+      .pc-term-pre {
+        margin: 2px 0 0 0; white-space: pre-wrap; word-break: break-all;
+        color: #cbd5e1; font-size: 11.5px;
+      }
+      .pc-term-bar {
+        display: flex; align-items: center; gap: 6px;
+        background: #1e293b; border-top: 1px solid #334155; padding: 6px 10px;
+      }
+      .pc-term-cwd {
+        font-family: ui-monospace, monospace; font-size: 11px;
+        color: #4ade80; white-space: nowrap; flex-shrink: 0;
+        max-width: 180px; overflow: hidden; text-overflow: ellipsis;
+      }
+      .pc-term-input {
+        flex: 1; background: transparent; border: none; outline: none;
+        color: #e2e8f0; font-family: ui-monospace, monospace; font-size: 12px;
+        caret-color: #4ade80;
+      }
+      .pc-term-input::placeholder { color: #475569; }
+      .pc-term-send {
+        background: transparent; border: none; cursor: pointer;
+        color: #4ade80; display: flex; align-items: center; padding: 2px;
+        opacity: 0.8; transition: opacity 0.15s;
+      }
+      .pc-term-send:hover:not(:disabled) { opacity: 1; }
+      .pc-term-send:disabled { opacity: 0.3; cursor: not-allowed; }
+      .pc-term-send .material-icons { font-size: 16px !important; }
 
       /* ── Confirm modal ─────────────────────────────────────────── */
       .pc-confirm-overlay {
@@ -345,6 +397,71 @@ export async function renderPcs(container, db) {
       alert(`Error: ${e.message}`);
     }
   };
+
+  window._pcToggleTerm = (pcId) => {
+    _termOpen[pcId] = !_termOpen[pcId];
+    const termEl = document.getElementById(`term-${pcId}`);
+    if (termEl) termEl.style.display = _termOpen[pcId] ? 'flex' : 'none';
+    if (_termOpen[pcId] && !_termUnsubs[pcId]) {
+      _termOpenedAt[pcId] = Math.floor(Date.now() / 1000);
+      _termUnsubs[pcId] = onSnapshot(doc(_dbRef, 'remote_terminal', pcId), snap => {
+        if (!snap.exists()) return;
+        const data = snap.data() || {};
+        const respondedAt = data.responded_at?.seconds || 0;
+        const busy = data.status === 'pending' || data.status === 'running';
+        const inp = document.getElementById(`term-inp-${pcId}`);
+        const btn = document.getElementById(`term-btn-${pcId}`);
+        if (inp) inp.disabled = busy;
+        if (btn) busy ? btn.setAttribute('disabled', '') : btn.removeAttribute('disabled');
+        if (data.cwd) {
+          _termCwds[pcId] = data.cwd;
+          const cwdEl = document.getElementById(`term-cwd-${pcId}`);
+          if (cwdEl) cwdEl.textContent = data.cwd + '>';
+        }
+        if ((data.status === 'done' || data.status === 'error')
+            && respondedAt > (_termLastAt[pcId] || 0)
+            && respondedAt >= (_termOpenedAt[pcId] || 0)) {
+          _termLastAt[pcId] = respondedAt;
+          if (!_termHistories[pcId]) _termHistories[pcId] = [];
+          _termHistories[pcId].push({
+            cmd:    _termPendingCmd[pcId] || '',
+            output: data.output || '',
+            error:  data.status === 'error',
+            cwd:    data.cwd || _termCwds[pcId] || '',
+          });
+          _termPendingCmd[pcId] = null;
+          _renderTermOutput(pcId);
+        }
+        _termStatus[pcId] = data.status || 'idle';
+      });
+    }
+  };
+
+  window._pcSendTerm = async (pcId) => {
+    const inp = document.getElementById(`term-inp-${pcId}`);
+    if (!inp) return;
+    const cmd = inp.value.trim();
+    if (!cmd) return;
+    _termPendingCmd[pcId] = cmd;
+    inp.value = '';
+    inp.disabled = true;
+    document.getElementById(`term-btn-${pcId}`)?.setAttribute('disabled', '');
+    try {
+      await setDoc(doc(_dbRef, 'remote_terminal', pcId), {
+        cmd,
+        cwd:       _termCwds[pcId] || null,
+        status:    'pending',
+        issued_at: serverTimestamp(),
+      });
+    } catch (e) {
+      if (!_termHistories[pcId]) _termHistories[pcId] = [];
+      _termHistories[pcId].push({ cmd, output: `Error enviando: ${e.message}`, error: true, cwd: _termCwds[pcId] || '' });
+      _termPendingCmd[pcId] = null;
+      _renderTermOutput(pcId);
+      inp.disabled = false;
+      document.getElementById(`term-btn-${pcId}`)?.removeAttribute('disabled');
+    }
+  };
 }
 
 // ── Render ───────────────────────────────────────────────────────────────
@@ -407,6 +524,19 @@ function render() {
   emptyEl.style.display = 'none';
 
   cardsEl.innerHTML = filtered.map(p => renderCard(p, latestVersion)).join('');
+
+  // Restaurar estado de terminales abiertas tras innerHTML rebuild
+  filtered.forEach(({ pcId }) => {
+    if (!_termOpen[pcId]) return;
+    const termEl = document.getElementById(`term-${pcId}`);
+    if (termEl) termEl.style.display = 'flex';
+    _renderTermOutput(pcId);
+    const cwdEl = document.getElementById(`term-cwd-${pcId}`);
+    if (cwdEl && _termCwds[pcId]) cwdEl.textContent = _termCwds[pcId] + '>';
+    const inp = document.getElementById(`term-inp-${pcId}`);
+    const busy = _termStatus[pcId] === 'pending' || _termStatus[pcId] === 'running';
+    if (inp && busy) inp.disabled = true;
+  });
 }
 
 function renderCard(p, latestVersion) {
@@ -500,6 +630,13 @@ function renderCard(p, latestVersion) {
       <span>Quitar de la lista</span>
     </button>` : '';
 
+  const termBtn = `
+    <button class="pc-btn" style="grid-column:span 2"
+            onclick="window._pcToggleTerm('${escapeAttr(p.pcId)}')">
+      <span class="material-icons">terminal</span>
+      <span>Terminal remota</span>
+    </button>`;
+
   return `
     <div class="pc-card">
       <div class="pc-card-header">
@@ -540,6 +677,23 @@ function renderCard(p, latestVersion) {
         ${buttons}
         ${purgeBtn}
         ${removeBtn}
+        ${termBtn}
+      </div>
+
+      <div class="pc-terminal" id="term-${escapeAttr(p.pcId)}" style="display:none">
+        <div class="pc-term-out" id="term-out-${escapeAttr(p.pcId)}">
+          <span style="color:#6b7280;font-size:12px">Terminal lista. Escribí un comando.</span>
+        </div>
+        <div class="pc-term-bar">
+          <span class="pc-term-cwd" id="term-cwd-${escapeAttr(p.pcId)}">&gt;</span>
+          <input class="pc-term-input" id="term-inp-${escapeAttr(p.pcId)}" type="text"
+                 placeholder="comando…" autocomplete="off" spellcheck="false"
+                 onkeydown="if(event.key==='Enter')window._pcSendTerm('${escapeAttr(p.pcId)}')">
+          <button class="pc-term-send" id="term-btn-${escapeAttr(p.pcId)}"
+                  onclick="window._pcSendTerm('${escapeAttr(p.pcId)}')">
+            <span class="material-icons">send</span>
+          </button>
+        </div>
       </div>
     </div>`;
 }
@@ -581,10 +735,34 @@ function showConfirm({ title, message, confirmText = 'Aceptar', cancelText = 'Ca
   });
 }
 
+function _renderTermOutput(pcId) {
+  const outEl = document.getElementById(`term-out-${pcId}`);
+  if (!outEl) return;
+  const entries = _termHistories[pcId] || [];
+  if (entries.length === 0) {
+    outEl.innerHTML = '<span style="color:#6b7280;font-size:12px">Terminal lista. Escribí un comando.</span>';
+    return;
+  }
+  outEl.innerHTML = entries.map(e => {
+    const cwdEsc = escapeHtml(e.cwd || '');
+    const cmdEsc = escapeHtml(e.cmd || '');
+    const outEsc = escapeHtml(e.output || '');
+    return `<div class="pc-term-entry">
+      <div class="pc-term-prompt">${cwdEsc ? cwdEsc + '>' : '>'} <span style="color:#e2e8f0">${cmdEsc}</span></div>
+      <pre class="pc-term-pre"${e.error ? ' style="color:#f87171"' : ''}>${outEsc}</pre>
+    </div>`;
+  }).join('');
+  outEl.scrollTop = outEl.scrollHeight;
+}
+
 function cleanup() {
-  if (_unsubPcs) { try { _unsubPcs(); } catch {} _unsubPcs = null; }
+  if (_unsubPcs)  { try { _unsubPcs();  } catch {} _unsubPcs  = null; }
   if (_unsubCmds) { try { _unsubCmds(); } catch {} _unsubCmds = null; }
   if (_refreshTimer) { clearInterval(_refreshTimer); _refreshTimer = null; }
+  Object.values(_termUnsubs).forEach(fn => { try { fn(); } catch {} });
+  _termUnsubs = {}; _termOpen = {}; _termHistories = {}; _termCwds = {};
+  _termStatus = {}; _termLastAt = {}; _termOpenedAt = {}; _termPendingCmd = {};
+  _dbRef = null;
 }
 
 // Cleanup automático cuando se cambia de página (la app re-renderiza el contenedor)

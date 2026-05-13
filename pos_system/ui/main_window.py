@@ -737,8 +737,24 @@ class MainWindow(QMainWindow):
 
             # 10. PC Status reporter (heartbeat + listener de comandos remotos)
             self._start_pc_status_reporter()
+
+            # 11. Remote terminal listener
+            self._start_remote_terminal_listener()
         except Exception as e:
             logger.warning(f"No se pudo activar listeners de sincronizacion: {e}")
+
+    def _start_remote_terminal_listener(self):
+        try:
+            from pos_system.utils.firebase_sync import get_firebase_sync
+            fb = get_firebase_sync()
+            if not fb or not fb.enabled:
+                return
+            from pos_system.ui.remote_terminal_listener import RemoteTerminalListener
+            self._remote_terminal_listener = RemoteTerminalListener(fb.db)
+            self._remote_terminal_listener.start()
+            logger.info("RemoteTerminal: listener iniciado.")
+        except Exception as e:
+            logger.warning(f"RemoteTerminal: no se pudo iniciar: {e}")
 
     def _start_pc_status_reporter(self):
         """Inicia el reporter de heartbeat y handlers de comandos remotos."""
