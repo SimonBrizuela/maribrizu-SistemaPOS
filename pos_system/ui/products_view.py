@@ -627,7 +627,10 @@ class ProductsView(QWidget):
                     from pos_system.utils.firebase_sync import get_firebase_sync
                     fb = get_firebase_sync()
                     if fb:
-                        fb.delete_product(product_id)
+                        product = self.product_model.get_by_id(product_id)
+                        firebase_id = (product or {}).get('firebase_id') or ''
+                        if firebase_id:
+                            fb.delete_product(firebase_id)
                 except Exception:
                     pass
                 QMessageBox.information(self, 'Éxito', 'Producto eliminado correctamente')

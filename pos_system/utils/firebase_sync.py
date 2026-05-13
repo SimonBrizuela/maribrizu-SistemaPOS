@@ -1925,17 +1925,21 @@ class FirebaseSync:
 
         threading.Thread(target=_do, daemon=True).start()
 
-    def delete_product(self, product_id):
-        """Elimina un producto del inventario en Firestore inmediatamente."""
-        if not self.enabled:
+    def delete_product(self, firebase_id):
+        """Elimina un producto del catálogo en Firestore y escribe un tombstone."""
+        if not self.enabled or not firebase_id:
             return
         def _do():
             try:
-                pid = str(product_id)
-                self.db.collection('inventario').document(pid).delete()
-                logger.info(f"Firebase: Producto #{pid} eliminado de inventario.")
+                from firebase_admin import firestore as _fs
+                fid = str(firebase_id)
+                self.db.collection('catalogo').document(fid).delete()
+                self.db.collection('catalogo_deleted').document(fid).set({
+                    'deleted_at': _fs.SERVER_TIMESTAMP,
+                })
+                logger.info(f"Firebase: Producto '{fid}' eliminado de catalogo + tombstone escrito.")
             except Exception as e:
-                logger.error(f"Firebase: Error eliminando producto #{product_id}: {e}")
+                logger.error(f"Firebase: Error eliminando producto '{firebase_id}': {e}")
         self._run(_do)
 
     # ══════════════════════════════════════════════════
