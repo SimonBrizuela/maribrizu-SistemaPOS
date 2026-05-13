@@ -22,7 +22,6 @@ class RemoteTerminalListener(QThread):
 
     def __init__(self, firebase_db):
         super().__init__()
-        self.setDaemon(True)
         self._db   = firebase_db
         self._host = socket.gethostname()
         self._cwd  = None   # directorio de sesión actual
