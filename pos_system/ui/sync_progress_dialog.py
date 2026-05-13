@@ -23,10 +23,11 @@ class DownloadWorker(QThread):
 
     TOTAL_STEPS = 4
 
-    def __init__(self, main_window, write_trigger=True):
+    def __init__(self, main_window, write_trigger=True, force_full=False):
         super().__init__()
         self.main_window = main_window
         self.write_trigger = write_trigger  # False en auto-sync para evitar loop
+        self.force_full = force_full        # True → ignorar epoch, sync completo + reconciliación
 
     # ── Helpers de fecha ─────────────────────────────────────────────────
     @staticmethod
@@ -170,11 +171,14 @@ class DownloadWorker(QThread):
             import datetime as _dt, time as _time
             _sync_file = DATA_DIR / "last_catalog_sync.txt"
             _local_epoch = 0.0
-            try:
-                if _sync_file.exists():
-                    _local_epoch = float(_sync_file.read_text(encoding='utf-8').strip())
-            except Exception:
-                pass
+            if self.force_full:
+                self.log_message.emit('Sync forzado: descarga completa + reconciliación activada.', 'info')
+            else:
+                try:
+                    if _sync_file.exists():
+                        _local_epoch = float(_sync_file.read_text(encoding='utf-8').strip())
+                except Exception:
+                    pass
 
             # Delta sync: solo docs modificados desde el último sync
             try:

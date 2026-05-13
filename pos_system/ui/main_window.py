@@ -1581,7 +1581,7 @@ class MainWindow(QMainWindow):
             worker = SyncWorker(self, full_history=True, write_trigger=False)
         else:
             Toast.info(self, f'Sincronización iniciada por {remote_pc} — descargando datos...')
-            worker = DownloadWorker(main_window=self, write_trigger=False)
+            worker = DownloadWorker(main_window=self, write_trigger=False, force_full=True)
 
         worker.finished.connect(lambda ok, msg: self._on_silent_sync_done(ok, command, remote_pc))
         worker.start()
