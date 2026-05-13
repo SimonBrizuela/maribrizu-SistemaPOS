@@ -269,12 +269,14 @@ class DownloadWorker(QThread):
                     except Exception:
                         conj_colores = None
 
-                # Saltar productos sin precio o inactivos
-                if precio <= 0 or estado == 'sin_precio':
-                    continue
-
+                # Registrar en el set ANTES de filtrar — los productos con
+                # precio=0 o inactivos siguen existiendo en Firebase y no son ghosts.
                 if firebase_id:
                     firebase_ids_seen.add(firebase_id)
+
+                # Saltar productos sin precio o inactivos (no insertar/actualizar localmente)
+                if precio <= 0 or estado == 'sin_precio':
+                    continue
 
                 # NOTA: NO insertar cat en categories — esa tabla es solo para RUBROS.
 
@@ -396,7 +398,7 @@ class DownloadWorker(QThread):
             # En delta sync la lista descargada es parcial, por lo que
             # firebase_ids_seen está incompleta y no se puede usar para
             # detectar fantasmas. Solo aplica cuando _local_epoch == 0.
-            if _local_epoch == 0 and firebase_ids_seen:
+            if (self.force_full or _local_epoch == 0) and firebase_ids_seen:
                 try:
                     local_con_fb = db.execute_query(
                         "SELECT id, name, firebase_id FROM products "
@@ -409,18 +411,27 @@ class DownloadWorker(QThread):
                     ]
                     if ghost_ids:
                         from firebase_admin import firestore as _fs
+                        eliminados_rec = 0
+                        skipped_rec = 0
                         for local_id, nombre_ghost, fid in ghost_ids:
-                            db.execute_update(
-                                "DELETE FROM products WHERE id = ?", (local_id,)
-                            )
                             try:
-                                fb.db.collection('catalogo_deleted').document(fid).set(
-                                    {'deleted_at': _fs.SERVER_TIMESTAMP}
+                                db.execute_update(
+                                    "DELETE FROM products WHERE id = ?", (local_id,)
                                 )
+                                eliminados_rec += 1
+                                try:
+                                    fb.db.collection('catalogo_deleted').document(fid).set(
+                                        {'deleted_at': _fs.SERVER_TIMESTAMP}
+                                    )
+                                except Exception:
+                                    pass
                             except Exception:
-                                pass
-                        self.log_message.emit(
-                            f'Reconciliacion: {len(ghost_ids)} producto(s) fantasma eliminados', 'ok')
+                                # FK constraint: producto tiene ventas asociadas, no se elimina
+                                skipped_rec += 1
+                        msg = f'Reconciliacion: {eliminados_rec} fantasma(s) eliminados'
+                        if skipped_rec:
+                            msg += f', {skipped_rec} con ventas (conservados)'
+                        self.log_message.emit(msg, 'ok')
                     else:
                         self.log_message.emit(
                             'Reconciliacion: sin fantasmas locales.', 'info')
