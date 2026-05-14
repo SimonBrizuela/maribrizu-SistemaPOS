@@ -197,6 +197,15 @@ class MainWindow(QMainWindow):
         self._sig_delta_sync_done.connect(self._on_delta_sync_done)
         QTimer.singleShot(8_000, self._start_delta_product_sync)
 
+        # Cola offline: reintenta ventas con firebase_synced=0.
+        # Primer intento a los 15s del arranque (espera que Firebase esté listo),
+        # después cada 3 min. Idempotente: doc id = {pc_id}_{sale_id}.
+        self._retry_pending_running = False
+        QTimer.singleShot(15_000, self._retry_pending_firebase_sales)
+        self._pending_retry_timer = QTimer()
+        self._pending_retry_timer.timeout.connect(self._retry_pending_firebase_sales)
+        self._pending_retry_timer.start(3 * 60 * 1000)
+
     def setup_shortcuts(self):
         """Setup keyboard shortcuts"""
         QShortcut(QKeySequence("Ctrl+1"), self, lambda: self.tabs.setCurrentIndex(0))
@@ -1300,6 +1309,20 @@ class MainWindow(QMainWindow):
                                         batch.commit()
                                         batch = firedb.batch()
                                 batch.commit()
+                                # Marcar synced=1 para que la cola offline las ignore
+                                try:
+                                    ids = [int(s.get('id') or s.get('sale_id') or 0) for s in all_sales]
+                                    ids = [i for i in ids if i]
+                                    CHUNK = 500
+                                    for off in range(0, len(ids), CHUNK):
+                                        chunk = ids[off:off + CHUNK]
+                                        placeholders = ','.join('?' * len(chunk))
+                                        db.execute_update(
+                                            f"UPDATE sales SET firebase_synced=1 WHERE id IN ({placeholders})",
+                                            tuple(chunk)
+                                        )
+                                except Exception as _me:
+                                    logger.warning(f"firebase_synced bulk mark: {_me}")
 
                                 # Historial diario
                                 for day_key, day_sales in sales_by_day.items():
@@ -1364,6 +1387,79 @@ class MainWindow(QMainWindow):
         t = threading.Thread(target=self._do_cloud_sync, args=(False,), daemon=True)
         t.start()
         logger.info("Google Sheets: Auto-sync iniciado en background.")
+
+    def _retry_pending_firebase_sales(self):
+        """Reintenta subir a Firebase las ventas locales con firebase_synced=0.
+
+        Corre en thread daemon, sin UI. Idempotente: el doc id en Firebase es
+        '{pc_id}_{sale_id}' con set(), así que re-subir es seguro. Limita a
+        ventas de los últimos 30 días para no flagelar al arrancar con todo
+        el histórico viejo de bases nuevas.
+        """
+        if self._retry_pending_running:
+            return
+        self._retry_pending_running = True
+
+        def _do():
+            try:
+                from pos_system.utils.firebase_sync import get_firebase_sync
+                fb = get_firebase_sync()
+                if not fb or not fb.enabled:
+                    return
+
+                cutoff = (now_ar() - timedelta(days=30)).strftime('%Y-%m-%d %H:%M:%S')
+                rows = self.db.execute_query(
+                    "SELECT id FROM sales "
+                    "WHERE COALESCE(firebase_synced, 0) = 0 "
+                    "  AND created_at >= ? "
+                    "  AND cash_register_id IS NOT NULL "
+                    "ORDER BY created_at ASC, id ASC "
+                    "LIMIT 200",
+                    (cutoff,)
+                )
+                if not rows:
+                    return
+
+                from pos_system.models.sale import Sale
+                sale_model = Sale(self.db)
+                ok = 0
+                fail = 0
+                for r in rows:
+                    sid = r['id']
+                    sale = sale_model.get_by_id(sid)
+                    if not sale:
+                        continue
+                    try:
+                        # Adjuntar cash_register_id si la venta tiene caja asociada
+                        # (sale ya lo trae si la columna existe; no hace falta tocar nada).
+                        fb.sync_sale(sale)
+                        fb.sync_sale_detail_by_day(sale, db_manager=self.db)
+                        # Propagar stock actualizado a Firebase (igual que el path normal).
+                        # Best-effort: si falla, no impide marcar synced=1 — la venta sí subió.
+                        try:
+                            fb.sync_stock_after_sale(sale.get('items') or [], self.db)
+                        except Exception as _se:
+                            logger.debug(f"retry_pending stock venta {sid}: {_se}")
+                        self.db.execute_update(
+                            "UPDATE sales SET firebase_synced=1 WHERE id=?", (sid,)
+                        )
+                        ok += 1
+                    except Exception as e:
+                        fail += 1
+                        logger.debug(f"retry_pending venta {sid}: {e}")
+                        # Si la primera falla, probablemente no hay internet —
+                        # cortar para no quemar reintentos al pedo.
+                        if fail >= 3:
+                            break
+                if ok or fail:
+                    logger.info(f"Cola offline Firebase: subidas={ok} fallos={fail} "
+                                f"(de {len(rows)} pendientes)")
+            except Exception as e:
+                logger.warning(f"_retry_pending_firebase_sales: {e}")
+            finally:
+                self._retry_pending_running = False
+
+        threading.Thread(target=_do, daemon=True).start()
 
     def _prompt_turno(self):
         """

@@ -758,6 +758,20 @@ class SyncWorker(QThread):
                     self.log_message.emit(f'  → Ventas: {i+1}/{total_ventas}', 'info')
 
             batch.commit()
+            # Marcar todas las subidas como synced para que la cola offline las ignore
+            try:
+                ids = [int(s.get('id') or s.get('sale_id') or 0) for s in all_sales]
+                ids = [i for i in ids if i]
+                CHUNK = 500
+                for off in range(0, len(ids), CHUNK):
+                    chunk = ids[off:off + CHUNK]
+                    placeholders = ','.join('?' * len(chunk))
+                    db.execute_update(
+                        f"UPDATE sales SET firebase_synced=1 WHERE id IN ({placeholders})",
+                        tuple(chunk)
+                    )
+            except Exception as _me:
+                self.log_message.emit(f'  ⚠ marcar synced: {_me}', 'warn')
             self.log_message.emit(f'{count} ventas sincronizadas con sus items', 'ok')
             self.progress.emit(2, 5)
 

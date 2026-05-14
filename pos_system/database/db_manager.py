@@ -222,7 +222,18 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE sales ADD COLUMN transfer_amount REAL DEFAULT 0")
             except Exception:
                 pass
-            
+            # firebase_synced: 0 = pendiente de subir a Firebase, 1 = subido OK.
+            # Las ventas viejas quedan en 0 — el worker periódico las reintenta;
+            # la subida es idempotente (doc id = {pc_id}_{sale_id}, set merge).
+            try:
+                cursor.execute("ALTER TABLE sales ADD COLUMN firebase_synced INTEGER DEFAULT 0")
+            except Exception:
+                pass
+            try:
+                cursor.execute("CREATE INDEX IF NOT EXISTS idx_sales_fb_synced ON sales(firebase_synced, created_at)")
+            except Exception:
+                pass
+
             # Tabla de items de venta (detalle)
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS sale_items (

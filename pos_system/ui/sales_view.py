@@ -4080,12 +4080,21 @@ class SalesView(QWidget):
                     fb.sync_stock_after_sale(sale_with_caja.get('items') or [], self.db)
                 except Exception as _se:
                     _log.getLogger(__name__).warning(f"Firebase stock post-venta: {_se}")
+                # Marcar la venta como subida (la cola offline la ignora a partir de acá).
+                try:
+                    self.db.execute_update(
+                        "UPDATE sales SET firebase_synced=1 WHERE id=?",
+                        (sale.get('id'),)
+                    )
+                except Exception as _me:
+                    _log.getLogger(__name__).warning(f"firebase_synced mark: {_me}")
                 _log.getLogger(__name__).info(
                     f"Firebase: Venta #{sale.get('id')} subida (caja #{caja.get('id')})."
                 )
             except Exception as e:
                 import logging
                 logging.getLogger(__name__).warning(f"Firebase upload venta: {e}")
+                # Falló — queda firebase_synced=0 y el worker la reintenta.
 
         threading.Thread(target=_do, daemon=True).start()
 
