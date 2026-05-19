@@ -230,13 +230,12 @@ class PDFGenerator:
         os.makedirs(output_dir, exist_ok=True)
         self.styles = getSampleStyleSheet()
         
-        # Información de la empresa (temporal - se puede configurar después)
         self.company_info = {
-            'name': 'Tu Empresa',
-            'address': 'Dirección de tu negocio',
-            'phone': 'Tel: (000) 000-0000',
-            'email': 'info@tuempresa.com',
-            'website': 'www.tuempresa.com'
+            'name': 'LIBRERIA LICEO',
+            'address': 'Alfonsina Storni 168 - Cordoba',
+            'phone': '3517046684',
+            'email': 'libreria.liceo@hotmail.com',
+            'website': ''
         }
         
     def set_company_info(self, name, address, phone, email, website):
@@ -334,7 +333,7 @@ class PDFGenerator:
         if self.company_info.get('address'):
             story.append(Paragraph(self.company_info['address'], sty_sub))
         if self.company_info.get('phone'):
-            story.append(Paragraph(self.company_info['phone'], sty_sub))
+            story.append(Paragraph(f"Tel: {self.company_info['phone']}", sty_sub))
         story.append(Spacer(1, 2*mm))
         story.append(Paragraph('* * * * * * * * * * * * * * * * * * *', sty_sep))
         story.append(Paragraph('COMPROBANTE DE VENTA', sty_titulo))
