@@ -1407,12 +1407,19 @@ class SalesView(QWidget):
 
     def _on_promo_product_chosen(self, product_id, qty):
         """Recibe el producto elegido del PromosQuickDialog y lo agrega N veces
-        (la cantidad mínima requerida para que aplique la promo)."""
+        (la cantidad mínima requerida para que aplique la promo).
+
+        Productos Conjunto / mp_* abren un diálogo modal con su propia cantidad
+        adentro: si llamamos `add_to_cart` N veces el diálogo se reabre cada vez
+        que el cajero lo cierra. Para esos casos abrimos UNA sola vez."""
         try:
             prod = self.product_model.get_by_id(int(product_id))
             if not prod:
                 return
             qty = max(1, int(qty))
+            if int(prod.get('es_conjunto') or 0) == 1 or prod.get('is_mp'):
+                self.add_to_cart(prod)
+                return
             for _ in range(qty):
                 self.add_to_cart(prod)
         except Exception:
