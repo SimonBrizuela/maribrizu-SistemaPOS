@@ -3220,14 +3220,6 @@ class SalesView(QWidget):
                 f"QDoubleSpinBox::down-button, QSpinBox::down-button {{ width:16px; }}"
             )
             qty_spin.valueChanged.connect(lambda v, r=row: self.update_quantity(r, v))
-            # Conjuntos: el stock se descuenta via conjunto_after_*; cambiar
-            # quantity post-dialog desincronizaria. Bloqueamos edicion (el
-            # cajero puede quitar y volver a agregar si quiere otra cantidad).
-            if item.get('is_conjunto'):
-                qty_spin.setReadOnly(True)
-                qty_spin.setButtonSymbols(qty_spin.NoButtons)
-                qty_spin.setToolTip('Para cambiar la cantidad de un conjunto, '
-                                    'quitá el item y volvé a agregarlo.')
             self.cart_table.setCellWidget(row, 1, qty_spin)
 
             # Col 2: Precio unitario (clickable — abre editor de precio)
@@ -3491,16 +3483,31 @@ class SalesView(QWidget):
             # antes del "0,5"). Ignoramos sin reconstruir para no matar el foco.
             return
         item = self.cart[row]
-        # Conjuntos: el precio y el descuento de stock dependen de los
-        # after_unidades/after_restante calculados por el dialog. No
-        # recalculamos via promos del producto base.
+        # Conjuntos: recalculamos los after_unidades/after_restante por delta
+        # contra la cantidad previa para no desincronizar el stock al cerrar
+        # la venta. Tambien actualizamos el label "N packs/u/m" del nombre.
         if item.get('is_conjunto'):
-            item['quantity'] = quantity
-            item['subtotal'] = round(quantity * item['unit_price'], 2)
+            old_qty = float(item.get('quantity') or 0)
+            new_qty = float(quantity)
+            delta = new_qty - old_qty
+            item['quantity'] = new_qty
+            item['subtotal'] = round(new_qty * item['unit_price'], 2)
+            item['conjunto_cantidad'] = new_qty
+            if abs(delta) > 1e-9:
+                self._adjust_conjunto_after_for_delta(item, delta)
+            item['product_name'] = self._rebuild_conjunto_name(item)
+            self._refresh_cart_row_pricing(row, item)
+            self._refresh_cart_totals(row)
             return
         item['quantity'] = quantity
-        # Siempre recalcular precio — las promos de Firebase dependen de la cantidad
+        # Siempre recalcular precio — las promos de Firebase dependen de la cantidad.
+        # EXCEPTO si el cajero editó el precio unitario manualmente (override):
+        # ahi respetamos su valor y solo actualizamos el subtotal.
         promo_changed = False
+        if item.get('manual_price_override'):
+            item['subtotal'] = round(quantity * item['unit_price'], 2)
+            self._refresh_cart_totals(row)
+            return
         try:
             product = self.product_model.get_by_id(item['product_id'])
             if product:
@@ -3531,6 +3538,81 @@ class SalesView(QWidget):
             self._refresh_cart_row_pricing(row, item)
         else:
             self._refresh_cart_totals(row)
+
+    def _adjust_conjunto_after_for_delta(self, item, delta):
+        """Aplica `delta` al stock final del item (conjunto_after_unidades/restante).
+
+        `delta` está en unidades de venta del item (packs para vender_por='conjunto',
+        unidades de `unidad_venta` para 'unidad'/'fraccion'). Para 'unidad'/'fraccion'
+        convertimos a `unidad_base` antes de subir/bajar restante y abrir/cerrar packs."""
+        vender_por = item.get('conjunto_vender_por', 'conjunto')
+        after_u = float(item.get('conjunto_after_unidades') or 0)
+        after_r = float(item.get('conjunto_after_restante') or 0)
+        contenido = float(item.get('conjunto_cantidad_base') or 0)
+
+        if vender_por == 'conjunto':
+            item['conjunto_after_unidades'] = max(0.0, after_u - delta)
+            return
+
+        unidad_venta = item.get('conjunto_unidad_venta')
+        unidad_base  = item.get('conjunto_unidad_base')
+        delta_base = delta
+        if unidad_venta and unidad_base and unidad_venta != unidad_base:
+            try:
+                from pos_system.ui.conjunto_dialog import convertir as _conj_convertir
+                c = _conj_convertir(abs(delta), unidad_venta, unidad_base)
+                if c is not None:
+                    delta_base = c if delta >= 0 else -c
+            except Exception:
+                pass
+
+        if delta_base >= 0:
+            if after_r >= delta_base - 1e-9:
+                item['conjunto_after_restante'] = max(0.0, after_r - delta_base)
+                return
+            rem = delta_base - after_r
+            new_r = 0.0
+            new_u = after_u
+            while rem > 1e-9 and new_u > 0 and contenido > 0:
+                new_u -= 1
+                if rem >= contenido - 1e-9:
+                    rem -= contenido
+                else:
+                    new_r = contenido - rem
+                    rem = 0
+            item['conjunto_after_unidades'] = max(0.0, new_u)
+            item['conjunto_after_restante'] = max(0.0, new_r)
+            return
+
+        add = -delta_base
+        new_r = after_r + add
+        new_u = after_u
+        if contenido > 0 and new_r >= contenido:
+            new_u += int(new_r // contenido)
+            new_r = new_r % contenido
+        item['conjunto_after_unidades'] = new_u
+        item['conjunto_after_restante'] = new_r
+
+    def _rebuild_conjunto_name(self, item):
+        """Re-arma `product_name` con el sufijo "N pack(s)/u/m" actualizado a la
+        cantidad actual del item. Mantiene el prefijo de color y el nombre base."""
+        cantidad = float(item.get('conjunto_cantidad') or item.get('quantity') or 0)
+        vender_por = item.get('conjunto_vender_por', 'conjunto')
+        tipo = item.get('conjunto_tipo', '')
+        tipo_label = _CONJ_TIPOS.get(tipo, {}).get('label', 'Conjunto')
+        if vender_por == 'conjunto':
+            descripcion = f'{_fmt_qty(cantidad)} {tipo_label.lower()}(s)'
+        elif vender_por == 'unidad':
+            descripcion = f'{_fmt_qty(cantidad)} u'
+        else:
+            unidad_venta = item.get('conjunto_unidad_venta')
+            unidad_base  = item.get('conjunto_unidad_base')
+            short = (_CONJ_UNIDADES.get(unidad_venta, {}).get('short')
+                     or _CONJ_UNIDADES.get(unidad_base, {}).get('short', ''))
+            descripcion = f'{_fmt_qty(cantidad)} {short}'
+        full = item.get('product_name', '')
+        base = full.split('  ·  ', 1)[0] if '  ·  ' in full else full
+        return f'{base}  ·  {descripcion}'
 
     def _refresh_cart_row_pricing(self, row, item):
         """Actualiza in-place las celdas Producto (col 0), Precio Unit. (col 2) y Subtotal (col 3).
@@ -3761,6 +3843,9 @@ class SalesView(QWidget):
                 item['promo_id'] = None
                 item['promo_label'] = ''
                 item['subtotal'] = round(item['quantity'] * new_price, 2)
+                # Flag para que update_quantity no piso el precio override
+                # con el del catalogo cuando el cajero cambie la cantidad.
+                item['manual_price_override'] = True
                 changed = True
             if new_obs != (item.get('observation', '') or ''):
                 item['observation'] = new_obs
