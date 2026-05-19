@@ -1,9 +1,10 @@
 import { db } from './firebase.js';
 import { invalidateCacheByPrefix, peekCache } from './cache.js';
+import { prewarmStore, onStoreChange } from './store.js';
 import './styles/login.css';
 import { renderLogin } from './pages/login.js';
 import { isLoggedIn, getSession, logout } from './auth.js';
-import { initNotifications, obtenerAlertasActivas, onAlertasCambian } from './notifications.js';
+import { initNotifications, obtenerAlertasActivas, onAlertasCambian, refrescarAlertas } from './notifications.js';
 import { initConsumiblesWatcher } from './consumibles_watcher.js';
 
 // ── Estado global ──
@@ -139,7 +140,7 @@ function openGroupForPage(page) {
   }
 }
 
-async function loadPage(page, forceRefresh = false) {
+async function loadPage(page, forceRefresh = false, fromLiveUpdate = false) {
   const content = document.getElementById('pageContent');
 
   // Si la página anterior expuso un cleanup (ej. pcs.js cancela onSnapshot), ejecutarlo
@@ -155,13 +156,15 @@ async function loadPage(page, forceRefresh = false) {
 
   // Mostrar spinner solo si no hay datos cacheados válidos
   // (si hay cache, render() termina en <10ms y el contenido aparece directo)
+  // En re-renders por live update no mostramos spinner: el contenido viejo queda visible
+  // mientras se re-pinta — evita el "flash" que mata la sensación de tiempo real.
   const { cacheKey } = pages[page];
   const hasCached = !forceRefresh && cacheKey && peekCache(cacheKey);
-  if (!hasCached) {
+  if (!hasCached && !fromLiveUpdate) {
     content.innerHTML = `<div class="loader"><div class="spinner"></div><span>Cargando datos...</span></div>`;
   }
 
-  setStatus('connecting');
+  if (!fromLiveUpdate) setStatus('connecting');
   try {
     const mod = await loadPageModule(page);
     const renderFn = mod[pages[page].render];
@@ -171,7 +174,10 @@ async function loadPage(page, forceRefresh = false) {
   } catch (err) {
     console.error(err);
     if (reloadIfStaleChunk(err)) return;
-    content.innerHTML = `<div class="empty-state"><span class="material-icons">error_outline</span><p>Error cargando datos: ${err.message}</p></div>`;
+    // En re-renders por store, NO pisar el contenido válido que ya está pintado.
+    if (!fromLiveUpdate) {
+      content.innerHTML = `<div class="empty-state"><span class="material-icons">error_outline</span><p>Error cargando datos: ${err.message}</p></div>`;
+    }
     setStatus('offline');
   }
 }
@@ -280,19 +286,119 @@ function initApp(session) {
     if (window.innerWidth > 768) closeSidebar();
   });
 
+  // Notificaciones globales de stock: se inicializan ANTES del store para que
+  // _db esté listo cuando el onStoreChange dispare refrescarAlertas.
+  initNotifications(db);
+  window.navigateToPage = navigate;
+  actualizarBadgeNotif(obtenerAlertasActivas());
+  onAlertasCambian(actualizarBadgeNotif);
+
+  // Arrancar listeners realtime globales ANTES de la primera navegación.
+  // Los cache keys quedan pinned: las páginas leerán sincrónicamente de memoria
+  // ni bien lleguen los primeros snapshots (en milisegundos).
+  prewarmStore(db);
+
+  // Cuando cualquier colección del store recibe cambios desde el server,
+  // re-renderizar la página activa sin spinner (datos ya están en cache).
+  // Debounce 250 ms para agrupar bursts de cambios.
+  let _storeRefreshTimer = null;
+  let _notifRefreshTimer = null;
+  let _pendingRerender = false;
+
+  // ¿El usuario está interactuando con la UI? Si sí, NO destruir el DOM:
+  // se perdería el texto de un input, una selección, un modal abierto,
+  // un formulario a medio llenar, etc. El refresh queda diferido y se
+  // ejecuta cuando el usuario libere el foco / cierre el modal.
+  function userBusy() {
+    const ae = document.activeElement;
+    if (ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) return true;
+    if (ae && ae.isContentEditable) return true;
+
+    // Overlay/modal abierto. Los modales se appendan como hijos directos
+    // del <body> con position:fixed sobre todo. Excluimos los elementos
+    // estructurales (#app, #login, #sidebarOverlay) y los no-visuales.
+    for (const c of document.body.children) {
+      const id = c.id || '';
+      if (id === 'app' || id === 'login' || id === 'sidebarOverlay' ||
+          c.tagName === 'SCRIPT' || c.tagName === 'STYLE' ||
+          c.tagName === 'NOSCRIPT' || c.tagName === 'LINK' ||
+          c.tagName === 'META') continue;
+      const cs = getComputedStyle(c);
+      if (cs.display !== 'none' && cs.visibility !== 'hidden') return true;
+    }
+
+    // Input de búsqueda del catálogo con texto (aunque no tenga foco).
+    const buscar = document.getElementById('buscar');
+    if (buscar && buscar.value && buscar.value.trim() !== '') return true;
+
+    // Tabs editables del catálogo (nuevo, importar, config, margenes, reportes,
+    // etiquetas, proveedor): re-renderizar perdería el form a medio llenar.
+    // Sólo dejamos que los tabs "catalogo" e "inventario" se refresquen — esos
+    // tienen sus propios listeners internos que preservan el estado UI.
+    const activeTab = document.querySelector('.tab-btn.active')?.dataset?.tab;
+    if (activeTab && activeTab !== 'catalogo' && activeTab !== 'inventario') return true;
+
+    return false;
+  }
+
+  onStoreChange((col) => {
+    if (_storeRefreshTimer) clearTimeout(_storeRefreshTimer);
+    _storeRefreshTimer = setTimeout(() => {
+      _storeRefreshTimer = null;
+      // Si la página actual acaba de hacer un edit local (ej. catálogo: editar
+      // producto), no re-renderizar la página entera — perderíamos búsqueda,
+      // scroll y filtros. La página ya actualizó su estado en memoria.
+      // El chequeo va acá (no antes del setTimeout) porque la página puede
+      // setear el flag justo después de que el snapshot llegue.
+      if (col === 'catalogo' && Date.now() < (window.__catalogoLocalEditUntil || 0)) return;
+
+      // Control Total: el cajero está mirando análisis y métricas; cada venta
+      // que llega no debe destruir el DOM ni resetear scroll/filtros. Los datos
+      // del store se mantienen frescos en memoria — al volver a la página se
+      // ven actualizados; mientras se está adentro, refresh manual con los
+      // botones de período.
+      if (currentPage === 'control_total') return;
+
+      // Si el usuario está interactuando, diferimos el refresh para no
+      // pisar lo que está haciendo (buscar, editar, llenar un form).
+      if (userBusy()) {
+        _pendingRerender = true;
+        return;
+      }
+      loadPage(currentPage, false, true);
+    }, 250);
+    // Cuando cambia el catálogo, recalcular alertas de stock. El listener
+    // viejo dependía de config/catalogo_meta.last_updated — si el POS vendía
+    // pero no editaba el catálogo, ese meta no se actualizaba y los toasts
+    // no aparecían. Acá nos enteramos del cambio real del catálogo.
+    if (col === 'catalogo') {
+      if (_notifRefreshTimer) clearTimeout(_notifRefreshTimer);
+      _notifRefreshTimer = setTimeout(() => {
+        _notifRefreshTimer = null;
+        refrescarAlertas({ silent: false }).catch(() => {});
+      }, 400);
+    }
+  });
+
+  // Cuando el usuario libera el foco (sale de un input, cierra un modal),
+  // ejecutamos el refresh diferido — pero sólo si ya nadie más está
+  // interactuando, para no caer en un loop "blur → refresh → blur".
+  document.addEventListener('focusout', () => {
+    if (!_pendingRerender) return;
+    setTimeout(() => {
+      if (_pendingRerender && !userBusy()) {
+        _pendingRerender = false;
+        loadPage(currentPage, false, true);
+      }
+    }, 400);
+  });
+
   // Cargar última página visitada o dashboard
   const lastPage = localStorage.getItem('lastPage');
   navigate(lastPage && pages[lastPage] ? lastPage : 'dashboard');
 
   // Prefetch en idle de las páginas más usadas (no bloquea la carga inicial)
   prefetchPageModules(['ventas', 'historial', 'control_total', 'catalogo']);
-
-  // Notificaciones globales de stock: se inicializan una vez por sesión y
-  // monitorean el catálogo para mostrar toasts arriba en cualquier página.
-  initNotifications(db);
-  window.navigateToPage = navigate;
-  actualizarBadgeNotif(obtenerAlertasActivas());
-  onAlertasCambian(actualizarBadgeNotif);
 
   // Watcher de consumibles: escucha ventas y descuenta stock de productos
   // vinculados (ej: vender "Fotocopia A4" descuenta automáticamente "Hojas A4").
