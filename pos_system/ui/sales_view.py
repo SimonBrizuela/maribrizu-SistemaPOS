@@ -4023,16 +4023,22 @@ class SalesView(QWidget):
                                 cli_name = (selected_cliente.get('razon_social')
                                             or selected_cliente.get('nombre')
                                             or '').strip()
-                            pdf_path = self.pdf_generator.generate_non_fiscal_ticket(
+                            # Impresión nativa Qt (QPrinter + QPrintDialog) — no
+                            # depende de visor PDF instalado; abre el diálogo de
+                            # impresión de Windows directamente. Reemplaza el
+                            # flujo viejo (PDF via Chrome headless → os.startfile)
+                            # que en algunas PCs abría el ticket en el browser.
+                            from pos_system.utils.ticket_printer import imprimir_ticket_no_fiscal
+                            imprimir_ticket_no_fiscal(
                                 sale,
+                                parent=self,
                                 cajero_name=turno_nombre,
                                 cliente_name=cli_name or 'Consumidor Final',
                             )
-                            self.open_pdf(pdf_path)
                         except Exception as e:
                             QMessageBox.warning(
                                 self, 'Ticket',
-                                f'No se pudo generar el ticket: {e}'
+                                f'No se pudo imprimir el ticket: {e}'
                             )
 
                 self.cart = []

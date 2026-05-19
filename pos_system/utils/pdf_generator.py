@@ -497,7 +497,16 @@ class PDFGenerator:
     # `pos_system/assets/ticket_nofiscal.html` (sintaxis Mustache), embebe el
     # logo como data-URI y lo convierte a PDF con Chrome headless (no agrega
     # deps de Python). Si no encuentra Chrome/Edge, tira excepción.
-    def generate_non_fiscal_ticket(self, sale, cajero_name='', cliente_name='Consumidor Final'):
+    def render_non_fiscal_ticket_html(self, sale, cajero_name='', cliente_name='Consumidor Final'):
+        """
+        Devuelve el HTML completo del ticket no fiscal renderizado, sin
+        convertir a PDF. Mismo template Mustache que `generate_non_fiscal_ticket`.
+        Útil para embeber en QWebEngineView y mostrar el ticket dentro del POS
+        con un diálogo de impresión propio (no depende de visor de PDF externo).
+        """
+        return self._build_ticket_html(sale, cajero_name, cliente_name)
+
+    def _build_ticket_html(self, sale, cajero_name='', cliente_name='Consumidor Final'):
         # ── Paths de assets ────────────────────────────────────────────────
         assets_base = os.path.dirname(__file__)
         tpl_path = os.path.join(assets_base, '..', 'assets', 'ticket_nofiscal.html')
@@ -616,12 +625,16 @@ class PDFGenerator:
 
         # ── Render Mustache (mini) ─────────────────────────────────────────
         html = _render_mustache(template, ctx)
+        return html
 
-        # ── Convertir a PDF con Chrome (Edge como fallback) ────────────────
+    def generate_non_fiscal_ticket(self, sale, cajero_name='', cliente_name='Consumidor Final'):
+        """Render HTML → PDF (flujo legacy). El flujo nuevo usa
+        `render_non_fiscal_ticket_html` + QWebEngineView para imprimir
+        directo desde el POS sin depender de visor PDF externo."""
+        html = self._build_ticket_html(sale, cajero_name, cliente_name)
         timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         filename = f'ticket_{sale.get("id", "x")}_{timestamp}.pdf'
         filepath = os.path.join(self.output_dir, filename)
-
         _html_to_pdf(html, filepath)
         return filepath
 

@@ -42,10 +42,15 @@ _COLOR_GREEN     = QColor('#3d7a3a')
 _COLOR_BLUE      = QColor('#c1521f')
 _COLOR_RED       = QColor('#a01616')
 _COLOR_GRAY      = QColor('#9b958a')
-# Máximo de ventas a cargar por refresh — protege la UI cuando el rango
-# de fechas devuelve miles de filas. La paginación se hace por filtro de
-# fecha (los rangos rápidos ya filtran).
-_MAX_SALES_LOAD = 50
+# Paginación: 30 ventas por página. Al llegar al fondo del scroll, la UI
+# carga las siguientes 30 desde SQLite (que ya está sincronizado con Firebase
+# en background). Así evitamos traer miles de filas a memoria y romper PCs
+# de menor RAM. SQLite con LIMIT/OFFSET es O(1) por página para queries con
+# fechas indexadas.
+_PAGE_SIZE = 30
+# Cuando el scroll está a < N filas del fondo, disparar la siguiente página.
+# Pre-carga sutil para que el usuario no vea el "salto" al llegar al final.
+_PREFETCH_THRESHOLD_ROWS = 5
 
 from pos_system.models.sale import Sale
 from pos_system.database.db_manager import DatabaseManager
@@ -55,16 +60,22 @@ logger = logging.getLogger(__name__)
 
 
 class _SalesLoaderThread(QThread):
-    """Runs the sales query on a background thread so the UI never blocks."""
-    results_ready = pyqtSignal(list)
+    """Runs the sales query on a background thread so the UI never blocks.
 
-    def __init__(self, sale_model, from_date, to_date, payment_type, limit, parent=None):
+    Emite `(sales, offset)` para que la UI distinga entre carga inicial
+    (offset=0 → reemplazar tabla) y append (offset>0 → agregar filas).
+    """
+    results_ready = pyqtSignal(list, int)
+
+    def __init__(self, sale_model, from_date, to_date, payment_type, limit,
+                 offset=0, parent=None):
         super().__init__(parent)
         self._sale_model  = sale_model
         self._from_date   = from_date
         self._to_date     = to_date
         self._payment     = payment_type
         self._limit       = limit
+        self._offset      = offset
 
     def run(self):
         try:
@@ -73,11 +84,12 @@ class _SalesLoaderThread(QThread):
                 end_date=self._to_date,
                 payment_type=self._payment,
                 limit=self._limit,
+                offset=self._offset,
             )
         except Exception as e:
             logger.error(f"SalesLoaderThread: {e}")
             sales = []
-        self.results_ready.emit(sales)
+        self.results_ready.emit(sales, self._offset)
 
 
 class SalesHistoryView(QWidget):
@@ -88,6 +100,17 @@ class SalesHistoryView(QWidget):
         self.db = DatabaseManager()
         self.sale_model = Sale(self.db)
         self.pdf_generator = PDFGenerator()
+
+        # Estado de paginación. Se resetea con cada nueva búsqueda/filtro.
+        self._page_offset = 0          # cuántas filas ya cargadas
+        self._all_loaded  = False      # True cuando la última página vino vacía
+        self._loading_more = False     # lock anti doble-disparo del scroll
+        # Totales acumulados (para que el resumen siga siendo correcto al
+        # agregar filas via scroll — sin re-sumar toda la tabla).
+        self._total_sum = 0.0
+        self._cash_sum  = 0.0
+        self._transfer_sum = 0.0
+
         self.init_ui()
 
     def open_pdf(self, pdf_path):
@@ -296,6 +319,13 @@ class SalesHistoryView(QWidget):
 
         self._current_sale_id = None
         self._loader_thread   = None
+
+        # Scroll infinito: cuando el usuario llegue cerca del fondo de la tabla,
+        # disparamos la carga de la siguiente página de 30. El listener filtra
+        # por umbral (_PREFETCH_THRESHOLD_ROWS) para precargar antes del final.
+        vbar = self.sales_table.verticalScrollBar()
+        vbar.valueChanged.connect(self._on_table_scroll)
+
         self.refresh_data()
 
     def _set_today(self):
@@ -314,39 +344,104 @@ class SalesHistoryView(QWidget):
         self.refresh_data()
 
     def refresh_data(self):
+        """Carga inicial (página 1). Resetea offset, totales y limpia tabla."""
         # If a previous load is still running, ignore — it will populate when done.
         if self._loader_thread and self._loader_thread.isRunning():
             return
 
+        self._page_offset = 0
+        self._all_loaded = False
+        self._loading_more = False
+        self._total_sum = 0.0
+        self._cash_sum  = 0.0
+        self._transfer_sum = 0.0
+
+        # Limpiar tabla antes de la primera página — evita parpadeo si tarda
+        # y deja la grilla vacía mientras suena "Cargando...".
+        self.sales_table.blockSignals(True)
+        self.sales_table.setRowCount(0)
+        self.sales_table.blockSignals(False)
+
+        self._launch_page_load(offset=0, set_loading_label=True)
+
+    def _load_more(self):
+        """Carga la siguiente página de 30 (scroll infinito)."""
+        if self._all_loaded or self._loading_more:
+            return
+        if self._loader_thread and self._loader_thread.isRunning():
+            return
+        self._loading_more = True
+        self._launch_page_load(offset=self._page_offset, set_loading_label=False)
+
+    def _launch_page_load(self, offset, set_loading_label):
         from_date    = self.from_date.date().toString('yyyy-MM-dd') + ' 00:00:00'
         to_date      = self.to_date.date().toString('yyyy-MM-dd') + ' 23:59:59'
         payment_type = self.payment_filter.currentData()
 
-        self.summary_label.setText('Cargando...')
+        if set_loading_label:
+            self.summary_label.setText('Cargando...')
         self._search_btn.setEnabled(False)
 
         self._loader_thread = _SalesLoaderThread(
-            self.sale_model, from_date, to_date, payment_type, _MAX_SALES_LOAD, parent=self
+            self.sale_model, from_date, to_date, payment_type,
+            limit=_PAGE_SIZE, offset=offset, parent=self
         )
         self._loader_thread.results_ready.connect(self._on_sales_loaded)
         self._loader_thread.start()
 
-    def _on_sales_loaded(self, sales):
+    def _on_table_scroll(self, value):
+        """Listener del scrollbar: si el usuario llegó cerca del fondo, prefetch."""
+        if self._all_loaded or self._loading_more:
+            return
+        vbar = self.sales_table.verticalScrollBar()
+        # Disparar cuando le falta < umbral filas para llegar al final.
+        # rowHeight es 36; usamos una estimación basada en el porcentaje
+        # del scroll para no sumar trabajo en cada movimiento.
+        max_val = vbar.maximum()
+        if max_val <= 0:
+            return
+        # < 5 filas del fondo = ~85% del scroll para tablas razonables.
+        if value >= max_val - (_PREFETCH_THRESHOLD_ROWS * 36):
+            self._load_more()
+
+    def _on_sales_loaded(self, sales, offset):
         self._search_btn.setEnabled(True)
+        is_initial = (offset == 0)
+
+        # Si la página vino vacía, marcamos "todo cargado" y salimos.
+        if not sales:
+            self._all_loaded = True
+            self._loading_more = False
+            if is_initial:
+                # Caso especial: rango sin ventas — mostrar resumen vacío.
+                self.sales_table.setRowCount(0)
+                self.summary_label.setText('Sin ventas en el rango seleccionado.')
+                # Limpiar detalle
+                self.detail_table.setRowCount(0)
+                self.reprint_btn.setEnabled(False)
+                self.edit_btn.setEnabled(False)
+                if hasattr(self, 'facturar_btn'):
+                    self.facturar_btn.setEnabled(False)
+                self._current_sale_id = None
+            else:
+                # Append vacío — actualizar el resumen para sacar el "+ cargar más".
+                self._update_summary()
+            return
 
         # Bloquear señales y repaints durante el populate — cada setItem
         # puede disparar selectionChanged → _show_sale_detail → query SQLite.
         tbl = self.sales_table
         tbl.blockSignals(True)
         tbl.setUpdatesEnabled(False)
-        tbl.clearSelection()
+        if is_initial:
+            tbl.clearSelection()
         try:
-            tbl.setRowCount(len(sales))
-            total_sum = 0.0
-            cash_sum = 0.0
-            transfer_sum = 0.0
+            start_row = 0 if is_initial else tbl.rowCount()
+            new_total_rows = start_row + len(sales)
+            tbl.setRowCount(new_total_rows)
 
-            for row, sale in enumerate(sales):
+            for i, sale in enumerate(sales):
+                row = start_row + i
                 tbl.setRowHeight(row, 36)
 
                 id_item = QTableWidgetItem(str(sale['id']))
@@ -391,34 +486,49 @@ class SalesHistoryView(QWidget):
                     disc_item.setForeground(_COLOR_RED)
                 tbl.setItem(row, 6, disc_item)
 
-                total_sum += total
+                # Acumular totales en el estado de la vista (no en locales) para
+                # que las páginas siguientes sumen sobre lo que ya había.
+                self._total_sum += total
                 if ptype == 'cash':
-                    cash_sum += total
+                    self._cash_sum += total
                 else:
-                    transfer_sum += total
+                    self._transfer_sum += total
         finally:
             tbl.setUpdatesEnabled(True)
             tbl.blockSignals(False)
 
-        # Resumen
-        count = len(sales)
-        avg = total_sum / count if count > 0 else 0
-        truncado = f' (limite: {_MAX_SALES_LOAD} mas recientes — acota fechas para ver mas)' if count >= _MAX_SALES_LOAD else ''
+        # Avanzar el offset para la próxima página.
+        self._page_offset = offset + len(sales)
+        # Si esta página vino corta, ya no hay más para pedir.
+        if len(sales) < _PAGE_SIZE:
+            self._all_loaded = True
+        self._loading_more = False
+
+        self._update_summary()
+
+        if is_initial:
+            # Limpiar detalle sólo al recargar desde cero.
+            self.detail_table.setRowCount(0)
+            self.reprint_btn.setEnabled(False)
+            self.edit_btn.setEnabled(False)
+            if hasattr(self, 'facturar_btn'):
+                self.facturar_btn.setEnabled(False)
+            self._current_sale_id = None
+
+    def _update_summary(self):
+        count = self.sales_table.rowCount()
+        avg = self._total_sum / count if count > 0 else 0
+        if self._all_loaded:
+            hint = ''
+        else:
+            hint = ' <span style="color:#9b958a">· bajá para cargar más</span>'
         self.summary_label.setText(
-            f'<b>{count}</b> ventas{truncado}  |  '
-            f'Total: <b>${total_sum:.2f}</b>  |  '
-            f'Efectivo: <b>${cash_sum:.2f}</b>  |  '
-            f'Virtual: <b>${transfer_sum:.2f}</b>  |  '
+            f'<b>{count}</b> ventas{hint}  |  '
+            f'Total: <b>${self._total_sum:.2f}</b>  |  '
+            f'Efectivo: <b>${self._cash_sum:.2f}</b>  |  '
+            f'Virtual: <b>${self._transfer_sum:.2f}</b>  |  '
             f'Promedio: <b>${avg:.2f}</b>'
         )
-
-        # Limpiar detalle
-        self.detail_table.setRowCount(0)
-        self.reprint_btn.setEnabled(False)
-        self.edit_btn.setEnabled(False)
-        if hasattr(self, 'facturar_btn'):
-            self.facturar_btn.setEnabled(False)
-        self._current_sale_id = None
 
     def _on_selection_changed(self):
         row = self.sales_table.currentRow()
@@ -614,14 +724,18 @@ class SalesHistoryView(QWidget):
                            or sale.get('username')
                            or sale.get('turno_nombre')
                            or '')
-            pdf_path = self.pdf_generator.generate_non_fiscal_ticket(
+            # Impresión nativa Qt: abre el diálogo de impresión de Windows
+            # con la lista de impresoras instaladas. No hay PDF intermedio
+            # ni dependencia de visor — funciona en cualquier PC con PyQt5.
+            from pos_system.utils.ticket_printer import imprimir_ticket_no_fiscal
+            imprimir_ticket_no_fiscal(
                 sale,
+                parent=self,
                 cajero_name=cajero_name,
                 cliente_name='Consumidor Final',
             )
-            self.open_pdf(pdf_path)
         except Exception as e:
-            QMessageBox.critical(self, 'Error', f'No se pudo generar el ticket: {e}')
+            QMessageBox.critical(self, 'Error', f'No se pudo imprimir el ticket: {e}')
 
 
 class EditSaleDialog(QDialog):

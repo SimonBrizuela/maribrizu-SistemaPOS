@@ -481,9 +481,12 @@ class Sale:
         return sale
     
     def get_all(self, start_date: str = None, end_date: str = None,
-                payment_type: str = None, limit: int = None) -> List[Dict]:
+                payment_type: str = None, limit: int = None,
+                offset: int = 0) -> List[Dict]:
         """Obtiene todas las ventas con filtros opcionales.
-        limit: si se pasa, corta el resultado (las ventas más recientes primero).
+        limit:  si se pasa, corta el resultado (las ventas más recientes primero).
+        offset: salta las primeras N filas — usado por la UI para paginar
+                (carga 30 a 30 con scroll infinito sin traer miles a la vez).
         """
         query = "SELECT * FROM sales WHERE 1=1"
         params = []
@@ -504,6 +507,9 @@ class Sale:
         query += " ORDER BY created_at DESC, id DESC"
         if limit and int(limit) > 0:
             query += f" LIMIT {int(limit)}"
+            # OFFSET sólo aplica si hay LIMIT — SQLite lo requiere así.
+            if offset and int(offset) > 0:
+                query += f" OFFSET {int(offset)}"
         return self.db.execute_query(query, tuple(params))
     
     def get_today_sales(self) -> List[Dict]:

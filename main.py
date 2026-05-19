@@ -2,8 +2,20 @@ import sys
 import math
 import re
 import logging
+
+# QtWebEngineWidgets DEBE importarse antes de crear QApplication. Esto inicializa
+# el runtime Chromium y habilita el atributo AA_ShareOpenGLContexts. Usado por
+# pos_system.utils.ticket_printer para mostrar el ticket no fiscal con render
+# fiel al PDF (logo, fuente monospace, etc.) y permitir imprimir vía
+# QWebEnginePage.print con el diálogo nativo de Windows.
+# Si PyQtWebEngine no está instalado, el ticket cae a un fallback más simple.
 from PyQt5.QtWidgets import QApplication, QMessageBox
 from PyQt5.QtCore import Qt
+QApplication.setAttribute(Qt.AA_ShareOpenGLContexts, True)
+try:
+    from PyQt5 import QtWebEngineWidgets  # noqa: F401
+except ImportError:
+    pass
 
 from pos_system.config import APP_NAME, ORGANIZATION, APP_VERSION, DATABASE_PATH
 from pos_system.ui.main_window import MainWindow
