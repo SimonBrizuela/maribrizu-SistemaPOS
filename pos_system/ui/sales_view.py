@@ -3835,13 +3835,15 @@ class SalesView(QWidget):
             new_obs = obs_input.toPlainText().strip()
             changed = False
             if new_price != current_price:
-                item['unit_price'] = new_price
                 item['original_price'] = item.get('original_price', current_price)
-                item['discount_amount'] = 0
-                item['discount_type'] = None
-                item['discount_value'] = 0
-                item['promo_id'] = None
-                item['promo_label'] = ''
+                item['unit_price'] = new_price
+                # Preservar la info de promo (label / id / type / value) — el
+                # cajero ve que la promo seguia activa y el strikethrough usa el
+                # precio original. Solo recomputamos el monto descontado contra
+                # el override manual. Si el cajero subio el precio por encima
+                # del original, discount_amount queda en 0 (no se muestra badge).
+                disc = max(0.0, float(item['original_price']) - float(new_price))
+                item['discount_amount'] = round(disc, 2)
                 item['subtotal'] = round(item['quantity'] * new_price, 2)
                 # Flag para que update_quantity no piso el precio override
                 # con el del catalogo cuando el cajero cambie la cantidad.
