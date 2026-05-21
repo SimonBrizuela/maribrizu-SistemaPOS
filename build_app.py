@@ -93,8 +93,11 @@ def main():
         f'--hidden-import=OpenSSL.SSL '
         f'--hidden-import=lxml '
         f'--hidden-import=lxml.etree '
+        f'--hidden-import=qrcode '
+        f'--hidden-import=qrcode.image.pil '
         f'--collect-all zeep '
         f'--collect-all OpenSSL '
+        f'--collect-all qrcode '
         f'"{project_root / "main.py"}"'
     )
     

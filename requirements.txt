@@ -8,3 +8,4 @@ pytest>=7.4.0
 zeep>=4.2.1
 pyOpenSSL>=23.0.0
 lxml>=4.9.0
+qrcode[pil]>=7.4

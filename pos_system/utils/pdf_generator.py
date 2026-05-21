@@ -2023,7 +2023,7 @@ class PDFGenerator:
         sAFIP_sub = S('AFS2', fontSize=7, fontName='Helvetica', alignment=TA_CENTER, leading=9)
 
         afip_logo_cell = [
-            Paragraph('<b>AFIP</b>', sAFIP),
+            Paragraph('<b>ARCA</b>', sAFIP),
             Paragraph('Comprobante Autorizado', sAFIP_sub),
         ]
 

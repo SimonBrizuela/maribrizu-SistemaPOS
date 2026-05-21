@@ -3202,8 +3202,9 @@ class SalesView(QWidget):
             # Col 1: Cantidad (DoubleSpinBox)
             qty_spin = CartQuantitySpinBox()
             qty_spin.setMinimum(0.0)
-            max_stock = item.get('max_stock', 0)
-            qty_spin.setMaximum(float(max_stock) if max_stock and max_stock > 0 else 9999.0)
+            # Sin tope por stock: el cajero puede ingresar cualquier cantidad.
+            # La validación de stock (si aplica) ocurre al confirmar la venta.
+            qty_spin.setMaximum(99_999_999.0)
             qty_spin.setValue(float(item['quantity']))
             qty_spin.setFixedHeight(32)
             qty_spin.setFont(QFont('Segoe UI', 11, QFont.Bold))
@@ -5949,7 +5950,7 @@ class VariosItemDialog(QDialog):
         form.addRow('Precio unitario:', self.price_input)
 
         self.qty_input = CartQuantitySpinBox()
-        self.qty_input.setRange(0.01, 9999)
+        self.qty_input.setRange(0.01, 99_999_999)
         self.qty_input.setValue(1)
         self.qty_input.setFont(QFont('Segoe UI', 11))
         form.addRow('Cantidad:', self.qty_input)
