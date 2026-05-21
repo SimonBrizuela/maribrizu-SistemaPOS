@@ -2278,6 +2278,51 @@ class FirebaseSync:
                         'created_at': w.get('created_at', ''),
                     })
 
+                # Multi-PC: recalcular stats desde ventas_por_dia para que el
+                # cierre incluya ventas de TODAS las PCs (no solo la local).
+                # Si la query falla o devuelve menos que el local, fallback al
+                # report local — así no se pierde info si Firebase está caído.
+                try:
+                    fb_items = list(self.db.collection('ventas_por_dia')
+                                    .where('cash_register_id', '==', int(register_id)).stream())
+                    fb_efectivo = 0.0
+                    fb_transferencia = 0.0
+                    ventas_ef_keys = set()
+                    ventas_tr_keys = set()
+                    productos_fb = {}
+                    for it in fb_items:
+                        d_it = it.to_dict() or {}
+                        if d_it.get('deleted'): continue
+                        sub = float(d_it.get('subtotal', 0) or 0)
+                        cant = float(d_it.get('cantidad', 0) or 0)
+                        # pc_id derivado del doc id (esquema {pc}_{num}_{idx})
+                        parts = it.id.split('_')
+                        pcid = '_'.join(parts[:-2]) if len(parts) >= 3 else ''
+                        nv_key = f"{pcid}|{d_it.get('num_venta')}"
+                        if d_it.get('tipo_pago') == 'Transferencia':
+                            fb_transferencia += sub
+                            ventas_tr_keys.add(nv_key)
+                        else:
+                            fb_efectivo += sub
+                            ventas_ef_keys.add(nv_key)
+                        prod = d_it.get('producto') or d_it.get('product_name') or '-'
+                        if prod not in productos_fb:
+                            productos_fb[prod] = {'product_name': prod, 'total_quantity': 0.0, 'total_amount': 0.0}
+                        productos_fb[prod]['total_quantity'] += cant
+                        productos_fb[prod]['total_amount']   += sub
+                    # Solo preferimos Firestore si tiene >= ventas que el local
+                    # (proteccion contra Firestore con datos desactualizados).
+                    if (fb_efectivo + fb_transferencia) >= (efectivo + transferencia):
+                        efectivo        = fb_efectivo
+                        transferencia   = fb_transferencia
+                        num_cash        = len(ventas_ef_keys)
+                        num_transf      = len(ventas_tr_keys)
+                        esperado        = inicial + efectivo - retiros
+                        productos_lista = sorted(productos_fb.values(),
+                                                 key=lambda p: -p['total_amount'])
+                except Exception as e_recalc:
+                    logger.warning(f"sync_cash_closing: fallback a local — recalc Firestore fallo: {e_recalc}")
+
                 pc_id = _get_pc_id()
                 # Doc id compartido = solo register_id. Las 5 PCs escriben al
                 # mismo doc (merge=True) → una sola caja en Firebase para todas.
@@ -2593,6 +2638,62 @@ class FirebaseSync:
                     'productos_vendidos':      [],
                     'retiros':                 [],
                 })
+
+                # 3. Auto-cerrar huérfanos: cualquier otro doc con fecha_cierre
+                # vacío y register_id != nueva. Quedan así cuando una caja se
+                # abandona (cierre fallido, PC offline al cerrar) y aparecen
+                # como fantasmas en la web. Cada huérfano recibe fecha_cierre
+                # = hora de su última venta (no `now`), para que la fila refleje
+                # cuándo dejó de operar realmente, no cuándo se limpió.
+                try:
+                    from datetime import datetime as _dt
+                    huerfanos = list(self.db.collection('cierres_caja')
+                                     .where('fecha_cierre', '==', '').stream())
+                    new_rid = int(register_id) if register_id else 0
+                    for h in huerfanos:
+                        data = h.to_dict() or {}
+                        rid = data.get('register_id')
+                        try:
+                            if rid is not None and int(rid) == new_rid:
+                                continue
+                        except Exception:
+                            pass
+                        # Última venta de esta caja para usar como fecha_cierre
+                        try:
+                            items = list(self.db.collection('ventas_por_dia')
+                                         .where('cash_register_id', '==', int(rid)).stream())
+                        except Exception:
+                            items = []
+                        last_dt = None
+                        for it in items:
+                            d2 = it.to_dict() or {}
+                            if d2.get('deleted'): continue
+                            fecha_str = d2.get('fecha', '')
+                            hora_str  = d2.get('hora', '00:00:00')
+                            try:
+                                dt = _dt.strptime(f"{fecha_str} {hora_str}", '%d/%m/%Y %H:%M:%S')
+                            except Exception:
+                                try:
+                                    dt = _dt.strptime(f"{fecha_str} {hora_str}", '%d/%m/%Y %H:%M')
+                                except Exception:
+                                    continue
+                            dt = dt.replace(tzinfo=_TZ_AR)
+                            if not last_dt or dt > last_dt:
+                                last_dt = dt
+                        cierre_dt = last_dt or now_ar()
+                        self.db.collection('cierres_caja').document(h.id).set({
+                            'fecha_cierre':     cierre_dt,
+                            'cerrado_desde':    'auto-orphan',
+                            'pendiente_conteo': False,
+                            'updated_at':       now_ar_iso(),
+                        }, merge=True)
+                        logger.info(
+                            f"Firebase: Caja huérfana #{rid} auto-cerrada "
+                            f"(fecha_cierre = {'última venta' if last_dt else 'ahora'})."
+                        )
+                except Exception as e_orph:
+                    logger.warning(f"Firebase: Error auto-cerrando huérfanos: {e_orph}")
+
                 logger.info(f"Firebase: Caja #{register_id} abierta → caja_activa + cierres_caja actualizados.")
             except Exception as e:
                 logger.error(f"Firebase: Error subiendo apertura de caja: {e}")

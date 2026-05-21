@@ -35,6 +35,15 @@ def _fmt_qty(q):
     return f"{q:.2f}".rstrip('0').rstrip('.')
 
 
+def _fmt_money(n):
+    """Formatea monto: entero sin decimales, con decimales muestra hasta 2.
+    100 -> '100', 100.5 -> '100.50', 100.555 -> '100.56'."""
+    n = float(n or 0)
+    if round(n, 2) == int(round(n, 2)):
+        return f"{int(round(n)):,}"
+    return f"{n:,.2f}"
+
+
 class CartQuantitySpinBox(QDoubleSpinBox):
     """Cantidad del carrito aceptando coma o punto como separador decimal.
 
@@ -394,7 +403,7 @@ class ProductSearchDialog(QDialog):
             self.cart_list.setItem(row, 0, name_item)
 
             # Columna combinada: "x2  $500"
-            detail_item = QTableWidgetItem(f'x{_fmt_qty(qty)}  ${subtotal:,.0f}')
+            detail_item = QTableWidgetItem(f'x{_fmt_qty(qty)}  ${_fmt_money(subtotal)}')
             detail_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             detail_item.setForeground(QColor('#c1521f'))
             self.cart_list.setItem(row, 1, detail_item)
@@ -3230,13 +3239,13 @@ class SalesView(QWidget):
                 w2 = QWidget()
                 wl2 = QVBoxLayout(w2); wl2.setContentsMargins(4, 4, 8, 4); wl2.setSpacing(0)
                 wl2.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                strike2 = QLabel(f"<s>${orig_price:,.0f}</s>")
+                strike2 = QLabel(f"<s>${_fmt_money(orig_price)}</s>")
                 strike2.setStyleSheet(
                     f"color:{_T['text_dim']}; font-size:10px; background:transparent;"
                     f" border:none; font-family:'JetBrains Mono', Consolas, monospace;"
                 )
                 strike2.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                final2 = QLabel(f"${item['unit_price']:,.0f}")
+                final2 = QLabel(f"${_fmt_money(item['unit_price'])}")
                 final2.setStyleSheet(
                     f"color:{_T['text']}; font-size:12px; font-weight:600; background:transparent;"
                     f" border:none; font-family:'JetBrains Mono', Consolas, monospace;"
@@ -3250,7 +3259,7 @@ class SalesView(QWidget):
                 self.cart_table.setItem(row, 2, b2)
             else:
                 self.cart_table.removeCellWidget(row, 2)
-                price_item = QTableWidgetItem(f'${item["unit_price"]:,.0f}')
+                price_item = QTableWidgetItem(f'${_fmt_money(item["unit_price"])}')
                 price_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 price_item.setFont(QFont('Consolas', 11))
                 price_item.setForeground(QColor(_T['text']))
@@ -3264,13 +3273,13 @@ class SalesView(QWidget):
                 w = QWidget()
                 wl = QVBoxLayout(w); wl.setContentsMargins(8, 4, 12, 4); wl.setSpacing(0)
                 wl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                strike = QLabel(f"<s>${orig_total:,.0f}</s>")
+                strike = QLabel(f"<s>${_fmt_money(orig_total)}</s>")
                 strike.setStyleSheet(
                     f"color:{_T['text_dim']}; font-size:10px; background:transparent;"
                     f" border:none; font-family:'JetBrains Mono', Consolas, monospace;"
                 )
                 strike.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-                final = QLabel(f"${item['subtotal']:,.0f}")
+                final = QLabel(f"${_fmt_money(item['subtotal'])}")
                 final.setStyleSheet(
                     f"color:{_T['accent']}; font-size:13px; font-weight:700; background:transparent;"
                     f" border:none; font-family:'JetBrains Mono', Consolas, monospace;"
@@ -3284,7 +3293,7 @@ class SalesView(QWidget):
                 self.cart_table.setItem(row, 3, backing)
             else:
                 self.cart_table.removeCellWidget(row, 3)
-                subtotal_item = QTableWidgetItem(f'${item["subtotal"]:,.0f}')
+                subtotal_item = QTableWidgetItem(f'${_fmt_money(item["subtotal"])}')
                 subtotal_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
                 subtotal_item.setFont(QFont('Consolas', 11, QFont.Bold))
                 subtotal_item.setForeground(QColor(_T['text']))
@@ -3665,13 +3674,13 @@ class SalesView(QWidget):
             w2 = QWidget()
             wl2 = QVBoxLayout(w2); wl2.setContentsMargins(4, 4, 8, 4); wl2.setSpacing(0)
             wl2.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            strike2 = QLabel(f"<s>${orig:,.0f}</s>")
+            strike2 = QLabel(f"<s>${_fmt_money(orig)}</s>")
             strike2.setStyleSheet(
                 f"color:{_T['text_dim']}; font-size:10px; background:transparent;"
                 f" border:none; font-family:'JetBrains Mono', Consolas, monospace;"
             )
             strike2.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            final2 = QLabel(f"${item['unit_price']:,.0f}")
+            final2 = QLabel(f"${_fmt_money(item['unit_price'])}")
             final2.setStyleSheet(
                 f"color:{_T['text']}; font-size:12px; font-weight:600; background:transparent;"
                 f" border:none; font-family:'JetBrains Mono', Consolas, monospace;"
@@ -3685,7 +3694,7 @@ class SalesView(QWidget):
             self.cart_table.setItem(row, 2, b2)
         else:
             self.cart_table.removeCellWidget(row, 2)
-            price_item = QTableWidgetItem(f'${item["unit_price"]:,.0f}')
+            price_item = QTableWidgetItem(f'${_fmt_money(item["unit_price"])}')
             price_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             price_item.setFont(QFont('Consolas', 11))
             price_item.setForeground(QColor(_T['text']))
@@ -3699,13 +3708,13 @@ class SalesView(QWidget):
             w = QWidget()
             wl = QVBoxLayout(w); wl.setContentsMargins(8, 4, 12, 4); wl.setSpacing(0)
             wl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            strike = QLabel(f"<s>${orig_total:,.0f}</s>")
+            strike = QLabel(f"<s>${_fmt_money(orig_total)}</s>")
             strike.setStyleSheet(
                 f"color:{_T['text_dim']}; font-size:10px; background:transparent;"
                 f" border:none; font-family:'JetBrains Mono', Consolas, monospace;"
             )
             strike.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            final = QLabel(f"${item['subtotal']:,.0f}")
+            final = QLabel(f"${_fmt_money(item['subtotal'])}")
             final.setStyleSheet(
                 f"color:{_T['accent']}; font-size:13px; font-weight:700; background:transparent;"
                 f" border:none; font-family:'JetBrains Mono', Consolas, monospace;"
@@ -3716,7 +3725,7 @@ class SalesView(QWidget):
             self.cart_table.setItem(row, 3, QTableWidgetItem(''))
         else:
             self.cart_table.removeCellWidget(row, 3)
-            sub_item = QTableWidgetItem(f'${item["subtotal"]:,.0f}')
+            sub_item = QTableWidgetItem(f'${_fmt_money(item["subtotal"])}')
             sub_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             sub_item.setFont(QFont('Consolas', 11, QFont.Bold))
             sub_item.setForeground(QColor(_T['text']))
@@ -3736,7 +3745,7 @@ class SalesView(QWidget):
             if self.cart_table.cellWidget(row, 3) is None:
                 sub_it = self.cart_table.item(row, 3)
                 if sub_it:
-                    sub_it.setText(f'${item["subtotal"]:,.0f}')
+                    sub_it.setText(f'${_fmt_money(item["subtotal"])}')
         # Total y contador
         total = sum(item['subtotal'] for item in self.cart)
         total_items = sum(float(item['quantity']) for item in self.cart)
@@ -3791,10 +3800,19 @@ class SalesView(QWidget):
         price_spin = QDoubleSpinBox()
         price_spin.setMinimum(0)
         price_spin.setMaximum(99_999_999)
-        price_spin.setDecimals(0)
+        price_spin.setDecimals(2)
         price_spin.setSingleStep(100)
         price_spin.setValue(current_price)
         price_spin.setPrefix('$ ')
+        # Aceptar coma o punto como separador decimal (locale ES_AR usa coma,
+        # pero el teclado numerico tipea coma siempre — toleramos ambos).
+        try:
+            from PyQt5.QtCore import QLocale
+            loc = QLocale(QLocale.Spanish, QLocale.Argentina)
+            loc.setNumberOptions(QLocale.RejectGroupSeparator)
+            price_spin.setLocale(loc)
+        except Exception:
+            pass
         price_spin.setFont(QFont('Segoe UI', 13, QFont.Bold))
         price_spin.setMinimumHeight(44)
         price_spin.setStyleSheet('QDoubleSpinBox { border: 2px solid #c1521f; border-radius: 6px; padding: 4px 8px; }')
