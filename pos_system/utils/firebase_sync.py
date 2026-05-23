@@ -431,12 +431,41 @@ class FirebaseSync:
                     else:
                         conjunto_colores = None
 
+                    # Vínculos consumibles: este producto, al venderse, descuenta
+                    # stock de otro(s) producto(s). Se guarda como JSON string en
+                    # SQLite. Legacy: vinculado_a/_cantidad/_nombre replican el
+                    # primer entry para compat con código viejo.
+                    vincs_raw = d.get('vinculaciones')
+                    if isinstance(vincs_raw, list) and vincs_raw:
+                        try:
+                            import json as _json
+                            vincs_norm = []
+                            for v in vincs_raw:
+                                if not isinstance(v, dict):
+                                    continue
+                                did = str(v.get('doc_id') or '').strip()
+                                cnt = _to_float(v.get('cantidad')) or 0.0
+                                if did and cnt > 0:
+                                    vincs_norm.append({
+                                        'doc_id':   did,
+                                        'cantidad': cnt,
+                                        'nombre':   str(v.get('nombre') or ''),
+                                    })
+                            vinculaciones = _json.dumps(vincs_norm, ensure_ascii=False) if vincs_norm else None
+                        except Exception:
+                            vinculaciones = None
+                    else:
+                        vinculaciones = None
+                    vinculado_a = (str(d.get('vinculado_a') or '').strip() or None)
+                    vinculado_cantidad = _to_float(d.get('vinculado_cantidad'))
+                    vinculado_nombre = (str(d.get('vinculado_nombre') or '').strip() or None)
+
                     try:
                         rows = db_manager.execute_query(
                             "SELECT id, name, price, cost, stock, barcode, category, rubro, stock_min, stock_max, "
                             "es_conjunto, conjunto_tipo, conjunto_unidad_medida, conjunto_unidades, "
                             "conjunto_contenido, conjunto_restante, conjunto_precio_unidad, conjunto_total, "
-                            "conjunto_colores "
+                            "conjunto_colores, vinculaciones, vinculado_a, vinculado_cantidad, vinculado_nombre "
                             "FROM products WHERE firebase_id = ?", (doc_id,)
                         ) or []
                     except Exception:
@@ -457,15 +486,18 @@ class FirebaseSync:
                                     es_conjunto, conjunto_tipo, conjunto_unidad_medida,
                                     conjunto_unidades, conjunto_contenido, conjunto_restante,
                                     conjunto_precio_unidad, conjunto_total, conjunto_colores,
+                                    vinculaciones, vinculado_a, vinculado_cantidad, vinculado_nombre,
                                     created_at, updated_at)
                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                                            ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                                           ?, ?, ?, ?,
                                            CURRENT_TIMESTAMP, ?)""",
                                 (nombre, categ, precio, costo, stock, barcode,
                                  desc, doc_id, rubro, stock_min, stock_max,
                                  es_conjunto, conjunto_tipo, conjunto_unidad_medida,
                                  conjunto_unidades, conjunto_contenido, conjunto_restante,
                                  conjunto_precio_unidad, conjunto_total, conjunto_colores,
+                                 vinculaciones, vinculado_a, vinculado_cantidad, vinculado_nombre,
                                  now_local_str)
                             )
                             changed_any = True
@@ -502,7 +534,11 @@ class FirebaseSync:
                             not _eq_float(r.get('conjunto_restante'),      conjunto_restante) or
                             not _eq_float(r.get('conjunto_precio_unidad'), conjunto_precio_unidad) or
                             not _eq_float(r.get('conjunto_total'),         conjunto_total) or
-                            (r.get('conjunto_colores') or None) != (conjunto_colores or None)
+                            (r.get('conjunto_colores') or None) != (conjunto_colores or None) or
+                            (r.get('vinculaciones') or None)     != (vinculaciones or None) or
+                            (r.get('vinculado_a') or None)       != vinculado_a or
+                            not _eq_float(r.get('vinculado_cantidad'), vinculado_cantidad) or
+                            (r.get('vinculado_nombre') or None)  != vinculado_nombre
                         )
                         if not cambios:
                             continue
@@ -520,6 +556,7 @@ class FirebaseSync:
                                        es_conjunto=?, conjunto_tipo=?, conjunto_unidad_medida=?,
                                        conjunto_unidades=?, conjunto_contenido=?, conjunto_restante=?,
                                        conjunto_precio_unidad=?, conjunto_total=?, conjunto_colores=?,
+                                       vinculaciones=?, vinculado_a=?, vinculado_cantidad=?, vinculado_nombre=?,
                                        updated_at=?
                                    WHERE id=?""",
                                 (nombre, categ, precio, costo, stock,
@@ -527,6 +564,7 @@ class FirebaseSync:
                                  es_conjunto, conjunto_tipo, conjunto_unidad_medida,
                                  conjunto_unidades, conjunto_contenido, conjunto_restante,
                                  conjunto_precio_unidad, conjunto_total, conjunto_colores,
+                                 vinculaciones, vinculado_a, vinculado_cantidad, vinculado_nombre,
                                  now_local_str, local_id)
                             )
                             changed_any = True
@@ -1655,6 +1693,135 @@ class FirebaseSync:
 
         self._run(_do)
 
+    def sync_vinculaciones_after_sale(self, sale_id: int,
+                                      vincs_to_sync: list,
+                                      db_manager) -> None:
+        """Push de los targets vinculados al catálogo en Firestore + marca
+        cada item de `ventas_por_dia/{pc_id}_{sale_id}_{idx}` con
+        `consumibles_procesado: True` y el detalle del descuento.
+
+        Patrón:
+          - Producto plano: stock = Increment(-delta) (atómico, multi-PC safe).
+          - Producto conjunto: push absoluto (conjunto_total/unidades/restante
+            + stock mirror) leídos desde SQLite local — el modelo de venta
+            ya recalculó el estado correcto.
+
+        Marca `consumibles_procesado` para que el watcher web no duplique
+        el descuento si está activo simultáneamente.
+        """
+        if not self.enabled or not vincs_to_sync:
+            return
+
+        def _do():
+            try:
+                from firebase_admin import firestore as _fs
+                now_dt  = now_ar().astimezone(timezone.utc)
+                now_str = now_dt.strftime('%Y-%m-%dT%H:%M:%S')
+                pc_id   = _get_pc_id()
+
+                batch = self.db.batch()
+                touched_targets = set()
+                touched_items   = {}  # item_idx -> list[descuento dict]
+
+                for v in vincs_to_sync:
+                    item_idx   = v.get('item_idx')
+                    target_fid = str(v.get('target_fid') or '').strip()
+                    local_id   = v.get('target_local_id')
+                    delta      = float(v.get('delta') or 0)
+                    if not target_fid or delta <= 0:
+                        continue
+
+                    # Acumular descuento por item para marcar consumibles_procesado
+                    desc_entry = {
+                        'contexto':  v.get('contexto') or '',
+                        'target_id': target_fid,
+                        'cantidad':  delta,
+                    }
+                    touched_items.setdefault(item_idx, []).append(desc_entry)
+
+                    # Evitar pushear el mismo target dos veces (si dos items del
+                    # mismo ticket descontaron del mismo target). Lo leemos
+                    # desde SQLite que ya tiene el estado final agregado.
+                    if target_fid in touched_targets:
+                        continue
+                    touched_targets.add(target_fid)
+
+                    if v.get('is_conjunto'):
+                        # Estado absoluto desde SQLite (ya descontado)
+                        try:
+                            rows = db_manager.execute_query(
+                                "SELECT stock, conjunto_total, conjunto_unidades, conjunto_restante "
+                                "FROM products WHERE id = ?",
+                                (int(local_id),)
+                            ) or []
+                        except Exception:
+                            rows = []
+                        if not rows:
+                            continue
+                        r = rows[0]
+                        payload = {
+                            'stock':                int(r.get('stock') or 0),
+                            'conjunto_total':       float(r.get('conjunto_total') or 0),
+                            'conjunto_unidades':    float(r.get('conjunto_unidades') or 0),
+                            'conjunto_restante':    float(r.get('conjunto_restante') or 0),
+                            'ultima_actualizacion': now_dt,
+                        }
+                        cat_ref = self.db.collection('catalogo').document(target_fid)
+                        batch.set(cat_ref, payload, merge=True)
+                        # Mirror en inventario (doc_id = id numérico local).
+                        try:
+                            inv_ref = self.db.collection('inventario').document(str(int(local_id)))
+                            batch.set(inv_ref, payload, merge=True)
+                        except Exception:
+                            pass
+                    else:
+                        # Stock plano: decremento atómico
+                        cat_ref = self.db.collection('catalogo').document(target_fid)
+                        batch.set(cat_ref, {
+                            'stock': _fs.Increment(-delta),
+                            'ultima_actualizacion': now_dt,
+                        }, merge=True)
+                        try:
+                            inv_ref = self.db.collection('inventario').document(str(int(local_id)))
+                            batch.set(inv_ref, {
+                                'stock': _fs.Increment(-delta),
+                                'ultima_actualizacion': now_dt,
+                            }, merge=True)
+                        except Exception:
+                            pass
+
+                # Marcar items en ventas_por_dia
+                col_vpd = self.db.collection('ventas_por_dia')
+                for item_idx, descuentos in touched_items.items():
+                    doc_id = f"{pc_id}_{sale_id}_{item_idx}"
+                    batch.set(col_vpd.document(doc_id), {
+                        'consumibles_procesado':    True,
+                        'consumibles_procesado_at': now_dt,
+                        'consumibles_descuentos':   descuentos,
+                    }, merge=True)
+
+                batch.commit()
+
+                # Tocar metadata para que las otras PCs detecten el cambio
+                try:
+                    self.db.collection('config').document('catalogo_meta').set(
+                        {'last_updated': now_str}, merge=True
+                    )
+                    self.db.collection('config').document('inventario_meta').set(
+                        {'last_updated': now_str}, merge=True
+                    )
+                except Exception:
+                    pass
+
+                logger.info(
+                    f"Firebase: vinculaciones aplicadas — "
+                    f"{len(touched_targets)} target(s), {len(touched_items)} item(s) marcados."
+                )
+            except Exception as e:
+                logger.error(f"Firebase: error en sync_vinculaciones_after_sale: {e}")
+
+        self._run(_do)
+
     def delta_sync_products_startup(self, local_db, on_done=None):
         """
         Al arrancar el POS, detecta en segundo plano si hay productos nuevos o
@@ -1789,6 +1956,38 @@ class FirebaseSync:
                     stock_min = int(raw_smin) if raw_smin not in (None, '', False) else None
                     stock_max = int(raw_smax) if raw_smax not in (None, '', False) else None
 
+                    # Vínculos consumibles (read-only desde POS; gestionados en webapp)
+                    _vincs_raw = d.get('vinculaciones')
+                    vinculaciones = None
+                    if isinstance(_vincs_raw, list) and _vincs_raw:
+                        try:
+                            import json as _json
+                            _vn = []
+                            for v in _vincs_raw:
+                                if not isinstance(v, dict):
+                                    continue
+                                _did = str(v.get('doc_id') or '').strip()
+                                try:
+                                    _cnt = float(v.get('cantidad') or 0)
+                                except (TypeError, ValueError):
+                                    _cnt = 0.0
+                                if _did and _cnt > 0:
+                                    _vn.append({
+                                        'doc_id':   _did,
+                                        'cantidad': _cnt,
+                                        'nombre':   str(v.get('nombre') or ''),
+                                    })
+                            vinculaciones = _json.dumps(_vn, ensure_ascii=False) if _vn else None
+                        except Exception:
+                            vinculaciones = None
+                    vinculado_a = (str(d.get('vinculado_a') or '').strip() or None)
+                    try:
+                        _vc = d.get('vinculado_cantidad')
+                        vinculado_cantidad = float(_vc) if _vc not in (None, '', False) else None
+                    except (TypeError, ValueError):
+                        vinculado_cantidad = None
+                    vinculado_nombre = (str(d.get('vinculado_nombre') or '').strip() or None)
+
                     entry = local_by_firebase_id.get(firebase_id)
 
                     if entry is None:
@@ -1804,10 +2003,15 @@ class FirebaseSync:
                                    (name, category, price, cost, stock, barcode,
                                     discount_value, firebase_id, rubro,
                                     stock_min, stock_max,
+                                    vinculaciones, vinculado_a, vinculado_cantidad, vinculado_nombre,
                                     created_at, updated_at)
-                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)""",
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                                           ?, ?, ?, ?,
+                                           CURRENT_TIMESTAMP, ?)""",
                                 (nombre, categ, precio, costo, stock, barcode,
-                                 desc, firebase_id, rubro, stock_min, stock_max, fb_ts)
+                                 desc, firebase_id, rubro, stock_min, stock_max,
+                                 vinculaciones, vinculado_a, vinculado_cantidad, vinculado_nombre,
+                                 fb_ts)
                             )
                             n_updated += 1
                         except Exception as e:
@@ -1828,10 +2032,14 @@ class FirebaseSync:
                                     """UPDATE products
                                        SET name=?, category=?, price=?, cost=?, stock=?,
                                            barcode=?, discount_value=?, rubro=?,
-                                           stock_min=?, stock_max=?, updated_at=?
+                                           stock_min=?, stock_max=?,
+                                           vinculaciones=?, vinculado_a=?, vinculado_cantidad=?, vinculado_nombre=?,
+                                           updated_at=?
                                        WHERE id=?""",
                                     (nombre, categ, precio, costo, stock,
-                                     barcode, desc, rubro, stock_min, stock_max, fb_ts, local_id)
+                                     barcode, desc, rubro, stock_min, stock_max,
+                                     vinculaciones, vinculado_a, vinculado_cantidad, vinculado_nombre,
+                                     fb_ts, local_id)
                                 )
                                 n_updated += 1
                             except Exception as e:

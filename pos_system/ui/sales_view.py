@@ -3174,12 +3174,19 @@ class SalesView(QWidget):
 
         for row, item in enumerate(self.cart):
             has_discount = item.get('discount_amount', 0) > 0
+            # El badge "● PROMO" solo se muestra para descuentos automáticos
+            # (promo real). Si el cajero editó el precio a mano sin promo
+            # activa, el strikethrough en la col Precio Unit. ya alcanza —
+            # no spammeamos un badge redundante.
+            has_promo_badge = has_discount and bool(
+                item.get('promo_id') or item.get('discount_type')
+            )
             self.cart_table.setRowHeight(row, 44)
 
             # Col 0: Nombre producto (con sub-línea de promo cuando aplica)
             name_text = item['product_name']
             promo_label = item.get('promo_label', '')
-            if has_discount:
+            if has_promo_badge:
                 orig = item.get('original_price', item['unit_price'])
                 disc_total = (orig - item['unit_price']) * item['quantity']
                 w = QWidget()
@@ -3330,7 +3337,13 @@ class SalesView(QWidget):
         # Total con ahorro si aplica — ajustar fuente según longitud del monto
         total_str = f'${total:,.2f}'
         font_size = 24 if len(total_str) <= 10 else (20 if len(total_str) <= 13 else 17)
-        total_discount = sum(item.get('discount_amount', 0) for item in self.cart)
+        # "Ahorro" suma solo descuentos por promo real. Precios editados a
+        # mano no entran — el cajero ya lo cambió a propósito.
+        total_discount = sum(
+            float(item.get('discount_amount') or 0)
+            for item in self.cart
+            if item.get('promo_id') or item.get('discount_type')
+        )
         if total_discount > 0:
             self.total_amount_label.setText(
                 f'<span style="font-size:12px;color:#3d7a3a;font-weight:normal;">'
@@ -3358,9 +3371,14 @@ class SalesView(QWidget):
         hints = []
         active_lines = []
         total_savings = 0.0
+        # Solo listar promos reales. Precios editados manualmente NO entran
+        # en este banner — el cajero ya sabe qué cambió y el strikethrough
+        # en la columna Precio Unit. lo refleja visualmente.
         for it in self.cart:
             disc = float(it.get('discount_amount') or 0)
             if disc <= 0:
+                continue
+            if not (it.get('promo_id') or it.get('discount_type')):
                 continue
             total_savings += disc
             label = it.get('promo_label') or '−'
@@ -3516,6 +3534,7 @@ class SalesView(QWidget):
         promo_changed = False
         if item.get('manual_price_override'):
             item['subtotal'] = round(quantity * item['unit_price'], 2)
+            self._refresh_cart_row_pricing(row, item)
             self._refresh_cart_totals(row)
             return
         try:
@@ -3632,12 +3651,18 @@ class SalesView(QWidget):
         from pos_system.ui.theme import COLORS as _T
 
         has_discount = item.get('discount_amount', 0) > 0
+        # El badge "● PROMO" solo se muestra para descuentos automáticos.
+        # Para precio editado manual sin promo, el strikethrough en la col
+        # Precio Unit. ya alcanza — no spammeamos un badge redundante.
+        has_promo_badge = has_discount and bool(
+            item.get('promo_id') or item.get('discount_type')
+        )
         promo_label = item.get('promo_label', '')
         name_text = item['product_name']
         orig = item.get('original_price', item['unit_price'])
 
         # ── Col 0: Producto (nombre + sub-línea promo si aplica) ──
-        if has_discount:
+        if has_promo_badge:
             disc_total = (orig - item['unit_price']) * item['quantity']
             w = QWidget()
             wl = QVBoxLayout(w); wl.setContentsMargins(12, 4, 8, 4); wl.setSpacing(2)
@@ -3753,7 +3778,13 @@ class SalesView(QWidget):
         self.items_count_lbl.setText(f'{items_str} item{"s" if total_items != 1 else ""}')
         total_str = f'${total:,.2f}'
         font_size = 24 if len(total_str) <= 10 else (20 if len(total_str) <= 13 else 17)
-        total_discount = sum(item.get('discount_amount', 0) for item in self.cart)
+        # "Ahorro" suma solo descuentos por promo real. Precios editados a
+        # mano no entran — el cajero ya lo cambió a propósito.
+        total_discount = sum(
+            float(item.get('discount_amount') or 0)
+            for item in self.cart
+            if item.get('promo_id') or item.get('discount_type')
+        )
         if total_discount > 0:
             self.total_amount_label.setText(
                 f'<span style="font-size:12px;color:#3d7a3a;font-weight:normal;">'

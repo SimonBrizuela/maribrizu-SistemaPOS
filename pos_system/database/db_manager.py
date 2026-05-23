@@ -173,6 +173,14 @@ class DatabaseManager:
                 "ALTER TABLE products ADD COLUMN conjunto_total REAL DEFAULT NULL",
                 # Stock por color (JSON: [{"color":"Rojo","unidades":5,"restante":35.5}, ...])
                 "ALTER TABLE products ADD COLUMN conjunto_colores TEXT DEFAULT NULL",
+                # Vínculos consumibles: este producto, al venderse, descuenta stock
+                # de otro(s) producto(s) del catálogo. `vinculaciones` es JSON con
+                # [{doc_id, cantidad, nombre}]. Los campos `vinculado_a/_cantidad/_nombre`
+                # replican el primer entry para compat con código que aún lee single-link.
+                "ALTER TABLE products ADD COLUMN vinculaciones TEXT DEFAULT NULL",
+                "ALTER TABLE products ADD COLUMN vinculado_a TEXT DEFAULT NULL",
+                "ALTER TABLE products ADD COLUMN vinculado_cantidad REAL DEFAULT NULL",
+                "ALTER TABLE products ADD COLUMN vinculado_nombre TEXT DEFAULT NULL",
             ]:
                 try:
                     cursor.execute(col_def)

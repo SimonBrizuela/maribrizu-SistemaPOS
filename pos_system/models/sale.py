@@ -71,7 +71,12 @@ class Sale:
             # 2. Insertar items y actualizar stock
             now_iso = datetime.now().isoformat()
             mp_para_sync_remoto = []   # items mp_* a sincronizar con Firestore después del commit
-            for item in items:
+            # Vínculos consumibles: targets que recibieron descuento por vinculación.
+            # Cada entry: {item_idx, target_firebase_id, target_local_id, is_conjunto, delta}.
+            # Se sincronizan a Firestore en background tras commit y marca consumibles_procesado
+            # en ventas_por_dia/{pc_id}_{sale_id}_{item_idx}.
+            vincs_para_sync_remoto = []
+            for item_idx, item in enumerate(items):
                 subtotal       = item['quantity'] * item['unit_price']
                 original_price = item.get('original_price', item['unit_price'])
                 discount_type  = item.get('discount_type') or None
@@ -192,6 +197,17 @@ class Sale:
                     )
                     # stock = -1 significa servicio/ilimitado, no se descuenta
 
+                # ── Vínculos consumibles (catalogo-level) ────────────────────
+                # Si el producto vendido tiene `vinculaciones`, descontar stock
+                # de los productos target en la misma transacción. Si el target
+                # es conjunto, se recalcula conjunto_total/unidades/restante
+                # para que el modal del webapp muestre el número correcto.
+                # Idempotente con el watcher web: post-commit marcamos los items
+                # con `consumibles_procesado: True` en ventas_por_dia.
+                self._aplicar_vinculaciones_local(
+                    cursor, item, item_idx, now_iso, vincs_para_sync_remoto
+                )
+
             # 3. Actualizar caja registradora
             if cash_register_id:
                 if payment_type == 'cash':
@@ -226,6 +242,18 @@ class Sale:
             threading.Thread(
                 target=self._sync_mp_to_firebase,
                 args=(mp_para_sync_remoto,),
+                daemon=True,
+            ).start()
+
+        # ── Sync remoto de vinculaciones (catalogo-level) ────────────────────
+        # Ya descontamos stock de los targets en SQLite. Acá pusheamos los
+        # nuevos stocks/conjunto_* al catalogo en Firestore y marcamos los items
+        # con `consumibles_procesado: True` en ventas_por_dia (evita que el
+        # watcher web duplique el descuento).
+        if vincs_para_sync_remoto:
+            threading.Thread(
+                target=self._sync_vincs_to_firebase,
+                args=(sale_id, vincs_para_sync_remoto),
                 daemon=True,
             ).start()
 
@@ -351,6 +379,172 @@ class Sale:
                     logger.warning(f"_sync_mp_to_firebase: item {it} falló: {e}")
         except Exception as e:
             logger.warning(f"_sync_mp_to_firebase: error general: {e}")
+
+    # ── Vínculos consumibles (catalogo-level) ──────────────────────────────
+    def _aplicar_vinculaciones_local(self, cursor, item: Dict, item_idx: int,
+                                     now_iso: str,
+                                     acumulador_remoto: List[Dict]) -> None:
+        """Si el producto vendido tiene `vinculaciones`, descuenta stock de
+        cada target en SQLite y acumula info para el sync remoto.
+
+        Soporta dos tipos de target:
+          - Producto plano: stock = max(0, stock - delta)
+          - Producto conjunto: recalcula conjunto_total/unidades/restante
+            respetando el invariante total = (cerrados × contenido) + restante
+
+        Skip si:
+          - producto vendido es sentinel mp_* (id=0) o sin id
+          - target tiene `conjunto_colores` (variedades) → descuento ambiguo
+          - target con stock=-1 (servicio/ilimitado)
+        """
+        qty_vendida = float(item.get('quantity') or 0)
+        if qty_vendida <= 0:
+            return
+        pid_vendido = item.get('product_id')
+        if not pid_vendido or pid_vendido == 0:
+            return
+
+        row = cursor.execute(
+            "SELECT vinculaciones, vinculado_a, vinculado_cantidad, vinculado_nombre "
+            "FROM products WHERE id = ?",
+            (pid_vendido,)
+        ).fetchone()
+        if not row:
+            return
+
+        vincs_raw, vinc_a_legacy, vinc_cant_legacy, vinc_nom_legacy = row
+        vincs = []
+        if vincs_raw:
+            try:
+                parsed = json.loads(vincs_raw)
+                if isinstance(parsed, list):
+                    vincs = parsed
+            except Exception:
+                vincs = []
+        # Fallback legacy: si no hay array pero hay vinculado_a/cantidad.
+        if not vincs and vinc_a_legacy:
+            try:
+                cant_legacy = float(vinc_cant_legacy or 0)
+            except (TypeError, ValueError):
+                cant_legacy = 0.0
+            if cant_legacy > 0:
+                vincs = [{
+                    'doc_id':   str(vinc_a_legacy),
+                    'cantidad': cant_legacy,
+                    'nombre':   vinc_nom_legacy or '',
+                }]
+        if not vincs:
+            return
+
+        seen = set()
+        for v in vincs:
+            if not isinstance(v, dict):
+                continue
+            target_fid = str(v.get('doc_id') or '').strip()
+            try:
+                cant_por_venta = float(v.get('cantidad') or 0)
+            except (TypeError, ValueError):
+                cant_por_venta = 0.0
+            if not target_fid or cant_por_venta <= 0:
+                continue
+            if target_fid in seen:
+                continue
+            seen.add(target_fid)
+
+            delta = qty_vendida * cant_por_venta
+
+            target_row = cursor.execute(
+                "SELECT id, stock, es_conjunto, conjunto_total, "
+                "       conjunto_contenido, conjunto_colores "
+                "FROM products WHERE firebase_id = ?",
+                (target_fid,)
+            ).fetchone()
+            if not target_row:
+                logger.warning(
+                    f"_aplicar_vinculaciones_local: target firebase_id={target_fid} "
+                    f"no existe en SQLite (¿catálogo sin sync?)"
+                )
+                continue
+
+            t_local_id, t_stock, t_es_conj, t_total, t_contenido, t_colores = target_row
+            t_stock      = float(t_stock or 0)
+            t_es_conj    = bool(t_es_conj)
+            t_total      = float(t_total or 0)
+            t_contenido  = float(t_contenido or 0)
+
+            # Servicio/ilimitado: no descontar.
+            if t_stock == -1:
+                continue
+
+            # Target con variedades: descuento ambiguo, skip con warning.
+            if t_colores:
+                logger.info(
+                    f"_aplicar_vinculaciones_local: target {target_fid} tiene "
+                    f"conjunto_colores, skip (ambiguo cuál variedad descontar)."
+                )
+                continue
+
+            if t_es_conj and t_contenido > 0:
+                nuevo_total = max(0.0, t_total - delta)
+                cerrados    = int(nuevo_total // t_contenido)
+                resto       = nuevo_total - cerrados * t_contenido
+                if resto > 0:
+                    nueva_unid = cerrados + 1
+                    nueva_rest = resto
+                else:
+                    nueva_unid = cerrados
+                    nueva_rest = 0
+                # `stock` clásico = espejo entero del total para que el POS que
+                # aún no entiende conjunto vea un stock razonable.
+                stock_mirror = max(0, int(nuevo_total))
+                cursor.execute(
+                    """UPDATE products
+                       SET stock             = ?,
+                           conjunto_total    = ?,
+                           conjunto_unidades = ?,
+                           conjunto_restante = ?,
+                           updated_at        = ?
+                       WHERE id = ?""",
+                    (stock_mirror, nuevo_total, nueva_unid, nueva_rest,
+                     now_iso, t_local_id)
+                )
+                acumulador_remoto.append({
+                    'item_idx':        item_idx,
+                    'target_local_id': t_local_id,
+                    'target_fid':      target_fid,
+                    'is_conjunto':     True,
+                    'delta':           delta,
+                    'contexto':        item.get('product_name') or '',
+                })
+            else:
+                nuevo_stock = max(0.0, t_stock - delta)
+                cursor.execute(
+                    "UPDATE products SET stock = ?, updated_at = ? WHERE id = ?",
+                    (nuevo_stock, now_iso, t_local_id)
+                )
+                acumulador_remoto.append({
+                    'item_idx':        item_idx,
+                    'target_local_id': t_local_id,
+                    'target_fid':      target_fid,
+                    'is_conjunto':     False,
+                    'delta':           delta,
+                    'contexto':        item.get('product_name') or '',
+                })
+
+    def _sync_vincs_to_firebase(self, sale_id: int,
+                                vincs_to_sync: List[Dict]) -> None:
+        """Empuja a Firestore el descuento de los targets vinculados + marca
+        cada item afectado en `ventas_por_dia` con `consumibles_procesado: True`.
+        Llamado en background tras commit local.
+        """
+        try:
+            from pos_system.utils.firebase_sync import get_firebase_sync
+            fb = get_firebase_sync()
+            if not fb or not getattr(fb, 'enabled', False):
+                return
+            fb.sync_vinculaciones_after_sale(sale_id, vincs_to_sync, self.db)
+        except Exception as e:
+            logger.warning(f"_sync_vincs_to_firebase: error general: {e}")
 
     def update(self, sale_id: int, payment_type: Optional[str] = None,
                items_updates: Optional[List[Dict]] = None) -> Optional[Dict]:
