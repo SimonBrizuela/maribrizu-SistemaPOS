@@ -3806,6 +3806,71 @@ class SalesView(QWidget):
             del self.cart[row]
             self.update_cart_display()
 
+    def _recompute_promo_for_new_base(self, item: dict, new_base: float) -> tuple:
+        """Re-aplica la promo activa del item sobre un nuevo precio base.
+
+        Soporta percentage, fixed, 2x1, nxm, bundle. Para 2x1/nxm/bundle
+        busca la definición original de la promo (Firebase o BD local) por
+        promo_id para conocer required/free/max. Si no la encuentra, cae a
+        un cálculo conservador sin descuento.
+
+        Returns: (unit_price_efectivo, discount_amount_total).
+        """
+        dtype = (item.get('discount_type') or '').strip()
+        dvalue = float(item.get('discount_value') or 0)
+        qty = int(item.get('quantity') or 1)
+        promo_id = item.get('promo_id')
+        new_base = float(new_base or 0)
+
+        if not dtype or dvalue <= 0 or new_base <= 0 or qty <= 0:
+            return new_base, 0.0
+
+        # Percentage / fixed: cálculo directo sin necesidad de buscar la promo
+        if dtype == 'percentage':
+            pct = min(dvalue, 100.0)
+            disc_per_unit = round(new_base * pct / 100, 2)
+            eff = max(0.0, new_base - disc_per_unit)
+            return eff, round(disc_per_unit * qty, 2)
+        if dtype == 'fixed':
+            disc_per_unit = min(dvalue, new_base)
+            eff = max(0.0, new_base - disc_per_unit)
+            return eff, round(disc_per_unit * qty, 2)
+
+        # 2x1/nxm/bundle: buscar la promo origen para conocer required/free/max
+        promo_local = None
+        for p in (self._firebase_promos or []):
+            if str(p.get('_id') or '') == str(promo_id or ''):
+                req = int(p.get('cantidad_requerida') or 1)
+                pays = int(p.get('cantidad_paga') or 1)
+                promo_local = {
+                    'promo_type':        p.get('tipo', dtype),
+                    'discount_value':    float(p.get('valor') or dvalue),
+                    'required_quantity': req,
+                    'free_quantity':     max(0, req - pays),
+                    'max_quantity':      int(p.get('cantidad_maxima') or 0),
+                    'name':              p.get('nombre', ''),
+                }
+                break
+        if promo_local is None:
+            try:
+                for p in (self.promo_model.get_active_for_product(item.get('product_id')) or []):
+                    if str(p.get('id')) == str(promo_id or ''):
+                        promo_local = p
+                        break
+            except Exception:
+                promo_local = None
+
+        if promo_local is None:
+            return new_base, 0.0
+
+        try:
+            eff, disc_total, _label = Promotion.calculate_promo_for_cart_item(
+                promo_local, qty, new_base
+            )
+            return float(eff), float(disc_total)
+        except Exception:
+            return new_base, 0.0
+
     def _on_cart_cell_clicked(self, row, col):
         """Click en col 2 (Precio Unit.) o col 3 (Subtotal) abre dialog para editar el precio."""
         if col not in (2, 3):
@@ -3815,16 +3880,42 @@ class SalesView(QWidget):
         item = self.cart[row]
         current_price = item['unit_price']
 
+        # Si el item tiene promo activa (% / fijo / 2x1 / nxm / bundle),
+        # el spinbox edita el PRECIO BASE de catálogo. Al aplicar, la promo
+        # se re-aplica al nuevo base y se recalcula el efectivo + descuento.
+        has_active_promo = bool(
+            (item.get('promo_id') or item.get('promo_label'))
+            and (item.get('discount_type') or '')
+            and float(item.get('discount_value') or 0) > 0
+        )
+        base_price = float(item.get('original_price') or current_price)
+        initial_value = base_price if has_active_promo else current_price
+
         dialog = QDialog(self)
         dialog.setWindowTitle('Editar precio')
         dialog.setWindowFlags(dialog.windowFlags() & ~Qt.WindowContextHelpButtonHint)
-        dialog.setFixedWidth(300)
+        dialog.setFixedWidth(320)
         layout = QVBoxLayout(dialog)
         layout.setSpacing(12)
         layout.setContentsMargins(16, 16, 16, 16)
 
-        lbl = QLabel(f'<b>{item["product_name"]}</b><br>'
-                     f'<span style="color:#6f6a5d;font-size:11px;">Precio actual: ${current_price:,.0f}</span>')
+        if has_active_promo:
+            promo_lbl_txt = item.get('promo_label', '') or 'promo'
+            lbl = QLabel(
+                f'<b>{item["product_name"]}</b><br>'
+                f'<span style="color:#6f6a5d;font-size:11px;">'
+                f'Precio base: ${base_price:,.2f} · '
+                f'Final con {promo_lbl_txt}: ${current_price:,.2f}'
+                f'</span><br>'
+                f'<span style="color:#c1521f;font-size:10px;">'
+                f'Editás el precio base. La promo se re-aplica automáticamente.'
+                f'</span>'
+            )
+        else:
+            lbl = QLabel(
+                f'<b>{item["product_name"]}</b><br>'
+                f'<span style="color:#6f6a5d;font-size:11px;">Precio actual: ${current_price:,.0f}</span>'
+            )
         lbl.setWordWrap(True)
         layout.addWidget(lbl)
 
@@ -3833,7 +3924,7 @@ class SalesView(QWidget):
         price_spin.setMaximum(99_999_999)
         price_spin.setDecimals(2)
         price_spin.setSingleStep(100)
-        price_spin.setValue(current_price)
+        price_spin.setValue(initial_value)
         price_spin.setPrefix('$ ')
         # Aceptar coma o punto como separador decimal (locale ES_AR usa coma,
         # pero el teclado numerico tipea coma siempre — toleramos ambos).
@@ -3849,7 +3940,7 @@ class SalesView(QWidget):
         price_spin.setStyleSheet('QDoubleSpinBox { border: 2px solid #c1521f; border-radius: 6px; padding: 4px 8px; }')
         # Si el precio actual es 0 (caso Varios 2 recién creado), dejar el campo
         # vacío para que el cajero tipee directamente sin tener que borrar el "0".
-        if current_price <= 0:
+        if initial_value <= 0:
             try:
                 price_spin.lineEdit().clear()
             except Exception:
@@ -3884,17 +3975,22 @@ class SalesView(QWidget):
             new_price = price_spin.value()
             new_obs = obs_input.toPlainText().strip()
             changed = False
-            if new_price != current_price:
-                item['original_price'] = item.get('original_price', current_price)
-                item['unit_price'] = new_price
-                # Preservar la info de promo (label / id / type / value) — el
-                # cajero ve que la promo seguia activa y el strikethrough usa el
-                # precio original. Solo recomputamos el monto descontado contra
-                # el override manual. Si el cajero subio el precio por encima
-                # del original, discount_amount queda en 0 (no se muestra badge).
-                disc = max(0.0, float(item['original_price']) - float(new_price))
-                item['discount_amount'] = round(disc, 2)
-                item['subtotal'] = round(item['quantity'] * new_price, 2)
+            if new_price != initial_value:
+                if has_active_promo:
+                    new_base = float(new_price)
+                    eff_unit, disc_total = self._recompute_promo_for_new_base(item, new_base)
+                    item['original_price'] = round(new_base, 2)
+                    item['unit_price'] = round(eff_unit, 2)
+                    item['discount_amount'] = round(disc_total, 2)
+                    item['subtotal'] = round(item['quantity'] * eff_unit, 2)
+                else:
+                    item['original_price'] = item.get('original_price', current_price)
+                    item['unit_price'] = new_price
+                    # Sin promo activa: el typed es el efectivo. Si quedó por
+                    # encima del original, no hay descuento.
+                    disc = max(0.0, float(item['original_price']) - float(new_price))
+                    item['discount_amount'] = round(disc, 2)
+                    item['subtotal'] = round(item['quantity'] * new_price, 2)
                 # Flag para que update_quantity no piso el precio override
                 # con el del catalogo cuando el cajero cambie la cantidad.
                 item['manual_price_override'] = True
