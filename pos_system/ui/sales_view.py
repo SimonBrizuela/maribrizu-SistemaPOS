@@ -1054,7 +1054,7 @@ class SalesView(QWidget):
         self.cart_table.setColumnWidth(1, 115)
         self.cart_table.setColumnWidth(2, 105)
         self.cart_table.setColumnWidth(3, 115)
-        self.cart_table.setColumnWidth(4, 78)
+        self.cart_table.setColumnWidth(4, 96)
         self.cart_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.cart_table.setSelectionBehavior(QTableWidget.SelectRows)
         self.cart_table.setStyleSheet(
@@ -3309,7 +3309,7 @@ class SalesView(QWidget):
             # Col 4: Botón quitar (×)
             rm_container = QWidget()
             rm_layout = QHBoxLayout(rm_container)
-            rm_layout.setContentsMargins(0, 0, 0, 0)
+            rm_layout.setContentsMargins(0, 0, 14, 0)
             rm_layout.setAlignment(Qt.AlignCenter)
             rm_btn = QPushButton('Quitar')
             rm_btn.setFixedSize(60, 30)
@@ -4787,8 +4787,8 @@ class SpotlightDialog(QDialog):
         # ── Bar superior: lupa + input + Esc chip ──
         bar = QFrame()
         bar.setStyleSheet(
-            f"QFrame {{ border:none; border-bottom:1px solid {_C['border_soft']};"
-            f" background:{_C['surface']};"
+            f"QFrame {{ border:none; border-bottom:1px solid {_C['border']};"
+            f" background:{_C['bg']};"
             f" border-top-left-radius:12px; border-top-right-radius:12px; }}"
         )
         bar_l = QHBoxLayout(bar); bar_l.setContentsMargins(14, 14, 14, 14); bar_l.setSpacing(10)
@@ -4843,8 +4843,8 @@ class SpotlightDialog(QDialog):
         # ── Footer con atajos ──
         ft = QFrame()
         ft.setStyleSheet(
-            f"QFrame {{ background:{_C['surface_alt']}; border:none;"
-            f" border-top:1px solid {_C['border_soft']};"
+            f"QFrame {{ background:{_C['bg']}; border:none;"
+            f" border-top:1px solid {_C['border']};"
             f" border-bottom-left-radius:12px; border-bottom-right-radius:12px; }}"
         )
         ft_l = QHBoxLayout(ft); ft_l.setContentsMargins(14, 8, 14, 8); ft_l.setSpacing(14)

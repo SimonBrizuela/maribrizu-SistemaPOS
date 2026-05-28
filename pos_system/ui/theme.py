@@ -20,7 +20,7 @@ from pathlib import Path
 
 # ── Tokens de color ─────────────────────────────────────────────────
 COLORS = {
-    "bg":          "#f5f2ea",
+    "bg":          "#ece4d2",
     "surface":     "#ffffff",
     "surface_alt": "#fafaf7",
     "border":      "#dcd6c8",

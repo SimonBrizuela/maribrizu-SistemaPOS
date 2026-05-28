@@ -97,7 +97,9 @@ class MainWindow(QMainWindow):
 
         # Tabs (con padding interno via QSS, el body queda al ras)
         self.tabs = QTabWidget()
-        self.tabs.setFont(QFont('Segoe UI', 10))
+        # Semibold para que el ancho calculado de cada pestaña coincida con el
+        # peso que dibuja el QSS (font-weight:600) y no recorte el texto.
+        self.tabs.setFont(QFont('Segoe UI', 10, QFont.DemiBold))
         self.tabs.setDocumentMode(True)
         self.tabs.tabBar().setExpanding(False)
 
@@ -298,15 +300,14 @@ class MainWindow(QMainWindow):
             chip = QPushButton(f'  {turno_nombre[:1].upper()}   {turno_nombre} · {role_txt}  ▾')
             chip.setStyleSheet(f'''
                 QPushButton {{
-                    background: {COLORS['surface_alt']};
-                    border: 1px solid {COLORS['border']};
-                    border-radius: 6px; padding: {pad};
+                    background: #e5dcc8;
+                    border: none;
+                    border-radius: 10px; padding: {pad};
                     color: {COLORS['text']}; font-size: {fs}px; font-weight: 600;
                     text-align: left;
                 }}
                 QPushButton:hover {{
-                    background: {COLORS['border_soft']};
-                    border-color: {COLORS['text_muted']};
+                    background: #d7cab2;
                 }}
             ''')
             chip.setFont(QFont('Segoe UI', fs))
@@ -318,10 +319,10 @@ class MainWindow(QMainWindow):
             cajero_nombre = self.current_user.get('full_name') or self.current_user.get('username', '')
             chip = QLabel(f'  {cajero_nombre[:1].upper()}   {cajero_nombre} · Cajero')
             chip.setStyleSheet(f'''
-                background: {COLORS['success_bg']};
-                border: 1px solid {COLORS['success']};
-                border-radius: 6px; padding: {pad};
-                color: {COLORS['success']}; font-size: {fs}px; font-weight: 600;
+                background: #cfe9d6;
+                border: none;
+                border-radius: 10px; padding: {pad};
+                color: {COLORS['success']}; font-size: {fs}px; font-weight: 700;
             ''')
             chip.setFont(QFont('Segoe UI', fs))
             hl.addWidget(chip)
@@ -331,18 +332,17 @@ class MainWindow(QMainWindow):
             b = QPushButton(text)
             b.setStyleSheet(f'''
                 QPushButton {{
-                    background: {COLORS['surface']};
-                    border: 1px solid {COLORS['border']};
-                    border-radius: 6px; padding: {pad};
+                    background: #e5dcc8;
+                    border: none;
+                    border-radius: 10px; padding: {pad};
                     color: {COLORS['text_muted']}; font-size: {fs}px; font-weight: 600;
                 }}
                 QPushButton:hover {{
-                    background: {COLORS['surface_alt']};
+                    background: #d7cab2;
                     color: {COLORS['text']};
-                    border-color: {COLORS['text_muted']};
                 }}
                 QPushButton:disabled {{
-                    background: {COLORS['border_soft']};
+                    background: #efe9dd;
                     color: {COLORS['text_dim']};
                 }}
             ''')
@@ -1096,23 +1096,23 @@ class MainWindow(QMainWindow):
             self._autostart_btn.setText('Auto: ON')
             self._autostart_btn.setStyleSheet(f'''
                 QPushButton {{
-                    background: {COLORS['success_bg']};
-                    border: 1px solid {COLORS['success']};
-                    border-radius: 6px; padding: 5px 12px;
+                    background: #cfe9d6;
+                    border: none;
+                    border-radius: 10px; padding: 5px 12px;
                     color: {COLORS['success']}; font-size: 10px; font-weight: 700;
                 }}
-                QPushButton:hover {{ background: {COLORS['border_soft']}; }}
+                QPushButton:hover {{ background: #bedfc7; }}
             ''')
         else:
             self._autostart_btn.setText('Auto: OFF')
             self._autostart_btn.setStyleSheet(f'''
                 QPushButton {{
-                    background: {COLORS['surface']};
-                    border: 1px solid {COLORS['border']};
-                    border-radius: 6px; padding: 5px 12px;
-                    color: {COLORS['text_muted']}; font-size: 10px;
+                    background: #e5dcc8;
+                    border: none;
+                    border-radius: 10px; padding: 5px 12px;
+                    color: {COLORS['text_muted']}; font-size: 10px; font-weight: 600;
                 }}
-                QPushButton:hover {{ background: {COLORS['surface_alt']}; }}
+                QPushButton:hover {{ background: #d7cab2; }}
             ''')
 
     def _toggle_autostart(self):

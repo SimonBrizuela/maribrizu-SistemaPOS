@@ -9,7 +9,7 @@
      app.setStyleSheet(QTextStream(f).readAll())
 
    Paleta (también en theme.py):
-     bg          #f5f2ea   fondo principal (crema)
+     bg          #ece4d2   fondo principal (crema)
      surface     #ffffff   tarjetas, inputs, dialogs
      surfaceAlt  #fafaf7   headers de tabla, secundario
      border      #dcd6c8   bordes principales
@@ -32,12 +32,12 @@
 }
 
 QWidget {
-    background-color: #f5f2ea;
+    background-color: #ece4d2;
     color: #1c1c1e;
 }
 
 QMainWindow, QDialog {
-    background-color: #f5f2ea;
+    background-color: #ece4d2;
 }
 
 /* QLabel transparent por defecto: hereda el fondo del padre.
@@ -101,7 +101,7 @@ QGroupBox::title {
     left: 14px;
     top: -2px;
     padding: 0 6px;
-    background: #f5f2ea;
+    background: #ece4d2;
     color: #6f6a5d;
     font-size: 10px;
     font-weight: 700;
@@ -134,7 +134,7 @@ QFrame[role="dialog-footer"] {
     border-top: 1px solid #ece8df;
 }
 QFrame[role="dialog-body"] {
-    background-color: #f5f2ea;
+    background-color: #ece4d2;
 }
 
 /* ── Texto secundario / monoespaciado ─────────────────────────── */
@@ -416,7 +416,7 @@ QRadioButton::indicator:checked {
 
 /* ── Tabs ─────────────────────────────────────────────────────── */
 QTabWidget::pane {
-    background-color: #f5f2ea;
+    background-color: #ece4d2;
     border: none;
     border-top: 1px solid #dcd6c8;
     top: 0px;
@@ -430,23 +430,28 @@ QTabBar {
 QTabBar::tab {
     background-color: transparent;
     color: #6f6a5d;
-    padding: 10px 20px;
+    padding: 9px 22px;
+    margin: 5px 6px;
     border: none;
-    border-bottom: 2px solid transparent;
+    border-radius: 9px;
     font-weight: 600;
-    min-width: 80px;
+    min-width: 64px;
 }
 
 QTabBar::tab:hover {
     color: #1c1c1e;
-    background: #fafaf7;
+    background: #e5dcc8;
 }
 
 QTabBar::tab:selected {
-    color: #c1521f;
-    font-weight: 700;
-    border-bottom: 2px solid #c1521f;
-    background: #ffffff;
+    color: #ffffff;
+    font-weight: 600;
+    background: #c1521f;
+}
+
+QTabBar::tab:selected:hover {
+    color: #ffffff;
+    background: #a3441a;
 }
 
 /* ── Tablas ───────────────────────────────────────────────────── */
@@ -540,7 +545,7 @@ QGroupBox::title {
     font-size: 10px;
     text-transform: uppercase;
     letter-spacing: 0.5px;
-    background-color: #f5f2ea;
+    background-color: #ece4d2;
 }
 
 /* QFrame con role="card" — alternativa a GroupBox */
