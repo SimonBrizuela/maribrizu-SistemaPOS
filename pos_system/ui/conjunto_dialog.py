@@ -692,9 +692,64 @@ class ConjuntoDialog(QDialog):
         self._build_ui()
         self._refresh_all()
 
+        # Autoajuste de tamaño al contenido (capado a la pantalla). Diferido para
+        # que los layouts ya tengan sus sizeHint definitivos.
+        self._fitted = False
+        QTimer.singleShot(0, self._fit_to_content)
+
         # Foco para teclado físico
         self.setFocusPolicy(Qt.StrongFocus)
         self.setFocus()
+
+    def showEvent(self, event):
+        """Reajusta al mostrarse: garantiza que entre completo en la pantalla."""
+        super().showEvent(event)
+        if not getattr(self, '_fitted', False):
+            self._fitted = True
+            QTimer.singleShot(0, self._fit_to_content)
+
+    def _fit_to_content(self):
+        """Redimensiona el diálogo al alto/ancho natural de su contenido.
+
+        Hace que TODO el contenido sea visible sin scroll del mouse, adaptándose
+        a cualquier pantalla: crece hasta lo que el contenido necesita pero nunca
+        supera ~92% del área disponible. Si el contenido excede la pantalla (caso
+        de monitores muy chicos), recién ahí queda el scroll del body como red de
+        seguridad. Tras redimensionar, recentra el diálogo en pantalla.
+        """
+        scr = QGuiApplication.primaryScreen()
+        avail = scr.availableGeometry() if scr else None
+        if not avail or not hasattr(self, '_body_inner'):
+            return
+
+        # Forzar el cálculo de geometrías antes de medir.
+        lay = self.layout()
+        if lay:
+            lay.activate()
+
+        header_h = self._header_widget.sizeHint().height()
+        footer_h = self._footer_widget.sizeHint().height()
+        body_h   = self._body_inner.sizeHint().height()
+        chrome   = self.frameGeometry().height() - self.geometry().height()
+        needed_h = header_h + body_h + footer_h + max(chrome, 0) + 2
+
+        body_w   = self._body_inner.sizeHint().width()
+        needed_w = max(self.width(), body_w + 2)
+
+        max_h = int(avail.height() * 0.96)
+        max_w = int(avail.width() * 0.94)
+        new_h = max(self.minimumHeight(), min(needed_h, max_h))
+        new_w = max(self.minimumWidth(), min(needed_w, max_w))
+        self.resize(new_w, new_h)
+
+        # Recentrar en el área disponible, sin desbordar por arriba.
+        fg = self.frameGeometry()
+        fg.moveCenter(avail.center())
+        if fg.top() < avail.top():
+            fg.moveTop(avail.top())
+        if fg.left() < avail.left():
+            fg.moveLeft(avail.left())
+        self.move(fg.topLeft())
 
     # --------------------------------------------------------- properties --
 
@@ -777,20 +832,25 @@ class ConjuntoDialog(QDialog):
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
 
-        root.addWidget(self._build_header())
+        self._header_widget = self._build_header()
+        root.addWidget(self._header_widget)
 
-        # Body scrolleable: si la pantalla es chica, el contenido se puede
-        # scrollear en lugar de quedar cortado.
+        # Body scrolleable: red de seguridad solo para pantallas físicamente
+        # más chicas que el contenido. En condiciones normales el diálogo se
+        # autoajusta (ver _fit_to_content) y este scroll nunca se activa.
         body_scroll = QScrollArea()
         body_scroll.setWidgetResizable(True)
         body_scroll.setFrameShape(QFrame.NoFrame)
         body_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         body_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         body_scroll.setStyleSheet(f'QScrollArea {{ background: {DIALOG_BG}; border: none; }}')
-        body_scroll.setWidget(self._build_body())
+        self._body_inner = self._build_body()
+        body_scroll.setWidget(self._body_inner)
+        self._body_scroll = body_scroll
         root.addWidget(body_scroll, 1)
 
-        root.addWidget(self._build_footer())
+        self._footer_widget = self._build_footer()
+        root.addWidget(self._footer_widget)
 
     def _build_header(self):
         meta = TIPOS[self.tipo]
@@ -840,8 +900,8 @@ class ConjuntoDialog(QDialog):
         body = QFrame()
         body.setStyleSheet(f'QFrame {{ background: {DIALOG_BG}; }}')
         v = QVBoxLayout(body)
-        v.setContentsMargins(14, 10, 14, 10)
-        v.setSpacing(8)
+        v.setContentsMargins(14, 8, 14, 8)
+        v.setSpacing(6)
 
         if self.has_colores:
             v.addWidget(self._build_color_selector())
@@ -955,12 +1015,18 @@ class ConjuntoDialog(QDialog):
         scroll.setFrameShape(QFrame.NoFrame)
         scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
-        # Altura por chip ≈ 44px (38 alto + 6 spacing). Tope a 5 visibles ~ 220.
+        # Altura por chip ≈ 44px (38 alto + 6 spacing). El tope de filas visibles
+        # se adapta a la pantalla: en monitores grandes se ven más variantes sin
+        # scroll interno; el resto del diálogo (stock, cantidad, confirmar) queda
+        # siempre visible porque la lista nunca pasa ~45% del alto disponible.
         n = len(self.colores_iniciales)
         per_row = 44
-        target = min(max(n, 1), 5) * per_row + 8
-        scroll.setMinimumHeight(target)
-        scroll.setMaximumHeight(min(n * per_row + 16, 5 * per_row + 16))
+        _scr = QGuiApplication.primaryScreen()
+        _avail_h = _scr.availableGeometry().height() if _scr else 800
+        max_rows = max(5, int((_avail_h * 0.45) / per_row))
+        visible_rows = min(max(n, 1), max_rows)
+        scroll.setMinimumHeight(min(max(n, 1), 3) * per_row + 8)
+        scroll.setMaximumHeight(visible_rows * per_row + 16)
 
         chips_w = QWidget()
         h = QVBoxLayout(chips_w)
@@ -1032,6 +1098,9 @@ class ConjuntoDialog(QDialog):
             else:
                 # Limpiar filtro al colapsar para que la próxima vez se vean todas
                 search.clear()
+        # Reajustar el alto del diálogo al nuevo contenido (expandido/colapsado),
+        # diferido para que el layout ya refleje el cambio de visibilidad.
+        QTimer.singleShot(0, self._fit_to_content)
 
     def _build_stock_row(self):
         """Una sola línea: 'DISPONIBLE  45 m  ·  2 rollos + 5m abierto'.
@@ -1140,16 +1209,16 @@ class ConjuntoDialog(QDialog):
 
     def _build_main_grid(self):
         grid = QHBoxLayout()
-        grid.setSpacing(12)
+        grid.setSpacing(8)
 
         left = QVBoxLayout()
-        left.setSpacing(10)
+        left.setSpacing(6)
 
         # Display de cantidad — caja simple: caption arriba, número + unidad abajo
         self.disp_frame = QFrame()
         self.disp_frame.setObjectName('qtyDisplay')
         self.disp_frame.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
-        self.disp_frame.setFixedHeight(58)
+        self.disp_frame.setFixedHeight(52)
         self.disp_frame.setStyleSheet(
             f'QFrame#qtyDisplay {{ background: #fff; border: 2px dashed {BORDER};'
             f'                     border-radius: 12px; }}'
@@ -1242,22 +1311,25 @@ class ConjuntoDialog(QDialog):
         left.addWidget(self.error_box)
         self.error_box.hide()
 
-        # "+ Otro color" — link chico (no botón grande). Solo en modo multi-color.
-        # Para mezclar varias variedades en una venta: pulsás, se commitea la
-        # cantidad actual al subtotal y queda lista para elegir otro color.
+        # "Agregar otra variante" — botón visible (no link). Solo en modo
+        # multi-color. Para mezclar varias variedades en una venta: pulsás, se
+        # commitea la cantidad actual al subtotal y queda lista para elegir otra.
         if self.has_colores:
-            self._agregar_btn = QPushButton('+ Otro color')
+            self._agregar_btn = QPushButton('+  Agregar otra variante')
             self._agregar_btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
-            self._agregar_btn.setFixedHeight(28)
+            self._agregar_btn.setMinimumHeight(34)
             self._agregar_btn.setCursor(Qt.PointingHandCursor)
             self._agregar_btn.setFocusPolicy(Qt.NoFocus)
             self._agregar_btn.setStyleSheet(
-                f'QPushButton {{ background: transparent; color: {ACCENT};'
-                f'                border: none; font-size: 12px; font-weight: 700;'
-                f'                font-family: {UI_FONT_CSS}; padding: 0 8px;'
-                f'                text-decoration: underline; }}'
-                f'QPushButton:hover    {{ color: {ACCENT_HOVER}; }}'
-                f'QPushButton:disabled {{ color: {TEXT_DIM}; text-decoration: none; }}'
+                f'QPushButton {{ background: {ACCENT_SOFT}; color: {ACCENT};'
+                f'                border: 1.5px solid {ACCENT}; border-radius: 9px;'
+                f'                font-size: 13px; font-weight: 800;'
+                f'                font-family: {UI_FONT_CSS}; padding: 6px 18px; }}'
+                f'QPushButton:hover    {{ background: {ACCENT}; color: #fff;'
+                f'                        border-color: {ACCENT_HOVER}; }}'
+                f'QPushButton:pressed  {{ background: {ACCENT_HOVER}; color: #fff; }}'
+                f'QPushButton:disabled {{ background: #fff; color: {TEXT_DIM};'
+                f'                        border-color: {BORDER}; }}'
             )
             self._agregar_btn.clicked.connect(self._on_agregar)
             btn_wrap = QHBoxLayout()
