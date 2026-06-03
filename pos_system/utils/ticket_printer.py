@@ -136,6 +136,7 @@ class TicketPreviewDialog(QDialog):
 
         self._sale_id = sale_id
         self._html = html
+        self._printer = None  # se mantiene vivo durante la impresión async
 
     def _imprimir(self):
         """
@@ -181,16 +182,24 @@ class TicketPreviewDialog(QDialog):
 
         try:
             # QWebEnginePage.print() en PyQt5 es async: toma printer + callback.
+            # IMPORTANTE: hay que mantener viva una referencia al QPrinter. Si se
+            # lo deja como variable local, al volver _imprimir() el GC de Python
+            # destruye el QPrinter de C++ mientras el render async sigue usándolo
+            # → segfault que cierra todo el POS. Lo guardamos en self.
+            self._printer = printer
             logger.info('_imprimir: enviando a QWebEnginePage.print…')
             self.view.page().print(printer, self._on_print_finished)
             self.print_btn.setEnabled(False)
             self.print_btn.setText('Imprimiendo...')
         except Exception as e:
+            self._printer = None
             logger.exception('Error iniciando impresión')
             QMessageBox.critical(self, 'Error de impresión',
                                  f'No se pudo imprimir el ticket:\n{e}')
 
     def _on_print_finished(self, success):
+        # El render async terminó: ya es seguro soltar el QPrinter.
+        self._printer = None
         self.print_btn.setEnabled(True)
         self.print_btn.setText('🖨️  Imprimir')
         if success:
