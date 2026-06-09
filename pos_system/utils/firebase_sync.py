@@ -3158,10 +3158,25 @@ class FirebaseSync:
             except Exception as e:
                 logger.error(f"Firebase: error en listener de ventas: {e}")
         
+        # Acotar el listener a las ventas de los ultimos 5 min. Sin este filtro,
+        # on_snapshot baja TODA la coleccion 'ventas' en cada (re)conexion y recien
+        # el handler descarta las viejas en memoria (age > 300) — pagando lecturas
+        # por toda la historia para quedarse con las nuevas. El SDK admin no tiene
+        # cache local, asi que cada arranque/reconexion repetia ese costo. El margen
+        # de 5 min cubre relojes desincronizados / writes en transito alrededor del
+        # arranque; las ventas nuevas (created_at = ahora) siempre caen en la ventana.
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
         try:
-            watcher = self.db.collection('ventas').on_snapshot(_watch)
+            from google.cloud.firestore_v1.base_query import FieldFilter
+            col_query = self.db.collection('ventas').where(
+                filter=FieldFilter('created_at', '>=', cutoff)
+            )
+        except ImportError:
+            col_query = self.db.collection('ventas').where('created_at', '>=', cutoff)
+        try:
+            watcher = col_query.on_snapshot(_watch)
             self._listeners.append(watcher)
-            logger.info("Firebase: Listener de ventas activado.")
+            logger.info(f"Firebase: Listener de ventas activado (filtro: > {cutoff.isoformat()}).")
         except Exception as e:
             logger.error(f"Firebase: No se pudo iniciar listener de ventas: {e}")
 
@@ -3209,10 +3224,22 @@ class FirebaseSync:
             except Exception as e:
                 logger.error(f"Firebase: error en listener de cierres: {e}")
         
+        # Mismo criterio que el listener de ventas: solo escuchar cierres recientes.
+        # Los docs de caja ABIERTA tienen fecha_cierre='' (string) y quedan fuera del
+        # rango >= cutoff (Timestamp), que es justo lo que queremos: este listener solo
+        # reacciona a cierres. El handler ya descartaba los historicos (age > 300).
+        cutoff = datetime.now(timezone.utc) - timedelta(minutes=5)
         try:
-            watcher = self.db.collection('cierres_caja').on_snapshot(_watch)
+            from google.cloud.firestore_v1.base_query import FieldFilter
+            col_query = self.db.collection('cierres_caja').where(
+                filter=FieldFilter('fecha_cierre', '>=', cutoff)
+            )
+        except ImportError:
+            col_query = self.db.collection('cierres_caja').where('fecha_cierre', '>=', cutoff)
+        try:
+            watcher = col_query.on_snapshot(_watch)
             self._listeners.append(watcher)
-            logger.info("Firebase: Listener de cierres de caja activado.")
+            logger.info(f"Firebase: Listener de cierres de caja activado (filtro: > {cutoff.isoformat()}).")
         except Exception as e:
             logger.error(f"Firebase: No se pudo iniciar listener de cierres: {e}")
 
