@@ -118,6 +118,13 @@ class Sale:
                             'user':            turno_nombre or '',
                         })
                     continue  # no descontar `products.stock` para mp_*
+
+                # Vínculos a productos fuente (consumibles, nivel producto). Si el
+                # producto vendido está vinculado a otro(s) de stock, su stock
+                # PROPIO no se descuenta (quedaría negativo): el stock real vive en
+                # los targets, que se descuentan en _aplicar_vinculaciones_local.
+                vincs_prod = self._parse_vinculos_producto(cursor, item['product_id'])
+
                 if item.get('is_conjunto'):
                     # Producto conjunto: no se descuenta stock clásico.
                     # Si el item viene con `conjunto_color`, actualizamos el
@@ -190,11 +197,15 @@ class Sale:
                             (after_u, after_r, after_total, now_iso, item['product_id'])
                         )
                 else:
-                    # Descontar stock — se permite vender aunque no haya stock suficiente
-                    cursor.execute(
-                        "UPDATE products SET stock = stock - ?, updated_at = ? WHERE id = ? AND stock != -1",
-                        (item['quantity'], now_iso, item['product_id'])
-                    )
+                    # Descontar stock — se permite vender aunque no haya stock
+                    # suficiente. EXCEPTO si el producto está vinculado: en ese
+                    # caso el stock real vive en los productos fuente (se descuentan
+                    # más abajo) y NO se toca el propio para que no quede negativo.
+                    if not vincs_prod:
+                        cursor.execute(
+                            "UPDATE products SET stock = stock - ?, updated_at = ? WHERE id = ? AND stock != -1",
+                            (item['quantity'], now_iso, item['product_id'])
+                        )
                     # stock = -1 significa servicio/ilimitado, no se descuenta
 
                 # ── Vínculos consumibles (catalogo-level) ────────────────────
@@ -205,7 +216,7 @@ class Sale:
                 # Idempotente con el watcher web: post-commit marcamos los items
                 # con `consumibles_procesado: True` en ventas_por_dia.
                 self._aplicar_vinculaciones_local(
-                    cursor, item, item_idx, now_iso, vincs_para_sync_remoto
+                    cursor, item, item_idx, now_iso, vincs_para_sync_remoto, vincs_prod
                 )
 
             # 3. Actualizar caja registradora
@@ -381,36 +392,20 @@ class Sale:
             logger.warning(f"_sync_mp_to_firebase: error general: {e}")
 
     # ── Vínculos consumibles (catalogo-level) ──────────────────────────────
-    def _aplicar_vinculaciones_local(self, cursor, item: Dict, item_idx: int,
-                                     now_iso: str,
-                                     acumulador_remoto: List[Dict]) -> None:
-        """Si el producto vendido tiene `vinculaciones`, descuenta stock de
-        cada target en SQLite y acumula info para el sync remoto.
-
-        Soporta dos tipos de target:
-          - Producto plano: stock = max(0, stock - delta)
-          - Producto conjunto: recalcula conjunto_total/unidades/restante
-            respetando el invariante total = (cerrados × contenido) + restante
-
-        Skip si:
-          - producto vendido es sentinel mp_* (id=0) o sin id
-          - target tiene `conjunto_colores` (variedades) → descuento ambiguo
-          - target con stock=-1 (servicio/ilimitado)
-        """
-        qty_vendida = float(item.get('quantity') or 0)
-        if qty_vendida <= 0:
-            return
-        pid_vendido = item.get('product_id')
-        if not pid_vendido or pid_vendido == 0:
-            return
-
+    def _parse_vinculos_producto(self, cursor, product_id) -> List[Dict]:
+        """Devuelve los vínculos normalizados de un producto del catálogo como
+        lista de {doc_id, cantidad, nombre}. Soporta el array nuevo `vinculaciones`
+        (JSON) y los campos legacy vinculado_a/_cantidad/_nombre. [] si no tiene,
+        no existe o es el sentinel mp_* (id=0)."""
+        if not product_id or product_id == 0:
+            return []
         row = cursor.execute(
             "SELECT vinculaciones, vinculado_a, vinculado_cantidad, vinculado_nombre "
             "FROM products WHERE id = ?",
-            (pid_vendido,)
+            (product_id,)
         ).fetchone()
         if not row:
-            return
+            return []
 
         vincs_raw, vinc_a_legacy, vinc_cant_legacy, vinc_nom_legacy = row
         vincs = []
@@ -433,6 +428,51 @@ class Sale:
                     'cantidad': cant_legacy,
                     'nombre':   vinc_nom_legacy or '',
                 }]
+
+        # Normalizar: descartar entries inválidas.
+        out = []
+        for v in vincs:
+            if not isinstance(v, dict):
+                continue
+            did = str(v.get('doc_id') or '').strip()
+            try:
+                cant = float(v.get('cantidad') or 0)
+            except (TypeError, ValueError):
+                cant = 0.0
+            if did and cant > 0:
+                out.append({'doc_id': did, 'cantidad': cant, 'nombre': v.get('nombre') or ''})
+        return out
+
+    def _aplicar_vinculaciones_local(self, cursor, item: Dict, item_idx: int,
+                                     now_iso: str,
+                                     acumulador_remoto: List[Dict],
+                                     vincs: Optional[List[Dict]] = None) -> None:
+        """Si el producto vendido tiene `vinculaciones`, descuenta stock de
+        cada target en SQLite y acumula info para el sync remoto.
+
+        `vincs`: vínculos ya parseados (de _parse_vinculos_producto). Si es None,
+        se parsean acá. Permite reusar el parseo que ya hizo create() para decidir
+        si saltear el descuento del stock propio.
+
+        Soporta dos tipos de target:
+          - Producto plano: stock = max(0, stock - delta)
+          - Producto conjunto: recalcula conjunto_total/unidades/restante
+            respetando el invariante total = (cerrados × contenido) + restante
+
+        Skip si:
+          - producto vendido es sentinel mp_* (id=0) o sin id
+          - target tiene `conjunto_colores` (variedades) → descuento ambiguo
+          - target con stock=-1 (servicio/ilimitado)
+        """
+        qty_vendida = float(item.get('quantity') or 0)
+        if qty_vendida <= 0:
+            return
+        pid_vendido = item.get('product_id')
+        if not pid_vendido or pid_vendido == 0:
+            return
+
+        if vincs is None:
+            vincs = self._parse_vinculos_producto(cursor, pid_vendido)
         if not vincs:
             return
 

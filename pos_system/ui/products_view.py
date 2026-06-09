@@ -10,6 +10,7 @@ from pos_system.utils.firebase_sync import now_ar
 import os
 
 from pos_system.models.product import Product
+from pos_system.utils.stock_links import has_links, effective_stock, build_target_index, shown_stock
 from pos_system.utils.image_handler import ImageHandler
 from pos_system.ui.components import PriceInput
 
@@ -507,7 +508,9 @@ class ProductsView(QWidget):
         # Actualizar tabla
         self.products_table.clearSpans()
         self.products_table.setRowCount(len(products))
-        
+        # Pre-cargar stock de fuentes vinculadas en una query (evita N+1).
+        _tidx = build_target_index(products, self.db)
+
         for row, product in enumerate(products):
             # Establecer altura de fila
             self.products_table.setRowHeight(row, 70)
@@ -554,14 +557,18 @@ class ProductsView(QWidget):
 
             self.products_table.setItem(row, 6, QTableWidgetItem(f"${product['cost']:.2f}"))
             
-            # Stock con color
-            stock_item = QTableWidgetItem(str(product['stock']))
-            if product['stock'] < 10:
+            # Stock con color. shown_stock: vinculado → fuente; -1 → ∞ servicio;
+            # negativo (sobrevendido) → 0. Nunca muestra negativo.
+            _stk_txt, _stk = shown_stock(product, self.db, targets_index=_tidx)
+            stock_item = QTableWidgetItem(_stk_txt)
+            if _stk < 10:
                 stock_item.setBackground(QColor('#fbe5e5'))
                 stock_item.setForeground(QColor('#c00'))
-            elif product['stock'] < 20:
+            elif _stk < 20:
                 stock_item.setBackground(QColor('#ffeaa7'))
             stock_item.setTextAlignment(Qt.AlignCenter)
+            if has_links(product):
+                stock_item.setToolTip('Stock por vínculo: disponibilidad del producto de stock vinculado.')
             self.products_table.setItem(row, 7, stock_item)
             
             self.products_table.setItem(row, 8, QTableWidgetItem(product['barcode'] or ''))
@@ -652,6 +659,17 @@ class ProductsView(QWidget):
         product_name = self.products_table.item(selected_row, 2).text()
         product = self.product_model.get_by_id(product_id)
 
+        # Producto vinculado: el stock no es propio, se gestiona desde el producto
+        # de stock vinculado (ej: las hojas). No permitir ajustarlo desde acá.
+        if has_links(product):
+            QMessageBox.information(
+                self, 'Stock vinculado',
+                f'"{product_name}" tiene el stock vinculado a otro producto.\n\n'
+                'Su disponibilidad sale del producto de stock vinculado '
+                '(ej: las hojas). Para reponer, ajustá el stock de ese producto fuente.'
+            )
+            return
+
         dialog = StockAdjustDialog(self, product_name=product_name, current_stock=product['stock'])
         if dialog.exec_() == QDialog.Accepted:
             quantity_change = dialog.get_quantity_change()
@@ -718,6 +736,8 @@ class ProductsView(QWidget):
     def show_low_stock(self):
         """Filtra y muestra solo productos con stock bajo"""
         low_stock = self.product_model.get_low_stock(threshold=10)
+        # Excluir vinculados: su stock no es propio (se repone el producto fuente).
+        low_stock = [p for p in low_stock if not has_links(p)]
         self.products_table.setRowCount(len(low_stock))
         for row, product in enumerate(low_stock):
             self.products_table.setRowHeight(row, 70)
@@ -732,7 +752,8 @@ class ProductsView(QWidget):
             self.products_table.setItem(row, 4, QTableWidgetItem(f"${product['price']:.2f}"))
             self.products_table.setItem(row, 5, QTableWidgetItem(f"${product['cost']:.2f}"))
             from PyQt5.QtGui import QColor
-            stock_item = QTableWidgetItem(str(product['stock']))
+            _lst_txt, _ = shown_stock(product, self.db)
+            stock_item = QTableWidgetItem(_lst_txt)
             stock_item.setBackground(QColor('#fbe5e5'))
             stock_item.setForeground(QColor('#c00'))
             stock_item.setFont(QFont('Arial', 10, QFont.Bold))

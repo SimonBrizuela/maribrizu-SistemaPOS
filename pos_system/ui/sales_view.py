@@ -20,6 +20,7 @@ from pos_system.models.sale import Sale
 from pos_system.models.cash_register import CashRegister
 from pos_system.models.promotion import Promotion
 from pos_system.utils.pdf_generator import PDFGenerator
+from pos_system.utils.stock_links import has_links, effective_stock, build_target_index, shown_stock
 from pos_system.ui.conjunto_dialog import ConjuntoDialog, UNIDADES as _CONJ_UNIDADES, TIPOS as _CONJ_TIPOS, parse_colores as _conj_parse_colores
 from pos_system.models.presupuesto import Presupuesto
 from pos_system.ui.presupuesto_dialog import PresupuestoDialog
@@ -606,6 +607,8 @@ class ProductSearchDialog(QDialog):
         self.table.clearSpans()
         self.table.setRowCount(0)
         self.table.setRowCount(len(results))
+        # Pre-cargar stock de fuentes vinculadas en una query (evita N+1).
+        _tidx = build_target_index(results, self.db) if self.db else {}
         # Tonos para destacar resultados de Productos Madre (mp_*) — fácil de
         # diferenciar del catálogo plano. Madres en violeta saturado, hojas en violeta claro.
         MP_BG_MADRE = QColor('#ede9fe')   # violeta más fuerte
@@ -643,14 +646,20 @@ class ProductSearchDialog(QDialog):
                 price_item.setBackground(row_bg)
             self.table.setItem(row, 2, price_item)
 
-            # Stock: sumamos para hojas. Madre: '—' para no engañar.
+            # Stock: sumamos para hojas. Madre: '—' para no engañar. Catálogo plano:
+            # shown_stock clampea negativos y resuelve vínculos (muestra el fuente).
+            stock_txt = None
             stock = p.get('stock', 0)
+            if not is_mp:
+                stock_txt, stock = shown_stock(p, self.db, targets_index=_tidx)
             if is_mp and mp_kind == 'madre':
                 stock_item = QTableWidgetItem('—')
+            elif stock_txt is not None:
+                stock_item = QTableWidgetItem(stock_txt)
             else:
                 stock_item = QTableWidgetItem(str(int(stock) if isinstance(stock, (int, float)) and stock == int(stock or 0) else stock if stock is not None else 0))
             stock_item.setTextAlignment(Qt.AlignCenter)
-            if stock is not None and not (is_mp and mp_kind == 'madre') and float(stock or 0) <= 0:
+            if (not (is_mp and mp_kind == 'madre')) and stock is not None and float(stock or 0) <= 0:
                 stock_item.setForeground(QColor('#a01616'))
             if is_mp:
                 stock_item.setBackground(row_bg)
@@ -1394,7 +1403,9 @@ class SalesView(QWidget):
             pass
         try:
             low = self.product_model.get_low_stock(threshold=3) or []
-            real_low = [p for p in low if (p.get('stock') or 0) > 0]
+            # Excluir vinculados: su stock no es propio (se repone el producto
+            # fuente, que ya aparece acá por su cuenta si está bajo).
+            real_low = [p for p in low if (p.get('stock') or 0) > 0 and not has_links(p)]
             if real_low:
                 self._estado_stock_lbl._dot.setStyleSheet(f"color:{_T['warning']}; font-size:12px; background:transparent; border:none;")
                 self._estado_stock_lbl._txt.setText(f'{len(real_low)} con stock bajo')
@@ -2549,6 +2560,10 @@ class SalesView(QWidget):
         self.products_table.setRowCount(0)
         self.products_table.setRowCount(len(products))
 
+        # Pre-cargar el stock de los productos fuente vinculados en UNA query
+        # (evita N+1 al calcular el stock efectivo fila por fila).
+        _tidx = build_target_index(products, self.db)
+
         for row, product in enumerate(products):
             self.products_table.setRowHeight(row, 42)
             es_conjunto = int(product.get('es_conjunto') or 0) == 1
@@ -2565,7 +2580,15 @@ class SalesView(QWidget):
 
             # Col 1: Nombre (con badge "[Rollo]" / "[Pack]" / etc para productos conjunto)
             badge_prefix = f'[{tipo_lbl}] ' if tipo_lbl else ''
-            stock_val_name = product['stock']
+            # Producto vinculado a otro de stock: la disponibilidad sale del/los
+            # producto(s) fuente, no del stock propio (que no se descuenta al vender).
+            es_vinc = (not es_conjunto) and has_links(product)
+            # shown_stock: vinculado → stock del fuente; -1 → ∞ servicio; negativo
+            # (sobrevendido) → 0. Nunca muestra un número negativo.
+            _stk_txt = ''
+            stock_val_name = 0
+            if not es_conjunto:
+                _stk_txt, stock_val_name = shown_stock(product, self.db, targets_index=_tidx)
             # Pre-parsear colores si los hay (afecta badge y tooltip del nombre)
             _colores_list = []
             if es_conjunto and product.get('conjunto_colores'):
@@ -2587,17 +2610,22 @@ class SalesView(QWidget):
                     name_item = QTableWidgetItem(f"{badge_prefix}{product['name']}{color_badge}")
                     name_item.setForeground(QColor('#c1521f'))  # violeta del catálogo conjunto
                 name_item.setFont(QFont('Segoe UI', 10, QFont.Bold))
+            elif stock_val_name == float('inf'):
+                name_item = QTableWidgetItem(f"{product['name']}  [Servicio]")
+                name_item.setFont(QFont('Segoe UI', 10))
+                name_item.setForeground(QColor('#c1521f'))
             elif stock_val_name == 0:
                 name_item = QTableWidgetItem(f"{product['name']}  [Sin stock]")
                 name_item.setFont(QFont('Segoe UI', 10))
                 name_item.setForeground(QColor('#a01616'))  # rojo legible
-            elif stock_val_name < 0:
-                name_item = QTableWidgetItem(f"{product['name']}  [Servicio]")
-                name_item.setFont(QFont('Segoe UI', 10))
-                name_item.setForeground(QColor('#c1521f'))
             else:
                 name_item = QTableWidgetItem(product['name'])
                 name_item.setFont(QFont('Segoe UI', 10))
+            if es_vinc:
+                name_item.setToolTip(
+                    'Stock por vínculo: la disponibilidad sale del/los producto(s) '
+                    'de stock vinculado(s), no del stock propio.'
+                )
             if es_conjunto:
                 u_short = _CONJ_UNIDADES.get(
                     (product.get('conjunto_unidad_medida') or '').lower(), {}
@@ -2665,8 +2693,8 @@ class SalesView(QWidget):
                     stock_item.setForeground(QColor('#c1521f'))
                 stock_item.setFont(QFont('Segoe UI', 10, QFont.Bold))
             else:
-                stock_val = product['stock']
-                stock_item = QTableWidgetItem(str(stock_val))
+                stock_val = stock_val_name   # 0, número, o inf (servicio)
+                stock_item = QTableWidgetItem(_stk_txt)
                 stock_item.setTextAlignment(Qt.AlignCenter)
                 if stock_val <= 0:
                     stock_item.setForeground(QColor('#a01616'))
@@ -2960,7 +2988,12 @@ class SalesView(QWidget):
             self._add_conjunto_to_cart(product)
             return
 
-        stock = product['stock']
+        # Producto vinculado: el "sin stock" se decide por la disponibilidad del
+        # producto fuente, no por el stock propio (que no se descuenta).
+        if has_links(product):
+            stock = effective_stock(product, self.db)
+        else:
+            stock = product['stock']
         # Stock -1 = servicio/ilimitado (sin control de stock)
         is_unlimited = (stock is None or stock == -1)
 
@@ -4924,6 +4957,8 @@ class SpotlightDialog(QDialog):
         """
         from pos_system.ui.theme import COLORS as _C
         self.list.clear()
+        # Pre-cargar stock de fuentes vinculadas en una query (evita N+1).
+        _tidx = build_target_index(self._results, self.db) if getattr(self, 'db', None) else {}
         for p in self._results:
             cat = p.get('category') or 'Sin categoría'
             stock = p.get('stock', 0)
@@ -4935,7 +4970,9 @@ class SpotlightDialog(QDialog):
             elif es_conj:
                 stock_txt = f"{p.get('conjunto_total') or 0:.0f} {p.get('conjunto_unidad_medida') or ''}".strip()
             else:
-                stock_txt = f"{stock} un"
+                # shown_stock: vinculado → fuente; -1 → ∞ servicio; negativo → 0.
+                _txt, _num = shown_stock(p, getattr(self, 'db', None), targets_index=_tidx)
+                stock_txt = '∞' if _num == float('inf') else f"{_txt} un"
             barcode = p.get('barcode') or ''
             if is_mp and mp_kind == 'madre':
                 price_txt = '—'

@@ -9,6 +9,7 @@ from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont, QKeySequence, QPixmap
 from datetime import datetime, timedelta, timezone
 from pos_system.utils.firebase_sync import now_ar
+from pos_system.utils.stock_links import has_links
 
 from pos_system.ui.products_view import ProductsView
 from pos_system.ui.sales_view import SalesView
@@ -445,7 +446,7 @@ class MainWindow(QMainWindow):
             # Solo considerar stock real > 0 para el badge (stock 0 es normal en este sistema)
             low_stock = self.product_model.get_low_stock(threshold=3)
             # Filtrar los que tienen stock > 0 pero bajo (no los que son 0 por defecto)
-            real_low = [p for p in low_stock if p.get('stock', 0) > 0]
+            real_low = [p for p in low_stock if p.get('stock', 0) > 0 and not has_links(p)]
             products_tab_index = self.tabs.indexOf(self.products_view)
             if products_tab_index >= 0:
                 if real_low:
