@@ -29,9 +29,10 @@ from PyQt5.QtWidgets import (QWidget, QVBoxLayout, QHBoxLayout, QTableWidget,
                              QTableWidgetItem, QPushButton, QLabel, QComboBox,
                              QDialog, QFormLayout, QMessageBox, QHeaderView,
                              QDateEdit, QFrame, QSplitter, QGroupBox, QScrollArea,
-                             QDialogButtonBox, QDoubleSpinBox)
+                             QDialogButtonBox, QDoubleSpinBox, QStackedWidget)
 from PyQt5.QtCore import Qt, QDate, QThread, pyqtSignal
 from PyQt5.QtGui import QFont, QColor
+from pos_system.ui.theme import COLORS as _T
 
 # Constantes cacheadas para evitar instanciar QFont/QColor por cada celda
 # durante refresh_data y _show_sale_detail (causa lag con cientos de ventas).
@@ -126,161 +127,203 @@ class SalesHistoryView(QWidget):
 
     def init_ui(self):
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(20, 20, 20, 20)
-        layout.setSpacing(14)
+        layout.setContentsMargins(20, 16, 20, 16)
+        layout.setSpacing(12)
 
-        # Header
+        # ── Header: título + subtítulo ──
+        head_col = QVBoxLayout(); head_col.setSpacing(1); head_col.setContentsMargins(0, 0, 0, 0)
         title = QLabel('Historial de Ventas')
-        title.setFont(QFont('Segoe UI', 15, QFont.Bold))
-        title.setStyleSheet('color: #1c1c1e;')
-        layout.addWidget(title)
+        title.setFont(QFont('Segoe UI', 16, QFont.Bold))
+        title.setStyleSheet(f'color:{_T["text"]}; background:transparent;')
+        head_col.addWidget(title)
+        subtitle = QLabel('Buscá una venta, revisá su detalle y reimprimí o facturá desde acá.')
+        subtitle.setStyleSheet(f'color:{_T["text_muted"]}; font-size:12px; background:transparent;')
+        head_col.addWidget(subtitle)
+        layout.addLayout(head_col)
 
-        # Filtros — con scroll horizontal si la pantalla es chica
+        # ── Filtros — con scroll horizontal si la pantalla es chica ──
         filter_scroll = QScrollArea()
         filter_scroll.setWidgetResizable(True)
-        filter_scroll.setMaximumHeight(60)
+        filter_scroll.setMaximumHeight(64)
         filter_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         filter_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         filter_scroll.setFrameShape(QFrame.NoFrame)
+        filter_scroll.setStyleSheet('QScrollArea { background:transparent; border:none; }')
 
         filter_frame = QFrame()
         filter_frame.setStyleSheet(
-            'QFrame { background: white; border: 1px solid #dcd6c8; border-radius: 8px; }'
+            f'QFrame {{ background:{_T["surface"]}; border:1px solid {_T["border"]}; border-radius:8px; }}'
         )
         filter_layout = QHBoxLayout(filter_frame)
-        filter_layout.setContentsMargins(12, 6, 12, 6)
-        filter_layout.setSpacing(10)
+        filter_layout.setContentsMargins(12, 8, 12, 8)
+        filter_layout.setSpacing(8)
+
+        input_qss = (
+            f"QDateEdit, QComboBox {{ border:1px solid {_T['border']}; border-radius:6px;"
+            f" background:{_T['surface']}; padding:4px 10px; color:{_T['text']}; }}"
+            f"QDateEdit:focus, QComboBox:focus {{ border-color:{_T['accent']}; }}"
+            f"QComboBox::drop-down, QDateEdit::drop-down {{ border:none; width:20px; }}"
+        )
+        flabel_qss = f'color:{_T["text_muted"]}; font-size:11px; font-weight:600; background:transparent;'
+
+        def _flabel(txt):
+            l = QLabel(txt); l.setStyleSheet(flabel_qss); return l
 
         # Rango de fechas
-        filter_layout.addWidget(QLabel('Desde:'))
+        filter_layout.addWidget(_flabel('Desde'))
         self.from_date = QDateEdit()
         self.from_date.setCalendarPopup(True)
         self.from_date.setDate(QDate.currentDate().addDays(-30))
         self.from_date.setDisplayFormat('dd/MM/yyyy')
-        self.from_date.setMinimumHeight(34)
+        self.from_date.setMinimumHeight(34); self.from_date.setMinimumWidth(118)
+        self.from_date.setStyleSheet(input_qss)
         filter_layout.addWidget(self.from_date)
 
-        filter_layout.addWidget(QLabel('Hasta:'))
+        filter_layout.addWidget(_flabel('Hasta'))
         self.to_date = QDateEdit()
         self.to_date.setCalendarPopup(True)
         self.to_date.setDate(QDate.currentDate())
         self.to_date.setDisplayFormat('dd/MM/yyyy')
-        self.to_date.setMinimumHeight(34)
+        self.to_date.setMinimumHeight(34); self.to_date.setMinimumWidth(118)
+        self.to_date.setStyleSheet(input_qss)
         filter_layout.addWidget(self.to_date)
 
         # Tipo de pago
-        filter_layout.addWidget(QLabel('Pago:'))
+        filter_layout.addWidget(_flabel('Pago'))
         self.payment_filter = QComboBox()
         self.payment_filter.addItem('Todos', None)
         self.payment_filter.addItem('Efectivo', 'cash')
         self.payment_filter.addItem('Transferencia', 'transfer')
-        self.payment_filter.setMinimumHeight(34)
+        self.payment_filter.setMinimumHeight(34); self.payment_filter.setMinimumWidth(120)
+        self.payment_filter.setStyleSheet(input_qss)
         filter_layout.addWidget(self.payment_filter)
 
+        filter_layout.addSpacing(4)
+
         # Botones de rango rápido
-        range_btn_style = '''
-            QPushButton {
-                background: #fafaf7; color: #5a5448;
-                border: 1.5px solid #dcd6c8; border-radius: 6px;
-                padding: 4px 12px; font-size: 10px; font-weight: bold;
-                min-height: 32px; min-width: 54px;
-            }
-            QPushButton:hover { background: #c1521f; color: white; border-color: #c1521f; }
-        '''
-        for label, slot in [('Hoy', self._set_today), ('7 dias', self._set_week), ('30 dias', self._set_month)]:
+        range_btn_style = (
+            f"QPushButton {{ background:{_T['surface_alt']}; color:{_T['text_muted']};"
+            f" border:1px solid {_T['border']}; border-radius:6px;"
+            f" padding:4px 12px; font-size:11px; font-weight:700;"
+            f" min-height:32px; min-width:52px; }}"
+            f"QPushButton:hover {{ background:{_T['accent']}; color:white; border-color:{_T['accent']}; }}"
+        )
+        for label, slot in [('Hoy', self._set_today), ('7 días', self._set_week), ('30 días', self._set_month)]:
             btn = QPushButton(label)
             btn.setStyleSheet(range_btn_style)
-            btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
+            btn.setCursor(Qt.PointingHandCursor)
             btn.clicked.connect(slot)
             filter_layout.addWidget(btn)
 
+        filter_layout.addStretch()
+
         search_btn = QPushButton('Buscar')
-        search_btn.setStyleSheet('''
-            QPushButton {
-                background: #c1521f; color: white;
-                border: none; border-radius: 6px;
-                padding: 4px 16px; font-weight: bold;
-                min-height: 32px;
-            }
-            QPushButton:hover { background: #a3441a; }
-        ''')
-        search_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        search_btn.setCursor(Qt.PointingHandCursor)
+        search_btn.setStyleSheet(
+            f"QPushButton {{ background:{_T['accent']}; color:white; border:none;"
+            f" border-radius:6px; padding:4px 20px; font-weight:700; min-height:34px; }}"
+            f"QPushButton:hover {{ background:{_T['accent_hover']}; }}"
+        )
         search_btn.clicked.connect(self.refresh_data)
         filter_layout.addWidget(search_btn)
         self._search_btn = search_btn
 
-        filter_layout.addStretch()
         filter_scroll.setWidget(filter_frame)
         layout.addWidget(filter_scroll)
 
-        # Splitter: tabla ventas + detalle
+        # ── Splitter: tabla ventas + detalle ──
         splitter = QSplitter(Qt.Vertical)
+        splitter.setHandleWidth(8)
+        splitter.setStyleSheet('QSplitter::handle { background:transparent; }')
 
-        # Tabla principal de ventas
+        # ── Tabla principal de ventas (dentro de un stack con estado vacío) ──
         self.sales_table = QTableWidget()
         self.sales_table.setColumnCount(7)
         self.sales_table.setHorizontalHeaderLabels(
             ['ID', 'Fecha y Hora', 'Tipo de Pago', 'Total', 'Recibido', 'Vuelto', 'Descuento']
         )
         self.sales_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.sales_table.setSelectionMode(QTableWidget.SingleSelection)
         self.sales_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.sales_table.setAlternatingRowColors(True)
+        self.sales_table.setShowGrid(False)
         self.sales_table.verticalHeader().setVisible(False)
-        self.sales_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        self.sales_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.Stretch)
-        self.sales_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.sales_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.sales_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self.sales_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        self.sales_table.horizontalHeader().setSectionResizeMode(6, QHeaderView.ResizeToContents)
+        self.sales_table.setStyleSheet(self._table_qss())
+        _sh = self.sales_table.horizontalHeader()
+        _sh.setHighlightSections(False)
+        _sh.setSectionResizeMode(0, QHeaderView.Fixed)
+        _sh.setSectionResizeMode(1, QHeaderView.Stretch)
+        for _c in (2, 3, 4, 5, 6):
+            _sh.setSectionResizeMode(_c, QHeaderView.Fixed)
+        self.sales_table.setColumnWidth(0, 58)
+        self.sales_table.setColumnWidth(2, 130)
+        self.sales_table.setColumnWidth(3, 120)
+        self.sales_table.setColumnWidth(4, 110)
+        self.sales_table.setColumnWidth(5, 100)
+        self.sales_table.setColumnWidth(6, 116)
         # Una sola conexión: itemSelectionChanged. Antes había dos
         # (currentRowChanged + itemSelectionChanged) y ambas disparaban
         # _show_sale_detail en cada selección → get_by_id() x2 en cada click.
         self.sales_table.itemSelectionChanged.connect(self._on_selection_changed)
-        splitter.addWidget(self.sales_table)
 
-        # Panel de detalle
+        # Stack: tabla (índice 0) ↔ estado vacío (índice 1)
+        self._sales_stack = QStackedWidget()
+        self._sales_stack.addWidget(self.sales_table)
+        self._sales_stack.addWidget(self._build_empty_state())
+        splitter.addWidget(self._sales_stack)
+
+        # ── Panel de detalle ──
         detail_widget = QWidget()
         detail_layout = QVBoxLayout(detail_widget)
-        detail_layout.setContentsMargins(0, 8, 0, 0)
-        detail_layout.setSpacing(6)
+        detail_layout.setContentsMargins(0, 6, 0, 0)
+        detail_layout.setSpacing(8)
 
-        detail_header = QHBoxLayout()
+        detail_header = QHBoxLayout(); detail_header.setSpacing(8)
         detail_title = QLabel('Detalle de la Venta')
-        detail_title.setFont(QFont('Segoe UI', 11, QFont.Bold))
-        detail_title.setStyleSheet('color: #1c1c1e;')
+        detail_title.setFont(QFont('Segoe UI', 12, QFont.Bold))
+        detail_title.setStyleSheet(f'color:{_T["text"]}; background:transparent;')
         detail_header.addWidget(detail_title)
         detail_header.addStretch()
 
-        self.edit_btn = QPushButton('Editar Venta')
-        self.edit_btn.setObjectName('btnSecondary')
+        accent_btn_qss = (
+            f"QPushButton {{ background:{_T['accent']}; color:white; border:none;"
+            f" border-radius:6px; padding:6px 16px; font-weight:700; min-height:34px; }}"
+            f"QPushButton:hover {{ background:{_T['accent_hover']}; }}"
+            f"QPushButton:disabled {{ background:{_T['border']}; color:{_T['text_dim']}; }}"
+        )
+        quiet_btn_qss = (
+            f"QPushButton {{ background:{_T['surface']}; color:{_T['text']};"
+            f" border:1px solid {_T['border']}; border-radius:6px; padding:6px 16px;"
+            f" font-weight:600; min-height:34px; }}"
+            f"QPushButton:hover {{ background:{_T['surface_alt']}; border-color:{_T['text_dim']}; }}"
+            f"QPushButton:disabled {{ background:{_T['surface']}; color:{_T['text_dim']};"
+            f" border-color:{_T['border_soft']}; }}"
+        )
+        success_btn_qss = (
+            f"QPushButton {{ background:{_T['success']}; color:white; border:none;"
+            f" border-radius:6px; padding:6px 16px; font-weight:700; min-height:34px; }}"
+            f"QPushButton:hover {{ background:#2f5e2c; }}"
+            f"QPushButton:disabled {{ background:{_T['border']}; color:{_T['text_dim']}; }}"
+        )
+
+        self.edit_btn = QPushButton('Editar venta')
         self.edit_btn.setEnabled(False)
         self.edit_btn.setCursor(Qt.PointingHandCursor)
-        self.edit_btn.setStyleSheet('''
-            QPushButton { background:#c1521f; color:white; border:none;
-                          border-radius:6px; padding:6px 14px; font-weight:bold; }
-            QPushButton:hover { background:#a3441a; }
-            QPushButton:disabled { background:#dcd6c8; color:#9b958a; }
-        ''')
+        self.edit_btn.setStyleSheet(quiet_btn_qss)
         self.edit_btn.clicked.connect(self._edit_current_sale)
         detail_header.addWidget(self.edit_btn)
 
-        self.reprint_btn = QPushButton('Reimprimir Ticket')
-        self.reprint_btn.setObjectName('btnSecondary')
+        self.reprint_btn = QPushButton('Reimprimir ticket')
         self.reprint_btn.setEnabled(False)
         self.reprint_btn.setCursor(Qt.PointingHandCursor)
+        self.reprint_btn.setStyleSheet(quiet_btn_qss)
         self.reprint_btn.clicked.connect(self._reprint_ticket)
         detail_header.addWidget(self.reprint_btn)
 
         self.facturar_btn = QPushButton('Facturar AFIP')
         self.facturar_btn.setEnabled(False)
         self.facturar_btn.setCursor(Qt.PointingHandCursor)
-        self.facturar_btn.setStyleSheet('''
-            QPushButton { background:#3d7a3a; color:white; border:none;
-                          border-radius:6px; padding:6px 14px; font-weight:bold; }
-            QPushButton:hover { background:#2f5e2c; }
-            QPushButton:disabled { background:#dcd6c8; color:#9b958a; }
-        ''')
+        self.facturar_btn.setStyleSheet(success_btn_qss)
         self.facturar_btn.setToolTip(
             'Emite una Factura Electrónica AFIP sobre esta venta histórica.\n'
             'Te pide elegir el perfil ARCA y el cliente — no tenés que volver\n'
@@ -294,25 +337,35 @@ class SalesHistoryView(QWidget):
         self.detail_table.setColumnCount(6)
         self.detail_table.setHorizontalHeaderLabels(['Producto', 'Precio Orig.', 'Precio Unit.', 'Cantidad', 'Descuento', 'Subtotal'])
         self.detail_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.detail_table.setSelectionMode(QTableWidget.NoSelection)
         self.detail_table.setAlternatingRowColors(True)
+        self.detail_table.setShowGrid(False)
         self.detail_table.verticalHeader().setVisible(False)
-        self.detail_table.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
-        self.detail_table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        self.detail_table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        self.detail_table.horizontalHeader().setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        self.detail_table.horizontalHeader().setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self.detail_table.horizontalHeader().setSectionResizeMode(5, QHeaderView.ResizeToContents)
+        self.detail_table.setStyleSheet(self._table_qss())
+        _dh = self.detail_table.horizontalHeader()
+        _dh.setHighlightSections(False)
+        _dh.setSectionResizeMode(0, QHeaderView.Stretch)
+        for _c in (1, 2, 3, 4, 5):
+            _dh.setSectionResizeMode(_c, QHeaderView.Fixed)
+        self.detail_table.setColumnWidth(1, 110)
+        self.detail_table.setColumnWidth(2, 110)
+        self.detail_table.setColumnWidth(3, 90)
+        self.detail_table.setColumnWidth(4, 128)
+        self.detail_table.setColumnWidth(5, 120)
         detail_layout.addWidget(self.detail_table)
 
         splitter.addWidget(detail_widget)
-        splitter.setSizes([400, 200])
-        layout.addWidget(splitter)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 2)
+        splitter.setSizes([520, 240])
+        layout.addWidget(splitter, 1)
 
-        # Resumen de totales
+        # ── Resumen de totales (banner limpio, sin franja lateral) ──
         self.summary_label = QLabel('')
+        self.summary_label.setTextFormat(Qt.RichText)
         self.summary_label.setStyleSheet(
-            'background: white; border: 1px solid #dcd6c8; border-left: 4px solid #c1521f; '
-            'border-radius: 7px; padding: 10px 16px; font-size: 12px; color: #1c1c1e;'
+            f'background:{_T["surface"]}; border:1px solid {_T["border"]};'
+            f' border-radius:8px; padding:10px 16px; font-size:12px; color:{_T["text"]};'
         )
         self.summary_label.setFont(QFont('Segoe UI', 10, QFont.Bold))
         layout.addWidget(self.summary_label)
@@ -327,6 +380,45 @@ class SalesHistoryView(QWidget):
         vbar.valueChanged.connect(self._on_table_scroll)
 
         self.refresh_data()
+
+    def _table_qss(self):
+        """Estilo compartido para las tablas (consistente con el carrito de Ventas)."""
+        return (
+            f"QTableWidget {{ border:1px solid {_T['border']}; border-radius:8px;"
+            f" background:{_T['surface']}; alternate-background-color:{_T['surface_alt']};"
+            f" gridline-color:{_T['border_soft']}; outline:none; }}"
+            f"QTableWidget::item {{ padding:4px 10px; border:none; color:{_T['text']}; }}"
+            f"QTableWidget::item:selected {{ background:{_T['accent_soft']}; color:{_T['text']}; }}"
+            f"QHeaderView::section {{ background:{_T['surface_alt']}; color:{_T['text_muted']};"
+            f" padding:8px 10px; border:none; border-bottom:1px solid {_T['border']};"
+            f" font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.4px; }}"
+            f"QScrollBar:vertical {{ background:transparent; width:10px; margin:2px; }}"
+            f"QScrollBar::handle:vertical {{ background:{_T['border']}; border-radius:5px; min-height:30px; }}"
+            f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height:0; }}"
+        )
+
+    def _build_empty_state(self):
+        """Widget mostrado cuando no hay ventas en el rango."""
+        w = QFrame()
+        w.setStyleSheet(
+            f"QFrame {{ background:{_T['surface']}; border:1px solid {_T['border']};"
+            f" border-radius:8px; }}"
+        )
+        v = QVBoxLayout(w); v.setContentsMargins(20, 20, 20, 20); v.setSpacing(6)
+        v.addStretch(1)
+        icon = QLabel('🗂'); icon.setAlignment(Qt.AlignCenter)
+        icon.setStyleSheet(f'font-size:30px; background:transparent; border:none; color:{_T["text_dim"]};')
+        v.addWidget(icon)
+        t = QLabel('No hay ventas en el rango seleccionado')
+        t.setAlignment(Qt.AlignCenter)
+        t.setStyleSheet(f'color:{_T["text"]}; font-size:14px; font-weight:700; background:transparent; border:none;')
+        v.addWidget(t)
+        s = QLabel('Probá ampliar las fechas o cambiar el filtro de pago.')
+        s.setAlignment(Qt.AlignCenter)
+        s.setStyleSheet(f'color:{_T["text_muted"]}; font-size:12px; background:transparent; border:none;')
+        v.addWidget(s)
+        v.addStretch(1)
+        return w
 
     def _set_today(self):
         self.from_date.setDate(QDate.currentDate())
@@ -413,9 +505,10 @@ class SalesHistoryView(QWidget):
             self._all_loaded = True
             self._loading_more = False
             if is_initial:
-                # Caso especial: rango sin ventas — mostrar resumen vacío.
+                # Caso especial: rango sin ventas — estado vacío + resumen en cero.
                 self.sales_table.setRowCount(0)
-                self.summary_label.setText('Sin ventas en el rango seleccionado.')
+                self._sales_stack.setCurrentIndex(1)   # mostrar estado vacío
+                self._update_summary()
                 # Limpiar detalle
                 self.detail_table.setRowCount(0)
                 self.reprint_btn.setEnabled(False)
@@ -427,6 +520,9 @@ class SalesHistoryView(QWidget):
                 # Append vacío — actualizar el resumen para sacar el "+ cargar más".
                 self._update_summary()
             return
+
+        # Hay ventas → asegurar que se vea la tabla (no el estado vacío)
+        self._sales_stack.setCurrentIndex(0)
 
         # Bloquear señales y repaints durante el populate — cada setItem
         # puede disparar selectionChanged → _show_sale_detail → query SQLite.
@@ -442,7 +538,7 @@ class SalesHistoryView(QWidget):
 
             for i, sale in enumerate(sales):
                 row = start_row + i
-                tbl.setRowHeight(row, 36)
+                tbl.setRowHeight(row, 38)
 
                 id_item = QTableWidgetItem(str(sale['id']))
                 id_item.setTextAlignment(Qt.AlignCenter)
@@ -558,7 +654,7 @@ class SalesHistoryView(QWidget):
         try:
             dt.setRowCount(len(items))
             for r, item in enumerate(items):
-                dt.setRowHeight(r, 32)
+                dt.setRowHeight(r, 34)
                 # Si el item tiene color de conjunto y el nombre no lo trae,
                 # lo prefijamos para que quede visible en el detalle.
                 _name = item['product_name'] or ''
@@ -751,53 +847,91 @@ class EditSaleDialog(QDialog):
         self.items_updates = []
 
         self.setWindowTitle(f"Editar venta #{self.sale.get('id', '')}")
-        self.setMinimumSize(640, 520)
+        self.setMinimumSize(560, 460)
         self._build_ui()
         self._recalc_total()
 
+    def _section_label(self, txt):
+        l = QLabel(txt)
+        l.setStyleSheet(
+            f"color:{_T['text_muted']}; font-size:10px; font-weight:700;"
+            f" letter-spacing:0.5px; background:transparent;"
+        )
+        return l
+
     def _build_ui(self):
+        self.setStyleSheet(f"QDialog {{ background:{_T['bg']}; }}")
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setContentsMargins(18, 16, 18, 16)
         layout.setSpacing(12)
 
-        header = QLabel(f"Venta #{self.sale.get('id', '')}  -  {self.sale.get('created_at', '')}")
-        header.setFont(QFont('Segoe UI', 11, QFont.Bold))
-        header.setStyleSheet('color: #1c1c1e;')
-        layout.addWidget(header)
+        # ── Encabezado: Venta #id + meta (fecha · pago) ──
+        head_col = QVBoxLayout(); head_col.setSpacing(1); head_col.setContentsMargins(0, 0, 0, 0)
+        header = QLabel(f"Venta #{self.sale.get('id', '')}")
+        header.setFont(QFont('Segoe UI', 15, QFont.Bold))
+        header.setStyleSheet(f'color:{_T["text"]}; background:transparent;')
+        head_col.addWidget(header)
+        try:
+            _dt = _parse_ar(self.sale.get('created_at')).strftime('%d/%m/%Y %H:%M')
+        except Exception:
+            _dt = str(self.sale.get('created_at') or '')
+        _pl = 'Efectivo' if self.new_payment_type == 'cash' else 'Transferencia'
+        meta = QLabel(f"{_dt}  ·  {_pl}")
+        meta.setStyleSheet(f'color:{_T["text_muted"]}; font-size:12px; background:transparent;')
+        head_col.addWidget(meta)
+        layout.addLayout(head_col)
 
-        pay_group = QGroupBox('Método de pago')
-        pay_layout = QHBoxLayout(pay_group)
-        pay_layout.setContentsMargins(10, 8, 10, 8)
+        # ── Método de pago (label de sección + combo, sin GroupBox) ──
+        layout.addWidget(self._section_label('MÉTODO DE PAGO'))
+        pay_row = QHBoxLayout(); pay_row.setContentsMargins(0, 0, 0, 0); pay_row.setSpacing(8)
         self.pay_combo = QComboBox()
         self.pay_combo.addItem('Efectivo', 'cash')
         self.pay_combo.addItem('Transferencia', 'transfer')
         idx = 0 if self.new_payment_type == 'cash' else 1
         self.pay_combo.setCurrentIndex(idx)
+        self.pay_combo.setMinimumHeight(34); self.pay_combo.setMinimumWidth(200)
+        self.pay_combo.setStyleSheet(
+            f"QComboBox {{ border:1px solid {_T['border']}; border-radius:6px;"
+            f" background:{_T['surface']}; padding:4px 10px; color:{_T['text']}; }}"
+            f"QComboBox:focus {{ border-color:{_T['accent']}; }}"
+            f"QComboBox::drop-down {{ border:none; width:20px; }}"
+        )
         self.pay_combo.currentIndexChanged.connect(self._on_payment_changed)
-        pay_layout.addWidget(QLabel('Pago:'))
-        pay_layout.addWidget(self.pay_combo)
-        pay_layout.addStretch()
-        layout.addWidget(pay_group)
+        pay_row.addWidget(self.pay_combo)
+        pay_row.addStretch()
+        layout.addLayout(pay_row)
 
-        items_group = QGroupBox(f"Items ({len(self.items)})")
-        ig_layout = QVBoxLayout(items_group)
-        ig_layout.setContentsMargins(10, 8, 10, 8)
+        # ── Items ──
+        layout.addWidget(self._section_label(f'ITEMS ({len(self.items)})'))
 
         self.table = QTableWidget()
         self.table.setColumnCount(5)
         self.table.setHorizontalHeaderLabels(['Producto', 'Cant.', 'Precio unit.', 'Desc.', 'Subtotal'])
         self.table.setRowCount(len(self.items))
         self.table.verticalHeader().setVisible(False)
-        self.table.verticalHeader().setDefaultSectionSize(54)
+        self.table.verticalHeader().setDefaultSectionSize(44)
         self.table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.table.setSelectionMode(QTableWidget.NoSelection)
+        self.table.setShowGrid(False)
+        self.table.setStyleSheet(
+            f"QTableWidget {{ border:1px solid {_T['border']}; border-radius:8px;"
+            f" background:{_T['surface']}; gridline-color:{_T['border_soft']}; outline:none; }}"
+            f"QTableWidget::item {{ padding:2px 10px; border:none; color:{_T['text']}; }}"
+            f"QHeaderView::section {{ background:{_T['surface_alt']}; color:{_T['text_muted']};"
+            f" padding:7px 10px; border:none; border-bottom:1px solid {_T['border']};"
+            f" font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.4px; }}"
+        )
         hdr = self.table.horizontalHeader()
+        hdr.setHighlightSections(False)
         hdr.setSectionResizeMode(0, QHeaderView.Stretch)
-        hdr.setSectionResizeMode(1, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(1, QHeaderView.Fixed)
         hdr.setSectionResizeMode(2, QHeaderView.Fixed)
-        self.table.setColumnWidth(2, 170)
-        hdr.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        hdr.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        hdr.setSectionResizeMode(3, QHeaderView.Fixed)
+        hdr.setSectionResizeMode(4, QHeaderView.Fixed)
+        self.table.setColumnWidth(1, 64)
+        self.table.setColumnWidth(2, 148)
+        self.table.setColumnWidth(3, 96)
+        self.table.setColumnWidth(4, 116)
 
         for row, it in enumerate(self.items):
             name_item = QTableWidgetItem(str(it.get('product_name') or ''))
@@ -818,23 +952,20 @@ class EditSaleDialog(QDialog):
             spin.setPrefix('$ ')
             spin.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             spin.setButtonSymbols(QDoubleSpinBox.NoButtons)
-            spin.setMinimumHeight(40)
+            spin.setFixedHeight(32)
             spin.setStyleSheet(
-                "QDoubleSpinBox {"
-                "  background: #ffffff;"
-                "  border: 1.5px solid #c1521f;"
-                "  border-radius: 6px;"
-                "  padding: 6px 12px;"
-                "  font-family: 'Consolas', monospace;"
-                "  font-weight: 700;"
-                "  font-size: 14px;"
-                "  color: #1c1c1e;"
-                "}"
-                "QDoubleSpinBox:focus { border-color: #a3441a; border-width: 2px; }"
+                f"QDoubleSpinBox {{ background:{_T['surface']};"
+                f" border:1px solid {_T['border']}; border-radius:6px;"
+                f" padding:2px 10px; font-family:'Consolas', monospace;"
+                f" font-weight:700; font-size:13px; color:{_T['text']}; }}"
+                f"QDoubleSpinBox:focus {{ border-color:{_T['accent']}; }}"
             )
+            # Wrapper con margen chico: el spin (32px) entra holgado en la fila
+            # (44px) sin clipearse — el problema anterior era 40px en fila de 54
+            # con 16px de margen (40+16 > 54).
             wrap = QWidget()
             wlay = QHBoxLayout(wrap)
-            wlay.setContentsMargins(10, 8, 10, 8)
+            wlay.setContentsMargins(8, 5, 8, 5)
             wlay.setSpacing(0)
             wlay.addWidget(spin)
             spin.valueChanged.connect(self._recalc_total)
@@ -853,24 +984,56 @@ class EditSaleDialog(QDialog):
             self.table.setItem(row, 4, sub_lbl)
             self._subtotal_labels[int(it.get('id'))] = (row, float(it.get('discount_amount') or 0), qty)
 
-        ig_layout.addWidget(self.table)
-        layout.addWidget(items_group, stretch=1)
+        layout.addWidget(self.table, stretch=1)
 
-        total_row = QHBoxLayout()
+        # ── Total (con divisoria arriba) ──
+        divider = QFrame(); divider.setFrameShape(QFrame.HLine)
+        divider.setStyleSheet(f'background:{_T["border"]}; border:none; max-height:1px;')
+        layout.addWidget(divider)
+
+        total_row = QHBoxLayout(); total_row.setContentsMargins(2, 0, 2, 0)
         total_row.addStretch()
-        total_row.addWidget(QLabel('Total:'))
+        tl = QLabel('TOTAL')
+        tl.setStyleSheet(
+            f"color:{_T['text_muted']}; font-size:10px; font-weight:700;"
+            f" letter-spacing:0.6px; background:transparent;"
+        )
+        total_row.addWidget(tl)
         self.total_lbl = QLabel('$0.00')
-        self.total_lbl.setFont(QFont('Segoe UI', 13, QFont.Bold))
-        self.total_lbl.setStyleSheet('color: #1c1c1e;')
+        self.total_lbl.setFont(QFont('Segoe UI', 18, QFont.Bold))
+        self.total_lbl.setStyleSheet(
+            f'color:{_T["text"]}; margin-left:10px; background:transparent;'
+            f" font-family:'JetBrains Mono', Consolas, monospace;"
+        )
         total_row.addWidget(self.total_lbl)
         layout.addLayout(total_row)
 
-        btns = QDialogButtonBox(QDialogButtonBox.Save | QDialogButtonBox.Cancel)
-        btns.button(QDialogButtonBox.Save).setText('Guardar')
-        btns.button(QDialogButtonBox.Cancel).setText('Cancelar')
-        btns.accepted.connect(self._on_accept)
-        btns.rejected.connect(self.reject)
-        layout.addWidget(btns)
+        # ── Botones ──
+        btn_row = QHBoxLayout(); btn_row.setSpacing(8)
+        btn_row.addStretch()
+        cancel_btn = QPushButton('Cancelar')
+        cancel_btn.setCursor(Qt.PointingHandCursor)
+        cancel_btn.setMinimumHeight(40); cancel_btn.setMinimumWidth(120)
+        cancel_btn.setStyleSheet(
+            f"QPushButton {{ background:{_T['surface']}; color:{_T['text_muted']};"
+            f" border:1px solid {_T['border']}; border-radius:8px; font-weight:600; padding:0 16px; }}"
+            f"QPushButton:hover {{ background:{_T['surface_alt']}; color:{_T['text']}; }}"
+        )
+        cancel_btn.clicked.connect(self.reject)
+        btn_row.addWidget(cancel_btn)
+
+        save_btn = QPushButton('Guardar')
+        save_btn.setCursor(Qt.PointingHandCursor)
+        save_btn.setDefault(True)
+        save_btn.setMinimumHeight(40); save_btn.setMinimumWidth(150)
+        save_btn.setStyleSheet(
+            f"QPushButton {{ background:{_T['accent']}; color:white; border:none;"
+            f" border-radius:8px; font-weight:700; padding:0 20px; }}"
+            f"QPushButton:hover {{ background:{_T['accent_hover']}; }}"
+        )
+        save_btn.clicked.connect(self._on_accept)
+        btn_row.addWidget(save_btn)
+        layout.addLayout(btn_row)
 
     def _on_payment_changed(self, _idx):
         self.new_payment_type = str(self.pay_combo.currentData() or 'cash')

@@ -9,6 +9,7 @@ from PyQt5.QtCore import Qt, QSize, QTimer, pyqtSignal, QThread
 from PyQt5.QtGui import QFont, QColor, QKeySequence, QIntValidator, QValidator
 from datetime import datetime
 import os
+import json
 import subprocess
 import platform
 import logging
@@ -23,6 +24,7 @@ from pos_system.utils.pdf_generator import PDFGenerator
 from pos_system.utils.stock_links import has_links, effective_stock, build_target_index, shown_stock
 from pos_system.ui.conjunto_dialog import ConjuntoDialog, UNIDADES as _CONJ_UNIDADES, TIPOS as _CONJ_TIPOS, parse_colores as _conj_parse_colores
 from pos_system.models.presupuesto import Presupuesto
+from pos_system.models.pending_cart import PendingCart
 from pos_system.ui.presupuesto_dialog import PresupuestoDialog
 from pos_system.models.mother_product import MotherProduct, Node, Discount
 from pos_system.ui.mp_variant_dialog import MPVariantDialog
@@ -707,6 +709,137 @@ class ProductSearchDialog(QDialog):
             QTableWidget.keyPressEvent(self.table, event)
 
 
+class PendingPreviewDialog(QDialog):
+    """Vista previa chica de una venta pendiente.
+
+    Muestra quién la dejó, los items y el total. Dos acciones:
+      - "Volver al carrito" → action = 'restore'
+      - "Descartar"         → action = 'delete' (con confirmación)
+    """
+    def __init__(self, parent=None, pending: dict = None):
+        super().__init__(parent)
+        from pos_system.ui.theme import COLORS as _T
+        self.action = None
+        p = pending or {}
+        items = p.get('items') or []
+        cajero = (p.get('cajero_nombre') or 'Cajero').strip() or 'Cajero'
+        total = float(p.get('total') or 0)
+        created = str(p.get('created_at') or '')
+
+        self.setWindowTitle('Venta pendiente')
+        self.setModal(True)
+        self.setMinimumWidth(440)
+        self.setStyleSheet(f"QDialog {{ background:{_T['bg']}; }}")
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(18, 16, 18, 16); v.setSpacing(10)
+
+        # Encabezado: cajero + fecha/hora
+        head = QLabel(f"Dejada por <b>{cajero}</b>")
+        head.setStyleSheet(f"color:{_T['text']}; font-size:14px; background:transparent; border:none;")
+        v.addWidget(head)
+        if created:
+            sub = QLabel(created[:16])
+            sub.setStyleSheet(f"color:{_T['text_muted']}; font-size:11px; background:transparent; border:none;")
+            v.addWidget(sub)
+
+        # Tabla de items (read-only)
+        tbl = QTableWidget()
+        tbl.setColumnCount(4)
+        tbl.setHorizontalHeaderLabels(['Producto', 'Cant.', 'P. Unit.', 'Subtotal'])
+        tbl.verticalHeader().setVisible(False)
+        tbl.setEditTriggers(QTableWidget.NoEditTriggers)
+        tbl.setSelectionMode(QAbstractItemView.NoSelection)
+        tbl.setFocusPolicy(Qt.NoFocus)
+        tbl.horizontalHeader().setSectionResizeMode(0, QHeaderView.Stretch)
+        tbl.horizontalHeader().setSectionResizeMode(1, QHeaderView.Fixed)
+        tbl.horizontalHeader().setSectionResizeMode(2, QHeaderView.Fixed)
+        tbl.horizontalHeader().setSectionResizeMode(3, QHeaderView.Fixed)
+        tbl.setColumnWidth(1, 56); tbl.setColumnWidth(2, 92); tbl.setColumnWidth(3, 104)
+        tbl.setMaximumHeight(280)
+        tbl.setStyleSheet(
+            f"QTableWidget {{ border:1px solid {_T['border']}; border-radius:6px;"
+            f" background:{_T['surface']}; }}"
+            f"QHeaderView::section {{ background:{_T['surface_alt']}; color:{_T['text_muted']};"
+            f" padding:6px 8px; border:none; border-bottom:1px solid {_T['border']};"
+            f" font-size:10px; font-weight:700; text-transform:uppercase; }}"
+        )
+        tbl.setRowCount(len(items))
+        for r, it in enumerate(items):
+            name = QTableWidgetItem(str(it.get('product_name', '')))
+            name.setToolTip(str(it.get('product_name', '')))
+            tbl.setItem(r, 0, name)
+            qi = QTableWidgetItem(_fmt_qty(it.get('quantity', 0)))
+            qi.setTextAlignment(Qt.AlignCenter)
+            tbl.setItem(r, 1, qi)
+            pu = QTableWidgetItem(f"${_fmt_money(it.get('unit_price', 0))}")
+            pu.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            tbl.setItem(r, 2, pu)
+            st = QTableWidgetItem(f"${_fmt_money(it.get('subtotal', 0))}")
+            st.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            tbl.setItem(r, 3, st)
+        v.addWidget(tbl)
+
+        # Total
+        trow = QHBoxLayout(); trow.setContentsMargins(2, 0, 2, 0)
+        trow.addStretch(1)
+        tl = QLabel('TOTAL')
+        tl.setStyleSheet(
+            f"color:{_T['text_muted']}; font-size:10px; font-weight:700;"
+            f" letter-spacing:0.6px; background:transparent; border:none;"
+        )
+        trow.addWidget(tl)
+        tv = QLabel(f"${total:,.2f}")
+        tv.setStyleSheet(
+            f"color:{_T['text']}; font-size:22px; font-weight:700; margin-left:10px;"
+            f" background:transparent; border:none;"
+            f" font-family:'JetBrains Mono', Consolas, monospace;"
+        )
+        trow.addWidget(tv)
+        v.addLayout(trow)
+
+        # Botones de acción
+        btns = QHBoxLayout(); btns.setSpacing(8)
+        discard = QPushButton('Descartar')
+        discard.setMinimumHeight(44); discard.setMinimumWidth(120)
+        discard.setCursor(Qt.PointingHandCursor)
+        discard.setStyleSheet(
+            f"QPushButton {{ background:{_T['surface']}; color:{_T['danger']};"
+            f" border:1px solid {_T['danger']}; border-radius:8px; font-weight:600; padding:0 14px; }}"
+            f"QPushButton:hover {{ background:{_T['danger']}; color:white; }}"
+        )
+        discard.clicked.connect(self._on_discard)
+        btns.addWidget(discard)
+        btns.addStretch(1)
+
+        back = QPushButton('Volver al carrito')
+        back.setMinimumHeight(44); back.setMinimumWidth(170)
+        back.setCursor(Qt.PointingHandCursor)
+        back.setDefault(True)
+        back.setStyleSheet(
+            f"QPushButton {{ background:{_T['warning']}; color:white;"
+            f" border:none; border-radius:8px; font-weight:700; padding:0 18px; }}"
+            f"QPushButton:hover {{ background:#946018; }}"
+        )
+        back.clicked.connect(self._on_restore)
+        btns.addWidget(back)
+        v.addLayout(btns)
+
+    def _on_restore(self):
+        self.action = 'restore'
+        self.accept()
+
+    def _on_discard(self):
+        reply = QMessageBox.question(
+            self, 'Descartar pendiente',
+            'Eliminar esta venta pendiente?\nNo se puede deshacer.',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+        )
+        if reply == QMessageBox.Yes:
+            self.action = 'delete'
+            self.accept()
+
+
 class SalesView(QWidget):
     # Señal emitida desde hilo de Firebase para refrescar UI en el hilo principal
     inventory_updated = pyqtSignal()
@@ -719,6 +852,7 @@ class SalesView(QWidget):
         self.sale_model = Sale(self.db)
         self.cash_register_model = CashRegister(self.db)
         self.promo_model = Promotion(self.db)
+        self.pending_model = PendingCart(self.db)
         self.pdf_generator = PDFGenerator()
         self.pdf_generator.set_company_info(
             name    = 'Librería Liceo',
@@ -1122,6 +1256,22 @@ class SalesView(QWidget):
         clear_btn.clicked.connect(self.clear_cart)
         ft_l.addWidget(clear_btn)
 
+        pending_btn = QPushButton('Dejar\npendiente')
+        pending_btn.setMinimumHeight(48); pending_btn.setMinimumWidth(104)
+        pending_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        pending_btn.setCursor(Qt.PointingHandCursor)
+        pending_btn.setToolTip('Guardar el carrito como venta pendiente y vaciarlo. '
+                               'Queda en la lista PENDIENTES para retomarlo después.')
+        pending_btn.setStyleSheet(
+            f"QPushButton {{ background:{_T['warning_bg']}; color:{_T['warning']};"
+            f" border:1px solid {_T['warning']}; border-radius:8px; padding:4px 12px;"
+            f" font-weight:700; }}"
+            f"QPushButton:hover {{ background:{_T['warning']}; color:white; }}"
+        )
+        pending_btn.clicked.connect(self._add_to_pending)
+        self._pending_btn = pending_btn
+        ft_l.addWidget(pending_btn)
+
         presup_btn = QPushButton('Presupuesto')
         presup_btn.setMinimumHeight(48); presup_btn.setMinimumWidth(120)
         presup_btn.setFont(QFont('Segoe UI', 11, QFont.Bold))
@@ -1153,11 +1303,13 @@ class SalesView(QWidget):
         body.addWidget(cart_panel, 1)
 
         # ── Panel lateral derecho ──
+        # Más angosto que antes (252 → 208): ACCIONES y CAJA ocupan menos y el
+        # carrito gana ancho. El espacio que sobra abajo lo usa PENDIENTES.
         side = QWidget()
-        side.setFixedWidth(252)
+        side.setFixedWidth(208)
         side_v = QVBoxLayout(side)
         side_v.setContentsMargins(0, 0, 0, 0)
-        side_v.setSpacing(10)
+        side_v.setSpacing(8)
 
         # ACCIONES
         side_v.addWidget(self._build_acciones_card())
@@ -1165,6 +1317,8 @@ class SalesView(QWidget):
         side_v.addWidget(self._build_caja_card())
         # ESTADO
         side_v.addWidget(self._build_estado_card())
+        # PENDIENTES (ventas en espera)
+        side_v.addWidget(self._build_pending_card())
 
         side_v.addStretch(1)
         body.addWidget(side)
@@ -1270,13 +1424,13 @@ class SalesView(QWidget):
     def _make_action_button(self, key, label, fn):
         from pos_system.ui.theme import COLORS as _T
         b = QPushButton(f"{key}\n{label}")
-        b.setMinimumHeight(54)
+        b.setMinimumHeight(44)
         b.setCursor(Qt.PointingHandCursor)
         b.setStyleSheet(
-            f"QPushButton {{ text-align:left; padding:6px 8px;"
+            f"QPushButton {{ text-align:left; padding:4px 8px;"
             f" background:{_T['surface']}; color:{_T['text']};"
             f" border:1px solid {_T['border']}; border-radius:6px;"
-            f" font-size:12px; font-weight:700; }}"
+            f" font-size:11px; font-weight:700; }}"
             f"QPushButton:hover {{ background:{_T['surface_alt']}; }}"
         )
         b.clicked.connect(fn)
@@ -1414,6 +1568,436 @@ class SalesView(QWidget):
                 self._estado_stock_lbl._txt.setText('Stock OK')
         except Exception:
             pass
+
+    # ════════════════════════════════════════════════════════════════════
+    # ── VENTAS PENDIENTES / EN ESPERA (hold del carrito) ────────────────
+    # ════════════════════════════════════════════════════════════════════
+    def _build_pending_card(self):
+        """Card lateral de ventas pendientes: header desplegable + lista.
+        El título titila cuando hay al menos un pendiente."""
+        from pos_system.ui.theme import COLORS as _T
+        card = QFrame()
+        card.setObjectName('pendCard')
+        card.setStyleSheet(
+            f"QFrame#pendCard {{ background:{_T['surface']}; border:1px solid {_T['border']};"
+            f" border-radius:8px; }}"
+        )
+        self._pending_card = card
+        self._pending_expanded = False
+
+        v = QVBoxLayout(card)
+        v.setContentsMargins(12, 10, 12, 10); v.setSpacing(6)
+
+        # ── Header clickable (desplegar / colapsar) ──
+        header = QWidget()
+        header.setObjectName('pendHeader')
+        header.setStyleSheet("QWidget#pendHeader { background:transparent; }")
+        header.setCursor(Qt.PointingHandCursor)
+        hl = QHBoxLayout(header); hl.setContentsMargins(0, 0, 0, 0); hl.setSpacing(6)
+
+        self._pending_header_lbl = QLabel('PENDIENTES')
+        self._pending_header_lbl.setStyleSheet(
+            f"color:{_T['text_muted']}; font-size:10px; font-weight:700;"
+            f" letter-spacing:0.5px; background:transparent; border:none;"
+        )
+        hl.addWidget(self._pending_header_lbl)
+
+        self._pending_count_lbl = QLabel('0')
+        self._pending_count_lbl.setAlignment(Qt.AlignCenter)
+        self._pending_count_lbl.setFixedHeight(16)
+        self._pending_count_lbl.setMinimumWidth(16)
+        self._pending_count_lbl.setStyleSheet(
+            f"background:{_T['warning']}; color:white; border-radius:8px;"
+            f" font-size:10px; font-weight:700; padding:0 5px;"
+        )
+        self._pending_count_lbl.setVisible(False)
+        hl.addWidget(self._pending_count_lbl)
+        hl.addStretch(1)
+
+        self._pending_chevron = QLabel('▸')
+        self._pending_chevron.setStyleSheet(
+            f"color:{_T['text_muted']}; font-size:11px; background:transparent; border:none;"
+        )
+        hl.addWidget(self._pending_chevron)
+        header.mousePressEvent = lambda e: self._toggle_pending_expand()
+        v.addWidget(header)
+
+        # ── Body colapsable: scroll con la lista ──
+        self._pending_body = QWidget()
+        self._pending_body.setStyleSheet("background:transparent;")
+        bv = QVBoxLayout(self._pending_body)
+        bv.setContentsMargins(0, 4, 0, 0); bv.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        scroll.setMaximumHeight(300)
+        scroll.setStyleSheet("QScrollArea { background:transparent; border:none; }")
+        inner = QWidget()
+        inner.setStyleSheet("background:transparent;")
+        self._pending_list_v = QVBoxLayout(inner)
+        self._pending_list_v.setContentsMargins(0, 0, 0, 0); self._pending_list_v.setSpacing(6)
+        self._pending_list_v.addStretch(1)
+        scroll.setWidget(inner)
+        bv.addWidget(scroll)
+        self._pending_body.setVisible(False)
+        v.addWidget(self._pending_body)
+
+        # ── Timer de titilado ──
+        self._pending_rows = []          # frames de las filas (para titilar)
+        self._pending_blink_on = False
+        self._pending_blink_timer = QTimer(self)
+        self._pending_blink_timer.timeout.connect(self._tick_pending_blink)
+
+        # Carga inicial (puede haber pendientes de una sesión previa)
+        QTimer.singleShot(300, self._refresh_pending_panel)
+        return card
+
+    def _toggle_pending_expand(self):
+        self._pending_expanded = not getattr(self, '_pending_expanded', False)
+        self._pending_body.setVisible(self._pending_expanded)
+        self._pending_chevron.setText('▾' if self._pending_expanded else '▸')
+
+    def _pending_row_css(self, on: bool) -> str:
+        """Estilo del frame de una fila pendiente. on=True → resaltado (titilando)."""
+        from pos_system.ui.theme import COLORS as _T
+        if on:
+            return (
+                f"QFrame#pendRow {{ background:{_T['warning_bg']}; border:1px solid {_T['warning']};"
+                f" border-radius:6px; }}"
+            )
+        return (
+            f"QFrame#pendRow {{ background:{_T['surface_alt']}; border:1px solid {_T['border']};"
+            f" border-radius:6px; }}"
+            f"QFrame#pendRow:hover {{ border-color:{_T['warning']}; background:{_T['warning_bg']}; }}"
+        )
+
+    def _tick_pending_blink(self):
+        """Titila las FILAS pendientes (fondo + borde + nombre del cajero), que es
+        lo que se ve. El título queda fijo en color de alerta."""
+        from pos_system.ui.theme import COLORS as _T
+        self._pending_blink_on = not getattr(self, '_pending_blink_on', False)
+        on = self._pending_blink_on
+        frame_css = self._pending_row_css(on)
+        name_color = _T['warning'] if on else _T['text']
+        for w in list(getattr(self, '_pending_rows', [])):
+            try:
+                w.setStyleSheet(frame_css)
+                lbl = getattr(w, '_name_lbl', None)
+                if lbl is not None:
+                    lbl.setStyleSheet(
+                        f"color:{name_color}; font-size:11px; font-weight:700;"
+                        f" background:transparent; border:none;"
+                    )
+            except RuntimeError:
+                # La fila fue destruida (refresh concurrente); se ignora.
+                continue
+
+    def _refresh_pending_panel(self):
+        """Reconstruye la lista de pendientes, el badge y el titilado."""
+        from pos_system.ui.theme import COLORS as _T
+        if not hasattr(self, '_pending_list_v'):
+            return
+        try:
+            pendings = self.pending_model.get_all()
+        except Exception as e:
+            logger.warning(f"No se pudieron leer pendientes: {e}")
+            pendings = []
+
+        lay = self._pending_list_v
+        # Vaciar la lista (widgets + spacers) y soltar las refs de filas viejas
+        self._pending_rows = []
+        while lay.count():
+            item = lay.takeAt(0)
+            w = item.widget()
+            if w:
+                w.deleteLater()
+
+        n = len(pendings)
+        self._pending_count_lbl.setText(str(n))
+        self._pending_count_lbl.setVisible(n > 0)
+
+        if n == 0:
+            hint = QLabel('Sin ventas pendientes')
+            hint.setStyleSheet(
+                f"color:{_T['text_dim']}; font-size:11px; font-style:italic;"
+                f" background:transparent; border:none; padding:4px 2px;"
+            )
+            lay.addWidget(hint)
+        else:
+            for p in pendings:
+                lay.addWidget(self._build_pending_row(p))
+        lay.addStretch(1)
+
+        # Header fijo en color de alerta cuando hay pendientes (el titilado real
+        # pasa en las filas). Cuando no hay, vuelve a muted.
+        header_color = _T['warning'] if n > 0 else _T['text_muted']
+        self._pending_header_lbl.setStyleSheet(
+            f"color:{header_color}; font-size:10px; font-weight:700;"
+            f" letter-spacing:0.5px; background:transparent; border:none;"
+        )
+
+        # Titilado de filas: activo solo si hay pendientes
+        if n > 0:
+            self._pending_blink_on = False
+            if not self._pending_blink_timer.isActive():
+                self._pending_blink_timer.start(650)
+        else:
+            self._pending_blink_timer.stop()
+
+    def _build_pending_row(self, p):
+        """Fila chica de un pendiente: cajero + total + items/hora. Click → preview."""
+        from pos_system.ui.theme import COLORS as _T
+        pid = int(p.get('id'))
+        cajero = (p.get('cajero_nombre') or 'Cajero').strip() or 'Cajero'
+        total = float(p.get('total') or 0)
+        cnt = float(p.get('items_count') or 0)
+        created = str(p.get('created_at') or '')
+        hhmm = created[11:16] if len(created) >= 16 else created
+
+        w = QFrame()
+        w.setObjectName('pendRow')
+        w.setCursor(Qt.PointingHandCursor)
+        w.setStyleSheet(self._pending_row_css(False))
+        wl = QVBoxLayout(w); wl.setContentsMargins(8, 6, 8, 6); wl.setSpacing(2)
+
+        top = QHBoxLayout(); top.setContentsMargins(0, 0, 0, 0); top.setSpacing(4)
+        name = QLabel(cajero[:18])
+        name.setStyleSheet(
+            f"color:{_T['text']}; font-size:11px; font-weight:700;"
+            f" background:transparent; border:none;"
+        )
+        w._name_lbl = name   # referencia para el titilado
+        top.addWidget(name); top.addStretch(1)
+        tot = QLabel(f"${_fmt_money(total)}")
+        tot.setStyleSheet(
+            f"color:{_T['warning']}; font-size:11px; font-weight:700;"
+            f" background:transparent; border:none;"
+            f" font-family:'JetBrains Mono', Consolas, monospace;"
+        )
+        top.addWidget(tot)
+        wl.addLayout(top)
+
+        sub = QLabel(f"{_fmt_qty(cnt)} item{'s' if cnt != 1 else ''}"
+                     + (f"  ·  {hhmm}" if hhmm else ''))
+        sub.setStyleSheet(
+            f"color:{_T['text_muted']}; font-size:10px;"
+            f" background:transparent; border:none;"
+        )
+        wl.addWidget(sub)
+
+        w.mousePressEvent = lambda e, _id=pid: self._open_pending_preview(_id)
+        if not hasattr(self, '_pending_rows'):
+            self._pending_rows = []
+        self._pending_rows.append(w)
+        return w
+
+    def _current_turno_nombre(self):
+        """Nombre del cajero/turno activo (fallbacks consistentes con complete_sale)."""
+        return (
+            self.current_user.get('turno_nombre')
+            or self.current_user.get('full_name')
+            or self.current_user.get('username', '')
+            or 'Cajero'
+        )
+
+    def _add_to_pending(self):
+        """Guarda el carrito actual como pendiente y lo vacía."""
+        if not self.cart:
+            QMessageBox.warning(self, 'Carrito vacío',
+                'No hay nada para dejar pendiente. Agregá productos primero.')
+            return
+
+        # Quién dejó la venta = quien INICIÓ el carrito (sellado en
+        # update_cart_display), no quien la archiva. Fallback al turno actual.
+        cajero_nombre = getattr(self, '_cart_cajero', None) or self._current_turno_nombre()
+        pc_id = ''
+        try:
+            mw = self.get_main_window()
+            pc_id = getattr(mw, 'pc_id', '') if mw else ''
+        except Exception:
+            pass
+
+        try:
+            self.pending_model.create(
+                items=self.cart,
+                cajero_nombre=cajero_nombre,
+                user_id=self.current_user.get('id'),
+                pc_id=pc_id,
+            )
+        except Exception as e:
+            logger.exception('Error dejando venta pendiente')
+            QMessageBox.critical(self, 'Error',
+                f'No se pudo dejar la venta pendiente:\n{e}')
+            return
+
+        # Vaciar carrito (sin pedir confirmación: la venta quedó guardada).
+        # update_cart_display limpia self._cart_cajero al quedar vacío.
+        self.cart = []
+        self.update_cart_display()
+        try:
+            self.reset_category_filter()
+        except Exception:
+            pass
+
+        # Anti doble-tap (pantalla táctil): el botón se desactiva un instante
+        # para que un segundo toque no dispare el aviso de "Carrito vacío".
+        try:
+            self._pending_btn.setEnabled(False)
+            QTimer.singleShot(500, lambda: self._pending_btn.setEnabled(True))
+        except Exception:
+            pass
+
+        self._refresh_pending_panel()
+        # Desplegar para que el cajero vea que se movió a la lista
+        if not getattr(self, '_pending_expanded', False):
+            self._toggle_pending_expand()
+
+    def _open_pending_preview(self, pending_id):
+        """Abre la vista previa chica de un pendiente y aplica la acción elegida."""
+        try:
+            p = self.pending_model.get_by_id(int(pending_id))
+        except Exception:
+            p = None
+        if not p:
+            self._refresh_pending_panel()
+            return
+        dlg = PendingPreviewDialog(self, pending=p)
+        # WA_DeleteOnClose: el dialogo se destruye al cerrarse en vez de quedar
+        # colgado como hijo de SalesView (que vive toda la sesión).
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
+        dlg.exec_()
+        act = dlg.action  # capturar antes de que deleteLater lo libere
+        if act == 'restore':
+            self._restore_pending(int(pending_id))
+        elif act == 'delete':
+            try:
+                self.pending_model.delete(int(pending_id))
+            except Exception:
+                logger.exception('No se pudo descartar el pendiente')
+            self._refresh_pending_panel()
+
+    def _restore_pending(self, pending_id):
+        """Devuelve un pendiente al carrito y lo borra de la lista."""
+        try:
+            p = self.pending_model.get_by_id(int(pending_id))
+        except Exception:
+            p = None
+        if not p:
+            self._refresh_pending_panel()
+            return
+        items = p.get('items') or []
+
+        if self.cart:
+            reply = QMessageBox.question(
+                self, 'Carrito con productos',
+                'El carrito actual tiene productos.\n'
+                'Volver a esta venta pendiente lo reemplazará.\n\n¿Continuar?',
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            if reply != QMessageBox.Yes:
+                return
+
+        # ── Revalidar stock de items conjunto contra el stock VIVO ──
+        # El descuento de conjuntos es un SET absoluto (sale.py), basado en un
+        # snapshot tomado al agregar el item. Como el pendiente pudo quedar
+        # guardado un buen rato, recomputamos el "after" sobre el stock actual
+        # para no pisar ventas/altas intermedias. (mp_* descuenta por delta vivo,
+        # no necesita esto.)
+        stock_warnings = []
+        for it in items:
+            if it.get('is_conjunto'):
+                ok, err = self._revalidate_conjunto_after(it)
+                if not ok:
+                    stock_warnings.append((it.get('product_name', 'Item'), err))
+
+        # ── Borrar la fila ANTES de poblar el carrito ──
+        # Si el DELETE no afecta ninguna fila (o falla), abortamos sin tocar el
+        # carrito: evita que un pendiente "fantasma" se restaure/cobre dos veces.
+        try:
+            removed = self.pending_model.delete(int(pending_id))
+        except Exception:
+            logger.exception('No se pudo borrar el pendiente al restaurar')
+            QMessageBox.warning(self, 'Pendiente',
+                'No se pudo quitar la venta de la lista de pendientes.\n'
+                'Probá de nuevo en un momento.')
+            self._refresh_pending_panel()
+            return
+        if not removed:
+            # Otra acción ya lo quitó; refrescamos y salimos sin duplicar.
+            self._refresh_pending_panel()
+            return
+
+        self.cart = items
+        # Conservar al cajero original del pendiente (si se vuelve a dejar
+        # pendiente, sigue figurando quien lo inició, no quien lo retomó).
+        self._cart_cajero = (p.get('cajero_nombre') or '').strip() or None
+        self.update_cart_display()
+        self._refresh_pending_panel()
+
+        if stock_warnings:
+            detalle = '\n'.join(f'•  {n}: {e}' for n, e in stock_warnings)
+            QMessageBox.warning(
+                self, 'Stock cambiado',
+                'El stock de estos productos por fracción cambió desde que se '
+                'dejó pendiente y ya no alcanza:\n\n' + detalle +
+                '\n\nRevisá o recargá esas líneas antes de cobrar.'
+            )
+
+    def _revalidate_conjunto_after(self, item):
+        """Recalcula conjunto_after_unidades/restante de un item conjunto contra
+        el stock VIVO actual (local). Devuelve (ok, mensaje_error).
+
+        Reusa aplicar_venta() del diálogo de conjunto, la MISMA función que se
+        usa al agregar el item, así que el cálculo es idéntico. Si no se puede
+        validar (producto ausente, error), degrada de forma segura dejando el
+        snapshot tal cual (ok=True)."""
+        try:
+            from pos_system.ui.conjunto_dialog import aplicar_venta
+        except Exception:
+            return True, ''
+        try:
+            pid = item.get('product_id')
+            rows = self.db.execute_query(
+                "SELECT conjunto_unidades, conjunto_restante, conjunto_contenido, "
+                "conjunto_colores FROM products WHERE id = ? LIMIT 1", (int(pid),)
+            ) or []
+            if not rows:
+                return True, ''
+            live = rows[0]
+            contenido = float(live.get('conjunto_contenido') or 0)
+            color = (item.get('conjunto_color') or '').strip()
+            if color and live.get('conjunto_colores'):
+                try:
+                    colores = json.loads(live.get('conjunto_colores') or '[]')
+                    if not isinstance(colores, list):
+                        colores = []
+                except Exception:
+                    colores = []
+                entry = next((c for c in colores if isinstance(c, dict)
+                              and str(c.get('color', '')).strip() == color), None)
+                base_u = float(entry.get('unidades') or 0) if entry else 0.0
+                base_r = float(entry.get('restante') or 0) if entry else 0.0
+            else:
+                base_u = float(live.get('conjunto_unidades') or 0)
+                base_r = float(live.get('conjunto_restante') or 0)
+
+            ok, err, after_u, after_r = aplicar_venta(
+                base_u, contenido, base_r,
+                float(item.get('conjunto_cantidad') or 0),
+                item.get('conjunto_vender_por', 'conjunto'),
+                item.get('conjunto_unidad_base'),
+                item.get('conjunto_unidad_venta'),
+            )
+            if not ok:
+                return False, err or 'Stock insuficiente'
+            item['conjunto_after_unidades'] = after_u
+            item['conjunto_after_restante'] = after_r
+            return True, ''
+        except Exception:
+            logger.exception('No se pudo revalidar stock de conjunto al restaurar')
+            return True, ''
 
     # ── Atajos del panel lateral ──
     def _open_promos_dialog(self):
@@ -3197,6 +3781,16 @@ class SalesView(QWidget):
 
     def update_cart_display(self):
         from pos_system.ui.theme import COLORS as _T
+        # Sellar quién inició el carrito (para Ventas Pendientes): se fija en la
+        # primera carga y se limpia al vaciarse. Así, si el Cajero A arma el
+        # carrito y el Cajero B toma la PC (y eventualmente cambia el turno),
+        # el pendiente conserva el nombre de A — no el de quien lo archiva.
+        if self.cart:
+            if not getattr(self, '_cart_cajero', None):
+                self._cart_cajero = self._current_turno_nombre()
+        else:
+            self._cart_cajero = None
+
         self.cart_table.setRowCount(len(self.cart))
         total = 0
 

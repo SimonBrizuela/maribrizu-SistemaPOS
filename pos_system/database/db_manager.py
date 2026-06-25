@@ -584,6 +584,27 @@ class DatabaseManager:
             except Exception:
                 pass
 
+            # Tabla de ventas pendientes / en espera (hold).
+            # Un cajero deja el carrito "en espera" (p. ej. el cliente fue a buscar
+            # plata) y otro puede seguir vendiendo. El carrito completo se guarda
+            # serializado como JSON en `items_json` para poder restaurarlo idéntico.
+            # Es 100% local (no sincroniza a Firebase) y la fila se borra al
+            # restaurarlo al carrito o al descartarlo.
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS pending_carts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    cajero_nombre TEXT DEFAULT '',
+                    user_id INTEGER DEFAULT NULL,
+                    pc_id TEXT DEFAULT '',
+                    items_json TEXT NOT NULL,
+                    total REAL NOT NULL DEFAULT 0,
+                    items_count REAL NOT NULL DEFAULT 0,
+                    nota TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT (localtime_now())
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_pending_carts_created ON pending_carts(created_at)")
+
             # ── PRODUCTOS MADRE (mp_*) ─────────────────────────────────────
             # Sistema jerárquico cargado desde la webapp (`webapp/src/pages/lab_productos_madre.js`).
             # Tablas espejo de Firestore: mp_products / mp_nodes / mp_discounts.
@@ -712,6 +733,20 @@ class DatabaseManager:
             logger.error(f"Update execution failed: {query[:100]}... - Error: {e}")
             raise
     
+    def execute_delete(self, query: str, params: tuple = ()) -> int:
+        """Execute a DELETE/UPDATE and return the number of affected rows.
+
+        execute_update devuelve lastrowid, que para DELETE no sirve para saber
+        si realmente se borró algo. Esto devuelve cursor.rowcount."""
+        try:
+            with self.get_connection() as conn:
+                cursor = conn.cursor()
+                cursor.execute(query, params)
+                return cursor.rowcount
+        except sqlite3.Error as e:
+            logger.error(f"Delete execution failed: {query[:100]}... - Error: {e}")
+            raise
+
     def execute_many(self, query: str, params_list: List[tuple]) -> int:
         """Execute multiple statements efficiently"""
         try:
