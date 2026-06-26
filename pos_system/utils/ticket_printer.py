@@ -48,11 +48,17 @@ class TicketPreviewDialog(QDialog):
     - QWebEngineView con el HTML renderizado (idéntico al PDF original)
     """
 
-    def __init__(self, html, sale_id='', parent=None):
+    def __init__(self, html, sale_id='', parent=None, doc_label='Ticket',
+                 pdf_name=None, grayscale=True, margins_mm=6):
         super().__init__(parent)
         from PyQt5.QtWebEngineWidgets import QWebEngineView
 
-        self.setWindowTitle(f'Ticket — Venta #{sale_id}')
+        self._doc_label = doc_label
+        self._pdf_name = pdf_name
+        self._grayscale = grayscale
+        self._margins_mm = margins_mm
+
+        self.setWindowTitle(f'{doc_label} — Venta #{sale_id}')
         self.setWindowFlags(self.windowFlags() | Qt.Window)
 
         # Tamaño responsive: 80% del ancho de la pantalla actual hasta máx 900px,
@@ -89,7 +95,7 @@ class TicketPreviewDialog(QDialog):
         toolbar.setContentsMargins(14, 10, 14, 10)
         toolbar.setSpacing(10)
 
-        title = QLabel(f'<b style="font-size:14px">Ticket — Venta #{sale_id}</b>')
+        title = QLabel(f'<b style="font-size:14px">{doc_label} — Venta #{sale_id}</b>')
         title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         toolbar.addWidget(title)
 
@@ -138,6 +144,12 @@ class TicketPreviewDialog(QDialog):
         self._html = html
         self._printer = None  # se mantiene vivo durante la impresión async
 
+        # Conectar UNA sola vez el callback de printToPdf. Conectarlo en cada
+        # click de "Guardar PDF" acumulaba handlers sobre la misma
+        # QWebEnginePage (que se reutiliza) y disparaba N diálogos duplicados
+        # al guardar más de una vez en la misma vista previa.
+        self.view.page().pdfPrintingFinished.connect(self._on_pdf_saved)
+
     def _imprimir(self):
         """
         Configura QPrinter, muestra el diálogo nativo de Windows para elegir
@@ -168,11 +180,12 @@ class TicketPreviewDialog(QDialog):
         else:
             printer = QPrinter(printers[0], QPrinter.HighResolution)
         printer.setPageSize(QPrinter.A4)
-        printer.setColorMode(QPrinter.GrayScale)
-        printer.setPageMargins(6, 6, 6, 6, QPrinter.Millimeter)
+        printer.setColorMode(QPrinter.GrayScale if self._grayscale else QPrinter.Color)
+        printer.setPageMargins(self._margins_mm, self._margins_mm,
+                               self._margins_mm, self._margins_mm, QPrinter.Millimeter)
 
         dialog = QPrintDialog(printer, self)
-        dialog.setWindowTitle(f'Imprimir ticket — Venta #{self._sale_id}')
+        dialog.setWindowTitle(f'Imprimir {self._doc_label.lower()} — Venta #{self._sale_id}')
         logger.info('_imprimir: abriendo QPrintDialog…')
         result = dialog.exec_()
         logger.info(f'_imprimir: QPrintDialog.exec_() = {result} (Accepted={QPrintDialog.Accepted})')
@@ -213,23 +226,21 @@ class TicketPreviewDialog(QDialog):
         Guarda el ticket como PDF usando QWebEnginePage.printToPdf.
         Útil para mandar por WhatsApp/email sin imprimir.
         """
-        default_name = f'ticket_{self._sale_id}.pdf'
+        default_name = self._pdf_name or f'ticket_{self._sale_id}.pdf'
         path, _ = QFileDialog.getSaveFileName(
-            self, 'Guardar ticket como PDF',
+            self, f'Guardar {self._doc_label.lower()} como PDF',
             os.path.join(os.path.expanduser('~'), 'Downloads', default_name),
             'PDF (*.pdf)'
         )
         if not path:
             return
         try:
+            m = float(self._margins_mm)
             layout = QPageLayout(QPageSize(QPageSize.A4), QPageLayout.Portrait,
-                                 QMarginsF(6, 6, 6, 6))
-            # printToPdf es async — esperamos confirmación antes de mostrar
-            # el diálogo de "abrir/mostrar" para no apuntar a un archivo aún
-            # vacío que rompería el visor.
-            self.view.page().pdfPrintingFinished.connect(
-                lambda saved_path, success: self._on_pdf_saved(saved_path, success)
-            )
+                                 QMarginsF(m, m, m, m))
+            # printToPdf es async — el callback _on_pdf_saved (conectado una
+            # sola vez en __init__) espera la confirmación antes de mostrar el
+            # diálogo de "abrir/mostrar" para no apuntar a un archivo aún vacío.
             self.view.page().printToPdf(path, layout)
         except Exception as e:
             logger.exception('Error guardando PDF')
@@ -245,7 +256,7 @@ class TicketPreviewDialog(QDialog):
         msg = QMessageBox(self)
         msg.setIcon(QMessageBox.Information)
         msg.setWindowTitle('PDF guardado')
-        msg.setText('Ticket guardado en:')
+        msg.setText(f'{self._doc_label} guardado en:')
         msg.setInformativeText(path)
         abrir_btn  = msg.addButton('Abrir', QMessageBox.AcceptRole)
         carpeta_btn = msg.addButton('Mostrar en carpeta', QMessageBox.ActionRole)
@@ -355,6 +366,63 @@ def imprimir_ticket_no_fiscal(sale, parent=None,
         try:
             QMessageBox.critical(parent, 'Error de impresión',
                                  f'No se pudo abrir el ticket:\n{e}')
+        except Exception:
+            pass
+        return False
+
+
+def imprimir_remito(sale, remito_meta=None, parent=None, cajero_name='', cliente=None):
+    """
+    Abre la vista previa del REMITO X (documento de entrega, no fiscal) dentro
+    del POS, con botones para imprimir o guardar PDF. Mismo motor que el ticket
+    no fiscal (QWebEngineView) pero en A4 a color y con la plantilla de remito.
+
+    Args:
+        sale: dict de la venta (usa sale['items'] y sale['total_amount']).
+        remito_meta: dict con 'nro_remito', 'letra', 'fecha', 'factura_ref',
+            'valorizado'. Lo que falte se completa por default.
+        parent: QWidget parent.
+        cajero_name: nombre del operador.
+        cliente: dict del receptor o None → Consumidor Final.
+
+    Returns:
+        True si se mostró/imprimió, False si falló.
+    """
+    logger.info(f'imprimir_remito: arrancando para venta #{sale.get("id")}')
+    try:
+        if not _qweb_available():
+            QMessageBox.warning(parent, 'Falta dependencia',
+                'PyQtWebEngine no está instalado. Para imprimir el remito correr:\n\n'
+                'pip install PyQtWebEngine')
+            return False
+
+        from pos_system.utils.pdf_generator import PDFGenerator
+        html = PDFGenerator().render_remito_html(
+            sale, remito_meta=remito_meta, cajero_name=cajero_name, cliente=cliente
+        )
+        logger.info(f'imprimir_remito: HTML generado, len={len(html)}')
+
+        sale_id = str(sale.get('id', ''))
+        nro = (remito_meta or {}).get('nro_remito', '') or sale_id
+        pdf_name = f'remito_{str(nro).replace(" ", "_").replace("/", "-")}.pdf'
+
+        dlg = TicketPreviewDialog(
+            html, sale_id=sale_id, parent=parent,
+            doc_label='Remito', pdf_name=pdf_name,
+            grayscale=False, margins_mm=10,
+        )
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+        QApplication.processEvents()
+        result = dlg.exec_()
+        logger.info(f'imprimir_remito: dialog cerrado con {result}')
+        return True
+    except Exception as e:
+        logger.exception('Error imprimiendo remito')
+        try:
+            QMessageBox.critical(parent, 'Error de impresión',
+                                 f'No se pudo abrir el remito:\n{e}')
         except Exception:
             pass
         return False

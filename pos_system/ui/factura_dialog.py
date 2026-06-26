@@ -108,6 +108,7 @@ class FacturaDialog(QDialog):
         self.perfil = perfil
         self.cliente_data = cliente_data
         self.pdf_path = None
+        self._show_remito_after_emit = False
         self._notas_prefill = notas
         self.es_varios_2 = bool((sale or {}).get('is_varios_2'))
         self._setup_emisor_data()
@@ -419,6 +420,21 @@ class FacturaDialog(QDialog):
         ''')
         preview_btn.clicked.connect(self._preview_factura)
         btn_row.addWidget(preview_btn)
+
+        remito_btn = QPushButton('Remito')
+        remito_btn.setMinimumHeight(40)
+        remito_btn.setFont(QFont('Segoe UI', 10))
+        remito_btn.setToolTip('Generar el remito de entrega (para firmar al recibir la mercadería)')
+        remito_btn.setStyleSheet('''
+            QPushButton {
+                background: #fff; color: #c1521f;
+                border: 1.5px solid #c1521f; border-radius: 8px;
+                padding: 0 12px; font-weight: 600;
+            }
+            QPushButton:hover { background: #fbeee7; }
+        ''')
+        remito_btn.clicked.connect(self._imprimir_remito)
+        btn_row.addWidget(remito_btn)
 
         emit_btn = QPushButton('Generar Factura PDF')
         emit_btn.setMinimumHeight(44)
@@ -733,6 +749,77 @@ class FacturaDialog(QDialog):
         except Exception as e:
             QMessageBox.warning(self, 'Vista previa', f'No se pudo generar la vista previa:\n{e}')
 
+    def _imprimir_remito(self):
+        """Botón 'Remito'. Pregunta si emitir la factura AFIP (con CAE) y
+        entregar el remito vinculado a ese comprobante, o generar solo el
+        remito de entrega sin factura."""
+        self._show_remito_after_emit = False
+        box = QMessageBox(self)
+        box.setWindowTitle('Remito de entrega')
+        box.setIcon(QMessageBox.Question)
+        box.setText('¿Cómo querés generar el remito?')
+        box.setInformativeText(
+            'Facturar en AFIP: emite la factura electrónica (con CAE) y te da '
+            'el remito vinculado a ese comprobante.\n\n'
+            'Dejar sin facturar: genera solo el remito de entrega, sin factura.'
+        )
+        btn_fact = box.addButton('Facturar en AFIP', QMessageBox.AcceptRole)
+        btn_solo = box.addButton('Dejar sin facturar', QMessageBox.ActionRole)
+        box.addButton('Cancelar', QMessageBox.RejectRole)
+        box.setDefaultButton(btn_fact)
+        box.exec_()
+        clicked = box.clickedButton()
+
+        if clicked is btn_fact:
+            # El remito se muestra al final de _do_generate_pdf, ya con el
+            # número y el CAE reales de la factura recién emitida.
+            self._show_remito_after_emit = True
+            self._emit_factura()
+        elif clicked is btn_solo:
+            self._show_remito_preview(vinculado=False)
+
+    def _show_remito_preview(self, nro=None, cae='', tipo=None, vinculado=True):
+        """Construye los datos del remito (Remito X, no fiscal) y abre la vista
+        previa para imprimir/guardar. Si `vinculado`, referencia la factura
+        (tipo, número y CAE) como comprobante asociado."""
+        try:
+            from pos_system.utils.ticket_printer import imprimir_remito
+
+            if tipo is None:
+                tipo = self.tipo_combo.currentText()
+            pv = self.emisor.get('punto_venta', 1)
+            if nro is None:
+                nro = self._get_next_nro_comprobante(tipo)
+            nro_fmt = f'{str(pv).zfill(5)}-{str(nro).zfill(8)}'
+
+            cliente = {
+                'razon_social':  self.razon_social_cliente_input.text().strip(),
+                'nombre':        self.cliente_input.text().strip(),
+                'cuit':          self.cuit_cliente_input.text().strip(),
+                'domicilio':     self.domicilio_cliente_input.text().strip(),
+                'condicion_iva': self.condicion_iva_cliente.currentText(),
+            }
+
+            factura_ref = ''
+            if vinculado:
+                factura_ref = f'{tipo} N° {nro_fmt}'
+                if cae:
+                    factura_ref += f'  ·  CAE {cae}'
+
+            remito_meta = {
+                'nro_remito':  nro_fmt,
+                'letra':       'X',
+                'fecha':       now_ar().strftime('%d/%m/%Y'),
+                'factura_ref': factura_ref,
+                'valorizado':  True,
+            }
+
+            imprimir_remito(self.sale, remito_meta=remito_meta, parent=self,
+                            cliente=cliente)
+        except Exception as e:
+            logger.exception('Error generando remito')
+            QMessageBox.warning(self, 'Remito', f'No se pudo generar el remito:\n{e}')
+
     def auto_emit(self):
         """
         Genera la factura como Consumidor Final sin mostrar el dialog.
@@ -991,7 +1078,7 @@ class FacturaDialog(QDialog):
             QMessageBox.critical(self, 'Error', f'Error al generar PDF:\n{str(e)}')
             return
 
-        # PDF generado OK → mostrar mensaje y aceptar
+        # PDF generado OK → confirmar y ofrecer abrir el PDF de la factura
         reply = QMessageBox.question(
             self, 'Factura generada',
             f'Factura generada correctamente.\n\nCAE: {cae}\nVto: {vto_cae}\n\n¿Abrir el PDF?',
@@ -1005,4 +1092,23 @@ class FacturaDialog(QDialog):
                     subprocess.Popen(['xdg-open', self.pdf_path])
             except Exception:
                 pass
+
+        # Remito de entrega vinculado a la factura recién emitida (con el número
+        # y el CAE reales). Si el usuario ya lo pidió desde el botón "Remito"
+        # ("Facturar en AFIP"), se muestra directo; si llegó por "Generar
+        # Factura PDF", se ofrece para que no quede oculto detrás de un botón.
+        if getattr(self, '_show_remito_after_emit', False):
+            self._show_remito_after_emit = False
+            self._show_remito_preview(nro=nro, cae=cae, tipo=tipo, vinculado=True)
+        else:
+            r = QMessageBox.question(
+                self, 'Remito de entrega',
+                'La factura se generó correctamente.\n\n'
+                '¿Generar también el remito de entrega (para que el cliente '
+                'firme al recibir la mercadería)?',
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+            )
+            if r == QMessageBox.Yes:
+                self._show_remito_preview(nro=nro, cae=cae, tipo=tipo, vinculado=True)
+
         self.accept()

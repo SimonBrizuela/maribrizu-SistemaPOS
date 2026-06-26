@@ -1,0 +1,310 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Remito · Librería Liceo</title>
+<style>
+  :root {
+    --ink:    #14171c;
+    --line:   #14171c;
+    --muted:  #5d5546;
+    --soft:   #8a8270;
+    --brand:  #b14a1c;
+    --cream:  #f6f3ec;
+    --rule:   #e0dacb;
+    --sans: "Segoe UI", system-ui, -apple-system, "Helvetica Neue", Arial, sans-serif;
+  }
+
+  html, body {
+    margin: 0; padding: 0;
+    background: #e7e7ea;
+    color: var(--ink);
+    font-family: var(--sans);
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  .backdrop {
+    min-height: 100vh;
+    display: flex; justify-content: center; align-items: flex-start;
+    padding: 26px 16px 60px; box-sizing: border-box;
+  }
+
+  /* Hoja A4 enmarcada (look comprobante) */
+  .sheet {
+    width: 188mm;
+    background: #fff;
+    color: var(--ink);
+    box-sizing: border-box;
+    padding: 7mm 7mm 6mm;
+    box-shadow: 0 1px 0 rgba(0,0,0,0.04), 0 16px 44px rgba(0,0,0,0.12);
+    font-size: 10pt;
+    line-height: 1.38;
+  }
+  .frame { border: 1.2px solid var(--line); }
+
+  /* ── Encabezado: 3 columnas (emisor | letra | comprobante) ───── */
+  .head { display: flex; align-items: stretch; }
+  .head .emisor {
+    flex: 1 1 0; min-width: 0; padding: 4mm 4.5mm;
+    display: flex; flex-direction: column; gap: 0.4mm;
+  }
+  .head .emisor .logo {
+    height: 15mm; width: auto; max-width: 62mm;
+    object-fit: contain; object-position: left center;
+    margin: 0 0 2mm;
+  }
+  .head .emisor .razon {
+    font-size: 11.5pt; font-weight: 700; letter-spacing: 0.01em;
+    margin: 0 0 0.6mm; color: var(--ink);
+  }
+  .head .emisor .ln { font-size: 8.6pt; color: var(--muted); margin: 0; }
+  .head .emisor .ln b { color: var(--ink); font-weight: 600; }
+
+  .head .letra {
+    flex: 0 0 24mm;
+    border-left: 1.2px solid var(--line);
+    border-right: 1.2px solid var(--line);
+    display: flex; flex-direction: column;
+    align-items: center; justify-content: center;
+    text-align: center; padding: 2mm 0;
+  }
+  .head .letra .big {
+    font-size: 34pt; font-weight: 800; line-height: 0.95; margin: 0;
+  }
+  .head .letra .lbl {
+    font-size: 6.6pt; letter-spacing: 0.22em; text-transform: uppercase;
+    color: var(--muted); margin-top: 1mm;
+  }
+
+  .head .docinfo {
+    flex: 0 0 62mm; padding: 4mm 4.5mm;
+    display: flex; flex-direction: column;
+  }
+  .head .docinfo .title {
+    font-size: 13pt; font-weight: 700; letter-spacing: 0.08em;
+    color: var(--brand); margin: 0; text-transform: uppercase;
+  }
+  .head .docinfo .sub {
+    font-size: 6.8pt; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--soft); margin: 0.3mm 0 2.5mm;
+  }
+  .head .docinfo .r { display: flex; justify-content: space-between; gap: 3mm; font-size: 9pt; }
+  .head .docinfo .r + .r { margin-top: 0.5mm; }
+  .head .docinfo .r .k { color: var(--soft); }
+  .head .docinfo .r .v { font-weight: 700; }
+  .head .docinfo .hr { border-top: 1px solid var(--rule); margin: 2.2mm 0; }
+  .head .docinfo .r.small { font-size: 8.2pt; }
+  .head .docinfo .r.small .v { font-weight: 600; }
+
+  .head-sep { border-top: 1.2px solid var(--line); }
+
+  /* ── Destinatario ────────────────────────────────────────────── */
+  .dest { padding: 3mm 4.5mm; }
+  .dest .lab {
+    font-size: 7.4pt; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--soft); font-weight: 700; margin: 0 0 1.6mm;
+  }
+  .dest .grid {
+    display: grid; grid-template-columns: 1.4fr 1fr; gap: 1mm 8mm;
+  }
+  .dest .f { font-size: 9.4pt; }
+  .dest .f .k {
+    color: var(--soft); font-size: 7.6pt; text-transform: uppercase;
+    letter-spacing: 0.05em; display: inline-block; min-width: 24mm;
+  }
+  .dest .f .v { font-weight: 600; color: var(--ink); }
+  .dest .f.wide { grid-column: 1 / -1; }
+  .dest .assoc {
+    margin-top: 2mm; padding-top: 1.6mm; border-top: 1px dashed var(--rule);
+    font-size: 8.4pt; color: var(--muted);
+  }
+  .dest .assoc b { color: var(--brand); font-weight: 700; }
+
+  /* ── Detalle ─────────────────────────────────────────────────── */
+  .det-lab {
+    font-size: 7.4pt; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--soft); font-weight: 700; margin: 4.5mm 0 1.6mm;
+  }
+  .items { width: 100%; border-collapse: collapse; font-size: 9.4pt; }
+  .items thead th {
+    text-align: left; font-size: 7.6pt; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--ink); font-weight: 700;
+    background: var(--cream);
+    border-top: 1.2px solid var(--line);
+    border-bottom: 1.2px solid var(--line);
+    padding: 2mm 3mm;
+  }
+  .items thead th.qty { width: 16mm; text-align: center; }
+  .items thead th.num { text-align: right; }
+  .items thead th.pu, .items thead th.imp { width: 27mm; }
+  .items tbody td {
+    padding: 1.8mm 3mm; border-bottom: 1px solid var(--rule);
+    vertical-align: top; height: 6mm;
+  }
+  .items td.qty  { text-align: center; font-weight: 700; }
+  .items td.desc { word-break: break-word; }
+  .items td.num  { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .items td.muted { color: var(--soft); }
+  .items tr.empty td { height: 6mm; }
+  .items tbody { border-bottom: 1.2px solid var(--line); }
+
+  /* ── Resumen ─────────────────────────────────────────────────── */
+  .summary {
+    display: flex; justify-content: space-between; align-items: flex-end;
+    gap: 8mm; margin-top: 3.5mm;
+  }
+  .units { font-size: 9pt; color: var(--muted); }
+  .units .n { color: var(--ink); font-weight: 700; }
+  .totalbox { min-width: 68mm; border: 1.2px solid var(--line); }
+  .totalbox .row {
+    display: flex; justify-content: space-between; align-items: baseline;
+    gap: 8mm; padding: 2.6mm 4mm;
+  }
+  .totalbox .lbl { font-size: 10pt; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; white-space: nowrap; }
+  .totalbox .amt { font-size: 14.5pt; font-weight: 800; font-variant-numeric: tabular-nums; }
+
+  /* ── Firma ───────────────────────────────────────────────────── */
+  .sign {
+    margin-top: 8mm; page-break-inside: avoid; break-inside: avoid;
+  }
+  .sign .title {
+    font-size: 8.4pt; font-weight: 700; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--ink); margin: 0 0 0.6mm;
+  }
+  .sign .note { font-size: 8pt; color: var(--muted); margin: 0 0 11mm; }
+  .sign .lines { display: flex; gap: 8mm; align-items: flex-end; }
+  .sign .slot { flex: 1 1 0; text-align: center; }
+  .sign .slot.firma { flex: 1.5 1 0; }
+  .sign .slot .ln { border-top: 1px solid var(--ink); padding-top: 1.2mm; }
+  .sign .slot .lbl {
+    font-size: 7.4pt; letter-spacing: 0.08em; text-transform: uppercase; color: var(--soft);
+  }
+
+  /* ── Footer ──────────────────────────────────────────────────── */
+  .foot {
+    margin-top: 5mm; padding-top: 2mm; border-top: 1px solid var(--rule);
+    text-align: center; font-size: 7.6pt; letter-spacing: 0.03em; color: var(--soft);
+  }
+  .foot b { color: var(--muted); font-weight: 700; }
+
+  @page { size: A4 portrait; margin: 0; }
+  @media print {
+    html, body { background: #fff; }
+    .backdrop { display: block; padding: 0; min-height: 0; }
+    .sheet { width: 100%; box-shadow: none; padding: 3mm 4mm; }
+    .items, .sign, .summary, .head, .totalbox { page-break-inside: avoid; break-inside: avoid; }
+  }
+</style>
+</head>
+<body>
+
+<div class="backdrop">
+  <div class="sheet">
+    <div class="frame">
+
+      <!-- ── Encabezado ───────────────────────────────────────── -->
+      <div class="head">
+        <div class="emisor">
+          {{#logo_src}}<img class="logo" src="{{logo_src}}" alt="Logo">{{/logo_src}}
+          <p class="razon">{{empresa_nombre}}</p>
+          <p class="ln">{{empresa_tag}}</p>
+          <p class="ln">{{empresa_direccion}}</p>
+          {{#empresa_tel}}<p class="ln"><b>Tel:</b> {{empresa_tel}}</p>{{/empresa_tel}}
+          {{#empresa_email}}<p class="ln">{{empresa_email}}</p>{{/empresa_email}}
+        </div>
+
+        <div class="letra">
+          <p class="big">{{letra}}</p>
+          <p class="lbl">Remito</p>
+        </div>
+
+        <div class="docinfo">
+          <p class="title">Remito</p>
+          <p class="sub">Comprobante de entrega</p>
+          <div class="r"><span class="k">N°</span><span class="v">{{nro_remito}}</span></div>
+          <div class="r"><span class="k">Fecha</span><span class="v">{{fecha}}</span></div>
+          <div class="hr"></div>
+          <div class="r small"><span class="k">CUIT</span><span class="v">{{cuit}}</span></div>
+          {{#condicion_iva_emisor}}<div class="r small"><span class="k">Cond. IVA</span><span class="v">{{condicion_iva_emisor}}</span></div>{{/condicion_iva_emisor}}
+          {{#ing_brutos}}<div class="r small"><span class="k">Ing. Brutos</span><span class="v">{{ing_brutos}}</span></div>{{/ing_brutos}}
+          {{#inicio_actividades}}<div class="r small"><span class="k">Inicio act.</span><span class="v">{{inicio_actividades}}</span></div>{{/inicio_actividades}}
+        </div>
+      </div>
+
+      <div class="head-sep"></div>
+
+      <!-- ── Destinatario ─────────────────────────────────────── -->
+      <div class="dest">
+        <p class="lab">Destinatario</p>
+        <div class="grid">
+          <div class="f wide"><span class="k">Señor/es</span><span class="v">{{cliente_nombre}}</span></div>
+          <div class="f"><span class="k">{{cliente_doc_label}}</span><span class="v">{{cliente_doc}}</span></div>
+          <div class="f"><span class="k">Cond. IVA</span><span class="v">{{cliente_condicion}}</span></div>
+          <div class="f wide"><span class="k">Domicilio</span><span class="v">{{cliente_domicilio}}</span></div>
+        </div>
+        {{#factura_ref}}<div class="assoc">Comprobante asociado: <b>{{factura_ref}}</b></div>{{/factura_ref}}
+      </div>
+
+    </div><!-- /frame -->
+
+    <!-- ── Detalle ────────────────────────────────────────────── -->
+    <p class="det-lab">Detalle de la mercadería</p>
+    <table class="items">
+      <thead>
+        <tr>
+          <th class="qty">Cant.</th>
+          <th>Descripción</th>
+          {{#valorizado}}<th class="num pu">P. unit.</th>{{/valorizado}}
+          {{#valorizado}}<th class="num imp">Importe</th>{{/valorizado}}
+        </tr>
+      </thead>
+      <tbody>
+        {{#items}}
+        <tr>
+          <td class="qty">{{cantidad}}</td>
+          <td class="desc">{{descripcion}}</td>
+          {{#valorizado}}<td class="num muted">${{precio_unit}}</td>{{/valorizado}}
+          {{#valorizado}}<td class="num">${{importe}}</td>{{/valorizado}}
+        </tr>
+        {{/items}}
+        {{#filler_rows}}
+        <tr class="empty">
+          <td class="qty"></td>
+          <td class="desc"></td>
+          {{#valorizado}}<td class="num"></td>{{/valorizado}}
+          {{#valorizado}}<td class="num"></td>{{/valorizado}}
+        </tr>
+        {{/filler_rows}}
+      </tbody>
+    </table>
+
+    <!-- ── Resumen ────────────────────────────────────────────── -->
+    <div class="summary">
+      <div class="units">{{items_count}} artículo(s) · Total de unidades: <span class="n">{{unidades}}</span></div>
+      {{#valorizado}}
+      <div class="totalbox"><div class="row"><span class="lbl">Importe total</span><span class="amt">${{total}}</span></div></div>
+      {{/valorizado}}
+    </div>
+
+    <!-- ── Recibí conforme ────────────────────────────────────── -->
+    <div class="sign">
+      <p class="title">Recibí conforme</p>
+      <p class="note">Recibí los artículos detallados, en la cantidad y el estado indicados.</p>
+      <div class="lines">
+        <div class="slot firma"><div class="ln"><span class="lbl">Firma</span></div></div>
+        <div class="slot"><div class="ln"><span class="lbl">Aclaración</span></div></div>
+        <div class="slot"><div class="ln"><span class="lbl">DNI / CUIT</span></div></div>
+        <div class="slot"><div class="ln"><span class="lbl">Fecha</span></div></div>
+      </div>
+    </div>
+
+    <div class="foot">
+      Remito X — comprobante interno de entrega de mercadería.
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>

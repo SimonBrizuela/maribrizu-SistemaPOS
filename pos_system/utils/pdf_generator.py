@@ -26,6 +26,18 @@ def _fmt_qty(q):
         return str(int(q))
     return f"{q:.2f}".rstrip('0').rstrip('.')
 
+def _fmt_money_ar(v):
+    """Formatea importe a notación argentina: 1234.5 -> '1.234,50'."""
+    return f"{float(v or 0):,.2f}".replace(',', '#').replace('.', ',').replace('#', '.')
+
+def _fmt_cuit(c):
+    """Formatea un CUIT/CUIL de 11 dígitos como XX-XXXXXXXX-X. Si no tiene 11
+    dígitos, lo devuelve tal cual."""
+    s = ''.join(ch for ch in str(c or '') if ch.isdigit())
+    if len(s) == 11:
+        return f"{s[:2]}-{s[2:10]}-{s[10]}"
+    return str(c or '')
+
 def _parse_ar(s):
     """Parsea un timestamp de la DB (o Firestore) y lo devuelve en hora AR (naive).
     La DB guarda con `localtime_now()` → "YYYY-MM-DD HH:MM:SS" sin tz, ya en AR."""
@@ -496,6 +508,41 @@ class PDFGenerator:
     # `pos_system/assets/ticket_nofiscal.html` (sintaxis Mustache), embebe el
     # logo como data-URI y lo convierte a PDF con Chrome headless (no agrega
     # deps de Python). Si no encuentra Chrome/Edge, tira excepción.
+    def _resolve_emisor_perfil(self):
+        """Devuelve el perfil de facturación activo (emisor) desde
+        `perfiles_facturacion`. Prioriza el perfil apuntado por
+        config.emisor_activo_id; si no hay match, toma el perfil activo más
+        reciente con CUIT real (>=10 dígitos). Devuelve {} si no hay ninguno.
+
+        La tabla `config` con keys afip_* existe pero suele estar vacía; los
+        datos fiscales viven en perfiles_facturacion. Es la misma resolución que
+        usan el ticket no fiscal y el remito, para que todos los documentos del
+        POS muestren el mismo emisor.
+        """
+        perfil = {}
+        try:
+            from pos_system.database.db_manager import DatabaseManager
+            _db = DatabaseManager()
+            _cfg = _db.execute_query("SELECT value FROM config WHERE key='emisor_activo_id'")
+            emisor_fb_id = _cfg[0]['value'] if _cfg and _cfg[0].get('value') else ''
+            if emisor_fb_id:
+                r = _db.execute_query(
+                    "SELECT * FROM perfiles_facturacion WHERE firebase_id=? AND activo=1",
+                    (emisor_fb_id,)
+                )
+                if r: perfil = r[0]
+            if not perfil:
+                # fallback: primer perfil activo con CUIT "real" (al menos 10 dígitos)
+                r = _db.execute_query(
+                    "SELECT * FROM perfiles_facturacion "
+                    "WHERE activo=1 AND LENGTH(cuit) >= 10 "
+                    "ORDER BY updated_at DESC LIMIT 1"
+                )
+                if r: perfil = r[0]
+        except Exception:
+            pass
+        return perfil
+
     def render_non_fiscal_ticket_html(self, sale, cajero_name='', cliente_name='Consumidor Final'):
         """
         Devuelve el HTML completo del ticket no fiscal renderizado, sin
@@ -523,32 +570,7 @@ class PDFGenerator:
                 logo_src = 'data:image/png;base64,' + base64.b64encode(f.read()).decode('ascii')
 
         # ── Datos empresa: leer desde perfiles_facturacion (fuente real) ───
-        # La tabla `config` con keys afip_* existe pero suele estar vacía; los
-        # datos fiscales viven en perfiles_facturacion. Priorizamos el perfil
-        # apuntado por config.emisor_activo_id; si no match, tomamos cualquier
-        # perfil con activo=1 que tenga CUIT cargado (no los perfiles de prueba).
-        perfil = {}
-        try:
-            from pos_system.database.db_manager import DatabaseManager
-            _db = DatabaseManager()
-            _cfg = _db.execute_query("SELECT value FROM config WHERE key='emisor_activo_id'")
-            emisor_fb_id = _cfg[0]['value'] if _cfg and _cfg[0].get('value') else ''
-            if emisor_fb_id:
-                r = _db.execute_query(
-                    "SELECT * FROM perfiles_facturacion WHERE firebase_id=? AND activo=1",
-                    (emisor_fb_id,)
-                )
-                if r: perfil = r[0]
-            if not perfil:
-                # fallback: primer perfil activo con CUIT "real" (al menos 10 dígitos)
-                r = _db.execute_query(
-                    "SELECT * FROM perfiles_facturacion "
-                    "WHERE activo=1 AND LENGTH(cuit) >= 10 "
-                    "ORDER BY updated_at DESC LIMIT 1"
-                )
-                if r: perfil = r[0]
-        except Exception:
-            pass
+        perfil = self._resolve_emisor_perfil()
 
         # ── Datos de la venta ──────────────────────────────────────────────
         sale_dt = _parse_ar(sale.get('created_at'))
@@ -625,6 +647,117 @@ class PDFGenerator:
         # ── Render Mustache (mini) ─────────────────────────────────────────
         html = _render_mustache(template, ctx)
         return html
+
+    # ─── Remito X (HTML A4 → vista previa / impresión nativa) ───────────────
+    # Documento de entrega NO fiscal ("para firmar al recibir"). Usa el mismo
+    # motor de preview/print que el ticket no fiscal (QWebEngineView) pero con
+    # layout A4 y la plantilla `pos_system/assets/remito.html`.
+    def render_remito_html(self, sale, remito_meta=None, cajero_name='', cliente=None):
+        """Devuelve el HTML A4 del remito renderizado (sin convertir a PDF).
+
+        Args:
+            sale: dict de la venta (usa sale['items'] y sale['total_amount']).
+            remito_meta: dict opcional con 'nro_remito', 'letra', 'fecha',
+                'factura_ref', 'valorizado'. Lo que falte se completa por default.
+            cajero_name: nombre del operador (reservado; no se imprime).
+            cliente: dict del receptor {nombre/razon_social, cuit, domicilio,
+                condicion_iva} o None → Consumidor Final.
+        """
+        return self._build_remito_html(sale, remito_meta or {}, cajero_name, cliente)
+
+    def _build_remito_html(self, sale, remito_meta, cajero_name='', cliente=None):
+        # ── Template ───────────────────────────────────────────────────────
+        assets_base = os.path.dirname(__file__)
+        tpl_path = os.path.join(assets_base, '..', 'assets', 'remito.html')
+        meipass = getattr(sys, '_MEIPASS', None)
+        if meipass:
+            tpl_path = os.path.join(meipass, 'pos_system', 'assets', 'remito.html')
+        with open(tpl_path, 'r', encoding='utf-8') as f:
+            template = f.read()
+
+        # ── Logo como data-URI ─────────────────────────────────────────────
+        # Mismo logo que usa la factura A4 de AFIP (generate_factura_afip_a4),
+        # para que el remito sea visualmente parte de la misma familia.
+        logo_src = ''
+        for cand in ('logo_liceo_ticket.png', 'factura_logo.png', 'logo.png'):
+            p = _asset_path(cand)
+            if os.path.exists(p):
+                try:
+                    with open(p, 'rb') as f:
+                        logo_src = 'data:image/png;base64,' + base64.b64encode(f.read()).decode('ascii')
+                    break
+                except OSError:
+                    continue
+
+        # ── Emisor (mismo perfil que ticket/factura) ───────────────────────
+        perfil = self._resolve_emisor_perfil()
+        empresa_direccion = perfil.get('domicilio', '') or self.company_info.get('address', '')
+        if perfil.get('localidad'):
+            empresa_direccion = f"{empresa_direccion} - {perfil['localidad']}".strip(' -')
+
+        # ── Items (valorizados) ────────────────────────────────────────────
+        items_ctx = []
+        suma_importes = 0.0
+        unidades = 0.0
+        for it in (sale.get('items') or []):
+            qty        = float(it.get('quantity', 1) or 0)
+            name       = (it.get('product_name') or it.get('descripcion') or it.get('name') or '-').strip()
+            unit_price = float(it.get('unit_price', 0) or 0)
+            importe    = float(it.get('subtotal', 0) or 0)
+            items_ctx.append({
+                'cantidad':    _fmt_qty(qty),
+                'descripcion': name,
+                'precio_unit': _fmt_money_ar(unit_price),
+                'importe':     _fmt_money_ar(importe),
+            })
+            suma_importes += importe
+            unidades += qty
+        # El TOTAL usa el total_amount de la venta como fuente de verdad (igual
+        # que ticket y factura); solo cae a la suma de renglones si no hay total.
+        total_amount = float(sale.get('total_amount', 0) or 0)
+        total = total_amount if total_amount else suma_importes
+
+        # Renglones vacíos para que la tabla luzca como un remito real (form).
+        MIN_ROWS = 8
+        filler_rows = [{} for _ in range(max(0, MIN_ROWS - len(items_ctx)))]
+
+        # ── Receptor ───────────────────────────────────────────────────────
+        cli = cliente or {}
+        cliente_nombre = (cli.get('razon_social') or cli.get('nombre') or 'Consumidor Final').strip()
+        cliente_doc    = (cli.get('cuit') or '').strip()
+        cliente_dom    = (cli.get('domicilio') or '').strip()
+        cliente_cond   = (cli.get('condicion_iva') or 'Consumidor Final').strip()
+
+        # ── Meta del remito ────────────────────────────────────────────────
+        fecha = remito_meta.get('fecha') or datetime.now(_TZ_AR).strftime('%d/%m/%Y')
+        ctx = {
+            'logo_src':             logo_src,
+            'empresa_nombre':       perfil.get('razon_social') or perfil.get('nombre') or self.company_info.get('name', ''),
+            'empresa_tag':          'LIBRERIA · MERCERIA · REGALERIA',
+            'empresa_direccion':    empresa_direccion,
+            'empresa_tel':          perfil.get('telefono', '') or self.company_info.get('phone', ''),
+            'empresa_email':        perfil.get('email', '')    or self.company_info.get('email', ''),
+            'cuit':                 _fmt_cuit(perfil.get('cuit', '')),
+            'ing_brutos':           perfil.get('ing_brutos', ''),
+            'condicion_iva_emisor': perfil.get('condicion_iva', ''),
+            'inicio_actividades':   perfil.get('inicio_actividades', ''),
+            'letra':                remito_meta.get('letra', 'X'),
+            'nro_remito':           remito_meta.get('nro_remito', ''),
+            'fecha':                fecha,
+            'factura_ref':          remito_meta.get('factura_ref', ''),
+            'valorizado':           remito_meta.get('valorizado', True),
+            'cliente_nombre':       cliente_nombre,
+            'cliente_doc_label':    'CUIT / DNI',
+            'cliente_doc':          cliente_doc or '—',
+            'cliente_domicilio':    cliente_dom or '—',
+            'cliente_condicion':    cliente_cond,
+            'items':                items_ctx,
+            'filler_rows':          filler_rows,
+            'items_count':          len(items_ctx),
+            'unidades':             _fmt_qty(unidades) if items_ctx else '0',
+            'total':                _fmt_money_ar(total),
+        }
+        return _render_mustache(template, ctx)
 
     def generate_non_fiscal_ticket(self, sale, cajero_name='', cliente_name='Consumidor Final'):
         """Render HTML → PDF (flujo legacy). El flujo nuevo usa
