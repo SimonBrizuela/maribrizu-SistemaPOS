@@ -1,7 +1,9 @@
 // ── Balance Mensual ───────────────────────────────────────────────────────────
-// Módulo montado dentro de Control Total (3ra pestaña). Integra el flujo del Excel
-// "BALANCE LIBRERIA": saldos de cierre por medio de pago, breakdown por rubro y una
-// capa de MONTOS FIJOS compartida ("definir una vez, restar en todos los meses").
+// Vista principal de Control Total: un único segmented control une el Resumen de
+// ganancia (pestaña externa que inyecta control_total.js vía opts.extSegs) con el
+// flujo del Excel "BALANCE LIBRERIA": saldos de cierre por medio de pago, breakdown
+// por rubro, agregado Semana a Semana y una capa de MONTOS FIJOS compartida
+// ("definir una vez, restar en todos los meses").
 //
 // Origen de datos híbrido: histórico del Excel (BALANCE_SEED, importable e idempotente)
 // + autocompletar de ventas reales para meses nuevos. Todo editable a mano.
@@ -25,6 +27,11 @@ let cfg = null;
 let db = null;
 let mountEl = null;
 let view = 'resumen';
+// Pestañas externas que Control Total inyecta en el segmented control (ej: el
+// Resumen de ganancia del período). Cada una: { k, label, icon, el, onShow? }.
+// El elemento vive fuera del módulo: al activarse se re-adjunta al body (los
+// listeners sobreviven porque el nodo nunca se destruye, solo se desmonta).
+let extSegs = [];
 const openMeses = new Set();
 let saving = false;
 
@@ -407,8 +414,8 @@ function openHistPanel() {
 }
 function balHistKey(e) {
   if (!mountEl || !mountEl.isConnected) return;
-  const pane = document.getElementById('ct-tab-balance');
-  if (!pane || pane.style.display === 'none') return;
+  // El deshacer es del balance: no aplica con una pestaña externa activa (Resumen CT).
+  if (extSegs.some(s => s.k === view)) return;
   const t = e.target;
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
   const z = e.key === 'z' || e.key === 'Z', y = e.key === 'y' || e.key === 'Y';
@@ -515,11 +522,14 @@ async function removeMes(ym) {
 }
 
 // ── Punto de entrada ──────────────────────────────────────────────────────────
-export async function mountBalanceMensual(paneEl, _db) {
+export async function mountBalanceMensual(paneEl, _db, opts) {
   mountEl = paneEl;
   db = _db;
-  view = localStorage.getItem('bal:view') || 'resumen';
+  extSegs = (opts && opts.extSegs) || [];
+  view = localStorage.getItem('bal:view') || (extSegs[0] && extSegs[0].k) || 'resumen';
   if (view === 'fijos') view = 'dia';   // la pestaña Montos fijos se movió a Día por día
+  const validas = [...extSegs.map(s => s.k), 'resumen', 'semana', 'dia', 'meses', 'buscar'];
+  if (!validas.includes(view)) view = (extSegs[0] && extSegs[0].k) || 'resumen';
   openMeses.clear();
   curDiaYm = curDiaDD = null;   // la vista Día por día arranca siempre en hoy
   paneEl.innerHTML = `<div class="ct-loading"><div class="spinner" style="width:24px;height:24px;border-width:3px"></div></div>`;
@@ -543,13 +553,17 @@ function tieneDatos() {
 }
 
 // ── Render raíz ───────────────────────────────────────────────────────────────
+// El shell (segmented control + banda de caja) se renderiza siempre: aunque el
+// balance no tenga datos todavía, las pestañas externas (Resumen de Control
+// Total) tienen que seguir funcionando. El estado vacío vive en renderBody.
 function render() {
-  if (!tieneDatos()) { renderEmpty(); return; }
   const segs = [
-    { k: 'resumen', label: 'Resumen vivo', icon: 'table_chart' },
-    { k: 'dia',     label: 'Día por día',  icon: 'today' },
-    { k: 'meses',   label: 'Meses',        icon: 'calendar_month' },
-    { k: 'buscar',  label: 'Buscar',       icon: 'search' },
+    ...extSegs.map(s => ({ k: s.k, label: s.label, icon: s.icon })),
+    { k: 'resumen', label: 'Resumen vivo',     icon: 'table_chart' },
+    { k: 'semana',  label: 'Semana a Semana',  icon: 'view_week' },
+    { k: 'dia',     label: 'Día por día',      icon: 'today' },
+    { k: 'meses',   label: 'Meses',            icon: 'calendar_month' },
+    { k: 'buscar',  label: 'Buscar',           icon: 'search' },
   ];
   mountEl.innerHTML = `
     <div class="bal-wrap">
@@ -593,8 +607,9 @@ function render() {
   updateHistUI();
 }
 
-function renderEmpty() {
-  mountEl.innerHTML = `
+// Estado vacío de las vistas del balance (las pestañas externas no lo necesitan).
+function renderEmptyBody(body) {
+  body.innerHTML = `
     <div class="bal-empty">
       <span class="material-icons">savings</span>
       <div class="bal-empty-title">Balance Mensual todavía sin datos</div>
@@ -606,7 +621,7 @@ function renderEmpty() {
         <span class="material-icons">file_download</span> Importar histórico del Excel
       </button>
     </div>`;
-  mountEl.querySelector('#bal-import')?.addEventListener('click', () => importarHistorico(true));
+  body.querySelector('#bal-import')?.addEventListener('click', () => importarHistorico(true));
 }
 
 // Encuentra el contenedor que scrollea (para preservar la posición en re-renders).
@@ -623,12 +638,22 @@ function scrollAncestor() {
 function renderBody() {
   const body = mountEl.querySelector('#bal-body');
   if (!body) return;
+  // Pestaña externa (ej: Resumen de Control Total): se re-adjunta el nodo vivo.
+  const ext = extSegs.find(s => s.k === view);
+  if (ext) {
+    body.innerHTML = '';
+    body.appendChild(ext.el);
+    if (typeof ext.onShow === 'function') ext.onShow();
+    return;
+  }
+  if (!tieneDatos()) { renderEmptyBody(body); return; }
   // Preservar scroll en los re-render síncronos (agregar/renombrar/borrar) para
   // no saltar al tope. Día/Buscar cargan async y manejan su propio estado.
   const scroller = scrollAncestor();
   const sTop = scroller ? scroller.scrollTop : window.scrollY;
   const restore = () => { if (scroller) scroller.scrollTop = sTop; else window.scrollTo(0, sTop); };
   if (view === 'resumen') { renderResumen(body); restore(); }
+  else if (view === 'semana') renderSemana(body);
   else if (view === 'dia') renderDia(body);
   else if (view === 'meses') { renderMeses(body); restore(); }
   else if (view === 'buscar') renderBuscar(body);
@@ -1098,6 +1123,154 @@ function patchMesTotales(card, ym) {
   if (tf) tf.textContent = money(totalFijosMes(ym));
   const head = mountEl.querySelector(`[data-mes-total="${ym}"]`);
   if (head) head.textContent = money(totalSaldos(ym));
+}
+
+// ── Sub-vista: SEMANA A SEMANA (agregado semanal del Día por día) ─────────────
+// Agrupa el detalle diario en semanas lunes→domingo: ingresos, egresos y saldo
+// de cada semana + la caja acumulada al cierre (el SALDO DIARIO ACUMULADO del
+// Excel al último día cargado de la semana). Click en una fila = desglose por
+// medio de pago.
+function mondayOf(iso) {
+  // 12:00-03:00 → mismo día calendario en UTC, getUTCDay() da el día AR.
+  const d = new Date(iso + 'T12:00:00-03:00');
+  return shiftFecha(iso, -((d.getUTCDay() + 6) % 7));
+}
+function ddmm(iso) { return `${iso.slice(8, 10)}/${iso.slice(5, 7)}`; }
+
+async function renderSemana(body) {
+  body.innerHTML = `<div class="ct-loading"><div class="spinner" style="width:24px;height:24px;border-width:3px"></div></div>`;
+  const meses = mesesOrdenados('asc');
+  const docs = {};
+  await Promise.all(meses.map(async ym => { docs[ym] = await loadDiasMes(db, ym); }));
+  if (view !== 'semana') return;   // cambió de pestaña mientras cargaba
+
+  // Agrupar los días cargados por semana (clave = lunes de esa semana)
+  const semanas = new Map();
+  meses.forEach(ym => {
+    const m = docs[ym];
+    if (!m || !m.dias) return;
+    Object.keys(m.dias).sort().forEach(dd => {
+      const t = diaTotales(m.dias[dd]);
+      if (!t.ing.total && !t.com.total) return;   // día plantilla sin montos
+      const lun = mondayOf(`${ym}-${dd}`);
+      let w = semanas.get(lun);
+      if (!w) {
+        w = {
+          lun, dom: shiftFecha(lun, 6), dias: 0, cierre: null, fin: null,
+          ing: { efectivo: 0, mp: 0, lapos: 0, sin: 0, total: 0 },
+          egr: { efectivo: 0, mp: 0, lapos: 0, sin: 0, total: 0 },
+        };
+        semanas.set(lun, w);
+      }
+      ['efectivo', 'mp', 'lapos', 'sin', 'total'].forEach(k => { w.ing[k] += t.ing[k]; w.egr[k] += t.com[k]; });
+      w.dias++;
+      w.fin = { ym, dd };   // último día con datos (los meses vienen en orden asc)
+    });
+  });
+
+  const lista = [...semanas.values()].sort((a, b) => b.lun.localeCompare(a.lun));
+  if (!lista.length) {
+    body.innerHTML = `
+      <div class="bal-empty">
+        <span class="material-icons">view_week</span>
+        <div class="bal-empty-title">Todavía no hay días cargados</div>
+        <div class="bal-empty-sub">El resumen semanal se arma desde el detalle del "Día por día".
+        Cargá días ahí (o usá "Importar días") y las semanas aparecen solas.</div>
+      </div>`;
+    return;
+  }
+
+  const r2 = v => Math.round(v * 100) / 100;
+  // Caja al cierre de cada semana: acumulado del mes del último día con datos.
+  // Solo si ese mes tiene apertura cargada (sin apertura el acumulado miente).
+  lista.forEach(w => {
+    const m = docs[w.fin.ym];
+    const ap = m && m.apertura;
+    if (ap && (ap.efectivo != null || ap.mp != null || ap.lapos != null)) {
+      const a = acumuladoHasta(m.dias, ap, w.fin.dd);
+      w.cierre = r2(a.efectivo + a.mp + a.lapos + a.sin);
+    }
+  });
+
+  const lunActual = mondayOf(hoyAR());
+  // Promedios sobre las últimas 4 semanas cerradas (la semana en curso distorsiona)
+  const cerradas = lista.filter(w => w.lun !== lunActual).slice(0, 4);
+  const promIng = cerradas.length ? cerradas.reduce((s, w) => s + w.ing.total, 0) / cerradas.length : 0;
+  const promEgr = cerradas.length ? cerradas.reduce((s, w) => s + w.egr.total, 0) / cerradas.length : 0;
+  const promSaldo = promIng - promEgr;
+
+  const mlab = ym => (cfg.meses?.[ym]?.label) || labelFromYm(ym);
+  let mesPrev = null;
+  const rows = lista.map(w => {
+    const saldo = r2(w.ing.total - w.egr.total);
+    const mesLun = w.lun.slice(0, 7);
+    const divider = mesLun !== mesPrev
+      ? `<tr class="bal-row-sep"><td colspan="5">${esc(mlab(mesLun))}</td></tr>` : '';
+    mesPrev = mesLun;
+    const medioRow = (label, ing, egr) => `
+      <div class="bal-sem-det-item">
+        <span>${label}</span>
+        <b><span class="bal-sem-mas">+${fmt(r2(ing))}</span> <span class="bal-sem-menos">−${fmt(r2(egr))}</span>
+        <span class="bal-sem-igual${negCls(ing - egr)}">= ${money(r2(ing - egr))}</span></b>
+      </div>`;
+    return `${divider}
+      <tr class="bal-sem-row" data-sem="${w.lun}">
+        <td class="bal-td-lbl">
+          <div class="bal-sem-lbl"><b>${ddmm(w.lun)} → ${ddmm(w.dom)}</b>
+            ${w.lun === lunActual ? '<span class="bal-sem-badge">Esta semana</span>' : ''}</div>
+          <small>${w.dias} ${w.dias === 1 ? 'día cargado' : 'días cargados'}</small>
+        </td>
+        <td>${money(r2(w.ing.total))}</td>
+        <td>${w.egr.total ? money(r2(w.egr.total)) : '—'}</td>
+        <td class="bal-sem-saldo${negCls(saldo)}">${money(saldo)}</td>
+        <td class="bal-td-total${negCls(w.cierre)}">${w.cierre != null ? money(w.cierre) : '—'}</td>
+      </tr>
+      <tr class="bal-sem-det" data-det="${w.lun}" style="display:none">
+        <td colspan="5">
+          <div class="bal-sem-det-grid">
+            ${medioRow('Efectivo', w.ing.efectivo, w.egr.efectivo)}
+            ${medioRow('Mercado Pago', w.ing.mp, w.egr.mp)}
+            ${medioRow('Lapos', w.ing.lapos, w.egr.lapos)}
+            ${(w.ing.sin || w.egr.sin) ? medioRow('Sin medio', w.ing.sin, w.egr.sin) : ''}
+          </div>
+        </td>
+      </tr>`;
+  }).join('');
+
+  body.innerHTML = `
+    <div class="bal-caption"><span class="material-icons">view_week</span>
+      Resumen <b>semana a semana</b> (lunes a domingo), armado desde el detalle del Día por día.
+      Click en una semana para ver el desglose por medio de pago.</div>
+
+    <div class="bal-sem-stats">
+      <div class="bal-sem-stat"><span>Semanas registradas</span><b>${lista.length}</b></div>
+      <div class="bal-sem-stat"><span>Ingresos promedio ${cerradas.length ? `(últ. ${cerradas.length} sem.)` : ''}</span><b>${money(r2(promIng))}</b></div>
+      <div class="bal-sem-stat"><span>Egresos promedio</span><b>${money(r2(promEgr))}</b></div>
+      <div class="bal-sem-stat"><span>Saldo promedio</span><b class="${negCls(promSaldo).trim()}">${money(r2(promSaldo))}</b></div>
+    </div>
+
+    <div class="bal-card bal-xls">
+      <div class="bal-card-title"><span class="material-icons">view_week</span> Semana a semana</div>
+      <div class="bal-table-wrap">
+        <table class="bal-table bal-xls-table">
+          <thead><tr>
+            <th class="bal-th-lbl">Semana</th>
+            <th>Ingresos</th>
+            <th>Egresos</th>
+            <th>Saldo semana</th>
+            <th class="bal-th-total">Caja al cierre</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
+
+  body.querySelectorAll('.bal-sem-row').forEach(tr => {
+    tr.addEventListener('click', () => {
+      const det = body.querySelector(`.bal-sem-det[data-det="${tr.dataset.sem}"]`);
+      if (det) det.style.display = det.style.display === 'none' ? '' : 'none';
+    });
+  });
 }
 
 // ── Sub-vista: DÍA POR DÍA (detalle completo, flujo de cierre diario) ─────────

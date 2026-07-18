@@ -3277,29 +3277,8 @@ body {
 .var-search-empty .material-icons { font-size: 18px !important; color: var(--tint-purple-fg); }
 
 /* ════════════════════════════════════════════════════════════════════════════
-   Control Total — pestañas principales (extraídas de inline a CSS, firma .fact-tab)
-   ════════════════════════════════════════════════════════════════════════════ */
-.ct-main-tabs {
-  display: flex; gap: 6px; margin-bottom: 14px;
-  border-bottom: 2px solid var(--border); padding-bottom: 0;
-}
-.ct-main-tab {
-  display: flex; align-items: center; gap: 6px;
-  padding: 10px 20px; border: none; background: transparent;
-  cursor: pointer; font-size: 14px; font-family: inherit; font-weight: 600;
-  color: var(--text-muted); border-bottom: 3px solid transparent;
-  margin-bottom: -2px; transition: color .2s, border-color .2s, background .2s;
-  border-radius: 8px 8px 0 0;
-}
-.ct-main-tab:hover:not(.active) { background: var(--bg); color: var(--text); }
-.ct-main-tab.active {
-  color: var(--primary); border-bottom-color: var(--primary);
-  font-weight: 700; background: var(--card-bg);
-}
-.ct-main-tab .material-icons { font-size: 18px !important; }
-
-/* ════════════════════════════════════════════════════════════════════════════
-   Balance Mensual — módulo (RESUMEN vivo · meses · montos fijos)
+   Balance Mensual — módulo (Resumen CT · RESUMEN vivo · semana a semana ·
+   día por día · meses · buscar)
    ════════════════════════════════════════════════════════════════════════════ */
 .bal-wrap { display: flex; flex-direction: column; gap: 16px; }
 
@@ -3908,6 +3887,36 @@ html[data-theme="dark"] { --bal-green: #3f7d63; --bal-green-soft: rgba(63,125,99
   .bal-caja-medios { margin-left: 0; width: 100%; justify-content: space-between; gap: 10px; }
   .bal-caja-item.is-total { padding-left: 0; border-left: none; }
 }
+
+/* ── Semana a Semana (agregado semanal del Día por día) ── */
+.bal-sem-stats {
+  display: flex; flex-wrap: wrap; gap: 10px 28px;
+  padding: 12px 18px; margin-bottom: 16px; border-radius: var(--radius);
+  background: var(--card-bg); border: 1px solid var(--border); box-shadow: var(--shadow);
+}
+.bal-sem-stat { display: flex; flex-direction: column; gap: 2px; }
+.bal-sem-stat > span { font-size: 11px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .4px; }
+.bal-sem-stat b { font-size: 16px; color: var(--text-strong); font-variant-numeric: tabular-nums; }
+.bal-sem-row { cursor: pointer; }
+.bal-sem-row:hover td { background: var(--surface-hover); }
+.bal-sem-row td { font-variant-numeric: tabular-nums; }
+.bal-sem-lbl { display: flex; align-items: center; gap: 8px; }
+.bal-sem-lbl b { color: var(--text-strong); }
+.bal-sem-row td:first-child small { display: block; font-size: 11px; color: var(--text-muted); margin-top: 1px; }
+.bal-sem-badge {
+  font-size: 10.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px;
+  padding: 2px 8px; border-radius: 99px;
+  background: var(--tint-green-bg); color: var(--tint-green-fg);
+}
+.bal-sem-saldo { font-weight: 700; color: var(--text-strong); }
+.bal-sem-det td { background: var(--bg); padding: 10px 16px; }
+.bal-sem-det-grid { display: flex; flex-wrap: wrap; gap: 8px 32px; }
+.bal-sem-det-item { display: flex; flex-direction: column; gap: 2px; }
+.bal-sem-det-item > span { font-size: 10.5px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .4px; }
+.bal-sem-det-item b { font-size: 12.5px; font-weight: 600; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.bal-sem-mas   { color: var(--tint-green-fg); }
+.bal-sem-menos { color: var(--tint-red-fg); }
+.bal-sem-igual { color: var(--text-strong); font-weight: 800; margin-left: 4px; }
 
 @media (max-width: 620px) {
   .bal-mov-ing { grid-template-columns: 1fr 90px 110px 28px; }

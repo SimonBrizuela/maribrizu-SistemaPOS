@@ -89,6 +89,9 @@ function destroyCtCharts() {
   _ctChartRefs.forEach(ch => { try { ch.destroy(); } catch (_) {} });
   _ctChartRefs.clear();
 }
+function resizeCtCharts() {
+  _ctChartRefs.forEach(ch => { try { ch.resize(); } catch (_) {} });
+}
 function ctMakeChart(id, el, config) {
   if (!el || !window.Chart) return null;
   window.Chart.defaults.color = cssVar('--chart-text', '#65676b');
@@ -150,6 +153,11 @@ function applyIncluirSinCostoStyle(btn) {
   if (lbl) lbl.textContent = on ? 'Sumar sin costo: ON' : 'Sumar sin costo';
 }
 
+// La página es el Balance Mensual: un único segmented control donde la primera
+// pestaña ("Resumen") es el motor de ganancia de Control Total. El pane del
+// Resumen vive en un elemento propio que el módulo Balance re-adjunta al
+// activarse — los listeners y el estado sobreviven a los cambios de pestaña
+// porque el nodo nunca se destruye, solo se desmonta del DOM.
 export async function renderControlTotal(container, db) {
   let periodo = localStorage.getItem('ct:periodo') || 'hoy';
   let customRange = null;
@@ -157,94 +165,87 @@ export async function renderControlTotal(container, db) {
   const config = await loadConfig(db);
   const [categorias, rubros] = await Promise.all([loadCategorias(db), loadRubros(db)]);
 
-  container.innerHTML = buildSkeleton(periodo, config, categorias, rubros);
+  container.innerHTML = `
+    <div class="ct-wrap">
+      <div id="ct-balance-mount">
+        <div class="ct-loading"><div class="spinner" style="width:24px;height:24px;border-width:3px"></div></div>
+      </div>
+    </div>`;
+
+  const pane = document.createElement('div');
+  pane.className = 'ct-ganancia-pane';
+  pane.innerHTML = buildGananciaPane(periodo, config, categorias, rubros);
 
   const togglePanel = (visible) => {
-    const panel = container.querySelector('#ct-custom-panel');
+    const panel = pane.querySelector('#ct-custom-panel');
     if (panel) panel.style.display = visible ? '' : 'none';
   };
 
-  container.querySelectorAll('.ct-periodo-btn').forEach(btn => {
+  pane.querySelectorAll('.ct-periodo-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       const p = btn.dataset.p;
       if (p === 'custom') {
         periodo = 'custom';
         localStorage.setItem('ct:periodo', periodo);
-        container.querySelectorAll('.ct-periodo-btn').forEach(b => b.classList.toggle('active', b.dataset.p === periodo));
+        pane.querySelectorAll('.ct-periodo-btn').forEach(b => b.classList.toggle('active', b.dataset.p === periodo));
         togglePanel(true);
-        if (customRange?.desde) refreshDatos(container, db, periodo, config, customRange);
+        if (customRange?.desde) refreshDatos(pane, db, periodo, config, customRange);
         return;
       }
       togglePanel(false);
       periodo = p;
       localStorage.setItem('ct:periodo', periodo);
-      container.querySelectorAll('.ct-periodo-btn').forEach(b => b.classList.toggle('active', b.dataset.p === periodo));
-      refreshDatos(container, db, periodo, config, customRange);
+      pane.querySelectorAll('.ct-periodo-btn').forEach(b => b.classList.toggle('active', b.dataset.p === periodo));
+      refreshDatos(pane, db, periodo, config, customRange);
     });
   });
 
-  setupCustomPanel(container, customRange, config, (range) => {
+  setupCustomPanel(pane, customRange, config, (range) => {
     customRange = range;
     localStorage.setItem('ct:custom_range', JSON.stringify(range));
     periodo = 'custom';
     localStorage.setItem('ct:periodo', periodo);
-    container.querySelectorAll('.ct-periodo-btn').forEach(b => b.classList.toggle('active', b.dataset.p === 'custom'));
-    refreshDatos(container, db, periodo, config, customRange);
+    pane.querySelectorAll('.ct-periodo-btn').forEach(b => b.classList.toggle('active', b.dataset.p === 'custom'));
+    refreshDatos(pane, db, periodo, config, customRange);
   });
 
   if (periodo === 'custom' && !customRange?.desde) togglePanel(true);
   if (periodo === 'custom' && customRange?.desde) togglePanel(false);
 
-  setupGastoForm(container, db, periodo, config);
-  setupConfigCuentas(container, db, config);
-  setupCategoriasBtn(container, db, periodo, config);
-  setupMainTabs(container, db);
+  setupGastoForm(pane, db, periodo, config);
+  setupConfigCuentas(pane, db, config);
+  setupCategoriasBtn(pane, db, periodo, config);
 
   // Toggle "Sumar sin costo": incluye items vendidos sin costo cargado en
   // el calculo de ganancia (asume costo = 0). Persiste y refresca todo.
-  const btnSC = container.querySelector('#ct-incluir-sc');
+  const btnSC = pane.querySelector('#ct-incluir-sc');
   if (btnSC) {
     applyIncluirSinCostoStyle(btnSC);
     btnSC.addEventListener('click', () => {
       localStorage.setItem('ct:incluir_sin_costo', isIncluirSinCosto() ? '0' : '1');
       applyIncluirSinCostoStyle(btnSC);
-      refreshDatos(container, db, periodo, config, customRange);
+      refreshDatos(pane, db, periodo, config, customRange);
     });
   }
 
-  await refreshDatos(container, db, periodo, config, customRange);
-}
+  const mount = container.querySelector('#ct-balance-mount');
+  try {
+    await mountBalanceMensual(mount, db, {
+      extSegs: [{
+        k: 'ganancia', label: 'Resumen', icon: 'dashboard', el: pane,
+        // Chart.js pudo dibujar con el pane desmontado (canvas 0×0): al volver
+        // a mostrarse, forzamos el resize para que tomen el ancho real.
+        onShow: () => resizeCtCharts(),
+      }],
+    });
+  } catch (err) {
+    console.error('[control_total] error montando Balance Mensual:', err);
+    mount.innerHTML = `<div class="bal-empty"><span class="material-icons">error_outline</span>
+      <div class="bal-empty-sub">No se pudo cargar el Balance Mensual.</div></div>`;
+    return;
+  }
 
-// Tabs principales: Resumen / Días / Balance Mensual — persiste en localStorage.
-// Balance Mensual se monta lazy la primera vez que se activa su pestaña.
-function setupMainTabs(container, db) {
-  const tabs = container.querySelectorAll('.ct-main-tab');
-  const panes = {
-    resumen: container.querySelector('#ct-tab-resumen'),
-    dias:    container.querySelector('#ct-tab-dias'),
-    balance: container.querySelector('#ct-tab-balance'),
-  };
-  let balanceMontado = false;
-  const aplicar = (activo) => {
-    tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === activo));
-    Object.entries(panes).forEach(([k, el]) => { if (el) el.style.display = k === activo ? '' : 'none'; });
-    if (activo === 'balance' && !balanceMontado) {
-      balanceMontado = true;
-      const mount = container.querySelector('#ct-balance-mount');
-      if (mount) mountBalanceMensual(mount, db).catch(err => {
-        console.error('[control_total] error montando Balance Mensual:', err);
-        mount.innerHTML = `<div class="bal-empty"><span class="material-icons">error_outline</span>
-          <div class="bal-empty-sub">No se pudo cargar el Balance Mensual.</div></div>`;
-      });
-    }
-  };
-  const guardada = localStorage.getItem('ct:main_tab') || 'resumen';
-  aplicar(guardada);
-  tabs.forEach(t => t.addEventListener('click', () => {
-    const v = t.dataset.tab;
-    localStorage.setItem('ct:main_tab', v);
-    aplicar(v);
-  }));
+  await refreshDatos(pane, db, periodo, config, customRange);
 }
 
 // ── Config de cuentas ─────────────────────────────────────────────────────────
@@ -645,8 +646,9 @@ async function refreshDatos(container, db, periodo, config, customRange) {
       el.addEventListener('click', () => abrirDetalleControl(el.dataset.detalle, detalleData));
     });
 
+    // Salta a la pestaña "Resumen vivo" del Balance (mismo segmented control).
     statsEl.querySelector('[data-go-balance]')?.addEventListener('click', () => {
-      container.querySelector('.ct-main-tab[data-tab="balance"]')?.click();
+      statsEl.closest('.bal-wrap')?.querySelector('.bal-seg-btn[data-seg="resumen"]')?.click();
     });
 
     const btnReasignar = statsEl.querySelector('#ct-reasignar-btn');
@@ -3050,7 +3052,10 @@ async function abrirModalNuevaCategoria(db, movActual, onCreated) {
 }
 
 // ── Esqueleto HTML ────────────────────────────────────────────────────────────
-function buildSkeleton(periodo, config, categorias, rubros) {
+// Pane "Resumen" (motor de ganancia): toolbar de período + ecuación + alertas +
+// gastos + movimientos + lista por días. Se muestra como primera pestaña del
+// segmented control del Balance Mensual.
+function buildGananciaPane(periodo, config, categorias, rubros) {
   const c1 = config.cuenta1_nombre || 'Cuenta 1';
   const c2 = config.cuenta2_nombre || 'Cuenta 2';
   const fi = config.fecha_inicio || '2026-04-18';
@@ -3066,8 +3071,6 @@ function buildSkeleton(periodo, config, categorias, rubros) {
     (rubros || []).map(r => `<option value="${escapeHtmlCt(r)}">${escapeHtmlCt(r)}</option>`).join('');
 
   return `
-    <div class="ct-wrap">
-
       <div class="ct-toolbar">
         <div class="ct-periodo">
           ${periodos.map(p => `<button class="ct-periodo-btn${p===periodo?' active':''}" data-p="${p}">${labels[p]}</button>`).join('')}
@@ -3111,18 +3114,6 @@ function buildSkeleton(periodo, config, categorias, rubros) {
         </div>
       </div>
 
-      <div class="ct-main-tabs">
-        <button type="button" class="ct-main-tab active" data-tab="resumen">
-          <span class="material-icons">dashboard</span> Resumen
-        </button>
-        <button type="button" class="ct-main-tab" data-tab="dias">
-          <span class="material-icons">calendar_month</span> Días
-        </button>
-        <button type="button" class="ct-main-tab" data-tab="balance">
-          <span class="material-icons">savings</span> Balance Mensual
-        </button>
-      </div>
-
       <form id="ct-config-form" style="display:none;gap:10px;align-items:flex-end;flex-wrap:wrap;background:var(--card-bg);padding:16px;border-radius:var(--radius);margin-bottom:16px;box-shadow:var(--shadow)">
         <div>
           <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">Nombre Cuenta 1 (transferencia)</label>
@@ -3143,7 +3134,6 @@ function buildSkeleton(periodo, config, categorias, rubros) {
         <button type="submit" class="btn-primary" style="padding:8px 20px;background:var(--primary);color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-size:14px">Guardar</button>
       </form>
 
-      <div id="ct-tab-resumen" class="ct-tab-pane">
       <div id="ct-stats">
         <div class="ct-loading"><div class="spinner" style="width:24px;height:24px;border-width:3px"></div></div>
       </div>
@@ -3210,34 +3200,22 @@ function buildSkeleton(periodo, config, categorias, rubros) {
           <div class="ct-loading"><div class="spinner" style="width:24px;height:24px;border-width:3px"></div></div>
         </div>
       </div>
-      </div><!-- /#ct-tab-resumen -->
-
-      <div id="ct-tab-dias" class="ct-tab-pane" style="display:none">
-        <div class="ct-gastos-card">
-          <div class="ct-section-title" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
-            <div>
-              <span class="material-icons" style="font-size:16px;vertical-align:middle">calendar_month</span>
-              Lista por días
-              <span style="font-size:11px;color:var(--text-muted);margin-left:8px;font-weight:400">Click en una fila para ver el detalle del día</span>
-            </div>
-            <div class="ct-lg-tabs" style="display:flex;gap:4px;background:var(--bg);padding:3px;border-radius:8px">
-              <button class="ct-lg-tab" data-vista="agrupado" style="padding:5px 14px;border:none;background:transparent;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;color:var(--text-muted)">Mes → días</button>
-              <button class="ct-lg-tab" data-vista="dia" style="padding:5px 14px;border:none;background:transparent;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;color:var(--text-muted)">Por día</button>
-              <button class="ct-lg-tab" data-vista="mes" style="padding:5px 14px;border:none;background:transparent;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;color:var(--text-muted)">Por mes</button>
-            </div>
+      <div class="ct-gastos-card">
+        <div class="ct-section-title" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px">
+          <div>
+            <span class="material-icons" style="font-size:16px;vertical-align:middle">calendar_month</span>
+            Lista por días
+            <span style="font-size:11px;color:var(--text-muted);margin-left:8px;font-weight:400">Click en una fila para ver el detalle del día</span>
           </div>
-          <div id="ct-ganancia-lista">
-            <div class="ct-loading"><div class="spinner" style="width:24px;height:24px;border-width:3px"></div></div>
+          <div class="ct-lg-tabs" style="display:flex;gap:4px;background:var(--bg);padding:3px;border-radius:8px">
+            <button class="ct-lg-tab" data-vista="agrupado" style="padding:5px 14px;border:none;background:transparent;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;color:var(--text-muted)">Mes → días</button>
+            <button class="ct-lg-tab" data-vista="dia" style="padding:5px 14px;border:none;background:transparent;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;color:var(--text-muted)">Por día</button>
+            <button class="ct-lg-tab" data-vista="mes" style="padding:5px 14px;border:none;background:transparent;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;color:var(--text-muted)">Por mes</button>
           </div>
         </div>
-      </div><!-- /#ct-tab-dias -->
-
-      <div id="ct-tab-balance" class="ct-tab-pane" style="display:none">
-        <div id="ct-balance-mount">
+        <div id="ct-ganancia-lista">
           <div class="ct-loading"><div class="spinner" style="width:24px;height:24px;border-width:3px"></div></div>
         </div>
-      </div><!-- /#ct-tab-balance -->
-
-    </div>
+      </div>
   `;
 }
