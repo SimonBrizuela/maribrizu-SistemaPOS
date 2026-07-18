@@ -4165,6 +4165,18 @@ html[data-theme="dark"] { --bal-green: #3f7d63; --bal-green-soft: rgba(63,125,99
 }
 .cc-plata-auto:hover { text-decoration: underline; }
 
+/* Variantes en la lista: chip violeta con el nombre de la variante; las
+   consecutivas del mismo producto se enganchan con ↳ y separador punteado. */
+.cc-chip-varnt {
+  display: inline-flex; align-items: center; gap: 3px;
+  background: var(--tint-purple-bg); color: var(--tint-purple-fg); text-transform: none;
+}
+.cc-chip-varnt .material-icons { font-size: 11px !important; }
+.cc-var-arrow { font-size: 16px !important; color: var(--tint-purple-fg); }
+tr.cc-row-varcont td { border-top-style: dashed; }
+tr.cc-row-varcont .cc-prod-btn { color: var(--text-muted); font-weight: 500; }
+tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
+
 /* Stock real + link al catálogo en la lista de compra */
 .cc-stock { text-align: right; white-space: nowrap; }
 .cc-stock.is-cero { color: var(--tint-red-fg); font-weight: 700; }

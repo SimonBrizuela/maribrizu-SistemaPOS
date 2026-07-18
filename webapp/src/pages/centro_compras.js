@@ -708,25 +708,35 @@ function paintTable() {
   // El plan (lo que entra en la plata + lo ya registrado) va arriba; después la
   // línea de corte y abajo SOLO lo que no entra (o no tiene costo). data-idx
   // siempre apunta al índice real en s.rows, así los handlers no dependen del
-  // orden visual.
+  // orden visual. Las variantes consecutivas del mismo producto se marcan como
+  // "continuación" para que se vea que van juntas.
   const arriba = [], abajo = [];
   s.rows.forEach((r, i) => ((r.registrado || r.fits) ? arriba : abajo).push(i));
-  const parts = arriba.map(i => rowHtml(s.rows[i], i));
+  const parts = [];
+  let prevDoc = null;
+  const emit = (i) => {
+    const r = s.rows[i];
+    parts.push(rowHtml(r, i, r.esVariedad && String(r.doc_id) === prevDoc));
+    prevDoc = String(r.doc_id);
+  };
+  arriba.forEach(emit);
   if (abajo.length) {
     parts.push(`<tr class="cc-cutoff"><td colspan="9">
       <span class="material-icons">content_cut</span>
       Acá se acaba la plata (${money(disp)}) · lo de abajo no entra en el presupuesto</td></tr>`);
-    parts.push(...abajo.map(i => rowHtml(s.rows[i], i)));
+    prevDoc = null;
+    abajo.forEach(emit);
   }
   tbody.innerHTML = parts.join('');
 }
 
-function rowHtml(r, i) {
+function rowHtml(r, i, esContinuacion) {
   // Atenuada solo si quedó fuera del plan y el usuario tampoco la marcó a mano.
   const espera = !r.registrado && !r.sinCosto && !r.fits && !r.checked;
   const cls = [
     r.registrado ? 'cc-row-reg' : '',
     espera ? 'cc-row-espera' : '',
+    esContinuacion ? 'cc-row-varcont' : '',
   ].filter(Boolean).join(' ');
 
   let chip = '';
@@ -763,13 +773,21 @@ function rowHtml(r, i) {
   const stk = stockRealDe(r);
   const stockTitle = [stk.title, 'Stock real leído del Catálogo'].filter(Boolean).join('\n');
 
+  // Variantes: nombre BASE del producto + chip violeta con la variante, así se
+  // ve de qué producto es. Consecutivas del mismo producto van con ↳ enganchado.
+  const nombreBase = r.esVariedad && r.producto?.nombre ? r.producto.nombre : r.nombre;
+  const varChip = r.esVariedad
+    ? `<span class="cc-chip cc-chip-varnt" title="Variante de ${esc(nombreBase)}"><span class="material-icons">palette</span>${esc(r.variedad || '(sin nombre)')}</span>`
+    : '';
+
   return `<tr class="${cls}" data-idx="${i}">
     <td style="text-align:center">${checkbox}</td>
     <td>
       <div class="cc-prod">
+        ${esContinuacion ? '<span class="material-icons cc-var-arrow" title="Otra variante del producto de arriba">subdirectory_arrow_right</span>' : ''}
         <button type="button" class="cc-prod-btn" data-action="ver-catalogo" data-doc="${esc(String(r.doc_id))}"
-                title="Abrir este producto en el Catálogo">${esc(r.nombre)}<span class="material-icons">open_in_new</span></button>
-        ${chip}
+                title="Abrir este producto en el Catálogo">${esc(nombreBase)}<span class="material-icons">open_in_new</span></button>
+        ${varChip}${chip}
       </div>
       ${r.cobertura_texto ? `<div class="cc-cob">${esc(r.cobertura_texto)}</div>` : ''}
       ${perdida}
