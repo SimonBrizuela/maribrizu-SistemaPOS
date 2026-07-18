@@ -8879,7 +8879,8 @@ export async function renderCatalogo(container, db) {
       }
     }
     // Si venimos del Centro de Compras, botón flotante para pegar la vuelta.
-    // Vive dentro del container: navegar a otra página lo elimina solo.
+    // Vive dentro del container (navegar a otra página lo elimina solo) pero
+    // pinta POR ENCIMA del editor de producto (z-index en CSS > modales).
     if (window.__catalogoVolverA === 'centro_compras') {
       window.__catalogoVolverA = null;
       const volver = document.createElement('button');
@@ -8887,6 +8888,12 @@ export async function renderCatalogo(container, db) {
       volver.className = 'cat-volver-cc';
       volver.innerHTML = `<span class="material-icons">arrow_back</span> Volver a Centro de Compras`;
       volver.addEventListener('click', () => {
+        // Los modales del catálogo viven como hijos directos del body: cerrarlos
+        // antes de irse para que no queden tapando la otra página.
+        document.querySelectorAll('body > div').forEach(el => {
+          if (el.classList.contains('modal-overlay') ||
+              (el.style && el.style.position === 'fixed' && el.style.inset === '0px')) el.remove();
+        });
         volver.remove();
         if (typeof window.navigateToPage === 'function') window.navigateToPage('centro_compras');
       });

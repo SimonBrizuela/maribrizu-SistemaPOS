@@ -4177,9 +4177,11 @@ html[data-theme="dark"] { --bal-green: #3f7d63; --bal-green-soft: rgba(63,125,99
 .cc-prod-btn:hover { color: var(--primary); text-decoration: underline; }
 .cc-prod-btn:hover .material-icons { opacity: 1; color: var(--primary); }
 
-/* Botón flotante en Catálogo cuando se llega desde el Centro de Compras */
+/* Botón flotante en Catálogo cuando se llega desde el Centro de Compras.
+   z-index arriba de los modales del catálogo (editor 2000, vinculador 2500)
+   para que se pueda volver aun con el producto abierto. */
 .cat-volver-cc {
-  position: fixed; bottom: 24px; right: 24px; z-index: 60;
+  position: fixed; bottom: 24px; right: 24px; z-index: 2600;
   display: inline-flex; align-items: center; gap: 8px;
   padding: 12px 20px; border: none; border-radius: 999px; cursor: pointer;
   background: var(--primary); color: #fff; font-family: inherit; font-size: 14px; font-weight: 700;

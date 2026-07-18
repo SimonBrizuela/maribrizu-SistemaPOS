@@ -552,6 +552,11 @@ function initApp(session) {
       // botones de período.
       if (currentPage === 'control_total') return;
 
+      // Centro de Compras: el usuario está armando un plan (checks, cantidades,
+      // tope, costos a medio cargar) — cada venta del POS no debe resetear la
+      // página. El botón "Actualizar" de la página refresca stock y ritmo.
+      if (currentPage === 'centro_compras') return;
+
       // Si el usuario está interactuando, diferimos el refresh para no
       // pisar lo que está haciendo (buscar, editar, llenar un form).
       if (userBusy()) {
