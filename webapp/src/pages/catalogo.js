@@ -8861,15 +8861,36 @@ export async function renderCatalogo(container, db) {
     // Banner de alertas: velocity en background → al completar, dibuja banner
     cargarVelocidadVentas().then(() => renderBannerCriticos()).catch(() => {});
 
-    // Deep-link desde la página de Notificaciones: si nos pidieron abrir un
-    // producto al entrar al catálogo, lo abrimos en el editor completo.
+    // Deep-link desde Notificaciones / Centro de Compras: si nos pidieron abrir
+    // un producto al entrar al catálogo, lo abrimos en el editor completo.
     if (window.__pendingCatalogoOpen) {
       const targetId = window.__pendingCatalogoOpen;
       window.__pendingCatalogoOpen = null;
       const prod = allProductos.find(p => p.doc_id === targetId);
       if (prod) {
+        // Dejar el producto también filtrado en la lista de fondo, así al cerrar
+        // el editor queda a la vista.
+        const buscarInp = document.getElementById('buscar');
+        if (buscarInp && prod.nombre) {
+          buscarInp.value = prod.nombre;
+          aplicarFiltros();
+        }
         setTimeout(() => { try { abrirEditorCompleto(prod); } catch (e) { console.warn('Deep-link a editor falló:', e); } }, 50);
       }
+    }
+    // Si venimos del Centro de Compras, botón flotante para pegar la vuelta.
+    // Vive dentro del container: navegar a otra página lo elimina solo.
+    if (window.__catalogoVolverA === 'centro_compras') {
+      window.__catalogoVolverA = null;
+      const volver = document.createElement('button');
+      volver.type = 'button';
+      volver.className = 'cat-volver-cc';
+      volver.innerHTML = `<span class="material-icons">arrow_back</span> Volver a Centro de Compras`;
+      volver.addEventListener('click', () => {
+        volver.remove();
+        if (typeof window.navigateToPage === 'function') window.navigateToPage('centro_compras');
+      });
+      container.appendChild(volver);
     }
   } catch(e) {
     const tc = document.getElementById('tabContent');

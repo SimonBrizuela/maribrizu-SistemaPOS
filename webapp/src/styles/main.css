@@ -4142,6 +4142,52 @@ html[data-theme="dark"] { --bal-green: #3f7d63; --bal-green-soft: rgba(63,125,99
 }
 .cc-gauge-hint .material-icons { font-size: 16px !important; color: var(--warning); }
 
+/* Plata manual del mes (monto fijado a mano, persistido en control_config/compras) */
+.cc-plata-form {
+  margin: 0 0 12px; padding: 12px 14px; border-radius: 10px;
+  background: var(--surface-2); border: 1px dashed var(--border);
+}
+.cc-plata-form > label {
+  display: block; font-size: 11px; font-weight: 700; color: var(--text-muted);
+  text-transform: uppercase; letter-spacing: .3px; margin-bottom: 8px;
+}
+.cc-plata-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cc-plata-row input {
+  width: 180px; padding: 9px 12px; border: 1.5px solid var(--border); border-radius: 8px;
+  font-size: 15px; font-weight: 700; font-family: inherit; font-variant-numeric: tabular-nums;
+  background: var(--surface); color: var(--text-strong);
+}
+.cc-plata-hint { margin-top: 8px; font-size: 11.5px; color: var(--text-muted); }
+.cc-chip-manual { background: var(--tint-purple-bg); color: var(--tint-purple-fg); margin-right: 4px; }
+.cc-plata-auto {
+  margin-left: 10px; border: none; background: none; padding: 0; cursor: pointer;
+  font-family: inherit; font-size: 12px; font-weight: 700; color: var(--primary);
+}
+.cc-plata-auto:hover { text-decoration: underline; }
+
+/* Stock real + link al catálogo en la lista de compra */
+.cc-stock { text-align: right; white-space: nowrap; }
+.cc-stock.is-cero { color: var(--tint-red-fg); font-weight: 700; }
+.cc-prod-btn {
+  border: none; background: none; padding: 0; cursor: pointer; font-family: inherit;
+  font-size: inherit; font-weight: 600; color: var(--text); text-align: left;
+  display: inline-flex; align-items: center; gap: 4px;
+}
+.cc-prod-btn .material-icons { font-size: 14px !important; color: var(--text-muted); opacity: 0; transition: opacity .15s; }
+.cc-prod-btn:hover { color: var(--primary); text-decoration: underline; }
+.cc-prod-btn:hover .material-icons { opacity: 1; color: var(--primary); }
+
+/* Botón flotante en Catálogo cuando se llega desde el Centro de Compras */
+.cat-volver-cc {
+  position: fixed; bottom: 24px; right: 24px; z-index: 60;
+  display: inline-flex; align-items: center; gap: 8px;
+  padding: 12px 20px; border: none; border-radius: 999px; cursor: pointer;
+  background: var(--primary); color: #fff; font-family: inherit; font-size: 14px; font-weight: 700;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.25);
+}
+.cat-volver-cc:hover { filter: brightness(1.08); }
+.cat-volver-cc .material-icons { font-size: 18px !important; }
+
 /* Controles: período / tope / acciones */
 .cc-controls { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 .cc-period { display: inline-flex; background: var(--surface-3); border-radius: 10px; padding: 3px; }

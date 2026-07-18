@@ -137,6 +137,10 @@ function semanasRestantesDelMes(ym) {
 }
 
 // ── Cálculo del presupuesto ───────────────────────────────────────────────────
+// Si hay un monto fijado a mano ("la plata que tengo HOY para gastar", guardado
+// en control_config/compras), ese monto manda: las compras registradas DESPUÉS
+// de fijarlo lo van bajando (las anteriores ya estaban descontadas cuando el
+// usuario lo cargó). Solo vale para el mes en que se fijó.
 function computeBudget(balCfg, diasDoc, comprasCfg, ym) {
   const ingresosMes = sumIngresosMes(diasDoc);
   const gastosFijosMes = totalFijosMes(balCfg, ym);
@@ -144,13 +148,21 @@ function computeBudget(balCfg, diasDoc, comprasCfg, ym) {
   const rentPiso = Number(comprasCfg.rentabilidad_piso_pct) || 0;
   const rentabilidad = Math.max(rentMonto, (rentPiso / 100) * ingresosMes);
   const comprasProductoMes = sumComprasProductoMes(diasDoc, comprasCfg.rubros_excluidos);
-  const presupuestoMes = ingresosMes - gastosFijosMes - rentabilidad - comprasProductoMes;
+  let presupuestoMes = ingresosMes - gastosFijosMes - rentabilidad - comprasProductoMes;
+  let manual = null;
+  const manMonto = Number(comprasCfg.presupuesto_manual);
+  if (comprasCfg.presupuesto_manual != null && Number.isFinite(manMonto)
+      && comprasCfg.presupuesto_manual_ym === ym) {
+    const compradoDesde = Math.max(0, comprasProductoMes - (Number(comprasCfg.presupuesto_manual_base) || 0));
+    presupuestoMes = manMonto - compradoDesde;
+    manual = { monto: manMonto, compradoDesde, fecha: comprasCfg.presupuesto_manual_fecha || '' };
+  }
   const gastableMes = Math.max(0, presupuestoMes);
   const semanasRestantes = semanasRestantesDelMes(ym);
   const gastableSemana = Math.max(0, gastableMes / semanasRestantes);
   return {
     ingresosMes, gastosFijosMes, rentabilidad, comprasProductoMes,
-    presupuestoMes, gastableMes, gastableSemana, semanasRestantes,
+    presupuestoMes, gastableMes, gastableSemana, semanasRestantes, manual,
   };
 }
 
@@ -198,6 +210,56 @@ function packSizeDe(p, variedad) {
     if (propio > 0) return propio;
   }
   return Number(p.conjunto_contenido) || 0;
+}
+
+// ── Stock real (réplica de la convención de notifications.js) ─────────────────
+// Total en unidades sueltas de una variedad: packs × contenido + restante suelto.
+function stockVariedadUnits(c, globalCont) {
+  const u = Number(c.unidades) || 0, r = Number(c.restante) || 0;
+  const cc = (Number(c.contenido) > 0) ? Number(c.contenido) : Number(globalCont) || 0;
+  return u * cc + r;
+}
+// Etiqueta del envase de un conjunto (rollo/pack/caja/...), en singular o plural.
+function unidadConjunto(p, n) {
+  const um = (p?.conjunto_unidad_medida || '').toLowerCase();
+  if (um === 'metro' || um === 'metros') return n === 1 ? 'metro' : 'metros';
+  const map = {
+    rollo: ['rollo', 'rollos'], pack: ['pack', 'packs'], caja: ['caja', 'cajas'],
+    bobina: ['bobina', 'bobinas'], bolsa: ['bolsa', 'bolsas'],
+  };
+  const par = map[(p?.conjunto_tipo || '').toLowerCase()] || ['pack', 'packs'];
+  return n === 1 ? par[0] : par[1];
+}
+// Stock real de una fila, leído del producto del catálogo: para una variedad,
+// sus packs + unidades sueltas; para un conjunto con variantes, el total real
+// con el desglose por variante en el tooltip; para el resto, el stock plano.
+function stockRealDe(r) {
+  const p = r.producto;
+  if (!p) return { texto: `${fmt(Math.max(0, r.stock), 0)} u.`, title: '', total: r.stock };
+  const esConjunto = (p.es_conjunto === true || p.es_conjunto === 1);
+  const colores = esConjunto && Array.isArray(p.conjunto_colores) ? p.conjunto_colores : [];
+  const globalCont = Number(p.conjunto_contenido) || 0;
+  if (r.esVariedad) {
+    const c = colores.find(x => (x.color || '') === r.variedad) || null;
+    const packs = Number(c?.unidades) || 0;
+    const units = c ? stockVariedadUnits(c, globalCont) : (Number(r.stockUnits) || 0);
+    const texto = `${fmt(packs, 0)} ${unidadConjunto(p, packs)}${units !== packs ? ` · ${fmt(units, 0)} u.` : ''}`;
+    return { texto, title: '', total: units };
+  }
+  if (colores.length > 0) {
+    const total = colores.reduce((s2, c) => s2 + stockVariedadUnits(c, globalCont), 0);
+    const title = colores.map(c => {
+      const packs = Number(c.unidades) || 0;
+      return `${c.color || '(sin nombre)'}: ${fmt(packs, 0)} ${unidadConjunto(p, packs)} · ${fmt(stockVariedadUnits(c, globalCont), 0)} u.`;
+    }).join('\n');
+    return { texto: `${fmt(total, 0)} u. en ${colores.length} variante${colores.length === 1 ? '' : 's'}`, title, total };
+  }
+  if (esConjunto) {
+    const tot = Number(p.conjunto_total) || 0;
+    return { texto: `${fmt(tot, 0)} u.`, title: '', total: tot };
+  }
+  const st = Number(p.stock) || 0;
+  return { texto: `${fmt(st, 0)} u.`, title: '', total: st };
 }
 
 function buildRows(alertas, comprasCfg) {
@@ -259,6 +321,7 @@ function buildRows(alertas, comprasCfg) {
       stock: Number(a.stock) || 0,
       stock_min: Number(a.stock_min) || 0,
       esVariedad,
+      variedad: esVariedad ? (a.variedad || '') : null,
       packSize,
       stockUnits,
       vel_dia: velDia,
@@ -519,6 +582,7 @@ function pageHtml() {
             <th style="width:34px"></th>
             <th>Producto</th>
             <th>Rubro</th>
+            <th style="text-align:right">Stock</th>
             <th style="text-align:right">Ritmo</th>
             <th style="text-align:center;width:92px">Cantidad</th>
             <th style="text-align:right">Costo</th>
@@ -540,8 +604,8 @@ function paintGauge() {
   const s = _state;
   const b = s.budget;
   const disp = budgetActivo();
-  const gastado = b.comprasProductoMes;
-  const colchon = gastado + b.gastableMes;                 // presupuesto total del mes (antes de gastar)
+  const gastado = b.manual ? b.manual.compradoDesde : b.comprasProductoMes;
+  const colchon = b.manual ? b.manual.monto : gastado + b.gastableMes;   // presupuesto total (antes de gastar)
   const usadoPct = colchon > 0 ? Math.min(100, (gastado / colchon) * 100) : (gastado > 0 ? 100 : 0);
   const librePct = Math.max(0, 100 - usadoPct);
   const color = librePct <= 0 ? 'var(--danger)' : librePct < 30 ? 'var(--warning)' : 'var(--success)';
@@ -554,31 +618,73 @@ function paintGauge() {
     ? `<div class="cc-gauge-alert">Ya te pasaste del colchón del mes por ${money(Math.abs(b.presupuestoMes))}. Frená las compras.</div>`
     : '';
 
+  // Desglose: con monto manual, la cuenta es monto fijado − comprado desde que
+  // se fijó; sin manual, la fórmula automática desde el Balance.
+  const fechaMan = b.manual?.fecha ? `${b.manual.fecha.slice(8, 10)}/${b.manual.fecha.slice(5, 7)}` : '';
+  const breakdown = b.manual
+    ? `<span class="cc-chip cc-chip-manual" title="Este monto lo cargaste vos, no sale del cálculo automático">monto fijado a mano${fechaMan ? ` el ${fechaMan}` : ''}</span>
+       ${money(b.manual.monto)}
+       <span class="cc-op">−</span> Comprado desde entonces ${money(b.manual.compradoDesde)}
+       <span class="cc-op">=</span> <b>${money(b.gastableMes)}</b> del mes
+       <button type="button" class="cc-plata-auto" data-action="plata-auto" title="Descartar el monto manual y volver a calcular desde el Balance">Usar cálculo automático</button>`
+    : `Ingresos ${money(b.ingresosMes)}
+       <span class="cc-op">−</span> Fijos ${money(b.gastosFijosMes)}
+       <span class="cc-op">−</span> Rentabilidad ${money(b.rentabilidad)}
+       <span class="cc-op">−</span> Comprado ${money(b.comprasProductoMes)}
+       <span class="cc-op">=</span> <b>${money(b.gastableMes)}</b> del mes`;
+
   s.dataFresca = tieneIngresosHoy(s.diasDoc);
-  const freshHint = s.dataFresca ? '' :
+  const freshHint = (s.dataFresca || b.manual) ? '' :
     `<div class="cc-gauge-hint"><span class="material-icons">info</span>
        El día de hoy no tiene caja cargada en el Balance — el número puede quedar corto.</div>`;
 
   document.getElementById('cc-gauge').innerHTML = `
     <div class="cc-gauge-head">
       <div class="cc-gauge-label">Podés gastar en producto <span class="cc-gauge-periodo">${periodoLabel}</span></div>
-      <div class="cc-gauge-actions"></div>
+      <div class="cc-gauge-actions">
+        <button type="button" class="cc-icon-btn" data-action="editar-plata" title="Cargar a mano la plata real que tenés para gastar este mes (se guarda)">
+          <span class="material-icons">edit</span>
+        </button>
+      </div>
     </div>
     <div class="cc-gauge-value" style="color:${color}">${money(Math.max(0, disp))}</div>
-    <div class="cc-bar"><div class="cc-bar-fill" style="width:${librePct.toFixed(1)}%;background:${color}"></div></div>
-    <div class="cc-gauge-breakdown">
-      Ingresos ${money(b.ingresosMes)}
-      <span class="cc-op">−</span> Fijos ${money(b.gastosFijosMes)}
-      <span class="cc-op">−</span> Rentabilidad ${money(b.rentabilidad)}
-      <span class="cc-op">−</span> Comprado ${money(b.comprasProductoMes)}
-      <span class="cc-op">=</span> <b>${money(b.gastableMes)}</b> del mes
+    <div id="cc-plata-form" class="cc-plata-form" style="display:none">
+      <label>Plata real para gastar en producto este mes</label>
+      <div class="cc-plata-row">
+        <input id="cc-plata-input" type="text" inputmode="numeric" placeholder="ej 2.000.000"
+               value="${fmt(b.manual ? b.manual.monto : b.gastableMes, 0)}" />
+        <button type="button" class="cc-btn-primary" data-action="plata-save"><span class="material-icons">save</span> Guardar</button>
+        <button type="button" class="cc-btn-ghost" data-action="plata-cancel">Cancelar</button>
+      </div>
+      <div class="cc-plata-hint">Queda guardado para ${labelFromYm(s.ym)} y baja solo con cada compra que registres.</div>
     </div>
+    <div class="cc-bar"><div class="cc-bar-fill" style="width:${librePct.toFixed(1)}%;background:${color}"></div></div>
+    <div class="cc-gauge-breakdown">${breakdown}</div>
     ${advertencia}
     ${freshHint}`;
   // Mantener el botón activo del segmento en sync
   document.querySelectorAll('.cc-seg').forEach(btn => {
     btn.classList.toggle('active', btn.dataset.period === s.period && s.topeManual == null);
   });
+}
+
+// Guarda (o borra, con monto null) el presupuesto manual del mes en
+// control_config/compras y recalcula todo con el número nuevo.
+async function guardarPlataManual(monto) {
+  const s = _state;
+  const partial = monto == null
+    ? { presupuesto_manual: null, presupuesto_manual_ym: null, presupuesto_manual_base: null, presupuesto_manual_fecha: null }
+    : { presupuesto_manual: monto, presupuesto_manual_ym: s.ym, presupuesto_manual_base: s.budget.comprasProductoMes, presupuesto_manual_fecha: hoyAR() };
+  s.comprasCfg = { ...s.comprasCfg, ...partial };
+  try {
+    await saveComprasConfig(_db, partial);
+  } catch (e) {
+    console.error('[centro_compras] guardar plata manual:', e);
+    await alertDialog({ title: 'No se pudo guardar', message: 'Revisá la conexión e intentá de nuevo.', type: 'error' });
+    return;
+  }
+  s.budget = computeBudget(s.balCfg, s.diasDoc, s.comprasCfg, s.ym);
+  recalc(true);
 }
 
 function tieneIngresosHoy(diasDoc) {
@@ -594,7 +700,7 @@ function paintTable() {
   const tbody = document.getElementById('cc-tbody');
   if (!tbody) return;
   if (!s.rows.length) {
-    tbody.innerHTML = `<tr><td colspan="8" class="cc-empty">
+    tbody.innerHTML = `<tr><td colspan="9" class="cc-empty">
       <span class="material-icons">check_circle</span> No hay faltantes que reponer ahora mismo.</td></tr>`;
     return;
   }
@@ -607,7 +713,7 @@ function paintTable() {
   s.rows.forEach((r, i) => ((r.registrado || r.fits) ? arriba : abajo).push(i));
   const parts = arriba.map(i => rowHtml(s.rows[i], i));
   if (abajo.length) {
-    parts.push(`<tr class="cc-cutoff"><td colspan="8">
+    parts.push(`<tr class="cc-cutoff"><td colspan="9">
       <span class="material-icons">content_cut</span>
       Acá se acaba la plata (${money(disp)}) · lo de abajo no entra en el presupuesto</td></tr>`);
     parts.push(...abajo.map(i => rowHtml(s.rows[i], i)));
@@ -654,14 +760,22 @@ function rowHtml(r, i) {
     ? `<div class="cc-perdida">Dejás de vender ~${money(r.perdidaSemana)}/sem si falta</div>`
     : '';
 
+  const stk = stockRealDe(r);
+  const stockTitle = [stk.title, 'Stock real leído del Catálogo'].filter(Boolean).join('\n');
+
   return `<tr class="${cls}" data-idx="${i}">
     <td style="text-align:center">${checkbox}</td>
     <td>
-      <div class="cc-prod">${esc(r.nombre)} ${chip}</div>
+      <div class="cc-prod">
+        <button type="button" class="cc-prod-btn" data-action="ver-catalogo" data-doc="${esc(String(r.doc_id))}"
+                title="Abrir este producto en el Catálogo">${esc(r.nombre)}<span class="material-icons">open_in_new</span></button>
+        ${chip}
+      </div>
       ${r.cobertura_texto ? `<div class="cc-cob">${esc(r.cobertura_texto)}</div>` : ''}
       ${perdida}
     </td>
     <td><span class="badge badge-gray">${esc(r.rubro || 'Sin rubro')}</span></td>
+    <td class="cc-stock${stk.total <= 0 ? ' is-cero' : ''}" title="${esc(stockTitle)}">${esc(stk.texto)}</td>
     <td style="text-align:right">${ritmo}</td>
     <td style="text-align:center">
       <input type="text" inputmode="numeric" class="cc-qty" data-idx="${i}" value="${r.qty}" title="${qtyTitle}"${r.registrado ? ' disabled' : ''} />
@@ -814,6 +928,36 @@ function onClick(e) {
       break;
     case 'registrar':
       registrarCompra(btn);
+      break;
+    case 'editar-plata': {
+      const form = document.getElementById('cc-plata-form');
+      if (!form) break;
+      const abierto = form.style.display !== 'none';
+      form.style.display = abierto ? 'none' : '';
+      if (!abierto) {
+        const inp = document.getElementById('cc-plata-input');
+        if (inp) { inp.focus(); inp.select(); }
+      }
+      break;
+    }
+    case 'plata-save': {
+      const v = parseNum((document.getElementById('cc-plata-input') || {}).value);
+      if (v == null || v < 0) break;
+      guardarPlataManual(v);
+      break;
+    }
+    case 'plata-cancel': {
+      const form = document.getElementById('cc-plata-form');
+      if (form) form.style.display = 'none';
+      break;
+    }
+    case 'plata-auto':
+      guardarPlataManual(null);
+      break;
+    case 'ver-catalogo':
+      window.__pendingCatalogoOpen = btn.dataset.doc;
+      window.__catalogoVolverA = 'centro_compras';
+      if (typeof window.navigateToPage === 'function') window.navigateToPage('catalogo');
       break;
   }
 }
@@ -989,16 +1133,16 @@ async function registrarCompra(btn) {
   s.rows.forEach(r => {
     if (idsReg.has(r.doc_id)) { r.registrado = true; r.checked = false; }
   });
-  const b = s.budget;
-  b.comprasProductoMes += total;
-  b.presupuestoMes = b.ingresosMes - b.gastosFijosMes - b.rentabilidad - b.comprasProductoMes;
-  b.gastableMes = Math.max(0, b.presupuestoMes);
-  b.gastableSemana = Math.max(0, b.gastableMes / b.semanasRestantes);
-  // Reflejar la compra en el diasDoc en memoria (por si se registra otra en la sesión).
-  if (!s.diasDoc.dias) s.diasDoc.dias = {};
-  const diaMem = s.diasDoc.dias[DD] || { fecha, ingresos: [], compras: [] };
-  diaMem.compras = [...(diaMem.compras || []), ...lineas];
-  s.diasDoc.dias[DD] = diaMem;
+  // Reflejar la compra en el diasDoc en memoria (por si se registra otra en la
+  // sesión) — solo si la fecha cae en el mes del semáforo.
+  if (ymF === s.ym) {
+    if (!s.diasDoc.dias) s.diasDoc.dias = {};
+    const diaMem = s.diasDoc.dias[DD] || { fecha, ingresos: [], compras: [] };
+    diaMem.compras = [...(diaMem.compras || []), ...lineas];
+    s.diasDoc.dias[DD] = diaMem;
+  }
+  // Recomputar el presupuesto completo (respeta el monto manual si está activo).
+  s.budget = computeBudget(s.balCfg, s.diasDoc, s.comprasCfg, s.ym);
 
   // Reset de selección: con el presupuesto que quedó, el plan se rearma con lo
   // que todavía entra (si no, quedan tildadas filas que ya no alcanza a pagar).
