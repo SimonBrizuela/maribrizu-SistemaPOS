@@ -1,0 +1,1006 @@
+// ── Centro de Compras ─────────────────────────────────────────────────────────
+// Semáforo de presupuesto de inversión en producto. La idea del dueño: cuidar la
+// plata del negocio. Todos los meses separa una rentabilidad (monto fijo, nunca
+// menos que un piso % de las ventas). Los gastos fijos se cubren aparte. El único
+// gasto que maneja activamente es la compra de mercadería. Esta página le dice, en
+// vivo, cuánto puede gastar este mes/semana en producto y en qué orden comprar
+// (los más urgentes/vendidos primero) hasta que la plata se acaba (línea de corte).
+//
+//   presupuesto = ingresosMes − gastosFijosMes − rentabilidad − comprasProductoMes
+//
+// Ingresos y gastos fijos salen del Balance Mensual (control_config/balance y
+// control_config/dias_<ym>). Las alertas de reposición vienen de notifications.js
+// y acá se clasifican en tres niveles: SÍ O SÍ (se agota o ya no hay Y rota),
+// IMPORTANTE (sin stock aunque venda poco, o top vendido bajo mínimo) y PUEDE
+// ESPERAR. Dentro de cada nivel se ordena por la plata que se deja de facturar
+// si falta (ritmo × precio de venta). El presupuesto se asigna en dos pasadas:
+// primero lo SÍ O SÍ — si no entra completo a la cobertura objetivo, se achica
+// la cobertura hasta un piso de 7 días ANTES de dejar productos afuera — y con
+// lo que sobra se va marcando el resto en orden (lo que entra, entra, aunque
+// esté después del corte). Al registrar una compra se escribe una línea en el
+// libro diario del Balance, así el semáforo baja y el gasto queda contabilizado
+// en un solo lugar.
+
+import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { loadBalanceConfig, loadDiasMes, saveDiasMes, loadComprasConfig, saveComprasConfig } from '../config.js';
+import { refrescarAlertas, obtenerCandidatosCompra } from '../notifications.js';
+import { sugerirCantidad } from '../inventario_resumen.js';
+import { confirmDialog, alertDialog } from '../components/dialogs.js';
+
+const MEDIOS = [
+  { k: 'efectivo', label: 'Efectivo' },
+  { k: 'mp',       label: 'Mercado Pago' },
+  { k: 'lapos',    label: 'Lapos' },
+];
+// Rubros que NO son inversión en producto (se cubren como gasto fijo aparte) y por
+// eso no descuentan del presupuesto de compras. Normalizados (sin acento, minúscula).
+const RUBROS_FIJOS_DEFAULT = ['sueldos', 'gastos fijos'];
+const COBERTURA_DEFAULT = 30;    // días de venta a cubrir al sugerir cantidad
+const MIN_COBERTURA_DIAS = 7;    // piso al achicar cantidades de lo SÍ O SÍ cuando la plata no alcanza
+const MIN_ROTACION = 3;          // unidades vendidas en la ventana para considerar que "rota"
+const TIER_RANK = { sisi: 0, importante: 1, opcional: 2 };
+
+// ── Formato / parseo es-AR (réplica de balance_mensual.js) ────────────────────
+function fmt(n, dec = 2) {
+  if (n == null || n === '' || Number.isNaN(Number(n))) return '—';
+  return Number(n).toLocaleString('es-AR', { minimumFractionDigits: dec, maximumFractionDigits: dec });
+}
+function money(n, dec = 0) { return '$ ' + fmt(n, dec); }
+function esc(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => (
+    { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]
+  ));
+}
+// Parseo tolerante es-AR: "312.400" → 312400, "1.234,56" → 1234.56.
+function parseNum(raw) {
+  if (typeof raw === 'number') return raw;
+  if (raw == null) return null;
+  let s = String(raw).trim().replace(/[^\d.,\-]/g, '');
+  if (s === '' || s === '-') return null;
+  if (s.includes(',')) {
+    s = s.replace(/\./g, '').replace(',', '.');
+  } else {
+    const dots = (s.match(/\./g) || []).length;
+    if (dots > 1 || /^-?\d{1,3}(\.\d{3})+$/.test(s)) s = s.replace(/\./g, '');
+  }
+  const n = parseFloat(s);
+  return Number.isNaN(n) ? null : n;
+}
+function normRubro(s) {
+  return String(s || '').normalize('NFKD').replace(/[̀-ͯ]/g, '').toLowerCase().trim();
+}
+// Fecha de hoy en Argentina como "YYYY-MM-DD".
+function hoyAR() {
+  return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+}
+const MESES_ES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
+function labelFromYm(ym) {
+  const m = /^(\d{4})-(\d{2})$/.exec(ym);
+  if (!m) return ym;
+  return `${MESES_ES[+m[2] - 1] || ''} ${m[1].slice(2)}`.trim();
+}
+
+// ── Helpers de Balance como funciones puras (replicadas, toman balCfg/diasDoc) ─
+// ¿Aplica un monto fijo en el mes ym? Respeta pausa global (activo:false), baja
+// "desde tal mes" (desactivadoDesde) y exclusión puntual del mes (fijosExcluidos).
+function fijoAplica(balCfg, ym, fijo) {
+  if (fijo.activo === false) return false;
+  if (fijo.desactivadoDesde && ym >= fijo.desactivadoDesde) return false;
+  const mes = balCfg?.meses?.[ym];
+  if (mes && Array.isArray(mes.fijosExcluidos) && mes.fijosExcluidos.includes(fijo.id)) return false;
+  return true;
+}
+function fijoMontoEnMes(balCfg, ym, fijo) {
+  if (!fijoAplica(balCfg, ym, fijo)) return 0;
+  const ov = balCfg?.meses?.[ym]?.fijosOverride?.[fijo.id];
+  if (ov != null) return Number(ov) || 0;
+  return Number(fijo.monto) || 0;
+}
+function totalFijosMes(balCfg, ym) {
+  return (balCfg?.montosFijos || [])
+    .filter(f => f.activo !== false)
+    .reduce((s, f) => s + fijoMontoEnMes(balCfg, ym, f), 0);
+}
+// Ingresos del mes = suma de todos los ingresos diarios cargados en el Balance.
+function sumIngresosMes(diasDoc) {
+  const dias = diasDoc?.dias || {};
+  let total = 0;
+  for (const dd of Object.keys(dias)) {
+    for (const x of (dias[dd].ingresos || [])) total += Number(x.monto) || 0;
+  }
+  return total;
+}
+// Compras de producto ya hechas este mes = compras del libro diario cuyo rubro NO
+// es un rubro fijo (sueldos / gastos fijos), que se cubren aparte.
+function sumComprasProductoMes(diasDoc, rubrosFijos) {
+  const dias = diasDoc?.dias || {};
+  const fijos = new Set((rubrosFijos && rubrosFijos.length ? rubrosFijos : RUBROS_FIJOS_DEFAULT).map(normRubro));
+  let total = 0;
+  for (const dd of Object.keys(dias)) {
+    for (const x of (dias[dd].compras || [])) {
+      const monto = Number(x.monto) || 0;
+      if (monto <= 0) continue;
+      if (fijos.has(normRubro(x.rubro))) continue;
+      total += monto;
+    }
+  }
+  return total;
+}
+// Semanas que quedan del mes (inclusive de la actual), mínimo 1.
+function semanasRestantesDelMes(ym) {
+  const hoy = hoyAR();
+  const [y, m] = ym.split('-').map(Number);
+  const diasEnMes = new Date(y, m, 0).getDate();
+  let diasRestantes = diasEnMes;
+  if (ym === hoy.slice(0, 7)) diasRestantes = diasEnMes - Number(hoy.slice(8, 10)) + 1;
+  return Math.max(1, Math.ceil(diasRestantes / 7));
+}
+
+// ── Cálculo del presupuesto ───────────────────────────────────────────────────
+function computeBudget(balCfg, diasDoc, comprasCfg, ym) {
+  const ingresosMes = sumIngresosMes(diasDoc);
+  const gastosFijosMes = totalFijosMes(balCfg, ym);
+  const rentMonto = Number(comprasCfg.rentabilidad_monto) || 0;
+  const rentPiso = Number(comprasCfg.rentabilidad_piso_pct) || 0;
+  const rentabilidad = Math.max(rentMonto, (rentPiso / 100) * ingresosMes);
+  const comprasProductoMes = sumComprasProductoMes(diasDoc, comprasCfg.rubros_excluidos);
+  const presupuestoMes = ingresosMes - gastosFijosMes - rentabilidad - comprasProductoMes;
+  const gastableMes = Math.max(0, presupuestoMes);
+  const semanasRestantes = semanasRestantesDelMes(ym);
+  const gastableSemana = Math.max(0, gastableMes / semanasRestantes);
+  return {
+    ingresosMes, gastosFijosMes, rentabilidad, comprasProductoMes,
+    presupuestoMes, gastableMes, gastableSemana, semanasRestantes,
+  };
+}
+
+// ── Filas priorizadas ─────────────────────────────────────────────────────────
+// Nivel de una alerta:
+//   sisi       → se agota ya (o ya no hay) Y el producto rota → no comprarlo es
+//                perder ventas seguro.
+//   importante → sin stock (aunque venda poco), o top vendido bajo mínimo.
+//   opcional   → stock bajo configurado, variantes auto, etc. Puede esperar.
+function tierDe(a) {
+  const rota = (Number(a.unidades_ventana) || 0) >= MIN_ROTACION;
+  if (!a.auto && rota && (a.urgente || a.critico)) return 'sisi';
+  if (a.critico || a.es_top || a.urgente) return 'importante';
+  if (rota && a.dias_cobertura <= 14) return 'importante';   // rota y le quedan ~2 semanas
+  return 'opcional';
+}
+
+// Fuentes de la lista: alertas activas (bajo mínimo / por agotarse) + candidatos
+// por cobertura (rotan pero el stock no llega a los días objetivo — ej: las
+// hojas que se gastan con cada impresión). Si un producto ya está en alerta
+// (global o por variedad), manda la alerta.
+function fuentesCompra(alertasBase, comprasCfg) {
+  const dias = Number(comprasCfg.cobertura_dias_objetivo) || COBERTURA_DEFAULT;
+  const vistos = new Set((alertasBase || []).map(a => String(a.doc_id)));
+  const out = [...(alertasBase || [])];
+  for (const c of obtenerCandidatosCompra(dias)) {
+    if (!vistos.has(String(c.doc_id))) out.push(c);
+  }
+  return out;
+}
+
+// Arma las filas comprables: cantidad sugerida × costo, nivel de prioridad y la
+// plata que se pierde si no se repone. Se ordena por nivel y, dentro del nivel,
+// por pérdida en el horizonte (lo que más se mueve Y más descubierto está va
+// primero). Filas sin costo cargado se marcan aparte (no se pueden presupuestar
+// hasta cargarles el costo).
+// Unidades por pack/rollo de un producto conjunto. Para una variedad usa su
+// contenido propio si lo tiene; si no, el global del producto. 0 = no aplica.
+function packSizeDe(p, variedad) {
+  if (!p || !(p.es_conjunto === true || p.es_conjunto === 1)) return 0;
+  if (variedad != null) {
+    const c = (Array.isArray(p.conjunto_colores) ? p.conjunto_colores : [])
+      .find(x => (x.color || '') === variedad);
+    const propio = Number(c?.contenido) || 0;
+    if (propio > 0) return propio;
+  }
+  return Number(p.conjunto_contenido) || 0;
+}
+
+function buildRows(alertas, comprasCfg) {
+  const cobertura = Number(comprasCfg.cobertura_dias_objetivo) || COBERTURA_DEFAULT;
+  const rows = [];
+  for (const a of (alertas || [])) {
+    const cost = Math.max(0, Number(a.producto?.costo) || 0);
+    const precio = Math.max(0, Number(a.producto?.precio_venta ?? a.producto?.precio) || 0);
+    const velDia = Number(a.vel_dia) || 0;
+    const esVariedad = a.variedad != null;
+    const packSize = packSizeDe(a.producto, esVariedad ? a.variedad : null);
+    const stockUnits = Number.isFinite(Number(a.stock_total_unidades))
+      ? Number(a.stock_total_unidades)
+      : (Number(a.stock) || 0);
+
+    let qty;
+    let costRow = cost;
+    if (esVariedad) {
+      // Variedades: la cantidad va en PACKS/rollos (así se compran). El ritmo
+      // por color (en unidades sueltas) dice cuántos packs cubren el horizonte;
+      // el rango min/max configurado queda como piso. Sin max, volver a 2× min.
+      let packsRango = Number(a.sugerencia) || 0;
+      if (!(packsRango > 0)) {
+        const min = Number(a.stock_min) || 0;
+        const stk = Math.max(0, Number(a.stock) || 0);
+        packsRango = Math.max(0, Math.max(min * 2, min + 1) - stk);
+      }
+      let packsRitmo = 0;
+      if (velDia > 0 && packSize > 0) {
+        packsRitmo = Math.ceil(Math.max(0, velDia * cobertura - stockUnits) / packSize);
+      }
+      qty = Math.max(packsRitmo, packsRango);
+      // El costo del catálogo es por unidad suelta (misma convención que la
+      // valorización de stock) → lo que se paga por pack = costo × contenido.
+      if (packSize > 0 && cost > 0) costRow = cost * packSize;
+    } else {
+      qty = sugerirCantidad(velDia, a.stock, a.stock_min, cobertura);
+      if (!(qty > 0)) qty = Number(a.sugerencia) || 0;
+      // Conjuntos sin variedades se compran de a packs enteros → redondear arriba.
+      if (qty > 0 && packSize > 1) qty = Math.ceil(qty / packSize) * packSize;
+    }
+    if (!(qty > 0)) continue;   // nada que reponer
+
+    // Plata que se deja de facturar en el horizonte si no se repone: ritmo ×
+    // precio × días descubiertos. Combina "se mueve mucho" con "se queda sin
+    // stock ya": sin stock pierde el horizonte entero, con 25 días de cobertura
+    // pierde solo los 5 del final.
+    const diasCob = Number.isFinite(a.dias_cobertura) ? Math.max(0, a.dias_cobertura) : Infinity;
+    const perdidaHorizonte = velDia * precio * Math.max(0, cobertura - Math.min(diasCob, cobertura));
+
+    rows.push({
+      doc_id: a.doc_id,
+      nombre: a.nombre || '(sin nombre)',
+      rubro: a.rubro || '',
+      urgente: !!a.urgente,
+      critico: !!a.critico,
+      tier: tierDe(a),
+      cobertura_texto: a.cobertura_texto || '',
+      stock: Number(a.stock) || 0,
+      stock_min: Number(a.stock_min) || 0,
+      esVariedad,
+      packSize,
+      stockUnits,
+      vel_dia: velDia,
+      vel_semana: Number(a.vel_semana) || 0,
+      dias_cobertura: diasCob,
+      perdidaSemana: velDia * 7 * precio,
+      perdidaHorizonte,
+      producto: a.producto || null,
+      qty,
+      cost: costRow,
+      subtotal: qty * costRow,
+      sinCosto: !(costRow > 0),
+      qtyManual: false,
+      fits: false,
+      acumulado: 0,
+      checked: false,
+      registrado: false,
+    });
+  }
+  rows.sort((a, b) => {
+    if (TIER_RANK[a.tier] !== TIER_RANK[b.tier]) return TIER_RANK[a.tier] - TIER_RANK[b.tier];
+    if ((b.perdidaHorizonte || 0) !== (a.perdidaHorizonte || 0)) return (b.perdidaHorizonte || 0) - (a.perdidaHorizonte || 0);
+    if ((b.vel_dia || 0) !== (a.vel_dia || 0)) return (b.vel_dia || 0) - (a.vel_dia || 0);
+    if (a.dias_cobertura !== b.dias_cobertura) return a.dias_cobertura - b.dias_cobertura;
+    return a.nombre.localeCompare(b.nombre);
+  });
+  return rows;
+}
+
+// Cantidad sugerida para cubrir `dias` días de venta (respeta el stock_min).
+// Variedades: packs para cubrir el horizonte según su ritmo por color; sin
+// ritmo/contenido conocido, mantiene la cantidad del rango configurado.
+// Conjuntos sin variedades: redondeo a packs enteros.
+function qtyADias(r, dias) {
+  if (r.esVariedad) {
+    if (r.packSize > 0 && r.vel_dia > 0) {
+      const faltan = Math.max(0, r.vel_dia * dias - r.stockUnits);
+      return Math.ceil(faltan / r.packSize);
+    }
+    return r.qty;
+  }
+  let q = sugerirCantidad(r.vel_dia, r.stock, r.stock_min, dias);
+  if (q > 0 && r.packSize > 1) q = Math.ceil(q / r.packSize) * r.packSize;
+  return q;
+}
+
+// Asigna el presupuesto en dos pasadas:
+//   1. Lo SÍ O SÍ entra completo. Si a la cobertura objetivo no alcanza, se
+//      achica la cobertura (hasta un piso de 7 días) antes de dejar afuera un
+//      solo producto imprescindible. Cantidades editadas a mano se respetan.
+//   2. Con lo que sobra se marca el resto en orden de prioridad: lo que entra,
+//      entra, aunque haya algo más caro antes que no entró (relleno greedy).
+//      Excepción: si ni lo SÍ O SÍ entró completo, no se gasta en niveles
+//      menores — esa plata es de los imprescindibles.
+// Deja en cada fila subtotal / fits / acumulado y devuelve corte + totales para
+// los avisos.
+function asignarPresupuesto(rows, budget, coberturaObj) {
+  const sisi = rows.filter(r => r.tier === 'sisi' && !r.sinCosto && !r.registrado);
+  const costoSisiA = dias => sisi.reduce((t, r) => t + (r.qtyManual ? r.qty : qtyADias(r, dias)) * r.cost, 0);
+
+  const costoSisiObjetivo = costoSisiA(coberturaObj);
+  let diasUsados = coberturaObj;
+  if (sisi.length && costoSisiObjetivo > budget) {
+    diasUsados = MIN_COBERTURA_DIAS;
+    for (let d = coberturaObj - 1; d > MIN_COBERTURA_DIAS; d--) {
+      if (costoSisiA(d) <= budget) { diasUsados = d; break; }
+    }
+  }
+  for (const r of sisi) {
+    if (!r.qtyManual) r.qty = qtyADias(r, diasUsados);
+  }
+  const costoSisiUsado = costoSisiA(diasUsados);
+  const sisiCorto = costoSisiUsado > budget;
+
+  let running = 0;
+  rows.forEach(r => {
+    r.subtotal = r.qty * r.cost;
+    r.fits = false;
+    if (r.sinCosto || r.registrado || !(r.subtotal > 0)) { r.acumulado = running; return; }
+    const bloqueado = sisiCorto && r.tier !== 'sisi';
+    if (!bloqueado && running + r.subtotal <= budget) {
+      running += r.subtotal;
+      r.fits = true;
+    }
+    r.acumulado = running;
+  });
+  return {
+    totalFit: running,
+    diasUsados,
+    degradado: sisi.length > 0 && diasUsados < coberturaObj,
+    costoSisiUsado,
+    costoSisiObjetivo,
+    sisiCorto,
+  };
+}
+
+// ── Estado del módulo ─────────────────────────────────────────────────────────
+let _db = null;
+let _state = null;
+
+export async function renderCentroCompras(container, db) {
+  _db = db;
+  // Shell sincrónico (cancela el skeleton diferido de main.js y da feedback ya).
+  container.innerHTML = shellHtml();
+
+  const ym = hoyAR().slice(0, 7);
+  let alertas, balCfg, diasDoc, comprasCfg;
+  try {
+    [alertas, balCfg, diasDoc, comprasCfg] = await Promise.all([
+      refrescarAlertas({ silent: true }),
+      loadBalanceConfig(db),
+      loadDiasMes(db, ym),
+      loadComprasConfig(db),
+    ]);
+  } catch (e) {
+    console.error('[centro_compras] error cargando datos:', e);
+    // Si #cc-root ya no está, el usuario navegó a otra página mientras cargaba:
+    // no pisar el contenido de esa página con nuestro error.
+    const host = container.querySelector('#cc-root');
+    if (host) host.innerHTML = `<div class="empty-state"><span class="material-icons">error_outline</span>
+      <p>No se pudieron cargar los datos. Reintentá.</p></div>`;
+    return;
+  }
+
+  comprasCfg = comprasCfg || {};
+  const budget = computeBudget(balCfg || {}, diasDoc, comprasCfg, ym);
+  const rows = buildRows(fuentesCompra(alertas, comprasCfg), comprasCfg);
+
+  _state = {
+    ym,
+    alertasBase: alertas,
+    balCfg: balCfg || {},
+    diasDoc: diasDoc || { ym, dias: {} },
+    comprasCfg,
+    budget,
+    rows,
+    period: 'mes',        // 'mes' | 'semana'
+    topeManual: null,
+    medio: fuenteValida(comprasCfg.medio_default),
+    proveedor: comprasCfg.proveedor_default || '',
+    fecha: hoyAR(),
+    ajustesOpen: false,
+  };
+
+  const root = container.querySelector('#cc-root');
+  if (!root) return;   // navegaron a otra página mientras cargaban los datos
+  root.innerHTML = pageHtml();
+  bindEvents(root);
+  recalc(true);
+}
+
+function fuenteValida(f) { return MEDIOS.some(m => m.k === f) ? f : 'efectivo'; }
+
+// ── Presupuesto activo según período / tope ───────────────────────────────────
+function budgetActivo() {
+  const s = _state;
+  if (s.topeManual != null) return s.topeManual;
+  return s.period === 'semana' ? s.budget.gastableSemana : s.budget.gastableMes;
+}
+
+function coberturaObjetivo() {
+  return Number(_state.comprasCfg.cobertura_dias_objetivo) || COBERTURA_DEFAULT;
+}
+
+// Reasigna el presupuesto, (opcional) resetea la selección a lo que entra, y
+// repinta gauge + resumen + avisos + tabla + plan.
+function recalc(resetSelection) {
+  const s = _state;
+  const budget = budgetActivo();
+  s.alloc = asignarPresupuesto(s.rows, budget, coberturaObjetivo());
+  if (resetSelection) {
+    s.rows.forEach(r => { r.checked = r.fits; });
+  }
+  paintGauge();
+  paintResumen();
+  paintWarn();
+  paintTable();
+  paintPlan();
+}
+
+function planSeleccionado() {
+  const items = _state.rows.filter(r => r.checked && !r.registrado && r.qty > 0 && r.cost > 0);
+  const total = items.reduce((sum, r) => sum + r.qty * r.cost, 0);
+  return { items, total };
+}
+
+// ── HTML: shell + página ──────────────────────────────────────────────────────
+function shellHtml() {
+  return `
+    <div id="cc-root">
+      <div class="cc-loading">
+        <div class="skel" style="height:120px;border-radius:14px;margin-bottom:16px"></div>
+        <div class="skel" style="height:44px;border-radius:10px;margin-bottom:8px"></div>
+        <div class="skel" style="height:280px;border-radius:12px"></div>
+      </div>
+    </div>`;
+}
+
+function pageHtml() {
+  const s = _state;
+  return `
+    ${gaugeShell()}
+    <div class="cc-controls">
+      <div class="cc-period">
+        <button class="cc-seg" data-action="period" data-period="mes">Mes</button>
+        <button class="cc-seg" data-action="period" data-period="semana">Semana</button>
+      </div>
+      <div class="cc-tope">
+        <span class="material-icons">local_shipping</span>
+        <input id="cc-tope" type="text" inputmode="numeric" placeholder="Tope de este viaje (ej 500.000)"
+               value="${s.topeManual != null ? fmt(s.topeManual, 0) : ''}" />
+        <button class="cc-icon-btn" data-action="tope-clear" title="Quitar tope">
+          <span class="material-icons">close</span>
+        </button>
+      </div>
+      <div class="cc-spacer"></div>
+      <button class="cc-icon-btn" data-action="actualizar" title="Actualizar stock y ritmo">
+        <span class="material-icons">refresh</span>
+      </button>
+      <button class="cc-icon-btn" data-action="ajustes" title="Ajustes de rentabilidad">
+        <span class="material-icons">tune</span>
+      </button>
+    </div>
+    <div id="cc-ajustes" class="cc-ajustes" style="display:none"></div>
+    <div id="cc-warn"></div>
+    <div id="cc-tiers" class="cc-tiers"></div>
+
+    <div class="cc-registrar">
+      <div class="cc-reg-field">
+        <label>Proveedor / viaje</label>
+        <input id="cc-prov" type="text" placeholder="Mayorista..." value="${esc(s.proveedor)}" />
+      </div>
+      <div class="cc-reg-field">
+        <label>Medio</label>
+        <select id="cc-medio">
+          ${MEDIOS.map(m => `<option value="${m.k}"${m.k === s.medio ? ' selected' : ''}>${m.label}</option>`).join('')}
+        </select>
+      </div>
+      <div class="cc-reg-field">
+        <label>Fecha</label>
+        <input id="cc-fecha" type="date" value="${s.fecha}" />
+      </div>
+      <div class="cc-spacer"></div>
+      <div id="cc-plan" class="cc-plan"></div>
+      <button class="cc-btn-primary" data-action="registrar">
+        <span class="material-icons">shopping_cart_checkout</span> Registrar compra
+      </button>
+    </div>
+
+    <div class="table-card cc-table-card">
+      <div class="table-card-header">
+        <h3>Lista de compra priorizada</h3>
+        <span class="cc-hint">Ordenada por prioridad y plata en riesgo · Registrar descuenta el presupuesto, no el stock.</span>
+      </div>
+      <div class="table-wrap">
+        <table class="cc-table">
+          <thead><tr>
+            <th style="width:34px"></th>
+            <th>Producto</th>
+            <th>Rubro</th>
+            <th style="text-align:right">Ritmo</th>
+            <th style="text-align:center;width:92px">Cantidad</th>
+            <th style="text-align:right">Costo</th>
+            <th style="text-align:right">Subtotal</th>
+            <th style="text-align:right">Acumulado</th>
+          </tr></thead>
+          <tbody id="cc-tbody"></tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+function gaugeShell() {
+  return `<div id="cc-gauge" class="cc-gauge"></div>`;
+}
+
+// ── Pintado: gauge ────────────────────────────────────────────────────────────
+function paintGauge() {
+  const s = _state;
+  const b = s.budget;
+  const disp = budgetActivo();
+  const gastado = b.comprasProductoMes;
+  const colchon = gastado + b.gastableMes;                 // presupuesto total del mes (antes de gastar)
+  const usadoPct = colchon > 0 ? Math.min(100, (gastado / colchon) * 100) : (gastado > 0 ? 100 : 0);
+  const librePct = Math.max(0, 100 - usadoPct);
+  const color = librePct <= 0 ? 'var(--danger)' : librePct < 30 ? 'var(--warning)' : 'var(--success)';
+  const periodoLabel = s.topeManual != null
+    ? 'para este viaje'
+    : s.period === 'semana' ? `esta semana (quedan ${b.semanasRestantes})` : `este mes · ${labelFromYm(s.ym)}`;
+
+  const negativo = b.presupuestoMes < 0;
+  const advertencia = negativo
+    ? `<div class="cc-gauge-alert">Ya te pasaste del colchón del mes por ${money(Math.abs(b.presupuestoMes))}. Frená las compras.</div>`
+    : '';
+
+  s.dataFresca = tieneIngresosHoy(s.diasDoc);
+  const freshHint = s.dataFresca ? '' :
+    `<div class="cc-gauge-hint"><span class="material-icons">info</span>
+       El día de hoy no tiene caja cargada en el Balance — el número puede quedar corto.</div>`;
+
+  document.getElementById('cc-gauge').innerHTML = `
+    <div class="cc-gauge-head">
+      <div class="cc-gauge-label">Podés gastar en producto <span class="cc-gauge-periodo">${periodoLabel}</span></div>
+      <div class="cc-gauge-actions"></div>
+    </div>
+    <div class="cc-gauge-value" style="color:${color}">${money(Math.max(0, disp))}</div>
+    <div class="cc-bar"><div class="cc-bar-fill" style="width:${librePct.toFixed(1)}%;background:${color}"></div></div>
+    <div class="cc-gauge-breakdown">
+      Ingresos ${money(b.ingresosMes)}
+      <span class="cc-op">−</span> Fijos ${money(b.gastosFijosMes)}
+      <span class="cc-op">−</span> Rentabilidad ${money(b.rentabilidad)}
+      <span class="cc-op">−</span> Comprado ${money(b.comprasProductoMes)}
+      <span class="cc-op">=</span> <b>${money(b.gastableMes)}</b> del mes
+    </div>
+    ${advertencia}
+    ${freshHint}`;
+  // Mantener el botón activo del segmento en sync
+  document.querySelectorAll('.cc-seg').forEach(btn => {
+    btn.classList.toggle('active', btn.dataset.period === s.period && s.topeManual == null);
+  });
+}
+
+function tieneIngresosHoy(diasDoc) {
+  const hoy = hoyAR();
+  if (diasDoc?.ym && diasDoc.ym !== hoy.slice(0, 7)) return true;   // no aplica a meses viejos
+  const dia = diasDoc?.dias?.[hoy.slice(8, 10)];
+  return !!(dia && (dia.ingresos || []).some(x => Number(x.monto) > 0));
+}
+
+// ── Pintado: tabla ────────────────────────────────────────────────────────────
+function paintTable() {
+  const s = _state;
+  const tbody = document.getElementById('cc-tbody');
+  if (!tbody) return;
+  if (!s.rows.length) {
+    tbody.innerHTML = `<tr><td colspan="8" class="cc-empty">
+      <span class="material-icons">check_circle</span> No hay faltantes que reponer ahora mismo.</td></tr>`;
+    return;
+  }
+  const disp = budgetActivo();
+  // El plan (lo que entra en la plata + lo ya registrado) va arriba; después la
+  // línea de corte y abajo SOLO lo que no entra (o no tiene costo). data-idx
+  // siempre apunta al índice real en s.rows, así los handlers no dependen del
+  // orden visual.
+  const arriba = [], abajo = [];
+  s.rows.forEach((r, i) => ((r.registrado || r.fits) ? arriba : abajo).push(i));
+  const parts = arriba.map(i => rowHtml(s.rows[i], i));
+  if (abajo.length) {
+    parts.push(`<tr class="cc-cutoff"><td colspan="8">
+      <span class="material-icons">content_cut</span>
+      Acá se acaba la plata (${money(disp)}) · lo de abajo no entra en el presupuesto</td></tr>`);
+    parts.push(...abajo.map(i => rowHtml(s.rows[i], i)));
+  }
+  tbody.innerHTML = parts.join('');
+}
+
+function rowHtml(r, i) {
+  // Atenuada solo si quedó fuera del plan y el usuario tampoco la marcó a mano.
+  const espera = !r.registrado && !r.sinCosto && !r.fits && !r.checked;
+  const cls = [
+    r.registrado ? 'cc-row-reg' : '',
+    espera ? 'cc-row-espera' : '',
+  ].filter(Boolean).join(' ');
+
+  let chip = '';
+  if (r.registrado) chip = `<span class="cc-chip cc-chip-ok">registrado</span>`;
+  else {
+    if (r.tier === 'sisi') chip = `<span class="cc-chip cc-chip-sisi">sí o sí</span>`;
+    else if (r.tier === 'importante') chip = `<span class="cc-chip cc-chip-urg">importante</span>`;
+    if (r.critico) chip += ` <span class="cc-chip cc-chip-red">sin stock</span>`;
+  }
+
+  const checkbox = r.sinCosto || r.registrado
+    ? `<span class="material-icons cc-check-off" title="${r.sinCosto ? 'Sin costo cargado' : 'Ya registrado'}">${r.sinCosto ? 'block' : 'check_circle'}</span>`
+    : `<input type="checkbox" class="cc-check" data-idx="${i}"${r.checked ? ' checked' : ''} />`;
+
+  const ritmo = r.vel_semana >= 1
+    ? `~${fmt(Math.round(r.vel_semana), 0)}/sem`
+    : (r.vel_semana > 0 ? '<1/sem' : '—');
+
+  const esPack = r.esVariedad && r.packSize > 0;
+  const costo = r.sinCosto
+    ? `<input type="text" inputmode="numeric" class="cc-cost" data-idx="${i}" placeholder="${esPack ? 'costo pack' : 'costo'}"
+         title="Cargá el costo ${esPack ? `del pack (${r.packSize} u)` : 'unitario'} acá — se guarda también en el Catálogo" />`
+    : `<span title="${esPack ? `Costo por pack de ${r.packSize} u` : 'Costo unitario'}">${money(r.cost, 0)}</span>`;
+  const qtyTitle = esPack
+    ? `Packs/rollos de ${r.packSize} unidades`
+    : (r.packSize > 1 ? `Se redondea a packs de ${r.packSize} unidades` : 'Unidades a comprar');
+  const subtotal = r.sinCosto ? '—' : money(r.subtotal, 0);
+  const acumulado = r.fits ? money(r.acumulado, 0) : '—';   // solo tiene sentido dentro del plan
+
+  const perdida = !r.registrado && r.tier !== 'opcional' && r.perdidaSemana > 0
+    ? `<div class="cc-perdida">Dejás de vender ~${money(r.perdidaSemana)}/sem si falta</div>`
+    : '';
+
+  return `<tr class="${cls}" data-idx="${i}">
+    <td style="text-align:center">${checkbox}</td>
+    <td>
+      <div class="cc-prod">${esc(r.nombre)} ${chip}</div>
+      ${r.cobertura_texto ? `<div class="cc-cob">${esc(r.cobertura_texto)}</div>` : ''}
+      ${perdida}
+    </td>
+    <td><span class="badge badge-gray">${esc(r.rubro || 'Sin rubro')}</span></td>
+    <td style="text-align:right">${ritmo}</td>
+    <td style="text-align:center">
+      <input type="text" inputmode="numeric" class="cc-qty" data-idx="${i}" value="${r.qty}" title="${qtyTitle}"${r.registrado ? ' disabled' : ''} />
+    </td>
+    <td style="text-align:right">${costo}</td>
+    <td style="text-align:right">${subtotal}</td>
+    <td style="text-align:right;color:var(--text-muted)">${acumulado}</td>
+  </tr>`;
+}
+
+// ── Pintado: resumen del plan ─────────────────────────────────────────────────
+function paintPlan() {
+  const el = document.getElementById('cc-plan');
+  if (!el) return;
+  const { items, total } = planSeleccionado();
+  const disp = budgetActivo();
+  const restante = disp - total;
+  const pasado = restante < 0;
+  el.innerHTML = `
+    <div class="cc-plan-line"><span>Seleccionados</span><b>${items.length}</b></div>
+    <div class="cc-plan-line"><span>Total plan</span><b>${money(total)}</b></div>
+    <div class="cc-plan-line ${pasado ? 'cc-plan-over' : 'cc-plan-ok'}">
+      <span>${pasado ? 'Te pasás por' : 'Te queda'}</span><b>${money(Math.abs(restante))}</b>
+    </div>`;
+}
+
+// ── Ajustes de rentabilidad ───────────────────────────────────────────────────
+function paintAjustes() {
+  const el = document.getElementById('cc-ajustes');
+  if (!el) return;
+  if (!_state.ajustesOpen) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  const c = _state.comprasCfg;
+  el.style.display = 'block';
+  el.innerHTML = `
+    <div class="cc-ajustes-grid">
+      <div class="cc-reg-field">
+        <label>Rentabilidad a separar (monto fijo)</label>
+        <input id="cc-aj-monto" type="text" inputmode="numeric" value="${c.rentabilidad_monto != null ? fmt(c.rentabilidad_monto, 0) : ''}" placeholder="ej 250.000" />
+      </div>
+      <div class="cc-reg-field">
+        <label>Piso % de las ventas</label>
+        <input id="cc-aj-piso" type="text" inputmode="numeric" value="${c.rentabilidad_piso_pct != null ? c.rentabilidad_piso_pct : ''}" placeholder="ej 20" />
+      </div>
+      <div class="cc-reg-field">
+        <label>Cobertura objetivo (días)</label>
+        <input id="cc-aj-cob" type="text" inputmode="numeric" value="${c.cobertura_dias_objetivo != null ? c.cobertura_dias_objetivo : COBERTURA_DEFAULT}" placeholder="30" />
+      </div>
+    </div>
+    <div class="cc-ajustes-actions">
+      <button class="cc-btn-ghost" data-action="ajustes-cancel">Cancelar</button>
+      <button class="cc-btn-primary" data-action="ajustes-save">
+        <span class="material-icons">save</span> Guardar
+      </button>
+    </div>
+    <div class="cc-ajustes-hint">La rentabilidad efectiva es la mayor entre el monto fijo y el piso % de los ingresos del mes.</div>`;
+}
+
+// ── Resumen por nivel ─────────────────────────────────────────────────────────
+// Píldoras con cuánta plata pide cada nivel (a las cantidades actuales) y el
+// aviso de productos sin costo cargado, que no se pueden presupuestar.
+function paintResumen() {
+  const el = document.getElementById('cc-tiers');
+  if (!el) return;
+  const act = _state.rows.filter(r => !r.registrado);
+  const totalDe = tier => {
+    const list = act.filter(r => r.tier === tier && !r.sinCosto);
+    return { n: list.length, total: list.reduce((t, r) => t + r.qty * r.cost, 0) };
+  };
+  const sisi = totalDe('sisi');
+  const imp = totalDe('importante');
+  const opc = totalDe('opcional');
+  const sinCosto = act.filter(r => r.sinCosto);
+  const sinCostoImp = sinCosto.filter(r => r.tier !== 'opcional').length;
+
+  const pill = (cls, label, g) => g.n === 0 ? '' :
+    `<div class="cc-tier-pill ${cls}">${label} <span>${g.n} · ${money(g.total)}</span></div>`;
+  const warnCosto = sinCosto.length === 0 ? '' :
+    `<div class="cc-tier-pill cc-tier-nocost" title="Cargales el costo en la columna Costo de la tabla — se guarda en el Catálogo">
+       <span class="material-icons">warning_amber</span>
+       ${sinCosto.length} sin costo${sinCostoImp ? ` (${sinCostoImp} importante${sinCostoImp === 1 ? '' : 's'})` : ''}</div>`;
+
+  el.innerHTML = pill('cc-tier-sisi', 'Sí o sí', sisi)
+    + pill('cc-tier-imp', 'Importante', imp)
+    + pill('cc-tier-opc', 'Puede esperar', opc)
+    + warnCosto;
+}
+
+// ── Avisos: tope manual + presupuesto corto para lo SÍ O SÍ ───────────────────
+function paintWarn() {
+  const el = document.getElementById('cc-warn');
+  if (!el) return;
+  const s = _state;
+  const partes = [];
+  if (s.topeManual != null && s.topeManual > s.budget.gastableMes) {
+    partes.push(`<div class="cc-warn"><span class="material-icons">warning_amber</span>
+      El tope (${money(s.topeManual)}) supera lo que el colchón del mes permite gastar (${money(s.budget.gastableMes)}).</div>`);
+  }
+  const a = s.alloc;
+  if (a && a.sisiCorto) {
+    partes.push(`<div class="cc-warn cc-warn-danger"><span class="material-icons">priority_high</span>
+      La plata no cubre ni ${MIN_COBERTURA_DIAS} días de lo SÍ O SÍ: necesitás como mínimo
+      ${money(a.costoSisiUsado)} y hay ${money(budgetActivo())}. Comprá en orden, de arriba hacia abajo,
+      hasta donde llegues.</div>`);
+  } else if (a && a.degradado) {
+    partes.push(`<div class="cc-warn"><span class="material-icons">content_cut</span>
+      Para ${coberturaObjetivo()} días de lo SÍ O SÍ hacen falta ${money(a.costoSisiObjetivo)} y hay
+      ${money(budgetActivo())}. Ajusté las cantidades para cubrir ~${a.diasUsados} días
+      (${money(a.costoSisiUsado)}) sin dejar ningún imprescindible afuera.</div>`);
+  }
+  el.innerHTML = partes.join('');
+}
+
+// ── Eventos (delegados en el root, que se recrea en cada render completo) ──────
+function bindEvents(root) {
+  root.addEventListener('click', onClick);
+  root.addEventListener('change', onChange);
+  root.addEventListener('input', onInput);
+}
+
+function onClick(e) {
+  const btn = e.target.closest('[data-action]');
+  if (!btn) return;
+  const action = btn.dataset.action;
+  const s = _state;
+  switch (action) {
+    case 'period':
+      s.period = btn.dataset.period;
+      s.topeManual = null;
+      { const t = document.getElementById('cc-tope'); if (t) t.value = ''; }
+      recalc(true);
+      break;
+    case 'tope-clear':
+      s.topeManual = null;
+      { const t = document.getElementById('cc-tope'); if (t) t.value = ''; }
+      recalc(true);
+      break;
+    case 'actualizar':
+      actualizar(btn);
+      break;
+    case 'ajustes':
+      s.ajustesOpen = !s.ajustesOpen;
+      paintAjustes();
+      break;
+    case 'ajustes-cancel':
+      s.ajustesOpen = false;
+      paintAjustes();
+      break;
+    case 'ajustes-save':
+      guardarAjustes();
+      break;
+    case 'registrar':
+      registrarCompra(btn);
+      break;
+  }
+}
+
+function onChange(e) {
+  const s = _state;
+  if (e.target.classList.contains('cc-check')) {
+    const i = Number(e.target.dataset.idx);
+    if (s.rows[i]) s.rows[i].checked = e.target.checked;
+    paintPlan();
+    return;
+  }
+  if (e.target.classList.contains('cc-qty')) {
+    const i = Number(e.target.dataset.idx);
+    const r = s.rows[i];
+    if (!r) return;
+    const v = parseNum(e.target.value);
+    r.qty = v != null && v >= 0 ? Math.round(v) : 0;
+    r.qtyManual = true;    // la asignación de presupuesto ya no le pisa la cantidad
+    recalc(false);         // recomputa acumulado/corte sin tocar la selección manual
+    return;
+  }
+  if (e.target.classList.contains('cc-cost')) {
+    const i = Number(e.target.dataset.idx);
+    const r = s.rows[i];
+    if (!r) return;
+    const v = parseNum(e.target.value);
+    if (!(v > 0)) return;
+    r.cost = v;
+    r.sinCosto = false;
+    // En variedades el input pide el costo del PACK; el catálogo guarda costo
+    // por unidad suelta (convención de la valorización de stock).
+    const costoUnidad = (r.esVariedad && r.packSize > 0) ? v / r.packSize : v;
+    if (r.producto) r.producto.costo = costoUnidad;
+    guardarCostoCatalogo(r.doc_id, costoUnidad);
+    recalc(false);
+    if (r.fits && !r.checked) {
+      r.checked = true;
+      paintTable();
+      paintPlan();
+    }
+    return;
+  }
+  if (e.target.id === 'cc-medio') { s.medio = fuenteValida(e.target.value); return; }
+  if (e.target.id === 'cc-fecha') { s.fecha = e.target.value || hoyAR(); return; }
+}
+
+let _topeTimer = null;
+function onInput(e) {
+  const s = _state;
+  if (e.target.id === 'cc-tope') {
+    clearTimeout(_topeTimer);
+    _topeTimer = setTimeout(() => {
+      const v = parseNum(e.target.value);
+      s.topeManual = (v != null && v > 0) ? v : null;
+      recalc(true);
+    }, 250);
+    return;
+  }
+  if (e.target.id === 'cc-prov') { s.proveedor = e.target.value; }
+}
+
+// ── Actualizar (re-fetch stock/ritmo + Balance) ───────────────────────────────
+async function actualizar(btn) {
+  const s = _state;
+  btn.classList.add('cc-spin');
+  try {
+    const [alertas, diasDoc, balCfg] = await Promise.all([
+      refrescarAlertas({ silent: true }),
+      loadDiasMes(_db, s.ym),
+      loadBalanceConfig(_db),
+    ]);
+    s.alertasBase = alertas;
+    s.diasDoc = diasDoc || { ym: s.ym, dias: {} };
+    s.balCfg = balCfg || {};
+    s.budget = computeBudget(s.balCfg, s.diasDoc, s.comprasCfg, s.ym);
+    s.rows = buildRows(fuentesCompra(alertas, s.comprasCfg), s.comprasCfg);
+    recalc(true);
+  } catch (e) {
+    console.error('[centro_compras] actualizar:', e);
+  } finally {
+    btn.classList.remove('cc-spin');
+  }
+}
+
+// ── Guardar ajustes ───────────────────────────────────────────────────────────
+async function guardarAjustes() {
+  const s = _state;
+  const monto = parseNum((document.getElementById('cc-aj-monto') || {}).value) || 0;
+  const piso = parseNum((document.getElementById('cc-aj-piso') || {}).value) || 0;
+  const cob = Math.max(1, Math.round(parseNum((document.getElementById('cc-aj-cob') || {}).value) || COBERTURA_DEFAULT));
+  const partial = {
+    rentabilidad_monto: monto,
+    rentabilidad_piso_pct: piso,
+    cobertura_dias_objetivo: cob,
+  };
+  s.comprasCfg = { ...s.comprasCfg, ...partial };
+  try {
+    await saveComprasConfig(_db, partial);
+  } catch (e) {
+    console.error('[centro_compras] guardar ajustes:', e);
+    await alertDialog({ title: 'No se pudo guardar', message: 'Revisá la conexión e intentá de nuevo.', type: 'error' });
+    return;
+  }
+  // La cobertura cambia las cantidades sugeridas → reconstruir filas.
+  s.budget = computeBudget(s.balCfg, s.diasDoc, s.comprasCfg, s.ym);
+  s.rows = buildRows(fuentesCompra(s.alertasBase, s.comprasCfg), s.comprasCfg);
+  s.ajustesOpen = false;
+  paintAjustes();
+  recalc(true);
+}
+
+// Persiste el costo cargado desde la tabla en el producto del Catálogo, para que
+// quede para siempre (acá, en Catálogo y en la próxima compra). Falla en silencio:
+// la fila ya quedó presupuestada en memoria igual.
+function guardarCostoCatalogo(docId, costo) {
+  if (!_db || !docId) return;
+  updateDoc(doc(_db, 'catalogo', String(docId)), { costo, ultima_actualizacion: serverTimestamp() })
+    .catch(e => console.warn('[centro_compras] no se pudo guardar el costo en catálogo:', e));
+}
+
+// ── Registrar compra ──────────────────────────────────────────────────────────
+async function registrarCompra(btn) {
+  const s = _state;
+  const { items, total } = planSeleccionado();
+  if (!items.length) {
+    await alertDialog({ title: 'Nada seleccionado', message: 'Marcá al menos un producto con costo cargado.', type: 'warning' });
+    return;
+  }
+  const fecha = s.fecha || hoyAR();
+  const proveedor = (document.getElementById('cc-prov')?.value || s.proveedor || '').trim();
+  const medio = fuenteValida((document.getElementById('cc-medio') || {}).value || s.medio);
+
+  const ok = await confirmDialog({
+    title: 'Registrar compra',
+    message: `Vas a registrar <b>${items.length}</b> producto(s) por <b>${money(total)}</b>`
+      + `${proveedor ? ` en <b>${esc(proveedor)}</b>` : ''} (${MEDIOS.find(m => m.k === medio)?.label}) el ${fecha}.`
+      + `<br><br>Queda como gasto de inversión en el Balance del día y baja el presupuesto.`,
+    confirmText: 'Registrar',
+    cancelText: 'Cancelar',
+  });
+  if (!ok) return;
+
+  const ymF = fecha.slice(0, 7);
+  const DD = fecha.slice(8, 10);
+  const lineas = items.map(r => ({
+    proveedor: proveedor || 'Compra',
+    rubro: r.rubro || '',
+    medio,
+    monto: r.qty * r.cost,
+    origen: 'centro_compras',
+    doc_id: r.doc_id,
+  }));
+
+  btn.disabled = true;
+  try {
+    // Re-leer el día justo antes de escribir (el array se reemplaza entero, no se
+    // mergea) para no pisar una edición hecha desde el Balance.
+    const mesDoc = await loadDiasMes(_db, ymF);
+    const dia = (mesDoc?.dias?.[DD]) || { fecha, ingresos: [], compras: [] };
+    dia.compras = [...(dia.compras || []), ...lineas];
+    await saveDiasMes(_db, ymF, { dias: { [DD]: dia } });
+  } catch (e) {
+    console.error('[centro_compras] registrar:', e);
+    btn.disabled = false;
+    await alertDialog({ title: 'No se pudo registrar', message: 'Revisá la conexión e intentá de nuevo.', type: 'error' });
+    return;
+  }
+  btn.disabled = false;
+
+  // Update en vivo: marcar filas registradas, subir lo comprado, bajar el semáforo.
+  const idsReg = new Set(items.map(r => r.doc_id));
+  s.rows.forEach(r => {
+    if (idsReg.has(r.doc_id)) { r.registrado = true; r.checked = false; }
+  });
+  const b = s.budget;
+  b.comprasProductoMes += total;
+  b.presupuestoMes = b.ingresosMes - b.gastosFijosMes - b.rentabilidad - b.comprasProductoMes;
+  b.gastableMes = Math.max(0, b.presupuestoMes);
+  b.gastableSemana = Math.max(0, b.gastableMes / b.semanasRestantes);
+  // Reflejar la compra en el diasDoc en memoria (por si se registra otra en la sesión).
+  if (!s.diasDoc.dias) s.diasDoc.dias = {};
+  const diaMem = s.diasDoc.dias[DD] || { fecha, ingresos: [], compras: [] };
+  diaMem.compras = [...(diaMem.compras || []), ...lineas];
+  s.diasDoc.dias[DD] = diaMem;
+
+  // Reset de selección: con el presupuesto que quedó, el plan se rearma con lo
+  // que todavía entra (si no, quedan tildadas filas que ya no alcanza a pagar).
+  recalc(true);
+}

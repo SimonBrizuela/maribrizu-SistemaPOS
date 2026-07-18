@@ -18,7 +18,9 @@
  *   - `notif:silenced_until` (localStorage): timestamp hasta el que se silencia
  *     todo (no implementado todavía, dejado para futuro).
  */
-import { collection, getDocs, doc, onSnapshot, query, orderBy } from 'firebase/firestore';
+import { collection, getDocs, doc, onSnapshot, query, orderBy, limit, setDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
+import { getCached } from './cache.js';
+import { fechaDMYtoYMD } from './config.js';
 
 // ── Estado interno ───────────────────────────────────────────────────────────
 let _db = null;
@@ -32,10 +34,100 @@ let _unsubMeta = null;
 let _lastMetaTs = null;
 let _refreshing = false;
 let _pendingRefresh = false;
+let _refreshPromise = null;    // refresh en vuelo — los que llegan tarde lo esperan
 let _baselineDone = false;
 
+// ── Velocidad de venta (recomendación de reposición urgente) ─────────────────
+// Mapa nombre_normalizado → unidades vendidas en la ventana reciente. Se usa
+// para detectar qué productos en alerta de stock ROTAN seguido y, por lo tanto,
+// son urgentes de reponer. Se carga desde la misma cache que "Productos más
+// vendidos" (`productos:items_rich`), así no agrega lecturas a Firestore.
+let _velocidadPorNombre = new Map();       // nombre → unidades vendidas en la ventana
+let _velocidadPorNombreColor = new Map();  // "nombre||color" → unidades (variedades de conjuntos)
+let _nombresConColor = new Set();          // productos cuyas ventas vienen con conjunto_color (docs nuevos)
+let _consumoPorDocId = new Map();  // doc_id → unidades consumidas vía vinculaciones (impresiones → hoja, etc.)
+let _primerMovPorNombre = new Map();  // nombre → ymd de la primera venta en la ventana (ritmo de productos nuevos)
+let _primerMovPorDocId = new Map();   // doc_id → ymd del primer consumo vinculado en la ventana
+let _hoyYmd = '';                  // fecha AR del último refresh de velocidades
+let _umbralTop = Infinity;       // unidades de la ventana en el percentil 80 (top vendidos)
+
+const VENTANA_DIAS = 30;          // ventana de ventas recientes para medir el ritmo
+const UMBRAL_DIAS_COBERTURA = 7;  // si al ritmo actual se agota en ≤ esto → urgente
+const MIN_VENTAS_URGENTE = 3;     // mínimo vendido para escalar a urgente una alerta ya existente
+const MIN_VENTAS_RITMO = 8;       // mínimo vendido para generar urgencia SOLA por ritmo (sin stock_min)
+
 const LS_BROWSER_ENABLED = 'notif:browser_enabled';
+const LS_IGNORADOS = 'notif:ignorados';   // cache local del listado (carga instantánea)
+const IGNORADOS_DOC = ['config', 'notif_ignorados'];   // doc Firestore compartido entre PCs
 const TOAST_DURATION_MS = 9000;
+
+// ── Productos ocultados por el usuario ───────────────────────────────────────
+// Fuente de verdad: doc Firestore `config/notif_ignorados` { ids: [...] }, así
+// lo que se oculta en una PC se oculta en todas (listener en tiempo real).
+// localStorage queda solo como cache para mostrar el estado al instante mientras
+// llega el primer snapshot.
+let _ignorados = null;   // Set<doc_id>
+let _unsubIgnorados = null;
+
+function _cargarIgnorados() {
+  if (_ignorados) return _ignorados;
+  _ignorados = new Set();
+  try {
+    const raw = localStorage.getItem(LS_IGNORADOS);
+    if (raw) for (const id of JSON.parse(raw)) _ignorados.add(String(id));
+  } catch (e) { /* cache corrupto: arrancamos vacío */ }
+  return _ignorados;
+}
+
+function _cacheIgnoradosLocal() {
+  try { localStorage.setItem(LS_IGNORADOS, JSON.stringify([..._cargarIgnorados()])); } catch (e) {}
+}
+
+function _suscribirIgnorados() {
+  if (!_db || _unsubIgnorados) return;
+  try {
+    _unsubIgnorados = onSnapshot(doc(_db, ...IGNORADOS_DOC), (snap) => {
+      const ids = (snap.exists() && Array.isArray(snap.data().ids)) ? snap.data().ids : [];
+      _ignorados = new Set(ids.map(String));
+      _cacheIgnoradosLocal();
+      _emitChange(_calcularAlertas(_productos));   // refresca todas las pestañas/PCs
+    }, (err) => console.warn('[notificaciones] listener ignorados:', err));
+  } catch (e) {
+    console.warn('[notificaciones] no se pudo subscribir a ignorados:', e);
+  }
+}
+
+export function obtenerIgnorados() {
+  return [..._cargarIgnorados()];
+}
+
+export function ignorarProducto(docId) {
+  if (!docId) return;
+  const id = String(docId);
+  _cargarIgnorados().add(id);            // optimista: se ve al toque
+  _cacheIgnoradosLocal();
+  _emitChange(_calcularAlertas(_productos));
+  if (_db) setDoc(doc(_db, ...IGNORADOS_DOC), { ids: arrayUnion(id) }, { merge: true })
+    .catch(e => console.warn('[notificaciones] error guardando oculto:', e));
+}
+
+export function restaurarProducto(docId) {
+  if (!docId) return;
+  const id = String(docId);
+  _cargarIgnorados().delete(id);
+  _cacheIgnoradosLocal();
+  _emitChange(_calcularAlertas(_productos));
+  if (_db) setDoc(doc(_db, ...IGNORADOS_DOC), { ids: arrayRemove(id) }, { merge: true })
+    .catch(e => console.warn('[notificaciones] error restaurando oculto:', e));
+}
+
+export function restaurarTodos() {
+  _cargarIgnorados().clear();
+  _cacheIgnoradosLocal();
+  _emitChange(_calcularAlertas(_productos));
+  if (_db) setDoc(doc(_db, ...IGNORADOS_DOC), { ids: [] }, { merge: true })
+    .catch(e => console.warn('[notificaciones] error restaurando todos:', e));
+}
 
 // ── Helpers de catálogo ──────────────────────────────────────────────────────
 function _stockTotalVariedad(c, globalCont) {
@@ -73,35 +165,80 @@ function _stockEfectivo(p) {
   return Number(p.stock) || 0;
 }
 
+// Servicios del local de fotocopias (impresión, fotocopia, plastificado,
+// anillado, escaneo...). NO se reponen ellos: lo que se repone es su insumo
+// (la hoja/plástico vinculado, ya contado por consumo). Aunque figuren con
+// stock 0 o negativo, no deben aparecer en las alertas.
+const _RE_SERVICIO = /impres|fotocopia|plastific|anillad|encuaderna|escane|laminad|ampliaci[oó]n|reducci[oó]n/i;
+// Insumos cuyo nombre puede mencionar el servicio ("Hoja para fotocopias A4"):
+// son lo que se REPONE, nunca deben quedar excluidos como servicio.
+const _RE_INSUMO = /hoja|resma|papel|cartulina|opalina|acetato|etiqueta/i;
+function _esServicio(p) {
+  if (!p) return false;
+  const vinc = p.vinculaciones;
+  if ((Array.isArray(vinc) && vinc.length > 0) || p.vinculado_a) return true; // consume otro producto al venderse
+  const nombre = p.nombre || '';
+  if (_RE_INSUMO.test(nombre)) return false;
+  return _RE_SERVICIO.test(nombre);
+}
+
 function _alertasProducto(p) {
   const out = [];
   // -1 = ilimitado/servicio: nunca alertar.
   const stockRaw = Number(p.stock);
   if (stockRaw === -1) return out;
+  if (_esServicio(p)) return out;   // servicios (impresión/fotocopia/etc.): no se reponen
 
   const nombreBase = p.nombre || '(sin nombre)';
   const esConjunto = p && (p.es_conjunto === true || p.es_conjunto === 1);
   const variedades = esConjunto && Array.isArray(p.conjunto_colores) ? p.conjunto_colores : [];
 
-  // 1) Alerta por variedad (cada color con su propio stock_min).
-  // El stock_min de la variedad se compara contra el contador de
-  // packs/rollos/cajas/unidades que el usuario ve en el editor (`c.unidades`),
-  // NO contra el total en unidades sueltas. Así "1 pack mínimo" funciona
-  // sin importar cuántas unidades trae cada pack, y se adapta a cualquier
-  // tipo de producto (rollo, pack, caja, unidad, metro).
+  // 1) Alerta por variedad. Dos fuentes:
+  //    a. Con stock_min explícito: dispara toast + notif del navegador.
+  //       Se compara `unidades` (contador de packs/rollos) contra `stock_min`,
+  //       NO el total en unidades sueltas — así "1 pack mínimo" funciona sin
+  //       importar cuántas unidades trae cada pack.
+  //    b. Sin stock_min, pero el TOTAL EN UNIDADES SUELTAS (unidades*contenido
+  //       + restante) es 0 o ≤ 2: auto-detección de variantes bajas. Se marcan
+  //       con `auto: true` y NO disparan toast individual — solo aparecen en
+  //       la página /notificaciones. Esto matchea el contador "VARIANTES BAJAS"
+  //       del Dashboard que también compara el total real, no el contador.
+  //       Importante: una variedad con 1 pack × 5 unidades NO es "casi vacía".
+  const VARIEDAD_AUTO_UMBRAL = 2;
   if (variedades.length > 0) {
     const globalCont = Number(p.conjunto_contenido || 0);
     for (const c of variedades) {
       const sMinVar = Number(c.stock_min) || 0;
-      if (!(sMinVar > 0)) continue;
       const cantidadVar = Number(c.unidades) || 0;
-      if (cantidadVar > sMinVar) continue;
       const sMaxVar = Number(c.stock_max) || 0;
-      const sugerencia = sMaxVar > sMinVar ? Math.max(0, sMaxVar - cantidadVar) : null;
-      const totalUnitsVar = _stockTotalVariedad(c, globalCont);
       const u = _unidadProducto(p);
+      const totalUnitsVar = _stockTotalVariedad(c, globalCont);
+
+      let dispara = false;
+      let auto = false;
+      let stockMinUsado = sMinVar;
+      let stockMostrar = cantidadVar;
+      let unidadSingPlural = cantidadVar === 1 ? u.sg : u.pl;
+      let critico = false;
+
+      if (sMinVar > 0 && cantidadVar <= sMinVar) {
+        // Alerta configurada: comparar packs vs stock_min configurado
+        dispara = true;
+        critico = cantidadVar === 0;
+      } else if (sMinVar <= 0 && totalUnitsVar <= VARIEDAD_AUTO_UMBRAL) {
+        // Alerta auto: comparar total real en unidades sueltas
+        dispara = true;
+        auto = true;
+        stockMinUsado = VARIEDAD_AUTO_UMBRAL;
+        stockMostrar = totalUnitsVar;
+        unidadSingPlural = totalUnitsVar === 1 ? u.sg : u.pl;
+        critico = totalUnitsVar === 0;
+      }
+      if (!dispara) continue;
+
+      const sugerencia = sMaxVar > stockMinUsado ? Math.max(0, sMaxVar - cantidadVar) : null;
       out.push({
-        key: p.doc_id + '|var:' + (c.color || ''),
+        key: p.doc_id + '|' + (auto ? 'varauto:' : 'var:') + (c.color || ''),
         doc_id: p.doc_id,
         variedad: c.color || '',
         nombre: nombreBase + ' · ' + (c.color || ''),
@@ -109,13 +246,14 @@ function _alertasProducto(p) {
         rubro: p.rubro || '',
         sub_rubro: p.sub_rubro || '',
         marca: p.marca || '',
-        stock: cantidadVar,
+        stock: stockMostrar,
         stock_total_unidades: totalUnitsVar,
-        stock_min: sMinVar,
+        stock_min: stockMinUsado,
         stock_max: sMaxVar || null,
-        unidad_label: cantidadVar === 1 ? u.sg : u.pl,
+        unidad_label: unidadSingPlural,
         sugerencia,
-        critico: cantidadVar === 0,
+        critico,
+        auto,
         producto: p,
       });
     }
@@ -150,14 +288,246 @@ function _alertasProducto(p) {
   return out;
 }
 
+// ── Velocidad de venta ────────────────────────────────────────────────────────
+function _normNombre(s) {
+  return String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
+}
+
+// Carga las unidades vendidas por producto en la ventana reciente y deja listo
+// el umbral de "top vendidos". Es barato: reusa la cache de la página de
+// ranking. Falla en silencio (sin ventas → simplemente no hay urgencias).
+async function _cargarVelocidades() {
+  try {
+    const items = await getCached('productos:items_rich', async () => {
+      // orderBy por fecha_dt (Timestamp): el string `fecha` + limit recortaba el mes nuevo.
+      const snap = await getDocs(query(collection(_db, 'ventas_por_dia'), orderBy('fecha_dt', 'desc'), limit(5000)));
+      return snap.docs.map(d => d.data());
+    }, { ttl: 5 * 60 * 1000, memOnly: true });
+
+    // Ventana en fecha ARGENTINA (los docs guardan la fecha local del local).
+    const AR = { timeZone: 'America/Argentina/Buenos_Aires' };
+    _hoyYmd = new Date().toLocaleDateString('en-CA', AR);
+    const corteYMD = new Date(Date.now() - VENTANA_DIAS * 86400000).toLocaleDateString('en-CA', AR);
+
+    const mapa = new Map();
+    const mapaColor = new Map();
+    const conColor = new Set();
+    const consumo = new Map();
+    const primerNombre = new Map();
+    const primerDoc = new Map();
+    for (const it of items) {
+      if (it.deleted === true) continue;
+      const ymd = fechaDMYtoYMD(it.fecha);
+      if (!ymd || ymd < corteYMD) continue;
+
+      // Consumo vía vinculaciones (ej: cada impresión descuenta hojas). Es la
+      // verdad de terreno: lo que el watcher de consumibles ya descontó queda
+      // registrado en `consumibles_descuentos: [{target_id, cantidad}]`. Así la
+      // hoja/insumo acumula su consumo real aunque nunca se venda "suelta".
+      const desc = Array.isArray(it.consumibles_descuentos) ? it.consumibles_descuentos : null;
+      if (desc) {
+        for (const d of desc) {
+          if (!d || d.skip || d.error) continue;
+          const tid = String(d.target_id || '');
+          const c = Number(d.cantidad || 0);
+          if (tid && c > 0) {
+            consumo.set(tid, (consumo.get(tid) || 0) + c);
+            const prev = primerDoc.get(tid);
+            if (!prev || ymd < prev) primerDoc.set(tid, ymd);
+          }
+        }
+      }
+
+      const nombre = _normNombre(it.producto || it.product_name || '');
+      if (!nombre) continue;
+      const cant = Number(it.cantidad || it.quantity || 0);
+      if (!cant) continue;
+      // Las devoluciones/correcciones (cantidad negativa) restan del ritmo.
+      mapa.set(nombre, (mapa.get(nombre) || 0) + cant);
+      const color = _normNombre(it.conjunto_color || '');
+      if (color) {
+        conColor.add(nombre);
+        const k = nombre + '||' + color;
+        mapaColor.set(k, (mapaColor.get(k) || 0) + cant);
+      }
+      if (cant > 0) {
+        const prev = primerNombre.get(nombre);
+        if (!prev || ymd < prev) primerNombre.set(nombre, ymd);
+      }
+    }
+    _velocidadPorNombre = mapa;
+    _velocidadPorNombreColor = mapaColor;
+    _nombresConColor = conColor;
+    _consumoPorDocId = consumo;
+    _primerMovPorNombre = primerNombre;
+    _primerMovPorDocId = primerDoc;
+
+    // "Top vendido" = percentil 80 de los que vendieron algo. Con muy pocos
+    // datos no marcamos a nadie como top (evita inventar urgencias).
+    const vals = Array.from(mapa.values()).filter(v => v > 0).sort((a, b) => a - b);
+    _umbralTop = vals.length >= 5 ? vals[Math.floor(vals.length * 0.8)] : Infinity;
+  } catch (e) {
+    console.warn('[notificaciones] no se pudieron cargar velocidades de venta:', e);
+  }
+}
+
+// Enriquece una alerta con ritmo de venta, días de cobertura y la marca de
+// urgencia. Una alerta es URGENTE cuando el producto rota (vendió al menos
+// MIN_VENTAS_URGENTE en la ventana) y al ritmo actual se agota en ≤ 7 días
+// (lo que incluye los que ya están en cero). Las variantes auto-detectadas no
+// escalan a urgente para no inflar el ruido.
+// Días entre dos fechas "YYYY-MM-DD" (positivo si b es posterior).
+function _diasEntreYmd(a, b) {
+  const [ay, am, ad] = a.split('-').map(Number);
+  const [by, bm, bd] = b.split('-').map(Number);
+  return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86400000);
+}
+
+// Ritmo de un producto (o de UNA variedad) en la ventana:
+//   unidades = ventas directas por nombre + consumo vía vinculaciones (la hoja
+//              que se gasta al imprimir cuenta aunque nunca se venda "suelta").
+//   dias     = días efectivos de medición. Si el producto empezó a venderse
+//              hace poco (nuevo en catálogo), se mide desde su primera venta
+//              (piso 7 días) para no subestimar a los que arrancan fuerte.
+// Con `color`, mide SOLO esa variedad (las ventas nuevas guardan conjunto_color).
+// Si las ventas del producto no traen color (docs viejos), cae al ritmo del
+// producto entero — igual que antes.
+function _ritmoEfectivo(p, nombreFallback, color) {
+  const nombre = _normNombre((p && p.nombre) || nombreFallback || '');
+  const usaColor = !!color && _nombresConColor.has(nombre);
+  let unidades;
+  if (usaColor) {
+    unidades = _velocidadPorNombreColor.get(nombre + '||' + _normNombre(color)) || 0;
+  } else {
+    unidades = _velocidadPorNombre.get(nombre) || 0;
+    if (p && p.doc_id != null) unidades += _consumoPorDocId.get(String(p.doc_id)) || 0;
+  }
+  unidades = Math.max(0, unidades);   // devoluciones pueden dejarlo negativo
+
+  let dias = VENTANA_DIAS;
+  if (unidades > 0 && _hoyYmd) {
+    const primeros = [];
+    const pn = _primerMovPorNombre.get(nombre);
+    if (pn) primeros.push(pn);
+    if (!usaColor && p && p.doc_id != null) {
+      const pd = _primerMovPorDocId.get(String(p.doc_id));
+      if (pd) primeros.push(pd);
+    }
+    if (primeros.length) {
+      const transcurridos = _diasEntreYmd(primeros.sort()[0], _hoyYmd) + 1;
+      dias = Math.max(7, Math.min(VENTANA_DIAS, transcurridos));
+    }
+  }
+  return { unidades, dias };
+}
+
+function _aplicarUrgencia(a) {
+  const { unidades, dias } = _ritmoEfectivo(a.producto, a.nombre, a.variedad);
+  const velDia = unidades / dias;
+
+  a.unidades_ventana = unidades;
+  a.ritmo_dias = dias;
+  a.vel_dia = velDia;
+  a.vel_semana = velDia * 7;
+  a.es_top = velDia > 0 && unidades >= _umbralTop;
+  // Cobertura en UNIDADES SUELTAS: en alertas por variedad `stock` es el contador
+  // de packs/rollos, pero el ritmo se mide en unidades — usar el total real en
+  // unidades para no inflar (ni ocultar) la urgencia de los conjuntos.
+  const stockUnidades = Number.isFinite(Number(a.stock_total_unidades))
+    ? Number(a.stock_total_unidades)
+    : (Number(a.stock) || 0);
+  a.dias_cobertura = velDia > 0 ? stockUnidades / velDia : Infinity;
+
+  const rota = unidades >= MIN_VENTAS_URGENTE;
+  const porAgotarse = a.dias_cobertura <= UMBRAL_DIAS_COBERTURA;
+  a.urgente = !a.auto && rota && porAgotarse;
+  a.cobertura_texto = _coberturaTexto(a);
+  return a;
+}
+
+// Texto humano del ritmo: "Se agota en ~3 días · vendiste 12 en 30 días (~3/sem)".
+function _coberturaTexto(a) {
+  if (!a || !a.vel_dia || a.vel_dia <= 0) return '';
+  const porSem = a.vel_semana;
+  const ritmo = porSem >= 1
+    ? `~${_fmt(Math.round(porSem))}/sem`
+    : `~${_fmt(Math.max(1, Math.round(a.vel_dia * 30)))}/mes`;
+  const vendidos = `vendiste ${_fmt(Math.round(a.unidades_ventana))} en ${a.ritmo_dias || VENTANA_DIAS} días`;
+  if (a.stock <= 0) return `Sin stock · ${vendidos} (${ritmo})`;
+  const d = Math.max(1, Math.round(a.dias_cobertura));
+  return `Se agota en ~${d} ${d === 1 ? 'día' : 'días'} · ${vendidos} (${ritmo})`;
+}
+
+// Genera una urgencia POR RITMO de venta para un producto, sin depender de que
+// tenga `stock_min` cargado. Dispara cuando el producto rota fuerte (vendió
+// ≥ MIN_VENTAS_RITMO en la ventana) y figura en cero/negativo o se agota en
+// ≤ 7 días. Es lo que el dueño necesita reponer aunque nunca configuró mínimos.
+function _alertaVelocidad(p) {
+  if (Number(p.stock) === -1) return null;            // servicio / ilimitado
+  if (_esServicio(p)) return null;                    // impresión/fotocopia/etc.: se repone el insumo, no el servicio
+  const { unidades, dias } = _ritmoEfectivo(p);
+  if (unidades < MIN_VENTAS_RITMO) return null;
+  const stock = _stockEfectivo(p);
+  const velDia = unidades / dias;
+  const cobertura = velDia > 0 ? (stock <= 0 ? 0 : stock / velDia) : Infinity;
+  if (!(stock <= 0 || cobertura <= UMBRAL_DIAS_COBERTURA)) return null;
+  return {
+    key: p.doc_id + '|ritmo',
+    doc_id: p.doc_id,
+    variedad: null,
+    nombre: p.nombre || '(sin nombre)',
+    codigo: p.codigo || '',
+    rubro: p.rubro || '',
+    sub_rubro: p.sub_rubro || '',
+    marca: p.marca || '',
+    stock,
+    stock_min: Number(p.stock_min) || 0,
+    stock_max: Number(p.stock_max) || null,
+    sugerencia: null,
+    critico: stock <= 0,
+    origen: 'ritmo',
+    solo_pagina: true,   // se ve en la página/resumen, no spam-ea un toast por cada uno
+    producto: p,
+  };
+}
+
 function _calcularAlertas(productos) {
-  const out = [];
+  let out = [];
   for (const p of productos) {
     const arr = _alertasProducto(p);
     for (const a of arr) out.push(a);
   }
-  // Más crítico primero (stock = 0), luego por mayor déficit relativo
+
+  // Urgencias por ritmo de venta (aunque no tengan stock_min configurado).
+  const velAlertas = [];
+  for (const p of productos) {
+    const a = _alertaVelocidad(p);
+    if (a) velAlertas.push(a);
+  }
+  const docsConfig = new Set(out.filter(a => !a.auto).map(a => a.doc_id));
+  const docsVel = new Set(velAlertas.map(a => a.doc_id));
+  // Si un producto entra por ritmo, sus alertas auto-variantes se descartan
+  // (la urgencia a nivel producto manda y evita duplicar la misma fila).
+  out = out.filter(a => !(a.auto && docsVel.has(a.doc_id)));
+  for (const a of velAlertas) {
+    if (docsConfig.has(a.doc_id)) continue;  // ya tiene alerta config → esa se enriquece como urgente
+    out.push(a);
+  }
+
+  // Sacar los productos que el usuario ocultó (no aparecen en lista ni toasts).
+  const ign = _cargarIgnorados();
+  if (ign.size) out = out.filter(a => !ign.has(String(a.doc_id)));
+
+  for (const a of out) _aplicarUrgencia(a);
+
+  // Orden: urgentes primero y, dentro de ellos, los MÁS VENDIDOS arriba (es lo
+  // que el dueño quiere reponer primero). Luego sin stock y mayor déficit.
   out.sort((a, b) => {
+    if (a.urgente !== b.urgente) return a.urgente ? -1 : 1;
+    if (a.urgente && b.urgente) {
+      if ((b.vel_dia || 0) !== (a.vel_dia || 0)) return (b.vel_dia || 0) - (a.vel_dia || 0);
+      return a.dias_cobertura - b.dias_cobertura;
+    }
     if (a.critico !== b.critico) return a.critico ? -1 : 1;
     const da = (a.stock_min - a.stock) / Math.max(a.stock_min, 1);
     const db = (b.stock_min - b.stock) / Math.max(b.stock_min, 1);
@@ -167,28 +537,58 @@ function _calcularAlertas(productos) {
 }
 
 // ── Fetch del catálogo ───────────────────────────────────────────────────────
+// Usa la misma cache que el store global (`catalogo:all`) → si el listener
+// está activo, devuelve al toque; si no, hace un solo getDocs y lo cachea
+// para todas las páginas. Antes esto descargaba 12k docs duplicados en
+// paralelo al listener del store.
 async function _fetchCatalogo() {
-  const snap = await getDocs(query(collection(_db, 'catalogo'), orderBy('nombre')));
-  return snap.docs.map(d => ({ doc_id: d.id, ...d.data() }));
+  console.log('[notifications] usando getCached(catalogo:all)');
+  const _t0 = performance.now();
+  const items = await getCached('catalogo:all', async () => {
+    const snap = await getDocs(query(collection(_db, 'catalogo'), orderBy('nombre')));
+    // doc_id va al final para que NO lo pise un campo `id` interno del doc.
+    return snap.docs.map(d => ({ ...d.data(), doc_id: d.id }));
+  }, { ttl: 10 * 60 * 1000, memOnly: true });
+  console.log(`[notifications] ✓ catalogo listo en ${(performance.now() - _t0).toFixed(0)}ms (${items.length} docs)`);
+  return items;
 }
 
-async function _refrescar({ silent = false } = {}) {
-  if (_refreshing) { _pendingRefresh = true; return; }
+function _refrescar({ silent = false } = {}) {
+  // Si ya hay un refresh corriendo (ej: el inicial de initNotificaciones),
+  // esperar ESE en vez de volver al toque — si no, quien llega segundo (el
+  // Centro de Compras) calcula alertas con el catálogo todavía vacío.
+  if (_refreshing) { _pendingRefresh = true; return _refreshPromise; }
   _refreshing = true;
+  _refreshPromise = _doRefrescar({ silent });
+  return _refreshPromise;
+}
+
+async function _doRefrescar({ silent }) {
   try {
     const productos = await _fetchCatalogo();
     _productos = productos;
+    // Cargar el ritmo de venta (cacheado) antes de calcular, así las alertas ya
+    // salen con la marca de "reponer urgente" según lo más vendido.
+    await _cargarVelocidades();
     const alertas = _calcularAlertas(productos);
     // Cada alerta tiene una key única (doc_id o doc_id|var:Color) para
     // distinguir aviso global del producto de los avisos por variedad.
     const nuevasIds = new Set(alertas.map(a => a.key));
     const esInicial = !_baselineDone;
 
-    if (!silent) {
+    // En la primera ejecución forzamos silencio para armar el baseline sin
+    // disparar toasts por alertas que ya existían antes de abrir la app.
+    const dispararIndividuales = !silent && !esInicial;
+
+    if (dispararIndividuales) {
       // Diff: dispara cuando (a) la alerta es nueva o (b) el stock bajó más
       // que la última vez que avisamos. Así, si el usuario edita un producto
       // que ya estaba en alerta y vende otro item, vuelve a saltar el aviso.
+      // Las alertas `auto` (variantes detectadas sin stock_min configurado)
+      // NO disparan toast ni notif del navegador — sería ruidoso con 60 ítems.
+      // Solo se muestran en la página /notificaciones.
       const aDisparar = alertas.filter(a => {
+        if (a.auto || a.solo_pagina) return false;
         const prevStock = _lastStockPorKey.get(a.key);
         if (prevStock === undefined) return true;        // alerta nueva
         if (Number(a.stock) < Number(prevStock)) return true; // bajó más
@@ -199,13 +599,18 @@ async function _refrescar({ silent = false } = {}) {
       if (aDisparar.length && _browserEnabled() && _permPermitida()) {
         _mostrarNotifNavegador(aDisparar);
       }
-    } else if (esInicial && alertas.length > 0 && _browserEnabled() && _permPermitida()) {
-      // Carga inicial: si ya hay alertas pendientes y el usuario activó las
-      // notificaciones, mostramos un toast + notif resumen para confirmar que
-      // hay cosas por rellenar. Sin esto, sólo avisaríamos las que cambian
-      // DESPUÉS de abrir la página.
-      _mostrarToastResumen(alertas);
-      _mostrarNotifResumen(alertas);
+    } else if (esInicial && _browserEnabled() && _permPermitida()) {
+      // Carga inicial: si ya hay alertas configuradas (no auto) pendientes y
+      // el usuario activó las notificaciones, mostramos un toast + notif
+      // resumen para confirmar que hay cosas por rellenar. Excluimos `auto`
+      // del resumen para que el toast inicial sea sobre lo que el usuario
+      // configuró como mínimo — las variantes auto-bajas se ven en la página.
+      const alertasResumen = alertas.filter(a => !a.auto && !a.solo_pagina);
+      const urgentesRitmo  = alertas.filter(a => a.solo_pagina && a.urgente);
+      if (alertasResumen.length > 0 || urgentesRitmo.length > 0) {
+        _mostrarToastResumen(alertasResumen, urgentesRitmo);
+        _mostrarNotifResumen(alertasResumen.concat(urgentesRitmo));
+      }
     }
 
     _activeIds = nuevasIds;
@@ -279,10 +684,13 @@ function _mostrarNotifNavegador(alertas) {
     if (alertas.length === 1) {
       const a = alertas[0];
       const unidad = a.unidad_label ? ' ' + a.unidad_label : '';
-      const n = new Notification('Stock bajo · ' + a.nombre, {
-        body: `Quedan ${_fmt(a.stock)}${unidad} (mínimo ${_fmt(a.stock_min)}). Tocá para rellenar.`,
+      const titulo = (a.urgente ? 'Reponer urgente · ' : a.critico ? 'Sin stock · ' : 'Stock bajo · ') + a.nombre;
+      const cobertura = _coberturaTexto(a);
+      const n = new Notification(titulo, {
+        body: `Quedan ${_fmt(a.stock)}${unidad} (mínimo ${_fmt(a.stock_min)}).` + (cobertura ? ` ${cobertura}.` : '') + ' Tocá para reponer.',
         icon: '/libreria-liceo-512.png',
         tag: 'stock-' + a.key,
+        requireInteraction: !!a.urgente,
       });
       n.onclick = () => { window.focus(); _irACatalogo(a.doc_id); n.close(); };
     } else {
@@ -359,45 +767,58 @@ function _mostrarToast(a) {
   const root = _ensureToastRoot();
   const toast = document.createElement('div');
   toast.setAttribute('role', 'alert');
+
+  // Tres niveles: urgente (rota + por agotarse) > sin stock > stock bajo.
+  const urgente = !!a.urgente;
+  const acento  = urgente ? '#b00020' : a.critico ? '#c62828' : '#f57c00';
+  const acentoTxt = urgente ? '#b00020' : a.critico ? '#c62828' : '#b45309';
+  const tier    = urgente ? 'Reponer urgente' : a.critico ? 'Sin stock' : 'Stock bajo';
+  const icono   = urgente ? 'priority_high' : a.critico ? 'error' : 'warning';
+  const cobertura = _coberturaTexto(a);
+
   toast.style.cssText = [
     'pointer-events:auto',
-    'background:#ffffff',
-    `border-left:4px solid ${a.critico ? '#c62828' : '#f57c00'}`,
+    'background:var(--surface)',
+    `border-left:${urgente ? '5px' : '4px'} solid ${acento}`,
     'border-radius:12px',
-    'box-shadow:0 6px 24px rgba(0,0,0,0.18)',
+    `box-shadow:0 6px 24px rgba(0,0,0,${urgente ? '0.24' : '0.18'})`,
     'padding:12px 14px',
     'display:flex',
     'align-items:flex-start',
     'gap:10px',
     'font-family:Inter,system-ui,sans-serif',
-    'color:#1c1e21',
+    'color:var(--text)',
     'transform:translateY(-12px)',
     'opacity:0',
     'transition:transform 0.25s ease, opacity 0.25s ease',
   ].join(';');
 
   toast.innerHTML = `
-    <span class="material-icons" style="color:${a.critico ? '#c62828' : '#f57c00'};font-size:22px;flex-shrink:0">${a.critico ? 'error' : 'warning'}</span>
+    <span class="material-icons" style="color:${acento};font-size:22px;flex-shrink:0">${icono}</span>
     <div style="flex:1;min-width:0">
-      <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;color:${a.critico ? '#c62828' : '#b45309'};margin-bottom:2px">
-        ${a.critico ? 'Sin stock' : 'Stock bajo'}
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
+        <span style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;color:${acentoTxt}">${tier}</span>
+        ${a.es_top ? `<span style="font-size:9px;font-weight:800;letter-spacing:0.4px;color:var(--tint-red-fg);background:var(--tint-red-bg);border:1px solid var(--border);padding:1px 6px;border-radius:99px;text-transform:uppercase">Top ventas</span>` : ''}
       </div>
       <div style="font-size:14px;font-weight:700;line-height:1.3;word-wrap:break-word">${_escape(a.nombre)}</div>
-      <div style="font-size:12px;color:#65676b;margin-top:3px">
-        Quedan <b style="color:${a.critico ? '#c62828' : '#b45309'}">${_fmt(a.stock)}${a.unidad_label ? ' ' + a.unidad_label : ''}</b>
-        <span style="color:#9ca3af">/ mín ${_fmt(a.stock_min)}</span>
-        ${a.sugerencia ? ` · <span style="color:#7b3fa6">pedir ~${_fmt(a.sugerencia)}</span>` : ''}
+      <div style="font-size:12px;color:var(--text-muted);margin-top:3px">
+        Quedan <b style="color:${acentoTxt}">${_fmt(a.stock)}${a.unidad_label ? ' ' + a.unidad_label : ''}</b>
+        <span style="color:var(--text-muted)">/ mín ${_fmt(a.stock_min)}</span>
+        ${a.sugerencia ? ` · <span style="color:var(--primary)">pedir ~${_fmt(a.sugerencia)}</span>` : ''}
       </div>
+      ${cobertura ? `<div style="font-size:11.5px;font-weight:600;color:${urgente ? 'var(--tint-red-fg)' : 'var(--primary)'};margin-top:3px;display:flex;align-items:center;gap:4px">
+        <span class="material-icons" style="font-size:14px">trending_up</span>${_escape(cobertura)}
+      </div>` : ''}
       <div style="display:flex;gap:8px;margin-top:8px">
-        <button data-act="rellenar" style="background:#7b3fa6;color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">
-          Rellenar
+        <button data-act="rellenar" style="background:${urgente ? acento : '#7b3fa6'};color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">
+          ${urgente ? 'Reponer ahora' : 'Rellenar'}
         </button>
-        <button data-act="cerrar" style="background:transparent;color:#65676b;border:1px solid #e4e6eb;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">
+        <button data-act="cerrar" style="background:transparent;color:var(--text-muted);border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">
           Cerrar
         </button>
       </div>
     </div>
-    <button data-act="x" aria-label="Cerrar" style="background:none;border:none;color:#9ca3af;cursor:pointer;padding:2px;line-height:1;flex-shrink:0">
+    <button data-act="x" aria-label="Cerrar" style="background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px;line-height:1;flex-shrink:0">
       <span class="material-icons" style="font-size:18px">close</span>
     </button>
   `;
@@ -436,14 +857,16 @@ function _cerrarToast(toast) {
 // Toast resumen: una sola tarjeta con cuántos productos hay y un botón a la
 // página de notificaciones. Se usa al cargar la app, sin spam-ear con uno
 // por producto.
-function _mostrarToastResumen(alertas) {
+function _mostrarToastResumen(alertas, urgentesRitmo = []) {
   const root = _ensureToastRoot();
   const toast = document.createElement('div');
   toast.setAttribute('role', 'alert');
+  const hayUrgentes = urgentesRitmo.length > 0;
+  const acento = hayUrgentes ? '#b00020' : '#7b3fa6';
   toast.style.cssText = [
     'pointer-events:auto',
-    'background:#ffffff',
-    'border-left:4px solid #7b3fa6',
+    'background:var(--surface)',
+    `border-left:${hayUrgentes ? '5px' : '4px'} solid ${acento}`,
     'border-radius:12px',
     'box-shadow:0 6px 24px rgba(0,0,0,0.18)',
     'padding:12px 14px',
@@ -451,22 +874,28 @@ function _mostrarToastResumen(alertas) {
     'align-items:center',
     'gap:10px',
     'font-family:Inter,system-ui,sans-serif',
-    'color:#1c1e21',
+    'color:var(--text)',
     'transform:translateY(-12px)',
     'opacity:0',
     'transition:transform 0.25s ease, opacity 0.25s ease',
   ].join(';');
   const criticas = alertas.filter(a => a.critico).length;
+  const titulo = hayUrgentes
+    ? `${urgentesRitmo.length} de tus más vendidos sin stock`
+    : `${alertas.length} ${alertas.length === 1 ? 'producto' : 'productos'} con stock bajo`;
+  const sub = hayUrgentes
+    ? `Reponer urgente${alertas.length > 0 ? ` · ${alertas.length} con mínimo configurado` : ''}.`
+    : `${criticas > 0 ? `<b style="color:var(--tint-red-fg)">${criticas} sin stock</b> · ` : ''}revisá la lista para rellenar.`;
   toast.innerHTML = `
-    <span class="material-icons" style="color:#7b3fa6;font-size:24px;flex-shrink:0">inventory_2</span>
+    <span class="material-icons" style="color:${acento};font-size:24px;flex-shrink:0">${hayUrgentes ? 'priority_high' : 'inventory_2'}</span>
     <div style="flex:1;min-width:0">
-      <div style="font-size:13px;font-weight:700;color:#1c1e21">${alertas.length} ${alertas.length === 1 ? 'producto' : 'productos'} con stock bajo</div>
-      <div style="font-size:11.5px;color:#65676b;margin-top:2px">
-        ${criticas > 0 ? `<b style="color:#c62828">${criticas} sin stock</b> · ` : ''}revisá la lista para rellenar.
+      <div style="font-size:13px;font-weight:700;color:var(--text)">${titulo}</div>
+      <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">
+        ${sub}
       </div>
     </div>
     <button data-act="ver" style="background:#7b3fa6;color:#fff;border:none;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">Ver</button>
-    <button data-act="x" aria-label="Cerrar" style="background:none;border:none;color:#9ca3af;cursor:pointer;padding:2px;line-height:1;flex-shrink:0">
+    <button data-act="x" aria-label="Cerrar" style="background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px;line-height:1;flex-shrink:0">
       <span class="material-icons" style="font-size:18px">close</span>
     </button>
   `;
@@ -514,6 +943,9 @@ export function initNotifications(db) {
   _initialized = true;
   _db = db;
 
+  // 0. Listado compartido de productos ocultos (sincronizado entre PCs)
+  _suscribirIgnorados();
+
   // 1. Carga inicial (silenciosa: no spam-ear al login)
   _refrescar({ silent: true });
 
@@ -536,13 +968,53 @@ export function obtenerAlertasActivas() {
   return _calcularAlertas(_productos);
 }
 
+// Candidatos de compra por cobertura: productos que rotan (ventas directas +
+// consumo por vinculaciones, ej: hojas gastadas por impresiones/fotocopias) y
+// cuyo stock NO cubre `dias` días al ritmo actual. A diferencia de las alertas
+// (que saltan recién cuando quedan ≤7 días o se pisa el mínimo), esto incluye
+// lo que conviene adelantar: el Centro de Compras lo usa para recomendar la
+// compra ANTES de que falte.
+export function obtenerCandidatosCompra(dias = 30) {
+  const ign = _cargarIgnorados();
+  const out = [];
+  for (const p of _productos) {
+    if (Number(p.stock) === -1) continue;   // servicio / ilimitado
+    if (_esServicio(p)) continue;           // impresión/fotocopia/etc: se repone el insumo
+    if (p.doc_id != null && ign.has(String(p.doc_id))) continue;
+    const ritmo = _ritmoEfectivo(p);
+    if (ritmo.unidades < MIN_VENTAS_URGENTE) continue;   // casi no rota → no vale adelantar
+    const stock = _stockEfectivo(p);
+    const velDia = ritmo.unidades / ritmo.dias;
+    const cobertura = stock <= 0 ? 0 : stock / velDia;
+    if (cobertura >= dias) continue;               // el stock alcanza hasta el objetivo
+    out.push(_aplicarUrgencia({
+      key: p.doc_id + '|compra',
+      doc_id: p.doc_id,
+      variedad: null,
+      nombre: p.nombre || '(sin nombre)',
+      codigo: p.codigo || '',
+      rubro: p.rubro || '',
+      sub_rubro: p.sub_rubro || '',
+      marca: p.marca || '',
+      stock,
+      stock_min: Number(p.stock_min) || 0,
+      stock_max: Number(p.stock_max) || null,
+      sugerencia: null,
+      critico: stock <= 0,
+      origen: 'cobertura',
+      producto: p,
+    }));
+  }
+  return out;
+}
+
 export function onAlertasCambian(cb) {
   _listeners.add(cb);
   return () => _listeners.delete(cb);
 }
 
-export async function refrescarAlertas() {
-  await _refrescar({ silent: true });
+export async function refrescarAlertas({ silent = true } = {}) {
+  await _refrescar({ silent });
   return obtenerAlertasActivas();
 }
 
