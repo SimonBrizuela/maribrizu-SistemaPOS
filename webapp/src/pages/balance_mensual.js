@@ -9,10 +9,11 @@
 // + autocompletar de ventas reales para meses nuevos. Todo editable a mano.
 // Persiste en control_config/balance vía load/saveBalanceConfig (merge recursivo).
 
-import { loadBalanceConfig, saveBalanceConfig, invalidateBalanceConfig, loadDiasMes, saveDiasMes, invalidateDiasMes, parseArDate, isVentaVarios2 } from '../config.js';
+import { loadBalanceConfig, saveBalanceConfig, invalidateBalanceConfig, loadDiasMes, saveDiasMes, invalidateDiasMes, parseArDate, isVentaVarios2, saveControlConfig } from '../config.js';
 import { BALANCE_SEED } from './balance_seed.js';
 import { getCached } from '../cache.js';
-import { collection, getDocs, query, orderBy, limit, doc, setDoc, updateDoc, deleteField, serverTimestamp } from 'firebase/firestore';
+import { collection, getDocs, getDoc, query, orderBy, limit, doc, setDoc, updateDoc, deleteField, serverTimestamp } from 'firebase/firestore';
+import { cssVar } from '../theme.js';
 import { confirmDialog, alertDialog, promptDialog } from '../components/dialogs.js';
 import { refreshVencimientos, setPagosMesFromDias } from './calendario_core.js';
 
@@ -26,12 +27,7 @@ const MEDIOS = [
 let cfg = null;
 let db = null;
 let mountEl = null;
-let view = 'resumen';
-// Pestañas externas que Control Total inyecta en el segmented control (ej: el
-// Resumen de ganancia del período). Cada una: { k, label, icon, el, onShow? }.
-// El elemento vive fuera del módulo: al activarse se re-adjunta al body (los
-// listeners sobreviven porque el nodo nunca se destruye, solo se desmonta).
-let extSegs = [];
+let view = 'ganancia';
 const openMeses = new Set();
 let saving = false;
 
@@ -414,8 +410,8 @@ function openHistPanel() {
 }
 function balHistKey(e) {
   if (!mountEl || !mountEl.isConnected) return;
-  // El deshacer es del balance: no aplica con una pestaña externa activa (Resumen CT).
-  if (extSegs.some(s => s.k === view)) return;
+  // El deshacer es de las vistas editables; en el Resumen (solo lectura) no aplica.
+  if (view === 'ganancia') return;
   const t = e.target;
   if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
   const z = e.key === 'z' || e.key === 'Z', y = e.key === 'y' || e.key === 'Y';
@@ -522,14 +518,12 @@ async function removeMes(ym) {
 }
 
 // ── Punto de entrada ──────────────────────────────────────────────────────────
-export async function mountBalanceMensual(paneEl, _db, opts) {
+export async function mountBalanceMensual(paneEl, _db) {
   mountEl = paneEl;
   db = _db;
-  extSegs = (opts && opts.extSegs) || [];
-  view = localStorage.getItem('bal:view') || (extSegs[0] && extSegs[0].k) || 'resumen';
+  view = localStorage.getItem('bal:view') || 'ganancia';
   if (view === 'fijos') view = 'dia';   // la pestaña Montos fijos se movió a Día por día
-  const validas = [...extSegs.map(s => s.k), 'resumen', 'semana', 'dia', 'meses', 'buscar'];
-  if (!validas.includes(view)) view = (extSegs[0] && extSegs[0].k) || 'resumen';
+  if (!['ganancia', 'resumen', 'semana', 'dia', 'meses', 'buscar'].includes(view)) view = 'ganancia';
   openMeses.clear();
   curDiaYm = curDiaDD = null;   // la vista Día por día arranca siempre en hoy
   paneEl.innerHTML = `<div class="ct-loading"><div class="spinner" style="width:24px;height:24px;border-width:3px"></div></div>`;
@@ -553,17 +547,16 @@ function tieneDatos() {
 }
 
 // ── Render raíz ───────────────────────────────────────────────────────────────
-// El shell (segmented control + banda de caja) se renderiza siempre: aunque el
-// balance no tenga datos todavía, las pestañas externas (Resumen de Control
-// Total) tienen que seguir funcionando. El estado vacío vive en renderBody.
+// El shell (segmented control + banda de caja) se renderiza siempre; el estado
+// vacío (sin datos importados) vive en renderBody.
 function render() {
   const segs = [
-    ...extSegs.map(s => ({ k: s.k, label: s.label, icon: s.icon })),
-    { k: 'resumen', label: 'Resumen vivo',     icon: 'table_chart' },
-    { k: 'semana',  label: 'Semana a Semana',  icon: 'view_week' },
-    { k: 'dia',     label: 'Día por día',      icon: 'today' },
-    { k: 'meses',   label: 'Meses',            icon: 'calendar_month' },
-    { k: 'buscar',  label: 'Buscar',           icon: 'search' },
+    { k: 'ganancia', label: 'Resumen',          icon: 'dashboard' },
+    { k: 'resumen',  label: 'Resumen vivo',     icon: 'table_chart' },
+    { k: 'semana',   label: 'Semana a Semana',  icon: 'view_week' },
+    { k: 'dia',      label: 'Día por día',      icon: 'today' },
+    { k: 'meses',    label: 'Meses',            icon: 'calendar_month' },
+    { k: 'buscar',   label: 'Buscar',           icon: 'search' },
   ];
   mountEl.innerHTML = `
     <div class="bal-wrap">
@@ -638,21 +631,14 @@ function scrollAncestor() {
 function renderBody() {
   const body = mountEl.querySelector('#bal-body');
   if (!body) return;
-  // Pestaña externa (ej: Resumen de Control Total): se re-adjunta el nodo vivo.
-  const ext = extSegs.find(s => s.k === view);
-  if (ext) {
-    body.innerHTML = '';
-    body.appendChild(ext.el);
-    if (typeof ext.onShow === 'function') ext.onShow();
-    return;
-  }
   if (!tieneDatos()) { renderEmptyBody(body); return; }
   // Preservar scroll en los re-render síncronos (agregar/renombrar/borrar) para
   // no saltar al tope. Día/Buscar cargan async y manejan su propio estado.
   const scroller = scrollAncestor();
   const sTop = scroller ? scroller.scrollTop : window.scrollY;
   const restore = () => { if (scroller) scroller.scrollTop = sTop; else window.scrollTo(0, sTop); };
-  if (view === 'resumen') { renderResumen(body); restore(); }
+  if (view === 'ganancia') renderGanancia(body);
+  else if (view === 'resumen') { renderResumen(body); restore(); }
   else if (view === 'semana') renderSemana(body);
   else if (view === 'dia') renderDia(body);
   else if (view === 'meses') { renderMeses(body); restore(); }
@@ -1125,6 +1111,566 @@ function patchMesTotales(card, ym) {
   if (head) head.textContent = money(totalSaldos(ym));
 }
 
+// ── Sub-vista: RESUMEN (del período) ──────────────────────────────────────────
+// El tablero de la página, calculado 100% desde lo anotado en el balance (los
+// días del "Día por día"): ingresos − egresos = saldo del período, desglose por
+// medio de pago, estado de los gastos fijos del mes, gráficos y lista de días.
+// Reemplaza al viejo motor de ganancia POS (ventas × costo de catálogo).
+let ganPeriodo = localStorage.getItem('bal:gan_periodo') || 'mes';
+let ganRango = null;
+try { ganRango = JSON.parse(localStorage.getItem('bal:gan_rango') || 'null'); } catch (_) {}
+
+const MEDIO_COLORS = { efectivo: '#2e7d32', mp: '#1877f2', lapos: '#6a1b9a', sin: '#90a4ae' };
+const PROV_COLORS = ['#1877f2', '#2e7d32', '#e65100', '#6a1b9a', '#c62828', '#00695c', '#cfd8dc'];
+
+// Chart.js compartido con el Dashboard vía window.Chart (mismo vendor local).
+let _chartJsLoad = null;
+function loadChartJs() {
+  if (window.Chart) return Promise.resolve(window.Chart);
+  if (_chartJsLoad) return _chartJsLoad;
+  _chartJsLoad = new Promise((resolve, reject) => {
+    const s = document.createElement('script');
+    s.src = `${import.meta.env.BASE_URL}vendor/chart.umd.min.js`;
+    s.async = true;
+    s.onload = () => resolve(window.Chart);
+    s.onerror = () => reject(new Error('No se pudo cargar Chart.js'));
+    document.head.appendChild(s);
+  });
+  return _chartJsLoad;
+}
+const _ganCharts = new Map();
+function destroyGanCharts() {
+  _ganCharts.forEach(ch => { try { ch.destroy(); } catch (_) {} });
+  _ganCharts.clear();
+}
+function ganMakeChart(id, el, config) {
+  if (!el || !window.Chart) return;
+  window.Chart.defaults.color = cssVar('--chart-text', '#65676b');
+  window.Chart.defaults.borderColor = cssVar('--chart-grid', 'rgba(0,0,0,0.06)');
+  _ganCharts.set(id, new window.Chart(el.getContext('2d'), config));
+}
+function fmtCompacto(v) {
+  const n = Number(v) || 0;
+  if (Math.abs(n) >= 1e6) return (n / 1e6).toFixed(1).replace(/\.0$/, '') + 'M';
+  if (Math.abs(n) >= 1e3) return (n / 1e3).toFixed(1).replace(/\.0$/, '') + 'k';
+  return String(Math.round(n));
+}
+
+// Rango [desde, hasta] (ISO inclusive) del período elegido.
+function ganRangoActual() {
+  const hoy = hoyAR();
+  if (ganPeriodo === 'hoy') return { d: hoy, h: hoy };
+  if (ganPeriodo === 'semana') return { d: shiftFecha(hoy, -6), h: hoy };
+  if (ganPeriodo === 'mesant') {
+    const [y, m] = hoy.slice(0, 7).split('-').map(Number);
+    const py = m === 1 ? y - 1 : y, pm = m === 1 ? 12 : m - 1;
+    const ym = `${py}-${String(pm).padStart(2, '0')}`;
+    return { d: `${ym}-01`, h: `${ym}-${String(new Date(py, pm, 0).getDate()).padStart(2, '0')}` };
+  }
+  if (ganPeriodo === 'custom' && ganRango?.desde) {
+    const hta = ganRango.hasta || ganRango.desde;
+    return ganRango.desde <= hta ? { d: ganRango.desde, h: hta } : { d: hta, h: ganRango.desde };
+  }
+  return { d: hoy.slice(0, 8) + '01', h: hoy };   // este mes
+}
+
+// Serie de meses ISO entre dos 'YYYY-MM' inclusive. Se usa en vez de filtrar
+// cfg.meses porque los docs de días pueden existir para meses que todavía no se
+// agregaron al RESUMEN (ej: el mes en curso).
+function ymRange(ymD, ymH) {
+  const out = [];
+  let [y, m] = ymD.split('-').map(Number);
+  const [yH, mH] = ymH.split('-').map(Number);
+  while (y < yH || (y === yH && m <= mH)) {
+    out.push(`${y}-${String(m).padStart(2, '0')}`);
+    m++; if (m > 12) { m = 1; y++; }
+  }
+  return out;
+}
+// Etiqueta de mes aunque no esté cargado en cfg.meses ("2026-07" → "Julio 26").
+function mesLabelAny(ym) { return (cfg.meses?.[ym]?.label) || labelFromYm(ym); }
+
+// Agrega los días del balance dentro del rango: totales por medio, por día,
+// por rubro y por proveedor + la lista cruda de movimientos (para el detalle).
+async function ganAgg(d, h) {
+  const meses = ymRange(d.slice(0, 7), h.slice(0, 7));
+  const zero = () => ({ efectivo: 0, mp: 0, lapos: 0, sin: 0, total: 0 });
+  const agg = { ing: zero(), egr: zero(), porDia: {}, porRubro: {}, porProv: {}, movsIng: [], movsEgr: [] };
+  const acc = (o, medio, v) => { const k = medio && o[medio] != null ? medio : 'sin'; o[k] += v; o.total += v; };
+  const dia0 = (iso) => (agg.porDia[iso] = agg.porDia[iso] || { ing: 0, egr: 0 });
+  for (const ym of meses) {
+    const docM = await loadDiasMes(db, ym);
+    const dias = (docM && docM.dias) || {};
+    for (const dd of Object.keys(dias).sort()) {
+      const iso = `${ym}-${dd}`;
+      if (iso < d || iso > h) continue;
+      (dias[dd].ingresos || []).forEach(x => {
+        const v = Number(x.monto) || 0;
+        if (!v) return;
+        acc(agg.ing, x.medio, v);
+        dia0(iso).ing += v;
+        agg.movsIng.push({ iso, ym, dd, motivo: x.motivo || '', medio: x.medio || '', monto: v });
+      });
+      (dias[dd].compras || []).forEach(x => {
+        const v = Number(x.monto) || 0;
+        if (!v) return;
+        acc(agg.egr, x.medio, v);
+        dia0(iso).egr += v;
+        const rubro = (x.rubro || '').trim() || 'Sin rubro';
+        const prov  = (x.proveedor || x.motivo || '').trim() || '(sin nombre)';
+        agg.porRubro[rubro] = (agg.porRubro[rubro] || 0) + v;
+        agg.porProv[prov]   = (agg.porProv[prov]   || 0) + v;
+        agg.movsEgr.push({ iso, ym, dd, prov, rubro, medio: x.medio || '', monto: v });
+      });
+    }
+  }
+  return agg;
+}
+
+// "Mié 15/07" — etiqueta corta de un día para la tabla del período.
+function diaCorto(iso) {
+  const d = new Date(iso + 'T12:00:00-03:00');
+  const w = d.toLocaleDateString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', weekday: 'short' });
+  return `${w.charAt(0).toUpperCase() + w.slice(1)} ${ddmm(iso)}`;
+}
+
+function gotoDia(ym, dd) {
+  curDiaYm = ym; curDiaDD = dd;
+  view = 'dia';
+  localStorage.setItem('bal:view', view);
+  mountEl.querySelectorAll('.bal-seg-btn').forEach(x => x.classList.toggle('active', x.dataset.seg === 'dia'));
+  renderBody();
+}
+
+async function renderGanancia(body) {
+  destroyGanCharts();
+  const chartLib = loadChartJs().catch(() => null);
+  const { d, h } = ganRangoActual();
+  const periodos = [
+    { k: 'hoy',    t: 'Hoy' },
+    { k: 'semana', t: '7 días' },
+    { k: 'mes',    t: 'Este mes' },
+    { k: 'mesant', t: 'Mes anterior' },
+    { k: 'custom', t: '<span class="material-icons" style="font-size:15px;vertical-align:-3px;margin-right:3px">date_range</span>Personalizado' },
+  ];
+  body.innerHTML = `
+    <div class="ct-toolbar">
+      <div class="ct-periodo">
+        ${periodos.map(p => `<button type="button" class="ct-periodo-btn${p.k === ganPeriodo ? ' active' : ''}" data-p="${p.k}">${p.t}</button>`).join('')}
+      </div>
+      <button type="button" id="gan-config-btn" class="ct-config-btn" title="Nombres de cuentas y fecha de inicio (usados por el resto de la webapp)">
+        <span class="material-icons" style="font-size:18px">settings</span> Configurar cuentas
+      </button>
+    </div>
+    <div id="gan-custom" class="ct-custom-panel" style="display:${ganPeriodo === 'custom' ? '' : 'none'}">
+      <div class="ct-custom-grp">
+        <div class="ct-custom-title">Rango por días</div>
+        <div class="ct-custom-row">
+          <label>Desde<input type="date" id="gan-desde" value="${ganRango?.desde || ''}"></label>
+          <label>Hasta<input type="date" id="gan-hasta" value="${ganRango?.hasta || ''}"></label>
+          <button type="button" id="gan-aplicar" class="ct-custom-apply">Aplicar</button>
+        </div>
+      </div>
+    </div>
+    <div id="gan-stats">
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:12px">
+        ${Array(3).fill('<div class="skel" style="height:96px;border-radius:14px"></div>').join('')}
+      </div>
+    </div>`;
+
+  // Toolbar de período. En "Personalizado" el panel de rango queda visible
+  // (ganRangoActual cae a "este mes" hasta que se aplique un rango).
+  body.querySelectorAll('.ct-periodo-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      ganPeriodo = btn.dataset.p;
+      localStorage.setItem('bal:gan_periodo', ganPeriodo);
+      renderBody();
+    });
+  });
+  body.querySelector('#gan-aplicar')?.addEventListener('click', () => {
+    const desde = body.querySelector('#gan-desde')?.value;
+    if (!desde) return;
+    ganRango = { desde, hasta: body.querySelector('#gan-hasta')?.value || desde };
+    localStorage.setItem('bal:gan_rango', JSON.stringify(ganRango));
+    ganPeriodo = 'custom';
+    localStorage.setItem('bal:gan_periodo', 'custom');
+    renderBody();
+  });
+  body.querySelector('#gan-config-btn')?.addEventListener('click', openConfigCuentas);
+
+  const agg = await ganAgg(d, h);
+  const ymRef = h.slice(0, 7);
+  const fijosRef = fijosActivos().filter(f => fijoAplica(f, ymRef));
+  const totalFijosRef = totalFijosMes(ymRef);
+  let fijosPagados = 0;
+  if (fijosRef.length) {
+    const docRef = await loadDiasMes(db, ymRef);
+    fijosRef.forEach(f => { fijosPagados += pagosDeFijo(f, (docRef && docRef.dias) || {}).reduce((s, p) => s + p.monto, 0); });
+  }
+  if (view !== 'ganancia') return;
+  const stats = body.querySelector('#gan-stats');
+  if (!stats) return;
+
+  const r2 = v => Math.round(v * 100) / 100;
+  const saldo = r2(agg.ing.total - agg.egr.total);
+  const diasCon = Object.keys(agg.porDia).sort();
+  const colorSaldo = saldo >= 0 ? '#1b5e20' : '#b71c1c';
+  const bgSaldo    = saldo >= 0 ? 'var(--tint-green-bg)' : 'var(--tint-red-bg)';
+  const fijosPend  = Math.max(0, r2(totalFijosRef - fijosPagados));
+
+  const medioCard = (k, label, icon, color) => {
+    const ing = r2(agg.ing[k]), egr = r2(agg.egr[k]), neto = r2(ing - egr);
+    return `
+      <div class="ct-cuenta-item">
+        <span class="material-icons" style="color:${color};font-size:18px">${icon}</span>
+        <div class="ct-cuenta-body">
+          <div class="ct-cuenta-nombre">${label}</div>
+          <div class="ct-cuenta-vals">
+            <span class="ct-cuenta-ingreso">+$${fmt(ing)}</span>
+            ${egr > 0 ? `<span class="ct-cuenta-gasto">−$${fmt(egr)}</span>` : ''}
+            <span class="ct-cuenta-neto" style="color:${neto >= 0 ? 'var(--tint-green-fg)' : 'var(--tint-red-fg)'}">= $${fmt(neto)}</span>
+          </div>
+        </div>
+      </div>`;
+  };
+
+  stats.innerHTML = `
+    <div class="ct-ecuacion">
+      <div class="ct-eq-bloque ct-clickable" data-gan-det="ing" title="Ver los ingresos anotados del período">
+        <span class="material-icons ct-eq-icon" style="color:var(--tint-green-fg)">payments</span>
+        <div class="ct-eq-num">$${fmt(r2(agg.ing.total))}</div>
+        <div class="ct-eq-lbl">Ingresos</div>
+        <div class="ct-eq-sub">${agg.movsIng.length} movimiento${agg.movsIng.length === 1 ? '' : 's'}</div>
+      </div>
+      <div class="ct-eq-op">−</div>
+      <div class="ct-eq-bloque ct-clickable" data-gan-det="egr" title="Ver las compras / gastos anotados del período">
+        <span class="material-icons ct-eq-icon" style="color:var(--tint-red-fg)">shopping_cart</span>
+        <div class="ct-eq-num">$${fmt(r2(agg.egr.total))}</div>
+        <div class="ct-eq-lbl">Egresos / Compras</div>
+        <div class="ct-eq-sub">${agg.movsEgr.length} movimiento${agg.movsEgr.length === 1 ? '' : 's'}</div>
+      </div>
+      <div class="ct-eq-op">=</div>
+      <div class="ct-eq-bloque ct-eq-neta" style="background:${bgSaldo};border-color:${colorSaldo}">
+        <span class="material-icons ct-eq-icon" style="color:${colorSaldo}">${saldo >= 0 ? 'trending_up' : 'trending_down'}</span>
+        <div class="ct-eq-num" style="color:${colorSaldo};font-size:26px;font-weight:900">$${fmt(saldo)}</div>
+        <div class="ct-eq-lbl" style="color:${colorSaldo};font-weight:700">Saldo del período</div>
+        <div class="ct-eq-sub">&nbsp;</div>
+      </div>
+    </div>
+
+    <div class="ct-totales-reales">
+      <span class="material-icons" style="font-size:16px;color:var(--text-muted)">info</span>
+      <span>Período: <b>${d === h ? esc(fechaLarga(d)) : `${ddmm(d)} → ${ddmm(h)}`}</b> · ${diasCon.length} día${diasCon.length === 1 ? '' : 's'} con movimientos anotados en el balance</span>
+    </div>
+
+    ${totalFijosRef > 0 ? `
+      <div class="ct-fijos-band">
+        <span class="material-icons">event_repeat</span>
+        <span class="ct-fijos-band-txt">Gastos fijos de <b>${esc(mesLabelAny(ymRef))}</b>: pagados <b>$${fmt(r2(fijosPagados))}</b> de <b>$${fmt(r2(totalFijosRef))}</b></span>
+        <span class="ct-fijos-result" style="color:${fijosPend > 0 ? 'var(--tint-orange-fg)' : 'var(--tint-green-fg)'}">
+          ${fijosPend > 0 ? `Pendiente: $${fmt(fijosPend)}` : 'Todos pagados'}</span>
+        <span class="ct-fijos-link" data-gan-fijos><span class="material-icons" style="font-size:15px;color:inherit">arrow_forward</span> Ver Día por día</span>
+      </div>` : ''}
+
+    <div class="ct-cuentas-header">
+      <span class="ct-cuentas-titulo">Desglose por medio de pago</span>
+    </div>
+    <div class="ct-cuentas-row">
+      ${medioCard('efectivo', 'Efectivo', 'payments', 'var(--tint-green-fg)')}
+      ${medioCard('mp', 'Mercado Pago', 'account_balance', 'var(--tint-blue-fg)')}
+      ${medioCard('lapos', 'Lapos', 'account_balance', 'var(--tint-purple-fg)')}
+      ${(agg.ing.sin || agg.egr.sin) ? medioCard('sin', 'Sin medio', 'help_outline', 'var(--text-muted)') : ''}
+    </div>
+
+    <div class="ct-charts-row" id="gan-charts"></div>
+
+    ${diasCon.length ? `
+      <div class="bal-card bal-xls" style="margin-top:16px">
+        <div class="bal-card-title"><span class="material-icons">today</span> Días del período
+          <small style="font-weight:500;color:var(--text-muted);margin-left:8px;text-transform:none;letter-spacing:0">Click en un día para ver su detalle</small>
+        </div>
+        <div class="bal-table-wrap">
+          <table class="bal-table bal-xls-table">
+            <thead><tr>
+              <th class="bal-th-lbl">Día</th><th>Ingresos</th><th>Egresos</th><th class="bal-th-total">Saldo</th>
+            </tr></thead>
+            <tbody>
+              ${[...diasCon].reverse().map(iso => {
+                const x = agg.porDia[iso];
+                const s = r2(x.ing - x.egr);
+                return `<tr class="bal-gdia-row" data-ym="${iso.slice(0, 7)}" data-dd="${iso.slice(8, 10)}">
+                  <td class="bal-td-lbl">${diaCorto(iso)}</td>
+                  <td>${money(r2(x.ing))}</td>
+                  <td>${x.egr ? money(r2(x.egr)) : '—'}</td>
+                  <td class="bal-td-total${negCls(s)}">${money(s)}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+            <tfoot><tr class="bal-row-total">
+              <td class="bal-td-lbl">Total</td>
+              <td>${money(r2(agg.ing.total))}</td>
+              <td>${money(r2(agg.egr.total))}</td>
+              <td class="bal-td-total${negCls(saldo)}">${money(saldo)}</td>
+            </tr></tfoot>
+          </table>
+        </div>
+      </div>` : `
+      <div class="bal-empty" style="margin-top:16px">
+        <span class="material-icons">event_busy</span>
+        <div class="bal-empty-title">Sin movimientos anotados en este período</div>
+        <div class="bal-empty-sub">Los números de este resumen salen de lo cargado en "Día por día".
+        Cargá los días del período (o elegí otro rango) y se completa solo.</div>
+      </div>`}
+  `;
+
+  stats.querySelectorAll('[data-gan-det]').forEach(el =>
+    el.addEventListener('click', () => openGanMovs(el.dataset.ganDet, agg)));
+  stats.querySelector('[data-gan-fijos]')?.addEventListener('click', () => {
+    curDiaYm = curDiaDD = null;
+    view = 'dia';
+    localStorage.setItem('bal:view', view);
+    mountEl.querySelectorAll('.bal-seg-btn').forEach(x => x.classList.toggle('active', x.dataset.seg === 'dia'));
+    renderBody();
+  });
+  stats.querySelectorAll('.bal-gdia-row').forEach(tr =>
+    tr.addEventListener('click', () => gotoDia(tr.dataset.ym, tr.dataset.dd)));
+
+  // ── Gráficos (Chart.js, todo desde el balance) ──
+  chartLib.then(Chart => {
+    if (!Chart || view !== 'ganancia') return;
+    const row = stats.querySelector('#gan-charts');
+    if (!row) return;
+    const fmtMoney = v => '$' + Number(v || 0).toLocaleString('es-AR', { maximumFractionDigits: 0 });
+    const legendCfg = { position: 'bottom', labels: { boxWidth: 10, padding: 8, font: { size: 11 }, color: cssVar('--chart-text', '#65676b') } };
+
+    const mediosIng = MEDIOS.map(m => ({ ...m, v: r2(agg.ing[m.k]) }))
+      .concat(agg.ing.sin ? [{ k: 'sin', label: 'Sin medio', v: r2(agg.ing.sin) }] : [])
+      .filter(m => m.v > 0);
+    const rubros = Object.entries(agg.porRubro).map(([nombre, v]) => ({ nombre, v: r2(v) }))
+      .sort((a, b) => b.v - a.v).slice(0, 8);
+    const provsAll = Object.entries(agg.porProv).map(([nombre, v]) => ({ nombre, v: r2(v) }))
+      .sort((a, b) => b.v - a.v);
+    const provs = provsAll.slice(0, 6);
+    const provResto = r2(provsAll.slice(6).reduce((s, p) => s + p.v, 0));
+    if (provResto > 0) provs.push({ nombre: 'Otros', v: provResto });
+    const mostrarBars = diasCon.length >= 2;
+
+    row.innerHTML = `
+      ${mediosIng.length ? `
+        <div class="ct-chart-card">
+          <div class="ct-chart-title"><span class="material-icons">pie_chart</span>Ingresos por medio de pago</div>
+          <div class="ct-chart-body"><canvas id="gan-ch-medios"></canvas></div>
+        </div>` : ''}
+      ${mostrarBars ? `
+        <div class="ct-chart-card ct-chart-card-wide">
+          <div class="ct-chart-title"><span class="material-icons">bar_chart</span>Ingresos vs egresos por día</div>
+          <div class="ct-chart-body"><canvas id="gan-ch-dias"></canvas></div>
+        </div>` : ''}
+      ${rubros.length ? `
+        <div class="ct-chart-card ct-chart-card-wide">
+          <div class="ct-chart-title"><span class="material-icons">inventory_2</span>Compras / gastos por rubro</div>
+          <div class="ct-chart-body" style="height:${Math.max(200, rubros.length * 28 + 50)}px"><canvas id="gan-ch-rubros"></canvas></div>
+        </div>` : ''}
+      ${provs.length ? `
+        <div class="ct-chart-card">
+          <div class="ct-chart-title"><span class="material-icons">local_shipping</span>Egresos por proveedor</div>
+          <div class="ct-chart-body"><canvas id="gan-ch-provs"></canvas></div>
+        </div>` : ''}
+    `;
+
+    if (mediosIng.length) {
+      ganMakeChart('medios', row.querySelector('#gan-ch-medios'), {
+        type: 'doughnut',
+        data: {
+          labels: mediosIng.map(m => m.label),
+          datasets: [{ data: mediosIng.map(m => m.v), backgroundColor: mediosIng.map(m => MEDIO_COLORS[m.k]), borderWidth: 0 }],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, cutout: '62%',
+          plugins: { legend: legendCfg, tooltip: { callbacks: { label: ctx => `${ctx.label}: ${fmtMoney(ctx.parsed)}` } } },
+        },
+      });
+    }
+    if (mostrarBars) {
+      ganMakeChart('dias', row.querySelector('#gan-ch-dias'), {
+        type: 'bar',
+        data: {
+          labels: diasCon.map(ddmm),
+          datasets: [
+            { label: 'Ingresos', data: diasCon.map(iso => r2(agg.porDia[iso].ing)), backgroundColor: 'rgba(46,125,50,0.85)', borderRadius: 4 },
+            { label: 'Egresos',  data: diasCon.map(iso => r2(agg.porDia[iso].egr)), backgroundColor: 'rgba(198,40,40,0.85)', borderRadius: 4 },
+          ],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: legendCfg, tooltip: { callbacks: { label: ctx => `${ctx.dataset.label}: ${fmtMoney(ctx.parsed.y)}` } } },
+          scales: {
+            x: { grid: { display: false }, ticks: { font: { size: 10 }, color: cssVar('--chart-text', '#65676b') } },
+            y: { ticks: { callback: v => fmtCompacto(v), font: { size: 10 }, color: cssVar('--chart-text', '#65676b') }, grid: { color: cssVar('--chart-grid', 'rgba(0,0,0,0.06)') } },
+          },
+        },
+      });
+    }
+    if (rubros.length) {
+      ganMakeChart('rubros', row.querySelector('#gan-ch-rubros'), {
+        type: 'bar',
+        data: {
+          labels: rubros.map(x => x.nombre),
+          datasets: [{ label: 'Egresos', data: rubros.map(x => x.v), backgroundColor: 'rgba(245,124,0,0.85)', borderRadius: 4 }],
+        },
+        options: {
+          indexAxis: 'y', responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false }, tooltip: { callbacks: { label: ctx => fmtMoney(ctx.parsed.x) } } },
+          scales: {
+            x: { ticks: { callback: v => fmtCompacto(v), font: { size: 10 }, color: cssVar('--chart-text', '#65676b') }, grid: { color: cssVar('--chart-grid', 'rgba(0,0,0,0.06)') } },
+            y: { grid: { display: false }, ticks: { font: { size: 11 }, color: cssVar('--chart-text', '#65676b') } },
+          },
+        },
+      });
+    }
+    if (provs.length) {
+      ganMakeChart('provs', row.querySelector('#gan-ch-provs'), {
+        type: 'doughnut',
+        data: {
+          labels: provs.map(p => p.nombre),
+          datasets: [{ data: provs.map(p => p.v), backgroundColor: provs.map((p, i) => PROV_COLORS[i % PROV_COLORS.length]), borderWidth: 0 }],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false, cutout: '62%',
+          plugins: { legend: legendCfg, tooltip: { callbacks: { label: ctx => `${ctx.label}: ${fmtMoney(ctx.parsed)}` } } },
+        },
+      });
+    }
+  });
+}
+
+// Modal de detalle del Resumen: los movimientos (ingresos o egresos) del período
+// agrupados por día. Cada fila salta a su día en "Día por día".
+function openGanMovs(tipo, agg) {
+  const esIng = tipo === 'ing';
+  const movs = esIng ? agg.movsIng : agg.movsEgr;
+  const total = movs.reduce((s, m) => s + m.monto, 0);
+  const medioLbl = k => MEDIOS.find(m => m.k === k)?.label || 'Sin medio';
+
+  document.querySelector('.app-dialog-overlay')?.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay app-dialog-overlay';
+
+  const porDia = {};
+  movs.forEach(m => { (porDia[m.iso] = porDia[m.iso] || []).push(m); });
+  const dias = Object.keys(porDia).sort().reverse();
+  const soloUno = dias.length === 1;
+
+  overlay.innerHTML = `
+    <div class="modal" style="max-width:640px">
+      <div class="modal-header" style="border-bottom:none;padding-bottom:6px">
+        <h3 style="display:flex;align-items:center;gap:10px;margin:0;font-size:16px">
+          <span class="material-icons" style="color:${esIng ? 'var(--tint-green-fg)' : 'var(--tint-red-fg)'};font-size:26px">${esIng ? 'payments' : 'shopping_cart'}</span>
+          ${esIng ? 'Ingresos' : 'Egresos / Compras'} del período
+        </h3>
+      </div>
+      <div class="modal-body" style="padding:4px 24px 12px">
+        <div style="max-height:55vh;overflow:auto">
+          ${movs.length ? `<div class="bal-buscar-tot">${movs.length} movimiento(s) en ${dias.length} día(s) · tocá para desplegar</div>` +
+            dias.map(iso => {
+              const arr = porDia[iso];
+              const sub = arr.reduce((s, m) => s + m.monto, 0);
+              return `
+                <div class="bal-grp${soloUno ? ' open' : ''}">
+                  <button type="button" class="bal-grp-head" data-grp-toggle>
+                    <span class="material-icons bal-grp-chev">chevron_right</span>
+                    <span class="bal-grp-name">${esc(fechaLarga(iso))}</span>
+                    <span class="bal-grp-count">${arr.length}</span>
+                    <b class="bal-grp-tot">${money(sub)}</b>
+                  </button>
+                  <div class="bal-grp-body">
+                    ${arr.map(m => `
+                      <button type="button" class="bal-grp-row" data-ym="${m.ym}" data-dd="${m.dd}">
+                        <span class="bal-buscar-fecha">${esc(medioLbl(m.medio))}</span>
+                        <span class="bal-buscar-desc">${esc(esIng ? (m.motivo || '(sin motivo)') : m.prov)}${!esIng && m.rubro !== 'Sin rubro' ? ` <small style="color:var(--text-muted)">· ${esc(m.rubro)}</small>` : ''}</span>
+                        <span class="bal-buscar-monto ${esIng ? 'is-ing' : 'is-com'}">${esIng ? '+' : '−'}${money(m.monto)}</span>
+                      </button>`).join('')}
+                  </div>
+                </div>`;
+            }).join('') : '<div class="bal-mov-empty">Sin movimientos en el período.</div>'}
+        </div>
+      </div>
+      <div class="app-dialog-footer" style="display:flex;justify-content:space-between;align-items:center;gap:10px;padding:14px 20px;border-top:1px solid var(--border);background:var(--surface-2)">
+        <span class="bal-pv-total">Total: <b>${money(total)}</b></span>
+        <button class="ad-cancel" style="padding:10px 18px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:13px;font-weight:600;color:var(--text-muted)">Cerrar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const cleanup = () => { document.removeEventListener('keydown', onKey); overlay.remove(); };
+  const onKey = e => { if (e.key === 'Escape') { e.preventDefault(); cleanup(); } };
+  document.addEventListener('keydown', onKey);
+  overlay.querySelector('.ad-cancel').addEventListener('click', cleanup);
+  overlay.addEventListener('click', e => { if (e.target === overlay) cleanup(); });
+  overlay.querySelector('.modal-body').addEventListener('click', e => {
+    const head = e.target.closest('[data-grp-toggle]');
+    if (head) { head.parentElement.classList.toggle('open'); return; }
+    const rowb = e.target.closest('.bal-grp-row');
+    if (rowb) { cleanup(); gotoDia(rowb.dataset.ym, rowb.dataset.dd); }
+  });
+}
+
+// Nombres de cuentas + fecha de inicio (control_config/settings): los usan otras
+// páginas de la webapp (Dashboard, Historial); acá solo se editan.
+async function openConfigCuentas() {
+  let cfgCtrl = {};
+  try {
+    const snap = await getDoc(doc(db, 'control_config', 'settings'));
+    if (snap.exists()) cfgCtrl = snap.data();
+  } catch (_) {}
+  document.querySelector('.app-dialog-overlay')?.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay app-dialog-overlay';
+  const field = (id, lbl, val, type, ph) => `
+    <div>
+      <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px">${lbl}</label>
+      <input id="${id}" type="${type}" value="${esc(val)}" placeholder="${ph || ''}"
+        style="padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;width:100%">
+    </div>`;
+  overlay.innerHTML = `
+    <div class="modal" style="max-width:420px">
+      <div class="modal-header" style="border-bottom:none;padding-bottom:6px">
+        <h3 style="display:flex;align-items:center;gap:10px;margin:0;font-size:16px">
+          <span class="material-icons" style="color:var(--bal-green);font-size:24px">settings</span> Configurar cuentas
+        </h3>
+      </div>
+      <div class="modal-body" style="padding:4px 24px 16px;display:flex;flex-direction:column;gap:12px">
+        ${field('gcfg-c1', 'Nombre Cuenta 1 (transferencia)', cfgCtrl.cuenta1_nombre || 'Cuenta 1', 'text', 'Ej: Mercado Pago')}
+        ${field('gcfg-c2', 'Nombre Cuenta 2 (transferencia)', cfgCtrl.cuenta2_nombre || 'Cuenta 2', 'text', 'Ej: Banco Galicia')}
+        ${field('gcfg-fi', 'Fecha de inicio real (oculta todo lo anterior en la webapp)', cfgCtrl.fecha_inicio || '2026-04-18', 'date')}
+      </div>
+      <div class="app-dialog-footer" style="display:flex;justify-content:flex-end;gap:10px;padding:14px 20px;border-top:1px solid var(--border);background:var(--surface-2)">
+        <button class="ad-cancel" style="padding:10px 18px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:13px;font-weight:600;color:var(--text-muted)">Cancelar</button>
+        <button class="bal-btn" id="gcfg-save"><span class="material-icons">save</span> Guardar</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  const cleanup = () => overlay.remove();
+  overlay.querySelector('.ad-cancel').addEventListener('click', cleanup);
+  overlay.addEventListener('click', e => { if (e.target === overlay) cleanup(); });
+  overlay.querySelector('#gcfg-save').addEventListener('click', async () => {
+    const btn = overlay.querySelector('#gcfg-save');
+    btn.disabled = true;
+    try {
+      await saveControlConfig(db, {
+        ...cfgCtrl,
+        cuenta1_nombre: overlay.querySelector('#gcfg-c1').value.trim() || 'Cuenta 1',
+        cuenta2_nombre: overlay.querySelector('#gcfg-c2').value.trim() || 'Cuenta 2',
+        fecha_inicio:   overlay.querySelector('#gcfg-fi').value || '2026-04-18',
+      });
+      location.reload();
+    } catch (err) {
+      btn.disabled = false;
+      alertDialog({ title: 'Error', message: 'No se pudo guardar la configuración.', type: 'error' });
+    }
+  });
+}
+
 // ── Sub-vista: SEMANA A SEMANA (agregado semanal del Día por día) ─────────────
 // Agrupa el detalle diario en semanas lunes→domingo: ingresos, egresos y saldo
 // de cada semana + la caja acumulada al cierre (el SALDO DIARIO ACUMULADO del
@@ -1139,7 +1685,11 @@ function ddmm(iso) { return `${iso.slice(8, 10)}/${iso.slice(5, 7)}`; }
 
 async function renderSemana(body) {
   body.innerHTML = `<div class="ct-loading"><div class="spinner" style="width:24px;height:24px;border-width:3px"></div></div>`;
-  const meses = mesesOrdenados('asc');
+  // Del primer mes del balance al mes actual: el mes en curso puede tener días
+  // cargados aunque todavía no se haya agregado al RESUMEN.
+  const ymHoy = hoyAR().slice(0, 7);
+  const primero = mesesOrdenados('asc')[0] || ymHoy;
+  const meses = ymRange(primero <= ymHoy ? primero : ymHoy, ymHoy);
   const docs = {};
   await Promise.all(meses.map(async ym => { docs[ym] = await loadDiasMes(db, ym); }));
   if (view !== 'semana') return;   // cambió de pestaña mientras cargaba
@@ -1199,13 +1749,12 @@ async function renderSemana(body) {
   const promEgr = cerradas.length ? cerradas.reduce((s, w) => s + w.egr.total, 0) / cerradas.length : 0;
   const promSaldo = promIng - promEgr;
 
-  const mlab = ym => (cfg.meses?.[ym]?.label) || labelFromYm(ym);
   let mesPrev = null;
   const rows = lista.map(w => {
     const saldo = r2(w.ing.total - w.egr.total);
     const mesLun = w.lun.slice(0, 7);
     const divider = mesLun !== mesPrev
-      ? `<tr class="bal-row-sep"><td colspan="5">${esc(mlab(mesLun))}</td></tr>` : '';
+      ? `<tr class="bal-row-sep"><td colspan="5">${esc(mesLabelAny(mesLun))}</td></tr>` : '';
     mesPrev = mesLun;
     const medioRow = (label, ing, egr) => `
       <div class="bal-sem-det-item">
