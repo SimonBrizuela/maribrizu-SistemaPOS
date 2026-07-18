@@ -3,7 +3,10 @@ import {
   query, orderBy, limit, serverTimestamp
 } from 'firebase/firestore';
 import { getCached, invalidateCache, invalidateCacheByPrefix } from '../cache.js';
-import { getFechaInicioDate, saveControlConfig, isVentaVarios2, isItemVarios2 } from '../config.js';
+import { getFechaInicioDate, saveControlConfig, isVentaVarios2, isItemVarios2, loadBalanceConfig } from '../config.js';
+import { cssVar } from '../theme.js';
+import { confirmDialog, alertDialog, escHtml } from '../components/dialogs.js';
+import { mountBalanceMensual } from './balance_mensual.js';
 
 // ── Categorías de gastos/ingresos ─────────────────────────────────────────────
 // Doc: { nombre, tipo: 'gasto'|'ingreso'|'ambos', color, parent_id? }
@@ -73,7 +76,7 @@ function loadChartJsCt() {
   if (_ctChartLoader) return _ctChartLoader;
   _ctChartLoader = new Promise((resolve, reject) => {
     const s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js';
+    s.src = `${import.meta.env.BASE_URL}vendor/chart.umd.min.js`;
     s.async = true;
     s.onload = () => resolve(window.Chart);
     s.onerror = () => reject(new Error('No se pudo cargar Chart.js'));
@@ -88,6 +91,8 @@ function destroyCtCharts() {
 }
 function ctMakeChart(id, el, config) {
   if (!el || !window.Chart) return null;
+  window.Chart.defaults.color = cssVar('--chart-text', '#65676b');
+  window.Chart.defaults.borderColor = cssVar('--chart-grid', 'rgba(0,0,0,0.06)');
   const ch = new window.Chart(el.getContext('2d'), config);
   _ctChartRefs.set(id, ch);
   return ch;
@@ -130,6 +135,21 @@ function periodoRango(periodo, customRange) {
 }
 
 // ── Render principal ──────────────────────────────────────────────────────────
+// Estado del toggle "Sumar sin costo" (persistido en localStorage).
+// Al activarse, el ingreso de items sin costo cargado se suma a la ganancia
+// (se asume costo = 0 → todo el precio de venta cuenta como ganancia).
+const isIncluirSinCosto = () => localStorage.getItem('ct:incluir_sin_costo') === '1';
+
+function applyIncluirSinCostoStyle(btn) {
+  if (!btn) return;
+  const on = isIncluirSinCosto();
+  btn.style.background    = on ? 'var(--tint-orange-bg)' : '';
+  btn.style.color         = on ? '#e65100' : '';
+  btn.style.borderColor   = on ? '#e65100' : '';
+  const lbl = btn.querySelector('.ct-sc-label');
+  if (lbl) lbl.textContent = on ? 'Sumar sin costo: ON' : 'Sumar sin costo';
+}
+
 export async function renderControlTotal(container, db) {
   let periodo = localStorage.getItem('ct:periodo') || 'hoy';
   let customRange = null;
@@ -178,27 +198,45 @@ export async function renderControlTotal(container, db) {
   setupGastoForm(container, db, periodo, config);
   setupConfigCuentas(container, db, config);
   setupCategoriasBtn(container, db, periodo, config);
-  setupMainTabs(container);
+  setupMainTabs(container, db);
+
+  // Toggle "Sumar sin costo": incluye items vendidos sin costo cargado en
+  // el calculo de ganancia (asume costo = 0). Persiste y refresca todo.
+  const btnSC = container.querySelector('#ct-incluir-sc');
+  if (btnSC) {
+    applyIncluirSinCostoStyle(btnSC);
+    btnSC.addEventListener('click', () => {
+      localStorage.setItem('ct:incluir_sin_costo', isIncluirSinCosto() ? '0' : '1');
+      applyIncluirSinCostoStyle(btnSC);
+      refreshDatos(container, db, periodo, config, customRange);
+    });
+  }
 
   await refreshDatos(container, db, periodo, config, customRange);
 }
 
-// Tabs principales: Resumen / Días — persiste en localStorage
-function setupMainTabs(container) {
+// Tabs principales: Resumen / Días / Balance Mensual — persiste en localStorage.
+// Balance Mensual se monta lazy la primera vez que se activa su pestaña.
+function setupMainTabs(container, db) {
   const tabs = container.querySelectorAll('.ct-main-tab');
   const panes = {
     resumen: container.querySelector('#ct-tab-resumen'),
     dias:    container.querySelector('#ct-tab-dias'),
+    balance: container.querySelector('#ct-tab-balance'),
   };
+  let balanceMontado = false;
   const aplicar = (activo) => {
-    tabs.forEach(t => {
-      const a = t.dataset.tab === activo;
-      t.classList.toggle('active', a);
-      t.style.color = a ? 'var(--primary)' : '#65676b';
-      t.style.fontWeight = a ? '700' : '600';
-      t.style.borderBottomColor = a ? 'var(--primary)' : 'transparent';
-    });
+    tabs.forEach(t => t.classList.toggle('active', t.dataset.tab === activo));
     Object.entries(panes).forEach(([k, el]) => { if (el) el.style.display = k === activo ? '' : 'none'; });
+    if (activo === 'balance' && !balanceMontado) {
+      balanceMontado = true;
+      const mount = container.querySelector('#ct-balance-mount');
+      if (mount) mountBalanceMensual(mount, db).catch(err => {
+        console.error('[control_total] error montando Balance Mensual:', err);
+        mount.innerHTML = `<div class="bal-empty"><span class="material-icons">error_outline</span>
+          <div class="bal-empty-sub">No se pudo cargar el Balance Mensual.</div></div>`;
+      });
+    }
   };
   const guardada = localStorage.getItem('ct:main_tab') || 'resumen';
   aplicar(guardada);
@@ -227,11 +265,17 @@ async function refreshDatos(container, db, periodo, config, customRange) {
   // La fecha efectiva = la más reciente entre el período elegido y la fecha_inicio global
   const desde = desdePeriodo > fechaInicio ? desdePeriodo : fechaInicio;
 
-  const zonas = ['ct-stats', 'ct-alertas', 'ct-gastos-lista'];
-  zonas.forEach(id => {
-    const el = container.querySelector(`#${id}`);
-    if (el) el.innerHTML = `<div class="ct-loading"><div class="spinner" style="width:24px;height:24px;border-width:3px"></div></div>`;
-  });
+  // Placeholders por zona — más informativos que un spinner solitario.
+  const statsEl0 = container.querySelector('#ct-stats');
+  if (statsEl0) statsEl0.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px">
+      ${Array(5).fill('<div class="skel" style="height:96px;border-radius:14px"></div>').join('')}
+    </div>
+    <div class="skel skel-line" style="width:60%;margin:14px 0 0"></div>`;
+  const alertasEl0 = container.querySelector('#ct-alertas');
+  if (alertasEl0) alertasEl0.innerHTML = `<div class="skel skel-line lg" style="width:240px"></div>`;
+  const gastosEl0 = container.querySelector('#ct-gastos-lista');
+  if (gastosEl0) gastosEl0.innerHTML = Array(4).fill('<div class="skel skel-row" style="margin-bottom:6px"></div>').join('');
 
   // Cargar en paralelo — cache compartido con otras páginas
   const [ventas, itemsMap, catalogo, gastos, categorias, transferSplits] = await Promise.all([
@@ -241,19 +285,31 @@ async function refreshDatos(container, db, periodo, config, customRange) {
       const snap = await getDocs(query(collection(db, 'ventas'), orderBy('created_at', 'desc'), limit(5000)));
       return snap.docs.map(d => ({ id: d.id, ...d.data() }));
     }, { ttl: 60 * 1000 }),
+    // ct:items_rich se deriva de historial:ventas_dia:v3 (pinned al listener
+    // ventas_por_dia del store, acotado por fecha_dt >= fecha_inicio). Antes
+    // hacía su propio getDocs con orderBy('num_venta','asc'), limit(5000) →
+    // traía las 5000 más viejas y dejaba afuera las de hoy cuando la coleccion
+    // superaba 5000 docs (cards de "Hoy" quedaban en $0).
     getCached('ct:items_rich', async () => {
-      const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('num_venta', 'asc'), limit(5000)));
+      const items = await getCached('historial:ventas_dia:v3', async () => {
+        // Fallback (si el store no respondió): ordenar por fecha_dt (Timestamp),
+        // no por el string `fecha` — el string-sort + limit recortaba el mes nuevo.
+        const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('fecha_dt', 'desc'), limit(8000)));
+        return snap.docs.map(d => {
+          const data = d.data();
+          const parts = (d.id || '').split('_');
+          const pcId  = parts.length >= 3 ? parts.slice(0, -2).join('_') : '';
+          return { id: d.id, _pc_id: pcId, ...data };
+        });
+      });
       const map = {};
-      snap.docs.forEach(d => {
-        const data = d.data();
+      items.forEach(data => {
         if (data.deleted === true) return;
         if (isItemVarios2(data)) return;
         const nombre = (data.producto || data.product_name || '').toUpperCase().trim();
-        // doc.id = "{pc_id}_{sale_id}_{idx}" → pc_id = todo menos las últimas 2 piezas.
-        // Key compuesta pc_id+sale_id evita mezclar items de distintas PCs con mismo num_venta.
-        const parts = d.id.split('_');
-        const pcId  = parts.length >= 3 ? parts.slice(0, -2).join('_') : '';
-        const key   = pcId ? `${pcId}_${data.num_venta}` : String(data.num_venta);
+        // Key compuesta pc_id+num_venta evita mezclar items de distintas PCs con mismo num_venta.
+        const pcId = data._pc_id || '';
+        const key  = pcId ? `${pcId}_${data.num_venta}` : String(data.num_venta);
         if (!map[key]) map[key] = [];
         map[key].push({
           nombre,
@@ -263,10 +319,10 @@ async function refreshDatos(container, db, periodo, config, customRange) {
         });
       });
       return map;
-    }, { ttl: 5 * 60 * 1000, memOnly: true }),
+    }, { ttl: 60 * 1000, memOnly: true }),
     getCached('catalogo:all', async () => {
       const snap = await getDocs(collection(db, 'catalogo'));
-      return snap.docs.map(d => ({ doc_id: d.id, ...d.data() }));
+      return snap.docs.map(d => ({ ...d.data(), doc_id: d.id }));
     }, { ttl: 10 * 60 * 1000, memOnly: true }),
     getCached(`ct:gastos:${desde.toISOString().slice(0,10)}${hasta ? '_' + hasta.toISOString().slice(0,10) : ''}`, () => loadGastos(db, desde, hasta), { ttl: 30 * 1000 }),
     loadCategorias(db),
@@ -419,8 +475,12 @@ async function refreshDatos(container, db, periodo, config, customRange) {
     porCategoria[key].count++;
   }
 
-  // Ganancia bruta SOLO de los items con costo conocido — así no se distorsiona
-  const gananciaBruta = ingresoConCosto - cmv;
+  // Ganancia bruta: por defecto SOLO items con costo conocido, asi no se
+  // distorsiona. Si el usuario activo "Sumar sin costo", incluimos los items
+  // sin costo asumiendo costo=0 (todo el precio cuenta como ganancia).
+  const sumarSinCosto = isIncluirSinCosto();
+  const ingresoGanancia = ingresoConCosto + (sumarSinCosto ? ingresoSinCosto : 0);
+  const gananciaBruta = ingresoGanancia - cmv;
   // Ganancia neta: bruta − gastos + ingresos manuales
   const gananciaNeta  = gananciaBruta - gastoTotal + ingManualTotal;
 
@@ -431,46 +491,74 @@ async function refreshDatos(container, db, periodo, config, customRange) {
   // ── Render stats ──
   const statsEl = container.querySelector('#ct-stats');
   if (statsEl) {
+    // Banda informativa "Ganancia después de fijos": capa aparte del Balance
+    // Mensual, NO altera la ecuación de ganancia. Solo aparece si hay montos
+    // fijos cargados (control_config/balance importado/configurado).
+    let despuesFijosHtml = '';
+    try {
+      const balCfg = await loadBalanceConfig(db);
+      if (balCfg && Array.isArray(balCfg.montosFijos) && balCfg.montosFijos.length) {
+        const ymActual = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }).slice(0, 7);
+        const totalFijos = balCfg.montosFijos
+          .filter(f => f.activo !== false && !(f.desactivadoDesde && ymActual >= f.desactivadoDesde))
+          .reduce((s, f) => s + (Number(f.monto) || 0), 0);
+        if (totalFijos > 0) {
+          const desp = gananciaNeta - totalFijos;
+          const colorDesp = desp >= 0 ? 'var(--tint-green-fg)' : 'var(--tint-red-fg)';
+          despuesFijosHtml = `
+            <div class="ct-fijos-band">
+              <span class="material-icons">event_repeat</span>
+              <span class="ct-fijos-band-txt">Gastos fijos mensuales: <b>−$${fmt(totalFijos)}</b> <span class="ct-fijos-ref">(referencia mensual)</span></span>
+              <span class="ct-fijos-result" style="color:${colorDesp}">Ganancia después de fijos: $${fmt(desp)}</span>
+              <span class="ct-fijos-link" data-go-balance><span class="material-icons" style="font-size:15px;color:inherit">arrow_forward</span> Ver Balance Mensual</span>
+            </div>`;
+        }
+      }
+    } catch (_) { /* balance opcional: si falla, no mostramos la banda */ }
+
     const colorNeta = gananciaNeta >= 0 ? '#1b5e20' : '#b71c1c';
-    const bgNeta    = gananciaNeta >= 0 ? '#f1f8f1' : '#fff5f5';
+    const bgNeta    = gananciaNeta >= 0 ? 'var(--tint-green-bg)' : 'var(--tint-red-bg)';
     const iconNeta  = gananciaNeta >= 0 ? 'trending_up' : 'trending_down';
-    const margen    = ingresoConCosto > 0 ? Math.round((gananciaBruta / ingresoConCosto) * 100) : 0;
+    const margen    = ingresoGanancia > 0 ? Math.round((gananciaBruta / ingresoGanancia) * 100) : 0;
     const c1 = config.cuenta1_nombre || 'Cuenta 1';
     const c2 = config.cuenta2_nombre || 'Cuenta 2';
     const pctCubierto = ingresoTotal > 0 ? Math.round((ingresoConCosto / ingresoTotal) * 100) : 0;
 
     const subCosto = itemsSinCosto > 0
-      ? `<span style="color:#e65100;font-weight:700">${itemsSinCosto} items sin costo</span>`
+      ? `<span style="color:var(--tint-orange-fg);font-weight:700">${itemsSinCosto} items sin costo${sumarSinCosto ? ' (incluidos)' : ''}</span>`
       : `${margen}% margen`;
     const subIngreso = itemsSinCosto > 0
-      ? `<span style="color:#e65100">${pctCubierto}% con costo</span>`
+      ? `<span style="color:var(--tint-orange-fg)">${pctCubierto}% con costo</span>`
       : `${ventasPeriodo.length} ventas`;
+    const brutaSub = sumarSinCosto && ingresoSinCosto > 0
+      ? `${margen}% margen · <span style="color:var(--tint-orange-fg)">+$${fmt(ingresoSinCosto)} s/c</span>`
+      : `${margen}% margen`;
 
     statsEl.innerHTML = `
       <div class="ct-ecuacion">
         <div class="ct-eq-bloque ct-clickable" data-detalle="vendido" title="Ver detalle de productos vendidos con costo">
-          <span class="material-icons ct-eq-icon" style="color:#1877f2">point_of_sale</span>
+          <span class="material-icons ct-eq-icon" style="color:var(--tint-blue-fg)">point_of_sale</span>
           <div class="ct-eq-num">$${fmt(ingresoConCosto)}</div>
           <div class="ct-eq-lbl">Vendiste con costo</div>
           <div class="ct-eq-sub">${subIngreso}</div>
         </div>
         <div class="ct-eq-op">−</div>
         <div class="ct-eq-bloque ct-clickable" data-detalle="costo" title="Ver detalle de costos">
-          <span class="material-icons ct-eq-icon" style="color:#e65100">inventory_2</span>
+          <span class="material-icons ct-eq-icon" style="color:var(--tint-orange-fg)">inventory_2</span>
           <div class="ct-eq-num">$${fmt(cmv)}</div>
           <div class="ct-eq-lbl">Lo que te costó</div>
           <div class="ct-eq-sub">${subCosto}</div>
         </div>
         <div class="ct-eq-op">=</div>
         <div class="ct-eq-bloque ct-clickable" data-detalle="bruta" title="Ver detalle de ganancia por producto">
-          <span class="material-icons ct-eq-icon" style="color:#00695c">show_chart</span>
-          <div class="ct-eq-num" style="color:${gananciaBruta>=0?'#00695c':'#c62828'}">$${fmt(gananciaBruta)}</div>
+          <span class="material-icons ct-eq-icon" style="color:var(--tint-teal-fg)">show_chart</span>
+          <div class="ct-eq-num" style="color:${gananciaBruta>=0?'var(--tint-teal-fg)':'var(--tint-red-fg)'}">$${fmt(gananciaBruta)}</div>
           <div class="ct-eq-lbl">Ganancia bruta</div>
-          <div class="ct-eq-sub">${margen}% margen</div>
+          <div class="ct-eq-sub">${brutaSub}</div>
         </div>
         <div class="ct-eq-op">−</div>
         <div class="ct-eq-bloque ct-clickable" data-detalle="gastos" title="Ver detalle de gastos">
-          <span class="material-icons ct-eq-icon" style="color:#c62828">receipt_long</span>
+          <span class="material-icons ct-eq-icon" style="color:var(--tint-red-fg)">receipt_long</span>
           <div class="ct-eq-num">$${fmt(gastoTotal)}</div>
           <div class="ct-eq-lbl">Gastos / Pagos</div>
           <div class="ct-eq-sub">${gastos.length} registros</div>
@@ -486,11 +574,13 @@ async function refreshDatos(container, db, periodo, config, customRange) {
 
       <!-- Línea de totales reales (todo lo que entró) -->
       <div class="ct-totales-reales">
-        <span class="material-icons" style="font-size:16px;color:#65676b">info</span>
+        <span class="material-icons" style="font-size:16px;color:var(--text-muted)">info</span>
         <span>Total ingresado en el período: <b>$${fmt(ingresoTotal)}</b> (${ventasPeriodo.length} ventas)</span>
         ${ingresoSinCosto > 0
           ? `<span class="ct-chip-warn">$${fmt(ingresoSinCosto)} sin costo</span>` : ''}
       </div>
+
+      ${despuesFijosHtml}
 
       <!-- Desglose por cuenta -->
       <div class="ct-cuentas-header">
@@ -501,38 +591,38 @@ async function refreshDatos(container, db, periodo, config, customRange) {
       </div>
       <div class="ct-cuentas-row">
         <div class="ct-cuenta-item">
-          <span class="material-icons" style="color:#2e7d32;font-size:18px">payments</span>
+          <span class="material-icons" style="color:var(--tint-green-fg);font-size:18px">payments</span>
           <div class="ct-cuenta-body">
             <div class="ct-cuenta-nombre">Efectivo</div>
             <div class="ct-cuenta-vals">
               <span class="ct-cuenta-ingreso">+$${fmt(efectivoTotal)}</span>
-              ${ingManualEfectivo > 0 ? `<span class="ct-cuenta-ingreso">+$${fmt(ingManualEfectivo)} <small style="color:#65676b">extra</small></span>` : ''}
+              ${ingManualEfectivo > 0 ? `<span class="ct-cuenta-ingreso">+$${fmt(ingManualEfectivo)} <small style="color:var(--text-muted)">extra</small></span>` : ''}
               ${gastoEfectivo > 0 ? `<span class="ct-cuenta-gasto">−$${fmt(gastoEfectivo)}</span>` : ''}
-              <span class="ct-cuenta-neto" style="color:${netoEfectivo>=0?'#2e7d32':'#c62828'}">= $${fmt(netoEfectivo)}</span>
+              <span class="ct-cuenta-neto" style="color:${netoEfectivo>=0?'var(--tint-green-fg)':'var(--tint-red-fg)'}">= $${fmt(netoEfectivo)}</span>
             </div>
           </div>
         </div>
         <div class="ct-cuenta-item">
-          <span class="material-icons" style="color:#1877f2;font-size:18px">account_balance</span>
+          <span class="material-icons" style="color:var(--tint-blue-fg);font-size:18px">account_balance</span>
           <div class="ct-cuenta-body">
             <div class="ct-cuenta-nombre">${c1}</div>
             <div class="ct-cuenta-vals">
               <span class="ct-cuenta-ingreso">+$${fmt(transCuenta1)}</span>
-              ${ingManualCuenta1 > 0 ? `<span class="ct-cuenta-ingreso">+$${fmt(ingManualCuenta1)} <small style="color:#65676b">extra</small></span>` : ''}
+              ${ingManualCuenta1 > 0 ? `<span class="ct-cuenta-ingreso">+$${fmt(ingManualCuenta1)} <small style="color:var(--text-muted)">extra</small></span>` : ''}
               ${gastoCuenta1 > 0 ? `<span class="ct-cuenta-gasto">−$${fmt(gastoCuenta1)}</span>` : ''}
-              <span class="ct-cuenta-neto" style="color:${netoCuenta1>=0?'#2e7d32':'#c62828'}">= $${fmt(netoCuenta1)}</span>
+              <span class="ct-cuenta-neto" style="color:${netoCuenta1>=0?'var(--tint-green-fg)':'var(--tint-red-fg)'}">= $${fmt(netoCuenta1)}</span>
             </div>
           </div>
         </div>
         <div class="ct-cuenta-item">
-          <span class="material-icons" style="color:#6a1b9a;font-size:18px">account_balance</span>
+          <span class="material-icons" style="color:var(--tint-purple-fg);font-size:18px">account_balance</span>
           <div class="ct-cuenta-body">
             <div class="ct-cuenta-nombre">${c2}</div>
             <div class="ct-cuenta-vals">
               <span class="ct-cuenta-ingreso">+$${fmt(transCuenta2)}</span>
-              ${ingManualCuenta2 > 0 ? `<span class="ct-cuenta-ingreso">+$${fmt(ingManualCuenta2)} <small style="color:#65676b">extra</small></span>` : ''}
+              ${ingManualCuenta2 > 0 ? `<span class="ct-cuenta-ingreso">+$${fmt(ingManualCuenta2)} <small style="color:var(--text-muted)">extra</small></span>` : ''}
               ${gastoCuenta2 > 0 ? `<span class="ct-cuenta-gasto">−$${fmt(gastoCuenta2)}</span>` : ''}
-              <span class="ct-cuenta-neto" style="color:${netoCuenta2>=0?'#2e7d32':'#c62828'}">= $${fmt(netoCuenta2)}</span>
+              <span class="ct-cuenta-neto" style="color:${netoCuenta2>=0?'var(--tint-green-fg)':'var(--tint-red-fg)'}">= $${fmt(netoCuenta2)}</span>
             </div>
           </div>
         </div>
@@ -545,7 +635,7 @@ async function refreshDatos(container, db, periodo, config, customRange) {
     // Click en bloques de la ecuación → modal con detalle
     const detalleData = {
       mapaConCosto, gastos, soloGastos, soloIngresos,
-      ingresoConCosto, cmv, gananciaBruta, gastoTotal, gananciaNeta,
+      ingresoConCosto, ingresoSinCosto, cmv, gananciaBruta, gastoTotal, gananciaNeta,
       ingManualTotal, ingManualEfectivo, ingManualCuenta1, ingManualCuenta2,
       gastoEfectivo, gastoCuenta1, gastoCuenta2,
       porCategoria, categorias, catById,
@@ -553,6 +643,10 @@ async function refreshDatos(container, db, periodo, config, customRange) {
     };
     statsEl.querySelectorAll('.ct-clickable').forEach(el => {
       el.addEventListener('click', () => abrirDetalleControl(el.dataset.detalle, detalleData));
+    });
+
+    statsEl.querySelector('[data-go-balance]')?.addEventListener('click', () => {
+      container.querySelector('.ct-main-tab[data-tab="balance"]')?.click();
     });
 
     const btnReasignar = statsEl.querySelector('#ct-reasignar-btn');
@@ -709,8 +803,8 @@ function renderGastosLista(container, db, gastos, categorias, catById, config, o
                 <td>
                   ${g.es_ingreso ? '<span class="ct-mov-tag ct-mov-ingreso" title="Ingreso">Ingreso</span> ' : ''}${escapeHtmlCt(g.descripcion || '-')}
                 </td>
-                <td>${catNombre ? `<span class="ct-cat-badge" style="--cat-color:${catColor}">${escapeHtmlCt(catNombre)}</span>` : '<span style="color:#94a3b8;font-size:11px">—</span>'}</td>
-                <td>${g.rubro ? `<span class="ct-rubro-badge">${escapeHtmlCt(g.rubro)}</span>` : '<span style="color:#94a3b8;font-size:11px">—</span>'}</td>
+                <td>${catNombre ? `<span class="ct-cat-badge" style="--cat-color:${catColor}">${escapeHtmlCt(catNombre)}</span>` : '<span style="color:var(--text-muted);font-size:11px">—</span>'}</td>
+                <td>${g.rubro ? `<span class="ct-rubro-badge">${escapeHtmlCt(g.rubro)}</span>` : '<span style="color:var(--text-muted);font-size:11px">—</span>'}</td>
                 <td><span class="badge ${g.tipo==='efectivo'?'badge-green':'badge-blue'}">${tipoLabel[g.tipo] || g.tipo}</span></td>
                 <td style="text-align:right;font-weight:700;color:${color}">${signo}$${fmt(g.monto)}</td>
                 <td><button class="ct-del-btn" data-id="${g._id}" title="Eliminar"><span class="material-icons" style="font-size:16px;pointer-events:none">delete_outline</span></button></td>
@@ -722,7 +816,7 @@ function renderGastosLista(container, db, gastos, categorias, catById, config, o
     `;
     body.querySelectorAll('.ct-del-btn').forEach(btn => {
       btn.addEventListener('click', async () => {
-        if (!confirm('¿Eliminar este registro?')) return;
+        if (!await confirmDialog({ title: 'Eliminar registro', message: '¿Eliminar este registro?', confirmText: 'Eliminar', danger: true })) return;
         btn.disabled = true;
         await deleteDoc(doc(db, 'gastos', btn.dataset.id));
         invalidateCacheByPrefix('ct:gastos');
@@ -781,8 +875,8 @@ function renderResumenCategorias(container, porCategoria) {
             <span class="ct-cat-chip-count">${c.count}</span>
           </div>
           <div class="ct-cat-chip-nums">
-            ${c.gasto > 0 ? `<span style="color:#c62828">−$${fmt(c.gasto)}</span>` : ''}
-            ${c.ingreso > 0 ? `<span style="color:#2e7d32">+$${fmt(c.ingreso)}</span>` : ''}
+            ${c.gasto > 0 ? `<span style="color:var(--tint-red-fg)">−$${fmt(c.gasto)}</span>` : ''}
+            ${c.ingreso > 0 ? `<span style="color:var(--tint-green-fg)">+$${fmt(c.ingreso)}</span>` : ''}
           </div>
         </div>
       `).join('')}
@@ -831,25 +925,25 @@ function renderRecompra(container, ventas, itemsMap, catalogo, fechaInicio) {
 function renderRecompraProgreso(diasHistoria, progreso) {
   const dias_faltan = Math.max(0, RECOMPRA_DIAS_OBJETIVO - diasHistoria);
   return `
-    <div class="ct-card" style="background:linear-gradient(135deg,#fff 0%,#fff7f0 100%);border:1px solid var(--border);border-radius:var(--radius);padding:18px 22px;margin-bottom:16px;box-shadow:var(--shadow)">
+    <div class="ct-card" style="background:linear-gradient(135deg,var(--surface) 0%,var(--surface-2) 100%);border:1px solid var(--border);border-radius:var(--radius);padding:18px 22px;margin-bottom:16px;box-shadow:var(--shadow)">
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
-        <span class="material-icons" style="font-size:22px;color:#c97a35">auto_awesome</span>
-        <div style="font-weight:700;font-size:15px;color:#1c1e21">Recomendación de recompra</div>
-        <div style="margin-left:auto;font-size:11px;color:#65676b;background:#f0f2f5;padding:3px 8px;border-radius:6px;font-weight:600;letter-spacing:.4px">
+        <span class="material-icons" style="font-size:22px;color:var(--tint-orange-fg)">auto_awesome</span>
+        <div style="font-weight:700;font-size:15px;color:var(--text)">Recomendación de recompra</div>
+        <div style="margin-left:auto;font-size:11px;color:var(--text-muted);background:var(--bg);padding:3px 8px;border-radius:6px;font-weight:600;letter-spacing:.4px">
           APRENDIENDO
         </div>
       </div>
-      <div style="font-size:13px;color:#444;margin-bottom:12px;line-height:1.5">
+      <div style="font-size:13px;color:var(--text);margin-bottom:12px;line-height:1.5">
         Estoy estudiando el movimiento del local para sugerirte qué comprar antes de fin de mes.
         Necesito ${RECOMPRA_DIAS_OBJETIVO} días de ventas para que las recomendaciones sean confiables.
       </div>
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px">
-        <div style="flex:1;height:14px;background:#f0f2f5;border-radius:7px;overflow:hidden;position:relative">
+        <div style="flex:1;height:14px;background:var(--bg);border-radius:7px;overflow:hidden;position:relative">
           <div style="position:absolute;inset:0;width:${progreso}%;background:linear-gradient(90deg,#f5a623 0%,#c97a35 100%);border-radius:7px;transition:width .4s"></div>
         </div>
-        <div style="font-weight:800;font-size:18px;color:#c97a35;min-width:54px;text-align:right">${progreso}%</div>
+        <div style="font-weight:800;font-size:18px;color:var(--tint-orange-fg);min-width:54px;text-align:right">${progreso}%</div>
       </div>
-      <div style="font-size:12px;color:#65676b;display:flex;justify-content:space-between">
+      <div style="font-size:12px;color:var(--text-muted);display:flex;justify-content:space-between">
         <span>${diasHistoria} ${diasHistoria === 1 ? 'día' : 'días'} de historia</span>
         <span>Faltan ${dias_faltan} ${dias_faltan === 1 ? 'día' : 'días'} para activarse</span>
       </div>
@@ -899,6 +993,11 @@ function calcularSugerenciasRecompra(ventas, itemsMap, catalogo) {
   for (const p of (catalogo || [])) {
     const k = (p.nombre || '').toUpperCase().trim();
     if (!k) continue;
+    // Producto vinculado a otro de stock (ej: "Impresión" → "Hojas Pampa"): no
+    // lleva stock propio, lo que se repone es la fuente. No sugerir comprarlo.
+    const _vinc = (Array.isArray(p.vinculaciones) && p.vinculaciones.some(v => v && v.doc_id && Number(v.cantidad) > 0))
+      || (p.vinculado_a && Number(p.vinculado_cantidad) > 0);
+    if (_vinc) continue;
     const unidades30 = ventasPorProducto[k] || 0;
     if (unidades30 <= 0) continue;
     const velocidadDia = unidades30 / divisor;
@@ -933,13 +1032,13 @@ function renderRecompraSugerencias({ sugerencias, diasAlFin, diasACubrir, diviso
     : '';
   if (sugerencias.length === 0) {
     return `
-      <div class="ct-card" style="background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:18px 22px;margin-bottom:16px;box-shadow:var(--shadow)">
+      <div class="ct-card" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:18px 22px;margin-bottom:16px;box-shadow:var(--shadow)">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px">
           <span class="material-icons" style="font-size:22px;color:#42b883">check_circle</span>
-          <div style="font-weight:700;font-size:15px;color:#1c1e21">Recompra de fin de mes</div>
+          <div style="font-weight:700;font-size:15px;color:var(--text)">Recompra de fin de mes</div>
           ${previewBadge ? `<div style="margin-left:auto">${previewBadge}</div>` : ''}
         </div>
-        <div style="font-size:13px;color:#65676b">El stock alcanza para los ${diasAlFin} días que faltan al fin de mes. No detecté faltantes.</div>
+        <div style="font-size:13px;color:var(--text-muted)">El stock alcanza para los ${diasAlFin} días que faltan al fin de mes. No detecté faltantes.</div>
       </div>
     `;
   }
@@ -953,29 +1052,29 @@ function renderRecompraSugerencias({ sugerencias, diasAlFin, diasACubrir, diviso
       : s.margenPct >= 20 ? '#1c1e21'
       : '#e74c3c';
     return `
-    <tr style="border-bottom:1px solid #f0f2f5">
-      <td style="padding:8px 12px;font-size:13px;color:#1c1e21">
+    <tr style="border-bottom:1px solid var(--border)">
+      <td style="padding:8px 12px;font-size:13px;color:var(--text)">
         <div style="font-weight:600">${escapeHtmlCt(s.nombre)}</div>
-        <div style="font-size:11px;color:#65676b">${escapeHtmlCt(s.rubro)}</div>
+        <div style="font-size:11px;color:var(--text-muted)">${escapeHtmlCt(s.rubro)}</div>
       </td>
-      <td style="padding:8px 12px;font-size:13px;color:#1c1e21;text-align:right">${s.precioVenta > 0 ? '$' + fmt(s.precioVenta) : '<span style="color:#b0b3b8">—</span>'}</td>
+      <td style="padding:8px 12px;font-size:13px;color:var(--text);text-align:right">${s.precioVenta > 0 ? '$' + fmt(s.precioVenta) : '<span style="color:#b0b3b8">—</span>'}</td>
       <td style="padding:8px 12px;font-size:13px;color:${margenColor};text-align:right;font-weight:600">${margenTxt}</td>
-      <td style="padding:8px 12px;font-size:12px;color:#65676b;text-align:right">${s.stock}</td>
-      <td style="padding:8px 12px;font-size:14px;color:#c97a35;text-align:right;font-weight:700">${s.faltante}</td>
-      <td style="padding:8px 12px;font-size:13px;color:#1c1e21;text-align:right;font-weight:600">$${fmt(s.inversion)}</td>
+      <td style="padding:8px 12px;font-size:12px;color:var(--text-muted);text-align:right">${s.stock}</td>
+      <td style="padding:8px 12px;font-size:14px;color:var(--tint-orange-fg);text-align:right;font-weight:700">${s.faltante}</td>
+      <td style="padding:8px 12px;font-size:13px;color:var(--text);text-align:right;font-weight:600">$${fmt(s.inversion)}</td>
     </tr>
   `;
   }).join('');
   return `
-    <div class="ct-card" style="background:#fff;border:1px solid var(--border);border-radius:var(--radius);padding:0;margin-bottom:16px;box-shadow:var(--shadow);overflow:hidden">
-      <div style="padding:16px 22px;background:linear-gradient(135deg,#fff7f0 0%,#fff 100%);border-bottom:1px solid var(--border)">
+    <div class="ct-card" style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);padding:0;margin-bottom:16px;box-shadow:var(--shadow);overflow:hidden">
+      <div style="padding:16px 22px;background:linear-gradient(135deg,var(--surface-2) 0%,var(--surface) 100%);border-bottom:1px solid var(--border)">
         <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;flex-wrap:wrap">
-          <span class="material-icons" style="font-size:22px;color:#c97a35">auto_awesome</span>
-          <div style="font-weight:700;font-size:15px;color:#1c1e21">Recompra de fin de mes</div>
+          <span class="material-icons" style="font-size:22px;color:var(--tint-orange-fg)">auto_awesome</span>
+          <div style="font-weight:700;font-size:15px;color:var(--text)">Recompra de fin de mes</div>
           ${previewBadge}
-          <div style="margin-left:auto;font-size:11px;color:#65676b">${diasHistoria} días de historia · cubre ${diasACubrir} días</div>
+          <div style="margin-left:auto;font-size:11px;color:var(--text-muted)">${diasHistoria} días de historia · cubre ${diasACubrir} días</div>
         </div>
-        <div style="font-size:12px;color:#65676b">${
+        <div style="font-size:12px;color:var(--text-muted)">${
           completo
             ? `Productos con stock insuficiente para llegar al fin de mes (basado en velocidad de venta de los últimos ${RECOMPRA_VENT_LOOKBACK} días).`
             : `Vista previa con datos limitados (${divisor} ${divisor === 1 ? 'día' : 'días'} de ventas analizados). Las cantidades se vuelven más confiables cuando se complete la barra de aprendizaje.`
@@ -984,20 +1083,20 @@ function renderRecompraSugerencias({ sugerencias, diasAlFin, diasACubrir, diviso
       <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse">
           <thead>
-            <tr style="background:#fafbfc;text-align:left">
-              <th style="padding:10px 12px;font-size:11px;color:#65676b;font-weight:700;letter-spacing:.5px">PRODUCTO</th>
-              <th style="padding:10px 12px;font-size:11px;color:#65676b;font-weight:700;letter-spacing:.5px;text-align:right">PRECIO</th>
-              <th style="padding:10px 12px;font-size:11px;color:#65676b;font-weight:700;letter-spacing:.5px;text-align:right">MARGEN</th>
-              <th style="padding:10px 12px;font-size:11px;color:#65676b;font-weight:700;letter-spacing:.5px;text-align:right">STOCK</th>
-              <th style="padding:10px 12px;font-size:11px;color:#65676b;font-weight:700;letter-spacing:.5px;text-align:right">COMPRAR</th>
-              <th style="padding:10px 12px;font-size:11px;color:#65676b;font-weight:700;letter-spacing:.5px;text-align:right">INVERSIÓN</th>
+            <tr style="background:var(--surface-2);text-align:left">
+              <th style="padding:10px 12px;font-size:11px;color:var(--text-muted);font-weight:700;letter-spacing:.5px">PRODUCTO</th>
+              <th style="padding:10px 12px;font-size:11px;color:var(--text-muted);font-weight:700;letter-spacing:.5px;text-align:right">PRECIO</th>
+              <th style="padding:10px 12px;font-size:11px;color:var(--text-muted);font-weight:700;letter-spacing:.5px;text-align:right">MARGEN</th>
+              <th style="padding:10px 12px;font-size:11px;color:var(--text-muted);font-weight:700;letter-spacing:.5px;text-align:right">STOCK</th>
+              <th style="padding:10px 12px;font-size:11px;color:var(--text-muted);font-weight:700;letter-spacing:.5px;text-align:right">COMPRAR</th>
+              <th style="padding:10px 12px;font-size:11px;color:var(--text-muted);font-weight:700;letter-spacing:.5px;text-align:right">INVERSIÓN</th>
             </tr>
           </thead>
           <tbody>${filas}</tbody>
           <tfoot>
-            <tr style="background:#fafbfc;border-top:2px solid var(--border)">
-              <td colspan="5" style="padding:10px 12px;font-size:13px;font-weight:700;color:#1c1e21">Inversión total estimada</td>
-              <td style="padding:10px 12px;font-size:14px;font-weight:800;color:#c97a35;text-align:right">$${fmt(totalInversion)}</td>
+            <tr style="background:var(--surface-2);border-top:2px solid var(--border)">
+              <td colspan="5" style="padding:10px 12px;font-size:13px;font-weight:700;color:var(--text)">Inversión total estimada</td>
+              <td style="padding:10px 12px;font-size:14px;font-weight:800;color:var(--tint-orange-fg);text-align:right">$${fmt(totalInversion)}</td>
             </tr>
           </tfoot>
         </table>
@@ -1022,7 +1121,7 @@ function renderAlertas(container, db, mapaSinCosto, mapaPerdida, itemsSinCosto, 
     html += `
       <div class="ct-alert ct-alert-warn">
         <div class="ct-alert-header">
-          <span class="material-icons" style="color:#e65100">sell</span>
+          <span class="material-icons" style="color:var(--tint-orange-fg)">sell</span>
           <div>
             <div class="ct-alert-title">${sinCostoList.length} productos sin costo cargado</div>
             <div class="ct-alert-sub">Cubren <b>$${fmt(ingresoSinCosto)}</b> en ventas del período. La ganancia bruta no los incluye hasta que cargues el costo.</div>
@@ -1039,12 +1138,12 @@ function renderAlertas(container, db, mapaSinCosto, mapaPerdida, itemsSinCosto, 
     html += `
       <div class="ct-alert ct-alert-loss">
         <div class="ct-alert-header">
-          <span class="material-icons" style="color:#c62828">trending_down</span>
+          <span class="material-icons" style="color:var(--tint-red-fg)">trending_down</span>
           <div>
             <div class="ct-alert-title">Vendiste ${perdidaList.length} productos por debajo del costo</div>
-            <div class="ct-alert-sub">Pérdida acumulada: <b style="color:#c62828">$${fmt(montoPerdida)}</b></div>
+            <div class="ct-alert-sub">Pérdida acumulada: <b style="color:var(--tint-red-fg)">$${fmt(montoPerdida)}</b></div>
           </div>
-          <button class="ct-alert-btn" id="ct-open-perdidas" style="background:#ffebee;color:#c62828;border-color:#ef9a9a">
+          <button class="ct-alert-btn" id="ct-open-perdidas" style="background:var(--tint-red-bg);color:var(--tint-red-fg);border-color:var(--border)">
             <span class="material-icons" style="font-size:16px">visibility</span> Ver detalle
           </button>
         </div>
@@ -1065,7 +1164,7 @@ function renderAlertas(container, db, mapaSinCosto, mapaPerdida, itemsSinCosto, 
 function abrirDetalleControl(tipo, data) {
   const {
     mapaConCosto, gastos, soloGastos, soloIngresos,
-    ingresoConCosto, cmv, gananciaBruta, gastoTotal, gananciaNeta,
+    ingresoConCosto, ingresoSinCosto = 0, cmv, gananciaBruta, gastoTotal, gananciaNeta,
     ingManualTotal,
     gastoEfectivo, gastoCuenta1, gastoCuenta2,
     porCategoria, catById,
@@ -1103,7 +1202,7 @@ function abrirDetalleControl(tipo, data) {
                 <td style="text-align:right">${d.cantidad}</td>
                 <td style="text-align:right">$${fmt(d.precioUnit)}</td>
                 <td style="text-align:right;font-weight:700">$${fmt(d.ingreso)}</td>
-                <td style="text-align:right;color:#65676b">${ingresoConCosto > 0 ? Math.round((d.ingreso / ingresoConCosto) * 100) : 0}%</td>
+                <td style="text-align:right;color:var(--text-muted)">${ingresoConCosto > 0 ? Math.round((d.ingreso / ingresoConCosto) * 100) : 0}%</td>
               </tr>
             `).join('')}
           </tbody>
@@ -1132,8 +1231,8 @@ function abrirDetalleControl(tipo, data) {
                 <td><b style="font-size:13px">${nombre}</b></td>
                 <td style="text-align:right">${d.cantidad}</td>
                 <td style="text-align:right">$${fmt(d.costoUnit)}</td>
-                <td style="text-align:right;font-weight:700;color:#e65100">$${fmt(d.cmv)}</td>
-                <td style="text-align:right;color:#65676b">${cmv > 0 ? Math.round((d.cmv / cmv) * 100) : 0}%</td>
+                <td style="text-align:right;font-weight:700;color:var(--tint-orange-fg)">$${fmt(d.cmv)}</td>
+                <td style="text-align:right;color:var(--text-muted)">${cmv > 0 ? Math.round((d.cmv / cmv) * 100) : 0}%</td>
               </tr>
             `).join('')}
           </tbody>
@@ -1143,8 +1242,9 @@ function abrirDetalleControl(tipo, data) {
     titulo = 'Ganancia bruta por producto';
     icono  = 'show_chart';
     color  = '#00695c';
-    const margenTot = ingresoConCosto > 0 ? Math.round((gananciaBruta / ingresoConCosto) * 100) : 0;
-    desc   = `Ingreso − costo por producto. Total: <b style="color:${gananciaBruta>=0?'#00695c':'#c62828'}">$${fmt(gananciaBruta)}</b> (${margenTot}% margen).`;
+    const ingGanTot = ingresoConCosto + (isIncluirSinCosto() ? (ingresoSinCosto || 0) : 0);
+    const margenTot = ingGanTot > 0 ? Math.round((gananciaBruta / ingGanTot) * 100) : 0;
+    desc   = `Ingreso − costo por producto. Total: <b style="color:${gananciaBruta>=0?'var(--tint-teal-fg)':'var(--tint-red-fg)'}">$${fmt(gananciaBruta)}</b> (${margenTot}% margen).`;
     const lista = productos
       .map(([nombre, d]) => [nombre, { ...d, ganancia: d.ingreso - d.cmv, margen: d.ingreso > 0 ? (d.ingreso - d.cmv) / d.ingreso * 100 : 0 }])
       .sort((a, b) => b[1].ganancia - a[1].ganancia);
@@ -1164,9 +1264,9 @@ function abrirDetalleControl(tipo, data) {
               <tr>
                 <td><b style="font-size:13px">${nombre}</b></td>
                 <td style="text-align:right">$${fmt(d.ingreso)}</td>
-                <td style="text-align:right;color:#e65100">$${fmt(d.cmv)}</td>
-                <td style="text-align:right;font-weight:700;color:${d.ganancia>=0?'#00695c':'#c62828'}">$${fmt(d.ganancia)}</td>
-                <td style="text-align:right;color:${d.margen>=0?'#00695c':'#c62828'}">${Math.round(d.margen)}%</td>
+                <td style="text-align:right;color:var(--tint-orange-fg)">$${fmt(d.cmv)}</td>
+                <td style="text-align:right;font-weight:700;color:${d.ganancia>=0?'var(--tint-teal-fg)':'var(--tint-red-fg)'}">$${fmt(d.ganancia)}</td>
+                <td style="text-align:right;color:${d.margen>=0?'var(--tint-teal-fg)':'var(--tint-red-fg)'}">${Math.round(d.margen)}%</td>
               </tr>
             `).join('')}
           </tbody>
@@ -1176,7 +1276,7 @@ function abrirDetalleControl(tipo, data) {
     titulo = 'Gastos / Pagos del período';
     icono  = 'receipt_long';
     color  = '#c62828';
-    desc   = `Gasto total: <b style="color:#c62828">$${fmt(gastoTotal)}</b> · Ingresos manuales: <b style="color:#2e7d32">$${fmt(ingManualTotal || 0)}</b> · ${gastos.length} registros.`;
+    desc   = `Gasto total: <b style="color:var(--tint-red-fg)">$${fmt(gastoTotal)}</b> · Ingresos manuales: <b style="color:var(--tint-green-fg)">$${fmt(ingManualTotal || 0)}</b> · ${gastos.length} registros.`;
 
     // Resumen por categoría (solo con movimiento)
     const porCatArr = Object.values(porCategoria || {})
@@ -1188,15 +1288,15 @@ function abrirDetalleControl(tipo, data) {
       ? `<div class="empty-state" style="padding:32px"><span class="material-icons">receipt_long</span><p>Sin registros en el período</p></div>`
       : `
         <div style="display:flex;gap:12px;flex-wrap:wrap;margin-bottom:12px">
-          <div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">Efectivo</span><b style="color:#c62828">$${fmt(gastoEfectivo)}</b></div>
-          <div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">${c1}</span><b style="color:#c62828">$${fmt(gastoCuenta1)}</b></div>
-          <div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">${c2}</span><b style="color:#c62828">$${fmt(gastoCuenta2)}</b></div>
-          ${ingManualTotal > 0 ? `<div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">Ingresos extra</span><b style="color:#2e7d32">$${fmt(ingManualTotal)}</b></div>` : ''}
+          <div class="ct-mini-stat"><span style="color:var(--text-muted);font-size:12px">Efectivo</span><b style="color:var(--tint-red-fg)">$${fmt(gastoEfectivo)}</b></div>
+          <div class="ct-mini-stat"><span style="color:var(--text-muted);font-size:12px">${c1}</span><b style="color:var(--tint-red-fg)">$${fmt(gastoCuenta1)}</b></div>
+          <div class="ct-mini-stat"><span style="color:var(--text-muted);font-size:12px">${c2}</span><b style="color:var(--tint-red-fg)">$${fmt(gastoCuenta2)}</b></div>
+          ${ingManualTotal > 0 ? `<div class="ct-mini-stat"><span style="color:var(--text-muted);font-size:12px">Ingresos extra</span><b style="color:var(--tint-green-fg)">$${fmt(ingManualTotal)}</b></div>` : ''}
         </div>
 
         ${porCatArr.length > 0 ? `
         <div style="padding:12px 20px 4px 20px">
-          <div style="font-size:11px;font-weight:700;color:#65676b;text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px">Por categoría</div>
+          <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:6px">Por categoría</div>
           <div class="ct-cat-chips">
             ${porCatArr.map(c => `
               <div class="ct-cat-chip" style="--cat-color:${c.color}">
@@ -1206,8 +1306,8 @@ function abrirDetalleControl(tipo, data) {
                   <span class="ct-cat-chip-count">${c.count}</span>
                 </div>
                 <div class="ct-cat-chip-nums">
-                  ${c.gasto > 0 ? `<span style="color:#c62828">−$${fmt(c.gasto)}</span>` : ''}
-                  ${c.ingreso > 0 ? `<span style="color:#2e7d32">+$${fmt(c.ingreso)}</span>` : ''}
+                  ${c.gasto > 0 ? `<span style="color:var(--tint-red-fg)">−$${fmt(c.gasto)}</span>` : ''}
+                  ${c.ingreso > 0 ? `<span style="color:var(--tint-green-fg)">+$${fmt(c.ingreso)}</span>` : ''}
                 </div>
               </div>
             `).join('')}
@@ -1231,9 +1331,9 @@ function abrirDetalleControl(tipo, data) {
               const col   = g.es_ingreso ? '#2e7d32' : '#c62828';
               return `
                 <tr>
-                  <td style="white-space:nowrap;color:#65676b">${g.fecha || ''}</td>
+                  <td style="white-space:nowrap;color:var(--text-muted)">${g.fecha || ''}</td>
                   <td><b style="font-size:13px">${escapeHtmlCt(g.descripcion || '-')}</b></td>
-                  <td>${catNombre ? `<span class="ct-cat-badge" style="--cat-color:${catColor}">${escapeHtmlCt(catNombre)}</span>` : '<span style="color:#94a3b8">—</span>'}</td>
+                  <td>${catNombre ? `<span class="ct-cat-badge" style="--cat-color:${catColor}">${escapeHtmlCt(catNombre)}</span>` : '<span style="color:var(--text-muted)">—</span>'}</td>
                   <td><span class="badge ${g.tipo==='efectivo'?'badge-green':'badge-blue'}">${tipoLabel[g.tipo] || g.tipo}</span></td>
                   <td style="text-align:right;font-weight:700;color:${col}">${signo}$${fmt(g.monto)}</td>
                 </tr>
@@ -1247,39 +1347,48 @@ function abrirDetalleControl(tipo, data) {
     icono  = gananciaNeta >= 0 ? 'trending_up' : 'trending_down';
     color  = gananciaNeta >= 0 ? '#1b5e20' : '#b71c1c';
     desc   = `El resultado final del período, después de descontar costos y gastos.`;
-    const margenTot = ingresoConCosto > 0 ? Math.round((gananciaBruta / ingresoConCosto) * 100) : 0;
+    const sumarSC = isIncluirSinCosto();
+    const ingGanTot = ingresoConCosto + (sumarSC ? ingresoSinCosto : 0);
+    const margenTot = ingGanTot > 0 ? Math.round((gananciaBruta / ingGanTot) * 100) : 0;
     body = `
       <div class="ct-neta-breakdown">
         <div class="ct-neta-row">
-          <div class="ct-neta-lbl"><span class="material-icons" style="color:#1877f2">point_of_sale</span> Vendiste con costo</div>
+          <div class="ct-neta-lbl"><span class="material-icons" style="color:var(--tint-blue-fg)">point_of_sale</span> Vendiste con costo</div>
           <div class="ct-neta-val">+ $${fmt(ingresoConCosto)}</div>
         </div>
+        ${sumarSC && ingresoSinCosto > 0 ? `
+        <div class="ct-neta-row">
+          <div class="ct-neta-lbl"><span class="material-icons" style="color:var(--tint-orange-fg)">add_box</span> Vendiste sin costo cargado <span style="color:var(--text-muted);font-weight:400;font-size:12px">(asumido costo $0)</span></div>
+          <div class="ct-neta-val">+ $${fmt(ingresoSinCosto)}</div>
+        </div>` : ''}
         <div class="ct-neta-row ct-neta-sub">
-          <div class="ct-neta-lbl"><span class="material-icons" style="color:#e65100">inventory_2</span> Lo que te costó</div>
-          <div class="ct-neta-val" style="color:#e65100">− $${fmt(cmv)}</div>
+          <div class="ct-neta-lbl"><span class="material-icons" style="color:var(--tint-orange-fg)">inventory_2</span> Lo que te costó</div>
+          <div class="ct-neta-val" style="color:var(--tint-orange-fg)">− $${fmt(cmv)}</div>
         </div>
         <div class="ct-neta-sep"></div>
         <div class="ct-neta-row ct-neta-result">
-          <div class="ct-neta-lbl"><span class="material-icons" style="color:#00695c">show_chart</span> Ganancia bruta <span style="color:#65676b;font-weight:400;font-size:12px">(${margenTot}% margen)</span></div>
-          <div class="ct-neta-val" style="color:${gananciaBruta>=0?'#00695c':'#c62828'}">= $${fmt(gananciaBruta)}</div>
+          <div class="ct-neta-lbl"><span class="material-icons" style="color:var(--tint-teal-fg)">show_chart</span> Ganancia bruta <span style="color:var(--text-muted);font-weight:400;font-size:12px">(${margenTot}% margen)</span></div>
+          <div class="ct-neta-val" style="color:${gananciaBruta>=0?'var(--tint-teal-fg)':'var(--tint-red-fg)'}">= $${fmt(gananciaBruta)}</div>
         </div>
         <div class="ct-neta-row ct-neta-sub">
-          <div class="ct-neta-lbl"><span class="material-icons" style="color:#c62828">receipt_long</span> Gastos / Pagos</div>
-          <div class="ct-neta-val" style="color:#c62828">− $${fmt(gastoTotal)}</div>
+          <div class="ct-neta-lbl"><span class="material-icons" style="color:var(--tint-red-fg)">receipt_long</span> Gastos / Pagos</div>
+          <div class="ct-neta-val" style="color:var(--tint-red-fg)">− $${fmt(gastoTotal)}</div>
         </div>
         ${ingManualTotal > 0 ? `
         <div class="ct-neta-row ct-neta-sub">
-          <div class="ct-neta-lbl"><span class="material-icons" style="color:#2e7d32">add_circle</span> Ingresos manuales</div>
-          <div class="ct-neta-val" style="color:#2e7d32">+ $${fmt(ingManualTotal)}</div>
+          <div class="ct-neta-lbl"><span class="material-icons" style="color:var(--tint-green-fg)">add_circle</span> Ingresos manuales</div>
+          <div class="ct-neta-val" style="color:var(--tint-green-fg)">+ $${fmt(ingManualTotal)}</div>
         </div>` : ''}
         <div class="ct-neta-sep"></div>
-        <div class="ct-neta-row ct-neta-final" style="background:${gananciaNeta>=0?'#f1f8f1':'#fff5f5'}">
+        <div class="ct-neta-row ct-neta-final" style="background:${gananciaNeta>=0?'var(--tint-green-bg)':'var(--tint-red-bg)'}">
           <div class="ct-neta-lbl"><span class="material-icons" style="color:${color}">${icono}</span> <b>Ganancia neta</b></div>
           <div class="ct-neta-val" style="color:${color};font-size:22px;font-weight:900">$${fmt(gananciaNeta)}</div>
         </div>
       </div>
-      <div style="margin-top:16px;padding:12px;background:#f7f8fa;border-radius:8px;font-size:12px;color:#65676b;line-height:1.6">
-        <b>Nota:</b> la ganancia bruta solo considera productos con costo cargado. Ventas sin costo conocido no se descuentan acá — aparecen en el banner de alerta de arriba.
+      <div style="margin-top:16px;padding:12px;background:var(--surface-2);border-radius:8px;font-size:12px;color:var(--text-muted);line-height:1.6">
+        <b>Nota:</b> ${sumarSC
+          ? 'la ganancia incluye los items vendidos sin costo cargado (asumiendo costo $0). Activado con el botón "Sumar sin costo".'
+          : 'la ganancia bruta solo considera productos con costo cargado. Ventas sin costo conocido no se descuentan acá — aparecen en el banner de alerta de arriba.'}
       </div>`;
   }
   else {
@@ -1317,7 +1426,7 @@ function abrirPanelCostos(db, list, onRefresh) {
   overlay.innerHTML = `
     <div class="ct-modal" role="dialog">
       <div class="ct-modal-header">
-        <span class="material-icons" style="color:#e65100">sell</span>
+        <span class="material-icons" style="color:var(--tint-orange-fg)">sell</span>
         <h3>Cargar costos faltantes</h3>
         <button class="ct-modal-close" title="Cerrar"><span class="material-icons">close</span></button>
       </div>
@@ -1341,14 +1450,14 @@ function abrirPanelCostos(db, list, onRefresh) {
               <tr data-nombre="${encodeURIComponent(nombre)}" data-docid="${d.doc_id || ''}">
                 <td>
                   <b style="font-size:13px">${nombre}</b>
-                  ${!d.en_catalogo ? '<div style="color:#c62828;font-size:11px">no está en el catálogo</div>' : ''}
+                  ${!d.en_catalogo ? '<div style="color:var(--tint-red-fg);font-size:11px">no está en el catálogo</div>' : ''}
                 </td>
                 <td style="text-align:right">${d.cantidad}</td>
                 <td style="text-align:right">$${fmt(d.precio_venta)}</td>
                 <td style="text-align:right;font-weight:700">$${fmt(d.ingreso)}</td>
                 <td style="text-align:right">
                   <input type="number" step="0.01" min="0" class="ct-costo-input" placeholder="$"
-                    style="width:90px;padding:6px 8px;border:1.5px solid #e4e6eb;border-radius:6px;text-align:right;font-size:13px" />
+                    style="width:90px;padding:6px 8px;border:1.5px solid var(--border);border-radius:6px;text-align:right;font-size:13px" />
                 </td>
                 <td>
                   <button class="ct-save-costo" ${!d.doc_id ? 'disabled title="No está en el catálogo"' : ''}>
@@ -1361,7 +1470,7 @@ function abrirPanelCostos(db, list, onRefresh) {
         </table>
       </div>
       <div class="ct-modal-footer">
-        <span style="color:#65676b;font-size:12px">Tip: Enter en el input guarda el costo.</span>
+        <span style="color:var(--text-muted);font-size:12px">Tip: Enter en el input guarda el costo.</span>
         <button class="ct-btn-primary" id="ct-refresh-modal">
           <span class="material-icons" style="font-size:16px">refresh</span> Actualizar Control Total
         </button>
@@ -1392,11 +1501,11 @@ function abrirPanelCostos(db, list, onRefresh) {
           ultima_actualizacion: serverTimestamp(),
         });
         invalidateCacheByPrefix('catalogo');
-        tr.style.background = '#e8f5e9';
+        tr.style.background = 'var(--tint-green-bg)';
         tr.style.transition = 'background 0.3s';
-        btn.innerHTML = '<span class="material-icons" style="font-size:16px;color:#2e7d32">check_circle</span>';
+        btn.innerHTML = '<span class="material-icons" style="font-size:16px;color:var(--tint-green-fg)">check_circle</span>';
       } catch (e) {
-        alert('Error al guardar: ' + e.message);
+        alertDialog({ title: 'Error', message: 'No se pudo guardar: ' + escHtml(e.message), type: 'error' });
         btn.disabled = false;
         btn.innerHTML = '<span class="material-icons" style="font-size:16px">save</span>';
       }
@@ -1419,7 +1528,7 @@ function abrirPanelPerdidas(db, list, onRefresh) {
   overlay.innerHTML = `
     <div class="ct-modal" role="dialog">
       <div class="ct-modal-header">
-        <span class="material-icons" style="color:#c62828">trending_down</span>
+        <span class="material-icons" style="color:var(--tint-red-fg)">trending_down</span>
         <h3>Ventas por debajo del costo</h3>
         <button class="ct-modal-close" title="Cerrar"><span class="material-icons">close</span></button>
       </div>
@@ -1444,14 +1553,14 @@ function abrirPanelPerdidas(db, list, onRefresh) {
                 <td style="text-align:right">${d.cantidad}</td>
                 <td style="text-align:right">$${fmt(d.costo)}</td>
                 <td style="text-align:right">$${fmt(d.precio)}</td>
-                <td style="text-align:right;font-weight:700;color:#c62828">-$${fmt(d.perdida)}</td>
+                <td style="text-align:right;font-weight:700;color:var(--tint-red-fg)">-$${fmt(d.perdida)}</td>
               </tr>
             `).join('')}
           </tbody>
         </table>
       </div>
       <div class="ct-modal-footer">
-        <span style="color:#65676b;font-size:12px">Usá el Catálogo para ajustar precios de venta o costos.</span>
+        <span style="color:var(--text-muted);font-size:12px">Usá el Catálogo para ajustar precios de venta o costos.</span>
         <button class="ct-btn-primary" id="ct-close-perdidas">Cerrar</button>
       </div>
     </div>
@@ -1493,7 +1602,7 @@ function abrirReasignarModal({ db, transPorDia, transferSplits, config, onSaved 
   overlay.innerHTML = `
     <div class="ct-modal ct-reasignar-modal" role="dialog">
       <div class="ct-modal-header">
-        <span class="material-icons" style="color:#1877f2">swap_horiz</span>
+        <span class="material-icons" style="color:var(--tint-blue-fg)">swap_horiz</span>
         <h3>Reasignar transferencias</h3>
         <button class="ct-modal-close" title="Cerrar"><span class="material-icons">close</span></button>
       </div>
@@ -1625,7 +1734,7 @@ function abrirReasignarModal({ db, transPorDia, transferSplits, config, onSaved 
         tr.classList.remove('is-override', 'edited', 'mismatch');
         tr.lastElementChild.innerHTML = '';
       } catch (err) {
-        alert('Error al resetear: ' + err.message);
+        alertDialog({ title: 'Error', message: 'No se pudo resetear: ' + escHtml(err.message), type: 'error' });
         resetBtn.disabled = false;
         resetBtn.innerHTML = '<span class="material-icons" style="font-size:16px">restart_alt</span>';
       }
@@ -1650,7 +1759,7 @@ function abrirReasignarModal({ db, transPorDia, transferSplits, config, onSaved 
       closeModal();
       onSaved?.();
     } catch (err) {
-      alert('Error al guardar: ' + err.message);
+      alertDialog({ title: 'Error', message: 'No se pudo guardar: ' + escHtml(err.message), type: 'error' });
       btn.disabled = false;
       btn.innerHTML = '<span class="material-icons" style="font-size:16px;vertical-align:-3px">save</span> Guardar cambios';
     }
@@ -1733,7 +1842,7 @@ function renderCtMiniCharts(container, data) {
   const fmtMoney = v => '$' + Number(v || 0).toLocaleString('es-AR', { maximumFractionDigits: 0 });
   const legendCfg = {
     position: 'bottom',
-    labels: { boxWidth: 10, padding: 8, font: { size: 11 }, color: '#65676b' },
+    labels: { boxWidth: 10, padding: 8, font: { size: 11 }, color: cssVar('--chart-text', '#65676b') },
   };
 
   if (hayIngresos) {
@@ -1775,8 +1884,8 @@ function renderCtMiniCharts(container, data) {
           tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmtMoney(ctx.parsed.y)}` } },
         },
         scales: {
-          x: { grid: { display: false }, ticks: { font: { size: 10 }, color: '#65676b' } },
-          y: { ticks: { callback: (v) => fmtCompacto(v), font: { size: 10 }, color: '#65676b' }, grid: { color: 'rgba(0,0,0,0.06)' } },
+          x: { grid: { display: false }, ticks: { font: { size: 10 }, color: cssVar('--chart-text', '#65676b') } },
+          y: { ticks: { callback: (v) => fmtCompacto(v), font: { size: 10 }, color: cssVar('--chart-text', '#65676b') }, grid: { color: cssVar('--chart-grid', 'rgba(0,0,0,0.06)') } },
         },
       },
     });
@@ -1800,8 +1909,8 @@ function renderCtMiniCharts(container, data) {
           tooltip: { callbacks: { label: (ctx) => `${ctx.dataset.label}: ${fmtMoney(ctx.parsed.x)}` } },
         },
         scales: {
-          x: { ticks: { callback: (v) => fmtCompacto(v), font: { size: 10 }, color: '#65676b' }, grid: { color: 'rgba(0,0,0,0.06)' } },
-          y: { grid: { display: false }, ticks: { font: { size: 11 }, color: '#65676b' } },
+          x: { ticks: { callback: (v) => fmtCompacto(v), font: { size: 10 }, color: cssVar('--chart-text', '#65676b') }, grid: { color: cssVar('--chart-grid', 'rgba(0,0,0,0.06)') } },
+          y: { grid: { display: false }, ticks: { font: { size: 11 }, color: cssVar('--chart-text', '#65676b') } },
         },
       },
     });
@@ -2073,7 +2182,7 @@ async function abrirGestorCategorias(container, db, periodo, config) {
   overlay.innerHTML = `
     <div class="ct-modal" role="dialog" style="max-width:720px">
       <div class="ct-modal-header">
-        <span class="material-icons" style="color:#6a1b9a">local_offer</span>
+        <span class="material-icons" style="color:var(--tint-purple-fg)">local_offer</span>
         <h3>Categorías de gastos e ingresos</h3>
         <button class="ct-modal-close" title="Cerrar"><span class="material-icons">close</span></button>
       </div>
@@ -2084,12 +2193,12 @@ async function abrirGestorCategorias(container, db, periodo, config) {
         <form id="ct-cat-form" class="ct-cat-form">
           <input type="text" id="ct-cat-nombre" placeholder="Nombre (ej: Proveedor X, Servicios, Alquiler)" required
             style="flex:1;min-width:180px;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px" />
-          <select id="ct-cat-tipo" style="padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;background:#fff">
+          <select id="ct-cat-tipo" style="padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;background:var(--surface)">
             <option value="ambos">Gasto e ingreso</option>
             <option value="gasto">Solo gasto</option>
             <option value="ingreso">Solo ingreso</option>
           </select>
-          <select id="ct-cat-padre" style="padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;background:#fff">
+          <select id="ct-cat-padre" style="padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;background:var(--surface)">
             <option value="">Sin categoría padre</option>
             ${cats.map(c => `<option value="${c.id}">${escapeHtmlCt(c.nombre)}</option>`).join('')}
           </select>
@@ -2100,7 +2209,7 @@ async function abrirGestorCategorias(container, db, periodo, config) {
         <div id="ct-cat-lista" style="margin-top:16px"></div>
       </div>
       <div class="ct-modal-footer">
-        <span style="color:#65676b;font-size:12px">Eliminar una categoría no borra los gastos; quedan como "Sin categoría".</span>
+        <span style="color:var(--text-muted);font-size:12px">Eliminar una categoría no borra los gastos; quedan como "Sin categoría".</span>
         <button class="ct-btn-primary" id="ct-cat-cerrar">Cerrar</button>
       </div>
     </div>
@@ -2142,8 +2251,8 @@ async function abrirGestorCategorias(container, db, periodo, config) {
     const render = (padreId, nivel) => {
       const hijos = (porPadre[padreId] || []).sort((a, b) => (a.nombre || '').localeCompare(b.nombre || '', 'es'));
       return hijos.map(c => {
-        const tipoBadge = c.tipo === 'gasto' ? '<span class="ct-cat-tipo-badge" style="color:#c62828">Gasto</span>'
-                        : c.tipo === 'ingreso' ? '<span class="ct-cat-tipo-badge" style="color:#2e7d32">Ingreso</span>'
+        const tipoBadge = c.tipo === 'gasto' ? '<span class="ct-cat-tipo-badge" style="color:var(--tint-red-fg)">Gasto</span>'
+                        : c.tipo === 'ingreso' ? '<span class="ct-cat-tipo-badge" style="color:var(--tint-green-fg)">Ingreso</span>'
                         : '<span class="ct-cat-tipo-badge">Ambos</span>';
         return `
           <div class="ct-cat-row" data-id="${c.id}" style="padding-left:${12 + nivel * 20}px">
@@ -2165,7 +2274,7 @@ async function abrirGestorCategorias(container, db, periodo, config) {
       const id = row.dataset.id;
       const c  = byId[id];
       row.querySelector('.ct-cat-del').addEventListener('click', async () => {
-        if (!confirm(`¿Eliminar la categoría "${c.nombre}"?`)) return;
+        if (!await confirmDialog({ title: 'Eliminar categoría', message: `¿Eliminar la categoría <b>"${escHtml(c.nombre)}"</b>?`, confirmText: 'Eliminar', danger: true })) return;
         await deleteDoc(doc(db, 'gasto_categorias', id));
         invalidateCategorias();
         const updated = await loadCategorias(db);
@@ -2224,7 +2333,7 @@ function editarCategoriaInline(row, cat, db, onDone, todasCats) {
     </select>
     <select class="ct-cat-edit-padre" style="padding:6px 8px;border:1.5px solid var(--border);border-radius:6px;font-size:12px;max-width:140px">${parentOpts}</select>
     <div class="ct-cat-actions">
-      <button class="ct-cat-save" title="Guardar"><span class="material-icons" style="font-size:16px;color:#2e7d32">check</span></button>
+      <button class="ct-cat-save" title="Guardar"><span class="material-icons" style="font-size:16px;color:var(--tint-green-fg)">check</span></button>
       <button class="ct-cat-cancel" title="Cancelar"><span class="material-icons" style="font-size:16px">close</span></button>
     </div>
   `;
@@ -2308,7 +2417,7 @@ function renderListaGanancia(container, ventas, itemsMap, catalogoPorNombre, gas
   const ensureDia = (key) => {
     if (!porDia[key]) {
       porDia[key] = {
-        fecha: key, ingreso: 0, cmv: 0, ingresoConCosto: 0,
+        fecha: key, ingreso: 0, cmv: 0, ingresoConCosto: 0, ingresoSinCosto: 0,
         ventas: [], items: [],
         gastos: [], ingresosManuales: [],
         totalGastos: 0, totalIngresosManuales: 0,
@@ -2335,6 +2444,8 @@ function renderListaGanancia(container, ventas, itemsMap, catalogoPorNombre, gas
       if (costoUnit > 0) {
         d.cmv += costoUnit * it.cantidad;
         d.ingresoConCosto += ingresoItem;
+      } else {
+        d.ingresoSinCosto += ingresoItem;
       }
       d.items.push({ ...it, costoUnit, categoria: cat?.categoria || null, hora: f.getHours() });
     }
@@ -2361,7 +2472,7 @@ function renderListaGanancia(container, ventas, itemsMap, catalogoPorNombre, gas
   for (const d of dias) {
     const k = d.fecha.slice(0, 7);
     if (!porMes[k]) porMes[k] = {
-      mes: k, ingreso: 0, cmv: 0, ingresoConCosto: 0,
+      mes: k, ingreso: 0, cmv: 0, ingresoConCosto: 0, ingresoSinCosto: 0,
       ventas: [], items: [], dias: [],
       gastos: [], ingresosManuales: [],
       totalGastos: 0, totalIngresosManuales: 0,
@@ -2369,6 +2480,7 @@ function renderListaGanancia(container, ventas, itemsMap, catalogoPorNombre, gas
     porMes[k].ingreso                += d.ingreso;
     porMes[k].cmv                    += d.cmv;
     porMes[k].ingresoConCosto        += d.ingresoConCosto;
+    porMes[k].ingresoSinCosto        += d.ingresoSinCosto;
     porMes[k].totalGastos            += d.totalGastos;
     porMes[k].totalIngresosManuales  += d.totalIngresosManuales;
     porMes[k].ventas.push(...d.ventas);
@@ -2400,20 +2512,21 @@ function renderListaGanancia(container, ventas, itemsMap, catalogoPorNombre, gas
     el.innerHTML = `
       <div class="ct-lg-acordeon" style="display:flex;flex-direction:column;gap:8px;margin-top:6px">
         ${meses.map(m => {
-          const ganM = m.ingresoConCosto - m.cmv;
-          const margenM = m.ingresoConCosto > 0 ? Math.round((ganM / m.ingresoConCosto) * 100) : 0;
+          const ingGanM = m.ingresoConCosto + (isIncluirSinCosto() ? m.ingresoSinCosto : 0);
+          const ganM = ingGanM - m.cmv;
+          const margenM = ingGanM > 0 ? Math.round((ganM / ingGanM) * 100) : 0;
           const expanded = mesesExpandidos.has(m.mes);
           return `
-            <div class="ct-lg-mes" data-mes="${m.mes}" style="border:1px solid var(--border);border-radius:10px;overflow:hidden;background:#fff">
+            <div class="ct-lg-mes" data-mes="${m.mes}" style="border:1px solid var(--border);border-radius:10px;overflow:hidden;background:var(--surface)">
               <button type="button" class="ct-lg-mes-header" data-mes="${m.mes}"
-                style="display:flex;align-items:center;gap:10px;width:100%;padding:12px 14px;border:none;background:${expanded?'#f7f8fa':'#fff'};cursor:pointer;text-align:left;font-family:inherit">
-                <span class="material-icons ct-lg-chev" style="font-size:20px;color:#65676b;transition:transform .18s;transform:${expanded?'rotate(90deg)':'rotate(0deg)'}">chevron_right</span>
+                style="display:flex;align-items:center;gap:10px;width:100%;padding:12px 14px;border:none;background:${expanded?'var(--surface-2)':'var(--surface)'};cursor:pointer;text-align:left;font-family:inherit">
+                <span class="material-icons ct-lg-chev" style="font-size:20px;color:var(--text-muted);transition:transform .18s;transform:${expanded?'rotate(90deg)':'rotate(0deg)'}">chevron_right</span>
                 <b style="font-size:14px;flex:1">${formatMes(m.mes)}</b>
-                <span style="font-size:11px;color:#65676b">${m.dias.length} ${m.dias.length===1?'día':'días'} · ${m.ventas.length} ventas</span>
-                <span style="font-size:13px;color:#1877f2;font-weight:600;min-width:110px;text-align:right">$${fmt(m.ingreso)}</span>
-                <span style="font-size:13px;font-weight:700;min-width:110px;text-align:right;color:${ganM>=0?'#00695c':'#c62828'}">$${fmt(ganM)} <span style="font-weight:500;font-size:11px">(${margenM}%)</span></span>
+                <span style="font-size:11px;color:var(--text-muted)">${m.dias.length} ${m.dias.length===1?'día':'días'} · ${m.ventas.length} ventas</span>
+                <span style="font-size:13px;color:var(--tint-blue-fg);font-weight:600;min-width:110px;text-align:right">$${fmt(m.ingreso)}</span>
+                <span style="font-size:13px;font-weight:700;min-width:110px;text-align:right;color:${ganM>=0?'var(--tint-teal-fg)':'var(--tint-red-fg)'}">$${fmt(ganM)} <span style="font-weight:500;font-size:11px">(${margenM}%)</span></span>
               </button>
-              <div class="ct-lg-mes-body" style="display:${expanded?'block':'none'};border-top:1px solid var(--border);background:#fafbfc">
+              <div class="ct-lg-mes-body" style="display:${expanded?'block':'none'};border-top:1px solid var(--border);background:var(--surface-2)">
                 <div style="overflow-x:auto">
                   <table class="ct-costos-table" style="margin:0">
                     <thead><tr>
@@ -2428,17 +2541,18 @@ function renderListaGanancia(container, ventas, itemsMap, catalogoPorNombre, gas
                     </tr></thead>
                     <tbody>
                       ${m.dias.map(d => {
-                        const ganD = d.ingresoConCosto - d.cmv;
+                        const ingGanD = d.ingresoConCosto + (isIncluirSinCosto() ? d.ingresoSinCosto : 0);
+                        const ganD = ingGanD - d.cmv;
                         return `
                           <tr class="ct-lg-row-dia" data-fecha="${d.fecha}" style="cursor:pointer">
                             <td><b style="font-size:13px">${formatDia(d.fecha)}</b></td>
                             <td style="text-align:right;font-weight:600">$${fmt(d.ingreso)}</td>
-                            <td style="text-align:right;color:#e65100">$${fmt(d.cmv)}</td>
-                            <td style="text-align:right;font-weight:700;color:${ganD>=0?'#00695c':'#c62828'}">$${fmt(ganD)}</td>
-                            <td style="text-align:right;color:${d.totalGastos>0?'#c62828':'#94a3b8'}">${d.totalGastos>0?'-$'+fmt(d.totalGastos):'—'}</td>
-                            <td style="text-align:right;color:${d.totalIngresosManuales>0?'#2e7d32':'#94a3b8'}">${d.totalIngresosManuales>0?'+$'+fmt(d.totalIngresosManuales):'—'}</td>
-                            <td style="text-align:right;color:#65676b">${d.ventas.length}</td>
-                            <td style="text-align:center"><span class="material-icons" style="font-size:18px;color:#65676b">chevron_right</span></td>
+                            <td style="text-align:right;color:var(--tint-orange-fg)">$${fmt(d.cmv)}</td>
+                            <td style="text-align:right;font-weight:700;color:${ganD>=0?'var(--tint-teal-fg)':'var(--tint-red-fg)'}">$${fmt(ganD)}</td>
+                            <td style="text-align:right;color:${d.totalGastos>0?'var(--tint-red-fg)':'var(--text-muted)'}">${d.totalGastos>0?'-$'+fmt(d.totalGastos):'—'}</td>
+                            <td style="text-align:right;color:${d.totalIngresosManuales>0?'var(--tint-green-fg)':'var(--text-muted)'}">${d.totalIngresosManuales>0?'+$'+fmt(d.totalIngresosManuales):'—'}</td>
+                            <td style="text-align:right;color:var(--text-muted)">${d.ventas.length}</td>
+                            <td style="text-align:center"><span class="material-icons" style="font-size:18px;color:var(--text-muted)">chevron_right</span></td>
                           </tr>
                         `;
                       }).join('')}
@@ -2468,7 +2582,7 @@ function renderListaGanancia(container, ventas, itemsMap, catalogoPorNombre, gas
         const dia = porDia[fecha];
         if (dia) abrirDetalleGanancia(dia, 'dia', config);
       });
-      tr.addEventListener('mouseenter', () => tr.style.background = '#f0f2f5');
+      tr.addEventListener('mouseenter', () => tr.style.background = 'var(--bg)');
       tr.addEventListener('mouseleave', () => tr.style.background = '');
     });
   };
@@ -2495,18 +2609,19 @@ function renderListaGanancia(container, ventas, itemsMap, catalogoPorNombre, gas
           </tr></thead>
           <tbody>
             ${data.map((row, i) => {
-              const ganancia = row.ingresoConCosto - row.cmv;
-              const margen = row.ingresoConCosto > 0 ? Math.round((ganancia / row.ingresoConCosto) * 100) : 0;
+              const ingGanRow = row.ingresoConCosto + (isIncluirSinCosto() ? (row.ingresoSinCosto || 0) : 0);
+              const ganancia = ingGanRow - row.cmv;
+              const margen = ingGanRow > 0 ? Math.round((ganancia / ingGanRow) * 100) : 0;
               const labelFecha = vista === 'mes' ? formatMes(row.mes) : formatDia(row.fecha);
               return `
                 <tr class="ct-lg-row" data-idx="${i}" style="cursor:pointer">
                   <td><b style="font-size:13px">${labelFecha}</b></td>
                   <td style="text-align:right;font-weight:600">$${fmt(row.ingreso)}</td>
-                  <td style="text-align:right;color:#e65100">$${fmt(row.cmv)}</td>
-                  <td style="text-align:right;font-weight:700;color:${ganancia>=0?'#00695c':'#c62828'}">$${fmt(ganancia)}</td>
-                  <td style="text-align:right;color:${margen>=0?'#00695c':'#c62828'}">${margen}%</td>
-                  <td style="text-align:right;color:#65676b">${row.ventas.length}</td>
-                  <td style="text-align:center"><span class="material-icons" style="font-size:18px;color:#65676b">chevron_right</span></td>
+                  <td style="text-align:right;color:var(--tint-orange-fg)">$${fmt(row.cmv)}</td>
+                  <td style="text-align:right;font-weight:700;color:${ganancia>=0?'var(--tint-teal-fg)':'var(--tint-red-fg)'}">$${fmt(ganancia)}</td>
+                  <td style="text-align:right;color:${margen>=0?'var(--tint-teal-fg)':'var(--tint-red-fg)'}">${margen}%</td>
+                  <td style="text-align:right;color:var(--text-muted)">${row.ventas.length}</td>
+                  <td style="text-align:center"><span class="material-icons" style="font-size:18px;color:var(--text-muted)">chevron_right</span></td>
                 </tr>
               `;
             }).join('')}
@@ -2520,7 +2635,7 @@ function renderListaGanancia(container, ventas, itemsMap, catalogoPorNombre, gas
         const idx = parseInt(tr.dataset.idx);
         abrirDetalleGanancia(data[idx], vista, config);
       });
-      tr.addEventListener('mouseenter', () => tr.style.background = '#f7f8fa');
+      tr.addEventListener('mouseenter', () => tr.style.background = 'var(--surface-2)');
       tr.addEventListener('mouseleave', () => tr.style.background = '');
     });
   };
@@ -2533,8 +2648,8 @@ function renderListaGanancia(container, ventas, itemsMap, catalogoPorNombre, gas
       container.querySelectorAll('.ct-lg-tab').forEach(b => {
         const active = b.dataset.vista === vista;
         b.classList.toggle('active', active);
-        b.style.background = active ? '#fff' : 'transparent';
-        b.style.color      = active ? '#1c1e21' : '#65676b';
+        b.style.background = active ? 'var(--surface)' : 'transparent';
+        b.style.color      = active ? 'var(--text)' : 'var(--text-muted)';
         b.style.fontWeight = active ? '700' : '600';
         b.style.boxShadow  = active ? '0 1px 2px rgba(0,0,0,0.05)' : 'none';
       });
@@ -2546,8 +2661,8 @@ function renderListaGanancia(container, ventas, itemsMap, catalogoPorNombre, gas
   container.querySelectorAll('.ct-lg-tab').forEach(b => {
     const active = b.dataset.vista === vista;
     b.classList.toggle('active', active);
-    b.style.background = active ? '#fff' : 'transparent';
-    b.style.color      = active ? '#1c1e21' : '#65676b';
+    b.style.background = active ? 'var(--surface)' : 'transparent';
+    b.style.color      = active ? 'var(--text)' : 'var(--text-muted)';
     b.style.fontWeight = active ? '700' : '600';
     b.style.boxShadow  = active ? '0 1px 2px rgba(0,0,0,0.05)' : 'none';
   });
@@ -2572,8 +2687,11 @@ function formatMes(yyyymm) {
 // ── Modal: detalle de un día/mes (lo mejor del período) ───────────────────────
 function abrirDetalleGanancia(row, vista, config) {
   const titulo  = vista === 'mes' ? formatMes(row.mes) : formatDia(row.fecha);
-  const ganancia = row.ingresoConCosto - row.cmv;
-  const margen   = row.ingresoConCosto > 0 ? (ganancia / row.ingresoConCosto) * 100 : 0;
+  const sumarSC = isIncluirSinCosto();
+  const ingSC   = row.ingresoSinCosto || 0;
+  const ingGan  = row.ingresoConCosto + (sumarSC ? ingSC : 0);
+  const ganancia = ingGan - row.cmv;
+  const margen   = ingGan > 0 ? (ganancia / ingGan) * 100 : 0;
 
   const c1 = config?.cuenta1_nombre || 'Cuenta 1';
   const c2 = config?.cuenta2_nombre || 'Cuenta 2';
@@ -2596,7 +2714,7 @@ function abrirDetalleGanancia(row, vista, config) {
       <div style="margin-bottom:16px">
         <div style="font-size:12px;font-weight:700;color:${color};margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px;display:flex;align-items:center;gap:6px">
           <span class="material-icons" style="font-size:16px">${icon}</span>
-          ${label} <span style="color:#65676b;font-weight:500">· ${movs.length}</span>
+          ${label} <span style="color:var(--text-muted);font-weight:500">· ${movs.length}</span>
           <span style="margin-left:auto;color:${color}">${isGasto?'-':'+'}$${fmt(total)}</span>
         </div>
         <table class="ct-costos-table">
@@ -2610,10 +2728,10 @@ function abrirDetalleGanancia(row, vista, config) {
           <tbody>
             ${ordenados.map(g => `
               <tr>
-                ${vista === 'mes' ? `<td style="font-size:12px;color:#65676b">${formatDia(g.fecha || '')}</td>` : ''}
+                ${vista === 'mes' ? `<td style="font-size:12px;color:var(--text-muted)">${formatDia(g.fecha || '')}</td>` : ''}
                 <td><b style="font-size:13px">${escapeHtmlCt(g.descripcion || '(sin descripción)')}</b></td>
-                <td style="font-size:12px;color:#475569">${escapeHtmlCt(g.categoria_nombre || 'Sin categoría')}</td>
-                <td style="font-size:12px;color:#475569">${escapeHtmlCt(tipoLabel[g.tipo] || g.tipo || '—')}</td>
+                <td style="font-size:12px;color:var(--text-muted)">${escapeHtmlCt(g.categoria_nombre || 'Sin categoría')}</td>
+                <td style="font-size:12px;color:var(--text-muted)">${escapeHtmlCt(tipoLabel[g.tipo] || g.tipo || '—')}</td>
                 <td style="text-align:right;font-weight:700;color:${color}">${isGasto?'-':'+'}$${fmt(g.monto || 0)}</td>
               </tr>
             `).join('')}
@@ -2679,7 +2797,7 @@ function abrirDetalleGanancia(row, vista, config) {
   if (vista === 'mes' && row.dias) {
     mejorDia = [...row.dias].map(d => ({
       ...d,
-      ganancia: d.ingresoConCosto - d.cmv,
+      ganancia: (d.ingresoConCosto + (sumarSC ? (d.ingresoSinCosto || 0) : 0)) - d.cmv,
     })).sort((a, b) => b.ganancia - a.ganancia)[0];
   }
 
@@ -2688,30 +2806,30 @@ function abrirDetalleGanancia(row, vista, config) {
   overlay.innerHTML = `
     <div class="ct-modal" role="dialog" style="max-width:780px">
       <div class="ct-modal-header">
-        <span class="material-icons" style="color:#00695c">insights</span>
+        <span class="material-icons" style="color:var(--tint-teal-fg)">insights</span>
         <h3>${vista === 'mes' ? 'Mes:' : ''} ${titulo}</h3>
         <button class="ct-modal-close" title="Cerrar"><span class="material-icons">close</span></button>
       </div>
 
       <div class="ct-modal-desc">
-        <b style="color:${ganancia>=0?'#00695c':'#c62828'}">$${fmt(ganancia)}</b> de ganancia bruta
+        <b style="color:${ganancia>=0?'var(--tint-teal-fg)':'var(--tint-red-fg)'}">$${fmt(ganancia)}</b> de ganancia bruta
         (${Math.round(margen)}% margen) sobre <b>$${fmt(row.ingreso)}</b> en ventas.
-        ${(totalGastosRow > 0 || totalIngresosRow > 0) ? `<div style="margin-top:4px;font-size:12px;color:#65676b">Neto tras movimientos: <b style="color:${gananciaNeta>=0?'#00695c':'#c62828'}">$${fmt(gananciaNeta)}</b></div>` : ''}
+        ${(totalGastosRow > 0 || totalIngresosRow > 0) ? `<div style="margin-top:4px;font-size:12px;color:var(--text-muted)">Neto tras movimientos: <b style="color:${gananciaNeta>=0?'var(--tint-teal-fg)':'var(--tint-red-fg)'}">$${fmt(gananciaNeta)}</b></div>` : ''}
       </div>
 
       <div class="ct-modal-body">
 
         <!-- KPIs principales -->
         <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px">
-          <div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">Ingreso total</span><b style="color:#1877f2">$${fmt(row.ingreso)}</b></div>
-          <div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">CMV</span><b style="color:#e65100">$${fmt(row.cmv)}</b></div>
-          <div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">Ganancia bruta</span><b style="color:${ganancia>=0?'#00695c':'#c62828'}">$${fmt(ganancia)}</b></div>
-          <div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">Margen</span><b style="color:${margen>=0?'#00695c':'#c62828'}">${Math.round(margen)}%</b></div>
-          <div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">Ventas</span><b>${row.ventas.length}</b></div>
-          <div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">Ticket prom.</span><b>$${fmt(ticketProm)}</b></div>
-          ${totalGastosRow > 0 ? `<div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">Gastos anotados</span><b style="color:#c62828">-$${fmt(totalGastosRow)}</b></div>` : ''}
-          ${totalIngresosRow > 0 ? `<div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">Ingresos extra</span><b style="color:#2e7d32">+$${fmt(totalIngresosRow)}</b></div>` : ''}
-          ${(totalGastosRow > 0 || totalIngresosRow > 0) ? `<div class="ct-mini-stat"><span style="color:#65676b;font-size:12px">Ganancia neta</span><b style="color:${gananciaNeta>=0?'#00695c':'#c62828'}">$${fmt(gananciaNeta)}</b></div>` : ''}
+          <div class="ct-mini-stat"><span style="color:var(--text-muted);font-size:12px">Ingreso total</span><b style="color:var(--tint-blue-fg)">$${fmt(row.ingreso)}</b></div>
+          <div class="ct-mini-stat"><span style="color:var(--text-muted);font-size:12px">CMV</span><b style="color:var(--tint-orange-fg)">$${fmt(row.cmv)}</b></div>
+          <div class="ct-mini-stat"><span style="color:var(--text-muted);font-size:12px">Ganancia bruta</span><b style="color:${ganancia>=0?'var(--tint-teal-fg)':'var(--tint-red-fg)'}">$${fmt(ganancia)}</b></div>
+          <div class="ct-mini-stat"><span style="color:var(--text-muted);font-size:12px">Margen</span><b style="color:${margen>=0?'var(--tint-teal-fg)':'var(--tint-red-fg)'}">${Math.round(margen)}%</b></div>
+          <div class="ct-mini-stat"><span style="color:var(--text-muted);font-size:12px">Ventas</span><b>${row.ventas.length}</b></div>
+          <div class="ct-mini-stat"><span style="color:var(--text-muted);font-size:12px">Ticket prom.</span><b>$${fmt(ticketProm)}</b></div>
+          ${totalGastosRow > 0 ? `<div class="ct-mini-stat"><span style="color:var(--text-muted);font-size:12px">Gastos anotados</span><b style="color:var(--tint-red-fg)">-$${fmt(totalGastosRow)}</b></div>` : ''}
+          ${totalIngresosRow > 0 ? `<div class="ct-mini-stat"><span style="color:var(--text-muted);font-size:12px">Ingresos extra</span><b style="color:var(--tint-green-fg)">+$${fmt(totalIngresosRow)}</b></div>` : ''}
+          ${(totalGastosRow > 0 || totalIngresosRow > 0) ? `<div class="ct-mini-stat"><span style="color:var(--text-muted);font-size:12px">Ganancia neta</span><b style="color:${gananciaNeta>=0?'var(--tint-teal-fg)':'var(--tint-red-fg)'}">$${fmt(gananciaNeta)}</b></div>` : ''}
         </div>
 
         <!-- Movimientos manuales (gastos / ingresos) anotados ese día/mes -->
@@ -2719,55 +2837,55 @@ function abrirDetalleGanancia(row, vista, config) {
         ${renderMovsTable(ingresosRow, 'ingreso')}
 
         <!-- Highlights -->
-        <div style="background:#f7f8fa;border-radius:10px;padding:14px;margin-bottom:16px">
-          <div style="font-size:12px;font-weight:700;color:#1c1e21;margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px">Lo mejor del ${vista === 'mes' ? 'mes' : 'día'}</div>
+        <div style="background:var(--surface-2);border-radius:10px;padding:14px;margin-bottom:16px">
+          <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:10px;text-transform:uppercase;letter-spacing:.5px">Lo mejor del ${vista === 'mes' ? 'mes' : 'día'}</div>
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">
             ${top5Ingreso[0] ? `
-            <div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:3px solid #fbbf24">
-              <div style="font-size:10px;color:#65676b;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Top en ingreso</div>
-              <div style="font-size:13px;font-weight:700;color:#1c1e21;margin-top:2px">${escapeHtmlCt(top5Ingreso[0].nombre)}</div>
-              <div style="font-size:11px;color:#475569;margin-top:2px">$${fmt(top5Ingreso[0].ingreso)} · ${top5Ingreso[0].cantidad} u.</div>
+            <div style="background:var(--surface);border-radius:8px;padding:10px 12px;border-left:3px solid var(--border)">
+              <div style="font-size:10px;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:.4px">Top en ingreso</div>
+              <div style="font-size:13px;font-weight:700;color:var(--text);margin-top:2px">${escapeHtmlCt(top5Ingreso[0].nombre)}</div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:2px">$${fmt(top5Ingreso[0].ingreso)} · ${top5Ingreso[0].cantidad} u.</div>
             </div>` : ''}
             ${top5Cantidad[0] ? `
-            <div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:3px solid #94a3b8">
-              <div style="font-size:10px;color:#65676b;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Más vendido (unidades)</div>
-              <div style="font-size:13px;font-weight:700;color:#1c1e21;margin-top:2px">${escapeHtmlCt(top5Cantidad[0].nombre)}</div>
-              <div style="font-size:11px;color:#475569;margin-top:2px">${top5Cantidad[0].cantidad} u. · $${fmt(top5Cantidad[0].ingreso)}</div>
+            <div style="background:var(--surface);border-radius:8px;padding:10px 12px;border-left:3px solid #94a3b8">
+              <div style="font-size:10px;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:.4px">Más vendido (unidades)</div>
+              <div style="font-size:13px;font-weight:700;color:var(--text);margin-top:2px">${escapeHtmlCt(top5Cantidad[0].nombre)}</div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${top5Cantidad[0].cantidad} u. · $${fmt(top5Cantidad[0].ingreso)}</div>
             </div>` : ''}
             ${top5Ganancia[0] ? `
-            <div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:3px solid #00695c">
-              <div style="font-size:10px;color:#65676b;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Mayor ganancia</div>
-              <div style="font-size:13px;font-weight:700;color:#1c1e21;margin-top:2px">${escapeHtmlCt(top5Ganancia[0].nombre)}</div>
-              <div style="font-size:11px;color:#475569;margin-top:2px">$${fmt(top5Ganancia[0].ganancia)} de ganancia</div>
+            <div style="background:var(--surface);border-radius:8px;padding:10px 12px;border-left:3px solid #00695c">
+              <div style="font-size:10px;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:.4px">Mayor ganancia</div>
+              <div style="font-size:13px;font-weight:700;color:var(--text);margin-top:2px">${escapeHtmlCt(top5Ganancia[0].nombre)}</div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:2px">$${fmt(top5Ganancia[0].ganancia)} de ganancia</div>
             </div>` : ''}
             ${topCategorias[0] ? `
-            <div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:3px solid #6a1b9a">
-              <div style="font-size:10px;color:#65676b;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Mejor categoría</div>
-              <div style="font-size:13px;font-weight:700;color:#1c1e21;margin-top:2px">${escapeHtmlCt(topCategorias[0].nombre)}</div>
-              <div style="font-size:11px;color:#475569;margin-top:2px">$${fmt(topCategorias[0].ingreso)} · ${topCategorias[0].cantidad} u.</div>
+            <div style="background:var(--surface);border-radius:8px;padding:10px 12px;border-left:3px solid #6a1b9a">
+              <div style="font-size:10px;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:.4px">Mejor categoría</div>
+              <div style="font-size:13px;font-weight:700;color:var(--text);margin-top:2px">${escapeHtmlCt(topCategorias[0].nombre)}</div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:2px">$${fmt(topCategorias[0].ingreso)} · ${topCategorias[0].cantidad} u.</div>
             </div>` : ''}
             ${horaPico ? `
-            <div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:3px solid #1877f2">
-              <div style="font-size:10px;color:#65676b;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Hora pico</div>
-              <div style="font-size:13px;font-weight:700;color:#1c1e21;margin-top:2px">${String(horaPico.hora).padStart(2,'0')}:00 — ${String(horaPico.hora+1).padStart(2,'0')}:00</div>
-              <div style="font-size:11px;color:#475569;margin-top:2px">${horaPico.ventas} ventas · $${fmt(horaPico.ingreso)}</div>
+            <div style="background:var(--surface);border-radius:8px;padding:10px 12px;border-left:3px solid #1877f2">
+              <div style="font-size:10px;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:.4px">Hora pico</div>
+              <div style="font-size:13px;font-weight:700;color:var(--text);margin-top:2px">${String(horaPico.hora).padStart(2,'0')}:00 — ${String(horaPico.hora+1).padStart(2,'0')}:00</div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${horaPico.ventas} ventas · $${fmt(horaPico.ingreso)}</div>
             </div>` : ''}
             ${mejorVenta ? `
-            <div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:3px solid #c62828">
-              <div style="font-size:10px;color:#65676b;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Mejor venta</div>
-              <div style="font-size:13px;font-weight:700;color:#1c1e21;margin-top:2px">$${fmt(mejorVenta.total_amount)}</div>
-              <div style="font-size:11px;color:#475569;margin-top:2px">${mejorVenta.payment_type === 'cash' ? 'Efectivo' : 'Transferencia'}${mejorVenta.username ? ' · ' + escapeHtmlCt(mejorVenta.username) : ''}</div>
+            <div style="background:var(--surface);border-radius:8px;padding:10px 12px;border-left:3px solid #c62828">
+              <div style="font-size:10px;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:.4px">Mejor venta</div>
+              <div style="font-size:13px;font-weight:700;color:var(--text);margin-top:2px">$${fmt(mejorVenta.total_amount)}</div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${mejorVenta.payment_type === 'cash' ? 'Efectivo' : 'Transferencia'}${mejorVenta.username ? ' · ' + escapeHtmlCt(mejorVenta.username) : ''}</div>
             </div>` : ''}
             ${mejorDia ? `
-            <div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:3px solid #fbbf24">
-              <div style="font-size:10px;color:#65676b;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Mejor día del mes</div>
-              <div style="font-size:13px;font-weight:700;color:#1c1e21;margin-top:2px">${formatDia(mejorDia.fecha)}</div>
-              <div style="font-size:11px;color:#475569;margin-top:2px">$${fmt(mejorDia.ganancia)} de ganancia</div>
+            <div style="background:var(--surface);border-radius:8px;padding:10px 12px;border-left:3px solid var(--border)">
+              <div style="font-size:10px;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:.4px">Mejor día del mes</div>
+              <div style="font-size:13px;font-weight:700;color:var(--text);margin-top:2px">${formatDia(mejorDia.fecha)}</div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:2px">$${fmt(mejorDia.ganancia)} de ganancia</div>
             </div>` : ''}
-            <div style="background:#fff;border-radius:8px;padding:10px 12px;border-left:3px solid #94a3b8">
-              <div style="font-size:10px;color:#65676b;font-weight:700;text-transform:uppercase;letter-spacing:.4px">Mix de pago</div>
-              <div style="font-size:13px;font-weight:700;color:#1c1e21;margin-top:2px">${ventasEfectivo} ef · ${ventasTransfer} tr</div>
-              <div style="font-size:11px;color:#475569;margin-top:2px">${row.ventas.length > 0 ? Math.round(ventasEfectivo / row.ventas.length * 100) : 0}% efectivo</div>
+            <div style="background:var(--surface);border-radius:8px;padding:10px 12px;border-left:3px solid #94a3b8">
+              <div style="font-size:10px;color:var(--text-muted);font-weight:700;text-transform:uppercase;letter-spacing:.4px">Mix de pago</div>
+              <div style="font-size:13px;font-weight:700;color:var(--text);margin-top:2px">${ventasEfectivo} ef · ${ventasTransfer} tr</div>
+              <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${row.ventas.length > 0 ? Math.round(ventasEfectivo / row.ventas.length * 100) : 0}% efectivo</div>
             </div>
           </div>
         </div>
@@ -2775,7 +2893,7 @@ function abrirDetalleGanancia(row, vista, config) {
         <!-- Top 5 productos por ingreso -->
         ${top5Ingreso.length > 0 ? `
         <div style="margin-bottom:16px">
-          <div style="font-size:12px;font-weight:700;color:#1c1e21;margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Top 5 productos por ingreso</div>
+          <div style="font-size:12px;font-weight:700;color:var(--text);margin-bottom:8px;text-transform:uppercase;letter-spacing:.5px">Top 5 productos por ingreso</div>
           <table class="ct-costos-table">
             <thead><tr>
               <th>Producto</th>
@@ -2790,8 +2908,8 @@ function abrirDetalleGanancia(row, vista, config) {
                   <td><b style="font-size:13px">${escapeHtmlCt(p.nombre)}</b></td>
                   <td style="text-align:right">${p.cantidad}</td>
                   <td style="text-align:right;font-weight:700">$${fmt(p.ingreso)}</td>
-                  <td style="text-align:right;color:${p.cmv>0?'#e65100':'#94a3b8'}">${p.cmv>0?'$'+fmt(p.cmv):'s/c'}</td>
-                  <td style="text-align:right;font-weight:700;color:${p.ganancia==null?'#94a3b8':(p.ganancia>=0?'#00695c':'#c62828')}">${p.ganancia==null?'—':'$'+fmt(p.ganancia)}</td>
+                  <td style="text-align:right;color:${p.cmv>0?'var(--tint-orange-fg)':'var(--text-muted)'}">${p.cmv>0?'$'+fmt(p.cmv):'s/c'}</td>
+                  <td style="text-align:right;font-weight:700;color:${p.ganancia==null?'var(--text-muted)':(p.ganancia>=0?'var(--tint-teal-fg)':'var(--tint-red-fg)')}">${p.ganancia==null?'—':'$'+fmt(p.ganancia)}</td>
                 </tr>
               `).join('')}
             </tbody>
@@ -2799,8 +2917,8 @@ function abrirDetalleGanancia(row, vista, config) {
         </div>` : ''}
 
         ${itemsSinCosto > 0 ? `
-        <div style="background:#fff8e1;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;display:flex;align-items:center;gap:8px;font-size:12px;color:#92400e">
-          <span class="material-icons" style="font-size:16px;color:#d97706">warning</span>
+        <div style="background:var(--tint-yellow-bg);border:1px solid var(--border);border-radius:8px;padding:10px 12px;display:flex;align-items:center;gap:8px;font-size:12px;color:var(--tint-orange-fg)">
+          <span class="material-icons" style="font-size:16px;color:var(--tint-orange-fg)">warning</span>
           <span><b>${itemsSinCosto}</b> items sin costo cargado en este ${vista === 'mes' ? 'mes' : 'día'}. La ganancia bruta no los incluye.</span>
         </div>` : ''}
 
@@ -2833,7 +2951,7 @@ async function abrirModalNuevaCategoria(db, movActual, onCreated) {
   overlay.innerHTML = `
     <div class="ct-modal ct-modal-compact" role="dialog">
       <div class="ct-modal-header">
-        <span class="material-icons" style="color:#6a1b9a">new_label</span>
+        <span class="material-icons" style="color:var(--tint-purple-fg)">new_label</span>
         <h3>Nueva categoría</h3>
         <button class="ct-modal-close" title="Cerrar"><span class="material-icons">close</span></button>
       </div>
@@ -2850,7 +2968,7 @@ async function abrirModalNuevaCategoria(db, movActual, onCreated) {
           <label class="ct-nc-tipo-opt"><input type="radio" name="nc-tipo" value="ingreso"><span>Solo ingreso</span></label>
         </div>
 
-        <label class="ct-field-label" style="margin-top:14px">Rubro <span style="color:#94a3b8;font-weight:400;font-size:11px">(opcional)</span></label>
+        <label class="ct-field-label" style="margin-top:14px">Rubro <span style="color:var(--text-muted);font-weight:400;font-size:11px">(opcional)</span></label>
         <select id="ct-nc-rubro" class="ct-field-input">
           <option value="">— Ninguno —</option>
           ${(rubros || []).map(r => `<option value="${escapeHtmlCt(r)}">${escapeHtmlCt(r)}</option>`).join('')}
@@ -2864,7 +2982,7 @@ async function abrirModalNuevaCategoria(db, movActual, onCreated) {
         </div>
 
         ${cats.length > 0 ? `
-          <label class="ct-field-label" style="margin-top:14px">Categoría padre <span style="color:#94a3b8;font-weight:400;font-size:11px">(opcional)</span></label>
+          <label class="ct-field-label" style="margin-top:14px">Categoría padre <span style="color:var(--text-muted);font-weight:400;font-size:11px">(opcional)</span></label>
           <select id="ct-nc-parent" class="ct-field-input">
             <option value="">— Ninguna —</option>
             ${cats.map(c => `<option value="${c.id}">${escapeHtmlCt(c.nombre)}</option>`).join('')}
@@ -2917,7 +3035,7 @@ async function abrirModalNuevaCategoria(db, movActual, onCreated) {
       close();
       if (onCreated) onCreated(ref.id, rubro);
     } catch (e) {
-      alert('Error al crear: ' + e.message);
+      alertDialog({ title: 'Error', message: 'No se pudo crear: ' + escHtml(e.message), type: 'error' });
       btnSave.disabled = false;
       btnSave.innerHTML = '<span class="material-icons" style="font-size:16px">check</span> Crear categoría';
     }
@@ -2954,6 +3072,9 @@ function buildSkeleton(periodo, config, categorias, rubros) {
         <div class="ct-periodo">
           ${periodos.map(p => `<button class="ct-periodo-btn${p===periodo?' active':''}" data-p="${p}">${labels[p]}</button>`).join('')}
         </div>
+        <button id="ct-incluir-sc" class="ct-config-btn" title="Sumar a la ganancia los items vendidos sin costo cargado (asume costo $0)">
+          <span class="material-icons" style="font-size:18px">add_box</span> <span class="ct-sc-label">Sumar sin costo</span>
+        </button>
         <button id="ct-config-btn" class="ct-config-btn" title="Configurar cuentas">
           <span class="material-icons" style="font-size:18px">settings</span> Configurar cuentas
         </button>
@@ -2990,14 +3111,15 @@ function buildSkeleton(periodo, config, categorias, rubros) {
         </div>
       </div>
 
-      <div class="ct-main-tabs" style="display:flex;gap:6px;margin-bottom:14px;border-bottom:2px solid var(--border);padding-bottom:0">
-        <button type="button" class="ct-main-tab active" data-tab="resumen"
-          style="padding:10px 20px;border:none;background:transparent;border-bottom:3px solid var(--primary);font-weight:700;font-size:14px;cursor:pointer;color:var(--primary);margin-bottom:-2px;display:flex;align-items:center;gap:6px;font-family:inherit">
-          <span class="material-icons" style="font-size:18px">dashboard</span> Resumen
+      <div class="ct-main-tabs">
+        <button type="button" class="ct-main-tab active" data-tab="resumen">
+          <span class="material-icons">dashboard</span> Resumen
         </button>
-        <button type="button" class="ct-main-tab" data-tab="dias"
-          style="padding:10px 20px;border:none;background:transparent;border-bottom:3px solid transparent;font-weight:600;font-size:14px;cursor:pointer;color:#65676b;margin-bottom:-2px;display:flex;align-items:center;gap:6px;font-family:inherit">
-          <span class="material-icons" style="font-size:18px">calendar_month</span> Días
+        <button type="button" class="ct-main-tab" data-tab="dias">
+          <span class="material-icons">calendar_month</span> Días
+        </button>
+        <button type="button" class="ct-main-tab" data-tab="balance">
+          <span class="material-icons">savings</span> Balance Mensual
         </button>
       </div>
 
@@ -3013,10 +3135,10 @@ function buildSkeleton(periodo, config, categorias, rubros) {
         <div>
           <label style="font-size:12px;font-weight:600;display:block;margin-bottom:4px" title="Oculta todas las ventas, gastos e historial anteriores a esta fecha">
             Fecha de inicio real
-            <span class="material-icons" style="font-size:13px;color:#65676b;vertical-align:middle">help_outline</span>
+            <span class="material-icons" style="font-size:13px;color:var(--text-muted);vertical-align:middle">help_outline</span>
           </label>
           <input id="cfg-fecha-inicio" type="date" value="${fi}" style="padding:8px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;width:100%;max-width:200px;min-width:0" />
-          <div style="font-size:11px;color:#65676b;margin-top:4px;max-width:220px">Todo lo anterior no se borra, solo se oculta.</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:4px;max-width:220px">Todo lo anterior no se borra, solo se oculta.</div>
         </div>
         <button type="submit" class="btn-primary" style="padding:8px 20px;background:var(--primary);color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-size:14px">Guardar</button>
       </form>
@@ -3054,7 +3176,7 @@ function buildSkeleton(periodo, config, categorias, rubros) {
           <input id="gasto-monto" type="number" placeholder="$ Monto" min="0.01" step="0.01" required
             style="width:130px;padding:10px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit" />
           <select id="gasto-tipo"
-            style="padding:10px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:#fff">
+            style="padding:10px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:var(--surface)">
             <option value="efectivo">Efectivo</option>
             <option value="cuenta1">${c1}</option>
             <option value="cuenta2">${c2}</option>
@@ -3069,7 +3191,7 @@ function buildSkeleton(periodo, config, categorias, rubros) {
             </button>
           </div>
           <select id="gasto-rubro" title="Rubro"
-            style="padding:10px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:#fff;max-width:180px">
+            style="padding:10px 14px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:var(--surface);max-width:180px">
             ${rubroOpts}
           </select>
           <button type="submit" style="padding:10px 20px;background:#c62828;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:700;font-size:14px;white-space:nowrap;display:flex;align-items:center;gap:6px;font-family:inherit">
@@ -3096,12 +3218,12 @@ function buildSkeleton(periodo, config, categorias, rubros) {
             <div>
               <span class="material-icons" style="font-size:16px;vertical-align:middle">calendar_month</span>
               Lista por días
-              <span style="font-size:11px;color:#65676b;margin-left:8px;font-weight:400">Click en una fila para ver el detalle del día</span>
+              <span style="font-size:11px;color:var(--text-muted);margin-left:8px;font-weight:400">Click en una fila para ver el detalle del día</span>
             </div>
-            <div class="ct-lg-tabs" style="display:flex;gap:4px;background:#f0f2f5;padding:3px;border-radius:8px">
-              <button class="ct-lg-tab" data-vista="agrupado" style="padding:5px 14px;border:none;background:transparent;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;color:#65676b">Mes → días</button>
-              <button class="ct-lg-tab" data-vista="dia" style="padding:5px 14px;border:none;background:transparent;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;color:#65676b">Por día</button>
-              <button class="ct-lg-tab" data-vista="mes" style="padding:5px 14px;border:none;background:transparent;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;color:#65676b">Por mes</button>
+            <div class="ct-lg-tabs" style="display:flex;gap:4px;background:var(--bg);padding:3px;border-radius:8px">
+              <button class="ct-lg-tab" data-vista="agrupado" style="padding:5px 14px;border:none;background:transparent;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;color:var(--text-muted)">Mes → días</button>
+              <button class="ct-lg-tab" data-vista="dia" style="padding:5px 14px;border:none;background:transparent;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;color:var(--text-muted)">Por día</button>
+              <button class="ct-lg-tab" data-vista="mes" style="padding:5px 14px;border:none;background:transparent;border-radius:6px;font-weight:600;font-size:12px;cursor:pointer;color:var(--text-muted)">Por mes</button>
             </div>
           </div>
           <div id="ct-ganancia-lista">
@@ -3109,6 +3231,12 @@ function buildSkeleton(periodo, config, categorias, rubros) {
           </div>
         </div>
       </div><!-- /#ct-tab-dias -->
+
+      <div id="ct-tab-balance" class="ct-tab-pane" style="display:none">
+        <div id="ct-balance-mount">
+          <div class="ct-loading"><div class="spinner" style="width:24px;height:24px;border-width:3px"></div></div>
+        </div>
+      </div><!-- /#ct-tab-balance -->
 
     </div>
   `;
