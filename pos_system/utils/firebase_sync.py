@@ -5,6 +5,7 @@ productos más vendidos a Firestore en tiempo real.
 También escucha cambios en tiempo real desde la web (inventario).
 """
 
+import json
 import threading
 import time as _time
 import logging
@@ -1263,6 +1264,13 @@ class FirebaseSync:
                     'cajero':           cajero,
                     'discount':         float(sale.get('discount', 0) or 0),
                     'cash_register_id': int(sale.get('cash_register_id') or 0) or None,
+                    # Cobro de fiado: la webapp pinta estas ventas con otro color.
+                    # fiado_tipo: 'productos' (se saldaron items) | 'a_cuenta'
+                    # (entrega de dinero que queda como saldo a favor).
+                    'es_fiado':          bool(sale.get('es_fiado')),
+                    'fiado_tipo':        str(sale.get('fiado_tipo') or ''),
+                    'fiado_cliente':     str(sale.get('fiado_cliente') or ''),
+                    'fiado_cliente_fid': str(sale.get('fiado_cliente_fid') or ''),
                 }
                 self.db.collection('ventas').document(fb_doc_id).set(doc, merge=True)
                 logger.debug(f"Firebase: Venta #{sale_id} ({pc_id}) sincronizada.")
@@ -1586,6 +1594,186 @@ class FirebaseSync:
         except Exception as e:
             logger.error(f"Firebase: No se pudo iniciar listener de observaciones: {e}")
 
+    # ══════════════════════════════════════════════════
+    #  FIADO (cuenta corriente de clientes)
+    # ══════════════════════════════════════════════════
+    def _upsert_fiado_doc(self, coleccion: str, doc_id: str, payload: dict) -> Optional[str]:
+        """Upsert sincrónico en una colección de fiado. Devuelve el doc id.
+
+        Sincrónico a propósito: el POS necesita el firebase_id para guardarlo en
+        SQLite y que los items/pagos queden colgando del mismo cliente. Si falla
+        (sin red), devuelve None y la fila local queda sin firebase_id — el
+        siguiente push la reintenta.
+        """
+        if not self.enabled:
+            return None
+        try:
+            col = self.db.collection(coleccion)
+            if doc_id:
+                col.document(doc_id).set(payload, merge=True)
+                return doc_id
+            ref = col.document()
+            ref.set(payload)
+            return ref.id
+        except Exception as e:
+            logger.error(f"Firebase: error upsert {coleccion}: {e}")
+            return None
+
+    def upsert_fiado_cliente(self, cliente: dict) -> Optional[str]:
+        """Sube/actualiza la ficha de un cliente de fiado."""
+        if not self.enabled or not cliente:
+            return None
+        payload = {
+            'nombre':     str(cliente.get('nombre') or '').strip(),
+            'dni':        str(cliente.get('dni') or ''),
+            'telefono':   str(cliente.get('telefono') or ''),
+            'email':      str(cliente.get('email') or ''),
+            'direccion':  str(cliente.get('direccion') or ''),
+            'notas':      str(cliente.get('notas') or ''),
+            'activo':     False if cliente.get('activo') in (0, False) else True,
+            'deleted':    bool(cliente.get('deleted')),
+            'local_id':   int(cliente.get('id') or 0) or None,
+            'pc_id':      str(cliente.get('pc_id') or _get_pc_id()),
+            'origen':     str(cliente.get('origen') or 'pos'),
+            'creado':     self._parse_dt(cliente.get('created_at')),
+            'actualizado': now_ar(),
+        }
+        return self._upsert_fiado_doc(
+            'fiado_clientes', str(cliente.get('firebase_id') or '').strip(), payload
+        )
+
+    def upsert_fiado_item(self, item: dict) -> Optional[str]:
+        """Sube/actualiza una línea de fiado (producto que el cliente se llevó)."""
+        if not self.enabled or not item:
+            return None
+        fecha = self._parse_dt(item.get('fecha'))
+        item_json = item.get('item_json')
+        if isinstance(item_json, (dict, list)):
+            item_json = json.dumps(item_json, ensure_ascii=False, default=str)
+        payload = {
+            'cliente_fid':      str(item.get('cliente_fid') or ''),
+            'cliente_local_id': item.get('cliente_local_id'),
+            'cliente_nombre':   str(item.get('cliente_nombre') or ''),
+            'entrega_id':       str(item.get('entrega_id') or ''),
+            'product_id':       int(item.get('product_id') or 0),
+            'product_fid':      str(item.get('product_fid') or ''),
+            'product_name':     str(item.get('product_name') or 'Item'),
+            'categoria':        str(item.get('categoria') or ''),
+            'quantity':         float(item.get('quantity') or 0),
+            'unit_price':       float(item.get('unit_price') or 0),
+            'subtotal':         float(item.get('subtotal') or 0),
+            'item_json':        item_json,
+            'estado':           str(item.get('estado') or 'pendiente'),
+            'venta_id':         item.get('venta_id'),
+            'pago_fid':         str(item.get('pago_fid') or ''),
+            'nota':             str(item.get('nota') or ''),
+            'origen':           str(item.get('origen') or 'pos'),
+            'pc_id':            str(item.get('pc_id') or _get_pc_id()),
+            'cajero':           str(item.get('cajero') or ''),
+            'deleted':          bool(item.get('deleted')),
+            'local_id':         int(item.get('id') or 0) or None,
+            'fecha_dt':         fecha,
+            'fecha_str':        fecha.strftime('%Y-%m-%d %H:%M:%S'),
+            'actualizado':      now_ar(),
+        }
+        return self._upsert_fiado_doc(
+            'fiado_items', str(item.get('firebase_id') or '').strip(), payload
+        )
+
+    def upsert_fiado_pago(self, pago: dict) -> Optional[str]:
+        """Sube/actualiza un cobro de fiado (por productos, a cuenta o crédito)."""
+        if not self.enabled or not pago:
+            return None
+        fecha = self._parse_dt(pago.get('fecha'))
+        items_json = pago.get('items_json') or pago.get('items')
+        if isinstance(items_json, (dict, list)):
+            items_json = json.dumps(items_json, ensure_ascii=False, default=str)
+        payload = {
+            'cliente_fid':      str(pago.get('cliente_fid') or ''),
+            'cliente_local_id': pago.get('cliente_local_id'),
+            'cliente_nombre':   str(pago.get('cliente_nombre') or ''),
+            'tipo':             str(pago.get('tipo') or 'productos'),
+            'monto':            float(pago.get('monto') or 0),
+            'credito_usado':    float(pago.get('credito_usado') or 0),
+            'metodo_pago':      str(pago.get('metodo_pago') or ''),
+            'venta_id':         pago.get('venta_id'),
+            'items_json':       items_json,
+            'nota':             str(pago.get('nota') or ''),
+            'pc_id':            str(pago.get('pc_id') or _get_pc_id()),
+            'cajero':           str(pago.get('cajero') or ''),
+            'deleted':          bool(pago.get('deleted')),
+            'local_id':         int(pago.get('id') or 0) or None,
+            'fecha_dt':         fecha,
+            'fecha_str':        fecha.strftime('%Y-%m-%d %H:%M:%S'),
+        }
+        return self._upsert_fiado_doc(
+            'fiado_pagos', str(pago.get('firebase_id') or '').strip(), payload
+        )
+
+    def start_fiado_listeners(self, db_manager, on_change: Optional[Callable] = None):
+        """Listeners realtime de las 3 colecciones de fiado — espejan a SQLite.
+
+        Es lo que hace que un item cargado desde la webapp aparezca en el POS
+        (y al revés) sin tener que sincronizar a mano.
+        """
+        if not self.enabled:
+            return
+
+        from pos_system.models.fiado import Fiado as _Fiado
+        modelo = _Fiado(db_manager)
+
+        upserts = {
+            'fiado_clientes': modelo.upsert_cliente_from_firebase,
+            'fiado_items':    modelo.upsert_item_from_firebase,
+            'fiado_pagos':    modelo.upsert_pago_from_firebase,
+        }
+        tablas = {
+            'fiado_clientes': 'fiado_clientes',
+            'fiado_items':    'fiado_items',
+            'fiado_pagos':    'fiado_pagos',
+        }
+
+        for coleccion, upsert_fn in upserts.items():
+            def _make_watch(col_name, fn):
+                def _watch(col_snapshot, changes, read_time):
+                    try:
+                        from google.cloud.firestore_v1.watch import ChangeType
+                        changed = False
+                        for change in changes:
+                            fid = change.document.id
+                            if change.type == ChangeType.REMOVED:
+                                try:
+                                    db_manager.execute_update(
+                                        f"UPDATE {tablas[col_name]} SET deleted = 1 "
+                                        f"WHERE firebase_id = ?", (fid,)
+                                    )
+                                    changed = True
+                                except Exception as e:
+                                    logger.warning(f"Fiado listener REMOVED ({col_name}): {e}")
+                                continue
+                            try:
+                                fn(fid, change.document.to_dict() or {})
+                                changed = True
+                            except Exception as e:
+                                logger.warning(f"Fiado listener upsert ({col_name}): {e}")
+                        if changed and on_change:
+                            try:
+                                on_change()
+                            except Exception as e:
+                                logger.warning(f"Fiado listener on_change: {e}")
+                    except Exception as e:
+                        logger.error(f"Firebase: error en listener de {col_name}: {e}")
+                return _watch
+
+            try:
+                watcher = self.db.collection(coleccion).on_snapshot(
+                    _make_watch(coleccion, upsert_fn)
+                )
+                self._listeners.append(watcher)
+            except Exception as e:
+                logger.error(f"Firebase: no se pudo iniciar listener de {coleccion}: {e}")
+        logger.info("Firebase: Listeners de fiado en tiempo real activados.")
+
     def sync_stock_after_sale(self, items: list, db_manager):
         """Descuenta el stock en Firebase (catalogo + inventario) de forma ATÓMICA
         usando firestore.Increment(-quantity). Esto evita race conditions cuando
@@ -1790,15 +1978,19 @@ class FirebaseSync:
                         except Exception:
                             pass
 
-                # Marcar items en ventas_por_dia
-                col_vpd = self.db.collection('ventas_por_dia')
-                for item_idx, descuentos in touched_items.items():
-                    doc_id = f"{pc_id}_{sale_id}_{item_idx}"
-                    batch.set(col_vpd.document(doc_id), {
-                        'consumibles_procesado':    True,
-                        'consumibles_procesado_at': now_dt,
-                        'consumibles_descuentos':   descuentos,
-                    }, merge=True)
+                # Marcar items en ventas_por_dia. Sólo aplica cuando el descuento
+                # vino de una venta real: el saldado de fiado con saldo a favor
+                # descuenta stock sin generar venta (sale_id=None) y ahí no hay
+                # doc que marcar.
+                if sale_id:
+                    col_vpd = self.db.collection('ventas_por_dia')
+                    for item_idx, descuentos in touched_items.items():
+                        doc_id = f"{pc_id}_{sale_id}_{item_idx}"
+                        batch.set(col_vpd.document(doc_id), {
+                            'consumibles_procesado':    True,
+                            'consumibles_procesado_at': now_dt,
+                            'consumibles_descuentos':   descuentos,
+                        }, merge=True)
 
                 batch.commit()
 

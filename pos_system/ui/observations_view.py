@@ -184,14 +184,27 @@ class ObservationsView(QWidget):
 
         return card
 
+    def _autor(self) -> str:
+        """Quién firma la observación: el cajero DE TURNO, no el usuario logueado.
+
+        En la práctica se entra al sistema con el usuario admin y el turno lo
+        lleva quien esté atendiendo (se elige al abrir el POS o con F5). Sin
+        esto todas las notas quedaban a nombre de "Administrador" y no servían
+        para saber quién anotó qué. Mismo orden que usan las ventas.
+        """
+        u = self.current_user or {}
+        return (str(u.get('turno_nombre') or '').strip()
+                or str(u.get('full_name') or '').strip()
+                or str(u.get('username') or '').strip()
+                or 'Cajero')
+
     def _on_new(self):
         dlg = NewObservationDialog(self)
         if dlg.exec_() != QDialog.Accepted:
             return
         try:
             uid = self.current_user.get('id')
-            uname = (self.current_user.get('full_name')
-                     or self.current_user.get('username') or 'Cajero')
+            uname = self._autor()
             pc = _get_pc_id()
             created_at = now_ar().strftime('%Y-%m-%d %H:%M:%S')
             obs_id = self.model.create(

@@ -17,6 +17,7 @@ from pos_system.ui.cash_view import CashView
 from pos_system.ui.sales_history_view import SalesHistoryView
 from pos_system.ui.observations_view import ObservationsView
 from pos_system.ui.presupuestos_view import PresupuestosView
+from pos_system.ui.fiados_view import FiadosView
 from pos_system.ui.fiscal_view import FiscalView
 from pos_system.ui.components import MessageBox, Toast
 from pos_system.models.cash_register import CashRegister
@@ -112,6 +113,7 @@ class MainWindow(QMainWindow):
         self.history_view = SalesHistoryView(self)
         self.observations_view = ObservationsView(self, current_user=self.current_user)
         self.presupuestos_view = PresupuestosView(self, current_user=self.current_user)
+        self.fiados_view = FiadosView(self, current_user=self.current_user)
 
         # Vista de promociones (solo lectura) — visible para todos
         from pos_system.ui.promos_readonly_view import PromosReadOnlyView
@@ -133,6 +135,7 @@ class MainWindow(QMainWindow):
 
         # Pestañas para cajero: Ventas, Historial, Promociones (solo lectura)
         self.tabs.addTab(self.sales_view, 'Ventas')
+        self.tabs.addTab(self.fiados_view, 'Fiados')
         self.tabs.addTab(self.history_view, 'Historial')
         if is_admin:
             self.tabs.addTab(self.cash_view, 'Caja')
@@ -729,6 +732,20 @@ class MainWindow(QMainWindow):
                     logger.warning(f"Pres refresh emit: {e}")
             fb.start_presupuestos_listener(self.db, on_change=_on_pres_change)
 
+            # 8b. Listeners de FIADO (clientes / items / pagos) en tiempo real.
+            # Lo que se carga desde la webapp aparece acá y al revés.
+            def _on_fiado_change():
+                try:
+                    if getattr(self, 'fiados_view', None) is not None:
+                        self.fiados_view.refresh_requested.emit()
+                    # Si Ventas está en Modo Fiado, revalidar la ficha elegida:
+                    # pudo borrarse o cobrarse desde la web u otra PC.
+                    if getattr(self, 'sales_view', None) is not None:
+                        self.sales_view.fiado_cliente_changed.emit()
+                except Exception as e:
+                    logger.warning(f"Fiado refresh emit: {e}")
+            fb.start_fiado_listeners(self.db, on_change=_on_fiado_change)
+
             # 9. Listeners de PRODUCTOS MADRE (mp_*) — sistema cargado desde la webapp.
             # Espejan mp_products / mp_nodes / mp_discounts en SQLite local en tiempo real.
             # La UI de venta consume desde local (rápido) y se refresca con _sig_mp_refresh.
@@ -1072,7 +1089,8 @@ class MainWindow(QMainWindow):
     def refresh_all_views(self):
         for view in [self.products_view, self.sales_view, self.cash_view,
                      self.history_view, self.promotions_view, self.fiscal_view,
-                     self.users_view, self.promos_readonly_view]:
+                     self.users_view, self.promos_readonly_view,
+                     getattr(self, 'fiados_view', None)]:
             if view is None:
                 continue
             try:

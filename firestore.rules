@@ -204,6 +204,35 @@ service cloud.firestore {
       allow read, write: if true;
     }
 
+    // ── TERMINAL REMOTA ───────────────────────────────────────────────────────
+    // La webapp escribe el comando; el POS escucha, ejecuta y escribe la respuesta.
+    match /remote_terminal/{pcId} {
+      allow read, write: if true;
+    }
+
+    // ── FIADO (cuenta corriente de clientes) ─────────────────────────────────
+    // fiado_clientes: ficha del cliente (nombre + datos opcionales).
+    // fiado_items:    cada producto que el cliente se llevó sin pagar.
+    // fiado_pagos:    cada cobro (por productos, a cuenta o aplicación de saldo).
+    // El POS crea/cobra; la webapp administra y carga items a nombre del cliente.
+    match /fiado_clientes/{docId} {
+      allow read, write: if true;
+    }
+    match /fiado_items/{docId} {
+      allow read, write: if true;
+    }
+    match /fiado_pagos/{docId} {
+      allow read, write: if true;
+    }
+
+    // ── RESUMEN DE INVENTARIO (agregado de velocidad de venta) ───────────────
+    // Doc único inventario_resumen/current mantenido por la webapp: cachea la
+    // velocidad de venta por producto (u7/u30/u90) para que la pestaña Inventario
+    // no tenga que reescanear ventas_por_dia en cada apertura.
+    match /inventario_resumen/{docId} {
+      allow read, write: if true;
+    }
+
     // ── BLOQUEAR TODO LO DEMÁS ────────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;

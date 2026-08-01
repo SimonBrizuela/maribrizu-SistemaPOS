@@ -213,6 +213,39 @@ class Presupuesto:
             return cur.rowcount
 
     # ── Sync entrante desde Firebase ─────────────────────────────────────────
+    def _venta_id_local(self, venta_id) -> Optional[int]:
+        """Traduce el `venta_id` que viene de Firestore a uno usable acá.
+
+        `presupuestos.venta_id` tiene FOREIGN KEY contra `sales(id)`, pero ese
+        id es LOCAL de la PC que convirtió el presupuesto en venta: cada PC
+        numera sus ventas por su cuenta. Al espejar un presupuesto convertido
+        en otra máquina, ese id no existe y SQLite rechazaba el INSERT entero
+        — el presupuesto no aparecía en esta PC (se veía como
+        "FOREIGN KEY constraint failed" en el log del listener).
+
+        Se guarda el id sólo si esa venta existe localmente; si no, NULL. El
+        `estado` ('convertido') se conserva igual, que es lo que la UI muestra.
+        """
+        if venta_id in (None, '', 0):
+            return None
+        try:
+            vid = int(venta_id)
+        except (TypeError, ValueError):
+            return None
+        try:
+            existe = self.db.execute_query(
+                "SELECT 1 FROM sales WHERE id = ? LIMIT 1", (vid,)
+            )
+        except Exception as e:
+            logger.warning(f"Presupuesto: no se pudo verificar la venta {vid}: {e}")
+            return None
+        if existe:
+            return vid
+        logger.debug(
+            f"Presupuesto: venta_id={vid} es de otra PC (no existe local) → se guarda en NULL."
+        )
+        return None
+
     def upsert_from_firebase(self, firebase_id: str, data: Dict) -> Optional[int]:
         """Inserta o actualiza un presupuesto recibido de Firestore.
 
@@ -237,6 +270,7 @@ class Presupuesto:
         existing_id = rows[0]['id'] if rows else None
 
         items_arr = data.get('items') or []
+        venta_id = self._venta_id_local(data.get('venta_id'))
 
         if existing_id:
             # Actualizar
@@ -256,7 +290,7 @@ class Presupuesto:
                  float(data.get('total') or 0),
                  str(data.get('fecha_validez') or ''),
                  str(data.get('estado') or 'pendiente'),
-                 data.get('venta_id'),
+                 venta_id,
                  str(data.get('notas') or ''),
                  1 if data.get('deleted') else 0,
                  existing_id)
@@ -281,7 +315,7 @@ class Presupuesto:
                  float(data.get('total') or 0),
                  str(data.get('fecha_validez') or ''),
                  str(data.get('estado') or 'pendiente'),
-                 data.get('venta_id'),
+                 venta_id,
                  str(data.get('pc_id') or ''),
                  str(data.get('cajero_nombre') or ''),
                  data.get('user_id'),

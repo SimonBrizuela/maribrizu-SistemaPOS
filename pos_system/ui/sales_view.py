@@ -25,6 +25,7 @@ from pos_system.utils.stock_links import has_links, effective_stock, build_targe
 from pos_system.ui.conjunto_dialog import ConjuntoDialog, UNIDADES as _CONJ_UNIDADES, TIPOS as _CONJ_TIPOS, parse_colores as _conj_parse_colores
 from pos_system.models.presupuesto import Presupuesto
 from pos_system.models.pending_cart import PendingCart
+from pos_system.models.fiado import Fiado, nuevo_entrega_id
 from pos_system.ui.presupuesto_dialog import PresupuestoDialog
 from pos_system.models.mother_product import MotherProduct, Node, Discount
 from pos_system.ui.mp_variant_dialog import MPVariantDialog
@@ -843,6 +844,10 @@ class PendingPreviewDialog(QDialog):
 class SalesView(QWidget):
     # Señal emitida desde hilo de Firebase para refrescar UI en el hilo principal
     inventory_updated = pyqtSignal()
+    # Cambió algo del fiado (otra PC, la webapp o la pestaña Fiados): revalidar
+    # el cliente del Modo Fiado. Va por señal porque el listener de Firebase
+    # corre en un hilo de red y no puede tocar widgets.
+    fiado_cliente_changed = pyqtSignal()
 
     def __init__(self, parent=None, current_user: dict = None):
         super().__init__(parent)
@@ -853,6 +858,7 @@ class SalesView(QWidget):
         self.cash_register_model = CashRegister(self.db)
         self.promo_model = Promotion(self.db)
         self.pending_model = PendingCart(self.db)
+        self.fiado_model = Fiado(self.db)
         self.pdf_generator = PDFGenerator()
         self.pdf_generator.set_company_info(
             name    = 'Librería Liceo',
@@ -863,6 +869,12 @@ class SalesView(QWidget):
         )
         self.current_user = current_user or {}
         self.cart = []
+        # ── Modo Fiado ──
+        # Con el modo activo, "Cobrar" pasa a ser "Cargar al fiado": el carrito
+        # se anota a nombre de un cliente y NO descuenta stock ni toca la caja.
+        # El stock se descuenta recién cuando el cliente paga (pestaña Fiados).
+        self._fiado_mode = False
+        self._fiado_cliente = None       # dict del cliente elegido
         self._all_products = []          # cache local de productos
         # ── Productos Madre con variantes (mp_*): modelos contra SQLite local ──
         # La data viene del listener de Firebase montado en main_window. Acá solo
@@ -884,6 +896,7 @@ class SalesView(QWidget):
         self.init_ui()
         self._start_firebase_listener()
         self.inventory_updated.connect(self.refresh_data)
+        self.fiado_cliente_changed.connect(self._refrescar_fiado_cliente)
     
     def get_main_window(self):
         """Obtiene la ventana principal"""
@@ -1134,6 +1147,19 @@ class SalesView(QWidget):
         varios_btn.clicked.connect(self._add_varios_item)
         h_top.addWidget(varios_btn)
 
+        # Modo Fiado: el carrito se anota a nombre de un cliente en vez de cobrarse.
+        self._fiado_btn = QPushButton('Fiado')
+        self._fiado_btn.setMinimumHeight(38); self._fiado_btn.setMinimumWidth(88)
+        self._fiado_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        self._fiado_btn.setCursor(Qt.PointingHandCursor)
+        self._fiado_btn.setCheckable(True)
+        self._fiado_btn.setToolTip(
+            'Modo Fiado: lo que cargues se anota a nombre de un cliente.\n'
+            'No descuenta stock ni entra a la caja hasta que el cliente pague.'
+        )
+        self._fiado_btn.clicked.connect(self._toggle_fiado_mode)
+        h_top.addWidget(self._fiado_btn)
+
         if (self.current_user or {}).get('role') == 'admin':
             varios2_btn = QPushButton('Varios 2')
             varios2_btn.setMinimumHeight(38); varios2_btn.setMinimumWidth(80)
@@ -1158,10 +1184,12 @@ class SalesView(QWidget):
 
         # ── Carrito (panel principal) ──
         cart_panel = QFrame()
+        cart_panel.setObjectName('cartPanel')
         cart_panel.setStyleSheet(
-            f"QFrame {{ background:{_T['surface']}; border:1px solid {_T['border']};"
+            f"QFrame#cartPanel {{ background:{_T['surface']}; border:1px solid {_T['border']};"
             f" border-radius:8px; }}"
         )
+        self._cart_panel = cart_panel
         cart_v = QVBoxLayout(cart_panel)
         cart_v.setContentsMargins(0, 0, 0, 0)
         cart_v.setSpacing(0)
@@ -1183,6 +1211,10 @@ class SalesView(QWidget):
         )
         cart_hdr_l.addWidget(self.items_count_lbl)
         cart_v.addWidget(cart_hdr)
+
+        # Banda de Modo Fiado: sólo visible con el modo activo. Es la señal
+        # principal de que el carrito NO se va a cobrar ahora.
+        cart_v.addWidget(self._build_fiado_banner())
 
         # Tabla del carrito (4 columnas estilo mockup)
         self.cart_table = QTableWidget()
@@ -1297,6 +1329,8 @@ class SalesView(QWidget):
             f"QPushButton:disabled {{ background:#c9c2b3; color:white; }}"
         )
         cobrar_btn.clicked.connect(self.complete_sale)
+        self._cobrar_btn = cobrar_btn
+        self._cobrar_btn_css_normal = cobrar_btn.styleSheet()
         ft_l.addWidget(cobrar_btn)
         cart_v.addWidget(cart_ft)
 
@@ -1313,8 +1347,6 @@ class SalesView(QWidget):
 
         # ACCIONES
         side_v.addWidget(self._build_acciones_card())
-        # CAJA
-        side_v.addWidget(self._build_caja_card())
         # ESTADO
         side_v.addWidget(self._build_estado_card())
         # PENDIENTES (ventas en espera)
@@ -1436,47 +1468,6 @@ class SalesView(QWidget):
         b.clicked.connect(fn)
         return b
 
-    def _build_caja_card(self):
-        from pos_system.ui.theme import COLORS as _T
-        card = QFrame()
-        card.setStyleSheet(
-            f"QFrame {{ background:{_T['surface']}; border:1px solid {_T['border']};"
-            f" border-radius:8px; }}"
-        )
-        v = QVBoxLayout(card)
-        v.setContentsMargins(12, 10, 12, 12); v.setSpacing(6)
-        l = QLabel('CAJA')
-        l.setStyleSheet(
-            f"color:{_T['text_muted']}; font-size:10px; font-weight:700;"
-            f" letter-spacing:0.5px; background:transparent; border:none;"
-        )
-        v.addWidget(l)
-
-        # Stats live
-        self._caja_ventas_lbl   = QLabel('—')
-        self._caja_tickets_lbl  = QLabel('—')
-        self._caja_promedio_lbl = QLabel('—')
-        for nombre, lbl in [('Ventas hoy', self._caja_ventas_lbl),
-                            ('Tickets', self._caja_tickets_lbl),
-                            ('Promedio', self._caja_promedio_lbl)]:
-            row = QHBoxLayout()
-            n = QLabel(nombre)
-            n.setStyleSheet(f"color:{_T['text_muted']}; font-size:11px; background:transparent; border:none;")
-            lbl.setStyleSheet(
-                f"color:{_T['text']}; font-size:11px; font-weight:600; background:transparent;"
-                f" border:none; font-family:'JetBrains Mono', Consolas, monospace;"
-            )
-            lbl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            row.addWidget(n); row.addStretch(1); row.addWidget(lbl)
-            v.addLayout(row)
-
-        # Refrescar al inicio y cada 30s
-        self._caja_timer = QTimer(self)
-        self._caja_timer.timeout.connect(self._refresh_caja_card)
-        self._caja_timer.start(30_000)
-        QTimer.singleShot(500, self._refresh_caja_card)
-        return card
-
     def _build_estado_card(self):
         from pos_system.ui.theme import COLORS as _T
         card = QFrame()
@@ -1518,21 +1509,6 @@ class SalesView(QWidget):
         h.addWidget(d); h.addWidget(t); h.addStretch(1)
         w._dot = d; w._txt = t
         return w
-
-    def _refresh_caja_card(self):
-        try:
-            from datetime import datetime as _dt
-            today = _dt.now().strftime('%Y-%m-%d')
-            sales = self.sale_model.get_all(start_date=f'{today} 00:00:00',
-                                            end_date=f'{today} 23:59:59') or []
-            n = len(sales)
-            total = sum(float(s.get('total_amount') or 0) for s in sales)
-            avg = (total / n) if n else 0.0
-            self._caja_ventas_lbl.setText(f'${total:,.0f}'.replace(',', '.'))
-            self._caja_tickets_lbl.setText(str(n))
-            self._caja_promedio_lbl.setText(f'${avg:,.0f}'.replace(',', '.') if n else '$0')
-        except Exception:
-            pass
 
     def _refresh_estado_card(self):
         from pos_system.ui.theme import COLORS as _T
@@ -1998,6 +1974,327 @@ class SalesView(QWidget):
         except Exception:
             logger.exception('No se pudo revalidar stock de conjunto al restaurar')
             return True, ''
+
+    # ════════════════════════════════════════════════════════════════════
+    # ── MODO FIADO (cuenta corriente) ───────────────────────────────────
+    # ════════════════════════════════════════════════════════════════════
+    def _build_fiado_banner(self):
+        """Banda violeta arriba del carrito que avisa que está en Modo Fiado."""
+        from pos_system.ui.theme import COLORS as _T
+        from pos_system.ui.fiado_dialogs import FIADO, FIADO_SOFT, FIADO_BORDER
+
+        banner = QFrame()
+        banner.setObjectName('fiadoBanner')
+        banner.setStyleSheet(
+            f"QFrame#fiadoBanner {{ background:{FIADO_SOFT};"
+            f" border-bottom:2px solid {FIADO}; }}"
+        )
+        h = QHBoxLayout(banner)
+        h.setContentsMargins(14, 9, 12, 9)
+        h.setSpacing(10)
+
+        chip = QLabel('MODO FIADO')
+        chip.setStyleSheet(
+            f"background:{FIADO}; color:white; border-radius:4px; padding:3px 9px;"
+            f" font-size:10px; font-weight:800; letter-spacing:0.8px;"
+        )
+        h.addWidget(chip)
+
+        col = QVBoxLayout(); col.setSpacing(0); col.setContentsMargins(0, 0, 0, 0)
+        self._fiado_cliente_lbl = QLabel('Sin cliente')
+        self._fiado_cliente_lbl.setStyleSheet(
+            f"color:{FIADO}; font-size:14px; font-weight:800;"
+            f" background:transparent; border:none;"
+        )
+        col.addWidget(self._fiado_cliente_lbl)
+        self._fiado_deuda_lbl = QLabel('')
+        self._fiado_deuda_lbl.setStyleSheet(
+            f"color:{_T['text_muted']}; font-size:11px;"
+            f" background:transparent; border:none;"
+        )
+        col.addWidget(self._fiado_deuda_lbl)
+        h.addLayout(col, 1)
+
+        cambiar = QPushButton('Cambiar cliente')
+        cambiar.setMinimumHeight(32)
+        cambiar.setCursor(Qt.PointingHandCursor)
+        cambiar.setStyleSheet(
+            f"QPushButton {{ background:white; color:{FIADO};"
+            f" border:1px solid {FIADO_BORDER}; border-radius:6px; padding:0 14px;"
+            f" font-size:11px; font-weight:700; }}"
+            f"QPushButton:hover {{ background:{FIADO_SOFT}; border-color:{FIADO}; }}"
+        )
+        cambiar.clicked.connect(self._pick_fiado_cliente)
+        h.addWidget(cambiar)
+
+        salir = QPushButton('Salir del modo')
+        salir.setMinimumHeight(32)
+        salir.setCursor(Qt.PointingHandCursor)
+        salir.setStyleSheet(
+            f"QPushButton {{ background:transparent; color:{FIADO};"
+            f" border:none; padding:0 8px; font-size:11px; font-weight:700;"
+            f" text-decoration:underline; }}"
+        )
+        salir.clicked.connect(lambda: self._set_fiado_mode(False))
+        h.addWidget(salir)
+
+        banner.setVisible(False)
+        self._fiado_banner = banner
+        # Estilo inicial del botón del header (apagado)
+        QTimer.singleShot(0, self._apply_fiado_styles)
+        return banner
+
+    def _toggle_fiado_mode(self):
+        """Handler del botón del header. Al encender, pide el cliente primero."""
+        quiere_activar = not self._fiado_mode
+        if quiere_activar:
+            if not self._pick_fiado_cliente():
+                self._fiado_btn.setChecked(False)
+                return
+            self._set_fiado_mode(True)
+        else:
+            self._set_fiado_mode(False)
+
+    def _set_fiado_mode(self, activo: bool):
+        self._fiado_mode = bool(activo)
+        if not self._fiado_mode:
+            self._fiado_cliente = None
+        self._fiado_btn.setChecked(self._fiado_mode)
+        self._fiado_banner.setVisible(self._fiado_mode)
+        self._apply_fiado_styles()
+
+    def _apply_fiado_styles(self):
+        """Repinta carrito, botón de cobro y chip del header según el modo."""
+        from pos_system.ui.theme import COLORS as _T
+        from pos_system.ui.fiado_dialogs import (FIADO, FIADO_HOVER, FIADO_SOFT,
+                                                 FIADO_BORDER, fmt_money)
+
+        if self._fiado_mode:
+            self._fiado_btn.setText('Fiado ON')
+            self._fiado_btn.setStyleSheet(
+                f"QPushButton {{ background:{FIADO}; color:white; border:none;"
+                f" border-radius:6px; padding:0 14px; font-weight:800; }}"
+                f"QPushButton:hover {{ background:{FIADO_HOVER}; }}"
+            )
+            self._cart_panel.setStyleSheet(
+                f"QFrame#cartPanel {{ background:{_T['surface']}; border:2px solid {FIADO};"
+                f" border-radius:8px; }}"
+            )
+            cli = self._fiado_cliente or {}
+            self._fiado_cliente_lbl.setText(str(cli.get('nombre') or 'Sin cliente'))
+            deuda = float(cli.get('deuda') or 0)
+            favor = float(cli.get('saldo_favor') or 0)
+            if deuda > 0:
+                detalle = f"Ya debe ${fmt_money(deuda)} · lo del carrito se suma a su cuenta"
+            elif favor > 0:
+                detalle = f"Tiene ${fmt_money(favor)} a favor · lo del carrito se suma a su cuenta"
+            else:
+                detalle = 'Sin deuda previa · lo del carrito se suma a su cuenta'
+            self._fiado_deuda_lbl.setText(detalle)
+
+            self._cobrar_btn.setText('Cargar\nal fiado')
+            self._cobrar_btn.setStyleSheet(
+                f"QPushButton {{ background:{FIADO}; color:white; border:none;"
+                f" border-radius:8px; padding:6px 24px; font-weight:700; }}"
+                f"QPushButton:hover {{ background:{FIADO_HOVER}; }}"
+                f"QPushButton:disabled {{ background:#c9c2b3; color:white; }}"
+            )
+        else:
+            self._fiado_btn.setText('Fiado')
+            self._fiado_btn.setStyleSheet(
+                f"QPushButton {{ background:{FIADO_SOFT}; color:{FIADO};"
+                f" border:1px solid {FIADO_BORDER}; border-radius:6px; padding:0 14px;"
+                f" font-weight:700; }}"
+                f"QPushButton:hover {{ background:#e9dcf7; border-color:{FIADO}; }}"
+            )
+            self._cart_panel.setStyleSheet(
+                f"QFrame#cartPanel {{ background:{_T['surface']}; border:1px solid {_T['border']};"
+                f" border-radius:8px; }}"
+            )
+            self._cobrar_btn.setText('Cobrar\nF2')
+            self._cobrar_btn.setStyleSheet(self._cobrar_btn_css_normal)
+
+    def _leer_fiado_cliente(self, cliente_id):
+        """Relee un cliente de fiado con sus totales al día. None si ya no está.
+
+        `get_clientes()` filtra los dados de baja, así que un cliente borrado
+        (acá, en otra PC o desde la web) devuelve None.
+        """
+        try:
+            return next(
+                (c for c in self.fiado_model.get_clientes()
+                 if int(c.get('id') or 0) == int(cliente_id)),
+                None
+            )
+        except Exception as e:
+            logger.warning(f'Fiado: no se pudo releer el cliente {cliente_id}: {e}')
+            return False   # False = no se pudo verificar (≠ borrado)
+
+    def _refrescar_fiado_cliente(self):
+        """Revalida el cliente del Modo Fiado contra la base.
+
+        El carrito puede quedar abierto un buen rato: en el medio esa ficha
+        pudo borrarse o cobrarse desde la pestaña Fiados, otra PC o la web.
+        Sin esto el banner sigue mostrando un nombre y una deuda que ya no
+        existen, y "Cargar al fiado" escribiría contra un cliente fantasma.
+        """
+        if not self._fiado_mode or not self._fiado_cliente:
+            return
+        cid = self._fiado_cliente.get('id')
+        if not cid:
+            return
+        vigente = self._leer_fiado_cliente(cid)
+        if vigente is False:
+            return          # error de lectura: se deja lo que había
+        if vigente is None:
+            nombre = self._fiado_cliente.get('nombre') or 'El cliente'
+            self._set_fiado_mode(False)
+            try:
+                from pos_system.ui.components import Toast
+                Toast.warning(self, f'{nombre} ya no está en la lista de fiado — '
+                                    f'se salió del Modo Fiado')
+            except Exception:
+                pass
+            return
+        self._fiado_cliente = vigente
+        self._apply_fiado_styles()
+
+    def _pick_fiado_cliente(self) -> bool:
+        """Abre el buscador de clientes. True si quedó uno elegido."""
+        from pos_system.ui.fiado_dialogs import FiadoClientePicker
+        pc_id = ''
+        try:
+            mw = self.get_main_window()
+            pc_id = getattr(mw, 'pc_id', '') if mw else ''
+        except Exception:
+            pass
+        dlg = FiadoClientePicker(self, db=self.db, pc_id=pc_id)
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
+        acepto = dlg.exec_() == QDialog.Accepted
+        cliente = dlg.cliente if acepto else None
+        if not cliente:
+            return False
+        # Releer con los totales frescos (deuda / saldo a favor) para el banner.
+        try:
+            completo = next(
+                (c for c in self.fiado_model.get_clientes()
+                 if int(c.get('id') or 0) == int(cliente.get('id') or 0)),
+                None
+            )
+            cliente = completo or cliente
+        except Exception:
+            pass
+        self._fiado_cliente = cliente
+        if self._fiado_mode:
+            self._apply_fiado_styles()
+        return True
+
+    def _cargar_al_fiado(self):
+        """Anota el carrito en la cuenta del cliente. No toca stock ni caja."""
+        from pos_system.ui.fiado_dialogs import (fmt_money, sincronizar_cliente,
+                                                 sincronizar_items)
+        if not self.cart:
+            QMessageBox.warning(self, 'Carrito vacío',
+                                'Agregá productos antes de cargarlos al fiado.')
+            return
+        if any(it.get('is_varios_2') for it in self.cart):
+            QMessageBox.warning(
+                self, 'Items Varios 2',
+                'Los items "Varios 2" son sólo para facturar a AFIP.\n'
+                'No se pueden cargar a una cuenta de fiado.'
+            )
+            return
+        if not self._fiado_cliente:
+            if not self._pick_fiado_cliente():
+                return
+
+        # Última verificación antes de escribir: si la ficha se borró mientras
+        # se armaba el carrito, los productos quedarían colgados de un cliente
+        # que ya no aparece en ninguna lista.
+        vigente = self._leer_fiado_cliente(self._fiado_cliente.get('id'))
+        if vigente is None:
+            nombre = self._fiado_cliente.get('nombre') or 'Ese cliente'
+            self._set_fiado_mode(False)
+            QMessageBox.warning(
+                self, 'Cliente eliminado',
+                f'{nombre} ya no está en la lista de fiado.\n\n'
+                f'El carrito quedó intacto: volvé a activar el Modo Fiado y '
+                f'elegí a quién cargárselo.'
+            )
+            return
+        if vigente:
+            self._fiado_cliente = vigente
+
+        cliente = self._fiado_cliente
+        total = sum(float(it.get('subtotal') or 0) for it in self.cart)
+        resp = QMessageBox.question(
+            self, 'Cargar al fiado',
+            f"¿Anotar {len(self.cart)} producto(s) por ${fmt_money(total)} "
+            f"a nombre de {cliente.get('nombre')}?\n\n"
+            f"No se descuenta stock ni entra a la caja: eso pasa cuando venga a pagar.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
+        )
+        if resp != QMessageBox.Yes:
+            return
+
+        pc_id = ''
+        try:
+            mw = self.get_main_window()
+            pc_id = getattr(mw, 'pc_id', '') if mw else ''
+        except Exception:
+            pass
+
+        try:
+            # El cliente puede haberse creado offline: si todavía no tiene
+            # firebase_id, intentamos subirlo ahora para que los items queden
+            # colgados de su doc y no de un id local.
+            if not str(cliente.get('firebase_id') or '').strip():
+                sincronizar_cliente(self.fiado_model, cliente)
+            ids = self.fiado_model.cargar_items(
+                cliente=cliente,
+                items=self.cart,
+                entrega_id=nuevo_entrega_id(),
+                cajero=self._current_turno_nombre(),
+                pc_id=pc_id,
+                origen='pos',
+            )
+        except Exception as e:
+            logger.exception('Error cargando el carrito al fiado')
+            QMessageBox.critical(self, 'Error',
+                                 f'No se pudo cargar al fiado:\n{e}')
+            return
+
+        # Sync a Firebase en background: la carga local ya quedó firme.
+        import threading as _th
+        _th.Thread(
+            target=sincronizar_items, args=(self.fiado_model, ids), daemon=True
+        ).start()
+
+        self.cart = []
+        self.update_cart_display()
+        try:
+            self.reset_category_filter()
+        except Exception:
+            pass
+        self._set_fiado_mode(False)
+
+        try:
+            from pos_system.ui.components import Toast
+            Toast.success(self, f"Cargado al fiado de {cliente.get('nombre')} "
+                                f"— ${fmt_money(total)}")
+        except Exception:
+            QMessageBox.information(
+                self, 'Fiado',
+                f"Se anotaron ${fmt_money(total)} a la cuenta de {cliente.get('nombre')}."
+            )
+
+        # Refrescar la pestaña Fiados si está montada
+        try:
+            mw = self.get_main_window()
+            if mw and getattr(mw, 'fiados_view', None) is not None:
+                mw.fiados_view.refresh_requested.emit()
+        except Exception:
+            pass
 
     # ── Atajos del panel lateral ──
     def _open_promos_dialog(self):
@@ -3062,6 +3359,7 @@ class SalesView(QWidget):
         """Recarga botones de rubros desde la BD."""
         self._invalidate_catalog_cache()
         self._load_rubro_buttons()
+        self._refrescar_fiado_cliente()
 
     def on_category_changed(self, text):
         """Compatibilidad — ya no se usa con combos."""
@@ -4870,6 +5168,11 @@ class SalesView(QWidget):
 
     def complete_sale(self):
         from PyQt5.QtWidgets import QMessageBox
+        # Modo Fiado: el carrito no se cobra ahora, se anota a la cuenta del
+        # cliente. El cobro (y el descuento de stock) pasa en la pestaña Fiados.
+        if self._fiado_mode:
+            self._cargar_al_fiado()
+            return
         if not self.cart:
             QMessageBox.warning(self, 'Carrito vacio', 'Agregue productos al carrito antes de facturar')
             return
@@ -4959,7 +5262,9 @@ class SalesView(QWidget):
                         from pos_system.utils.firebase_sync import get_firebase_sync, now_ar, _get_pc_id
                         obs_model = Observation(self.db)
                         u = self.current_user or {}
-                        uname = u.get('full_name') or u.get('username') or 'Cajero'
+                        # Firma el cajero DE TURNO (igual que la venta), no el
+                        # usuario logueado: casi siempre se entra como admin.
+                        uname = self._current_turno_nombre()
                         pc = _get_pc_id()
                         created_at = now_ar().strftime('%Y-%m-%d %H:%M:%S')
                         fb = get_firebase_sync()

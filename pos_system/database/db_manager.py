@@ -241,6 +241,19 @@ class DatabaseManager:
                 cursor.execute("CREATE INDEX IF NOT EXISTS idx_sales_fb_synced ON sales(firebase_synced, created_at)")
             except Exception:
                 pass
+            # Cobro de fiado: marca la venta que salda una cuenta corriente.
+            # fiado_tipo: 'productos' (se cobraron items fiados) o 'a_cuenta'
+            # (entrega de dinero suelta que genera saldo a favor).
+            for col_def in [
+                "ALTER TABLE sales ADD COLUMN es_fiado INTEGER DEFAULT 0",
+                "ALTER TABLE sales ADD COLUMN fiado_tipo TEXT DEFAULT ''",
+                "ALTER TABLE sales ADD COLUMN fiado_cliente TEXT DEFAULT ''",
+                "ALTER TABLE sales ADD COLUMN fiado_cliente_fid TEXT DEFAULT ''",
+            ]:
+                try:
+                    cursor.execute(col_def)
+                except Exception:
+                    pass
 
             # Tabla de items de venta (detalle)
             cursor.execute("""
@@ -604,6 +617,96 @@ class DatabaseManager:
                 )
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_pending_carts_created ON pending_carts(created_at)")
+
+            # ── FIADO (cuenta corriente de clientes) ───────────────────────
+            # Espejo local de las colecciones Firestore fiado_clientes /
+            # fiado_items / fiado_pagos. El POS carga y cobra offline; el
+            # listener de Firebase mergea lo que se cargue desde la webapp.
+            #
+            # Reglas del módulo:
+            #  - Cargar un item al fiado NO descuenta stock (el producto salió,
+            #    pero la venta todavía no existe).
+            #  - Al cobrar se crea una venta real: ahí se descuenta el stock,
+            #    entra a la caja y se marca es_fiado=1 en `sales`.
+            #  - `item_json` guarda la línea del carrito completa para poder
+            #    recrear la venta fiel (conjunto, colores, mp_*, promos).
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS fiado_clientes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    firebase_id TEXT UNIQUE DEFAULT NULL,
+                    nombre TEXT NOT NULL,
+                    dni TEXT DEFAULT '',
+                    telefono TEXT DEFAULT '',
+                    email TEXT DEFAULT '',
+                    direccion TEXT DEFAULT '',
+                    notas TEXT DEFAULT '',
+                    activo INTEGER NOT NULL DEFAULT 1,
+                    pc_id TEXT DEFAULT '',
+                    created_at TIMESTAMP DEFAULT (localtime_now()),
+                    updated_at TIMESTAMP DEFAULT (localtime_now()),
+                    deleted INTEGER NOT NULL DEFAULT 0
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS fiado_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    firebase_id TEXT UNIQUE DEFAULT NULL,
+                    cliente_fid TEXT DEFAULT '',
+                    cliente_local_id INTEGER DEFAULT NULL,
+                    cliente_nombre TEXT DEFAULT '',
+                    entrega_id TEXT DEFAULT '',
+                    product_id INTEGER DEFAULT 0,
+                    product_fid TEXT DEFAULT '',
+                    product_name TEXT NOT NULL,
+                    categoria TEXT DEFAULT '',
+                    quantity REAL NOT NULL DEFAULT 1,
+                    unit_price REAL NOT NULL DEFAULT 0,
+                    subtotal REAL NOT NULL DEFAULT 0,
+                    item_json TEXT DEFAULT NULL,
+                    estado TEXT NOT NULL DEFAULT 'pendiente',
+                    fecha TIMESTAMP DEFAULT (localtime_now()),
+                    pagado_at TIMESTAMP DEFAULT NULL,
+                    venta_id INTEGER DEFAULT NULL,
+                    pago_fid TEXT DEFAULT '',
+                    nota TEXT DEFAULT '',
+                    origen TEXT DEFAULT 'pos',
+                    pc_id TEXT DEFAULT '',
+                    cajero TEXT DEFAULT '',
+                    updated_at TIMESTAMP DEFAULT (localtime_now()),
+                    deleted INTEGER NOT NULL DEFAULT 0
+                )
+            """)
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS fiado_pagos (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    firebase_id TEXT UNIQUE DEFAULT NULL,
+                    cliente_fid TEXT DEFAULT '',
+                    cliente_local_id INTEGER DEFAULT NULL,
+                    cliente_nombre TEXT DEFAULT '',
+                    tipo TEXT NOT NULL DEFAULT 'productos',
+                    monto REAL NOT NULL DEFAULT 0,
+                    credito_usado REAL NOT NULL DEFAULT 0,
+                    metodo_pago TEXT DEFAULT '',
+                    venta_id INTEGER DEFAULT NULL,
+                    items_json TEXT DEFAULT NULL,
+                    nota TEXT DEFAULT '',
+                    fecha TIMESTAMP DEFAULT (localtime_now()),
+                    pc_id TEXT DEFAULT '',
+                    cajero TEXT DEFAULT '',
+                    deleted INTEGER NOT NULL DEFAULT 0
+                )
+            """)
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_fiado_cli_nombre ON fiado_clientes(nombre)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_fiado_items_cliente ON fiado_items(cliente_fid, estado)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_fiado_items_estado ON fiado_items(estado, fecha)")
+            cursor.execute("CREATE INDEX IF NOT EXISTS idx_fiado_pagos_cliente ON fiado_pagos(cliente_fid, fecha)")
+            # UNIQUE sobre firebase_id: normalizar '' a NULL (SQLite permite
+            # múltiples NULL pero un solo ''), igual que clientes/productos.
+            for _tbl in ('fiado_clientes', 'fiado_items', 'fiado_pagos'):
+                try:
+                    cursor.execute(f"UPDATE {_tbl} SET firebase_id = NULL WHERE firebase_id = ''")
+                except Exception:
+                    pass
 
             # ── PRODUCTOS MADRE (mp_*) ─────────────────────────────────────
             # Sistema jerárquico cargado desde la webapp (`webapp/src/pages/lab_productos_madre.js`).

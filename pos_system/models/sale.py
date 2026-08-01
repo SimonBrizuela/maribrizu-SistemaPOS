@@ -44,6 +44,12 @@ class Sale:
         user_id = sale_data.get('user_id')
         notes = sale_data.get('notes', '')
         turno_nombre = sale_data.get('turno_nombre', '') or ''
+        # Cobro de fiado: la venta salda una cuenta corriente. Se guarda para
+        # que el historial local y la webapp la distingan de una venta común.
+        es_fiado          = 1 if sale_data.get('es_fiado') else 0
+        fiado_tipo        = str(sale_data.get('fiado_tipo') or '')
+        fiado_cliente     = str(sale_data.get('fiado_cliente') or '')
+        fiado_cliente_fid = str(sale_data.get('fiado_cliente_fid') or '')
 
         # Validar consistencia para pago mixto
         if payment_type == 'mixed':
@@ -63,8 +69,9 @@ class Sale:
             #    como CURRENT_TIMESTAMP = UTC)
             created_at_ar = now_ar().strftime('%Y-%m-%d %H:%M:%S')
             cursor.execute(
-                "INSERT INTO sales (total_amount, payment_type, cash_received, change_given, transfer_amount, cash_register_id, user_id, notes, turno_nombre, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (total_amount, payment_type, cash_received, change_given, transfer_amount, cash_register_id, user_id, notes, turno_nombre, created_at_ar)
+                "INSERT INTO sales (total_amount, payment_type, cash_received, change_given, transfer_amount, cash_register_id, user_id, notes, turno_nombre, created_at, es_fiado, fiado_tipo, fiado_cliente, fiado_cliente_fid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (total_amount, payment_type, cash_received, change_given, transfer_amount, cash_register_id, user_id, notes, turno_nombre, created_at_ar,
+                 es_fiado, fiado_tipo, fiado_cliente, fiado_cliente_fid)
             )
             sale_id = cursor.lastrowid
 
@@ -104,119 +111,10 @@ class Sale:
                      promo_id, subtotal, conjunto_color,
                      mp_product_id, mp_node_id_val, mp_presentation_id_val)
                 )
-                if is_mp:
-                    # Producto Madre: descontar stock de mp_nodes.presentaciones (sueltos
-                    # primero, abrir contenedor cuando se agotan). Resolvemos la presentación
-                    # efectiva (si es vinculada al rollo/pack, descuenta de la fuente).
-                    target_pres_id = self._deduct_mp_stock_local(cursor, item, now_iso)
-                    if target_pres_id:
-                        mp_para_sync_remoto.append({
-                            'node_id':         mp_node_id_val,
-                            'presentation_id': target_pres_id,
-                            'qty':             float(item['quantity'] or 0),
-                            'product_id':      mp_product_id or '',
-                            'user':            turno_nombre or '',
-                        })
-                    continue  # no descontar `products.stock` para mp_*
-
-                # Vínculos a productos fuente (consumibles, nivel producto). Si el
-                # producto vendido está vinculado a otro(s) de stock, su stock
-                # PROPIO no se descuenta (quedaría negativo): el stock real vive en
-                # los targets, que se descuentan en _aplicar_vinculaciones_local.
-                vincs_prod = self._parse_vinculos_producto(cursor, item['product_id'])
-
-                if item.get('is_conjunto'):
-                    # Producto conjunto: no se descuenta stock clásico.
-                    # Si el item viene con `conjunto_color`, actualizamos el
-                    # color dentro del array `conjunto_colores` y recomputamos
-                    # los agregados planos (unidades / restante / total) como
-                    # SUMA de todos los colores. Si no trae color (legacy o
-                    # producto sin colores), updateamos los planos directamente.
-                    after_u = float(item.get('conjunto_after_unidades') or 0)
-                    after_r = float(item.get('conjunto_after_restante') or 0)
-                    color = (item.get('conjunto_color') or '').strip()
-                    row = cursor.execute(
-                        "SELECT conjunto_contenido, conjunto_colores "
-                        "FROM products WHERE id = ?",
-                        (item['product_id'],)
-                    ).fetchone()
-                    contenido = float(row[0]) if row and row[0] is not None else 0.0
-                    colores_raw = row[1] if row and len(row) > 1 else None
-
-                    if color and colores_raw:
-                        try:
-                            import json as _json
-                            colores = _json.loads(colores_raw)
-                            if not isinstance(colores, list):
-                                colores = []
-                        except Exception:
-                            colores = []
-                        # Actualizar el color correspondiente
-                        encontrado = False
-                        for c in colores:
-                            if isinstance(c, dict) and str(c.get('color', '')).strip() == color:
-                                c['unidades'] = after_u
-                                c['restante'] = after_r
-                                encontrado = True
-                                break
-                        if not encontrado:
-                            colores.append({
-                                'color':    color,
-                                'unidades': after_u,
-                                'restante': after_r,
-                            })
-                        # Agregados = suma de todos los colores
-                        sum_u = sum(float(c.get('unidades') or 0) for c in colores if isinstance(c, dict))
-                        sum_r = sum(float(c.get('restante') or 0) for c in colores if isinstance(c, dict))
-                        sum_total = sum(
-                            float(c.get('unidades') or 0) * contenido + float(c.get('restante') or 0)
-                            for c in colores if isinstance(c, dict)
-                        )
-                        cursor.execute(
-                            """UPDATE products
-                               SET conjunto_unidades = ?,
-                                   conjunto_restante = ?,
-                                   conjunto_total    = ?,
-                                   conjunto_colores  = ?,
-                                   updated_at        = ?
-                               WHERE id = ?""",
-                            (sum_u, sum_r, sum_total,
-                             _json.dumps(colores, ensure_ascii=False),
-                             now_iso, item['product_id'])
-                        )
-                    else:
-                        # Legacy / sin colores: usar after_u / after_r directos
-                        after_total = after_u * contenido + after_r
-                        cursor.execute(
-                            """UPDATE products
-                               SET conjunto_unidades = ?,
-                                   conjunto_restante = ?,
-                                   conjunto_total    = ?,
-                                   updated_at        = ?
-                               WHERE id = ?""",
-                            (after_u, after_r, after_total, now_iso, item['product_id'])
-                        )
-                else:
-                    # Descontar stock — se permite vender aunque no haya stock
-                    # suficiente. EXCEPTO si el producto está vinculado: en ese
-                    # caso el stock real vive en los productos fuente (se descuentan
-                    # más abajo) y NO se toca el propio para que no quede negativo.
-                    if not vincs_prod:
-                        cursor.execute(
-                            "UPDATE products SET stock = stock - ?, updated_at = ? WHERE id = ? AND stock != -1",
-                            (item['quantity'], now_iso, item['product_id'])
-                        )
-                    # stock = -1 significa servicio/ilimitado, no se descuenta
-
-                # ── Vínculos consumibles (catalogo-level) ────────────────────
-                # Si el producto vendido tiene `vinculaciones`, descontar stock
-                # de los productos target en la misma transacción. Si el target
-                # es conjunto, se recalcula conjunto_total/unidades/restante
-                # para que el modal del webapp muestre el número correcto.
-                # Idempotente con el watcher web: post-commit marcamos los items
-                # con `consumibles_procesado: True` en ventas_por_dia.
-                self._aplicar_vinculaciones_local(
-                    cursor, item, item_idx, now_iso, vincs_para_sync_remoto, vincs_prod
+                self._aplicar_stock_de_item(
+                    cursor, item, item_idx, now_iso,
+                    mp_para_sync_remoto, vincs_para_sync_remoto,
+                    usuario=turno_nombre,
                 )
 
             # 3. Actualizar caja registradora
@@ -285,6 +183,193 @@ class Sale:
             logging.getLogger(__name__).error(f'Error syncing monthly summary: {e}')
         
         return sale_id
+
+    # ── Descuento de stock de una línea ───────────────────────────────────
+    def _aplicar_stock_de_item(self, cursor, item: Dict, item_idx: int,
+                               now_iso: str,
+                               mp_acumulador: List[Dict],
+                               vincs_acumulador: List[Dict],
+                               usuario: str = '') -> None:
+        """Aplica a SQLite el descuento de stock de UNA línea de carrito.
+
+        Cubre los tres tipos de producto del sistema:
+          - Producto Madre (mp_*): descuenta de mp_nodes.presentaciones.
+          - Producto conjunto: recalcula unidades / restante / total (por color
+            si el item trae `conjunto_color`).
+          - Producto plano: `stock = stock - cantidad` (stock=-1 = ilimitado).
+        Y en todos los casos aplica las vinculaciones a productos fuente.
+
+        Los acumuladores recogen lo que hay que empujar a Firestore después del
+        commit. Está extraído de create() para poder reusarlo cuando se salda
+        un fiado con saldo a favor: ahí sale mercadería sin venta asociada.
+        """
+        is_mp = bool(item.get('is_mp'))
+        if is_mp:
+            # Producto Madre: descontar stock de mp_nodes.presentaciones (sueltos
+            # primero, abrir contenedor cuando se agotan). Resolvemos la presentación
+            # efectiva (si es vinculada al rollo/pack, descuenta de la fuente).
+            target_pres_id = self._deduct_mp_stock_local(cursor, item, now_iso)
+            if target_pres_id:
+                mp_acumulador.append({
+                    'node_id':         item.get('mp_node_id'),
+                    'presentation_id': target_pres_id,
+                    'qty':             float(item.get('quantity') or 0),
+                    'product_id':      item.get('mp_product_id') or '',
+                    'user':            usuario or '',
+                })
+            return  # no descontar `products.stock` para mp_*
+
+        # Vínculos a productos fuente (consumibles, nivel producto). Si el
+        # producto vendido está vinculado a otro(s) de stock, su stock
+        # PROPIO no se descuenta (quedaría negativo): el stock real vive en
+        # los targets, que se descuentan en _aplicar_vinculaciones_local.
+        vincs_prod = self._parse_vinculos_producto(cursor, item['product_id'])
+
+        if item.get('is_conjunto'):
+            # Producto conjunto: no se descuenta stock clásico.
+            # Si el item viene con `conjunto_color`, actualizamos el
+            # color dentro del array `conjunto_colores` y recomputamos
+            # los agregados planos (unidades / restante / total) como
+            # SUMA de todos los colores. Si no trae color (legacy o
+            # producto sin colores), updateamos los planos directamente.
+            after_u = float(item.get('conjunto_after_unidades') or 0)
+            after_r = float(item.get('conjunto_after_restante') or 0)
+            color = (item.get('conjunto_color') or '').strip()
+            row = cursor.execute(
+                "SELECT conjunto_contenido, conjunto_colores "
+                "FROM products WHERE id = ?",
+                (item['product_id'],)
+            ).fetchone()
+            contenido = float(row[0]) if row and row[0] is not None else 0.0
+            colores_raw = row[1] if row and len(row) > 1 else None
+
+            if color and colores_raw:
+                try:
+                    colores = json.loads(colores_raw)
+                    if not isinstance(colores, list):
+                        colores = []
+                except Exception:
+                    colores = []
+                # Actualizar el color correspondiente
+                encontrado = False
+                for c in colores:
+                    if isinstance(c, dict) and str(c.get('color', '')).strip() == color:
+                        c['unidades'] = after_u
+                        c['restante'] = after_r
+                        encontrado = True
+                        break
+                if not encontrado:
+                    colores.append({
+                        'color':    color,
+                        'unidades': after_u,
+                        'restante': after_r,
+                    })
+                # Agregados = suma de todos los colores
+                sum_u = sum(float(c.get('unidades') or 0) for c in colores if isinstance(c, dict))
+                sum_r = sum(float(c.get('restante') or 0) for c in colores if isinstance(c, dict))
+                sum_total = sum(
+                    float(c.get('unidades') or 0) * contenido + float(c.get('restante') or 0)
+                    for c in colores if isinstance(c, dict)
+                )
+                cursor.execute(
+                    """UPDATE products
+                       SET conjunto_unidades = ?,
+                           conjunto_restante = ?,
+                           conjunto_total    = ?,
+                           conjunto_colores  = ?,
+                           updated_at        = ?
+                       WHERE id = ?""",
+                    (sum_u, sum_r, sum_total,
+                     json.dumps(colores, ensure_ascii=False),
+                     now_iso, item['product_id'])
+                )
+            else:
+                # Legacy / sin colores: usar after_u / after_r directos
+                after_total = after_u * contenido + after_r
+                cursor.execute(
+                    """UPDATE products
+                       SET conjunto_unidades = ?,
+                           conjunto_restante = ?,
+                           conjunto_total    = ?,
+                           updated_at        = ?
+                       WHERE id = ?""",
+                    (after_u, after_r, after_total, now_iso, item['product_id'])
+                )
+        else:
+            # Descontar stock — se permite vender aunque no haya stock
+            # suficiente. EXCEPTO si el producto está vinculado: en ese
+            # caso el stock real vive en los productos fuente (se descuentan
+            # más abajo) y NO se toca el propio para que no quede negativo.
+            if not vincs_prod:
+                cursor.execute(
+                    "UPDATE products SET stock = stock - ?, updated_at = ? WHERE id = ? AND stock != -1",
+                    (item['quantity'], now_iso, item['product_id'])
+                )
+            # stock = -1 significa servicio/ilimitado, no se descuenta
+
+        # ── Vínculos consumibles (catalogo-level) ────────────────────
+        # Si el producto vendido tiene `vinculaciones`, descontar stock
+        # de los productos target en la misma transacción. Si el target
+        # es conjunto, se recalcula conjunto_total/unidades/restante
+        # para que el modal del webapp muestre el número correcto.
+        # Idempotente con el watcher web: post-commit marcamos los items
+        # con `consumibles_procesado: True` en ventas_por_dia.
+        self._aplicar_vinculaciones_local(
+            cursor, item, item_idx, now_iso, vincs_acumulador, vincs_prod
+        )
+
+    def descontar_stock_items(self, items: List[Dict], usuario: str = '') -> None:
+        """Descuenta stock de una lista de líneas SIN generar una venta.
+
+        Único caso de uso: saldar productos fiados con saldo a favor del cliente.
+        La plata ya entró a la caja cuando el cliente la dejó "a cuenta" (esa
+        entrega generó su propia venta), así que crear otra venta acá contaría
+        el dinero dos veces — pero la mercadería sí sale ahora y el stock tiene
+        que reflejarlo.
+
+        Usa exactamente el mismo motor de descuento que una venta normal y
+        propaga los cambios a Firebase igual que ella.
+        """
+        items = [it for it in (items or []) if it]
+        if not items:
+            return
+
+        now_iso = datetime.now().isoformat()
+        mp_para_sync_remoto = []
+        vincs_para_sync_remoto = []
+
+        with self.db.get_connection() as conn:
+            cursor = conn.cursor()
+            for idx, item in enumerate(items):
+                self._aplicar_stock_de_item(
+                    cursor, item, idx, now_iso,
+                    mp_para_sync_remoto, vincs_para_sync_remoto,
+                    usuario=usuario,
+                )
+
+        if mp_para_sync_remoto:
+            threading.Thread(
+                target=self._sync_mp_to_firebase,
+                args=(mp_para_sync_remoto,),
+                daemon=True,
+            ).start()
+        if vincs_para_sync_remoto:
+            # sale_id=None → sync_vinculaciones_after_sale sólo empuja el stock
+            # de los targets y no intenta marcar docs de `ventas_por_dia`.
+            threading.Thread(
+                target=self._sync_vincs_to_firebase,
+                args=(None, vincs_para_sync_remoto),
+                daemon=True,
+            ).start()
+
+        # Propagar el stock ya descontado al catálogo/inventario en Firebase.
+        try:
+            from pos_system.utils.firebase_sync import get_firebase_sync
+            fb = get_firebase_sync()
+            if fb and getattr(fb, 'enabled', False):
+                fb.sync_stock_after_sale(items, self.db)
+        except Exception as e:
+            logger.warning(f"descontar_stock_items: push de stock a Firebase falló: {e}")
 
     # ── Productos Madre (mp_*) ────────────────────────────────────────────
     def _deduct_mp_stock_local(self, cursor, item: Dict, now_iso: str) -> Optional[str]:

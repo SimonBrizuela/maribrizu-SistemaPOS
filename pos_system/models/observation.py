@@ -31,11 +31,16 @@ class Observation:
 
         with self.db.get_connection() as conn:
             cur = conn.cursor()
+            # firebase_id explícito en NULL: la columna es UNIQUE y su DEFAULT
+            # es '' — SQLite admite muchos NULL pero un solo ''. Sin esto, la
+            # segunda observación creada antes de que el sync le asigne su id
+            # (sin internet, o dos notas seguidas) reventaba con UNIQUE
+            # constraint y se perdía.
             cur.execute("""
                 INSERT INTO observations
-                    (text, context, sale_id, sale_item_id,
+                    (firebase_id, text, context, sale_id, sale_item_id,
                      created_by_id, created_by_name, pc_id)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (NULL, ?, ?, ?, ?, ?, ?, ?)
             """, (text, context, sale_id, sale_item_id,
                   created_by_id, created_by_name, pc_id))
             return cur.lastrowid
