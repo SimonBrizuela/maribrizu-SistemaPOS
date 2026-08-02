@@ -13,7 +13,6 @@ import { initCalendarioBadge, proximosEventos, textoSobre } from './pages/calend
 import { renderSkeleton } from './skeletons.js';
 import { initAutostart, getAutostart, setAutostart, isTauriApp } from './autostart.js';
 import { initUpdater } from './updater.js';
-import { initDownloadBanner } from './download_banner.js';
 
 // ── Diagnóstico de carga (solo dentro del .exe/Tauri) ──
 // Espeja los logs [store]/[config]/[cache] a un archivo (logs/webapp.log en el
@@ -1212,7 +1211,8 @@ document.addEventListener('DOMContentLoaded', () => {
       else alLogin();
     });
   }
-  initAutostart();       // registra el arranque con Windows la primera vez (solo en el .exe)
-  initUpdater();         // chequea actualizaciones del .exe contra el GitHub Release (solo en el .exe)
-  initDownloadBanner();  // cartel de descarga del .exe (solo en la web por navegador)
+  initAutostart();  // registra el arranque con Windows la primera vez (solo en el .exe)
+  initUpdater();    // chequea actualizaciones del .exe contra el GitHub Release (solo en el .exe)
+  // El cartel de descarga del .exe se saca: se usa la web. El .exe corre desde
+  // tauri.localhost y el login con Google no funciona bien dentro del WebView2.
 });
