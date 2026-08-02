@@ -27,11 +27,18 @@ Name: "spanish"; MessagesFile: "compiler:Languages\Spanish.isl"
 Name: "desktopicon"; Description: "Crear acceso directo en el Escritorio"; GroupDescription: "Íconos adicionales:"; Flags: checkedonce
 Name: "quicklaunchicon"; Description: "Crear acceso directo en Inicio rápido"; GroupDescription: "Íconos adicionales:"; Flags: unchecked; Check: not IsAdminInstallMode
 
+[InstallDelete]
+; Borra la service account que dejaron las versiones <= 3.0.53. Esa clave se
+; revoca tras el rollout, pero no tiene por que seguir en disco mientras tanto.
+Type: files; Name: "{app}\firebase_key.json"
+Type: files; Name: "{app}\_internal\firebase_key.json"
+
 [Files]
 ; Ejecutable principal
 Source: "dist\SistemaPOS\SistemaPOS.exe"; DestDir: "{app}"; Flags: ignoreversion
-; Firebase key (credenciales incluidas)
-Source: "dist\SistemaPOS\firebase_key.json"; DestDir: "{app}"; Flags: ignoreversion
+; Config de provisioning (URL + secreto de bootstrap). Reemplaza al viejo
+; firebase_key.json: la service account ya no viaja en el instalador.
+Source: "dist\SistemaPOS\provision.json"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 ; Carpeta interna con todas las dependencias
 Source: "dist\SistemaPOS\_internal\*"; DestDir: "{app}\_internal"; Flags: ignoreversion recursesubdirs createallsubdirs
 

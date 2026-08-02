@@ -1,239 +1,230 @@
 rules_version = '2';
+
+// ═══════════════════════════════════════════════════════════════════════════
+//  REGLAS DE SEGURIDAD — mari-d7c71
+// ───────────────────────────────────────────────────────────────────────────
+//  Antes toda la base era `allow read, write: if true`. Como la apiKey del
+//  cliente viaja en el bundle público de la webapp, eso equivalía a dejar la
+//  contabilidad, los datos de clientes, los certificados de ARCA y la terminal
+//  remota de las PCs abiertos a cualquiera con un navegador.
+//
+//  IMPORTANTE — el POS no se ve afectado por este archivo. Se conecta con el
+//  Admin SDK (service account), que salta las reglas por diseño. Las PCs de la
+//  librería siguen sincronizando igual sin tocarles nada.
+//
+//  Estos permisos aplican únicamente a la webapp de gestión.
+// ═══════════════════════════════════════════════════════════════════════════
+
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // ── VENTAS ────────────────────────────────────────────────────────────────
-    // Lectura pública. Escritura permitida desde el POS (SDK Admin) y la app.
-    // El campo 'cajero' y 'turno_nombre' identifican quién realizó la venta.
-    match /ventas/{ventaId} {
-      allow read: if true;
-      allow write: if true;   // POS usa SDK Admin (bypass), webapp solo lee
+    // ── Helpers ───────────────────────────────────────────────────────────
+    // El ingreso es con Google, así que CUALQUIERA con una cuenta de Google
+    // puede autenticarse contra este proyecto. Por eso `request.auth != null`
+    // no alcanza como permiso: hace falta un custom claim explícito, que solo
+    // se setea con el Admin SDK desde scripts/auth_admin.py y viaja firmado
+    // dentro del ID token (el cliente no puede fabricárselo).
+    function authorized() {
+      return request.auth != null
+             && (request.auth.token.admin == true || request.auth.token.staff == true);
     }
 
-    // ── INVENTARIO ────────────────────────────────────────────────────────────
-    // Lectura y escritura: el POS sincroniza stock en tiempo real.
-    match /inventario/{productoId} {
-      allow read: if true;
-      allow write: if true;
+    function isAdmin() {
+      return request.auth != null && request.auth.token.admin == true;
     }
 
-    // ── HISTORIAL DIARIO ──────────────────────────────────────────────────────
-    match /historial_diario/{diaId} {
-      allow read: if true;
-      allow write: if true;
+    // ═════════════════════════════════════════════════════════════════════
+    //  NIVEL CRÍTICO — solo admin
+    //  Control de las PCs, credenciales fiscales y dinero.
+    // ═════════════════════════════════════════════════════════════════════
+
+    // ── TERMINAL REMOTA ───────────────────────────────────────────────────
+    // La webapp escribe el comando; el POS lo ejecuta con shell=True.
+    // Escribir acá es ejecución de código en las PCs de la librería.
+    match /remote_terminal/{pcId} {
+      allow read, write: if isAdmin();
     }
 
-    // ── PRODUCTOS MÁS VENDIDOS ────────────────────────────────────────────────
-    match /productos_mas_vendidos/{productoId} {
-      allow read: if true;
-      allow write: if true;
+    // ── COMANDOS REMOTOS POR PC ───────────────────────────────────────────
+    // Mismo poder que la terminal: el POS actúa sobre lo que se escriba acá.
+    match /pc_commands/{pcId} {
+      allow read, write: if isAdmin();
     }
 
-    // ── VENTAS POR DÍA (detalle de items por turno/cajero) ───────────────────
-    // Incluye campo 'cajero' con el nombre del turno que realizó la venta.
-    match /ventas_por_dia/{itemId} {
-      allow read: if true;
-      allow write: if true;
+    // ── ESTADO DE PCs (heartbeat) ─────────────────────────────────────────
+    // Escribe el POS por Admin SDK. La webapp solo lo lee para el panel de
+    // monitoreo, que ya es exclusivo del admin.
+    // El alta y la actualizacion las hace solo el POS por Admin SDK; desde la
+    // webapp únicamente se borra una PC dada de baja (pcs.js).
+    match /pcs/{pcId} {
+      allow read, delete:   if isAdmin();
+      allow create, update: if false;
     }
 
-    // ── CIERRES DE CAJA ───────────────────────────────────────────────────────
-    // Incluye campo 'cajero' con el nombre del turno que cerró la caja.
-    match /cierres_caja/{cierreId} {
-      allow read: if true;
-      allow write: if true;
-    }
-
-    // ── RESÚMENES MENSUALES ───────────────────────────────────────────────────
-    match /resumenes_mensuales/{mesId} {
-      allow read: if true;
-      allow write: if true;
-    }
-
-    // ── TURNOS ────────────────────────────────────────────────────────────────
-    match /turnos/{turnoId} {
-      allow read, write: if true;
-    }
-
-    // ── SUBCATEGORÍAS ─────────────────────────────────────────────────────────
-    // Catálogo de subcategorías por rubro. Lectura pública, escritura desde POS.
-    match /sub_categories/{docId} {
-      allow read, write: if true;
-    }
-
-    // ── CATÁLOGO ──────────────────────────────────────────────────────────────
-    // Lectura y escritura pública: la web edita precios/stock/duplicados en tiempo real.
-    // Los CSV se suben con el script csv_to_firebase.py (SDK Admin, bypass de rules).
-    match /catalogo/{productoId} {
-      allow read, write: if true;
-    }
-
-    // ── TOMBSTONES DE CATÁLOGO ────────────────────────────────────────────────
-    // Cuando se borra un producto en la webapp se escribe un doc aquí con
-    // deleted_at = serverTimestamp(). El POS consulta estos tombstones
-    // filtrando por deleted_at > last_sync y borra solo los matches locales.
-    match /catalogo_deleted/{productoId} {
-      allow read, write: if true;
-    }
-
-    // ── RUBROS ────────────────────────────────────────────────────────────────
-    // Colección maestra de rubros y sub-rubros.
-    // El POS tiene un listener en tiempo real sobre esta colección.
-    // La web puede leer y escribir (agregar/quitar rubros desde el panel).
-    match /rubros/{rubroId} {
-      allow read, write: if true;
-    }
-
-    // ── CONFIGURACIÓN DEL SISTEMA ─────────────────────────────────────────────
-    // Incluye: config/rubros (lista de rubros), config/sub_rubros, config/settings.
-    match /config/{docId} {
-      allow read, write: if true;
-    }
-
-    // ── PRODUCTOS REMOTOS ─────────────────────────────────────────────────────
-    // La web escribe aquí para enviar cambios al POS (listener bidireccional).
-    // El POS lee y aplica los cambios automáticamente.
-    match /productos_remotos/{productoId} {
-      allow read, write: if true;
-    }
-
-    // ── PROMOCIONES ───────────────────────────────────────────────────────────
-    // La web crea/edita/elimina promociones. El POS las lee en tiempo real.
-    // El POS usa SDK Admin (bypass de rules) para lecturas desde el servidor.
-    match /promociones/{promoId} {
-      allow read: if true;
-      allow write: if true;
-    }
-
-    // ── PERFILES ARCA ─────────────────────────────────────────────────────────
-    // La web crea/edita perfiles de emisores. El POS los sincroniza en tiempo real
-    // y escribe los certificados (.crt/.key) automáticamente en cada PC.
+    // ── PERFILES ARCA ─────────────────────────────────────────────────────
+    // Contienen cert_content / key_content: la clave privada del certificado
+    // de facturación. Quien los lea puede facturar en nombre de la librería.
     match /perfiles_facturacion/{docId} {
-      allow read, write: if true;
+      allow read, write: if isAdmin();
     }
 
-    // ── PERFILES DE CLIENTES ──────────────────────────────────────────────────
-    // La web y el POS crean/editan clientes para facturación electrónica.
-    match /clientes_facturacion/{docId} {
-      allow read, write: if true;
+    // ── CIERRES DE CAJA Y RESÚMENES ───────────────────────────────────────
+    match /cierres_caja/{cierreId} {
+      allow read, write: if isAdmin();
+    }
+    match /resumenes_mensuales/{mesId} {
+      allow read, write: if isAdmin();
     }
 
-    // ── CAJEROS ───────────────────────────────────────────────────────────────
-    // El POS sincroniza cajeros en tiempo real. La web los lee para mostrar turnos.
-    match /cajeros/{docId} {
-      allow read, write: if true;
-    }
-
-    // ── CAJA ACTIVA ───────────────────────────────────────────────────────────
-    // Estado de la caja en tiempo real (abierta/cerrada).
-    match /caja_activa/{docId} {
-      allow read, write: if true;
-    }
-
-    // ── CONTROL TOTAL (gastos, categorías y config) ───────────────────────────
+    // ── CONTROL TOTAL (gastos, categorías y config) ───────────────────────
     match /gastos/{gastoId} {
-      allow read, write: if true;
+      allow read, write: if isAdmin();
     }
     match /gasto_categorias/{catId} {
-      allow read, write: if true;
+      allow read, write: if isAdmin();
     }
     match /control_config/{docId} {
-      allow read, write: if true;
+      allow read, write: if isAdmin();
     }
-    // Reasignación manual de transferencias por día (cuenta1 / cuenta2).
     match /transfer_splits/{fechaId} {
-      allow read, write: if true;
+      allow read, write: if isAdmin();
     }
 
-    // ── FACTURAS ELECTRÓNICAS ─────────────────────────────────────────────────
-    // El POS sube facturas generadas (FAC. ELEC. A/B/C) con sync_factura().
-    // La webapp las lee en la pestaña Resumen de Facturas.
+    // ═════════════════════════════════════════════════════════════════════
+    //  NIVEL OPERATIVO — lectura con sesión, escritura solo admin
+    // ═════════════════════════════════════════════════════════════════════
+
+    // ── CONFIGURACIÓN DEL SISTEMA ─────────────────────────────────────────
+    // config/rubros, config/sub_rubros, config/settings, config/emisor_activo.
+    match /config/{docId} {
+      allow read:  if authorized();
+      allow write: if isAdmin();
+    }
+
+    // ── PERFILES DE CLIENTES ──────────────────────────────────────────────
+    // Datos personales (CUIT, razón social, domicilio) usados en facturación
+    // y presupuestos.
+    match /clientes_facturacion/{docId} {
+      allow read:  if authorized();
+      allow write: if isAdmin();
+    }
+
+    // ── FACTURAS ELECTRÓNICAS ─────────────────────────────────────────────
+    // Las sube el POS con sync_factura() (Admin SDK). La webapp solo consulta.
     match /facturas/{facturaId} {
-      allow read, write: if true;
+      allow read:  if authorized();
+      allow write: if isAdmin();
     }
 
-    // ── OBSERVACIONES ─────────────────────────────────────────────────────────
-    // Notas compartidas entre cajeros (POS + web) en tiempo real.
-    // Cualquier usuario puede crear/leer; el admin puede marcar deleted=true.
+    // ── VENTAS ────────────────────────────────────────────────────────────
+    // Las genera el POS por Admin SDK. La webapp no debería escribirlas.
+    match /ventas/{ventaId} {
+      allow read:  if authorized();
+      allow write: if isAdmin();
+    }
+    match /ventas_por_dia/{itemId} {
+      allow read:  if authorized();
+      allow write: if isAdmin();
+    }
+    match /historial_diario/{diaId} {
+      allow read:  if authorized();
+      allow write: if isAdmin();
+    }
+    match /productos_mas_vendidos/{productoId} {
+      allow read:  if authorized();
+      allow write: if isAdmin();
+    }
+
+    // ── CAJEROS Y CAJA ACTIVA ─────────────────────────────────────────────
+    match /cajeros/{docId} {
+      allow read:  if authorized();
+      allow write: if isAdmin();
+    }
+    match /caja_activa/{docId} {
+      allow read:  if authorized();
+      allow write: if isAdmin();
+    }
+    match /turnos/{turnoId} {
+      allow read:  if authorized();
+      allow write: if isAdmin();
+    }
+
+    // ═════════════════════════════════════════════════════════════════════
+    //  NIVEL CATÁLOGO — lectura y escritura con sesión
+    //  Trabajo diario de gestión: precios, stock, promos, presupuestos.
+    // ═════════════════════════════════════════════════════════════════════
+
+    match /catalogo/{productoId} {
+      allow read, write: if authorized();
+    }
+    match /catalogo_deleted/{productoId} {
+      allow read, write: if authorized();
+    }
+    match /inventario/{productoId} {
+      allow read, write: if authorized();
+    }
+    match /inventario_resumen/{docId} {
+      allow read, write: if authorized();
+    }
+    match /rubros/{rubroId} {
+      allow read, write: if authorized();
+    }
+    match /sub_categories/{docId} {
+      allow read, write: if authorized();
+    }
+    match /productos_remotos/{productoId} {
+      allow read, write: if authorized();
+    }
+    match /promociones/{promoId} {
+      allow read, write: if authorized();
+    }
+
+    // ── OBSERVACIONES ─────────────────────────────────────────────────────
     match /observaciones/{obsId} {
-      allow read, write: if true;
+      allow read, write: if authorized();
     }
     match /observaciones_meta/{docId} {
-      allow read, write: if true;
+      allow read, write: if authorized();
     }
 
-    // ── PRESUPUESTOS ──────────────────────────────────────────────────────────
-    // Cotizaciones generadas desde POS y webapp. Items embebidos como array.
+    // ── PRESUPUESTOS ──────────────────────────────────────────────────────
     match /presupuestos/{presId} {
-      allow read, write: if true;
+      allow read, write: if authorized();
     }
     match /presupuestos_meta/{docId} {
-      allow read, write: if true;
+      allow read, write: if authorized();
     }
 
-    // ── LAB · PRODUCTOS MADRE (módulo aislado, NO toca el POS) ───────────────
-    // Esquema jerárquico de productos madre → raíces → sub-raíces con
-    // presentaciones, descuentos heredables y movimientos de stock.
-    // Colecciones prefijadas mp_* para no colisionar con el POS actual.
-    match /mp_products/{docId} {
-      allow read, write: if true;
-    }
-    match /mp_nodes/{docId} {
-      allow read, write: if true;
-    }
-    match /mp_presentations/{docId} {
-      allow read, write: if true;
-    }
-    match /mp_discounts/{docId} {
-      allow read, write: if true;
-    }
-    match /mp_stock_movements/{docId} {
-      allow read, write: if true;
-    }
-
-    // ── ESTADO DE PCs (heartbeat) ────────────────────────────────────────────
-    // Cada PC escribe su propio doc pcs/{pc_id} cada 30s con version, last_seen,
-    // cajero, caja activa, etc. La webapp lo lee para mostrar Estado de PCs.
-    match /pcs/{pcId} {
-      allow read, write: if true;
-    }
-
-    // ── COMANDOS REMOTOS POR PC ──────────────────────────────────────────────
-    // La webapp escribe pc_commands/{pc_id} con command/issued_at; el POS
-    // escucha su propio doc, ejecuta y actualiza status (running/done/failed).
-    match /pc_commands/{pcId} {
-      allow read, write: if true;
-    }
-
-    // ── TERMINAL REMOTA ───────────────────────────────────────────────────────
-    // La webapp escribe el comando; el POS escucha, ejecuta y escribe la respuesta.
-    match /remote_terminal/{pcId} {
-      allow read, write: if true;
-    }
-
-    // ── FIADO (cuenta corriente de clientes) ─────────────────────────────────
-    // fiado_clientes: ficha del cliente (nombre + datos opcionales).
-    // fiado_items:    cada producto que el cliente se llevó sin pagar.
-    // fiado_pagos:    cada cobro (por productos, a cuenta o aplicación de saldo).
-    // El POS crea/cobra; la webapp administra y carga items a nombre del cliente.
+    // ── FIADO (cuenta corriente de clientes) ──────────────────────────────
+    // El cobro real ocurre en el POS; la webapp administra y carga items.
     match /fiado_clientes/{docId} {
-      allow read, write: if true;
+      allow read, write: if authorized();
     }
     match /fiado_items/{docId} {
-      allow read, write: if true;
+      allow read, write: if authorized();
     }
     match /fiado_pagos/{docId} {
-      allow read, write: if true;
+      allow read, write: if authorized();
     }
 
-    // ── RESUMEN DE INVENTARIO (agregado de velocidad de venta) ───────────────
-    // Doc único inventario_resumen/current mantenido por la webapp: cachea la
-    // velocidad de venta por producto (u7/u30/u90) para que la pestaña Inventario
-    // no tenga que reescanear ventas_por_dia en cada apertura.
-    match /inventario_resumen/{docId} {
-      allow read, write: if true;
+    // ── LAB · PRODUCTOS MADRE (módulo aislado, NO toca el POS) ────────────
+    match /mp_products/{docId} {
+      allow read, write: if authorized();
+    }
+    match /mp_nodes/{docId} {
+      allow read, write: if authorized();
+    }
+    match /mp_presentations/{docId} {
+      allow read, write: if authorized();
+    }
+    match /mp_discounts/{docId} {
+      allow read, write: if authorized();
+    }
+    match /mp_stock_movements/{docId} {
+      allow read, write: if authorized();
     }
 
-    // ── BLOQUEAR TODO LO DEMÁS ────────────────────────────────────────────────
+    // ── BLOQUEAR TODO LO DEMÁS ────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;
     }

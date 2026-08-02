@@ -102,7 +102,7 @@ export async function renderPcs(container, db) {
       .pc-version { font-family: ui-monospace, monospace; font-size: 11px;
                     background: var(--bg); padding: 2px 8px; border-radius: 4px;
                     color: var(--text-muted); }
-      .pc-version.outdated { background: #fff3cd; color: #856404; }
+      .pc-version.outdated { background:var(--tint-yellow-bg); color: var(--tint-yellow-fg); }
       .pc-meta-row { display: flex; justify-content: space-between; align-items: baseline;
                      font-size: 12.5px; gap: 8px; }
       .pc-meta-label { color: var(--text-muted); flex-shrink: 0; }
@@ -120,15 +120,15 @@ export async function renderPcs(container, db) {
       .pc-btn:hover:not(:disabled) { background: var(--bg); border-color: var(--text-muted); }
       .pc-btn:disabled { opacity: 0.5; cursor: not-allowed; }
       .pc-btn .material-icons { font-size: 14px !important; }
-      .pc-btn.danger { color: #dc3545; border-color: rgba(220,53,69,0.3); }
+      .pc-btn.danger { color:var(--tint-red-fg); border-color: rgba(220,53,69,0.3); }
       .pc-btn.danger:hover:not(:disabled) { background: rgba(220,53,69,0.08); }
       .pc-cmd-status {
         font-size: 11px; padding: 6px 10px; border-radius: 6px;
         display: flex; align-items: center; gap: 6px; margin-top: 4px;
       }
-      .pc-cmd-status.running { background: #fff3cd; color: #856404; }
-      .pc-cmd-status.done    { background: #d1e7dd; color: #0f5132; }
-      .pc-cmd-status.failed  { background: #f8d7da; color: #842029; }
+      .pc-cmd-status.running { background:var(--tint-yellow-bg); color: var(--tint-yellow-fg); }
+      .pc-cmd-status.done    { background:var(--tint-green-bg); color: var(--tint-green-fg); }
+      .pc-cmd-status.failed  { background:var(--tint-red-bg); color: var(--tint-red-fg); }
       .pc-cmd-status .spinner-mini {
         width: 10px; height: 10px; border: 2px solid currentColor;
         border-top-color: transparent; border-radius: 50%;
@@ -137,7 +137,7 @@ export async function renderPcs(container, db) {
       @keyframes pcSpin { to { transform: rotate(360deg); } }
       .pc-stale-badge {
         font-size: 10px; padding: 2px 6px; border-radius: 4px;
-        background: #f8d7da; color: #842029; font-weight: 600;
+        background:var(--tint-red-bg); color: var(--tint-red-fg); font-weight: 600;
       }
       .pc-cmd-cancel {
         background: transparent; border: none; cursor: pointer;
@@ -156,13 +156,13 @@ export async function renderPcs(container, db) {
         overflow-y: auto; padding: 10px 12px;
         min-height: 140px; max-height: 240px;
         font-family: ui-monospace, 'Cascadia Code', Consolas, monospace;
-        font-size: 12px; color: #94a3b8; line-height: 1.5;
+        font-size: 12px; color:var(--text-muted); line-height: 1.5;
       }
       .pc-term-entry { margin-bottom: 8px; }
-      .pc-term-prompt { color: #4ade80; white-space: pre-wrap; word-break: break-all; }
+      .pc-term-prompt { color: var(--tint-green-fg); white-space: pre-wrap; word-break: break-all; }
       .pc-term-pre {
         margin: 2px 0 0 0; white-space: pre-wrap; word-break: break-all;
-        color: #cbd5e1; font-size: 11.5px;
+        color: var(--text-muted); font-size: 11.5px;
       }
       .pc-term-bar {
         display: flex; align-items: center; gap: 6px;
@@ -170,7 +170,7 @@ export async function renderPcs(container, db) {
       }
       .pc-term-cwd {
         font-family: ui-monospace, monospace; font-size: 11px;
-        color: #4ade80; white-space: nowrap; flex-shrink: 0;
+        color: var(--tint-green-fg); white-space: nowrap; flex-shrink: 0;
         max-width: 180px; overflow: hidden; text-overflow: ellipsis;
       }
       .pc-term-input {
@@ -178,10 +178,10 @@ export async function renderPcs(container, db) {
         color: #e2e8f0; font-family: ui-monospace, monospace; font-size: 12px;
         caret-color: #4ade80;
       }
-      .pc-term-input::placeholder { color: #475569; }
+      .pc-term-input::placeholder { color:var(--text-muted); }
       .pc-term-send {
         background: transparent; border: none; cursor: pointer;
-        color: #4ade80; display: flex; align-items: center; padding: 2px;
+        color: var(--tint-green-fg); display: flex; align-items: center; padding: 2px;
         opacity: 0.8; transition: opacity 0.15s;
       }
       .pc-term-send:hover:not(:disabled) { opacity: 1; }
@@ -212,10 +212,10 @@ export async function renderPcs(container, db) {
         margin-bottom: 14px; background: rgba(13,110,253,0.12);
       }
       .pc-confirm-icon .material-icons {
-        font-size: 26px !important; color: #0d6efd;
+        font-size: 26px !important; color:var(--tint-blue-fg);
       }
       .pc-confirm-icon.danger { background: rgba(220,53,69,0.12); }
-      .pc-confirm-icon.danger .material-icons { color: #dc3545; }
+      .pc-confirm-icon.danger .material-icons { color:var(--tint-red-fg); }
       .pc-confirm-title {
         font-size: 18px; font-weight: 700; color: var(--text);
         margin: 0 0 6px;
@@ -235,13 +235,13 @@ export async function renderPcs(container, db) {
       }
       .pc-confirm-btn:hover { background: var(--bg); }
       .pc-confirm-btn.primary {
-        background: #0d6efd; border-color: #0d6efd; color: white;
+        background: #0d6efd; border-color:var(--tint-blue-fg); color: white;
       }
       .pc-confirm-btn.primary:hover { background: #0b5ed7; border-color: #0b5ed7; }
       .pc-confirm-btn.danger {
-        background: #dc3545; border-color: #dc3545; color: white;
+        background: #dc3545; border-color:var(--tint-red-fg); color: white;
       }
-      .pc-confirm-btn.danger:hover { background: #bb2d3b; border-color: #bb2d3b; }
+      .pc-confirm-btn.danger:hover { background: #bb2d3b; border-color:var(--tint-red-fg); }
     `;
     document.head.appendChild(style);
   }
@@ -282,7 +282,7 @@ export async function renderPcs(container, db) {
       .map(([pcId]) => pcId);
 
     if (onlinePcs.length === 0) {
-      alert('No hay PCs online en este momento.');
+      showAlert({ title: 'Sin PCs online', message: 'No hay PCs online en este momento.', icon: 'wifi_off' });
       return;
     }
 
@@ -296,7 +296,7 @@ export async function renderPcs(container, db) {
     if (!ok) return;
 
     const issuedAt = new Date().toISOString();
-    const issuedBy = (getSession()?.username || 'admin');
+    const issuedBy = (getSession()?.display || getSession()?.email || 'admin');
     let okCount = 0;
     let errCount = 0;
     for (const pcId of onlinePcs) {
@@ -316,9 +316,9 @@ export async function renderPcs(container, db) {
       }
     }
     if (errCount === 0) {
-      alert(`Comando enviado a ${okCount} PC${okCount > 1 ? 's' : ''}. Mirá los banners en cada card para ver el progreso.`);
+      showAlert({ title: 'Comando enviado', message: `Comando enviado a ${okCount} PC${okCount > 1 ? 's' : ''}. Mirá los banners en cada card para ver el progreso.`, icon: 'check_circle' });
     } else {
-      alert(`Enviado: ${okCount}, errores: ${errCount}. Revisá la consola para detalles.`);
+      showAlert({ title: 'Enviado con errores', message: `Enviado: ${okCount}, errores: ${errCount}. Revisá la consola para detalles.`, icon: 'warning', danger: true });
     }
   });
 
@@ -349,7 +349,7 @@ export async function renderPcs(container, db) {
       const payload = {
         command,
         issued_at: new Date().toISOString(),
-        issued_by: (getSession()?.username || 'admin'),
+        issued_by: (getSession()?.display || getSession()?.email || 'admin'),
         status:    'pending',
         result:    null,
         finished_at: null,
@@ -357,7 +357,7 @@ export async function renderPcs(container, db) {
       if (param) payload.param = param;
       await setDoc(doc(db, 'pc_commands', pcId), payload);
     } catch (e) {
-      alert(`Error enviando comando: ${e.message}`);
+      showAlert({ title: 'Error', message: `No se pudo enviar el comando: ${e.message}`, icon: 'error_outline', danger: true });
     }
   };
 
@@ -377,7 +377,7 @@ export async function renderPcs(container, db) {
       // a mitad de camino, pero al terminar no tendrá doc para actualizar.
       await deleteDoc(doc(db, 'pc_commands', pcId));
     } catch (e) {
-      alert(`Error cancelando: ${e.message}`);
+      showAlert({ title: 'Error', message: `No se pudo cancelar: ${e.message}`, icon: 'error_outline', danger: true });
     }
   };
 
@@ -394,7 +394,7 @@ export async function renderPcs(container, db) {
       await deleteDoc(doc(db, 'pcs', pcId));
       await deleteDoc(doc(db, 'pc_commands', pcId)).catch(() => {});
     } catch (e) {
-      alert(`Error: ${e.message}`);
+      showAlert({ title: 'Error', message: `No se pudo quitar la PC: ${e.message}`, icon: 'error_outline', danger: true });
     }
   };
 
@@ -674,9 +674,9 @@ function renderCard(p, latestVersion) {
         <span class="pc-meta-label">Último sync</span>
         <span class="pc-meta-value" title="${escapeAttr(ultimoSyncSummary)}">${ultimoSync || 'nunca'}</span>
       </div>
-      ${lastError ? `<div class="pc-meta-row" style="background:#fff3cd;padding:6px 8px;border-radius:6px;margin-top:4px">
-        <span class="pc-meta-label" style="color:#856404">⚠ Error</span>
-        <span class="pc-meta-value" style="color:#856404;font-size:11px" title="${escapeAttr(lastError)}">${lastError.slice(0, 60)}${lastError.length > 60 ? '…' : ''}</span>
+      ${lastError ? `<div class="pc-meta-row" style="background:var(--tint-yellow-bg);padding:6px 8px;border-radius:6px;margin-top:4px">
+        <span class="pc-meta-label" style="color:var(--tint-yellow-fg)">⚠ Error</span>
+        <span class="pc-meta-value" style="color:var(--tint-yellow-fg);font-size:11px" title="${escapeAttr(lastError)}">${lastError.slice(0, 60)}${lastError.length > 60 ? '…' : ''}</span>
       </div>` : ''}
 
       ${cmdBanner}
@@ -690,7 +690,7 @@ function renderCard(p, latestVersion) {
 
       <div class="pc-terminal" id="term-${escapeAttr(p.pcId)}" style="display:none">
         <div class="pc-term-out" id="term-out-${escapeAttr(p.pcId)}">
-          <span style="color:#6b7280;font-size:12px">Terminal lista. Escribí un comando.</span>
+          <span style="color:var(--text-muted);font-size:12px">Terminal lista. Escribí un comando.</span>
         </div>
         <div class="pc-term-bar">
           <span class="pc-term-cwd" id="term-cwd-${escapeAttr(p.pcId)}">&gt;</span>
@@ -743,12 +743,40 @@ function showConfirm({ title, message, confirmText = 'Aceptar', cancelText = 'Ca
   });
 }
 
+// Alerta custom (reemplazo del alert() nativo del browser). Mismo estilo que showConfirm.
+function showAlert({ title, message, confirmText = 'Entendido', danger = false, icon = 'info' } = {}) {
+  return new Promise(resolve => {
+    document.querySelector('.pc-confirm-overlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'pc-confirm-overlay';
+    overlay.innerHTML = `
+      <div class="pc-confirm-box" role="dialog" aria-modal="true">
+        <div class="pc-confirm-icon ${danger ? 'danger' : ''}">
+          <span class="material-icons">${icon}</span>
+        </div>
+        <h3 class="pc-confirm-title">${escapeHtml(title || 'Aviso')}</h3>
+        <p class="pc-confirm-msg">${escapeHtml(message || '')}</p>
+        <div class="pc-confirm-actions">
+          <button class="pc-confirm-btn ${danger ? 'danger' : 'primary'}" data-act="ok">${escapeHtml(confirmText)}</button>
+        </div>
+      </div>`;
+    const close = () => { overlay.remove(); document.removeEventListener('keydown', onKey); resolve(); };
+    const onKey = (e) => { if (e.key === 'Escape' || e.key === 'Enter') close(); };
+    overlay.addEventListener('click', (e) => {
+      if (e.target === overlay || e.target.closest('[data-act="ok"]')) close();
+    });
+    document.addEventListener('keydown', onKey);
+    document.body.appendChild(overlay);
+    setTimeout(() => overlay.querySelector('[data-act="ok"]')?.focus(), 0);
+  });
+}
+
 function _renderTermOutput(pcId) {
   const outEl = document.getElementById(`term-out-${pcId}`);
   if (!outEl) return;
   const entries = _termHistories[pcId] || [];
   if (entries.length === 0) {
-    outEl.innerHTML = '<span style="color:#6b7280;font-size:12px">Terminal lista. Escribí un comando.</span>';
+    outEl.innerHTML = '<span style="color:var(--text-muted);font-size:12px">Terminal lista. Escribí un comando.</span>';
     return;
   }
   outEl.innerHTML = entries.map(e => {
@@ -757,7 +785,7 @@ function _renderTermOutput(pcId) {
     const outEsc = escapeHtml(e.output || '');
     return `<div class="pc-term-entry">
       <div class="pc-term-prompt">${cwdEsc ? cwdEsc + '>' : '>'} <span style="color:#e2e8f0">${cmdEsc}</span></div>
-      <pre class="pc-term-pre"${e.error ? ' style="color:#f87171"' : ''}>${outEsc}</pre>
+      <pre class="pc-term-pre"${e.error ? ' style="color:var(--tint-red-fg)"' : ''}>${outEsc}</pre>
     </div>`;
   }).join('');
   outEl.scrollTop = outEl.scrollHeight;

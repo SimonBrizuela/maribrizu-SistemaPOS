@@ -29,12 +29,29 @@ jobs:
           pip install -r requirements.txt
           pip install pyinstaller firebase-admin cryptography
 
-      - name: Write firebase_key.json
+      # La service account ya NO se empaqueta: el instalador es publico y
+      # cualquiera podia extraerla. En su lugar va provision.json, que solo
+      # habilita a pedir tokens de 1 hora al endpoint de Netlify.
+      - name: Write provision.json
         env:
-          FIREBASE_KEY: ${{ secrets.FIREBASE_KEY }}
+          POS_BOOTSTRAP_SECRET: ${{ secrets.POS_BOOTSTRAP_SECRET }}
+          POS_PROVISION_URL: ${{ secrets.POS_PROVISION_URL }}
         shell: pwsh
         run: |
-          $env:FIREBASE_KEY | Out-File -FilePath firebase_key.json -Encoding utf8 -NoNewline
+          if (-not $env:POS_BOOTSTRAP_SECRET) {
+            Write-Error "Falta el secret POS_BOOTSTRAP_SECRET. Sin el, las PCs no pueden sincronizar."
+            exit 1
+          }
+          $url = if ($env:POS_PROVISION_URL) { $env:POS_PROVISION_URL } else { "https://posmr87.netlify.app/api/provision" }
+          $json = @{
+            url        = $url
+            secret     = $env:POS_BOOTSTRAP_SECRET
+            project_id = "mari-d7c71"
+          } | ConvertTo-Json -Compress
+          # WriteAllText con UTF8Encoding($false) evita el BOM que mete Out-File
+          # en PowerShell 5.1 y que rompe el json.load del lado de Python.
+          [IO.File]::WriteAllText("$PWD\provision.json", $json, (New-Object Text.UTF8Encoding($false)))
+          Write-Host "provision.json escrito ($($json.Length) bytes) apuntando a $url"
 
       - name: Patch APP_VERSION
         shell: pwsh

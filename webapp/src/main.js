@@ -1,11 +1,11 @@
 import { db } from './firebase.js';
-import { invalidateCacheByPrefix } from './cache.js';
+import { invalidateCacheByPrefix, peekCacheValue } from './cache.js';
 import { prewarmStore, ensureCollections, prewarmRest, onStoreChange, hydrateStore } from './store.js';
-import { loadControlConfig } from './config.js';
+import { loadControlConfig, loadBalanceConfig, loadComprasConfig, loadDiasMes } from './config.js';
 import './styles/login.css';
 import './styles/skeleton.css';
 import { renderLogin } from './pages/login.js';
-import { isLoggedIn, getSession, logout } from './auth.js';
+import { hasSessionHint, onAuthReady, isLoginLink, completeLinkSignIn, logout } from './auth.js';
 import { initTheme, toggleTheme, getTheme } from './theme.js';
 import { initNotifications, obtenerAlertasActivas, onAlertasCambian, refrescarAlertas } from './notifications.js';
 import { initConsumiblesWatcher } from './consumibles_watcher.js';
@@ -60,6 +60,7 @@ const pages = {
   facturas:        { title: 'Facturación AFIP',        loader: () => import('./pages/facturas.js'),         render: 'renderFacturas',        cacheKey: null,                      needs: ['ventas', 'catalogo'] },
   perfiles:        { title: 'Perfiles ARCA',           loader: () => import('./pages/perfiles.js'),         render: 'renderPerfiles',        cacheKey: null,                      needs: [] },
   clientes:        { title: 'Perfiles de Clientes',    loader: () => import('./pages/clientes.js'),         render: 'renderClientes',        cacheKey: null,                      needs: [] },
+  fiados:          { title: 'Fiados',                  loader: () => import('./pages/fiados.js'),           render: 'renderFiados',          cacheKey: null,                      needs: ['fiado_clientes', 'fiado_items', 'fiado_pagos', 'catalogo'] },
   observaciones:   { title: 'Observaciones',           loader: () => import('./pages/observaciones.js'),    render: 'renderObservaciones',   cacheKey: null,                      needs: [] },
   presupuestos:    { title: 'Presupuestos',            loader: () => import('./pages/presupuestos.js'),     render: 'renderPresupuestos',    cacheKey: null,                      needs: ['catalogo'] },
   lab_productos:   { title: 'Productos Madre',         loader: () => import('./pages/lab_productos_madre.js'), render: 'renderLabProductos', cacheKey: null,                      needs: ['catalogo'] },
@@ -110,16 +111,21 @@ const LS_CC_NUEVO = 'cc:nuevo_visto';
 function initAvisoCentroCompras() {
   const badge = document.getElementById('navCCNuevo');
   if (badge && !localStorage.getItem(LS_CC_NUEVO)) badge.style.display = '';
+  refrescarBadgesGrupo();
 }
 function marcarCentroComprasVisto() {
   if (localStorage.getItem(LS_CC_NUEVO)) return;
   try { localStorage.setItem(LS_CC_NUEVO, '1'); } catch (e) { /* modo privado */ }
   const badge = document.getElementById('navCCNuevo');
   if (badge) badge.style.display = 'none';
+  refrescarBadgesGrupo();
+  renderPinned();
 }
 
 // ── Navegación ──
-function navigate(page) {
+// `abrirGrupo: false` para entradas que no viven en el árbol de secciones (los
+// accesos rápidos): ir por ahí no tiene que desplegar la sección de origen.
+function navigate(page, { abrirGrupo = true } = {}) {
   currentPage = page;
   localStorage.setItem('lastPage', page);
   if (page === 'centro_compras') marcarCentroComprasVisto();
@@ -136,61 +142,235 @@ function navigate(page) {
   const hint = document.querySelector('.refresh-hint');
   if (hint) hint.classList.toggle('show', PAGES_CON_TABLA_ANCHA.has(page));
   // Abrir el grupo que contiene la página activa
-  openGroupForPage(page);
+  if (abrirGrupo) openGroupForPage(page);
+  else refrescarBadgesGrupo();
   window.scrollTo({ top: 0, behavior: 'smooth' });
   loadPage(page);
 }
 
 // ── Grupos colapsables del sidebar ──
+// Acordeón exclusivo: sólo una sección abierta a la vez. Con las 4 abiertas la
+// lista mide más que la pantalla y siempre queda algo cortado; así el menú
+// entra completo sin scrollear.
+const LS_NAV_GROUP = 'nav:openGroup';
+
+function leerGrupoAbierto() {
+  try {
+    const uno = localStorage.getItem(LS_NAV_GROUP);
+    if (uno) return uno;
+    // Compat con el formato viejo (array de grupos abiertos): se queda con el último
+    const viejo = JSON.parse(localStorage.getItem('nav:openGroups') || '[]');
+    return viejo.length ? viejo[viejo.length - 1] : null;
+  } catch (_) { return null; }
+}
+
+function aplicarGrupoAbierto(groupId, persistir = true) {
+  document.querySelectorAll('.nav-group').forEach(group => {
+    const abrir = group.dataset.group === groupId;
+    group.querySelector('.nav-group-items')?.classList.toggle('open', abrir);
+    group.querySelector('.nav-group-arrow')?.classList.toggle('rotated', abrir);
+  });
+  if (persistir) {
+    try {
+      if (groupId) localStorage.setItem(LS_NAV_GROUP, groupId);
+      else localStorage.removeItem(LS_NAV_GROUP);
+      localStorage.removeItem('nav:openGroups');
+    } catch (_) { /* modo privado */ }
+  }
+  refrescarBadgesGrupo();
+}
+
 function initNavGroups() {
-  const saved = JSON.parse(localStorage.getItem('nav:openGroups') || '[]');
+  aplicarGrupoAbierto(leerGrupoAbierto(), false);
 
   document.querySelectorAll('.nav-group').forEach(group => {
-    const groupId = group.dataset.group;
-    const header  = group.querySelector('.nav-group-header');
-    const items   = group.querySelector('.nav-group-items');
-    const arrow   = group.querySelector('.nav-group-arrow');
-
-    // Restaurar estado guardado
-    const isOpen = saved.includes(groupId);
-    if (isOpen) {
-      items.classList.add('open');
-      arrow.classList.add('rotated');
-    }
-
+    const header = group.querySelector('.nav-group-header');
+    const items  = group.querySelector('.nav-group-items');
+    if (!header || !items) return;
     header.addEventListener('click', () => {
-      const opening = !items.classList.contains('open');
-      items.classList.toggle('open', opening);
-      arrow.classList.toggle('rotated', opening);
-
-      // Persistir en localStorage
-      const current = JSON.parse(localStorage.getItem('nav:openGroups') || '[]');
-      const updated = opening
-        ? [...new Set([...current, groupId])]
-        : current.filter(g => g !== groupId);
-      localStorage.setItem('nav:openGroups', JSON.stringify(updated));
+      // En rail el icono no colapsa nada: abre el panel lateral (para touch y
+      // para quien no llega con el hover).
+      if (enModoRail()) { abrirRailFlyout(group); return; }
+      const abriendo = !items.classList.contains('open');
+      aplicarGrupoAbierto(abriendo ? group.dataset.group : null);
     });
   });
 }
 
 function openGroupForPage(page) {
-  const link = document.querySelector(`.nav-link[data-page="${page}"]`);
-  if (!link) return;
-  const group = link.closest('.nav-group');
+  const link = document.querySelector(`.nav-group .nav-link[data-page="${page}"]`);
+  const group = link?.closest('.nav-group');
   if (!group) return;
-  const groupId = group.dataset.group;
-  const items   = group.querySelector('.nav-group-items');
-  const arrow   = group.querySelector('.nav-group-arrow');
-  if (!items.classList.contains('open')) {
-    items.classList.add('open');
-    arrow.classList.add('rotated');
-    const current = JSON.parse(localStorage.getItem('nav:openGroups') || '[]');
-    localStorage.setItem('nav:openGroups', JSON.stringify([...new Set([...current, groupId])]));
-  }
+  const items = group.querySelector('.nav-group-items');
+  if (!items.classList.contains('open')) aplicarGrupoAbierto(group.dataset.group);
+}
+
+// Badge agregado del grupo: mientras está cerrado suma los avisos de sus ítems.
+// Sin esto, "Productos" colapsado esconde las 99 notificaciones sin dar señal.
+function refrescarBadgesGrupo() {
+  document.querySelectorAll('.nav-group').forEach(group => {
+    const header = group.querySelector('.nav-group-header');
+    const items  = group.querySelector('.nav-group-items');
+    if (!header || !items) return;
+
+    // En rail los ítems no se ven nunca: el badge del grupo es la única señal,
+    // así que se muestra siempre (no sólo con la sección cerrada).
+    const abierto = !enModoRail() && items.classList.contains('open');
+    let total = 0, hayChip = false;
+    items.querySelectorAll('.nav-badge, .nav-nuevo').forEach(b => {
+      if (b.style.display === 'none') return;
+      const n = parseInt(String(b.textContent).replace(/\D/g, ''), 10);
+      if (Number.isFinite(n) && n > 0) total += n;
+      else hayChip = true;
+    });
+
+    let badge = header.querySelector('.nav-group-badge');
+    if (abierto || (total === 0 && !hayChip)) { badge?.remove(); return; }
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'nav-group-badge';
+      header.insertBefore(badge, header.querySelector('.nav-group-arrow'));
+    }
+    badge.classList.toggle('dot', total === 0);
+    badge.textContent = total > 0 ? (total > 99 ? '99+' : String(total)) : '';
+  });
+}
+
+// ── Accesos rápidos ──
+// Páginas fijadas arriba del menú. Se fijan/quitan con clic derecho sobre
+// cualquier ítem. Los ítems se clonan del original, así heredan icono, badge y
+// estado de aviso sin duplicar lógica (se les sacan los id para no repetirlos).
+const LS_PINNED = 'nav:pinned';
+const LS_PINNED_SEED = 'nav:pinned:seed';
+const PINNED_MAX = 6;
+const PINNED_DEFAULT = ['control_total', 'catalogo', 'ventas'];
+// Accesos rápidos FIJOS: siempre arriba de todo y no se pueden quitar con clic
+// derecho. Fiados es una cuenta abierta con plata de por medio — tiene que
+// estar a un clic desde cualquier pantalla, no escondido en una sección.
+// No ocupan lugar del tope de 6 que puede fijar el usuario.
+const PINNED_FIJOS = ['fiados'];
+
+function getPinned() {
+  try {
+    return JSON.parse(localStorage.getItem(LS_PINNED) || '[]')
+      .filter(p => pages[p] && !PINNED_FIJOS.includes(p));
+  } catch (_) { return []; }
+}
+
+/** Orden final de los accesos rápidos: primero los fijos, después los del usuario. */
+function listaPinned() {
+  return [...PINNED_FIJOS.filter(p => pages[p]), ...getPinned()];
+}
+
+function setPinned(lista) {
+  try { localStorage.setItem(LS_PINNED, JSON.stringify(lista.slice(0, PINNED_MAX))); } catch (_) {}
+  renderPinned();
+}
+
+function togglePinned(page) {
+  if (!pages[page]) return;
+  if (PINNED_FIJOS.includes(page)) return;   // fijo: no se quita
+  const lista = getPinned();
+  const i = lista.indexOf(page);
+  if (i >= 0) lista.splice(i, 1);
+  else if (lista.length < PINNED_MAX) lista.push(page);
+  else return; // tope alcanzado
+  setPinned(lista);
+}
+
+function renderPinned() {
+  const host = document.getElementById('navPinned');
+  const cont = document.getElementById('navPinnedItems');
+  const links = document.getElementById('navLinks');
+  if (!host || !cont) return;
+
+  cont.innerHTML = '';
+  listaPinned().forEach(page => {
+    const src = document.querySelector(`.nav-group .nav-link[data-page="${page}"]`);
+    if (!src) return;
+    const clon = src.cloneNode(true);
+    clon.classList.add('nav-link-pin');
+    clon.classList.toggle('nav-link-pin-fijo', PINNED_FIJOS.includes(page));
+    clon.classList.toggle('active', page === currentPage);
+    clon.removeAttribute('id');
+    clon.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+    cont.appendChild(clon);
+  });
+
+  const hay = cont.children.length > 0;
+  host.style.display = hay ? '' : 'none';
+  links?.classList.toggle('has-pinned', hay);
+}
+
+function initPinned() {
+  // Semilla la primera vez: si arrancara vacío, la función sería invisible.
+  // Se quita entera con clic derecho y no vuelve a sembrarse.
+  try {
+    if (!localStorage.getItem(LS_PINNED_SEED)) {
+      localStorage.setItem(LS_PINNED_SEED, '1');
+      if (!localStorage.getItem(LS_PINNED)) {
+        localStorage.setItem(LS_PINNED, JSON.stringify(PINNED_DEFAULT));
+      }
+    }
+  } catch (_) { /* modo privado */ }
+
+  const host = document.getElementById('navPinned');
+  host?.addEventListener('click', e => {
+    const a = e.target.closest('.nav-link');
+    if (!a) return;
+    e.preventDefault();
+    navigate(a.dataset.page, { abrirGrupo: false });
+    closeSidebar();
+  });
+
+  // Clic derecho en cualquier ítem del menú → fijar / quitar
+  document.getElementById('navLinks')?.addEventListener('contextmenu', e => {
+    const a = e.target.closest('.nav-link');
+    if (!a || !a.dataset.page) return;
+    e.preventDefault();
+    togglePinned(a.dataset.page);
+  });
+
+  renderPinned();
+}
+
+// Generación de carga. Cada loadPage se queda con la suya; si mientras estaba
+// esperando datos arrancó otra, la vieja se da cuenta y no toca nada global.
+let _loadGen = 0;
+
+/**
+ * Reemplaza #pageContent por un nodo nuevo, vacío y con los mismos id/clases.
+ *
+ * Las páginas reciben el contenedor por parámetro y varias escriben en él
+ * DESPUÉS de esperar sus datos (catálogo tarda segundos: pinta su shell, hace
+ * `await cargarDatos()` y recién ahí `renderShell()`). Si en el medio el
+ * usuario se fue a otra página, esa escritura tardía pisaba la pantalla nueva
+ * — se veía como que la app "salta sola" a la página con la que entraste.
+ *
+ * Al cambiar el nodo, el render viejo conserva la referencia al contenedor
+ * anterior, que ya está fuera del DOM: sigue escribiendo, pero sobre algo
+ * invisible que después se descarta. De paso, las suscripciones que se
+ * autolimpian con `document.body.contains(container)` (catálogo, fiados) se
+ * dan de baja solas.
+ */
+function nuevoPageContent() {
+  const viejo = document.getElementById('pageContent');
+  if (!viejo) return null;
+  const fresco = viejo.cloneNode(false);   // mismo tag, id y clases; sin hijos
+  viejo.replaceWith(fresco);
+  return fresco;
 }
 
 async function loadPage(page, forceRefresh = false, fromLiveUpdate = false) {
-  const content = document.getElementById('pageContent');
+  const gen = ++_loadGen;
+  // En refrescos en vivo se reusa el nodo actual: cambiarlo vaciaría la
+  // pantalla y se vería un parpadeo con cada venta que entra. Si el usuario
+  // navega mientras ese refresco corre, el próximo loadPage sí cambia el nodo
+  // y la escritura tardía cae en el viejo, ya desconectado.
+  const content = fromLiveUpdate
+    ? document.getElementById('pageContent')
+    : nuevoPageContent();
+  if (!content) return;
 
   // Si la página anterior expuso un cleanup (ej. pcs.js cancela onSnapshot), ejecutarlo
   // La nueva página la vuelve a inicializar si la necesita.
@@ -236,6 +416,12 @@ async function loadPage(page, forceRefresh = false, fromLiveUpdate = false) {
     }
     await renderPromise;
     if (_spinnerTimer) { clearTimeout(_spinnerTimer); _spinnerTimer = null; }
+    // El usuario ya navegó a otra página: esta carga llegó tarde y su
+    // contenedor está fuera del DOM. No tocamos el estado ni disparamos nada.
+    if (gen !== _loadGen) {
+      console.log(`[page] ${page} terminó tarde (ya se navegó a ${currentPage}) — descartado`);
+      return;
+    }
     console.log(`[page] === ${page} loadPage DONE en ${(performance.now() - _tPage).toFixed(0)}ms ===`);
     setStatus('online');
     updateLastTime();
@@ -253,6 +439,10 @@ async function loadPage(page, forceRefresh = false, fromLiveUpdate = false) {
   } catch (err) {
     if (_spinnerTimer) { clearTimeout(_spinnerTimer); _spinnerTimer = null; }
     console.error(err);
+    // Una carga abandonada suele romper justamente porque su DOM ya no está.
+    // No es un error que le importe al usuario: no se muestra ni se marca
+    // "sin conexión" (la página que sí está viendo puede haber cargado bien).
+    if (gen !== _loadGen) return;
     if (reloadIfStaleChunk(err)) return;
     // En re-renders por store, NO pisar el contenido válido que ya está pintado.
     if (!fromLiveUpdate) {
@@ -276,6 +466,147 @@ function updateLastTime() {
   if (el) el.textContent = 'Actualizado: ' + new Date().toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour12: false });
 }
 
+// ── Tooltips del modo rail ──
+// Se montan en <body> y no dentro del sidebar: el sidebar tiene overflow:hidden
+// y cualquier tooltip interno quedaría recortado contra su borde.
+let _railTip = null;
+
+function ocultarRailTip() {
+  if (_railTip) _railTip.classList.remove('show');
+}
+
+function initRailTooltips() {
+  const sidebar = document.getElementById('sidebar');
+  const app = document.getElementById('app');
+  if (!sidebar || !app) return;
+
+  const enRail = () => app.classList.contains('sidebar-collapsed') && window.innerWidth > 768;
+
+  const mostrar = (link) => {
+    const texto = link.querySelector('.nav-label')?.textContent?.trim();
+    if (!texto) return;
+    if (!_railTip) {
+      _railTip = document.createElement('div');
+      _railTip.className = 'rail-tooltip';
+      document.body.appendChild(_railTip);
+    }
+    _railTip.textContent = texto;
+    const r = link.getBoundingClientRect();
+    _railTip.style.left = `${r.right + 10}px`;
+    _railTip.style.top  = `${r.top + r.height / 2}px`;
+    _railTip.classList.add('show');
+  };
+
+  sidebar.addEventListener('mouseover', e => {
+    if (!enRail()) return;
+    const link = e.target.closest('.nav-link');
+    if (link) mostrar(link); else ocultarRailTip();
+  });
+  sidebar.addEventListener('mouseleave', ocultarRailTip);
+  sidebar.addEventListener('click', ocultarRailTip);
+  document.getElementById('navLinks')?.addEventListener('scroll', ocultarRailTip, { passive: true });
+  window.addEventListener('resize', ocultarRailTip);
+}
+
+// ── Panel lateral del rail ──
+// En rail cada sección es un solo icono; sus páginas se despliegan en un panel
+// flotante al pasar el mouse. Así la tira queda en ~7 iconos en vez de 21.
+let _railFlyout = null;
+let _railFlyoutGroup = null;
+let _railFlyoutTimer = null;
+
+function cerrarRailFlyout() {
+  clearTimeout(_railFlyoutTimer);
+  _railFlyout?.classList.remove('show');
+  _railFlyoutGroup?.querySelector('.nav-group-header')?.classList.remove('flyout-open');
+  _railFlyoutGroup = null;
+}
+
+function abrirRailFlyout(group) {
+  clearTimeout(_railFlyoutTimer);
+  const header = group.querySelector('.nav-group-header');
+  const items  = group.querySelector('.nav-group-items');
+  if (!header || !items) return;
+
+  if (!_railFlyout) {
+    _railFlyout = document.createElement('div');
+    _railFlyout.className = 'rail-flyout';
+    document.body.appendChild(_railFlyout);
+    _railFlyout.addEventListener('mouseenter', () => clearTimeout(_railFlyoutTimer));
+    _railFlyout.addEventListener('mouseleave', () => {
+      _railFlyoutTimer = setTimeout(cerrarRailFlyout, 120);
+    });
+    _railFlyout.addEventListener('click', e => {
+      const a = e.target.closest('.nav-link');
+      if (!a) return;
+      e.preventDefault();
+      cerrarRailFlyout();
+      navigate(a.dataset.page);
+    });
+  }
+
+  if (_railFlyoutGroup && _railFlyoutGroup !== group) {
+    _railFlyoutGroup.querySelector('.nav-group-header')?.classList.remove('flyout-open');
+  }
+  _railFlyoutGroup = group;
+  header.classList.add('flyout-open');
+
+  // Los ítems se clonan (no se mueven) para no romper los listeners directos
+  // del sidebar; se les sacan los id para no duplicarlos en el documento.
+  _railFlyout.innerHTML = '';
+  const titulo = document.createElement('div');
+  titulo.className = 'rail-flyout-title';
+  titulo.textContent = group.querySelector('.nav-group-label')?.textContent || '';
+  _railFlyout.appendChild(titulo);
+  items.querySelectorAll('.nav-link').forEach(src => {
+    const clon = src.cloneNode(true);
+    clon.removeAttribute('id');
+    clon.querySelectorAll('[id]').forEach(el => el.removeAttribute('id'));
+    _railFlyout.appendChild(clon);
+  });
+
+  // Posición: al costado del icono, sin salirse de la pantalla. Se mide antes
+  // de mostrarlo (con opacity 0 ya tiene layout) para que no pegue un salto.
+  const r = header.getBoundingClientRect();
+  _railFlyout.style.left = `${r.right + 10}px`;
+  _railFlyout.style.top = '0px';
+  const alto = _railFlyout.offsetHeight;
+  const top = Math.min(r.top - 10, window.innerHeight - alto - 8);
+  _railFlyout.style.top = `${Math.max(8, top)}px`;
+  _railFlyout.classList.add('show');
+}
+
+function initRailFlyout() {
+  const sidebar = document.getElementById('sidebar');
+  const app = document.getElementById('app');
+  if (!sidebar || !app) return;
+
+  const enRail = () => app.classList.contains('sidebar-collapsed') && window.innerWidth > 768;
+
+  sidebar.addEventListener('mouseover', e => {
+    if (!enRail()) return;
+    const header = e.target.closest('.nav-group-header');
+    if (header && !header.classList.contains('nav-pinned-header')) {
+      abrirRailFlyout(header.closest('.nav-group'));
+    } else if (e.target.closest('.nav-link') || e.target.closest('.sidebar-footer')) {
+      // Pasar a un acceso rápido o al footer cierra el panel de la sección
+      _railFlyoutTimer = setTimeout(cerrarRailFlyout, 120);
+    }
+  });
+  sidebar.addEventListener('mouseleave', () => {
+    _railFlyoutTimer = setTimeout(cerrarRailFlyout, 120);
+  });
+
+  document.addEventListener('keydown', e => { if (e.key === 'Escape') cerrarRailFlyout(); });
+  window.addEventListener('resize', cerrarRailFlyout);
+  document.getElementById('navLinks')?.addEventListener('scroll', cerrarRailFlyout, { passive: true });
+}
+
+function enModoRail() {
+  const app = document.getElementById('app');
+  return !!app && app.classList.contains('sidebar-collapsed') && window.innerWidth > 768;
+}
+
 // ── Helpers mobile ──
 function closeSidebar() {
   document.getElementById('sidebar').classList.remove('open');
@@ -295,6 +626,80 @@ function updateBottomNav(page) {
   });
 }
 
+// ── Precalentamiento de datos ──
+// Corre en el DOMContentLoaded, ANTES del login. La intro del login dura ~1.9s
+// (tiles cayendo + tagline + form) en los que el usuario sólo mira la
+// animación: esa ventana se aprovecha para hidratar el store, cachear
+// control_config y arrancar el listener de catalogo. Cuando el usuario termina
+// de tipear, los datos ya están en memoria y el dashboard pinta al toque.
+//
+// Sólo se dispara cuando hay (o se presume) sesión: las rules de Firestore
+// exigen usuario autenticado, así que sin token los listeners rebotan con
+// permission-denied. El SDK resuelve el token de forma perezosa —si la sesión
+// se está restaurando desde IndexedDB, la petición espera sola a que esté—,
+// por eso alcanza con la pista sincrónica de auth.js para arrancar acá.
+//
+// Las animaciones del login son transform/opacity puras → corren en el
+// compositor, no en el main thread. El trabajo de deserialización no las traba.
+//
+// Idempotente: initApp lo vuelve a llamar y la segunda vez es un no-op.
+// `force` re-arma los listeners cuando la pista de sesión resultó falsa y los
+// primeros los rechazó Firestore: sin esto, el login posterior quedaría con el
+// store vacío y sin nadie que lo vuelva a poblar.
+let _bootPreloadDone = false;
+function bootPreload(force = false) {
+  if (_bootPreloadDone && !force) return;
+  _bootPreloadDone = true;
+  console.log('[perf] bootPreload — precarga arrancada en paralelo al login');
+
+  // Orden crítico para el primer load en frío:
+  //   1) prewarmStore pinea TODAS las cache keys (sin abrir listeners).
+  //   2) hydrateStore pinta con el snapshot local de la última sesión.
+  //   3) Precargar control_config: es 1 doc chico que todas las páginas usan
+  //      (getFechaInicio). Si lo dejamos a que se pida desde una página, queda
+  //      atrás de los listeners en la cola serializada del SDK (medimos 17s).
+  //      Disparado ACÁ con el SDK libre, tarda <500ms.
+  //   4) ensureCollections arranca el listener de `catalogo` (lo más pesado
+  //      y compartido por muchas páginas + por el watcher de notificaciones).
+  prewarmStore(db);
+  // Hidratación instantánea + delta: pinta al toque con el snapshot local de la
+  // última sesión (~100-300ms vs 6-10s del primer snapshot del SDK) y en ~1s
+  // mergea del server lo que cambió desde entonces. No se espera: getCached()
+  // de las páginas queda colgado del waiter y se destraba apenas la hidratación
+  // (o el listener, lo que llegue primero) puebla la key.
+  hydrateStore(db);
+  loadControlConfig(db); // fire-and-forget — cachea adentro de getCached
+
+  // Los otros 3 docs de control_config (balance, dias del mes corriente y
+  // compras) van ACÁ y no cuando la página los pide. Son 1 doc cada uno, pero
+  // pedidos tarde quedan atrás de los listeners en la cola del SDK: medido en
+  // el arranque real, `settings` disparado temprano tardó 570ms y estos tres,
+  // disparados desde la página, 5.2s / 6.7s / 6.7s. Con el SDK libre resuelven
+  // en cientos de ms y el Balance / Centro de Compras abren sin esperarlos.
+  const hoy = new Date();
+  const ym = `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}`;
+  loadBalanceConfig(db).catch(() => {});
+  loadDiasMes(db, ym).catch(() => {});
+  loadComprasConfig(db).catch(() => {});
+
+  // El primer snapshot de `catalogo` es lo más caro del arranque (~12k docs,
+  // 6-7s de deserialización en el main thread). En idle para que no compita con
+  // el tipeo del usuario en el form; el `timeout` garantiza que arranque igual
+  // si el hilo nunca queda libre.
+  const runIdle = window.requestIdleCallback || (cb => setTimeout(cb, 150));
+  runIdle(() => ensureCollections(['catalogo']), { timeout: 600 });
+
+  // Chunk de la página que se va a abrir. NO es siempre el dashboard: al entrar
+  // se restaura `lastPage` (ver navigate/initApp), así que prefetcheamos esa
+  // misma para que su módulo ya esté parseado cuando termine el login.
+  let primera = 'dashboard';
+  try {
+    const last = localStorage.getItem('lastPage');
+    if (last && pages[last]) primera = last;
+  } catch (_) {}
+  loadPageModule(primera).catch(() => {});
+}
+
 // ── Inicializar app principal ──
 function initApp(session) {
   // Mostrar nombre de usuario en sidebar
@@ -307,14 +712,12 @@ function initApp(session) {
   if (sidebarFooterTheme && !document.getElementById('themeToggleBtn')) {
     const themeBtn = document.createElement('button');
     themeBtn.id = 'themeToggleBtn';
+    themeBtn.className = 'sidebar-foot-btn';
     const syncIcon = () => {
       const dark = getTheme() === 'dark';
       themeBtn.title = dark ? 'Modo claro' : 'Modo oscuro';
-      themeBtn.innerHTML = `<span class="material-icons" style="font-size:16px!important">${dark ? 'light_mode' : 'dark_mode'}</span>`;
+      themeBtn.innerHTML = `<span class="material-icons">${dark ? 'light_mode' : 'dark_mode'}</span>`;
     };
-    themeBtn.style.cssText = 'background:none;border:none;cursor:pointer;color:rgba(255,255,255,0.5);display:flex;align-items:center;gap:4px;font-size:12px;margin-left:auto;padding:4px 8px;border-radius:6px;transition:background 0.2s;font-family:inherit';
-    themeBtn.addEventListener('mouseenter', () => themeBtn.style.background = 'rgba(255,255,255,0.1)');
-    themeBtn.addEventListener('mouseleave', () => themeBtn.style.background = 'none');
     themeBtn.addEventListener('click', () => {
       toggleTheme();
       syncIcon();
@@ -334,11 +737,9 @@ function initApp(session) {
   if (sidebarFooter && !document.getElementById('logoutBtn')) {
     const logoutBtn = document.createElement('button');
     logoutBtn.id = 'logoutBtn';
+    logoutBtn.className = 'sidebar-foot-btn';
     logoutBtn.title = 'Cerrar sesión';
-    logoutBtn.style.cssText = 'background:none;border:none;cursor:pointer;color:rgba(255,255,255,0.5);display:flex;align-items:center;gap:4px;font-size:12px;padding:4px 8px;border-radius:6px;transition:background 0.2s;font-family:inherit';
-    logoutBtn.innerHTML = '<span class="material-icons" style="font-size:16px!important">logout</span>';
-    logoutBtn.addEventListener('mouseenter', () => logoutBtn.style.background = 'rgba(255,255,255,0.1)');
-    logoutBtn.addEventListener('mouseleave', () => logoutBtn.style.background = 'none');
+    logoutBtn.innerHTML = '<span class="material-icons">logout</span>';
     logoutBtn.addEventListener('click', () => { logout(); location.reload(); });
     sidebarFooter.appendChild(logoutBtn);
   }
@@ -348,15 +749,13 @@ function initApp(session) {
   if (isTauriApp() && sidebarFooterAs && !document.getElementById('autostartBtn')) {
     const asBtn = document.createElement('button');
     asBtn.id = 'autostartBtn';
-    asBtn.style.cssText = 'background:none;border:none;cursor:pointer;color:rgba(255,255,255,0.5);display:flex;align-items:center;gap:4px;font-size:12px;padding:4px 8px;border-radius:6px;transition:background 0.2s;font-family:inherit';
+    asBtn.className = 'sidebar-foot-btn';
     const syncAs = (on) => {
       asBtn.title = on ? 'Iniciar con Windows: activado (clic para desactivar)' : 'Iniciar con Windows: desactivado (clic para activar)';
-      asBtn.innerHTML = `<span class="material-icons" style="font-size:16px!important">${on ? 'power_settings_new' : 'power_off'}</span>`;
-      asBtn.style.color = on ? 'rgba(142,198,63,0.95)' : 'rgba(255,255,255,0.5)';
+      asBtn.innerHTML = `<span class="material-icons">${on ? 'power_settings_new' : 'power_off'}</span>`;
+      asBtn.classList.toggle('on', !!on);
     };
     getAutostart().then(syncAs);
-    asBtn.addEventListener('mouseenter', () => asBtn.style.background = 'rgba(255,255,255,0.1)');
-    asBtn.addEventListener('mouseleave', () => asBtn.style.background = 'none');
     asBtn.addEventListener('click', async () => {
       const next = !(await getAutostart());
       try { await setAutostart(next); syncAs(next); }
@@ -365,9 +764,8 @@ function initApp(session) {
     sidebarFooterAs.appendChild(asBtn);
   }
 
-  // Colapsar/expandir sidebar en desktop (slide suave), estado recordado.
-  // Dos botones: el de adentro del sidebar (arriba del logo) OCULTA; el del
-  // topbar reaparece sólo cuando está colapsado para volver a MOSTRARLO.
+  // Colapsar/expandir sidebar en desktop. Colapsado = modo rail (columna de
+  // iconos), no oculto: la navegación sigue disponible. Estado recordado.
   const collapseBtn = document.getElementById('sidebarCollapseBtn');
   const collapseInner = document.getElementById('sidebarCollapseInner');
   if (collapseBtn || collapseInner) {
@@ -376,21 +774,40 @@ function initApp(session) {
     try { collapsed = localStorage.getItem('ll-sidebar-collapsed') === '1'; } catch (_) {}
     const syncCollapse = () => {
       appEl.classList.toggle('sidebar-collapsed', collapsed);
-      if (collapseBtn) {
-        const ic = collapseBtn.querySelector('.material-icons');
-        if (ic) ic.textContent = 'menu';
-        collapseBtn.title = 'Mostrar menú';
-      }
+      [collapseBtn, collapseInner].forEach(btn => {
+        if (!btn) return;
+        const ic = btn.querySelector('.material-icons');
+        if (ic) ic.textContent = collapsed ? 'menu' : 'menu_open';
+        btn.title = collapsed ? 'Expandir menú' : 'Contraer menú';
+      });
+      ocultarRailTip();
+      cerrarRailFlyout();
+      refrescarBadgesGrupo();
     };
     syncCollapse();
+    // El ancho cambia de golpe (animarlo relayoutea la página entera en cada
+    // frame). El fade corto del contenido del sidebar tapa el salto sin costo.
+    const sidebarEl = document.getElementById('sidebar');
+    let swapTimer = null;
     const toggle = () => {
       collapsed = !collapsed;
       try { localStorage.setItem('ll-sidebar-collapsed', collapsed ? '1' : '0'); } catch (_) {}
       syncCollapse();
+      if (sidebarEl) {
+        sidebarEl.classList.remove('sidebar-swap');
+        void sidebarEl.offsetWidth; // reinicia la animación si se togglea rápido
+        sidebarEl.classList.add('sidebar-swap');
+        clearTimeout(swapTimer);
+        swapTimer = setTimeout(() => sidebarEl.classList.remove('sidebar-swap'), 220);
+      }
     };
     collapseBtn?.addEventListener('click', toggle);
     collapseInner?.addEventListener('click', toggle);
   }
+
+  // Modo rail: tooltips en los accesos rápidos + panel lateral por sección
+  initRailTooltips();
+  initRailFlyout();
 
   // Grupos colapsables del sidebar
   initNavGroups();
@@ -398,8 +815,12 @@ function initApp(session) {
   // Chip "Nuevo" en Centro de Compras (solo si nunca entró)
   initAvisoCentroCompras();
 
-  // Nav links (sidebar)
-  document.querySelectorAll('.nav-link').forEach(link => {
+  // Accesos rápidos fijados
+  initPinned();
+
+  // Nav links (sidebar). Scope a .nav-group: los ítems de accesos rápidos se
+  // recrean al vuelo y se manejan por delegación desde initPinned().
+  document.querySelectorAll('.nav-group .nav-link').forEach(link => {
     link.addEventListener('click', e => {
       e.preventDefault();
       navigate(link.dataset.page);
@@ -449,29 +870,19 @@ function initApp(session) {
   window.navigateToPage = navigate;
   actualizarBadgeNotif(obtenerAlertasActivas());
   onAlertasCambian(actualizarBadgeNotif);
+  actualizarBadgeFiados();
 
   // Aviso "HOY" en el sidebar si hoy es feriado/fecha comercial o tiene una nota.
   initCalendarioBadge(db, actualizarBadgeCalendario);
 
-  // Orden crítico para el primer load en frío:
-  //   1) prewarmStore pinea TODAS las cache keys (sin abrir listeners).
-  //   2) Precargar control_config: es 1 doc chico que todas las páginas usan
-  //      (getFechaInicio). Si lo dejamos a que se pida desde una página, queda
-  //      atrás de los listeners en la cola serializada del SDK (medimos 17s).
-  //      Disparado AHORA con el SDK libre, tarda <500ms.
-  //   3) ensureCollections arranca el listener de `catalogo` (lo más pesado
-  //      y compartido por muchas páginas + por el watcher de notificaciones).
-  //   4) initNotifications usa getCached('catalogo:all') → reusa el listener
-  //      en vez de disparar un getDocs propio que duplicaría la descarga.
-  prewarmStore(db);
-  // Hidratación instantánea + delta: pinta al toque con el snapshot local de la
-  // última sesión (~100-300ms vs 6-10s del primer snapshot del SDK) y en ~1s
-  // mergea del server lo que cambió desde entonces. No se espera: getCached()
-  // de las páginas queda colgado del waiter y se destraba apenas la hidratación
-  // (o el listener, lo que llegue primero) puebla la key.
-  hydrateStore(db);
-  loadControlConfig(db); // fire-and-forget — cachea adentro de getCached
-  ensureCollections(['catalogo']);
+  // La precarga de datos (store + control_config + catalogo) ya arrancó en el
+  // DOMContentLoaded, durante la intro del login. Acá es un no-op: se llama
+  // igual por si initApp entra por otra vía.
+  bootPreload();
+  // initNotifications usa getCached('catalogo:all') → reusa el listener que
+  // abrió bootPreload en vez de disparar un getDocs propio que duplicaría la
+  // descarga. Queda fuera de bootPreload porque pinta badge y toasts: no deben
+  // aparecer sobre la pantalla de login.
   initNotifications(db);
 
   // Cuando cualquier colección del store recibe cambios desde el server,
@@ -523,6 +934,7 @@ function initApp(session) {
   }
 
   onStoreChange((col) => {
+    if (col === 'fiado_items') actualizarBadgeFiados();
     if (_storeRefreshTimer) clearTimeout(_storeRefreshTimer);
     _storeRefreshTimer = setTimeout(() => {
       _storeRefreshTimer = null;
@@ -556,6 +968,12 @@ function initApp(session) {
       // tope, costos a medio cargar) — cada venta del POS no debe resetear la
       // página. El botón "Actualizar" de la página refresca stock y ritmo.
       if (currentPage === 'centro_compras') return;
+
+      // Fiados: la página se refresca sola cuando cambian las colecciones de
+      // fiado (se suscribe al store por su cuenta). Sin esta exclusión, cada
+      // venta del POS —que no tiene nada que ver con las cuentas corrientes—
+      // destruía el DOM y reseteaba el cliente elegido y el scroll.
+      if (currentPage === 'fiados') return;
 
       // Si el usuario está interactuando, diferimos el refresh para no
       // pisar lo que está haciendo (buscar, editar, llenar un form).
@@ -624,14 +1042,39 @@ function actualizarBadgeNotif(alertas) {
   const badge = document.getElementById('navNotifBadge');
   if (!badge) return;
   const n = (alertas || []).length;
-  if (n === 0) { badge.style.display = 'none'; return; }
+  if (n === 0) {
+    badge.style.display = 'none';
+  } else {
+    badge.textContent = n > 99 ? '99+' : String(n);
+    badge.style.display = 'inline-flex';
+  }
+  refrescarBadgesGrupo();
+  renderPinned();
+}
+
+// Badge de Fiados: cuántos clientes tienen productos sin pagar. Se recalcula
+// desde el store, así el cajero ve del sidebar que hay cuentas abiertas.
+function actualizarBadgeFiados() {
+  const badge = document.getElementById('navFiadoBadge');
+  if (!badge) return;
+  const items = peekCacheValue('fiado:items') || [];
+  const claves = new Set();
+  items.forEach(it => {
+    if (it.estado !== 'pendiente' || it.deleted === true) return;
+    const k = String(it.cliente_fid || '') || `local:${it.cliente_local_id}`;
+    if (k && k !== 'local:null') claves.add(k);
+  });
+  const n = claves.size;
   badge.textContent = n > 99 ? '99+' : String(n);
-  badge.style.display = 'inline-flex';
+  badge.style.display = n > 0 ? 'inline-flex' : 'none';
+  refrescarBadgesGrupo();
+  renderPinned();
 }
 
 function actualizarBadgeCalendario(info) {
   const badge = document.getElementById('navCalBadge');
-  const link = document.querySelector('.nav-link[data-page="calendario"]');
+  // Scope a .nav-group: el ítem clonado en accesos rápidos también matchea
+  const link = document.querySelector('.nav-group .nav-link[data-page="calendario"]');
   const hay = !!(info && info.hay);
   if (badge) {
     badge.style.display = hay ? 'inline-flex' : 'none';
@@ -640,6 +1083,8 @@ function actualizarBadgeCalendario(info) {
     }
   }
   if (link) link.classList.toggle('alerta-hoy', hay);
+  refrescarBadgesGrupo();
+  renderPinned();
   // Recalcular el aviso de fechas próximas (se llama también al cargar eventos).
   actualizarAvisoFechas();
 }
@@ -716,16 +1161,55 @@ function prefetchPageModules(pageList) {
 
 // ── Init ──
 document.addEventListener('DOMContentLoaded', () => {
-  if (isLoggedIn()) {
-    // Ya está logueado → mostrar app
+  // Firebase resuelve el estado de sesión de forma asíncrona (lee IndexedDB),
+  // pero esperar ese round-trip antes de pintar costaría el arranque en frío.
+  // Con la pista sincrónica de auth.js apostamos a que la sesión sigue viva:
+  // mostramos el shell y arrancamos la precarga en paralelo a la verificación.
+  // Si la apuesta falla, se cae al login y no se perdió nada.
+  const presumeSession = hasSessionHint();
+
+  function showShell() {
     document.getElementById('app').style.display = 'flex';
     const bn = document.getElementById('bottomNav');
     if (bn) bn.classList.add('visible');
-    initApp(getSession());
+  }
+
+  function hideShell() {
+    document.getElementById('app').style.display = 'none';
+    const bn = document.getElementById('bottomNav');
+    if (bn) bn.classList.remove('visible');
+  }
+
+  if (presumeSession) {
+    showShell();
+    bootPreload();
+  }
+
+  function entrar(session) {
+    showShell();
+    // force: si presumeSession era falso positivo, los listeners que abrió
+    // bootPreload murieron con permission-denied y hay que rearmarlos.
+    bootPreload(presumeSession);
+    initApp(session);
+  }
+
+  function alLogin() {
+    // Si habíamos pintado el shell de más, lo escondemos antes de que se vea.
+    if (presumeSession) hideShell();
+    renderLogin(entrar);
+  }
+
+  if (isLoginLink()) {
+    // La pestaña se abrió desde el enlace que llegó por correo: hay que
+    // canjearlo antes de mirar el estado de sesión, porque todavía no existe.
+    completeLinkSignIn().then(res => {
+      if (res.ok) entrar(res.session);
+      else alLogin();
+    });
   } else {
-    // Mostrar login
-    renderLogin((session) => {
-      initApp(session);
+    onAuthReady().then(session => {
+      if (session) entrar(session);
+      else alLogin();
     });
   }
   initAutostart();       // registra el arranque con Windows la primera vez (solo en el .exe)

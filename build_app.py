@@ -37,13 +37,17 @@ def main():
             shutil.rmtree(directory)
             print(f"  OK Eliminado: {directory}")
     
-    # Verificar firebase_key.json
-    if not firebase_key.exists():
-        print(f"\n⚠️  ADVERTENCIA: No se encontró {firebase_key}")
-        print("   La aplicación funcionará pero sin sincronización Firebase.")
-        print("   Coloca firebase_key.json en la raíz del proyecto para habilitar Firebase.")
+    # Verificar provision.json (credenciales de sincronización)
+    if not (project_root / "provision.json").exists():
+        print("\n  ADVERTENCIA: no se encontró provision.json")
+        print("   La aplicación va a funcionar pero sin sincronización Firebase.")
+        print("   El workflow de release lo genera desde los secrets del repo.")
     else:
-        print(f"  OKFirebase key encontrada")
+        print("  OK provision.json encontrado")
+
+    # La service account nunca debe viajar en un artefacto publico.
+    if firebase_key.exists():
+        print("  AVISO: hay un firebase_key.json en la raiz; NO se empaqueta.")
     
     # Compilar con PyInstaller directamente
     print("\n[2/5] Compilando aplicación con PyInstaller...")
@@ -105,12 +109,22 @@ def main():
         print("ERROR: PyInstaller falló. Verificando instalación de dependencias...")
         sys.exit(1)
     
-    # Copiar firebase_key.json si existe
-    print("\n[3/5] Incluyendo firebase_key.json...")
+    # Copiar provision.json (URL + secreto de bootstrap).
+    #
+    # La service account ya NO se distribuye: el instalador se publica en un
+    # Release publico y cualquiera podia extraerla para tener Admin SDK sobre
+    # todo el proyecto. En su lugar va provision.json, que solo habilita a
+    # pedir tokens de 1 hora, y la Netlify Function ademas exige que el pc_id
+    # ya figure en la coleccion `pcs`.
+    print("\n[3/5] Incluyendo provision.json...")
     app_dir = dist_dir / "SistemaPOS"
-    if firebase_key.exists():
-        shutil.copy(firebase_key, app_dir / "firebase_key.json")
-        print(f"  OKfirebase_key.json copiado")
+    provision = project_root / "provision.json"
+    if provision.exists():
+        shutil.copy(provision, app_dir / "provision.json")
+        print("  OK provision.json copiado")
+    else:
+        print("  AVISO: no hay provision.json, la build no va a sincronizar.")
+        print("         El workflow de release lo genera desde los secrets.")
     
     # Crear carpetas de datos y certificados AFIP
     print("\n[4/5] Creando directorios de datos...")

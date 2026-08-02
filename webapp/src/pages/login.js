@@ -1,4 +1,4 @@
-import { login } from '../auth.js';
+import { loginWithGoogle, sendLoginLink } from '../auth.js';
 
 export function renderLogin(onSuccess) {
   // Ocultar app shell completo
@@ -30,33 +30,44 @@ export function renderLogin(onSuccess) {
         </div>
       </div>
 
-      <form class="login-form" id="loginForm" autocomplete="off">
-        <div class="form-group">
-          <label>Usuario</label>
-          <div class="input-wrap">
-            <span class="material-icons">person</span>
-            <input type="text" id="loginUser" placeholder="Ingresá tu usuario" autocomplete="username" required />
-          </div>
-        </div>
+      <div class="login-form">
+        <button type="button" class="btn-google" id="googleBtn">
+          <svg class="google-mark" viewBox="0 0 48 48" aria-hidden="true">
+            <path fill="#4285F4" d="M45.1 24.5c0-1.6-.1-3.1-.4-4.5H24v8.5h11.8c-.5 2.7-2.1 5-4.4 6.6v5.5h7.1c4.2-3.8 6.6-9.5 6.6-16.1z"/>
+            <path fill="#34A853" d="M24 46c6 0 11-2 14.5-5.4l-7.1-5.5c-2 1.3-4.5 2.1-7.4 2.1-5.7 0-10.6-3.9-12.3-9.1H4.4v5.7C7.9 40.8 15.4 46 24 46z"/>
+            <path fill="#FBBC05" d="M11.7 28.1c-.4-1.3-.7-2.7-.7-4.1s.2-2.8.7-4.1v-5.7H4.4C2.9 17.1 2 20.4 2 24s.9 6.9 2.4 9.8l7.3-5.7z"/>
+            <path fill="#EA4335" d="M24 10.8c3.2 0 6.1 1.1 8.4 3.3l6.3-6.3C34.9 4.1 30 2 24 2 15.4 2 7.9 7.2 4.4 14.2l7.3 5.7c1.7-5.2 6.6-9.1 12.3-9.1z"/>
+          </svg>
+          Continuar con Google
+        </button>
 
-        <div class="form-group">
-          <label>Contraseña</label>
-          <div class="input-wrap">
-            <span class="material-icons">lock</span>
-            <input type="password" id="loginPass" placeholder="Ingresá tu contraseña" autocomplete="current-password" required />
+        <div class="login-sep"><span>o</span></div>
+
+        <form id="linkForm" autocomplete="on">
+          <div class="form-group">
+            <label>Recibir un enlace por correo</label>
+            <div class="input-wrap">
+              <span class="material-icons">mail_outline</span>
+              <input type="email" id="loginEmail" placeholder="tucorreo@ejemplo.com" autocomplete="email" required />
+            </div>
           </div>
-        </div>
+
+          <button type="submit" class="btn-login" id="linkBtn">
+            <span class="material-icons" style="font-size:18px!important">send</span>
+            Enviarme el enlace
+          </button>
+        </form>
 
         <div class="login-error" id="loginError">
           <span class="material-icons" style="font-size:16px!important">error_outline</span>
-          <span id="loginErrorMsg">Usuario o contraseña incorrectos</span>
+          <span id="loginErrorMsg"></span>
         </div>
 
-        <button type="submit" class="btn-login" id="loginBtn">
-          <span class="material-icons" style="font-size:18px!important">login</span>
-          Ingresar
-        </button>
-      </form>
+        <div class="login-ok" id="loginOk">
+          <span class="material-icons" style="font-size:16px!important">mark_email_read</span>
+          <span id="loginOkMsg"></span>
+        </div>
+      </div>
 
       <div class="login-footer">
         Sistema POS v2.0
@@ -77,48 +88,70 @@ export function renderLogin(onSuccess) {
     setTimeout(() => t.classList.remove('wiggle'), 1000);
   }, 4500);
 
-  // Focus automático
-  setTimeout(() => document.getElementById('loginUser').focus(), 100);
+  const errDiv = document.getElementById('loginError');
+  const errMsg = document.getElementById('loginErrorMsg');
+  const okDiv  = document.getElementById('loginOk');
+  const okMsg  = document.getElementById('loginOkMsg');
 
-  // Submit
-  document.getElementById('loginForm').addEventListener('submit', e => {
-    e.preventDefault();
-    const username = document.getElementById('loginUser').value.trim();
-    const password = document.getElementById('loginPass').value;
-    const btn      = document.getElementById('loginBtn');
-    const errDiv   = document.getElementById('loginError');
+  function showError(msg) {
+    okDiv.classList.remove('show');
+    errMsg.textContent = msg;
+    errDiv.classList.add('show');
+    const card = page.querySelector('.login-card');
+    card.style.animation = 'none';
+    card.offsetHeight;
+    card.style.animation = 'shake 0.4s ease';
+  }
 
-    // Loading state
+  function enter(session) {
+    clearInterval(wiggleInterval);
+    page.remove();
+    document.getElementById('app').style.display = 'flex';
+    const bn = document.getElementById('bottomNav');
+    if (bn) bn.classList.add('visible');
+    onSuccess(session);
+  }
+
+  // ── Google ──
+  document.getElementById('googleBtn').addEventListener('click', async () => {
+    const btn = document.getElementById('googleBtn');
     btn.disabled = true;
-    btn.innerHTML = `<div class="spinner" style="width:18px;height:18px;border-width:2px;border-color:rgba(255,255,255,0.3);border-top-color:#fff"></div> Verificando...`;
+    const original = btn.innerHTML;
+    btn.innerHTML = `<div class="spinner" style="width:18px;height:18px;border-width:2px"></div> Conectando...`;
 
-    setTimeout(() => {
-      const session = login(username, password);
-      if (session) {
-        errDiv.classList.remove('show');
-        btn.innerHTML = `<span class="material-icons" style="font-size:18px!important">check_circle</span> Bienvenido, ${session.display}!`;
-        btn.style.background = '#2e7d32';
-        setTimeout(() => {
-          clearInterval(wiggleInterval);
-          page.remove();
-          document.getElementById('app').style.display = 'flex';
-          const bn = document.getElementById('bottomNav');
-          if (bn) bn.classList.add('visible');
-          onSuccess(session);
-        }, 600);
-      } else {
-        errDiv.classList.add('show');
-        document.getElementById('loginErrorMsg').textContent = 'Usuario o contraseña incorrectos';
-        btn.disabled = false;
-        btn.innerHTML = `<span class="material-icons" style="font-size:18px!important">login</span> Ingresar`;
-        document.getElementById('loginPass').value = '';
-        document.getElementById('loginPass').focus();
-        // Shake animation
-        const card = page.querySelector('.login-card');
-        card.style.animation = 'none';
-        card.offsetHeight;
-        card.style.animation = 'shake 0.4s ease';
-      }
-    }, 500);
+    const res = await loginWithGoogle();
+
+    if (res.ok) {
+      errDiv.classList.remove('show');
+      btn.innerHTML = `<span class="material-icons" style="font-size:18px!important">check_circle</span> Hola, ${res.session.display}!`;
+      setTimeout(() => enter(res.session), 600);
+    } else {
+      showError(res.error);
+      btn.disabled = false;
+      btn.innerHTML = original;
+    }
+  });
+
+  // ── Enlace por correo ──
+  document.getElementById('linkForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const email = document.getElementById('loginEmail').value.trim();
+    const btn   = document.getElementById('linkBtn');
+
+    btn.disabled = true;
+    btn.innerHTML = `<div class="spinner" style="width:18px;height:18px;border-width:2px;border-color:rgba(255,255,255,0.3);border-top-color:#fff"></div> Enviando...`;
+
+    const res = await sendLoginLink(email);
+
+    if (res.ok) {
+      errDiv.classList.remove('show');
+      okMsg.textContent = `Te enviamos un enlace a ${email}. Abrilo desde este dispositivo.`;
+      okDiv.classList.add('show');
+      btn.innerHTML = `<span class="material-icons" style="font-size:18px!important">check_circle</span> Enlace enviado`;
+    } else {
+      showError(res.error);
+      btn.disabled = false;
+      btn.innerHTML = `<span class="material-icons" style="font-size:18px!important">send</span> Enviarme el enlace`;
+    }
   });
 }

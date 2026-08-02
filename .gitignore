@@ -5,6 +5,7 @@ backups/
 
 # Claves y credenciales (nunca subir)
 firebase_key.json
+provision.json
 *.key
 *.pem
 *.crt
@@ -62,6 +63,7 @@ certs_backup_*/
 
 # Node modules (webapp)
 webapp/node_modules/
+webapp/netlify/functions/node_modules/
 
 # Imágenes sueltas (capturas de pantalla, no son parte del sistema)
 2026-*.png
@@ -176,3 +178,6 @@ restaurar_borrados.py
 restaurar_por_id.py
 test_mp_dialog_firebase.py
 test_mp_variant_dialog.py
+
+# Local Netlify folder
+.netlify

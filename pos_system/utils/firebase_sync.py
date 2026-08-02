@@ -159,27 +159,29 @@ def init_firebase_sync() -> Optional["FirebaseSync"]:
             try:
                 firebase_admin.get_app()
             except ValueError:
-                # Buscar service account key en varias ubicaciones
-                import sys
-                exe_dir = os.path.dirname(sys.executable) if getattr(sys, 'frozen', False) else os.path.join(os.path.dirname(__file__), '..', '..')
-                candidates = [
-                    os.path.join(exe_dir, 'firebase_key.json'),
-                    os.path.join(exe_dir, '_internal', 'firebase_key.json'),
-                    os.path.join(os.path.dirname(__file__), '..', '..', 'firebase_key.json'),
-                    'firebase_key.json',
-                ]
-                key_path = None
-                for c in candidates:
-                    if os.path.exists(c):
-                        key_path = c
-                        break
-                if key_path:
-                    cred = credentials.Certificate(key_path)
-                    firebase_admin.initialize_app(cred)
-                    logger.info("Firebase: Inicializado con service account key.")
-                else:
-                    logger.warning("Firebase: No se encontró firebase_key.json. Sync desactivado.")
+                # Credenciales: primero provisioning remoto (token de 1 hora
+                # que se renueva solo), y si no hay, el firebase_key.json local
+                # que todavía existe en instalaciones viejas.
+                from pos_system.utils.firebase_credentials import resolve_credential
+                from pos_system.config import APP_VERSION
+
+                cred, project_id, detalle = resolve_credential(
+                    pc_id=_get_pc_id(),
+                    hostname=_socket.gethostname(),
+                    app_version=APP_VERSION,
+                )
+
+                if cred is None:
+                    logger.warning(f"Firebase: sin credenciales ({detalle}). Sync desactivado.")
                     return None
+
+                # projectId solo hace falta con el token remoto: la service
+                # account lo trae adentro del JSON.
+                if project_id:
+                    firebase_admin.initialize_app(cred, {'projectId': project_id})
+                else:
+                    firebase_admin.initialize_app(cred)
+                logger.info(f"Firebase: inicializado con {detalle}.")
 
             db = firestore.client()
             _sync_instance = FirebaseSync(db)
