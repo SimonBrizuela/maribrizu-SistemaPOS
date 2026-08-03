@@ -32,12 +32,25 @@ function b64url(input) {
     .replace(/\//g, '_');
 }
 
+/**
+ * Saca BOM, zero-width y espacios de los bordes.
+ *
+ * Un secreto pegado desde un archivo escrito con Out-File arrastra un BOM
+ * invisible. Como la comparación es byte a byte, eso devuelve 401 y deja sin
+ * credenciales a todas las PCs que instalaron esa build (pasó en la v3.0.54).
+ * Normalizar los dos lados evita que un carácter invisible frene la librería.
+ */
+function normalizar(valor) {
+  return typeof valor === 'string'
+    ? valor.replace(/^[﻿​]+/, '').replace(/[﻿​]+$/, '').trim()
+    : '';
+}
+
 /** Comparación en tiempo constante: no filtra el secreto por timing. */
 function secretMatches(received, expected) {
-  if (typeof received !== 'string' || typeof expected !== 'string') return false;
-  const a = Buffer.from(received);
-  const b = Buffer.from(expected);
-  if (a.length !== b.length) return false;
+  const a = Buffer.from(normalizar(received));
+  const b = Buffer.from(normalizar(expected));
+  if (a.length === 0 || a.length !== b.length) return false;
   return crypto.timingSafeEqual(a, b);
 }
 

@@ -49,19 +49,29 @@ def _bundle_dir() -> str:
     return os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 
 
+def _limpio(valor: str) -> str:
+    """Saca BOM, zero-width y espacios de los bordes.
+
+    El endpoint compara el secreto byte a byte. Un BOM invisible arrastrado
+    desde un archivo generado con Out-File devuelve 401 y la PC arranca sin
+    credenciales, muda y sin sincronizar (paso en la v3.0.54).
+    """
+    return str(valor or '').lstrip('﻿​').strip().strip('﻿​')
+
+
 def load_provision_config() -> dict:
     """Lee la URL y el secreto de provisioning.
 
     Prioridad: variables de entorno (utiles para probar) y despues el
     provision.json que el instalador deja junto al ejecutable.
     """
-    url    = os.environ.get('POS_PROVISION_URL') or DEFAULT_PROVISION_URL
-    secret = os.environ.get('POS_BOOTSTRAP_SECRET')
+    url    = _limpio(os.environ.get('POS_PROVISION_URL')) or DEFAULT_PROVISION_URL
+    secret = _limpio(os.environ.get('POS_BOOTSTRAP_SECRET'))
     if secret:
         return {
             'url':        url,
             'secret':     secret,
-            'project_id': os.environ.get('POS_PROJECT_ID') or DEFAULT_PROJECT_ID,
+            'project_id': _limpio(os.environ.get('POS_PROJECT_ID')) or DEFAULT_PROJECT_ID,
         }
 
     base = _bundle_dir()
@@ -71,13 +81,16 @@ def load_provision_config() -> dict:
     ):
         if os.path.exists(candidate):
             try:
-                with open(candidate, 'r', encoding='utf-8') as fh:
+                # utf-8-sig: si el archivo quedo con BOM al inicio, json.load
+                # con 'utf-8' explota antes de llegar a leer el secreto.
+                with open(candidate, 'r', encoding='utf-8-sig') as fh:
                     data = json.load(fh)
-                if data.get('secret'):
+                secret = _limpio(data.get('secret'))
+                if secret:
                     return {
-                        'url':        data.get('url') or DEFAULT_PROVISION_URL,
-                        'secret':     data['secret'],
-                        'project_id': data.get('project_id') or DEFAULT_PROJECT_ID,
+                        'url':        _limpio(data.get('url')) or DEFAULT_PROVISION_URL,
+                        'secret':     secret,
+                        'project_id': _limpio(data.get('project_id')) or DEFAULT_PROJECT_ID,
                     }
             except Exception as e:
                 logger.warning(f"Firebase: provision.json ilegible ({candidate}): {e}")
