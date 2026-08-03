@@ -746,6 +746,12 @@ class MainWindow(QMainWindow):
                     logger.warning(f"Fiado refresh emit: {e}")
             fb.start_fiado_listeners(self.db, on_change=_on_fiado_change)
 
+            # Lo cargado mientras la PC no tenía Firebase quedó con firebase_id
+            # vacío y no lo subía nadie. Se empuja al arrancar, en background
+            # para no demorar la apertura.
+            threading.Thread(target=self._push_fiado_pendientes, daemon=True,
+                             name='fiado-push-pendientes').start()
+
             # 9. Listeners de PRODUCTOS MADRE (mp_*) — sistema cargado desde la webapp.
             # Espejan mp_products / mp_nodes / mp_discounts en SQLite local en tiempo real.
             # La UI de venta consume desde local (rápido) y se refresca con _sig_mp_refresh.
@@ -782,6 +788,17 @@ class MainWindow(QMainWindow):
             logger.info("RemoteTerminal: listener iniciado.")
         except Exception as e:
             logger.warning(f"RemoteTerminal: no se pudo iniciar: {e}")
+
+    def _push_fiado_pendientes(self):
+        """Sube el fiado que quedó sin firebase_id por falta de conexión."""
+        try:
+            from pos_system.utils.firebase_sync import get_firebase_sync
+            fb = get_firebase_sync()
+            if not fb or not fb.enabled:
+                return
+            fb.push_fiado_pendientes(self.db)
+        except Exception as e:
+            logger.warning(f"Fiado: no se pudieron subir los pendientes: {e}")
 
     def _start_pc_status_reporter(self):
         """Inicia el reporter de heartbeat y handlers de comandos remotos."""

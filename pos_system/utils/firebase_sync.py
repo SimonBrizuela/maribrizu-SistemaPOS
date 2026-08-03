@@ -1712,6 +1712,81 @@ class FirebaseSync:
             'fiado_pagos', str(pago.get('firebase_id') or '').strip(), payload
         )
 
+    def push_fiado_pendientes(self, db_manager) -> dict:
+        """Sube el fiado que quedó solo en SQLite por no haber tenido Firebase.
+
+        El fiado se sincroniza en el momento de crearse, best-effort: si en ese
+        momento no hay conexión (o la PC está sin credenciales, como pasó el
+        2026-08-03 con el provisioning roto), el registro queda con
+        `firebase_id` vacío y nada lo vuelve a intentar — el "Forzar sync
+        (subir)" tampoco lo miraba. Esto lo cierra: barre lo que quedó sin
+        firebase_id y lo empuja.
+
+        Orden: clientes primero, porque al asignarles su fid se reapuntan los
+        items y pagos que colgaban del id local.
+        """
+        resultado = {'clientes': 0, 'items': 0, 'pagos': 0}
+        if not self.enabled:
+            return resultado
+
+        from pos_system.models.fiado import Fiado as _Fiado
+        modelo = _Fiado(db_manager)
+        sin_fid = "(firebase_id IS NULL OR TRIM(firebase_id) = '')"
+
+        def _pendientes(tabla):
+            try:
+                return db_manager.execute_query(
+                    f"SELECT id FROM {tabla} WHERE {sin_fid} ORDER BY id"
+                ) or []
+            except Exception as e:
+                logger.warning(f"Fiado push: no se pudo leer {tabla}: {e}")
+                return []
+
+        for fila in _pendientes('fiado_clientes'):
+            try:
+                cliente = modelo.get_cliente(int(fila['id']))
+                if not cliente:
+                    continue
+                fid = self.upsert_fiado_cliente(cliente)
+                if fid:
+                    modelo.set_cliente_firebase_id(int(cliente['id']), fid)
+                    modelo._reasignar_fid_local(int(cliente['id']), fid)
+                    resultado['clientes'] += 1
+            except Exception as e:
+                logger.warning(f"Fiado push cliente {fila.get('id')}: {e}")
+
+        for fila in _pendientes('fiado_items'):
+            try:
+                item = modelo.get_item(int(fila['id']))
+                if not item:
+                    continue
+                fid = self.upsert_fiado_item(item)
+                if fid:
+                    modelo.set_item_firebase_id(int(item['id']), fid)
+                    resultado['items'] += 1
+            except Exception as e:
+                logger.warning(f"Fiado push item {fila.get('id')}: {e}")
+
+        for fila in _pendientes('fiado_pagos'):
+            try:
+                pago = modelo.get_pago(int(fila['id']))
+                if not pago:
+                    continue
+                fid = self.upsert_fiado_pago(pago)
+                if fid:
+                    modelo.set_pago_firebase_id(int(pago['id']), fid)
+                    resultado['pagos'] += 1
+            except Exception as e:
+                logger.warning(f"Fiado push pago {fila.get('id')}: {e}")
+
+        if any(resultado.values()):
+            logger.info(
+                f"Fiado: subidos {resultado['clientes']} clientes, "
+                f"{resultado['items']} items y {resultado['pagos']} pagos "
+                f"que habían quedado solo locales."
+            )
+        return resultado
+
     def start_fiado_listeners(self, db_manager, on_change: Optional[Callable] = None):
         """Listeners realtime de las 3 colecciones de fiado — espejan a SQLite.
 

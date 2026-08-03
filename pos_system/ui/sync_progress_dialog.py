@@ -857,6 +857,18 @@ class SyncWorker(QThread):
                 fb.sync_monthly_summary(year, month, month_sales, db_manager=db)
                 self.log_message.emit(f'  → Resumen mensual {month:02d}/{year} actualizado', 'info')
             self.log_message.emit('Resúmenes mensuales sincronizados', 'ok')
+
+            # Fiado que quedó solo local: se sincroniza al crearse, best-effort,
+            # así que lo cargado sin conexión no subía nunca — ni con este mismo
+            # sync, que no lo miraba.
+            self.step_changed.emit('Subiendo fiado pendiente...')
+            pend = fb.push_fiado_pendientes(db)
+            if any(pend.values()):
+                self.log_message.emit(
+                    f"Fiado: {pend['clientes']} clientes, {pend['items']} items "
+                    f"y {pend['pagos']} pagos que estaban solo locales", 'ok')
+            else:
+                self.log_message.emit('Fiado: nada pendiente de subir', 'info')
             self.progress.emit(5, 5)
 
             # Escribir trigger para que las demás PCs suban sus datos también
