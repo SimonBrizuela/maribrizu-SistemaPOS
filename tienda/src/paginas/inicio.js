@@ -69,7 +69,7 @@ export async function inicio({ montar }) {
       <div class="contenedor" style="padding-block:var(--e-7)">
         <div class="portada__cuerpo">
           <div>
-            <p class="portada__lugar">Córdoba · Villa Cabrera</p>
+            <p class="portada__lugar">Córdoba · Parque Liceo</p>
             <h1 class="portada__titulo">Todo para el cole, la casa y el regalo</h1>
             <p class="portada__bajada">
               Somos la librería de la esquina, con el catálogo entero en tu celular.

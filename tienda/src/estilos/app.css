@@ -457,6 +457,12 @@
   .cabecera .buscador { display: none; }
   .cabecera [data-cerrar-busqueda] { display: none; }
 
+  /* La lupa y el carrito van contra el borde derecho.
+     El buscador tenia flex: 1 y era lo unico que separaba el logo de los
+     iconos. Al esconderlo en celular no quedo nada empujando, y los tres
+     elementos se amontonaban a la izquierda dejando medio encabezado vacio. */
+  .cabecera [data-abrir-busqueda] { margin-left: auto; }
+
   .cabecera[data-buscando] .buscador { display: flex; }
   .cabecera[data-buscando] .cabecera__logo,
   .cabecera[data-buscando] .carrito-boton,
@@ -506,9 +512,6 @@
 @media (max-width: 767px) {
   .cabecera__fila { transition: height var(--m-normal) var(--curva); }
   .cabecera--compacta .cabecera__fila { height: 52px; }
-  /* El nombre se guarda y quedan las cinco fichas, que ya identifican la
-     tienda y liberan el ancho para el buscador. */
-  .cabecera--compacta .cabecera__logo span:not(.marca-fichas) { display: none; }
 }
 
 
@@ -526,6 +529,12 @@
 @media (max-width: 480px) {
   /* El titulo de portada llegaba al borde. 13ch corta antes y deja margen. */
   .portada__titulo { max-width: 13ch; }
+
+  /* 48 px entre el encabezado y el primer texto es aire de escritorio; en una
+     pantalla de 667 px de alto es una franja vacia que empuja todo abajo del
+     pliegue. */
+  .portada__cuerpo { gap: var(--e-5); }
+  .marco-oscuro--vivo > .contenedor:first-of-type { padding-block: var(--e-5) var(--e-6) !important; }
 
   /* Los dos botones de portada, uno al lado del otro, quedaban de 150 px cada
      uno con el texto al limite. A lo ancho completo se leen y se tocan bien. */

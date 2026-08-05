@@ -25,9 +25,19 @@ except ValueError:
 
 db = firestore.client()
 
-# Coordenadas del local. Salen de la direccion de la libreria y son el origen de
-# todo calculo de distancia; si el local se muda, se cambian aca.
-ORIGEN = {'lat': -31.3689, 'lng': -64.2323}
+# Coordenadas del local: origen de todo calculo de distancia.
+#
+# El primer valor que se cargo aca estaba a 6,2 km del lugar real, porque se
+# dedujo de la direccion suponiendo el barrio equivocado. Con un radio de reparto
+# de 12 km, un error asi manda cada cotizacion al tramo que no es.
+#
+# Este valor sale de geocodificar la calle en Parque Liceo Primera Seccion, que
+# es el barrio correcto, pero es un punto de la calle y no la puerta del local.
+# Antes de que el calculo de envio cobre plata de verdad hay que afinarlo: la
+# forma buena es geocodificar la direccion completa con la misma clave de Google
+# que usa el checkout, que devuelve la altura exacta.
+ORIGEN = {'lat': -31.3539177, 'lng': -64.1695459}
+ORIGEN_VERIFICADO = False
 
 AJUSTES = {
     'abierta': True,
@@ -36,7 +46,9 @@ AJUSTES = {
     'whatsapp': '5493517046684',
     'email': 'libreria.liceo@hotmail.com',
     'direccion': 'Av. Alfonsina Storni 168, X5019 Córdoba',
+    'barrio': 'Parque Liceo 1ª Sección',
     'origen': ORIGEN,
+    'origen_verificado': ORIGEN_VERIFICADO,
     'horarios_texto': ('Lunes a viernes de 9 a 13 y de 16:30 a 20:30 · '
                        'Sábados de 9 a 13'),
     'entrega': {
