@@ -64,7 +64,11 @@ def stock_resumen(p, db=None, targets_index=None):
       disponible : float — >0 si hay algo, inf para servicios. Es la clave de orden.
       chip       : str   — texto corto para la píldora de la fila.
       titulo     : str   — encabezado del globo de detalle.
-      filas      : list[(etiqueta, valor)] — desglose; vacío si no hay nada que abrir.
+      filas      : list[dict] — desglose. Cada fila:
+                     label  : str
+                     valor  : str
+                     accion : dict|None — con qué preselección abrir el diálogo
+                              de venta si el cajero clickea esa fila.
     """
     is_mp   = bool(p.get('is_mp'))
     mp_kind = p.get('mp_kind') or ''
@@ -79,7 +83,11 @@ def stock_resumen(p, db=None, targets_index=None):
             if not presentaciones:
                 # Hoja sin presentaciones: se vende como unidad simple, sin
                 # control de stock. Cuenta como disponible.
-                filas.append((nombre_hoja, 'unidad simple'))
+                filas.append({
+                    'label': nombre_hoja, 'valor': 'unidad simple',
+                    'accion': {'tipo': 'mp', 'node_id': hoja.get('id'),
+                               'presentation_id': None, 'label': nombre_hoja},
+                })
                 con_stock += 1
                 continue
             for pres in presentaciones:
@@ -97,7 +105,13 @@ def stock_resumen(p, db=None, targets_index=None):
                     if (float(pres.get('stock') or 0) > 0
                             or float(pres.get('stock_sueltos') or 0) > 0):
                         con_stock += 1
-                filas.append((f'{nombre_hoja} · {etiqueta}', valor or 'sin stock'))
+                filas.append({
+                    'label':  f'{nombre_hoja} · {etiqueta}',
+                    'valor':  valor or 'sin stock',
+                    'accion': {'tipo': 'mp', 'node_id': hoja.get('id'),
+                               'presentation_id': pres.get('id'),
+                               'label': f'{nombre_hoja} · {etiqueta}'},
+                })
         if con_stock:
             chip = f'{con_stock} variante' + ('s' if con_stock != 1 else '')
         else:
@@ -113,13 +127,20 @@ def stock_resumen(p, db=None, targets_index=None):
     if int(p.get('es_conjunto') or 0) == 1:
         um = str(p.get('conjunto_unidad_medida') or '').strip()
         total = float(p.get('conjunto_total') or 0)
+        contenido = float(p.get('conjunto_contenido') or 0)
         filas = []
         for c in _conj_parse_colores(p.get('conjunto_colores')):
-            nombre = str(c.get('color') or '—').strip() or '—'
-            contenido = float(p.get('conjunto_contenido') or 0)
+            # `crudo` es la clave con la que ConjuntoDialog matchea la variedad;
+            # `nombre` es sólo para mostrar.
+            crudo = str(c.get('color') or '')
+            nombre = crudo.strip() or '—'
             total_color = (float(c.get('unidades') or 0) * contenido
                            + float(c.get('restante') or 0))
-            filas.append((nombre, f'{_fmt_qty(total_color)} {um}'.strip()))
+            filas.append({
+                'label':  nombre,
+                'valor':  f'{_fmt_qty(total_color)} {um}'.strip(),
+                'accion': {'tipo': 'conjunto', 'color': crudo, 'label': nombre},
+            })
         return {
             'disponible': max(0.0, total),
             'chip':       (f'{_fmt_qty(total)} {um}'.strip() if total > 0 else 'sin stock'),
@@ -130,11 +151,12 @@ def stock_resumen(p, db=None, targets_index=None):
     # ── Producto plano ──
     txt, num = shown_stock(p, db, targets_index=targets_index)
     if num == float('inf'):
-        return {'disponible': float('inf'), 'chip': '∞',
-                'titulo': 'Servicio', 'filas': [('Sin límite de stock', '∞')]}
+        return {'disponible': float('inf'), 'chip': '∞', 'titulo': 'Servicio',
+                'filas': [{'label': 'Sin límite de stock', 'valor': '∞', 'accion': None}]}
     filas = []
     if has_links(p):
-        filas.append(('Stock tomado del producto vinculado', f'{txt} un'))
+        filas.append({'label': 'Stock tomado del producto vinculado',
+                      'valor': f'{txt} un', 'accion': None})
     return {
         'disponible': num,
         'chip':       (f'{txt} un' if num > 0 else 'sin stock'),
@@ -2523,6 +2545,7 @@ class SalesView(QWidget):
                 self._search_dialog = None
         dlg = SpotlightDialog(parent=self, db=self.db, initial_text=text or '')
         dlg.product_selected.connect(self._on_product_selected_from_dialog)
+        dlg.variant_selected.connect(self._on_variant_selected_from_dialog)
         self._search_dialog = dlg
         dlg.exec_()
         self._search_dialog = None
@@ -2603,6 +2626,30 @@ class SalesView(QWidget):
             return
         self._add_to_search_history(term)
         self._open_search_dialog_with_text(term)
+
+    def _on_variant_selected_from_dialog(self, product: dict, accion: dict):
+        """Atajo del globo de stock del buscador: el cajero clickeó una variante
+        concreta, así que se abre el diálogo de siempre pero ya parado en ella —
+        sólo queda poner la cantidad. El camino largo (elegir el producto y
+        después la variante) sigue funcionando igual.
+        """
+        if hasattr(self, '_search_dialog') and self._search_dialog:
+            try:
+                self._search_dialog.close()
+            except Exception:
+                pass
+
+        tipo = (accion or {}).get('tipo')
+        if tipo == 'conjunto':
+            self._add_conjunto_to_cart(product, preselect_color=accion.get('color'))
+            return
+        if tipo == 'mp':
+            mp_doc = product.get('mp_doc') or {}
+            if mp_doc:
+                self._open_mp_variant_dialog(mp_doc, preseleccion=accion)
+            return
+        # Acción desconocida: no dejar al cajero sin nada, abrir el flujo normal.
+        self._on_product_selected_from_dialog(product)
 
     def _on_product_selected_from_dialog(self, product: dict):
         """Agrega al carrito el producto seleccionado desde el diálogo ampliado.
@@ -2776,8 +2823,12 @@ class SalesView(QWidget):
             return True
         return False
 
-    def _open_mp_variant_dialog(self, producto: dict):
-        """Abre el diálogo táctil con las hojas vendibles del producto madre."""
+    def _open_mp_variant_dialog(self, producto: dict, preseleccion: dict = None):
+        """Abre el diálogo táctil con las hojas vendibles del producto madre.
+
+        `preseleccion`: {'node_id', 'presentation_id'} para abrirlo ya parado en
+        una variante concreta (atajo del globo de stock del buscador).
+        """
         product_id = producto.get('id')
         hojas = self._mp_nodes.get_hojas_by_product(product_id)
         if not hojas:
@@ -2788,7 +2839,8 @@ class SalesView(QWidget):
             return
         descuentos = self._mp_discounts.get_by_product(product_id)
         try:
-            dlg = MPVariantDialog(producto, hojas, descuentos, parent=self)
+            dlg = MPVariantDialog(producto, hojas, descuentos, parent=self,
+                                  preseleccion=preseleccion)
         except Exception as e:
             logger.error(f"MPVariantDialog: {e}")
             QMessageBox.critical(self, 'Error', f'No se pudo abrir el diálogo de variantes:\n{e}')
@@ -5787,6 +5839,9 @@ class SpotlightDialog(QDialog):
     minimalista al estilo del mockup PosNew.
     """
     product_selected = pyqtSignal(dict)
+    # Atajo desde el globo de stock: (producto, accion) para abrir el diálogo de
+    # venta con la variante/variedad ya elegida, sin pasar por la selección.
+    variant_selected = pyqtSignal(dict, dict)
 
     def __init__(self, parent=None, db=None, initial_text=''):
         from PyQt5.QtWidgets import QApplication, QGraphicsDropShadowEffect
@@ -5797,6 +5852,7 @@ class SpotlightDialog(QDialog):
         self._resumenes = []          # stock_resumen() paralelo a _results
         self._hover_chip_row = -1     # fila cuya píldora tiene el mouse encima
         self._popover = None
+        self._popover_producto = None  # producto del globo abierto
         self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
         self.setModal(True)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -6209,6 +6265,8 @@ class SpotlightDialog(QDialog):
             self._popover.mouse_entered.connect(self._popover_close_timer.stop)
             self._popover.mouse_left.connect(self._popover_close_timer.start)
             self._popover.dismissed.connect(self._close_stock_popover)
+            self._popover.fila_activada.connect(self._on_variante_elegida)
+        self._popover_producto = producto
         self._popover.cargar(
             titulo=str(producto.get('name') or resumen.get('titulo') or 'Stock'),
             subtitulo=resumen.get('titulo') or '',
@@ -6237,6 +6295,19 @@ class SpotlightDialog(QDialog):
         if self._popover is not None and self._popover.isVisible():
             self._popover.hide()
             self.search_input.setFocus()
+
+    def _on_variante_elegida(self, accion):
+        """Atajo: clic en una fila del globo → cerrar el buscador y abrir el
+        diálogo de venta con esa variante/variedad ya elegida."""
+        if getattr(self, '_picking', False):
+            return
+        producto = getattr(self, '_popover_producto', None)
+        if not producto or not accion:
+            return
+        self._picking = True
+        self._close_stock_popover()
+        self.variant_selected.emit(producto, accion)
+        self.accept()
 
     def eventFilter(self, obj, event):
         from PyQt5.QtCore import QEvent
@@ -6292,6 +6363,7 @@ class _StockPopover(QFrame):
     mouse_entered = pyqtSignal()
     mouse_left    = pyqtSignal()
     dismissed     = pyqtSignal()
+    fila_activada = pyqtSignal(dict)   # click en una variante → venderla ya
 
     CON_FILTRO_DESDE = 7
 
@@ -6360,6 +6432,12 @@ class _StockPopover(QFrame):
         self._vacio.setWordWrap(True)
         v.addWidget(self._vacio)
 
+        self._pie = QLabel('Clic en una para venderla directo')
+        self._pie.setStyleSheet(
+            f"color:{_C['text_muted']}; font-size:10px; background:transparent; border:none;"
+        )
+        v.addWidget(self._pie)
+
         try:
             sombra = QGraphicsDropShadowEffect(self)
             sombra.setBlurRadius(26)
@@ -6378,11 +6456,17 @@ class _StockPopover(QFrame):
             if w is not None:
                 w.deleteLater()
         self._filas = []
+        clickeables = 0
 
-        for etiqueta, valor in filas:
-            fila = self._construir_fila(etiqueta, valor)
+        for f in filas:
+            etiqueta = f.get('label') or ''
+            valor    = f.get('valor') or ''
+            accion   = f.get('accion')
+            fila = self._construir_fila(etiqueta, valor, accion)
             self._cuerpo_lay.insertWidget(self._cuerpo_lay.count() - 1, fila)
             self._filas.append((f'{etiqueta} {valor}'.lower(), fila))
+            if accion:
+                clickeables += 1
 
         con_filtro = len(filas) >= self.CON_FILTRO_DESDE
         self._filtro.setVisible(con_filtro)
@@ -6391,16 +6475,20 @@ class _StockPopover(QFrame):
         self._vacio.setVisible(not filas)
         if not filas:
             self._vacio.setText('Sin desglose: el número de la píldora es el stock.')
+        self._pie.setVisible(bool(clickeables))
 
-        alto = min(230, max(46, len(filas) * 30 + 6))
+        alto = min(230, max(46, len(filas) * 32 + 6))
         self._scroll.setFixedHeight(alto if filas else 0)
 
-    def _construir_fila(self, etiqueta, valor):
+    def _construir_fila(self, etiqueta, valor, accion=None):
         _C = self._C
         w = QFrame()
-        w.setStyleSheet(f"QFrame {{ border:none; border-bottom:1px solid {_C['border_soft']}; }}")
+        w.setStyleSheet(
+            f"QFrame {{ border:none; border-bottom:1px solid {_C['border_soft']}; }}"
+            + (f"QFrame:hover {{ background:{_C['accent_soft']}; }}" if accion else '')
+        )
         h = QHBoxLayout(w)
-        h.setContentsMargins(0, 6, 0, 6)
+        h.setContentsMargins(6, 6, 6, 6)
         h.setSpacing(10)
         lbl = QLabel(str(etiqueta))
         lbl.setWordWrap(True)
@@ -6413,6 +6501,17 @@ class _StockPopover(QFrame):
         val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         h.addWidget(lbl, 1)
         h.addWidget(val, 0)
+        if accion:
+            # Click en la fila = atajo: abre el diálogo de venta con esta
+            # variante ya elegida, directo a la cantidad.
+            w.setCursor(Qt.PointingHandCursor)
+            w.setToolTip('Vender esta — abre el diálogo con la cantidad')
+            for hijo in (lbl, val):
+                hijo.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+            w.mouseReleaseEvent = (
+                lambda ev, a=accion: self.fila_activada.emit(a)
+                if ev.button() == Qt.LeftButton else None
+            )
         return w
 
     def _aplicar_filtro(self, texto):

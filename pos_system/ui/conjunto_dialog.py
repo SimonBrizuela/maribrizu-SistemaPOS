@@ -1076,7 +1076,18 @@ class ConjuntoDialog(QDialog):
         self._color_chevron.setText('▾' if start_expanded else '▸')
         if hasattr(self, '_color_search_wrap'):
             self._color_search_wrap.setVisible(start_expanded)
+        if start_expanded:
+            # Con muchas variedades la preseleccionada puede caer fuera de la
+            # ventana visible y parecería que no se eligió ninguna.
+            QTimer.singleShot(0, lambda: self._scroll_al_chip(chip_active))
         return wrap
+
+    def _scroll_al_chip(self, chip):
+        try:
+            if chip is not None and self._color_scroll is not None:
+                self._color_scroll.ensureWidgetVisible(chip, 0, 40)
+        except Exception:
+            pass
 
     def _toggle_color_expanded(self):
         """Despliega/colapsa la pestaña de variantes."""

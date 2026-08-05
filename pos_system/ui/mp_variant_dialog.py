@@ -578,7 +578,7 @@ class MPVariantDialog(QDialog):
         }
     """
     def __init__(self, producto: Dict, hojas: List[Dict], descuentos: List[Dict],
-                 parent=None):
+                 parent=None, preseleccion: Optional[Dict] = None):
         super().__init__(parent)
         self.producto = producto
         self.hojas = hojas or []
@@ -631,9 +631,47 @@ class MPVariantDialog(QDialog):
 
         self._build_ui()
 
+        # Atajo del buscador: viene con la variante ya elegida, así que el
+        # diálogo abre directo en la cantidad. Si el nodo ya no existe (catálogo
+        # cambiado desde otra PC) cae al flujo normal.
+        if preseleccion and self._aplicar_preseleccion(preseleccion):
+            return
         # Si solo hay 1 hoja, auto-seleccionarla
         if len(self.hojas) == 1:
             self._on_card_clicked(self.hojas[0])
+
+    def _aplicar_preseleccion(self, sel: Dict) -> bool:
+        """Deja seleccionada la hoja (y la presentación, si vino) de `sel`.
+
+        Devuelve False si no se pudo ubicar la hoja: el caller sigue con el
+        comportamiento normal en vez de abrir un diálogo en un estado raro.
+        """
+        node_id = str(sel.get('node_id') or '')
+        if not node_id:
+            return False
+        node = next((h for h in self.hojas if str(h.get('id') or '') == node_id), None)
+        if node is None:
+            return False
+
+        self._on_card_clicked(node)
+        # Dejar la variante elegida a la vista aunque esté abajo de todo.
+        try:
+            card = next((b for b in self._variant_btns
+                         if str(b.node.get('id') or '') == node_id), None)
+            if card is not None and getattr(self, '_variant_scroll', None) is not None:
+                self._variant_scroll.ensureWidgetVisible(card)
+        except Exception:
+            pass
+
+        pres_id = str(sel.get('presentation_id') or '')
+        if pres_id:
+            presentaciones = node.get('presentaciones') or []
+            idx = next((i for i, p in enumerate(presentaciones)
+                        if str(p.get('id') or '') == pres_id), -1)
+            # Con una sola presentación _on_card_clicked ya la dejó elegida.
+            if idx >= 0 and len(presentaciones) > 1 and idx < len(self._pres_btns):
+                self._on_pres_clicked(presentaciones[idx], self._pres_btns[idx])
+        return True
 
     # ── UI ──
     def _build_ui(self):
