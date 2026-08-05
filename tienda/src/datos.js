@@ -183,6 +183,38 @@ export async function traerDestacados(cantidad = 8) {
   });
 }
 
+/**
+ * Una tanda variada del catalogo, para cuando todavia no hay destacados
+ * marcados.
+ *
+ * Traer "los primeros N" da los primeros alfabeticamente, y el catalogo real
+ * arranca con Abecedario, Abrojal, Abrochadora, Abrochadora: la portada
+ * mostraba cuatro productos casi identicos y parecia rota. Se salta a un punto
+ * al azar del orden y se toma de ahi, asi cada visita ve cosas distintas.
+ */
+export async function traerMuestra(cantidad = 10) {
+  const rubros = await cargarRubros();
+  const total = rubros.reduce((t, r) => t + (r.cantidad || 0), 0);
+  // Se deja margen al final para no caer en el ultimo tramo y volver con menos
+  // productos de los pedidos.
+  const desde = total > cantidad * 3
+    ? Math.floor(Math.random() * (total - cantidad * 2))
+    : 0;
+
+  try {
+    const snap = await getDocs(query(
+      collection(db, 'tienda_productos'),
+      where('orden', '>=', desde),
+      orderBy('orden'),
+      limit(cantidad),
+    ));
+    return snap.docs.map(armarProducto);
+  } catch (err) {
+    console.error('[datos] muestra:', err);
+    return [];
+  }
+}
+
 export async function traerProducto(id) {
   return cacheado(`producto:${id}`, async () => {
     const snap = await getDoc(doc(db, 'tienda_productos', id));

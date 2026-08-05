@@ -2,7 +2,7 @@
  * Piezas de interfaz que se repiten en varias pantallas.
  * Devuelven HTML como texto; quien las usa lo inserta y engancha los eventos.
  */
-import { pesos, esc, colorDeVariedad } from './formato.js';
+import { pesos, esc, nombreBonito, colorDeVariedad } from './formato.js';
 import { icono, fichasMarca, franjaMarca } from './iconos.js';
 
 /**
@@ -15,11 +15,19 @@ import { icono, fichasMarca, franjaMarca } from './iconos.js';
 export function cardProducto(p, indice = 0) {
   const agotado = p.stock <= 0;
   const foto = p.imagenes?.[0];
-  const inicial = (p.nombre || '?').trim().charAt(0).toUpperCase();
 
-  const medios = foto
-    ? `<img src="${esc(foto)}" alt="${esc(p.nombre)}" loading="lazy" decoding="async" width="400" height="400">`
-    : `<div class="card-producto__placa" aria-hidden="true"><span>${esc(inicial)}</span></div>`;
+  // Se muestra el rubro, no la subcategoria. La subcategoria del catalogo es
+  // interna y ruidosa ("Jugueteria General", "Abrochadora"): se parte en dos
+  // lineas, grita, y no le dice nada a un cliente. El rubro es corto y ademas
+  // es el que le da el color a la card.
+  const etiqueta = nombreBonito(p.rubro) || p.categoria;
+
+  const bloqueFoto = foto
+    ? `<div class="card-producto__foto">
+         <img src="${esc(foto)}" alt="${esc(p.nombre)}" loading="lazy"
+              decoding="async" width="400" height="400">
+       </div>`
+    : '';
 
   const conVariedades = (p.variedades || []).filter(v => v.stock > 0);
   const muestras = conVariedades.slice(0, 3).map(v => {
@@ -38,7 +46,7 @@ export function cardProducto(p, indice = 0) {
 
   const cinta = agotado
     ? '<span class="card-producto__cinta ficha">Sin stock</span>'
-    : (p.destacado ? '<span class="card-producto__cinta ficha ficha--rubro">Más pedido</span>' : '');
+    : (p.destacado && foto ? '<span class="card-producto__cinta ficha ficha--rubro">Más pedido</span>' : '');
 
   // Con variedades el signo lleva a elegir, no agrega a ciegas: sumar "un
   // boligrafo" cuando hay cinco colores obliga a corregirlo despues.
@@ -47,7 +55,7 @@ export function cardProducto(p, indice = 0) {
     <button class="card-producto__agregar" data-agregar="${esc(p.id)}"
             data-elegir="${necesitaElegir ? '1' : ''}"
             aria-label="${necesitaElegir ? 'Elegir variedad de' : 'Agregar'} ${esc(p.nombre)}">
-      ${icono('mas', { tam: 20, grosor: 2.5 })}
+      ${icono('mas', { tam: 18, grosor: 2.5 })}
     </button>`;
 
   const anterior = p.precio_anterior && p.precio_anterior > p.precio
@@ -55,12 +63,13 @@ export function cardProducto(p, indice = 0) {
     : '';
 
   return `
-    <article class="card-producto${agotado ? ' card-producto--agotado' : ''}"
+    <article class="card-producto${foto ? '' : ' card-producto--sin-foto'}${
+               agotado ? ' card-producto--agotado' : ''}"
              data-rubro="${esc(p.rubro)}" style="--i:${indice}">
       ${cinta}
-      <div class="card-producto__foto">${medios}</div>
+      ${bloqueFoto}
       <div class="card-producto__cuerpo">
-        <span class="card-producto__rubro">${esc(p.categoria || p.rubro)}</span>
+        <span class="card-producto__rubro">${esc(etiqueta)}</span>
         <h3 class="card-producto__nombre">
           <a class="card-producto__enlace" href="/p/${esc(p.id)}"
              style="color:inherit;text-decoration:none">${esc(p.nombre)}</a>
@@ -84,13 +93,13 @@ export function grilla(productos) {
 /** Esqueletos mientras cargan los productos. */
 export function grillaCargando(cantidad = 10) {
   const uno = `
-    <article class="card-producto" aria-hidden="true">
-      <div class="card-producto__foto"><div class="esqueleto" style="width:100%;height:100%;border-radius:0"></div></div>
+    <article class="card-producto card-producto--sin-foto" aria-hidden="true"
+             style="border-top-color:var(--border)">
       <div class="card-producto__cuerpo">
         <div class="esqueleto" style="height:11px;width:45%"></div>
-        <div class="esqueleto" style="height:13px;width:100%"></div>
-        <div class="esqueleto" style="height:13px;width:65%"></div>
-        <div class="card-producto__pie"><div class="esqueleto" style="height:20px;width:70px"></div></div>
+        <div class="esqueleto" style="height:15px;width:100%"></div>
+        <div class="esqueleto" style="height:15px;width:70%"></div>
+        <div class="card-producto__pie"><div class="esqueleto" style="height:22px;width:80px"></div></div>
       </div>
     </article>`;
   return `<div class="grilla" role="status" aria-label="Cargando productos">
@@ -106,6 +115,13 @@ export function cabecera({ unidades = 0, busqueda = '' } = {}) {
           ${fichasMarca()}
           <span>Librería Liceo</span>
         </a>
+
+        <button class="icono-boton" data-abrir-busqueda aria-label="Buscar productos">
+          ${icono('buscar')}
+        </button>
+        <button class="icono-boton" data-cerrar-busqueda aria-label="Cerrar la búsqueda">
+          ${icono('izquierda')}
+        </button>
 
         <form class="buscador" role="search" data-buscador>
           <label class="solo-lectores" for="q">Buscar productos</label>

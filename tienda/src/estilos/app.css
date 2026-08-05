@@ -282,3 +282,32 @@
   justify-content: center;
   padding-block: var(--e-6);
 }
+
+
+/* ── Buscador plegable en celular ────────────────────────────────────────────
+   A 375 px el encabezado tenía logo + buscador + carrito, y al buscador le
+   quedaban 60 px: mostraba "Bu" y no se podía leer lo que uno escribía.
+
+   En pantalla chica el campo se guarda detrás de una lupa. Al tocarla, la fila
+   entera se convierte en el buscador con una flecha para volver, que es el
+   patrón que ya usan todas las apps y no hay que explicar. */
+@media (max-width: 639px) {
+  .cabecera .buscador { display: none; }
+  .cabecera [data-cerrar-busqueda] { display: none; }
+
+  .cabecera[data-buscando] .buscador { display: flex; }
+  .cabecera[data-buscando] .cabecera__logo,
+  .cabecera[data-buscando] .carrito-boton,
+  .cabecera[data-buscando] [data-abrir-busqueda] { display: none; }
+  .cabecera[data-buscando] [data-cerrar-busqueda] { display: grid; }
+}
+@media (min-width: 640px) {
+  .cabecera [data-abrir-busqueda],
+  .cabecera [data-cerrar-busqueda] { display: none; }
+}
+
+/* El nombre de la marca se guarda en pantallas muy angostas; las cinco fichas
+   solas ya identifican la tienda. */
+@media (max-width: 359px) {
+  .cabecera__logo span:not(.marca-fichas) { display: none; }
+}

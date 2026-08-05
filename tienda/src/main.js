@@ -165,11 +165,29 @@ document.addEventListener('click', async ev => {
   }
 });
 
+// Buscador plegable del celular. El foco entra al campo apenas se abre: si
+// hubiera que tocar la lupa y después el campo serían dos toques para lo mismo.
+document.addEventListener('click', ev => {
+  const cabeceraNodo = document.querySelector('.cabecera');
+  if (!cabeceraNodo) return;
+
+  if (ev.target.closest('[data-abrir-busqueda]')) {
+    cabeceraNodo.setAttribute('data-buscando', '');
+    cabeceraNodo.querySelector('#q')?.focus();
+  } else if (ev.target.closest('[data-cerrar-busqueda]')) {
+    cabeceraNodo.removeAttribute('data-buscando');
+  }
+});
+
 document.addEventListener('submit', ev => {
   const form = ev.target.closest('[data-buscador]');
   if (!form) return;
   ev.preventDefault();
   const texto = form.querySelector('input')?.value.trim() || '';
+  // El teclado del celular se baja al buscar: dejarlo abierto tapa la mitad de
+  // los resultados que el cliente acaba de pedir.
+  form.querySelector('input')?.blur();
+  document.querySelector('.cabecera')?.removeAttribute('data-buscando');
   ir(texto ? `/catalogo?q=${encodeURIComponent(texto)}` : '/catalogo');
 });
 

@@ -47,11 +47,20 @@
      blanco sobre el verde da 2,0:1 y no se lee nada. El verde, el naranja, el
      cyan y el rojo son luminosos y piden tinta oscura. Medido en
      design/contraste.mjs, no estimado a ojo. */
+  /* Sexto color. El logo trae cinco fichas y los rubros publicados son seis, asi
+     que Regaleria y Perfumeria caian las dos en el mismo rojo y parecia un error.
+     Este rosa no se invento: es el punto medio entre el rojo y el violeta del
+     logo, asi que pertenece a la familia sin desentonar. */
+  --liceo-rosa:     #B93A78;
+  --liceo-rosa-txt: #A32C68;
+  --liceo-rosa-bg:  #FBEBF3;
+
   --liceo-violeta-tinta: #FFFFFF;   /* 6,77:1 */
   --liceo-verde-tinta:   var(--ink); /* 9,62:1 */
   --liceo-naranja-tinta: var(--ink); /* 8,78:1 */
   --liceo-cyan-tinta:    var(--ink); /* 7,14:1 */
   --liceo-rojo-tinta:    var(--ink); /* 4,62:1 */
+  --liceo-rosa-tinta:    #FFFFFF;   /* 6,05:1 */
 
   /* ── Neutros ──────────────────────────────────────────────────────────────
      Ningún neutro es gris puro ni blanco puro: todos llevan una gota de violeta.
@@ -192,12 +201,14 @@
   --liceo-naranja-txt: #F5B95A;
   --liceo-cyan-txt:    #6DCBE2;
   --liceo-rojo-txt:    #F2818B;
+  --liceo-rosa-txt:    #EE93BE;
 
   --liceo-violeta-bg: #2A1B36;
   --liceo-verde-bg:   #23301A;
   --liceo-naranja-bg: #33260F;
   --liceo-cyan-bg:    #142C33;
   --liceo-rojo-bg:    #35191C;
+  --liceo-rosa-bg:    #331726;
 
   --bg:        #0E0D10;
   --surface:   #17151C;
@@ -260,11 +271,12 @@
   --rubro: var(--liceo-naranja); --rubro-txt: var(--liceo-naranja-txt);
   --rubro-bg: var(--liceo-naranja-bg); --rubro-tinta: var(--liceo-naranja-tinta);
 }
-[data-rubro="PERFUMERÍA"], [data-rubro="PERFUMERIA"] {
-  --rubro: var(--liceo-rojo);    --rubro-txt: var(--liceo-rojo-txt);
-  --rubro-bg: var(--liceo-rojo-bg);    --rubro-tinta: var(--liceo-rojo-tinta);
+[data-rubro="PERFUMERÍA"], [data-rubro="PERFUMERIA"],
+[data-rubro="LENCERÍA"], [data-rubro="LENCERIA"] {
+  --rubro: var(--liceo-rosa);    --rubro-txt: var(--liceo-rosa-txt);
+  --rubro-bg: var(--liceo-rosa-bg);    --rubro-tinta: var(--liceo-rosa-tinta);
 }
-[data-rubro="ACCESORIOS"], [data-rubro="LENCERÍA"], [data-rubro="LENCERIA"] {
+[data-rubro="ACCESORIOS"] {
   --rubro: var(--liceo-cyan);    --rubro-txt: var(--liceo-cyan-txt);
   --rubro-bg: var(--liceo-cyan-bg);    --rubro-tinta: var(--liceo-cyan-tinta);
 }

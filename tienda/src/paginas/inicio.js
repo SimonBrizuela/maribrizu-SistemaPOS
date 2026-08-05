@@ -1,4 +1,4 @@
-import { cargarConfig, cargarRubros, traerDestacados, traerProductos } from '../datos.js';
+import { cargarConfig, cargarRubros, traerDestacados, traerMuestra } from '../datos.js';
 import { grilla, grillaCargando, pie } from '../componentes.js';
 import { franjaMarca, icono } from '../iconos.js';
 import { esc } from '../formato.js';
@@ -41,7 +41,7 @@ export async function inicio({ montar }) {
 
     <div class="contenedor seccion">
       <div class="seccion__cabecera">
-        <h2>Lo más pedido</h2>
+        <h2 data-titulo-destacados>Del catálogo</h2>
         <a href="/catalogo" style="font-size:var(--t-sm);font-weight:600">Ver todo</a>
       </div>
       <div data-destacados>${grillaCargando(10)}</div>
@@ -98,12 +98,15 @@ export async function inicio({ montar }) {
   const cajaDestacados = document.querySelector('[data-destacados]');
   if (!cajaDestacados) return;
 
-  // Sin destacados marcados todavia, se muestran los primeros del catalogo: la
-  // portada con un hueco se ve peor que la portada con productos cualquiera.
+  // El titulo dice la verdad. Mientras nadie marque destacados desde el panel,
+  // esto es una muestra del catalogo y no "lo mas pedido": poner ese titulo
+  // sobre productos elegidos al azar es mentirle al cliente, y encima se nota
+  // apenas mira lo que hay abajo.
   let lista = destacados;
   if (!lista.length) {
-    const { productos } = await traerProductos({ cantidad: 10 });
-    lista = productos;
+    lista = await traerMuestra(10);
+  } else {
+    document.querySelector('[data-titulo-destacados]').textContent = 'Lo más pedido';
   }
 
   cajaDestacados.innerHTML = lista.length
