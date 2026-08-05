@@ -1,0 +1,171 @@
+<!-- @dsCard group="Base" name="Portada y marco negro" subtitle="El encabezado, la portada y el pie sobre el negro del logo" -->
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">Primera pantalla</h2>
+
+  <div class="pv-marco">
+
+    <header class="cabecera" style="position:static">
+      <div class="contenedor cabecera__fila">
+        <a class="cabecera__logo" href="#">
+          <span class="marca-fichas"><i></i><i></i><i></i><i></i><i></i></span>
+          Librería Liceo
+        </a>
+        <div class="buscador">
+          <span class="buscador__icono">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          </span>
+          <input class="buscador__input" type="search" placeholder="Buscar cuadernos, hilos, juguetes…" aria-label="Buscar productos">
+        </div>
+        <button class="icono-boton carrito-boton" aria-label="Carrito, 3 productos">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+          <span class="carrito-boton__globo cifra">3</span>
+        </button>
+      </div>
+    </header>
+
+    <div class="marco-oscuro">
+      <div class="contenedor" style="padding-block:var(--e-8) var(--e-7)">
+        <p class="apagado" style="font-size:var(--t-sm);font-weight:600;letter-spacing:.1em;text-transform:uppercase;margin-bottom:var(--e-4)">
+          Córdoba · Villa Cabrera
+        </p>
+        <h1 style="font-size:var(--t-hero);font-weight:700;letter-spacing:-.035em;max-width:14ch;margin-bottom:var(--e-4)">
+          Todo para el cole, la casa y el regalo
+        </h1>
+        <p class="apagado" style="font-size:var(--t-md);line-height:var(--alto-suelto);max-width:46ch;margin-bottom:var(--e-6)">
+          Somos la librería de la esquina, con el catálogo entero en tu celular.
+          Te lo llevamos a tu casa o lo pasás a buscar cuando te queda cómodo.
+        </p>
+        <div class="pv-fila">
+          <a class="boton boton--primario boton--grande" href="#">Ver el catálogo</a>
+          <a class="boton boton--grande" href="#" style="background:transparent;border-color:var(--ink-borde);color:var(--ink-texto)">Cómo llegar al local</a>
+        </div>
+      </div>
+
+      <div class="contenedor" style="padding-bottom:var(--e-7)">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:var(--e-3)">
+          <a href="#" data-rubro="LIBRERÍA" style="display:block;padding:var(--e-4);border-radius:var(--r-md);background:var(--rubro);color:var(--rubro-tinta);text-decoration:none">
+            <span style="display:block;font-family:var(--font-titulo);font-weight:700;font-size:var(--t-md)">Librería</span>
+            <span style="display:block;font-size:var(--t-xs);opacity:.75">1.240 productos</span>
+          </a>
+          <a href="#" data-rubro="PAPELERA" style="display:block;padding:var(--e-4);border-radius:var(--r-md);background:var(--rubro);color:var(--rubro-tinta);text-decoration:none">
+            <span style="display:block;font-family:var(--font-titulo);font-weight:700;font-size:var(--t-md)">Papelera</span>
+            <span style="display:block;font-size:var(--t-xs);opacity:.75">380 productos</span>
+          </a>
+          <a href="#" data-rubro="MERCERÍA" style="display:block;padding:var(--e-4);border-radius:var(--r-md);background:var(--rubro);color:var(--rubro-tinta);text-decoration:none">
+            <span style="display:block;font-family:var(--font-titulo);font-weight:700;font-size:var(--t-md)">Mercería</span>
+            <span style="display:block;font-size:var(--t-xs);opacity:.75">2.100 productos</span>
+          </a>
+          <a href="#" data-rubro="JUGUETERÍA" style="display:block;padding:var(--e-4);border-radius:var(--r-md);background:var(--rubro);color:var(--rubro-tinta);text-decoration:none">
+            <span style="display:block;font-family:var(--font-titulo);font-weight:700;font-size:var(--t-md)">Juguetería</span>
+            <span style="display:block;font-size:var(--t-xs);opacity:.75">460 productos</span>
+          </a>
+          <a href="#" data-rubro="REGALERÍA" style="display:block;padding:var(--e-4);border-radius:var(--r-md);background:var(--rubro);color:var(--rubro-tinta);text-decoration:none">
+            <span style="display:block;font-family:var(--font-titulo);font-weight:700;font-size:var(--t-md)">Regalería</span>
+            <span style="display:block;font-size:var(--t-xs);opacity:.75">590 productos</span>
+          </a>
+        </div>
+      </div>
+
+      <div class="franja-marca"><i></i><i></i><i></i><i></i><i></i></div>
+    </div>
+
+    <div style="background:var(--bg);padding:var(--e-6) 0">
+      <div class="contenedor">
+        <h2 style="margin-bottom:var(--e-4)">Lo más pedido</h2>
+        <div class="grilla">
+          <article class="card-producto" data-rubro="LIBRERÍA">
+            <div class="card-producto__foto"><div style="width:100%;height:100%;background:linear-gradient(145deg,#3F51B5,#7B3FA6)"></div></div>
+            <div class="card-producto__cuerpo">
+              <span class="card-producto__rubro">Librería</span>
+              <h3 class="card-producto__nombre">Cuaderno Rivadavia Tapa Dura 50 Hojas</h3>
+              <div class="card-producto__pie">
+                <span class="card-producto__precio cifra">$4.850</span>
+                <button class="card-producto__agregar" aria-label="Agregar"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+              </div>
+            </div>
+          </article>
+          <article class="card-producto" data-rubro="PAPELERA">
+            <div class="card-producto__foto"><div class="card-producto__placa"><span>R</span></div></div>
+            <div class="card-producto__cuerpo">
+              <span class="card-producto__rubro">Papelera</span>
+              <h3 class="card-producto__nombre">Resma A4 75&nbsp;g 500 Hojas</h3>
+              <div class="card-producto__pie">
+                <span class="card-producto__precio cifra">$12.400</span>
+                <button class="card-producto__agregar" aria-label="Agregar"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+              </div>
+            </div>
+          </article>
+          <article class="card-producto" data-rubro="MERCERÍA">
+            <div class="card-producto__foto"><div class="card-producto__placa"><span>H</span></div></div>
+            <div class="card-producto__cuerpo">
+              <span class="card-producto__rubro">Mercería</span>
+              <h3 class="card-producto__nombre">Hilo de Coser Poliéster 500 Yardas</h3>
+              <div class="card-producto__pie">
+                <span class="card-producto__precio cifra">$1.290</span>
+                <button class="card-producto__agregar" aria-label="Agregar"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+              </div>
+            </div>
+          </article>
+          <article class="card-producto" data-rubro="JUGUETERÍA">
+            <div class="card-producto__foto"><div style="width:100%;height:100%;background:linear-gradient(145deg,#F39C12,#E63946)"></div></div>
+            <div class="card-producto__cuerpo">
+              <span class="card-producto__rubro">Juguetería</span>
+              <h3 class="card-producto__nombre">Rompecabezas 1000 Piezas Paisaje</h3>
+              <div class="card-producto__pie">
+                <span class="card-producto__precio cifra">$13.950</span>
+                <button class="card-producto__agregar" aria-label="Agregar"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+              </div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </div>
+
+    <div class="marco-oscuro">
+      <div class="franja-marca"><i></i><i></i><i></i><i></i><i></i></div>
+      <div class="contenedor" style="padding-block:var(--e-6);display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:var(--e-5)">
+        <div>
+          <span class="cabecera__logo" style="color:var(--ink-texto);margin-bottom:var(--e-3)">
+            <span class="marca-fichas"><i></i><i></i><i></i><i></i><i></i></span>
+            Librería Liceo
+          </span>
+          <p class="apagado" style="font-size:var(--t-sm);line-height:1.6;margin-top:var(--e-3)">
+            Av. Alfonsina Storni 168<br>
+            X5019 Córdoba
+          </p>
+        </div>
+        <div>
+          <h3 style="font-size:var(--t-sm);letter-spacing:.08em;text-transform:uppercase;margin-bottom:var(--e-3)">Horarios</h3>
+          <p class="apagado" style="font-size:var(--t-sm);line-height:1.7">
+            Lunes a viernes 9 a 13 y 16:30 a 20:30<br>
+            Sábados 9 a 13<br>
+            Domingos cerrado
+          </p>
+        </div>
+        <div>
+          <h3 style="font-size:var(--t-sm);letter-spacing:.08em;text-transform:uppercase;margin-bottom:var(--e-3)">Contacto</h3>
+          <p class="apagado" style="font-size:var(--t-sm);line-height:1.7">
+            351 704 6684<br>
+            libreria.liceo@hotmail.com
+          </p>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <p class="pv-nota">
+    <strong>Este es el cambio más importante de la auditoría.</strong> La primera versión
+    tenía los cinco colores de la marca pero todo apoyado sobre blanco, con el color
+    reducido a detalles de ocho píxeles. Se veía prolijo y se veía como cualquier
+    plantilla de tienda.<br><br>
+    El logo es color saturado sobre negro profundo, y esa tensión es la marca. Poniendo
+    el marco sobre negro (encabezado, portada, pie) la primera pantalla se lee como el
+    logo, y el catálogo queda claro, que es lo que los productos necesitan para leerse.
+    La franja de cinco colores es el logo desarmado y estirado, y es lo único decorativo
+    de toda la tienda.<br><br>
+    Las fichas de rubro usan cada una su tinta: violeta con texto blanco, verde y
+    naranja con texto negro. Blanco sobre el verde del logo da 2:1 y no se lee.
+  </p>
+</section>

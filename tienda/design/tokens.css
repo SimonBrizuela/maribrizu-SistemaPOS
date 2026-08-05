@@ -41,21 +41,54 @@
   --liceo-cyan-bg:    #E4F4F8;
   --liceo-rojo-bg:    #FDEBEC;
 
+  /* Qué color va ENCIMA de cada color de marca cuando se usa como relleno
+     (ficha de filtro activa, botón de rubro, globo del carrito).
+     No hay una respuesta única: blanco sobre el violeta da 6,8:1 y se lee, pero
+     blanco sobre el verde da 2,0:1 y no se lee nada. El verde, el naranja, el
+     cyan y el rojo son luminosos y piden tinta oscura. Medido en
+     design/contraste.mjs, no estimado a ojo. */
+  --liceo-violeta-tinta: #FFFFFF;   /* 6,77:1 */
+  --liceo-verde-tinta:   var(--ink); /* 9,62:1 */
+  --liceo-naranja-tinta: var(--ink); /* 8,78:1 */
+  --liceo-cyan-tinta:    var(--ink); /* 7,14:1 */
+  --liceo-rojo-tinta:    var(--ink); /* 4,62:1 */
+
   /* ── Neutros ──────────────────────────────────────────────────────────────
-     El negro no es #000: lleva una pizca de violeta para que case con la marca
-     y no se vea como un agujero en la pantalla. */
+     Ningún neutro es gris puro ni blanco puro: todos llevan una gota de violeta.
+     Un #FFFFFF junto a la marca se ve azulado y frío por contraste simultáneo;
+     medio punto de tinte alcanza para que el conjunto se lea como una sola
+     familia sin que nadie note por qué. */
   --ink:       #0E0D10;
   --ink-2:     #1C1A21;
   --bg:        #FAF8FB;
-  --surface:   #FFFFFF;
+  --surface:   #FEFDFF;
   --surface-2: #F4F1F7;
   --surface-3: #EDE9F2;
   --text:      #17151C;
   --text-2:    #5C5766;
-  --text-3:    #8B8496;
+  --text-3:    #6F6879;
   --border:    #E7E2EC;
   --border-2:  #D3CCDC;
   --overlay:   rgba(14, 13, 16, .55);
+
+  /* Borde de un control (campo, selector, contador). Va aparte del borde
+     decorativo porque acá el contorno ES lo que identifica al elemento como
+     algo con lo que se puede interactuar: si no se distingue del fondo, el
+     campo desaparece. WCAG pide 3:1 para esto; el borde de una card, que es
+     decorativo, no tiene ese requisito. */
+  --borde-control: #8C8398;
+
+  /* ── Marco negro ──────────────────────────────────────────────────────────
+     El logo es color saturado sobre negro profundo, y esa tensión es la marca.
+     Una tienda con los mismos colores pero toda sobre blanco se parece a
+     cualquier plantilla. El encabezado, la portada y el pie van sobre negro; el
+     catálogo queda claro, porque los productos necesitan fondo neutro para
+     leerse. Estos valores no cambian entre modo claro y oscuro. */
+  --ink-superficie:   #0E0D10;
+  --ink-superficie-2: #1C1A21;
+  --ink-texto:        #F7F5FA;
+  --ink-texto-2:      #A9A1B5;
+  --ink-borde:        #2E2937;
 
   /* ── Semánticos ───────────────────────────────────────────────────────── */
   --primary:      var(--liceo-violeta);
@@ -64,9 +97,14 @@
   --primary-bg:   var(--liceo-violeta-bg);
   --primary-dark: #5E2D80;
 
-  --exito:     #2F7A3D;  --exito-bg:  #E8F5E9;
-  --alerta:    #9A5B00;  --alerta-bg: #FDF2E0;
-  --error:     #C1121F;  --error-bg:  #FDEBEC;
+  /* Cada estado tiene tres piezas y no se mezclan: el color del TEXTO sobre
+     fondo claro, el color del RELLENO cuando el estado es un bloque sólido, y
+     la TINTA que va encima de ese relleno. Separarlas es lo que evita el bug
+     clásico en modo oscuro: el verde se aclara para que el texto se lea, y de
+     rebote el tilde blanco sobre el círculo verde deja de verse. */
+  --exito:  #2F7A3D;  --exito-bg:  #E8F5E9;  --exito-solido:  #2F7A3D;  --exito-tinta:  #FFFFFF;
+  --alerta: #9A5B00;  --alerta-bg: #FDF2E0;  --alerta-solido: #9A5B00;  --alerta-tinta: #FFFFFF;
+  --error:  #C1121F;  --error-bg:  #FDEBEC;  --error-solido:  #C1121F;  --error-tinta:  #FFFFFF;
 
   /* ── Tipografía ───────────────────────────────────────────────────────────
      Rubik para títulos: geométrica y redonda, es lo más cercano a la
@@ -167,14 +205,18 @@
   --surface-3: #282430;
   --text:      #F2EFF5;
   --text-2:    #ADA5B8;
-  --text-3:    #7E7688;
+  --text-3:    #8B8398;
   --border:    #2A2632;
   --border-2:  #3A3444;
+  --borde-control: #6E6779;
   --overlay:   rgba(0, 0, 0, .7);
 
   --primary-txt: var(--liceo-violeta-txt);
   --primary-bg:  var(--liceo-violeta-bg);
 
+  /* Solo cambia el color de TEXTO. El relleno sólido y su tinta se heredan del
+     modo claro a propósito: un círculo verde oscuro con tilde blanco funciona
+     igual sobre fondo negro, y aclararlo acá rompería el tilde. */
   --exito: #6FBF7C;  --exito-bg:  #16301B;
   --alerta:#E8A94A;  --alerta-bg: #33260F;
   --error: #F2818B;  --error-bg:  #35191C;
@@ -193,33 +235,42 @@
    Se aplica en cualquier contenedor con data-rubro; los hijos usan
    var(--rubro) y var(--rubro-txt) sin saber de qué rubro se trata. */
 [data-rubro] {
-  --rubro:     var(--liceo-violeta);
-  --rubro-txt: var(--liceo-violeta-txt);
-  --rubro-bg:  var(--liceo-violeta-bg);
+  --rubro:       var(--liceo-violeta);
+  --rubro-txt:   var(--liceo-violeta-txt);
+  --rubro-bg:    var(--liceo-violeta-bg);
+  --rubro-tinta: var(--liceo-violeta-tinta);
 }
 [data-rubro="LIBRERÍA"], [data-rubro="LIBRERIA"] {
-  --rubro: var(--liceo-violeta); --rubro-txt: var(--liceo-violeta-txt); --rubro-bg: var(--liceo-violeta-bg);
+  --rubro: var(--liceo-violeta); --rubro-txt: var(--liceo-violeta-txt);
+  --rubro-bg: var(--liceo-violeta-bg); --rubro-tinta: var(--liceo-violeta-tinta);
 }
 [data-rubro="PAPELERA"] {
-  --rubro: var(--liceo-cyan);    --rubro-txt: var(--liceo-cyan-txt);    --rubro-bg: var(--liceo-cyan-bg);
+  --rubro: var(--liceo-cyan);    --rubro-txt: var(--liceo-cyan-txt);
+  --rubro-bg: var(--liceo-cyan-bg);    --rubro-tinta: var(--liceo-cyan-tinta);
 }
 [data-rubro="MERCERÍA"], [data-rubro="MERCERIA"] {
-  --rubro: var(--liceo-verde);   --rubro-txt: var(--liceo-verde-txt);   --rubro-bg: var(--liceo-verde-bg);
+  --rubro: var(--liceo-verde);   --rubro-txt: var(--liceo-verde-txt);
+  --rubro-bg: var(--liceo-verde-bg);   --rubro-tinta: var(--liceo-verde-tinta);
 }
 [data-rubro="REGALERÍA"], [data-rubro="REGALERIA"] {
-  --rubro: var(--liceo-rojo);    --rubro-txt: var(--liceo-rojo-txt);    --rubro-bg: var(--liceo-rojo-bg);
+  --rubro: var(--liceo-rojo);    --rubro-txt: var(--liceo-rojo-txt);
+  --rubro-bg: var(--liceo-rojo-bg);    --rubro-tinta: var(--liceo-rojo-tinta);
 }
 [data-rubro="JUGUETERÍA"], [data-rubro="JUGUETERIA"] {
-  --rubro: var(--liceo-naranja); --rubro-txt: var(--liceo-naranja-txt); --rubro-bg: var(--liceo-naranja-bg);
+  --rubro: var(--liceo-naranja); --rubro-txt: var(--liceo-naranja-txt);
+  --rubro-bg: var(--liceo-naranja-bg); --rubro-tinta: var(--liceo-naranja-tinta);
 }
 [data-rubro="PERFUMERÍA"], [data-rubro="PERFUMERIA"] {
-  --rubro: var(--liceo-rojo);    --rubro-txt: var(--liceo-rojo-txt);    --rubro-bg: var(--liceo-rojo-bg);
+  --rubro: var(--liceo-rojo);    --rubro-txt: var(--liceo-rojo-txt);
+  --rubro-bg: var(--liceo-rojo-bg);    --rubro-tinta: var(--liceo-rojo-tinta);
 }
 [data-rubro="ACCESORIOS"], [data-rubro="LENCERÍA"], [data-rubro="LENCERIA"] {
-  --rubro: var(--liceo-cyan);    --rubro-txt: var(--liceo-cyan-txt);    --rubro-bg: var(--liceo-cyan-bg);
+  --rubro: var(--liceo-cyan);    --rubro-txt: var(--liceo-cyan-txt);
+  --rubro-bg: var(--liceo-cyan-bg);    --rubro-tinta: var(--liceo-cyan-tinta);
 }
 [data-rubro="NAVIDAD"], [data-rubro="SELLOS"] {
-  --rubro: var(--liceo-verde);   --rubro-txt: var(--liceo-verde-txt);   --rubro-bg: var(--liceo-verde-bg);
+  --rubro: var(--liceo-verde);   --rubro-txt: var(--liceo-verde-txt);
+  --rubro-bg: var(--liceo-verde-bg);   --rubro-tinta: var(--liceo-verde-tinta);
 }
 
 /* ── Accesibilidad de movimiento ────────────────────────────────────────────

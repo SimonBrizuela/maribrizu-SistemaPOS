@@ -17,8 +17,8 @@
         <span class="campo__ayuda">Te escribimos por acá cuando el pedido esté listo.</span>
       </div>
 
-      <div style="display:flex;flex-direction:column;gap:var(--e-3);margin-top:var(--e-2)">
-        <span class="campo__label">Cómo lo recibís</span>
+      <div role="radiogroup" aria-labelledby="pv-entrega-tit" style="display:flex;flex-direction:column;gap:var(--e-3);margin-top:var(--e-2)">
+        <span class="campo__label" id="pv-entrega-tit">Cómo lo recibís</span>
 
         <button class="opcion" role="radio" aria-checked="false">
           <span class="opcion__marca"></span>
@@ -58,7 +58,7 @@
 
       <!-- Cotización resuelta -->
       <div data-rubro="LIBRERÍA" style="display:flex;align-items:center;gap:var(--e-3);padding:var(--e-4);border-radius:var(--r-md);background:var(--exito-bg);border:1px solid color-mix(in srgb, var(--exito) 30%, transparent)">
-        <span style="flex:none;display:grid;place-items:center;width:40px;height:40px;border-radius:50%;background:var(--exito);color:#fff">
+        <span style="flex:none;display:grid;place-items:center;width:40px;height:40px;border-radius:50%;background:var(--exito-solido);color:var(--exito-tinta)">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
         </span>
         <span style="flex:1;min-width:0">
@@ -114,14 +114,14 @@
     </div>
 
     <div style="display:flex;align-items:flex-start;gap:var(--e-3);padding:var(--e-4);border-radius:var(--r-md);background:var(--alerta-bg);border:1px solid color-mix(in srgb, var(--alerta) 30%, transparent)">
-      <span style="flex:none;display:grid;place-items:center;width:40px;height:40px;border-radius:50%;background:var(--alerta);color:#fff">
+      <span style="flex:none;display:grid;place-items:center;width:40px;height:40px;border-radius:50%;background:var(--alerta-solido);color:var(--alerta-tinta)">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M12 8v5M12 16.5v.5"/><circle cx="12" cy="12" r="9"/></svg>
       </span>
       <span style="flex:1">
         <span style="display:block;font-weight:700;font-size:var(--t-sm);color:var(--alerta)">Nos queda lejos para repartir</span>
         <span style="display:block;font-size:var(--t-xs);color:var(--text-2);line-height:1.5;margin-bottom:var(--e-3)">
           Estás a 18,6&nbsp;km y llegamos hasta 12&nbsp;km. Podés pasar a buscarlo por el local
-          cuando quieras — te lo dejamos preparado.
+          cuando quieras y te lo dejamos preparado.
         </span>
         <button class="boton boton--secundario boton--chico">Cambiar a retiro en el local</button>
       </span>

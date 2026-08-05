@@ -140,11 +140,11 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .boton--secundario {
   background: var(--surface);
   color: var(--text);
-  border-color: var(--border-2);
+  border-color: var(--borde-control);
 }
 .boton--secundario:hover:not(:disabled) {
   background: var(--surface-2);
-  border-color: var(--text-3);
+  border-color: var(--text-2);
 }
 
 .boton--fantasma {
@@ -154,15 +154,15 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .boton--fantasma:hover:not(:disabled) { background: var(--primary-bg); }
 
 .boton--peligro {
-  background: var(--error);
-  color: #fff;
+  background: var(--error-solido);
+  color: var(--error-tinta);
 }
 
 /* Hereda el color del rubro del contenedor: el botón de una ficha de jugueteria
    sale naranja sin escribir una regla por rubro. */
 .boton--rubro {
   background: var(--rubro, var(--primary));
-  color: #fff;
+  color: var(--rubro-tinta, var(--primary-ink));
 }
 
 .boton--chico  { min-height: 36px; padding: 0 var(--e-4); font-size: var(--t-xs); }
@@ -231,13 +231,17 @@ button, input, select, textarea { font: inherit; color: inherit; }
     color var(--m-rapido) var(--curva);
   touch-action: manipulation;
 }
-.ficha-filtro:hover { border-color: var(--border-2); background: var(--surface-2); }
+.ficha-filtro:hover { border-color: var(--borde-control); background: var(--surface-2); }
+/* La tinta la decide el rubro, no una constante. Blanco sobre el violeta se lee
+   a 6,8:1, pero sobre el verde lima del logo da 2,0:1 y desaparece. Cada color
+   trae la tinta que le corresponde. */
 .ficha-filtro[aria-pressed="true"] {
   background: var(--rubro, var(--primary));
   border-color: var(--rubro, var(--primary));
-  color: #fff;
+  color: var(--rubro-tinta, var(--primary-ink));
 }
-/* El punto de color adelanta de qué rubro es el filtro incluso sin activarlo. */
+/* El punto de color adelanta de qué rubro es el filtro incluso sin activarlo:
+   así el estado no depende solo del relleno. */
 .ficha-filtro::before {
   content: '';
   width: 8px; height: 8px;
@@ -246,7 +250,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   flex: none;
   transition: background var(--m-rapido) var(--curva);
 }
-.ficha-filtro[aria-pressed="true"]::before { background: #fff; }
+.ficha-filtro[aria-pressed="true"]::before { background: var(--rubro-tinta, var(--primary-ink)); }
 .ficha-filtro--sin-punto::before { display: none; }
 
 /* ── Card de producto ───────────────────────────────────────────────────── */
@@ -384,13 +388,27 @@ button, input, select, textarea { font: inherit; color: inherit; }
   border: none;
   border-radius: var(--r-full);
   background: var(--rubro, var(--primary));
-  color: #fff;
+  color: var(--rubro-tinta, var(--primary-ink));
   cursor: pointer;
   transition: transform var(--m-rapido) var(--curva), filter var(--m-rapido) var(--curva);
   touch-action: manipulation;
+  /* Se apoya sobre el enlace que cubre toda la card, para que tocar el signo
+     agregue al carrito en vez de abrir la ficha del producto. */
+  position: relative;
+  z-index: 2;
 }
 .card-producto__agregar:hover { filter: brightness(.92); }
 .card-producto__agregar:active { transform: scale(.9); }
+
+/* El enlace cubre la card entera sin envolver al botón: anidar un botón dentro
+   de un enlace es HTML inválido y en la práctica hace que cada toque en el
+   signo abra la ficha del producto. */
+.card-producto__enlace::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+}
 
 /* Agotado: la card se atenúa pero no desaparece. Un catálogo que encoge se ve
    pobre, y el cliente igual entra a ver si volvió el producto. */
@@ -408,7 +426,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   width: 14px; height: 14px;
   border-radius: 50%;
   border: 1.5px solid var(--surface);
-  box-shadow: 0 0 0 1px var(--border-2);
+  box-shadow: 0 0 0 1px var(--borde-control);
 }
 .card-producto__mas-colores {
   font-size: var(--t-xs);
@@ -459,7 +477,7 @@ button, input, select, textarea { font: inherit; color: inherit; }
   width: 100%;
   min-height: 48px;
   padding: var(--e-3) var(--e-4);
-  border: 1.5px solid var(--border-2);
+  border: 1.5px solid var(--borde-control);
   border-radius: var(--r-md);
   background: var(--surface);
   color: var(--text);
@@ -507,7 +525,7 @@ textarea.campo__control { min-height: 96px; resize: vertical; line-height: var(-
   align-items: flex-start;
   gap: var(--e-3);
   padding: var(--e-4);
-  border: 1.5px solid var(--border-2);
+  border: 1.5px solid var(--borde-control);
   border-radius: var(--r-md);
   background: var(--surface);
   cursor: pointer;
@@ -528,7 +546,7 @@ textarea.campo__control { min-height: 96px; resize: vertical; line-height: var(-
   flex: none;
   width: 22px; height: 22px;
   margin-top: 1px;
-  border: 2px solid var(--border-2);
+  border: 2px solid var(--borde-control);
   border-radius: 50%;
   display: grid;
   place-items: center;
@@ -579,23 +597,52 @@ textarea.campo__control { min-height: 96px; resize: vertical; line-height: var(-
 
 /* ── Estado vacío ───────────────────────────────────────────────────────── */
 
+/* Sin circulito gris con un icono adentro. Ese patron esta en todas las apps
+   del mundo y no dice nada: es relleno para que el espacio no quede vacio.
+   Aca manda la frase, que es lo unico que el cliente necesita leer, y debajo la
+   salida concreta. */
 .vacio {
   display: flex;
   flex-direction: column;
-  align-items: center;
+  align-items: flex-start;
   gap: var(--e-3);
   padding: var(--e-8) var(--e-4);
-  text-align: center;
+  max-width: 46ch;
 }
-.vacio__icono {
-  width: 64px; height: 64px;
-  display: grid; place-items: center;
-  border-radius: var(--r-full);
-  background: var(--surface-2);
-  color: var(--text-3);
+.vacio__titulo {
+  font-family: var(--font-titulo);
+  font-size: var(--t-xl);
+  font-weight: var(--peso-bold);
+  line-height: var(--alto-apretado);
+  letter-spacing: -.02em;
 }
-.vacio__titulo { font-family: var(--font-titulo); font-size: var(--t-lg); font-weight: var(--peso-bold); }
-.vacio__texto  { color: var(--text-2); max-width: 42ch; }
+.vacio__titulo em {
+  font-style: normal;
+  color: var(--primary-txt);
+}
+.vacio__texto {
+  color: var(--text-2);
+  line-height: var(--alto-suelto);
+}
+.vacio__acciones {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--e-3);
+  margin-top: var(--e-3);
+}
+/* Franja de marca corta como remate: las mismas cinco fichas del logo, sin
+   inventar un icono decorativo nuevo. */
+.vacio::before {
+  content: '';
+  width: 56px;
+  height: 5px;
+  border-radius: 3px;
+  background: linear-gradient(90deg,
+    var(--liceo-violeta) 0 20%, var(--liceo-verde) 20% 40%,
+    var(--liceo-naranja) 40% 60%, var(--liceo-cyan) 60% 80%,
+    var(--liceo-rojo) 80% 100%);
+  margin-bottom: var(--e-2);
+}
 
 /* ── Barra de acción fija (móvil) ───────────────────────────────────────────
    El total y el botón de comprar quedan siempre a la vista. El padding inferior
@@ -609,10 +656,9 @@ textarea.campo__control { min-height: 96px; resize: vertical; line-height: var(-
   gap: var(--e-3);
   padding: var(--e-3) var(--e-4);
   padding-bottom: calc(var(--e-3) + env(safe-area-inset-bottom, 0px));
-  background: color-mix(in srgb, var(--surface) 92%, transparent);
-  backdrop-filter: blur(12px);
-  -webkit-backdrop-filter: blur(12px);
+  background: var(--surface);
   border-top: 1px solid var(--border);
+  box-shadow: 0 -4px 16px rgba(14, 13, 16, .06);
 }
 
 /* ── Toast ──────────────────────────────────────────────────────────────── */
@@ -635,8 +681,8 @@ textarea.campo__control { min-height: 96px; resize: vertical; line-height: var(-
   gap: var(--e-3);
   padding: var(--e-3) var(--e-4);
   border-radius: var(--r-md);
-  background: var(--ink);
-  color: #fff;
+  background: var(--ink-superficie);
+  color: var(--ink-texto);
   font-size: var(--t-sm);
   font-weight: var(--peso-medio);
   box-shadow: var(--s-4);
@@ -775,7 +821,7 @@ textarea.campo__control { min-height: 96px; resize: vertical; line-height: var(-
 .contador {
   display: inline-flex;
   align-items: center;
-  border: 1.5px solid var(--border-2);
+  border: 1.5px solid var(--borde-control);
   border-radius: var(--r-full);
   overflow: hidden;
 }
@@ -858,14 +904,14 @@ textarea.campo__control { min-height: 96px; resize: vertical; line-height: var(-
   transition: background var(--m-normal) var(--curva), border-color var(--m-normal) var(--curva);
 }
 .progreso__paso--hecho .progreso__marca {
-  background: var(--exito);
-  border-color: var(--exito);
-  color: #fff;
+  background: var(--exito-solido);
+  border-color: var(--exito-solido);
+  color: var(--exito-tinta);
 }
 .progreso__paso--actual .progreso__marca {
   background: var(--primary);
   border-color: var(--primary);
-  color: #fff;
+  color: var(--primary-ink);
   animation: latido 2s ease-in-out infinite;
 }
 @keyframes latido {
@@ -879,15 +925,65 @@ textarea.campo__control { min-height: 96px; resize: vertical; line-height: var(-
 
 /* ── Encabezado ─────────────────────────────────────────────────────────── */
 
+/* El encabezado va sobre negro, no sobre blanco.
+   El logo es color saturado sobre negro profundo y esa tension ES la marca. Una
+   tienda con los mismos cinco colores pero toda sobre blanco termina pareciendose
+   a cualquier plantilla: el color queda reducido a detalles de 8 px. Poniendo el
+   marco (encabezado, portada, pie) sobre negro, la primera pantalla se lee como
+   el logo y el catalogo queda claro, que es lo que los productos necesitan. */
 .cabecera {
   position: sticky;
   top: 0;
   z-index: var(--z-nav);
-  background: color-mix(in srgb, var(--surface) 88%, transparent);
-  backdrop-filter: blur(14px);
-  -webkit-backdrop-filter: blur(14px);
-  border-bottom: 1px solid var(--border);
+  background: var(--ink-superficie);
+  border-bottom: 1px solid var(--ink-borde);
+  color: var(--ink-texto);
 }
+.cabecera .cabecera__logo { color: var(--ink-texto); }
+.cabecera .icono-boton { color: var(--ink-texto-2); }
+.cabecera .icono-boton:hover { background: var(--ink-superficie-2); color: var(--ink-texto); }
+
+/* El buscador sobre negro no puede ser un rectangulo blanco: partiria la barra
+   en dos. Es un hueco un punto mas claro que el fondo. */
+.cabecera .buscador__input {
+  background: var(--ink-superficie-2);
+  border-color: var(--ink-borde);
+  color: var(--ink-texto);
+}
+.cabecera .buscador__input::placeholder { color: var(--ink-texto-2); }
+.cabecera .buscador__icono { color: var(--ink-texto-2); }
+.cabecera .buscador__input:focus {
+  background: var(--ink-superficie-2);
+  border-color: var(--liceo-violeta);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--liceo-violeta) 35%, transparent);
+}
+.cabecera :focus-visible { outline-color: var(--liceo-verde); }
+
+/* ── Bloque oscuro reutilizable (portada, pie, cortes de seccion) ────────── */
+
+.marco-oscuro {
+  background: var(--ink-superficie);
+  color: var(--ink-texto);
+}
+.marco-oscuro h1, .marco-oscuro h2, .marco-oscuro h3 { color: var(--ink-texto); }
+.marco-oscuro a { color: var(--ink-texto); }
+.marco-oscuro .apagado { color: var(--ink-texto-2); }
+.marco-oscuro :focus-visible { outline-color: var(--liceo-verde); }
+
+/* La franja de cinco colores cierra el marco negro contra el catalogo claro.
+   Es el logo desarmado y estirado: aparece en el borde inferior de la portada y
+   arriba del pie, y es lo unico decorativo de toda la tienda. */
+.franja-marca {
+  display: flex;
+  height: 5px;
+  width: 100%;
+}
+.franja-marca i { flex: 1; display: block; }
+.franja-marca i:nth-child(1) { background: var(--liceo-violeta); }
+.franja-marca i:nth-child(2) { background: var(--liceo-verde); }
+.franja-marca i:nth-child(3) { background: var(--liceo-naranja); }
+.franja-marca i:nth-child(4) { background: var(--liceo-cyan); }
+.franja-marca i:nth-child(5) { background: var(--liceo-rojo); }
 .cabecera__fila {
   display: flex;
   align-items: center;
@@ -953,25 +1049,29 @@ textarea.campo__control { min-height: 96px; resize: vertical; line-height: var(-
 }
 
 .carrito-boton { position: relative; flex: none; }
+/* El rojo del logo con texto blanco da 4,2:1 y no llega al mínimo. Este es un
+   rojo más profundo, que además es el que el ojo espera en un contador de
+   avisos. */
 .carrito-boton__globo {
   position: absolute;
   top: 4px; right: 4px;
   min-width: 20px; height: 20px;
   padding: 0 5px;
   border-radius: var(--r-full);
-  background: var(--liceo-rojo);
-  color: #fff;
+  background: var(--error-solido);
+  color: var(--error-tinta);
   font-size: 11px;
   font-weight: var(--peso-bold);
   display: grid; place-items: center;
   font-variant-numeric: tabular-nums;
-  border: 2px solid var(--surface);
+  border: 2px solid var(--ink-superficie);
   animation: globo var(--m-normal) var(--curva);
 }
+/* Entra creciendo, sin pasarse de largo. El rebote que sobrepasa el tamaño
+   final y vuelve es simpático la primera vez y ruido a partir de la segunda. */
 @keyframes globo {
-  from { transform: scale(0); }
-  60%  { transform: scale(1.25); }
-  to   { transform: scale(1); }
+  from { transform: scale(.4); opacity: 0; }
+  to   { transform: scale(1);  opacity: 1; }
 }
 
 /* ── Navegación inferior (móvil) ────────────────────────────────────────── */
