@@ -37,7 +37,9 @@ BUCKET = 'mari-d7c71.firebasestorage.app'
 
 LADO_MAYOR = 900
 CALIDAD = 82
-EXTENSIONES = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tif', '.tiff'}
+# `.img` es lo que deja la descarga de fotos aprobadas: el formato real lo
+# detecta Pillow por el contenido, no por el nombre.
+EXTENSIONES = {'.jpg', '.jpeg', '.png', '.webp', '.bmp', '.tif', '.tiff', '.img'}
 
 
 def conectar():
@@ -96,19 +98,83 @@ def url_publica(ruta_storage):
             f'{quote(ruta_storage, safe="")}?alt=media')
 
 
+def descargar_aprobadas(ruta_json):
+    """
+    Baja las fotos elegidas en revisar_fotos.html a una carpeta temporal,
+    nombradas por codigo para que el resto del script no note la diferencia.
+    """
+    import json
+    import urllib.request
+    import tempfile
+
+    with open(ruta_json, encoding='utf-8') as f:
+        aprobadas = json.load(f)
+
+    carpeta = os.path.join(tempfile.gettempdir(), 'liceo_fotos_aprobadas')
+    os.makedirs(carpeta, exist_ok=True)
+
+    print(f'Bajando {len(aprobadas)} fotos aprobadas...\n')
+    bajadas, fallidas = 0, []
+
+    for item in aprobadas:
+        codigo = str(item.get('codigo') or '').strip()
+        url = item.get('url')
+        if not codigo or not url:
+            continue
+
+        # Muchos sitios rechazan las peticiones sin User-Agent de navegador.
+        pedido = urllib.request.Request(url, headers={
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) '
+                          'AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126 Safari/537.36',
+        })
+        try:
+            with urllib.request.urlopen(pedido, timeout=25) as r:
+                datos = r.read()
+        except Exception as e:
+            fallidas.append((codigo, item.get('nombre', ''), str(e)[:60]))
+            continue
+
+        # La extension no importa: preparar() abre el archivo con Pillow, que
+        # detecta el formato por el contenido.
+        with open(os.path.join(carpeta, f'{codigo}.img'), 'wb') as f:
+            f.write(datos)
+        bajadas += 1
+        print(f'  {codigo:<14} {len(datos)/1024:>7.0f} KB  {item.get("nombre", "")[:44]}')
+
+    if fallidas:
+        print(f'\n{len(fallidas)} no se pudieron bajar:')
+        for codigo, nombre, err in fallidas[:15]:
+            print(f'  {codigo:<14} {nombre[:40]:<42} {err}')
+
+    print(f'\n{bajadas} fotos bajadas a {carpeta}\n')
+    return carpeta
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument('carpeta', help='carpeta con las fotos')
+    ap.add_argument('carpeta', nargs='?', help='carpeta con las fotos')
+    ap.add_argument('--aprobadas', metavar='JSON',
+                    help='archivo que exporto revisar_fotos.html: baja las fotos elegidas')
     ap.add_argument('--simular', action='store_true',
                     help='muestra que haria, sin subir ni escribir')
     args = ap.parse_args()
 
-    carpeta = os.path.abspath(args.carpeta)
-    if not os.path.isdir(carpeta):
-        sys.exit(f'No existe la carpeta {carpeta}')
+    if not args.carpeta and not args.aprobadas:
+        ap.error('hace falta una carpeta o --aprobadas')
 
     db, bucket = conectar()
+
+    # Las fotos aprobadas en la pagina de revision se bajan a una carpeta
+    # temporal y despues siguen el mismo camino que las de la camara: se achican,
+    # se convierten y se suben. Un solo circuito para las dos procedencias.
+    if args.aprobadas:
+        carpeta = descargar_aprobadas(args.aprobadas)
+    else:
+        carpeta = os.path.abspath(args.carpeta)
+
+    if not os.path.isdir(carpeta):
+        sys.exit(f'No existe la carpeta {carpeta}')
 
     # ── Agrupar los archivos por producto ─────────────────────────────────
     por_producto = {}

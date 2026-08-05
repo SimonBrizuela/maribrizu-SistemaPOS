@@ -444,3 +444,40 @@
 @media (max-width: 359px) {
   .cabecera__logo span:not(.marca-fichas) { display: none; }
 }
+
+
+/* ── El encabezado acompaña el scroll ────────────────────────────────────────
+   El envoltorio [data-cabecera] existe para poder repintar el encabezado sin
+   tocar el resto. El problema es que medía exactamente lo mismo que su
+   contenido, y `position: sticky` se pega dentro de los límites del padre: sin
+   margen para moverse, nunca se pegaba a nada.
+
+   `display: contents` saca la caja del envoltorio del layout y deja al
+   encabezado como hijo directo de .app, que es donde sí tiene todo el alto de
+   la página para pegarse. */
+[data-cabecera] { display: contents; }
+
+/* Al bajar se va, al subir vuelve.
+   Un encabezado fijo permanente se come 64 px de pantalla todo el tiempo, que en
+   un celular es mucho. Al revés, uno que solo aparece arriba de todo obliga a
+   scrollear hasta el techo para buscar algo. El punto medio es el que usan las
+   apps: baja con vos, y apenas hacés el gesto de subir aparece. */
+.cabecera {
+  transition: transform var(--m-normal) var(--curva);
+  will-change: transform;
+}
+.cabecera--oculta {
+  /* El 101% cubre el borde inferior, que si no queda asomando una línea. */
+  transform: translateY(-101%);
+}
+
+/* La barra de filtros del catálogo va pegada abajo del encabezado, así que
+   cuando el encabezado se va, sube a ocupar su lugar. */
+.barra-catalogo { transition: top var(--m-normal) var(--curva); }
+body.sin-cabecera .barra-catalogo { top: 0; }
+
+/* Con movimiento reducido el encabezado no se esconde nunca: aparecer y
+   desaparecer sin transición es justo el tipo de salto que molesta. */
+@media (prefers-reduced-motion: reduce) {
+  .cabecera--oculta { transform: none; }
+}

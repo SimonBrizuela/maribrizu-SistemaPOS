@@ -120,6 +120,10 @@ async function dibujar() {
 
 alNavegar(async () => {
   await dibujar();
+  // La pantalla nueva arranca con el encabezado a la vista: si quedaba
+  // escondido de la anterior, el buscador aparecia recien al hacer scroll.
+  document.querySelector('.cabecera')?.classList.remove('cabecera--oculta');
+  document.body.classList.remove('sin-cabecera');
   // Cada pantalla nueva arranca arriba, y el foco va al contenido para que un
   // lector de pantalla no siga leyendo desde el encabezado anterior.
   window.scrollTo({ top: 0, behavior: 'instant' });
@@ -195,11 +199,53 @@ document.addEventListener('submit', ev => {
 // que cada pantalla tenga que acordarse de actualizarlos.
 carrito.suscribir(() => { if (!estaAbierto()) refrescarChrome(); });
 
+/* ── El encabezado acompaña el scroll ──────────────────────────────────────────
+   Al bajar se va, al subir vuelve. Así el buscador está a un gesto de distancia
+   en cualquier punto de la página, sin comerse 64 px de pantalla todo el rato.
+
+   El umbral de 6 px evita el temblequeo: sin él, el rebote del scroll en iOS y
+   los micromovimientos del trackpad hacen que el encabezado parpadee. */
+function seguirScroll() {
+  const UMBRAL = 6;
+  const DESDE = 120;   // arriba de todo nunca se esconde
+  let anterior = window.scrollY;
+  let pendiente = false;
+
+  function evaluar() {
+    pendiente = false;
+    const actual = window.scrollY;
+    const cabeceraNodo = document.querySelector('.cabecera');
+    if (!cabeceraNodo) { anterior = actual; return; }
+
+    const diferencia = actual - anterior;
+    if (Math.abs(diferencia) < UMBRAL) return;
+
+    // Mientras el buscador está abierto en el celular el encabezado se queda:
+    // esconderlo con el teclado desplegado le saca el campo de abajo del dedo.
+    const buscando = cabeceraNodo.hasAttribute('data-buscando');
+    const esconder = diferencia > 0 && actual > DESDE && !buscando && !estaAbierto();
+
+    cabeceraNodo.classList.toggle('cabecera--oculta', esconder);
+    document.body.classList.toggle('sin-cabecera', esconder);
+    anterior = actual;
+  }
+
+  // El listener es pasivo y el trabajo se hace en el siguiente cuadro: leer
+  // scrollY dentro del evento fuerza al navegador a recalcular el layout en
+  // medio del scroll, que es exactamente lo que lo hace ir a los tirones.
+  window.addEventListener('scroll', () => {
+    if (pendiente) return;
+    pendiente = true;
+    requestAnimationFrame(evaluar);
+  }, { passive: true });
+}
+
 /* ── Arranque ─────────────────────────────────────────────────────────────── */
 
 async function arrancar() {
   pintarEstructura();
   iniciarRutas();
+  seguirScroll();
   await dibujar();
 
   // Aviso de tienda cerrada: se consulta después del primer pintado para no

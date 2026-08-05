@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Revisar fotos · Librería Liceo</title>
+<style>
+  /* Pagina de trabajo interna, no forma parte de la tienda. Se abre con doble
+     clic desde el explorador y no necesita servidor. */
+  :root {
+    --violeta:#7B3FA6; --verde:#8EC63F; --rojo:#E63946;
+    --ink:#0E0D10; --bg:#FAF8FB; --sup:#fff;
+    --txt:#17151C; --txt2:#5C5766; --bor:#E7E2EC;
+  }
+  * { box-sizing:border-box }
+  body {
+    margin:0; background:var(--bg); color:var(--txt);
+    font:15px/1.5 system-ui, -apple-system, 'Segoe UI', sans-serif;
+  }
+  header {
+    position:sticky; top:0; z-index:10;
+    background:var(--ink); color:#fff;
+    padding:14px 20px; display:flex; align-items:center; gap:16px; flex-wrap:wrap;
+  }
+  header h1 { font-size:17px; margin:0; font-weight:700 }
+  .cuenta { margin-left:auto; font-variant-numeric:tabular-nums; opacity:.85; font-size:14px }
+  button {
+    font:inherit; cursor:pointer; border-radius:8px; border:1px solid transparent;
+    padding:9px 16px; font-weight:600;
+  }
+  .primario { background:var(--verde); color:var(--ink) }
+  .secundario { background:transparent; color:#fff; border-color:#3A3444 }
+  .envoltorio { max-width:1200px; margin:0 auto; padding:20px }
+
+  .producto {
+    background:var(--sup); border:1px solid var(--bor); border-radius:12px;
+    padding:16px; margin-bottom:14px;
+  }
+  .producto.resuelto { opacity:.5 }
+  .producto.resuelto .opciones { display:none }
+  .titulo { font-weight:700; margin-bottom:2px }
+  .meta { color:var(--txt2); font-size:13px; margin-bottom:12px }
+  .meta b { color:var(--txt) }
+
+  .opciones { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-start }
+  .opcion {
+    width:150px; border:2px solid var(--bor); border-radius:10px; overflow:hidden;
+    background:#fff; cursor:pointer; padding:0; display:block; text-align:left;
+    transition:border-color .12s, transform .12s;
+  }
+  .opcion:hover { border-color:#aaa; transform:translateY(-2px) }
+  .opcion.elegida { border-color:var(--verde); box-shadow:0 0 0 3px rgba(142,198,63,.3) }
+  .opcion img { width:100%; height:130px; object-fit:contain; background:#F4F1F7; display:block }
+  .opcion .origen {
+    font-size:11px; color:var(--txt2); padding:6px 8px; overflow:hidden;
+    text-overflow:ellipsis; white-space:nowrap;
+  }
+  .ninguna {
+    width:150px; height:auto; min-height:158px; border:2px dashed var(--bor);
+    border-radius:10px; background:#fff; color:var(--txt2); font-weight:600;
+    display:flex; align-items:center; justify-content:center; cursor:pointer;
+  }
+  .ninguna.elegida { border-color:var(--rojo); color:var(--rojo); background:#FDEBEC }
+  .vacio { color:var(--txt2); font-style:italic; padding:8px 0 }
+  .aviso {
+    background:#FDF2E0; border:1px solid #E8B65A; border-radius:10px;
+    padding:14px 16px; margin-bottom:18px; font-size:14px; line-height:1.6;
+  }
+  #cargador { padding:60px 20px; text-align:center }
+  #cargador input { display:block; margin:16px auto }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Revisar fotos de producto</h1>
+  <span class="cuenta" id="cuenta"></span>
+  <button class="secundario" id="btn-saltar">Saltar a la primera sin resolver</button>
+  <button class="primario" id="btn-exportar">Descargar aprobadas</button>
+</header>
+
+<div class="envoltorio">
+  <div id="cargador">
+    <p>Elegí el archivo <b>fotos_candidatas.json</b> que generó <code>buscar_fotos.py</code>.</p>
+    <input type="file" id="archivo" accept="application/json">
+  </div>
+
+  <div id="lista"></div>
+</div>
+
+<script>
+/* Se elige a mano y no automaticamente porque el catalogo no tiene codigo de
+   barras: la busqueda es por nombre y a veces trae otra cosa. Una foto
+   equivocada le llega al cliente y termina en una devolucion. */
+
+let productos = [];
+const elegido = new Map();   // doc_id -> url | null (null = ninguna sirve)
+
+document.getElementById('archivo').addEventListener('change', async ev => {
+  const f = ev.target.files[0];
+  if (!f) return;
+  productos = JSON.parse(await f.text());
+  document.getElementById('cargador').style.display = 'none';
+  pintar();
+});
+
+function pintar() {
+  const lista = document.getElementById('lista');
+
+  lista.innerHTML = `
+    <div class="aviso">
+      <b>Mirá que sea el producto correcto, no uno parecido.</b>
+      La búsqueda es por nombre, así que un "Cono de hilo 2000mts" puede traer
+      cualquier cono de hilo. Si ninguna es exactamente el producto que vendés,
+      tocá <b>Ninguna sirve</b> y sacale la foto vos.
+      <br><br>
+      Fijate también de dónde sale cada una: si es del sitio del fabricante, sin
+      problema. Si es de otra librería, mejor no.
+    </div>` +
+    productos.map((p, i) => `
+      <div class="producto" data-id="${p.doc_id}" id="p${i}">
+        <div class="titulo">${escapar(p.nombre)}</div>
+        <div class="meta">
+          código <b>${escapar(p.codigo)}</b>
+          ${p.marca ? ` · marca <b>${escapar(p.marca)}</b>` : ' · sin marca'}
+          ${p.importe ? ` · facturó <b>$${p.importe.toLocaleString('es-AR')}</b>` : ''}
+          · buscado como «${escapar(p.consulta || '')}»
+        </div>
+        <div class="opciones">
+          ${(p.candidatas || []).map(c => `
+            <button class="opcion" data-url="${escapar(c.url)}">
+              <img src="${escapar(c.miniatura || c.url)}" loading="lazy"
+                   alt="" onerror="this.parentElement.style.display='none'">
+              <span class="origen" title="${escapar(c.origen)}">${escapar(c.origen)}</span>
+            </button>`).join('')
+            || '<div class="vacio">La búsqueda no trajo nada. Hay que sacarle foto.</div>'}
+          <button class="ninguna" data-url="">Ninguna sirve</button>
+        </div>
+      </div>`).join('');
+
+  lista.addEventListener('click', ev => {
+    const boton = ev.target.closest('.opcion, .ninguna');
+    if (!boton) return;
+    const caja = boton.closest('.producto');
+    const id = caja.dataset.id;
+
+    caja.querySelectorAll('.elegida').forEach(x => x.classList.remove('elegida'));
+    boton.classList.add('elegida');
+    caja.classList.add('resuelto');
+    elegido.set(id, boton.dataset.url || null);
+    actualizarCuenta();
+  });
+
+  actualizarCuenta();
+}
+
+function actualizarCuenta() {
+  const conFoto = [...elegido.values()].filter(Boolean).length;
+  document.getElementById('cuenta').textContent =
+    `${elegido.size} de ${productos.length} revisados · ${conFoto} con foto`;
+}
+
+document.getElementById('btn-saltar').addEventListener('click', () => {
+  const i = productos.findIndex(p => !elegido.has(p.doc_id));
+  if (i >= 0) document.getElementById('p' + i).scrollIntoView({ behavior: 'smooth', block: 'center' });
+});
+
+document.getElementById('btn-exportar').addEventListener('click', () => {
+  const aprobadas = productos
+    .filter(p => elegido.get(p.doc_id))
+    .map(p => ({ doc_id: p.doc_id, codigo: p.codigo, nombre: p.nombre,
+                 url: elegido.get(p.doc_id) }));
+
+  if (!aprobadas.length) { alert('Todavía no elegiste ninguna foto.'); return; }
+
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([JSON.stringify(aprobadas, null, 1)],
+                                        { type: 'application/json' }));
+  a.download = 'fotos_aprobadas.json';
+  a.click();
+
+  alert(`${aprobadas.length} fotos aprobadas.\n\n` +
+        'Guardá el archivo en la raíz del proyecto y corré:\n\n' +
+        'python scripts/importar_fotos.py --aprobadas fotos_aprobadas.json');
+});
+
+function escapar(t) {
+  return String(t ?? '').replace(/[&<>"']/g,
+    c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' })[c]);
+}
+</script>
+</body>
+</html>
