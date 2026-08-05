@@ -397,6 +397,14 @@ class _ColorChip(QPushButton):
         self._refresh()
         self.toggled.connect(lambda _: self._refresh())
 
+    def setChecked(self, value: bool):
+        # El repintado cuelga de `toggled`, y quien preselecciona una variedad
+        # (escaneo de código o atajo del buscador) bloquea las señales para no
+        # disparar la lógica de cambio de color. Sin esto el chip queda checked
+        # pero pintado como si no lo estuviera.
+        super().setChecked(value)
+        self._refresh()
+
     def set_stock_text(self, txt):
         self._stock_text = txt
         self._lbl_stock.setText(txt)

@@ -5851,6 +5851,7 @@ class SpotlightDialog(QDialog):
         self._results = []
         self._resumenes = []          # stock_resumen() paralelo a _results
         self._hover_chip_row = -1     # fila cuya píldora tiene el mouse encima
+        self._popover_row = -1        # fila del globo abierto (sigue marcada)
         self._popover = None
         self._popover_producto = None  # producto del globo abierto
         self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
@@ -6191,7 +6192,10 @@ class SpotlightDialog(QDialog):
                         else:
                             c_bg, c_fg, c_bd = '#fef2f2', '#b91c1c', '#fecaca'
                         chip_r = spotlight_self._chip_rect(r, chip_w)
-                        hovered = (spotlight_self._hover_chip_row == index.row())
+                        # La píldora queda marcada mientras su globo está abierto,
+                        # aunque el mouse ya se haya movido adentro del globo.
+                        hovered = index.row() in (spotlight_self._hover_chip_row,
+                                                  spotlight_self._popover_row)
                         painter.setRenderHint(QPainter.Antialiasing, True)
                         painter.setPen(QPen(QColor(c_fg if hovered else c_bd), 1))
                         painter.setBrush(QColor(c_bg))
@@ -6288,10 +6292,15 @@ class SpotlightDialog(QDialog):
         pop.move(x, y)
         pop.show()
         pop.raise_()
+        self._popover_row = row
+        self.list.viewport().update()
 
     def _close_stock_popover(self):
         self._popover_open_timer.stop()
         self._popover_close_timer.stop()
+        if self._popover_row != -1:
+            self._popover_row = -1
+            self.list.viewport().update()
         if self._popover is not None and self._popover.isVisible():
             self._popover.hide()
             self.search_input.setFocus()
@@ -6350,6 +6359,75 @@ class SpotlightDialog(QDialog):
             self.reject()
             return
         super().keyPressEvent(event)
+
+
+class _FilaStock(QFrame):
+    """Una fila del globo de stock: etiqueta + disponibilidad.
+
+    Pinta el hover a mano en vez de con `QFrame:hover`, porque con los QLabel
+    hijos adentro el pseudo-estado no se ve y el cajero no sabía sobre cuál
+    variante estaba parado. Si la fila tiene acción, el clic la vende directo.
+    """
+    activada = pyqtSignal()
+
+    def __init__(self, etiqueta, valor, accion, colores, parent=None):
+        super().__init__(parent)
+        self._C = colores
+        self._accion = accion
+        self._hover = False
+        self.setAttribute(Qt.WA_StyledBackground, True)
+
+        h = QHBoxLayout(self)
+        h.setContentsMargins(8, 6, 8, 6)
+        h.setSpacing(10)
+        self._lbl = QLabel(str(etiqueta))
+        self._lbl.setWordWrap(True)
+        self._val = QLabel(str(valor))
+        self._val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        for w in (self._lbl, self._val):
+            w.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        h.addWidget(self._lbl, 1)
+        h.addWidget(self._val, 0)
+
+        if accion:
+            self.setCursor(Qt.PointingHandCursor)
+            self.setToolTip('Vender esta — abre el diálogo en la cantidad')
+        self._pintar()
+
+    def _pintar(self):
+        _C = self._C
+        activo = self._hover and self._accion is not None
+        self.setStyleSheet(
+            f"QFrame {{ background:{_C['accent_soft'] if activo else 'transparent'};"
+            f" border:none; border-left:3px solid "
+            f"{_C['accent'] if activo else 'transparent'};"
+            f" border-bottom:1px solid {_C['border_soft']}; }}"
+        )
+        self._lbl.setStyleSheet(
+            f"color:{_C['accent'] if activo else _C['text']}; font-size:11px;"
+            f" font-weight:{700 if activo else 400};"
+            f" background:transparent; border:none;"
+        )
+        self._val.setStyleSheet(
+            f"color:{_C['text'] if activo else _C['text_muted']}; font-size:11px;"
+            f" background:transparent; border:none;"
+            f" font-family:'Consolas','JetBrains Mono',monospace;"
+        )
+
+    def enterEvent(self, event):
+        self._hover = True
+        self._pintar()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self._hover = False
+        self._pintar()
+        super().leaveEvent(event)
+
+    def mouseReleaseEvent(self, event):
+        if self._accion and event.button() == Qt.LeftButton and self.rect().contains(event.pos()):
+            self.activada.emit()
+        super().mouseReleaseEvent(event)
 
 
 class _StockPopover(QFrame):
@@ -6481,38 +6559,10 @@ class _StockPopover(QFrame):
         self._scroll.setFixedHeight(alto if filas else 0)
 
     def _construir_fila(self, etiqueta, valor, accion=None):
-        _C = self._C
-        w = QFrame()
-        w.setStyleSheet(
-            f"QFrame {{ border:none; border-bottom:1px solid {_C['border_soft']}; }}"
-            + (f"QFrame:hover {{ background:{_C['accent_soft']}; }}" if accion else '')
-        )
-        h = QHBoxLayout(w)
-        h.setContentsMargins(6, 6, 6, 6)
-        h.setSpacing(10)
-        lbl = QLabel(str(etiqueta))
-        lbl.setWordWrap(True)
-        lbl.setStyleSheet(
-            f"color:{_C['text']}; font-size:11px; background:transparent; border:none;")
-        val = QLabel(str(valor))
-        val.setStyleSheet(
-            f"color:{_C['text_muted']}; font-size:11px; background:transparent;"
-            f" border:none; font-family:'Consolas','JetBrains Mono',monospace;")
-        val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        h.addWidget(lbl, 1)
-        h.addWidget(val, 0)
+        fila = _FilaStock(etiqueta, valor, accion, self._C)
         if accion:
-            # Click en la fila = atajo: abre el diálogo de venta con esta
-            # variante ya elegida, directo a la cantidad.
-            w.setCursor(Qt.PointingHandCursor)
-            w.setToolTip('Vender esta — abre el diálogo con la cantidad')
-            for hijo in (lbl, val):
-                hijo.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            w.mouseReleaseEvent = (
-                lambda ev, a=accion: self.fila_activada.emit(a)
-                if ev.button() == Qt.LeftButton else None
-            )
-        return w
+            fila.activada.connect(lambda a=accion: self.fila_activada.emit(a))
+        return fila
 
     def _aplicar_filtro(self, texto):
         palabras = [p for p in str(texto or '').lower().split() if p]
@@ -6526,7 +6576,14 @@ class _StockPopover(QFrame):
         super().enterEvent(event)
 
     def leaveEvent(self, event):
-        self.mouse_left.emit()
+        # Qt manda Leave al pasar el mouse a un hijo (una fila, el filtro, la
+        # barra de scroll). Sin este chequeo el globo se cerraba justo cuando
+        # el cajero iba a clickear una variante.
+        from PyQt5.QtGui import QCursor
+        bajo_el_mouse = QApplication.widgetAt(QCursor.pos())
+        if bajo_el_mouse is None or not (bajo_el_mouse is self
+                                         or self.isAncestorOf(bajo_el_mouse)):
+            self.mouse_left.emit()
         super().leaveEvent(event)
 
     def eventFilter(self, obj, event):
