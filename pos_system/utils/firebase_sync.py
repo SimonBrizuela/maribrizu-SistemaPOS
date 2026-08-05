@@ -1073,11 +1073,14 @@ class FirebaseSync:
 
         Devuelve True si se aplicó. Si la presentación no existe, registra warning y
         devuelve False (la venta sigue OK localmente).
+
+        Con `delta_qty` NEGATIVA repone (devolución de un fiado anulado): la
+        mercadería vuelve como sueltos, igual que en SQLite.
         """
         if not self.enabled or not node_id or not presentation_id:
             return False
         qty_orig = float(delta_qty or 0)
-        if qty_orig <= 0:
+        if qty_orig == 0:
             return False
 
         from google.cloud.firestore_v1.transaction import transactional
@@ -1102,9 +1105,13 @@ class FirebaseSync:
                 return False
             p = dict(presentaciones[idx])
             qty = qty_orig
-            # 1) Descontar de sueltos primero
             sueltos = float(p.get('stock_sueltos') or 0)
-            if sueltos > 0:
+            # 0) Devolución: entra todo como suelto, sin recomponer contenedores.
+            if qty < 0:
+                p['stock_sueltos'] = sueltos - qty
+                qty = 0
+            # 1) Descontar de sueltos primero
+            elif sueltos > 0:
                 usar = min(qty, sueltos)
                 p['stock_sueltos'] = sueltos - usar
                 qty -= usar
@@ -1871,8 +1878,9 @@ class FirebaseSync:
 
                 for it in items:
                     pid = it.get('product_id')
+                    # Negativa = devolución: Increment(-qty) termina sumando.
                     qty = float(it.get('quantity') or 0)
-                    if not pid or qty <= 0:
+                    if not pid or qty == 0:
                         continue
                     try:
                         rows = db_manager.execute_query(
@@ -1993,7 +2001,13 @@ class FirebaseSync:
                     target_fid = str(v.get('target_fid') or '').strip()
                     local_id   = v.get('target_local_id')
                     delta      = float(v.get('delta') or 0)
-                    if not target_fid or delta <= 0:
+                    # Línea ya descontada (producto que se cargó a un fiado): no
+                    # hay stock que mover, sólo marcar el item para que el
+                    # watcher web no aplique sus vinculaciones de nuevo.
+                    if v.get('solo_marcar'):
+                        touched_items.setdefault(item_idx, [])
+                        continue
+                    if not target_fid or delta == 0:
                         continue
 
                     # Acumular descuento por item para marcar consumibles_procesado

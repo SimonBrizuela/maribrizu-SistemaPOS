@@ -2,10 +2,11 @@
 
 Flujo completo:
   1. El cajero pone el carrito en Modo Fiado (pestaña Ventas) y lo carga a
-     nombre de un cliente. No se descuenta stock ni entra plata.
+     nombre de un cliente. El stock baja ahí (la mercadería se la lleva), pero
+     no entra plata.
   2. Cuando el cliente vuelve, se lo busca acá, se tildan los productos que
-     paga y se cobra: ahí sí se crea la venta real (descuenta stock, entra a
-     la caja) y esos productos pasan al historial en gris.
+     paga y se cobra: ahí se crea la venta real y entra la plata a la caja.
+     El stock no se vuelve a tocar. Esos productos pasan al historial en gris.
   3. También se puede registrar una entrega de dinero "a cuenta": genera saldo
      a favor que se aplica automáticamente en el próximo cobro.
 """
@@ -1079,10 +1080,15 @@ class FiadosView(QWidget):
         self._refrescar_otras_vistas()
 
     def _anular_item(self, it: dict):
+        linea = dict(it.get('cart_item') or {})
+        # El stock bajó cuando el cliente se llevó la mercadería: si la línea
+        # sale de la cuenta sin cobrarse, vuelve al inventario.
+        repone = bool(linea.get('stock_descontado'))
+        extra = ('\nEl stock vuelve al inventario.\n' if repone else '')
         resp = QMessageBox.question(
             self, 'Quitar de la deuda',
             f"¿Sacar \"{it.get('product_name')}\" (${fmt_money(it.get('subtotal'))}) "
-            f"de la cuenta sin cobrarlo?\n\n"
+            f"de la cuenta sin cobrarlo?\n{extra}\n"
             f"Queda registrado como anulado en el historial.",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No
         )
@@ -1093,9 +1099,22 @@ class FiadosView(QWidget):
         except Exception as e:
             QMessageBox.critical(self, 'Error', f'No se pudo anular:\n{e}')
             return
+        if repone:
+            try:
+                self.sale_model.reponer_stock_items([linea], usuario=self._cajero())
+            except Exception as e:
+                logger.exception('Fiado: error devolviendo el stock de un item anulado')
+                QMessageBox.warning(
+                    self, 'Stock',
+                    f'El producto salió de la cuenta, pero el stock no se pudo '
+                    f'devolver automáticamente:\n{e}\n\n'
+                    f'Ajustalo a mano desde el catálogo.'
+                )
         self._checked.discard(int(it['id']))
         self._sync_items_bg([int(it['id'])])
         self.refresh_data()
+        if repone:
+            self._refrescar_otras_vistas()
 
     def _sync_items_bg(self, ids):
         import threading as _th
@@ -1121,6 +1140,11 @@ class FiadosView(QWidget):
 
         Devuelve (cart, avisos). `avisos` junta los problemas de stock de
         productos por fracción que ya no alcanzan.
+
+        Las líneas cargadas desde el POS traen `stock_descontado` en su snapshot:
+        el stock bajó el día que el cliente se llevó la mercadería, así que el
+        cobro no las vuelve a tocar (ni a revalidar contra el stock vivo, que
+        justamente ya refleja esa salida).
         """
         cart, avisos = [], []
         for it in items:
@@ -1152,7 +1176,7 @@ class FiadosView(QWidget):
                 # Sin producto del catálogo → se cobra como item libre (Varios).
                 linea['is_varios'] = True
 
-            if linea.get('is_conjunto'):
+            if linea.get('is_conjunto') and not linea.get('stock_descontado'):
                 ok, err = revalidar_conjunto(self.db, linea)
                 if not ok:
                     avisos.append((linea['product_name'], err))
@@ -1270,7 +1294,12 @@ class FiadosView(QWidget):
                 QMessageBox.critical(self, 'Error',
                                      f'No se pudo registrar el cobro:\n{e}')
                 return
-            self._subir_venta(sale_id, dlg)
+            # A Firebase sólo van las líneas cuyo stock todavía no bajó. Las que
+            # se descontaron al cargarse al fiado ya se sincronizaron ese día.
+            self._subir_venta(
+                sale_id, dlg,
+                stock_items=[l for l in cart if not l.get('stock_descontado')],
+            )
         else:
             # Todo cubierto con saldo a favor: no hay venta nueva (la plata ya
             # entró a la caja cuando el cliente la dejó a cuenta), pero la
@@ -1405,8 +1434,14 @@ class FiadosView(QWidget):
             f"Se descuentan automáticamente en el próximo cobro."
         )
 
-    def _subir_venta(self, sale_id, dlg=None):
-        """Sube la venta del cobro a Firebase con el mismo flujo que el POS."""
+    def _subir_venta(self, sale_id, dlg=None, stock_items=None):
+        """Sube la venta del cobro a Firebase con el mismo flujo que el POS.
+
+        `stock_items`: líneas cuyo stock hay que descontar en Firebase. Si es
+        None se usan los items de la venta (comportamiento normal). El cobro de
+        un fiado pasa sólo las líneas que todavía no descontaron: el resto ya
+        bajó cuando el cliente se llevó la mercadería.
+        """
         if not sale_id:
             return
         import threading as _th
@@ -1429,7 +1464,10 @@ class FiadosView(QWidget):
                 fb.sync_sale(sale)
                 fb.sync_sale_detail_by_day(sale, db_manager=self.db)
                 try:
-                    fb.sync_stock_after_sale(sale.get('items') or [], self.db)
+                    a_descontar = (stock_items if stock_items is not None
+                                   else (sale.get('items') or []))
+                    if a_descontar:
+                        fb.sync_stock_after_sale(a_descontar, self.db)
                 except Exception as e:
                     logger.warning(f'Fiado: stock post-cobro: {e}')
                 self.db.execute_update(
@@ -1461,7 +1499,7 @@ class FiadosView(QWidget):
             detalle += (f"\n  · Saldo a favor aplicado: ${fmt_money(credito_usado)}"
                         f"\n  · Cobrado ahora: ${fmt_money(resto)}")
         if sale_id:
-            detalle += f"\n\nVenta #{sale_id} — el stock ya se descontó."
+            detalle += f"\n\nVenta #{sale_id}. El stock ya estaba descontado."
         else:
-            detalle += "\n\nSe cubrió con saldo a favor — el stock ya se descontó."
+            detalle += "\n\nSe cubrió con saldo a favor. El stock ya estaba descontado."
         QMessageBox.information(self, 'Cobro registrado', detalle)

@@ -48,6 +48,101 @@ def _fmt_money(n):
     return f"{n:,.2f}"
 
 
+# ── Stock para el buscador ────────────────────────────────────────────────
+def stock_resumen(p, db=None, targets_index=None):
+    """Disponibilidad de una entrada del catálogo, lista para mostrar.
+
+    Unifica los tres tipos de producto del sistema para que el buscador pueda
+    (a) ordenar dejando arriba lo que hay y (b) mostrar el detalle sin abrir el
+    producto:
+
+      - Plano       → stock propio (o el de sus fuentes si está vinculado).
+      - Conjunto    → conjunto_total, con una fila por variedad/color.
+      - Madre (mp_*)→ una fila por variante × presentación.
+
+    Devuelve dict con:
+      disponible : float — >0 si hay algo, inf para servicios. Es la clave de orden.
+      chip       : str   — texto corto para la píldora de la fila.
+      titulo     : str   — encabezado del globo de detalle.
+      filas      : list[(etiqueta, valor)] — desglose; vacío si no hay nada que abrir.
+    """
+    is_mp   = bool(p.get('is_mp'))
+    mp_kind = p.get('mp_kind') or ''
+
+    # ── Producto Madre: variantes × presentaciones ──
+    if is_mp and mp_kind == 'madre':
+        from pos_system.ui.mp_variant_dialog import _build_stock_text
+        filas, con_stock = [], 0
+        for hoja in (p.get('mp_hojas') or []):
+            nombre_hoja = str(hoja.get('nombre') or '—')
+            presentaciones = hoja.get('presentaciones') or []
+            if not presentaciones:
+                # Hoja sin presentaciones: se vende como unidad simple, sin
+                # control de stock. Cuenta como disponible.
+                filas.append((nombre_hoja, 'unidad simple'))
+                con_stock += 1
+                continue
+            for pres in presentaciones:
+                etiqueta = str(pres.get('label') or pres.get('tipo') or '—')
+                vinculada = (pres.get('stock_modo') == 'vinculado'
+                             and pres.get('vinculada_a'))
+                try:
+                    valor = _build_stock_text(hoja, pres)
+                except Exception:
+                    valor = ''
+                valor = valor.replace('Disponibles: ', '').replace('Stock: ', '')
+                # Las vinculadas leen el stock de su fuente: se muestran, pero no
+                # se cuentan aparte para no duplicar la misma mercadería.
+                if not vinculada:
+                    if (float(pres.get('stock') or 0) > 0
+                            or float(pres.get('stock_sueltos') or 0) > 0):
+                        con_stock += 1
+                filas.append((f'{nombre_hoja} · {etiqueta}', valor or 'sin stock'))
+        if con_stock:
+            chip = f'{con_stock} variante' + ('s' if con_stock != 1 else '')
+        else:
+            chip = 'sin stock'
+        return {
+            'disponible': float(con_stock),
+            'chip':       chip,
+            'titulo':     'Variantes disponibles',
+            'filas':      filas,
+        }
+
+    # ── Producto conjunto (rollos/packs, con o sin variedades) ──
+    if int(p.get('es_conjunto') or 0) == 1:
+        um = str(p.get('conjunto_unidad_medida') or '').strip()
+        total = float(p.get('conjunto_total') or 0)
+        filas = []
+        for c in _conj_parse_colores(p.get('conjunto_colores')):
+            nombre = str(c.get('color') or '—').strip() or '—'
+            contenido = float(p.get('conjunto_contenido') or 0)
+            total_color = (float(c.get('unidades') or 0) * contenido
+                           + float(c.get('restante') or 0))
+            filas.append((nombre, f'{_fmt_qty(total_color)} {um}'.strip()))
+        return {
+            'disponible': max(0.0, total),
+            'chip':       (f'{_fmt_qty(total)} {um}'.strip() if total > 0 else 'sin stock'),
+            'titulo':     'Variedades',
+            'filas':      filas,
+        }
+
+    # ── Producto plano ──
+    txt, num = shown_stock(p, db, targets_index=targets_index)
+    if num == float('inf'):
+        return {'disponible': float('inf'), 'chip': '∞',
+                'titulo': 'Servicio', 'filas': [('Sin límite de stock', '∞')]}
+    filas = []
+    if has_links(p):
+        filas.append(('Stock tomado del producto vinculado', f'{txt} un'))
+    return {
+        'disponible': num,
+        'chip':       (f'{txt} un' if num > 0 else 'sin stock'),
+        'titulo':     'Stock',
+        'filas':      filas,
+    }
+
+
 class CartQuantitySpinBox(QDoubleSpinBox):
     """Cantidad del carrito aceptando coma o punto como separador decimal.
 
@@ -871,8 +966,9 @@ class SalesView(QWidget):
         self.cart = []
         # ── Modo Fiado ──
         # Con el modo activo, "Cobrar" pasa a ser "Cargar al fiado": el carrito
-        # se anota a nombre de un cliente y NO descuenta stock ni toca la caja.
-        # El stock se descuenta recién cuando el cliente paga (pestaña Fiados).
+        # se anota a nombre de un cliente y descuenta stock (la mercadería se la
+        # lleva), pero no toca la caja. La plata entra cuando el cliente paga
+        # desde la pestaña Fiados.
         self._fiado_mode = False
         self._fiado_cliente = None       # dict del cliente elegido
         self._all_products = []          # cache local de productos
@@ -1155,7 +1251,8 @@ class SalesView(QWidget):
         self._fiado_btn.setCheckable(True)
         self._fiado_btn.setToolTip(
             'Modo Fiado: lo que cargues se anota a nombre de un cliente.\n'
-            'No descuenta stock ni entra a la caja hasta que el cliente pague.'
+            'Descuenta stock (se lleva la mercadería), pero no entra plata\n'
+            'a la caja hasta que el cliente pague.'
         )
         self._fiado_btn.clicked.connect(self._toggle_fiado_mode)
         h_top.addWidget(self._fiado_btn)
@@ -2190,7 +2287,11 @@ class SalesView(QWidget):
         return True
 
     def _cargar_al_fiado(self):
-        """Anota el carrito en la cuenta del cliente. No toca stock ni caja."""
+        """Anota el carrito en la cuenta del cliente.
+
+        Descuenta stock (la mercadería sale del local hoy) pero no toca la caja:
+        la plata entra recién cuando el cliente viene a pagar.
+        """
         from pos_system.ui.fiado_dialogs import (fmt_money, sincronizar_cliente,
                                                  sincronizar_items)
         if not self.cart:
@@ -2231,7 +2332,8 @@ class SalesView(QWidget):
             self, 'Cargar al fiado',
             f"¿Anotar {len(self.cart)} producto(s) por ${fmt_money(total)} "
             f"a nombre de {cliente.get('nombre')}?\n\n"
-            f"No se descuenta stock ni entra a la caja: eso pasa cuando venga a pagar.",
+            f"Se descuenta el stock (la mercadería se la lleva ahora), pero no "
+            f"entra plata a la caja: eso pasa cuando venga a pagar.",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
         )
         if resp != QMessageBox.Yes:
@@ -2243,6 +2345,23 @@ class SalesView(QWidget):
             pc_id = getattr(mw, 'pc_id', '') if mw else ''
         except Exception:
             pass
+
+        # ── Stock primero ──
+        # La mercadería sale del local hoy, así que el stock tiene que bajar
+        # ahora. Cada línea queda marcada para que el cobro posterior no la
+        # descuente de nuevo.
+        try:
+            self.sale_model.descontar_stock_items(
+                self.cart, usuario=self._current_turno_nombre()
+            )
+        except Exception as e:
+            logger.exception('Fiado: error descontando stock al cargar el carrito')
+            QMessageBox.critical(self, 'Error',
+                                 f'No se pudo descontar el stock:\n{e}\n\n'
+                                 f'El carrito quedó intacto.')
+            return
+        for it in self.cart:
+            it['stock_descontado'] = True
 
         try:
             # El cliente puede haberse creado offline: si todavía no tiene
@@ -2260,6 +2379,16 @@ class SalesView(QWidget):
             )
         except Exception as e:
             logger.exception('Error cargando el carrito al fiado')
+            # El stock ya bajó pero la deuda no quedó anotada: sin esto la
+            # mercadería desaparecería del inventario sin dejar rastro.
+            try:
+                self.sale_model.reponer_stock_items(
+                    self.cart, usuario=self._current_turno_nombre()
+                )
+                for it in self.cart:
+                    it.pop('stock_descontado', None)
+            except Exception:
+                logger.exception('Fiado: no se pudo devolver el stock tras el error')
             QMessageBox.critical(self, 'Error',
                                  f'No se pudo cargar al fiado:\n{e}')
             return
@@ -2288,11 +2417,15 @@ class SalesView(QWidget):
                 f"Se anotaron ${fmt_money(total)} a la cuenta de {cliente.get('nombre')}."
             )
 
-        # Refrescar la pestaña Fiados si está montada
+        # Refrescar la pestaña Fiados + el resto de las vistas: el stock que
+        # acaba de bajar tiene que verse en el catálogo y en el inventario.
+        self._invalidate_catalog_cache()
         try:
             mw = self.get_main_window()
             if mw and getattr(mw, 'fiados_view', None) is not None:
                 mw.fiados_view.refresh_requested.emit()
+            if mw:
+                mw.refresh_all_views()
         except Exception:
             pass
 
@@ -3001,6 +3134,7 @@ class SalesView(QWidget):
                 'is_mp':         True,
                 'mp_kind':       'madre',
                 'mp_doc':        madre,
+                'mp_hojas':      [],
             }
             cache.append(entry_m)
             haystacks.append(self._norm_search(' '.join(filter(None, [
@@ -3019,6 +3153,10 @@ class SalesView(QWidget):
                 hojas = node_mod.get_hojas_by_product(madre.get('id'))
             except Exception:
                 hojas = []
+            # Se guardan en la entrada del madre para que el buscador pueda
+            # ordenar por stock y mostrar el detalle de variantes sin volver a
+            # pegarle a SQLite en cada tecla.
+            entry_m['mp_hojas'] = hojas or []
             extra_hay = []
             for h in hojas or []:
                 pres_list = h.get('presentaciones') or []
@@ -5656,6 +5794,9 @@ class SpotlightDialog(QDialog):
         super().__init__(parent)
         self.db = db
         self._results = []
+        self._resumenes = []          # stock_resumen() paralelo a _results
+        self._hover_chip_row = -1     # fila cuya píldora tiene el mouse encima
+        self._popover = None
         self.setWindowFlags(Qt.Dialog | Qt.FramelessWindowHint)
         self.setModal(True)
         self.setAttribute(Qt.WA_TranslucentBackground, True)
@@ -5676,6 +5817,18 @@ class SpotlightDialog(QDialog):
         self._search_timer.setSingleShot(True)
         self._search_timer.setInterval(220)
         self._search_timer.timeout.connect(self._do_search)
+
+        # Globo de stock: se abre con un respiro para que barrer la lista con el
+        # mouse no dispare un popup por fila, y se cierra con otro para poder
+        # entrar en él sin que se escape.
+        self._popover_open_timer = QTimer(self)
+        self._popover_open_timer.setSingleShot(True)
+        self._popover_open_timer.setInterval(180)
+        self._popover_open_timer.timeout.connect(self._open_stock_popover)
+        self._popover_close_timer = QTimer(self)
+        self._popover_close_timer.setSingleShot(True)
+        self._popover_close_timer.setInterval(220)
+        self._popover_close_timer.timeout.connect(self._close_stock_popover)
 
         self._build_ui()
 
@@ -5770,6 +5923,11 @@ class SpotlightDialog(QDialog):
         # Solo doubleClicked — itemActivated también dispararía con Enter del list,
         # pero ya manejamos Enter en eventFilter del input. Evita doble-add.
         self.list.itemDoubleClicked.connect(self._on_pick)
+        # Hover sobre la píldora de stock → globo con el detalle.
+        self.list.setMouseTracking(True)
+        self.list.viewport().setMouseTracking(True)
+        self.list.viewport().installEventFilter(self)
+        self.list.verticalScrollBar().valueChanged.connect(self._close_stock_popover)
         outer.addWidget(self.list, 1)
 
         # ── Footer con atajos ──
@@ -5791,6 +5949,9 @@ class SpotlightDialog(QDialog):
             lbl.setStyleSheet(f"color:{_C['text_muted']}; font-size:11px; background:transparent;")
             ft_l.addWidget(chip); ft_l.addWidget(lbl)
         ft_l.addStretch(1)
+        pista = QLabel('mouse sobre el stock → detalle')
+        pista.setStyleSheet(f"color:{_C['text_muted']}; font-size:10px; background:transparent;")
+        ft_l.addWidget(pista)
         outer.addWidget(ft)
 
     def _on_text(self, _):
@@ -5847,7 +6008,16 @@ class SpotlightDialog(QDialog):
                 results = []
             results = [r for r in results if r.get('id', 0) > 0][:200]
 
-        self._results = results
+        # Lo que hay arriba, lo que no hay abajo. El orden dentro de cada grupo
+        # se mantiene (favoritos y alfabético del cache), así que la lista sigue
+        # siendo predecible: sólo se hunden los que no sirven para vender.
+        tidx = build_target_index(results, self.db) if getattr(self, 'db', None) else {}
+        pares = [(p, stock_resumen(p, getattr(self, 'db', None), tidx)) for p in results]
+        pares.sort(key=lambda t: 0 if t[1]['disponible'] > 0 else 1)
+
+        self._results   = [p for p, _ in pares]
+        self._resumenes = [r for _, r in pares]
+        self._close_stock_popover()
         self._render()
 
     def _render(self):
@@ -5855,23 +6025,15 @@ class SpotlightDialog(QDialog):
         Evita el problema visual de cellWidget que no respeta selection-background.
         """
         from pos_system.ui.theme import COLORS as _C
+        from PyQt5.QtGui import QFontMetrics
         self.list.clear()
-        # Pre-cargar stock de fuentes vinculadas en una query (evita N+1).
-        _tidx = build_target_index(self._results, self.db) if getattr(self, 'db', None) else {}
-        for p in self._results:
+        chip_fm = QFontMetrics(QFont('Segoe UI', 8, QFont.Bold))
+        for i, p in enumerate(self._results):
             cat = p.get('category') or 'Sin categoría'
-            stock = p.get('stock', 0)
-            es_conj = int(p.get('es_conjunto') or 0) == 1
             is_mp   = bool(p.get('is_mp'))
             mp_kind = p.get('mp_kind') or ''
-            if is_mp and mp_kind == 'madre':
-                stock_txt = 'ver variantes'
-            elif es_conj:
-                stock_txt = f"{p.get('conjunto_total') or 0:.0f} {p.get('conjunto_unidad_medida') or ''}".strip()
-            else:
-                # shown_stock: vinculado → fuente; -1 → ∞ servicio; negativo → 0.
-                _txt, _num = shown_stock(p, getattr(self, 'db', None), targets_index=_tidx)
-                stock_txt = '∞' if _num == float('inf') else f"{_txt} un"
+            resumen = (self._resumenes[i] if i < len(self._resumenes)
+                       else {'disponible': 0, 'chip': '', 'titulo': '', 'filas': []})
             barcode = p.get('barcode') or ''
             if is_mp and mp_kind == 'madre':
                 price_txt = '—'
@@ -5883,19 +6045,25 @@ class SpotlightDialog(QDialog):
                 line1 = f"◆  {p.get('name', '—')}"
             else:
                 line1 = f"{p.get('name', '—')}"
-            sub = f"{barcode}  ·  {cat}  ·  stock: {stock_txt}"
+            # El stock ya no va en el subtítulo: vive en la píldora de la derecha,
+            # que además abre el detalle al pasarle el mouse por encima.
+            sub = f"{barcode}  ·  {cat}"
+            chip_txt = resumen['chip']
             item = QListWidgetItem()
             item.setData(Qt.UserRole, p)
             item.setData(Qt.UserRole + 1, line1)
             item.setData(Qt.UserRole + 2, sub)
             item.setData(Qt.UserRole + 3, price_txt)
             item.setData(Qt.UserRole + 4, mp_kind if is_mp else '')  # marca para el delegate
+            item.setData(Qt.UserRole + 5, chip_txt)
+            item.setData(Qt.UserRole + 6, chip_fm.width(chip_txt) + 18)
+            item.setData(Qt.UserRole + 7, float(resumen['disponible']))
             item.setSizeHint(QSize(0, 56))
             self.list.addItem(item)
         # Custom paint via delegate
         if not hasattr(self, '_delegate_set'):
             from PyQt5.QtWidgets import QStyledItemDelegate, QStyle
-            from PyQt5.QtGui import QPalette, QPen
+            from PyQt5.QtGui import QPalette, QPen, QPainter
             spotlight_self = self
             class _Delegate(QStyledItemDelegate):
                 def paint(self, painter, option, index):
@@ -5927,24 +6095,54 @@ class SpotlightDialog(QDialog):
                     # Bottom border
                     painter.setPen(QPen(QColor(_C['border_soft']), 1))
                     painter.drawLine(r.x(), r.y() + r.height() - 1, r.x() + r.width(), r.y() + r.height() - 1)
+                    chip_txt   = index.data(Qt.UserRole + 5) or ''
+                    chip_w     = int(index.data(Qt.UserRole + 6) or 0)
+                    disponible = float(index.data(Qt.UserRole + 7) or 0)
+                    # El bloque derecho (precio arriba, stock abajo) se reserva
+                    # entero para que un nombre largo nunca lo pise.
+                    reserva = max(120, chip_w + 30)
                     # Texto nombre
                     f1 = QFont('Segoe UI', 10, QFont.Bold)
                     painter.setFont(f1)
                     painter.setPen(QColor('#5b21b6' if is_mp else _C['text']))
-                    name_rect = r.adjusted(16, 8, -120, -28)
-                    painter.drawText(name_rect, Qt.AlignLeft | Qt.AlignTop, p_data)
+                    name_rect = r.adjusted(16, 8, -reserva, -28)
+                    painter.drawText(
+                        name_rect, Qt.AlignLeft | Qt.AlignTop,
+                        QFontMetrics(f1).elidedText(p_data, Qt.ElideRight, name_rect.width())
+                    )
                     # Sub
                     f2 = QFont('Consolas', 9)
                     painter.setFont(f2)
                     painter.setPen(QColor(_C['text_muted']))
-                    sub_rect = r.adjusted(16, 30, -120, -8)
-                    painter.drawText(sub_rect, Qt.AlignLeft | Qt.AlignTop, sub)
-                    # Precio
+                    sub_rect = r.adjusted(16, 30, -reserva, -8)
+                    painter.drawText(
+                        sub_rect, Qt.AlignLeft | Qt.AlignTop,
+                        QFontMetrics(f2).elidedText(sub, Qt.ElideRight, sub_rect.width())
+                    )
+                    # Precio (arriba a la derecha)
                     f3 = QFont('Consolas', 11, QFont.Bold)
                     painter.setFont(f3)
                     painter.setPen(QColor(_C['text']))
-                    price_rect = r.adjusted(0, 0, -16, 0)
-                    painter.drawText(price_rect, Qt.AlignRight | Qt.AlignVCenter, price)
+                    price_rect = r.adjusted(0, 8, -16, 0)
+                    painter.drawText(price_rect, Qt.AlignRight | Qt.AlignTop, price)
+                    # Píldora de stock (abajo a la derecha) — el disparador del
+                    # globo de detalle. Verde = hay, rojo = no hay, azul = servicio.
+                    if chip_txt:
+                        if disponible == float('inf'):
+                            c_bg, c_fg, c_bd = '#eff6ff', '#1d4ed8', '#bfdbfe'
+                        elif disponible > 0:
+                            c_bg, c_fg, c_bd = '#ecfdf5', '#15803d', '#bbf7d0'
+                        else:
+                            c_bg, c_fg, c_bd = '#fef2f2', '#b91c1c', '#fecaca'
+                        chip_r = spotlight_self._chip_rect(r, chip_w)
+                        hovered = (spotlight_self._hover_chip_row == index.row())
+                        painter.setRenderHint(QPainter.Antialiasing, True)
+                        painter.setPen(QPen(QColor(c_fg if hovered else c_bd), 1))
+                        painter.setBrush(QColor(c_bg))
+                        painter.drawRoundedRect(chip_r, 9, 9)
+                        painter.setFont(QFont('Segoe UI', 8, QFont.Bold))
+                        painter.setPen(QColor(c_fg))
+                        painter.drawText(chip_r, Qt.AlignCenter, chip_txt)
                     painter.restore()
             self.list.setItemDelegate(_Delegate(self.list))
             self._delegate_set = True
@@ -5964,8 +6162,94 @@ class SpotlightDialog(QDialog):
         self.product_selected.emit(p)
         self.accept()
 
+    # ── Píldora de stock + globo de detalle ──────────────────────────────
+    def _chip_rect(self, row_rect, chip_w):
+        """Rectángulo de la píldora dentro de una fila. Lo comparten el dibujo
+        y la detección del mouse, así que no pueden desincronizarse."""
+        from PyQt5.QtCore import QRect
+        h = 18
+        return QRect(row_rect.right() - 14 - chip_w,
+                     row_rect.y() + row_rect.height() - 9 - h,
+                     chip_w, h)
+
+    def _row_under_chip(self, pos):
+        """Fila cuya píldora está bajo `pos` (viewport). -1 si ninguna."""
+        idx = self.list.indexAt(pos)
+        if not idx.isValid():
+            return -1
+        item = self.list.item(idx.row())
+        if item is None or not (item.data(Qt.UserRole + 5) or ''):
+            return -1
+        chip_w = int(item.data(Qt.UserRole + 6) or 0)
+        # Margen generoso: apuntar a una píldora de 18px de alto es incómodo.
+        rect = self._chip_rect(self.list.visualRect(idx), chip_w).adjusted(-6, -6, 6, 6)
+        return idx.row() if rect.contains(pos) else -1
+
+    def _on_list_hover(self, pos):
+        row = self._row_under_chip(pos)
+        if row == self._hover_chip_row:
+            return
+        self._hover_chip_row = row
+        self.list.viewport().update()
+        if row < 0:
+            self._popover_open_timer.stop()
+            self._popover_close_timer.start()
+        else:
+            self._popover_close_timer.stop()
+            self._popover_open_timer.start()
+
+    def _open_stock_popover(self):
+        row = self._hover_chip_row
+        if row < 0 or row >= len(self._resumenes):
+            return
+        resumen = self._resumenes[row]
+        producto = self._results[row] if row < len(self._results) else {}
+        if self._popover is None:
+            self._popover = _StockPopover(self)
+            self._popover.mouse_entered.connect(self._popover_close_timer.stop)
+            self._popover.mouse_left.connect(self._popover_close_timer.start)
+            self._popover.dismissed.connect(self._close_stock_popover)
+        self._popover.cargar(
+            titulo=str(producto.get('name') or resumen.get('titulo') or 'Stock'),
+            subtitulo=resumen.get('titulo') or '',
+            chip=resumen.get('chip') or '',
+            filas=resumen.get('filas') or [],
+        )
+        # Anclado a la izquierda de la píldora, sin salirse del diálogo.
+        item = self.list.item(row)
+        if item is None:
+            return
+        chip_w = int(item.data(Qt.UserRole + 6) or 0)
+        chip_r = self._chip_rect(self.list.visualItemRect(item), chip_w)
+        anchor = self.list.viewport().mapTo(self, chip_r.topLeft())
+        pop = self._popover
+        pop.adjustSize()
+        x = max(14, anchor.x() - pop.width() - 10)
+        y = min(max(14, anchor.y() - pop.height() // 2),
+                self.height() - pop.height() - 14)
+        pop.move(x, y)
+        pop.show()
+        pop.raise_()
+
+    def _close_stock_popover(self):
+        self._popover_open_timer.stop()
+        self._popover_close_timer.stop()
+        if self._popover is not None and self._popover.isVisible():
+            self._popover.hide()
+            self.search_input.setFocus()
+
     def eventFilter(self, obj, event):
         from PyQt5.QtCore import QEvent
+        # El filtro ya puede recibir eventos mientras _build_ui está a mitad de
+        # camino: la lista todavía no existe.
+        lista = getattr(self, 'list', None)
+        if lista is not None and obj is lista.viewport():
+            if event.type() == QEvent.MouseMove:
+                self._on_list_hover(event.pos())
+            elif event.type() == QEvent.Leave:
+                self._hover_chip_row = -1
+                self._popover_open_timer.stop()
+                self._popover_close_timer.start()
         if obj is self.search_input and event.type() == QEvent.KeyPress:
             key = event.key()
             if key in (Qt.Key_Down, Qt.Key_Up):
@@ -5987,9 +6271,172 @@ class SpotlightDialog(QDialog):
 
     def keyPressEvent(self, event):
         if event.key() == Qt.Key_Escape:
+            # Con el globo abierto, Esc lo cierra primero: nadie espera perder
+            # la búsqueda entera por cerrar un detalle.
+            if self._popover is not None and self._popover.isVisible():
+                self._close_stock_popover()
+                return
             self.reject()
             return
         super().keyPressEvent(event)
+
+
+class _StockPopover(QFrame):
+    """Globo con el desglose de stock de un producto del buscador.
+
+    Se abre al pasar el mouse por la píldora de stock y evita tener que entrar
+    al producto para saber si hay. Cuando el desglose es largo (un producto
+    madre con muchas variantes) suma un campo de filtro: al entrar el mouse al
+    globo, el foco pasa ahí y se puede tipear sin cerrar nada.
+    """
+    mouse_entered = pyqtSignal()
+    mouse_left    = pyqtSignal()
+    dismissed     = pyqtSignal()
+
+    CON_FILTRO_DESDE = 7
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        from PyQt5.QtWidgets import QGraphicsDropShadowEffect
+        from pos_system.ui.theme import COLORS as _C
+        self._C = _C
+        self._filas = []
+        self.setObjectName('stockPopover')
+        self.setStyleSheet(
+            f"QFrame#stockPopover {{ background:{_C['surface']};"
+            f" border:1px solid {_C['border']}; border-radius:10px; }}"
+        )
+        self.setFixedWidth(320)
+        self.setAttribute(Qt.WA_ShowWithoutActivating, True)
+
+        v = QVBoxLayout(self)
+        v.setContentsMargins(14, 12, 14, 12)
+        v.setSpacing(8)
+
+        self._titulo = QLabel('')
+        self._titulo.setWordWrap(True)
+        self._titulo.setStyleSheet(
+            f"color:{_C['text']}; font-size:12px; font-weight:700;"
+            f" background:transparent; border:none;"
+        )
+        v.addWidget(self._titulo)
+
+        self._subtitulo = QLabel('')
+        self._subtitulo.setStyleSheet(
+            f"color:{_C['text_muted']}; font-size:10px; background:transparent;"
+            f" border:none; font-family:'Consolas','JetBrains Mono',monospace;"
+        )
+        v.addWidget(self._subtitulo)
+
+        self._filtro = QLineEdit()
+        self._filtro.setPlaceholderText('Buscar…')
+        self._filtro.setStyleSheet(
+            f"QLineEdit {{ background:{_C['bg']}; border:1px solid {_C['border']};"
+            f" border-radius:6px; padding:5px 8px; font-size:11px; color:{_C['text']}; }}"
+            f"QLineEdit:focus {{ border-color:{_C['accent']}; }}"
+        )
+        self._filtro.textChanged.connect(self._aplicar_filtro)
+        self._filtro.installEventFilter(self)
+        v.addWidget(self._filtro)
+
+        self._scroll = QScrollArea()
+        self._scroll.setWidgetResizable(True)
+        self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._scroll.setStyleSheet('QScrollArea { background:transparent; border:none; }')
+        self._cuerpo = QWidget()
+        self._cuerpo.setStyleSheet('background:transparent;')
+        self._cuerpo_lay = QVBoxLayout(self._cuerpo)
+        self._cuerpo_lay.setContentsMargins(0, 0, 0, 0)
+        self._cuerpo_lay.setSpacing(0)
+        self._cuerpo_lay.addStretch(1)
+        self._scroll.setWidget(self._cuerpo)
+        v.addWidget(self._scroll)
+
+        self._vacio = QLabel('')
+        self._vacio.setStyleSheet(
+            f"color:{_C['text_muted']}; font-size:11px; background:transparent; border:none;"
+        )
+        self._vacio.setWordWrap(True)
+        v.addWidget(self._vacio)
+
+        try:
+            sombra = QGraphicsDropShadowEffect(self)
+            sombra.setBlurRadius(26)
+            sombra.setOffset(0, 4)
+            sombra.setColor(QColor(0, 0, 0, 80))
+            self.setGraphicsEffect(sombra)
+        except Exception:
+            pass
+
+    def cargar(self, titulo, subtitulo, chip, filas):
+        self._titulo.setText(titulo)
+        self._subtitulo.setText(f'{subtitulo} · {chip}'.strip(' ·') if subtitulo else chip)
+
+        while self._cuerpo_lay.count() > 1:
+            w = self._cuerpo_lay.takeAt(0).widget()
+            if w is not None:
+                w.deleteLater()
+        self._filas = []
+
+        for etiqueta, valor in filas:
+            fila = self._construir_fila(etiqueta, valor)
+            self._cuerpo_lay.insertWidget(self._cuerpo_lay.count() - 1, fila)
+            self._filas.append((f'{etiqueta} {valor}'.lower(), fila))
+
+        con_filtro = len(filas) >= self.CON_FILTRO_DESDE
+        self._filtro.setVisible(con_filtro)
+        self._filtro.clear()
+        self._scroll.setVisible(bool(filas))
+        self._vacio.setVisible(not filas)
+        if not filas:
+            self._vacio.setText('Sin desglose: el número de la píldora es el stock.')
+
+        alto = min(230, max(46, len(filas) * 30 + 6))
+        self._scroll.setFixedHeight(alto if filas else 0)
+
+    def _construir_fila(self, etiqueta, valor):
+        _C = self._C
+        w = QFrame()
+        w.setStyleSheet(f"QFrame {{ border:none; border-bottom:1px solid {_C['border_soft']}; }}")
+        h = QHBoxLayout(w)
+        h.setContentsMargins(0, 6, 0, 6)
+        h.setSpacing(10)
+        lbl = QLabel(str(etiqueta))
+        lbl.setWordWrap(True)
+        lbl.setStyleSheet(
+            f"color:{_C['text']}; font-size:11px; background:transparent; border:none;")
+        val = QLabel(str(valor))
+        val.setStyleSheet(
+            f"color:{_C['text_muted']}; font-size:11px; background:transparent;"
+            f" border:none; font-family:'Consolas','JetBrains Mono',monospace;")
+        val.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+        h.addWidget(lbl, 1)
+        h.addWidget(val, 0)
+        return w
+
+    def _aplicar_filtro(self, texto):
+        palabras = [p for p in str(texto or '').lower().split() if p]
+        for hay, fila in self._filas:
+            fila.setVisible(all(p in hay for p in palabras))
+
+    def enterEvent(self, event):
+        self.mouse_entered.emit()
+        if self._filtro.isVisible():
+            self._filtro.setFocus()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):
+        self.mouse_left.emit()
+        super().leaveEvent(event)
+
+    def eventFilter(self, obj, event):
+        from PyQt5.QtCore import QEvent
+        if obj is self._filtro and event.type() == QEvent.KeyPress:
+            if event.key() == Qt.Key_Escape:
+                self.dismissed.emit()
+                return True
+        return super().eventFilter(obj, event)
 
 
 class PromosQuickDialog(QDialog):

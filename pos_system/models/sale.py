@@ -202,7 +202,24 @@ class Sale:
         Los acumuladores recogen lo que hay que empujar a Firestore después del
         commit. Está extraído de create() para poder reusarlo cuando se salda
         un fiado con saldo a favor: ahí sale mercadería sin venta asociada.
+
+        Con `quantity` negativa el mismo motor DEVUELVE stock (ver
+        reponer_stock_items).
         """
+        # La línea ya descontó stock antes de llegar acá: es un producto que se
+        # cargó a un fiado (la mercadería salió del local ese día) y ahora se
+        # está cobrando. Descontar de nuevo dejaría el stock en negativo.
+        if item.get('stock_descontado'):
+            # Igual hay que marcar el item en `ventas_por_dia`: el watcher de
+            # consumibles de la webapp descuenta las vinculaciones de todo item
+            # que no venga marcado, y las de esta línea ya se aplicaron.
+            vincs_acumulador.append({
+                'item_idx':    item_idx,
+                'solo_marcar': True,
+                'contexto':    item.get('product_name') or '',
+            })
+            return
+
         is_mp = bool(item.get('is_mp'))
         if is_mp:
             # Producto Madre: descontar stock de mp_nodes.presentaciones (sueltos
@@ -236,12 +253,13 @@ class Sale:
             after_r = float(item.get('conjunto_after_restante') or 0)
             color = (item.get('conjunto_color') or '').strip()
             row = cursor.execute(
-                "SELECT conjunto_contenido, conjunto_colores "
+                "SELECT conjunto_contenido, conjunto_colores, conjunto_total "
                 "FROM products WHERE id = ?",
                 (item['product_id'],)
             ).fetchone()
             contenido = float(row[0]) if row and row[0] is not None else 0.0
             colores_raw = row[1] if row and len(row) > 1 else None
+            total_antes = float(row[2] or 0) if row and len(row) > 2 else 0.0
 
             if color and colores_raw:
                 try:
@@ -252,12 +270,18 @@ class Sale:
                     colores = []
                 # Actualizar el color correspondiente
                 encontrado = False
+                antes_color = 0.0
                 for c in colores:
                     if isinstance(c, dict) and str(c.get('color', '')).strip() == color:
+                        antes_color = (float(c.get('unidades') or 0) * contenido
+                                       + float(c.get('restante') or 0))
                         c['unidades'] = after_u
                         c['restante'] = after_r
                         encontrado = True
                         break
+                consumido_base = max(
+                    0.0, antes_color - (after_u * contenido + after_r)
+                )
                 if not encontrado:
                     colores.append({
                         'color':    color,
@@ -286,6 +310,7 @@ class Sale:
             else:
                 # Legacy / sin colores: usar after_u / after_r directos
                 after_total = after_u * contenido + after_r
+                consumido_base = max(0.0, total_antes - after_total)
                 cursor.execute(
                     """UPDATE products
                        SET conjunto_unidades = ?,
@@ -295,6 +320,12 @@ class Sale:
                        WHERE id = ?""",
                     (after_u, after_r, after_total, now_iso, item['product_id'])
                 )
+
+            # Cuánto salió realmente del rollo/pack en unidades base. Se guarda
+            # en la línea porque el descuento de conjunto es un SET absoluto:
+            # sin este dato no hay forma de devolver la fracción si después se
+            # anula (ej: un producto fiado que el cliente trae de vuelta).
+            item['conjunto_consumido_base'] = round(consumido_base, 4)
         else:
             # Descontar stock — se permite vender aunque no haya stock
             # suficiente. EXCEPTO si el producto está vinculado: en ese
@@ -321,11 +352,12 @@ class Sale:
     def descontar_stock_items(self, items: List[Dict], usuario: str = '') -> None:
         """Descuenta stock de una lista de líneas SIN generar una venta.
 
-        Único caso de uso: saldar productos fiados con saldo a favor del cliente.
-        La plata ya entró a la caja cuando el cliente la dejó "a cuenta" (esa
-        entrega generó su propia venta), así que crear otra venta acá contaría
-        el dinero dos veces — pero la mercadería sí sale ahora y el stock tiene
-        que reflejarlo.
+        Dos casos de uso:
+          - Cargar un carrito a la cuenta corriente de un cliente (fiado): la
+            mercadería sale del local hoy aunque la plata entre después.
+          - Saldar productos fiados con saldo a favor: la plata ya entró a la
+            caja cuando el cliente la dejó "a cuenta", así que crear otra venta
+            contaría el dinero dos veces.
 
         Usa exactamente el mismo motor de descuento que una venta normal y
         propaga los cambios a Firebase igual que ella.
@@ -337,6 +369,8 @@ class Sale:
         now_iso = datetime.now().isoformat()
         mp_para_sync_remoto = []
         vincs_para_sync_remoto = []
+        # Las líneas que ya venían descontadas no las toca ni SQLite ni Firebase.
+        aplicados = [it for it in items if not it.get('stock_descontado')]
 
         with self.db.get_connection() as conn:
             cursor = conn.cursor()
@@ -347,29 +381,147 @@ class Sale:
                     usuario=usuario,
                 )
 
-        if mp_para_sync_remoto:
+        self._propagar_stock_a_firebase(
+            aplicados, mp_para_sync_remoto, vincs_para_sync_remoto,
+            contexto='descontar_stock_items',
+        )
+
+    def reponer_stock_items(self, items: List[Dict], usuario: str = '') -> None:
+        """Devuelve al stock lo que `descontar_stock_items` sacó.
+
+        Caso de uso: un producto cargado a un fiado que se quita de la cuenta
+        sin cobrarlo — se anotó por error o el cliente lo trajo de vuelta. Como
+        el stock se descontó el día que se lo llevó, hay que reponerlo.
+
+        Reusa el motor de descuento con la cantidad en negativo: el UPDATE es
+        `stock = stock - (-cantidad)` y las vinculaciones aplican un delta
+        negativo, así que sumar y restar recorren exactamente el mismo camino.
+        Los conjuntos son la excepción (su descuento es un SET absoluto): se les
+        recalcula el estado destino a partir de lo que consumieron.
+        """
+        items = [it for it in (items or []) if it]
+        if not items:
+            return
+
+        now_iso = datetime.now().isoformat()
+        mp_para_sync_remoto = []
+        vincs_para_sync_remoto = []
+        repuestos = []
+
+        with self.db.get_connection() as conn:
+            cursor = conn.cursor()
+            for idx, item in enumerate(items):
+                reverso = dict(item)
+                reverso.pop('stock_descontado', None)
+                reverso['quantity'] = -abs(float(item.get('quantity') or 0))
+                if not reverso['quantity']:
+                    continue
+                if reverso.get('is_conjunto') and not self._preparar_reverso_conjunto(cursor, reverso):
+                    logger.warning(
+                        "reponer_stock_items: '%s' es conjunto y no se pudo "
+                        "calcular cuánto devolver — se deja el stock como está.",
+                        item.get('product_name')
+                    )
+                    continue
+                self._aplicar_stock_de_item(
+                    cursor, reverso, idx, now_iso,
+                    mp_para_sync_remoto, vincs_para_sync_remoto,
+                    usuario=usuario,
+                )
+                repuestos.append(reverso)
+
+        self._propagar_stock_a_firebase(
+            repuestos, mp_para_sync_remoto, vincs_para_sync_remoto,
+            contexto='reponer_stock_items',
+        )
+
+    def _preparar_reverso_conjunto(self, cursor, reverso: Dict) -> bool:
+        """Setea `conjunto_after_*` con el rollo/pack ya devuelto.
+
+        El descuento de conjuntos escribe unidades/restante absolutos, así que
+        no se puede invertir con una cantidad negativa: hay que partir del stock
+        VIVO y sumarle lo que la línea consumió (`conjunto_consumido_base`, que
+        el descuento guardó en la línea). Devuelve False si falta ese dato — sin
+        él cualquier número que escribiéramos sería inventado.
+        """
+        consumido = float(reverso.get('conjunto_consumido_base') or 0)
+        pid = reverso.get('product_id')
+        if consumido <= 0 or not pid:
+            return False
+
+        row = cursor.execute(
+            "SELECT conjunto_contenido, conjunto_colores, conjunto_total "
+            "FROM products WHERE id = ?",
+            (pid,)
+        ).fetchone()
+        if not row:
+            return False
+        contenido = float(row[0] or 0)
+        if contenido <= 0:
+            return False
+        color = (reverso.get('conjunto_color') or '').strip()
+
+        if color and row[1]:
+            try:
+                colores = json.loads(row[1])
+                if not isinstance(colores, list):
+                    colores = []
+            except Exception:
+                colores = []
+            entry = next((c for c in colores if isinstance(c, dict)
+                          and str(c.get('color', '')).strip() == color), None)
+            total_actual = ((float(entry.get('unidades') or 0) * contenido
+                             + float(entry.get('restante') or 0)) if entry else 0.0)
+        else:
+            total_actual = float(row[2] or 0)
+
+        nuevo_total = total_actual + consumido
+        cerrados = int(nuevo_total // contenido)
+        resto    = nuevo_total - cerrados * contenido
+        if resto > 1e-9:
+            reverso['conjunto_after_unidades'] = cerrados + 1
+            reverso['conjunto_after_restante'] = resto
+        else:
+            reverso['conjunto_after_unidades'] = cerrados
+            reverso['conjunto_after_restante'] = 0
+        return True
+
+    def _propagar_stock_a_firebase(self, items: List[Dict],
+                                   mp_para_sync: List[Dict],
+                                   vincs_para_sync: List[Dict],
+                                   contexto: str = '') -> None:
+        """Empuja a Firestore el stock que se acaba de mover en SQLite.
+
+        `items` con cantidad positiva descuentan y con cantidad negativa
+        reponen: Firestore usa Increment(-cantidad) en los dos casos.
+        """
+        # Acá no hay venta, así que no hay doc de `ventas_por_dia` que marcar:
+        # las entradas de sólo-marcado no tienen a dónde ir.
+        vincs_para_sync = [v for v in (vincs_para_sync or [])
+                           if not v.get('solo_marcar')]
+        if mp_para_sync:
             threading.Thread(
                 target=self._sync_mp_to_firebase,
-                args=(mp_para_sync_remoto,),
+                args=(mp_para_sync,),
                 daemon=True,
             ).start()
-        if vincs_para_sync_remoto:
+        if vincs_para_sync:
             # sale_id=None → sync_vinculaciones_after_sale sólo empuja el stock
             # de los targets y no intenta marcar docs de `ventas_por_dia`.
             threading.Thread(
                 target=self._sync_vincs_to_firebase,
-                args=(None, vincs_para_sync_remoto),
+                args=(None, vincs_para_sync),
                 daemon=True,
             ).start()
-
-        # Propagar el stock ya descontado al catálogo/inventario en Firebase.
+        if not items:
+            return
         try:
             from pos_system.utils.firebase_sync import get_firebase_sync
             fb = get_firebase_sync()
             if fb and getattr(fb, 'enabled', False):
                 fb.sync_stock_after_sale(items, self.db)
         except Exception as e:
-            logger.warning(f"descontar_stock_items: push de stock a Firebase falló: {e}")
+            logger.warning(f"{contexto or 'stock'}: push de stock a Firebase falló: {e}")
 
     # ── Productos Madre (mp_*) ────────────────────────────────────────────
     def _deduct_mp_stock_local(self, cursor, item: Dict, now_iso: str) -> Optional[str]:
@@ -385,11 +537,15 @@ class Sale:
              (decrementar `stock` de a 1, sumar equivalencia_base a sueltos).
           3) Si la presentación vendida tiene stock_modo='vinculado' y
              vinculada_a, redirigimos el descuento a la fuente.
+
+        Con cantidad NEGATIVA (devolución de un fiado anulado) hace lo inverso:
+        la mercadería vuelve como sueltos, sin recomponer contenedores — es lo
+        seguro, porque no sabemos si el rollo/caja se abrió para esa venta.
         """
         node_id = item.get('mp_node_id')
         pres_id = item.get('mp_presentation_id')
         qty     = float(item.get('quantity') or 0)
-        if not node_id or not pres_id or qty <= 0:
+        if not node_id or not pres_id or qty == 0:
             return None
 
         row = cursor.execute(
@@ -429,7 +585,11 @@ class Sale:
         t = dict(presentaciones[target_idx])
         pendiente = qty
         sueltos = float(t.get('stock_sueltos') or 0)
-        if sueltos > 0:
+        if pendiente < 0:
+            # Devolución: entra todo como suelto.
+            t['stock_sueltos'] = sueltos - pendiente
+            pendiente = 0
+        elif sueltos > 0:
             usar = min(pendiente, sueltos)
             t['stock_sueltos'] = sueltos - usar
             pendiente -= usar
@@ -467,7 +627,7 @@ class Sale:
                         presentation_id=it['presentation_id'],
                         delta_qty=it['qty'],
                         product_id=it.get('product_id') or '',
-                        motivo='venta',
+                        motivo='venta' if float(it.get('qty') or 0) > 0 else 'devolucion',
                         user=it.get('user') or '',
                         db_manager=self.db,  # espejo local del movimiento
                     )
@@ -549,8 +709,10 @@ class Sale:
           - target tiene `conjunto_colores` (variedades) → descuento ambiguo
           - target con stock=-1 (servicio/ilimitado)
         """
+        # Cantidad negativa = devolución: el delta también sale negativo y los
+        # UPDATE de más abajo (max(0, actual - delta)) terminan sumando.
         qty_vendida = float(item.get('quantity') or 0)
-        if qty_vendida <= 0:
+        if qty_vendida == 0:
             return
         pid_vendido = item.get('product_id')
         if not pid_vendido or pid_vendido == 0:

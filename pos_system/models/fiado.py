@@ -2,11 +2,14 @@
 
 Concepto:
 - Un cliente se lleva mercadería sin pagar. Cada producto que se lleva se
-  guarda como una fila en `fiado_items` con estado 'pendiente'. NO se descuenta
-  stock: el producto salió del local, pero la venta todavía no existe.
+  guarda como una fila en `fiado_items` con estado 'pendiente'. El stock SÍ se
+  descuenta (el producto salió del local), pero no entra plata a la caja: la
+  venta todavía no existe.
 - Cuando el cliente viene a pagar, se eligen los items que salda y el POS crea
-  una venta real: ahí se descuenta el stock, entra a la caja y la venta queda
-  marcada con es_fiado=1 para que la webapp la muestre distinta.
+  una venta real: ahí entra la plata a la caja y la venta queda marcada con
+  es_fiado=1 para que la webapp la muestre distinta. El stock no se vuelve a
+  tocar — las líneas cargadas desde el POS traen `stock_descontado` en su
+  snapshot para evitar el doble descuento.
 - También se pueden registrar entregas de dinero sueltas ("a cuenta"), que
   generan saldo a favor del cliente y se aplican en un cobro posterior.
 
@@ -203,7 +206,12 @@ class Fiado:
                      pc_id: str = '', origen: str = 'pos',
                      nota: str = '') -> List[int]:
         """Carga líneas de carrito a la cuenta del cliente. Devuelve los ids
-        locales creados. NO toca stock."""
+        locales creados.
+
+        No toca stock: el descuento lo hace el caller (Sale.descontar_stock_items)
+        antes de llamar acá, y deja `stock_descontado` en cada línea para que el
+        cobro posterior no lo repita.
+        """
         items = items or []
         if not items:
             return []
