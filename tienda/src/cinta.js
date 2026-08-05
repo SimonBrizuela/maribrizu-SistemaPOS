@@ -25,6 +25,9 @@ export function montarCinta(caja, { max, valor = 1, alCambiar }) {
   const tope = Math.max(PASO, Math.floor(max / PASO) * PASO);
   let metros = Math.min(tope, Math.max(PASO, valor));
 
+  // Se arranca en 1 m cuando hay stock: a 0,5 la chapita del arranque queda
+  // pegada al cursor y no se ve cuánta cinta hay para el otro lado.
+
   // Se dibujan las marcas de metro entero hasta un poco más allá del tope, para
   // que al llegar al final la cinta no termine en el vacío.
   const marcas = [];
@@ -39,6 +42,7 @@ export function montarCinta(caja, { max, valor = 1, alCambiar }) {
          aria-valuemin="${PASO}" aria-valuemax="${tope}"
          aria-valuenow="${metros}" aria-valuetext="${texto(metros)}">
       <div class="cinta__regla" style="width:${(Math.ceil(tope) + 2) * PX_METRO}px">
+        <span class="cinta__inicio"></span>
         ${marcas.join('')}
       </div>
       <div class="cinta__cursor"></div>

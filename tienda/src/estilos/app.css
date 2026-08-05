@@ -633,6 +633,24 @@
 }
 .cinta--animada .cinta__regla { transition: transform var(--m-normal) var(--curva); }
 
+/* El arranque del metro.
+   La regla empieza en 0 y antes no hay nada, así que con valores bajos media
+   cinta quedaba vacía y el conjunto se veía descentrado, como si le faltara
+   algo. Un metro de verdad tampoco tiene números antes del cero: tiene la
+   chapita del extremo. Esto es esa chapita, y de paso deja claro dónde empieza
+   a medirse. */
+.cinta__inicio {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: 100%;
+  width: 999px;
+  background:
+    repeating-linear-gradient(135deg,
+      var(--surface-3) 0 8px, var(--surface-2) 8px 16px);
+  border-right: 3px solid var(--text-3);
+}
+
 .cinta__metro {
   position: absolute;
   bottom: 0;
