@@ -580,3 +580,158 @@
     margin-inline: auto;
   }
 }
+
+/* ── Cinta métrica ───────────────────────────────────────────────────────────
+   Para lo que se vende cortado del rollo: cintas, cordones, elástico, abrojo.
+   350 productos del catálogo.
+
+   Un contador de "1, 2, 3" no dice nada cuando lo que comprás es una longitud.
+   Acá se ve una cinta de medir de verdad que se desplaza bajo una marca fija,
+   igual que cuando la vendedora estira el metro sobre el mostrador. El número
+   grande está para leerlo; la cinta está para entenderlo.
+
+   Se puede arrastrar con el dedo, y el paso de media hora es medio metro, que
+   es como se corta en el local. */
+.cinta {
+  --px-metro: 88px;
+  position: relative;
+  height: 78px;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  border: 1.5px solid var(--border);
+  overflow: hidden;
+  cursor: grab;
+  touch-action: pan-y;              /* el arrastre lateral es nuestro; el vertical de la página */
+  user-select: none;
+  -webkit-user-select: none;
+}
+.cinta:active { cursor: grabbing; }
+
+/* La regla. Las marcas chicas son un degradado repetido: dibujar cien
+   elementos para cien marcas es tirar memoria al pedo. */
+.cinta__regla {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 50%;
+  background-repeat: repeat-x;
+  background-image:
+    /* marca de cada 1/10 de metro */
+    repeating-linear-gradient(90deg,
+      var(--borde-control) 0 1.5px, transparent 1.5px calc(var(--px-metro) / 10));
+  background-position: 0 bottom;
+  background-size: 100% 14px;
+  will-change: transform;
+}
+.cinta--animada .cinta__regla { transition: transform var(--m-normal) var(--curva); }
+
+.cinta__metro {
+  position: absolute;
+  bottom: 0;
+  width: 0;
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: center;
+}
+/* Marca larga del metro entero */
+.cinta__metro::before {
+  content: '';
+  width: 2px;
+  height: 28px;
+  background: var(--text-3);
+}
+.cinta__metro span {
+  font-size: var(--t-xs);
+  font-weight: var(--peso-semi);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+  margin-bottom: 2px;
+  white-space: nowrap;
+}
+
+/* Marca fija del centro: es donde se lee el valor. */
+.cinta__cursor {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--primary);
+  pointer-events: none;
+}
+.cinta__cursor::before {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: 50%;
+  transform: translateX(-50%);
+  border-left: 7px solid transparent;
+  border-right: 7px solid transparent;
+  border-top: 8px solid var(--primary);
+}
+
+/* Los bordes se desvanecen para que la cinta se lea como una tira que sigue
+   más allá de la ventana, y no como una caja con contenido recortado. */
+.cinta::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(90deg,
+    var(--surface-2) 0%, transparent 12%, transparent 88%, var(--surface-2) 100%);
+}
+
+.cinta-control {
+  display: flex;
+  align-items: center;
+  gap: var(--e-3);
+  margin-top: var(--e-3);
+}
+.cinta-valor {
+  flex: 1;
+  font-family: var(--font-titulo);
+  font-size: var(--t-xl);
+  font-weight: var(--peso-bold);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -.02em;
+  text-align: center;
+}
+.cinta-valor small {
+  font-size: var(--t-base);
+  font-weight: var(--peso-semi);
+  color: var(--text-2);
+  margin-left: 2px;
+}
+.cinta-ayuda {
+  font-size: var(--t-xs);
+  color: var(--text-2);
+  text-align: center;
+  margin-top: var(--e-2);
+}
+
+/* ── Llevar el rollo o la caja entera ────────────────────────────────────────
+   Sale más barato por unidad que comprar de a uno, así que conviene decirlo:
+   es la diferencia entre vender dos metros y vender el rollo. */
+.opcion-pack {
+  display: flex;
+  align-items: center;
+  gap: var(--e-3);
+  width: 100%;
+  padding: var(--e-3) var(--e-4);
+  border: 1.5px dashed var(--borde-control);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  cursor: pointer;
+  text-align: left;
+  transition: border-color var(--m-rapido) var(--curva), background var(--m-rapido) var(--curva);
+}
+.opcion-pack:hover { border-color: var(--primary); background: var(--primary-bg); }
+.opcion-pack__texto { flex: 1; min-width: 0; }
+.opcion-pack__titulo { font-weight: var(--peso-semi); font-size: var(--t-sm); }
+.opcion-pack__ahorro { font-size: var(--t-xs); color: var(--exito); font-weight: var(--peso-semi); }
+.opcion-pack__precio {
+  font-family: var(--font-titulo);
+  font-weight: var(--peso-bold);
+  white-space: nowrap;
+}

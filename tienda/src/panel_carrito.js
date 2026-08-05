@@ -118,14 +118,20 @@ function alHacerClic(ev) {
 
   const id = boton.dataset.id;
   const variedad = boton.dataset.variedad || null;
+  const esPack = boton.dataset.pack === '1';
+  // El paso lo decide la unidad: medio metro para lo que se corta, uno para el
+  // resto. Sumar de a uno en una cinta obliga a tocar el mas dos veces por
+  // metro.
+  const paso = carrito.pasoDe(boton.dataset.unidad);
+  const actual = carrito.cantidadDe(id, variedad, esPack);
 
   if (boton.hasAttribute('data-sumar')) {
-    carrito.cambiarCantidad(id, variedad, carrito.cantidadDe(id, variedad) + 1);
+    carrito.cambiarCantidad(id, variedad, actual + paso, esPack);
   } else if (boton.hasAttribute('data-restar')) {
-    carrito.cambiarCantidad(id, variedad, carrito.cantidadDe(id, variedad) - 1);
+    carrito.cambiarCantidad(id, variedad, actual - paso, esPack);
   } else if (boton.hasAttribute('data-sacar')) {
-    const posicion = carrito.posicionDe(id, variedad);
-    const fuera = carrito.sacar(id, variedad);
+    const posicion = carrito.posicionDe(id, variedad, esPack);
+    const fuera = carrito.sacar(id, variedad, esPack);
     if (fuera) {
       avisar(`Sacaste ${fuera.nombre}`, {
         accion: { texto: 'Deshacer', alHacer: () => carrito.restaurar(fuera, posicion) },
@@ -140,23 +146,32 @@ function renglon(r) {
     : `<div class="card-producto__placa"><span style="font-size:1.4rem">${
          esc((r.nombre || '?').charAt(0).toUpperCase())}</span></div>`;
 
-  const datos = `data-id="${esc(r.id)}" data-variedad="${esc(r.variedad || '')}"`;
+  const datos = `data-id="${esc(r.id)}" data-variedad="${esc(r.variedad || '')}" `
+              + `data-unidad="${esc(r.unidad)}" data-pack="${r.es_pack ? '1' : '0'}"`;
   const tope = r.stock > 0 && r.cantidad >= r.stock;
+  const paso = carrito.pasoDe(r.unidad);
+  const cantidad = carrito.formatearCantidad(r.cantidad, r.unidad);
+
+  const detalle = r.es_pack
+    ? `<div class="renglon__variedad">Pack cerrado · ${r.pack_contenido} unidades</div>`
+    : (r.variedad ? `<div class="renglon__variedad">${esc(r.variedad)}</div>` : '');
 
   return `
     <div class="renglon" data-rubro="${esc(r.rubro)}">
       <div class="renglon__foto">${foto}</div>
       <div class="renglon__datos">
         <div class="renglon__nombre">${esc(r.nombre)}</div>
-        ${r.variedad ? `<div class="renglon__variedad">${esc(r.variedad)}</div>` : ''}
+        ${detalle}
         <div class="contador" style="margin-top:var(--e-1)">
           <button class="contador__boton" data-restar ${datos}
-                  ${r.cantidad <= 1 ? 'disabled' : ''} aria-label="Quitar uno">
+                  ${r.cantidad <= paso ? 'disabled' : ''}
+                  aria-label="${r.unidad === 'metro' ? 'Medio metro menos' : 'Quitar uno'}">
             ${icono('menos', { tam: 16, grosor: 2.5 })}
           </button>
-          <span class="contador__valor" aria-live="polite">${r.cantidad}</span>
+          <span class="contador__valor" style="min-width:52px" aria-live="polite">${cantidad}</span>
           <button class="contador__boton" data-sumar ${datos}
-                  ${tope ? 'disabled' : ''} aria-label="Agregar uno">
+                  ${tope ? 'disabled' : ''}
+                  aria-label="${r.unidad === 'metro' ? 'Medio metro más' : 'Agregar uno'}">
             ${icono('mas', { tam: 16, grosor: 2.5 })}
           </button>
         </div>
@@ -195,7 +210,7 @@ function pintar(renglones) {
     return;
   }
 
-  const unidades = carrito.unidades();
+  const cuantos = carrito.unidades();
   const total = carrito.subtotal();
 
   panel.innerHTML = cabecera + `
@@ -203,7 +218,7 @@ function pintar(renglones) {
     <div class="panel__pie">
       <div class="totales" style="margin-bottom:var(--e-4)">
         <div class="totales__fila">
-          <span>Productos (${unidades})</span>
+          <span>Productos (${cuantos})</span>
           <strong class="cifra">${pesos(total)}</strong>
         </div>
         <div class="totales__fila" style="font-size:var(--t-xs)">

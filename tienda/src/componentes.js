@@ -81,7 +81,11 @@ export function cardProducto(p, indice = 0, { conRubro = true } = {}) {
         ${detalle ? `<span class="card-producto__detalle">${esc(detalle)}</span>` : ''}
         ${tiraVariedades}
         <div class="card-producto__pie">
-          <div>${anterior}<span class="card-producto__precio cifra">${pesos(p.precio)}</span></div>
+          <div>${anterior}<span class="card-producto__precio cifra">${pesos(p.precio)}</span>${
+            p.unidad === 'metro'
+              ? '<span style="display:block;font-size:var(--t-xs);color:var(--text-2);font-weight:600;line-height:1.2">el metro</span>'
+              : ''
+          }</div>
           ${accion}
         </div>
       </div>

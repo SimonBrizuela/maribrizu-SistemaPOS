@@ -5,6 +5,7 @@ import { icono } from '../iconos.js';
 import * as carrito from '../carrito.js';
 import { avisar } from '../avisos.js';
 import { abrir as abrirCarrito } from '../panel_carrito.js';
+import { montarCinta } from '../cinta.js';
 
 export async function producto({ montar, params }) {
   const cfg = await cargarConfig();
@@ -24,6 +25,10 @@ export async function producto({ montar, params }) {
   }
 
   document.title = `${p.nombre} · Librería Liceo`;
+
+  // Los que se cortan del rollo llevan cinta metrica en vez de contador: 350
+  // productos del catalogo (cintas, cordones, elastico, abrojo).
+  const porMetro = p.unidad === 'metro';
 
   const variedades = p.variedades || [];
   const hayVariedades = variedades.length > 0;
@@ -58,11 +63,13 @@ export async function producto({ montar, params }) {
       </div>
     </div>` : '';
 
+  const restante = porMetro ? `${p.stock} metros` : `${p.stock}`;
   const estadoStock = agotado
     ? `<span class="dato-stock" style="color:var(--text-2)">${icono('atencion', { tam: 18 })} Sin stock por ahora</span>`
-    : (p.stock <= 5
-        ? `<span class="dato-stock" style="color:var(--alerta)">${icono('atencion', { tam: 18 })} Quedan ${p.stock}</span>`
-        : `<span class="dato-stock" style="color:var(--exito)">${icono('tilde', { tam: 18 })} Hay stock</span>`);
+    : (p.stock <= (porMetro ? 3 : 5)
+        ? `<span class="dato-stock" style="color:var(--alerta)">${icono('atencion', { tam: 18 })} Quedan ${restante}</span>`
+        : `<span class="dato-stock" style="color:var(--exito)">${icono('tilde', { tam: 18 })} ${
+            porMetro ? `Hay ${restante} en el rollo` : 'Hay stock'}</span>`);
 
   montar(`
     <div class="contenedor" data-rubro="${esc(p.rubro)}">
@@ -85,7 +92,9 @@ export async function producto({ montar, params }) {
           </div>
 
           <div>
-            <div class="ficha-producto__precio cifra" data-precio>${pesos(p.precio)}</div>
+            <div class="ficha-producto__precio cifra" data-precio>${pesos(p.precio)}${
+              porMetro ? '<small style="font-size:var(--t-base);font-weight:600;color:var(--text-2)"> el metro</small>' : ''
+            }</div>
             ${estadoStock}
           </div>
 
@@ -107,9 +116,27 @@ export async function producto({ montar, params }) {
               </a>
             </div>`
           : `
+            ${porMetro ? '<div data-cinta></div>' : ''}
             <button class="boton boton--primario boton--grande boton--bloque" data-agregar>
-              ${icono('carrito', { tam: 20 })} Agregar al pedido
-            </button>`}
+              ${icono('carrito', { tam: 20 })} <span data-etiqueta-agregar>Agregar al pedido</span>
+            </button>
+            ${p.precio_pack ? `
+              <button class="opcion-pack" data-pack>
+                <span class="opcion-pack__texto">
+                  <span class="opcion-pack__titulo">Llevar ${
+                    p.pack_tipo === 'rollo' ? 'el rollo entero' :
+                    p.pack_tipo === 'caja'  ? 'la caja entera'  : 'el pack entero'
+                  } · ${p.pack_contenido}${porMetro ? ' m' : ' u'}</span>
+                  <span class="opcion-pack__ahorro">${(() => {
+                    const suelto = p.precio * p.pack_contenido;
+                    const ahorro = Math.round((1 - p.precio_pack / suelto) * 100);
+                    return ahorro > 0
+                      ? `Ahorrás ${ahorro}% contra comprar de a ${porMetro ? 'un metro' : 'uno'}`
+                      : 'Precio por cantidad';
+                  })()}</span>
+                </span>
+                <span class="opcion-pack__precio cifra">${pesos(p.precio_pack)}</span>
+              </button>` : ''}`}
 
           <div style="display:flex;flex-direction:column;gap:var(--e-2);padding-top:var(--e-3);border-top:1px solid var(--border)">
             <span style="display:flex;gap:var(--e-2);align-items:center;font-size:var(--t-sm);color:var(--text-2)">
@@ -154,6 +181,32 @@ export async function producto({ montar, params }) {
     });
   });
 
+  // ── Cinta métrica ───────────────────────────────────────────────────────
+  let metros = 1;
+  const cajaCinta = document.querySelector('[data-cinta]');
+  const etiqueta = document.querySelector('[data-etiqueta-agregar]');
+
+  if (cajaCinta) {
+    montarCinta(cajaCinta, {
+      max: p.stock,
+      valor: Math.min(1, p.stock),
+      alCambiar: m => {
+        metros = m;
+        // El botón dice cuánto se lleva y cuánto sale: sin eso hay que hacer la
+        // multiplicación de cabeza antes de tocarlo.
+        const texto = m.toFixed(1).replace('.', ',');
+        etiqueta.textContent = `Agregar ${texto} m · ${pesos(p.precio * m)}`;
+      },
+    });
+  }
+
+  document.querySelector('[data-pack]')?.addEventListener('click', () => {
+    carrito.agregar(p, { esPack: true });
+    avisar(`Agregaste ${p.pack_tipo === 'rollo' ? 'el rollo' : 'la caja'} de ${p.nombre}`, {
+      accion: { texto: 'Ver pedido', alHacer: abrirCarrito },
+    });
+  });
+
   botonAgregar?.addEventListener('click', () => {
     if (hayVariedades && !elegida) {
       avisar('Elegí primero el color o modelo', { tipo: 'error' });
@@ -162,8 +215,8 @@ export async function producto({ montar, params }) {
       document.querySelector('[data-variedad]:not([disabled])')?.focus();
       return;
     }
-    carrito.agregar(p, { variedad: elegida });
-    avisar(`Agregaste ${p.nombre}${elegida ? ` · ${elegida}` : ''}`, {
+    carrito.agregar(p, { variedad: elegida, cantidad: porMetro ? metros : 1 });
+    avisar(`Agregaste ${porMetro ? `${metros.toFixed(1).replace('.', ',')} m de ` : ''}${p.nombre}${elegida ? ` · ${elegida}` : ''}`, {
       accion: { texto: 'Ver pedido', alHacer: abrirCarrito },
     });
   });

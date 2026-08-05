@@ -102,6 +102,69 @@ def tokenizar(*textos):
     return vistas[:25]
 
 
+def medidas_de(datos):
+    """
+    Traduce el modelo de "conjunto" del POS a lo que necesita una tienda.
+
+    En el catalogo, un producto que se vende fraccionado guarda DOS precios:
+
+      precio_venta            lo que sale el rollo / la caja entera
+      conjunto_precio_unidad  lo que sale UNO: un metro, un boligrafo
+
+    La tienda mostraba `precio_venta` para todos, asi que un metro de media
+    perla figuraba a $23.800 cuando vale $1.200, y un boligrafo suelto a
+    $14.900 cuando vale $1.400. Con esos precios no se vende nada.
+
+    Devuelve el precio de una unidad, el del pack cuando existe de verdad, y en
+    que se mide el producto.
+    """
+    es_conjunto = datos.get('es_conjunto') is True
+    tipo = str(datos.get('conjunto_tipo') or '').strip().lower()
+    um = str(datos.get('conjunto_unidad_medida') or '').strip().lower()
+
+    def numero(clave, por_defecto=0):
+        try:
+            return float(datos.get(clave) or por_defecto)
+        except (TypeError, ValueError):
+            return por_defecto
+
+    precio_venta = numero('precio_venta')
+    precio_unidad = numero('conjunto_precio_unidad')
+    contenido = int(numero('conjunto_contenido'))
+
+    unidad = 'metro' if um == 'metros' else 'unidad'
+    variedades = variedades_de(datos)
+
+    if not es_conjunto:
+        return {
+            'unidad': 'unidad', 'precio': round(precio_venta), 'precio_pack': None,
+            'pack_tipo': None, 'pack_contenido': None,
+            'stock': max(0, int(numero('stock'))), 'variedades': [],
+        }
+
+    # `conjunto_tipo: unidad` con contenido 1 no es un pack: es un producto
+    # suelto que quedo marcado como conjunto. No se le ofrece "llevar el pack".
+    hay_pack = contenido > 1 and tipo in ('rollo', 'caja', 'pack', 'bolsa', 'bobina', 'carton')
+
+    # El stock en unidades sale de `conjunto_total`, no del campo `stock`: ese
+    # ultimo cuenta packs cerrados y queda desfasado. Medido sobre el catalogo:
+    # un producto con stock 225 tenia 246 unidades reales para vender.
+    if variedades:
+        stock = sum(v['stock'] for v in variedades)
+    else:
+        stock = int(numero('conjunto_total') or numero('stock'))
+
+    return {
+        'unidad': unidad,
+        'precio': round(precio_unidad or precio_venta),
+        'precio_pack': round(precio_venta) if hay_pack else None,
+        'pack_tipo': tipo if hay_pack else None,
+        'pack_contenido': contenido if hay_pack else None,
+        'stock': max(0, stock),
+        'variedades': variedades,
+    }
+
+
 def variedades_de(datos):
     """
     Traduce conjunto_colores a la forma publica.
@@ -174,18 +237,10 @@ def se_publica(datos, rubros_habilitados):
     # 599 y se podian comprar 53. Una tienda donde siete de cada diez productos
     # dicen "sin stock" se lee como un local que cerro, no como uno surtido.
     #
-    # El stock real de un producto con variedades es la suma de las variedades;
-    # el campo `stock` del padre cuenta packs cerrados y da cero cuando hay
-    # mercaderia suelta para vender.
-    variedades = variedades_de(datos)
-    if variedades:
-        stock = sum(v['stock'] for v in variedades)
-    else:
-        try:
-            stock = int(float(datos.get('stock') or 0))
-        except (TypeError, ValueError):
-            stock = 0
-    if stock <= 0:
+    # El stock se cuenta en unidades vendibles (metros sueltos, boligrafos
+    # sueltos), no en packs cerrados. medidas_de() ya resuelve las tres formas
+    # que usa el catalogo.
+    if medidas_de(datos)['stock'] <= 0:
         return False, 'sin stock'
 
     if marca_manual is True:
@@ -206,15 +261,7 @@ def armar_documento(doc_id, datos):
     if marca.upper() == 'SIN MARCA':
         marca = ''
 
-    variedades = variedades_de(datos)
-    try:
-        stock = int(float(datos.get('stock') or 0))
-    except (TypeError, ValueError):
-        stock = 0
-    # Con variedades manda la suma de las variedades: el campo `stock` del
-    # producto padre cuenta packs cerrados y no lo que hay para vender suelto.
-    if variedades:
-        stock = sum(v['stock'] for v in variedades)
+    m = medidas_de(datos)
 
     imagenes = datos.get('tienda_imagenes')
     if not isinstance(imagenes, list):
@@ -223,15 +270,25 @@ def armar_documento(doc_id, datos):
     return {
         'nombre': nombre,
         'descripcion': str(datos.get('tienda_descripcion') or '').strip(),
-        'precio': round(float(datos.get('precio_venta') or 0)),
+        # Precio de UNA unidad: un metro de cinta, un boligrafo suelto.
+        'precio': m['precio'],
         'precio_anterior': None,
-        'stock': max(0, stock),
+        # Precio del rollo o la caja entera, cuando llevarse el pack tiene
+        # sentido. Sale mas barato por unidad que comprar de a uno, asi que la
+        # tienda lo ofrece como alternativa en la ficha del producto.
+        'precio_pack': m['precio_pack'],
+        'pack_tipo': m['pack_tipo'],
+        'pack_contenido': m['pack_contenido'],
+        # En que se mide: 'metro' para cintas, cordones y elastico; 'unidad'
+        # para el resto.
+        'unidad': m['unidad'],
+        'stock': m['stock'],
         'rubro': str(datos.get('rubro') or '').strip().upper(),
         'categoria': nombre_bonito(datos.get('categoria')),
         'sub_rubro': nombre_bonito(datos.get('sub_rubro')),
         'marca': marca,
         'imagenes': [str(u) for u in imagenes if u],
-        'variedades': variedades,
+        'variedades': m['variedades'],
         'destacado': datos.get('tienda_destacado') is True,
         'tokens': tokenizar(nombre, marca, datos.get('categoria'), datos.get('sub_rubro')),
         'codigo': str(datos.get('codigo') or ''),

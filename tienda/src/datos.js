@@ -105,8 +105,15 @@ function armarProducto(snap) {
     id: snap.id,
     nombre: d.nombre || '',
     descripcion: d.descripcion || '',
+    // Precio de UNA unidad: un metro de cinta, un boligrafo suelto.
     precio: Number(d.precio) || 0,
     precio_anterior: d.precio_anterior ? Number(d.precio_anterior) : null,
+    // 'metro' para lo que se corta del rollo, 'unidad' para el resto.
+    unidad: d.unidad === 'metro' ? 'metro' : 'unidad',
+    // Lo que sale el rollo o la caja entera, cuando existe.
+    precio_pack: d.precio_pack ? Number(d.precio_pack) : null,
+    pack_tipo: d.pack_tipo || null,
+    pack_contenido: Number(d.pack_contenido) || null,
     stock: Number(d.stock) || 0,
     rubro: d.rubro || '',
     categoria: d.categoria || '',
