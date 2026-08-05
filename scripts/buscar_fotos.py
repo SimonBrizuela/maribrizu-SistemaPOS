@@ -13,14 +13,30 @@ nombre. "ABROCHADORA MAPED VIVO N10" encuentra el producto exacto; "CONO DE HILO
 nada: junta candidatas y arma una pagina para que una persona elija. Una foto
 equivocada llega al cliente y se transforma en una devolucion.
 
-Configuracion (una vez):
-  1. Google Cloud, mismo proyecto que Maps: habilitar "Custom Search API".
-  2. https://programmablesearchengine.google.com  -> crear buscador,
-     activar "Buscar en toda la web" y "Busqueda de imagenes".
-     Anotar el ID del buscador (cx).
-  3. Variables de entorno:
-       GOOGLE_CSE_KEY=...     (clave de API)
-       GOOGLE_CSE_CX=...      (ID del buscador)
+Configuracion (una sola vez):
+
+  1. console.cloud.google.com, proyecto mari-d7c71
+     APIs y servicios > Biblioteca > "Custom Search API" > Habilitar
+
+  2. APIs y servicios > Credenciales > Crear credenciales > Clave de API
+     Restringila a "Custom Search API" y nada mas. No hace falta restringir
+     por dominio: esta clave la usa este script, no el navegador.
+
+  3. programmablesearchengine.google.com/controlpanel/create
+     Marcar "Buscar en toda la web". Una vez creado, en el panel activar
+     "Busqueda de imagenes". Copiar el ID del motor de busqueda.
+
+  4. Crear el archivo `claves_google.txt` en la raiz del proyecto con:
+
+       GOOGLE_CSE_KEY=AIza...
+       GOOGLE_CSE_CX=a1b2c3d4e5f6...
+
+     Ese archivo esta en .gitignore y no se sube a ningun lado.
+
+Cuota: 100 consultas gratis por dia. Pasado eso hace falta facturacion
+activa y sale US$5 cada 1.000, con tope de 10.000 por dia. Los 2.315
+productos publicados salen unos 11 dolares por unica vez, pero conviene
+arrancar por los que tienen marca, que son los que la busqueda acierta.
 
     python scripts/buscar_fotos.py --cantidad 50
     python scripts/buscar_fotos.py --cantidad 200 --solo-con-marca
@@ -54,6 +70,28 @@ EXCLUIDOS = [
     'shopee.', 'aliexpress.', 'amazon.',
     'pinterest.', 'ebay.',
 ]
+
+
+def leer_claves():
+    """
+    Las claves salen de claves_google.txt o, si no esta, de las variables de
+    entorno. El archivo evita tener que exportarlas en cada terminal nueva, que
+    es donde siempre se olvidan.
+    """
+    valores = {
+        'GOOGLE_CSE_KEY': os.environ.get('GOOGLE_CSE_KEY', ''),
+        'GOOGLE_CSE_CX': os.environ.get('GOOGLE_CSE_CX', ''),
+    }
+    ruta = os.path.join(RAIZ, 'claves_google.txt')
+    if os.path.exists(ruta):
+        with open(ruta, encoding='utf-8') as f:
+            for linea in f:
+                linea = linea.strip()
+                if not linea or linea.startswith('#') or '=' not in linea:
+                    continue
+                nombre, _, valor = linea.partition('=')
+                valores[nombre.strip()] = valor.strip().strip('"').strip("'")
+    return valores
 
 
 def conectar():
@@ -140,11 +178,12 @@ def main():
                     help='solo los que tienen marca cargada: la busqueda acierta mucho mas')
     args = ap.parse_args()
 
-    clave = os.environ.get('GOOGLE_CSE_KEY')
-    cx = os.environ.get('GOOGLE_CSE_CX')
+    claves = leer_claves()
+    clave = claves.get('GOOGLE_CSE_KEY')
+    cx = claves.get('GOOGLE_CSE_CX')
     if not clave or not cx:
         print(__doc__)
-        sys.exit('Faltan GOOGLE_CSE_KEY y GOOGLE_CSE_CX en las variables de entorno.')
+        sys.exit('Faltan las claves. Ver los pasos de configuracion de arriba.')
 
     db = conectar()
 

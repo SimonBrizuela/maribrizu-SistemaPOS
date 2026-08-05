@@ -185,3 +185,9 @@ test_mp_variant_dialog.py
 
 # Local Netlify folder
 .netlify
+
+# Claves de la API de busqueda de imagenes (nunca subir)
+claves_google.txt
+fotos_candidatas.json
+fotos_aprobadas.json
+FOTOS_PENDIENTES.xlsx
