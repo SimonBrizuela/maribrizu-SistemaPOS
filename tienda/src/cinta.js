@@ -49,13 +49,18 @@ export function montarCinta(caja, { max, valor = 1, alCambiar }) {
               style="border:1.5px solid var(--borde-control);border-radius:var(--r-full);width:44px;height:44px">
         ${icono('menos', { tam: 18, grosor: 2.5 })}
       </button>
-      <span class="cinta-valor" aria-hidden="true" data-valor></span>
+      <label class="solo-lectores" for="cinta-metros">Metros que llevás</label>
+      <input class="cinta-valor" id="cinta-metros" data-valor
+             type="text" inputmode="decimal" autocomplete="off"
+             aria-describedby="cinta-ayuda">
       <button class="contador__boton" data-mas aria-label="Medio metro más"
               style="border:1.5px solid var(--borde-control);border-radius:var(--r-full);width:44px;height:44px">
         ${icono('mas', { tam: 18, grosor: 2.5 })}
       </button>
     </div>
-    <p class="cinta-ayuda">Arrastrá la cinta o usá los botones. Cortamos de a medio metro.</p>`;
+    <p class="cinta-ayuda" id="cinta-ayuda">
+      Arrastrá la cinta, usá los botones, o escribí el largo exacto.
+    </p>`;
 
   const cinta = caja.querySelector('.cinta');
   const regla = caja.querySelector('.cinta__regla');
@@ -69,7 +74,11 @@ export function montarCinta(caja, { max, valor = 1, alCambiar }) {
 
   function pintar(avisar = true) {
     regla.style.transform = `translateX(${-metros * PX_METRO}px)`;
-    salida.innerHTML = `${metros.toFixed(1).replace('.', ',')}<small>m</small>`;
+    // No se pisa lo que la persona esta escribiendo: si esta con el campo
+    // enfocado, el valor se actualiza recien cuando termina.
+    if (document.activeElement !== salida) {
+      salida.value = metros.toFixed(1).replace('.', ',');
+    }
     menos.disabled = metros <= PASO;
     mas.disabled = metros >= tope;
     cinta.setAttribute('aria-valuenow', String(metros));
@@ -90,6 +99,41 @@ export function montarCinta(caja, { max, valor = 1, alCambiar }) {
 
   menos.addEventListener('click', () => fijar(metros - PASO));
   mas.addEventListener('click', () => fijar(metros + PASO));
+
+  // ── Escribirlo a mano ──────────────────────────────────────────────────────
+  // Los botones y el arrastre van de a medio metro, que es como se corta. Pero
+  // si alguien necesita 12,3 m, llegar arrastrando es una tortura. Escrito se
+  // acepta hasta el decimo de metro, que es la marca mas chica de la cinta.
+  salida.addEventListener('focus', () => salida.select());
+
+  function leerEscrito() {
+    // Acepta coma o punto: en el celular el teclado numerico da lo que da, y
+    // rechazar la coma en Argentina es rechazar la mitad de lo que se tipea.
+    const n = parseFloat(String(salida.value).replace(',', '.').replace(/[^\d.]/g, ''));
+    if (!Number.isFinite(n)) {
+      salida.value = metros.toFixed(1).replace('.', ',');
+      return;
+    }
+    const acotado = Math.min(tope, Math.max(PASO, Math.round(n * 10) / 10));
+    metros = acotado;
+    pintar();
+    // Si se paso del rollo, se avisa en vez de corregir en silencio: quien
+    // pidio 40 m tiene que enterarse de que hay 23.
+    if (n > tope) {
+      salida.setAttribute('aria-invalid', 'true');
+      caja.querySelector('.cinta-ayuda').textContent =
+        `En el rollo quedan ${tope.toFixed(1).replace('.', ',')} m. Lo ajustamos a eso.`;
+    } else {
+      salida.removeAttribute('aria-invalid');
+      caja.querySelector('.cinta-ayuda').textContent =
+        'Arrastrá la cinta, usá los botones, o escribí el largo exacto.';
+    }
+  }
+
+  salida.addEventListener('blur', leerEscrito);
+  salida.addEventListener('keydown', ev => {
+    if (ev.key === 'Enter') { ev.preventDefault(); leerEscrito(); salida.blur(); }
+  });
 
   // ── Arrastre ───────────────────────────────────────────────────────────────
   // Durante el arrastre la cinta sigue al dedo sin transición: con transición

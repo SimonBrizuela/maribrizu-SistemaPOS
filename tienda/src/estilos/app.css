@@ -688,21 +688,33 @@
   gap: var(--e-3);
   margin-top: var(--e-3);
 }
+/* Es un campo de texto, pero tiene que verse como el número grande que
+   muestra. El recuadro aparece recién al pasar por encima o al enfocarlo: si
+   estuviera siempre, la cinta pasaría a parecer un formulario. */
 .cinta-valor {
   flex: 1;
+  min-width: 0;
   font-family: var(--font-titulo);
   font-size: var(--t-xl);
   font-weight: var(--peso-bold);
   font-variant-numeric: tabular-nums;
   letter-spacing: -.02em;
   text-align: center;
+  color: var(--text);
+  background: transparent;
+  border: 1.5px solid transparent;
+  border-radius: var(--r-md);
+  padding: var(--e-2) var(--e-1);
+  transition: border-color var(--m-rapido) var(--curva), background var(--m-rapido) var(--curva);
 }
-.cinta-valor small {
-  font-size: var(--t-base);
-  font-weight: var(--peso-semi);
-  color: var(--text-2);
-  margin-left: 2px;
+.cinta-valor:hover { border-color: var(--border-2); }
+.cinta-valor:focus {
+  outline: none;
+  background: var(--surface);
+  border-color: var(--primary);
+  box-shadow: 0 0 0 3px var(--primary-bg);
 }
+.cinta-valor[aria-invalid="true"] { border-color: var(--alerta); }
 .cinta-ayuda {
   font-size: var(--t-xs);
   color: var(--text-2);
