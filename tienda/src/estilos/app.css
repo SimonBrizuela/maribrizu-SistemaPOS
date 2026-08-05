@@ -483,14 +483,22 @@
 
 /* ── El encabezado acompaña el scroll ────────────────────────────────────────
    El envoltorio [data-cabecera] existe para poder repintar el encabezado sin
-   tocar el resto. El problema es que medía exactamente lo mismo que su
-   contenido, y `position: sticky` se pega dentro de los límites del padre: sin
-   margen para moverse, nunca se pegaba a nada.
+   tocar el resto de la página. El problema es que medía exactamente lo mismo
+   que su contenido, y `position: sticky` se pega dentro de los límites del
+   padre: sin margen para moverse, nunca se pegaba a nada.
 
-   `display: contents` saca la caja del envoltorio del layout y deja al
-   encabezado como hijo directo de .app, que es donde sí tiene todo el alto de
-   la página para pegarse. */
-[data-cabecera] { display: contents; }
+   El intento anterior fue `display: contents` para sacar la caja del envoltorio
+   del layout. En la práctica siguió sin pegarse.
+
+   Lo que sí funciona sin depender de nada raro: pegar el envoltorio, que es un
+   hijo directo de .app y tiene toda la altura de la página para moverse. El
+   encabezado adentro queda estático y se repinta igual que antes. */
+[data-cabecera] {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-nav);
+}
+.cabecera { position: static; }
 
 /* El encabezado se queda mientras se navega.
    La version anterior lo escondia al bajar y lo traia al subir. Sobre el papel
@@ -747,3 +755,30 @@
   font-weight: var(--peso-bold);
   white-space: nowrap;
 }
+
+
+/* ── El botón de ancho completo no empuja la página ──────────────────────────
+   `.boton` lleva white-space: nowrap, que está bien para un botón que se
+   dimensiona por su contenido. Pero el de agregar ahora dice "Agregar 2,5 m ·
+   $13.000", y con nowrap su ancho mínimo pasaba a ser mayor que la pantalla:
+   el texto salía cortado y toda la ficha del producto quedaba corrida y con
+   desplazamiento lateral.
+
+   En bloque el texto puede partirse en dos líneas, que es lo que corresponde
+   cuando el ancho lo manda el contenedor y no el contenido. */
+.boton--bloque {
+  white-space: normal;
+  line-height: 1.25;
+  padding-inline: var(--e-4);
+  height: auto;
+  min-height: 52px;
+  padding-block: var(--e-3);
+}
+
+/* Red de seguridad contra el desplazamiento lateral.
+   Va en .principal y no en html o body: el encabezado pegajoso es hermano de
+   .principal, no hijo, así que ningún overflow de acá lo puede afectar. Y va
+   `clip` en vez de `hidden` porque `hidden` crearía un contenedor de
+   desplazamiento y rompería lo pegajoso de la barra de filtros del catálogo,
+   que sí está adentro. */
+.principal { overflow-x: clip; }

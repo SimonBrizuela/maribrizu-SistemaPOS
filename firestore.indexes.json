@@ -5,9 +5,33 @@
       "collectionGroup": "tienda_productos",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "rubro", "order": "ASCENDING" },
-        { "fieldPath": "orden", "order": "ASCENDING" },
-        { "fieldPath": "__name__", "order": "ASCENDING" }
+        {
+          "fieldPath": "rubro",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "orden",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "ASCENDING"
+        }
+      ]
+    },
+    {
+      "//": "Tiras de la portada y paginado por rubro: seis productos de un rubro a partir de un punto al azar DENTRO de ese rubro. El orden global mezcla los rubros, asi que no sirve para saltar.",
+      "collectionGroup": "tienda_productos",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "rubro",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "orden_rubro",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
@@ -15,8 +39,14 @@
       "collectionGroup": "tienda_productos",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "destacado", "order": "ASCENDING" },
-        { "fieldPath": "orden", "order": "ASCENDING" }
+        {
+          "fieldPath": "destacado",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "orden",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
@@ -24,8 +54,14 @@
       "collectionGroup": "tienda_productos",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "tokens", "arrayConfig": "CONTAINS" },
-        { "fieldPath": "orden", "order": "ASCENDING" }
+        {
+          "fieldPath": "tokens",
+          "arrayConfig": "CONTAINS"
+        },
+        {
+          "fieldPath": "orden",
+          "order": "ASCENDING"
+        }
       ]
     },
     {
@@ -33,8 +69,14 @@
       "collectionGroup": "tienda_pedidos",
       "queryScope": "COLLECTION",
       "fields": [
-        { "fieldPath": "estado", "order": "ASCENDING" },
-        { "fieldPath": "creado", "order": "DESCENDING" }
+        {
+          "fieldPath": "estado",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "creado",
+          "order": "DESCENDING"
+        }
       ]
     }
   ],
