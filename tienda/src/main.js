@@ -6,6 +6,7 @@ import { cargarConfig, traerProducto } from './datos.js';
 import * as carrito from './carrito.js';
 import { abrir as abrirCarrito, estaAbierto } from './panel_carrito.js';
 import { avisar } from './avisos.js';
+import { iniciarSugerencias, fijarAmbito, cerrarSugerencias } from './sugerencias.js';
 
 import { inicio } from './paginas/inicio.js';
 import { catalogo } from './paginas/catalogo.js';
@@ -102,6 +103,11 @@ async function dibujar() {
 
   if (camino === '/') document.title = 'Librería Liceo · Librería, mercería y regalería en Córdoba';
 
+  // El buscador sabe dónde está parada la persona: en /catalogo/PAPELERA
+  // sugiere dentro de Papelera y lo dice, con la salida a todo el catálogo a un
+  // toque. La ficha de un producto fija el suyo, que es el rubro del producto.
+  if (camino !== '/p') fijarAmbito(params.rubro ? decodeURIComponent(params.rubro) : null);
+
   try {
     await vista({ montar, params, query });
   } catch (err) {
@@ -122,6 +128,7 @@ async function dibujar() {
 /* ── Navegación ───────────────────────────────────────────────────────────── */
 
 alNavegar(async () => {
+  cerrarSugerencias();
   await dibujar();
   // Cada pantalla nueva arranca arriba, y el foco va al contenido para que un
   // lector de pantalla no siga leyendo desde el encabezado anterior.
@@ -244,6 +251,7 @@ async function arrancar() {
   pintarEstructura();
   iniciarRutas();
   reponerCompacta = seguirScroll();
+  iniciarSugerencias();
   await dibujar();
 
   // Aviso de tienda cerrada: se consulta después del primer pintado para no

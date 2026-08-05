@@ -6,6 +6,7 @@ import * as carrito from '../carrito.js';
 import { avisar } from '../avisos.js';
 import { abrir as abrirCarrito } from '../panel_carrito.js';
 import { montarCinta } from '../cinta.js';
+import { fijarAmbito } from '../sugerencias.js';
 
 export async function producto({ montar, params }) {
   const cfg = await cargarConfig();
@@ -25,6 +26,8 @@ export async function producto({ montar, params }) {
   }
 
   document.title = `${p.nombre} · Librería Liceo`;
+  // Quien esta mirando un abrojo probablemente busque otra cosa de merceria.
+  fijarAmbito(p.rubro);
 
   // Los que se cortan del rollo llevan cinta metrica en vez de contador: 350
   // productos del catalogo (cintas, cordones, elastico, abrojo).

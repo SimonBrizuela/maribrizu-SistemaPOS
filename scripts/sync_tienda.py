@@ -291,6 +291,13 @@ def armar_documento(doc_id, datos):
         'variedades': m['variedades'],
         'destacado': datos.get('tienda_destacado') is True,
         'tokens': tokenizar(nombre, marca, datos.get('categoria'), datos.get('sub_rubro')),
+        # Nombre normalizado para las sugerencias mientras se escribe.
+        # `tokens` sirve para buscar palabras completas, pero no para prefijos:
+        # array-contains compara exacto, asi que "abro" no encuentra "abrojo".
+        # Con el nombre entero en minusculas y sin acentos se puede pedir el
+        # rango [texto, texto + ], que es como se hace un "empieza con"
+        # en Firestore.
+        'nombre_busqueda': normalizar(nombre),
         'codigo': str(datos.get('codigo') or ''),
         'actualizado': firestore.SERVER_TIMESTAMP,
     }

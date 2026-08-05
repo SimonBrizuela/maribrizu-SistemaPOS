@@ -78,6 +78,21 @@
           "order": "DESCENDING"
         }
       ]
+    },
+    {
+      "//": "Sugerencias del buscador acotadas al rubro que se esta mirando.",
+      "collectionGroup": "tienda_productos",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "rubro",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "nombre_busqueda",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": []

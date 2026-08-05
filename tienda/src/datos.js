@@ -160,7 +160,11 @@ export async function traerProductos({ rubro = null, cursor = null, desde = 0,
   } catch (err) {
     if (err?.code !== 'failed-precondition') throw err;
 
-    console.warn('[datos] falta el indice compuesto (rubro, orden). Ordenando en el cliente.');
+    // Se imprime el mensaje de Firestore tal cual: trae el indice exacto que
+    // falta y un enlace para crearlo. Adivinar cual era mando a buscar el
+    // equivocado mas de una vez.
+    console.warn('[datos] falta un indice compuesto, ordenando en el cliente.\n' +
+                 (err?.message || ''));
     const alternativa = rubro
       ? query(col, where('rubro', '==', rubro), limit(300))
       : query(col, limit(300));
@@ -280,5 +284,90 @@ export async function buscar(texto, { cantidad = 60 } = {}) {
       console.error('[datos] busqueda:', err);
       return [];
     }
+  });
+}
+
+/**
+ * Sugerencias mientras se escribe.
+ *
+ * Se combinan dos consultas porque ninguna sola alcanza:
+ *
+ *   · Por prefijo del nombre. "abro" trae Abrojo y Abrochadora. Es lo que
+ *     resuelve el caso de escribir las primeras letras, que es como busca
+ *     casi todo el mundo. No sirve para palabras del medio: "faz" no
+ *     encuentra "Cinta Doble Faz".
+ *   · Por palabra completa, con el arreglo `tokens`. Eso si encuentra "faz",
+ *     pero solo cuando la palabra esta entera.
+ *
+ * Juntas cubren las dos formas de tipear. Se piden en paralelo: encadenarlas
+ * duplicaria la espera en cada tecla.
+ *
+ * @param {string} texto
+ * @param {string|null} rubro  acota al rubro que se esta mirando
+ */
+export async function sugerir(texto, { rubro = null, cantidad = 6 } = {}) {
+  const q = normalizar(texto);
+  if (q.length < 2) return [];
+
+  return cacheado(`sugerir:${rubro || ''}:${q}`, async () => {
+    const col = collection(db, 'tienda_productos');
+    const base = rubro ? [where('rubro', '==', rubro)] : [];
+
+    //  es practicamente el ultimo caracter del rango Unicode usable, asi
+    // que el rango [q, q+] es "todo lo que empieza con q".
+    const porPrefijo = getDocs(query(col, ...base,
+      where('nombre_busqueda', '>=', q),
+      where('nombre_busqueda', '<=', q + ''),
+      limit(cantidad * 2)));
+
+    // La ultima palabra puede estar a medio escribir, asi que para tokens se
+    // usa la anterior completa; si hay una sola palabra, se usa esa.
+    const palabras = q.split(/\s+/).filter(Boolean);
+    const completa = palabras.length > 1 ? palabras[palabras.length - 2] : palabras[0];
+
+    const porPalabra = completa && completa.length >= 3
+      ? getDocs(query(col, ...base,
+          where('tokens', 'array-contains', completa), limit(cantidad * 3)))
+      : Promise.resolve({ docs: [] });
+
+    let resultados;
+    try {
+      resultados = await Promise.all([porPrefijo, porPalabra]);
+    } catch (err) {
+      // Si falta el indice del rubro, se sugiere sobre todo el catalogo antes
+      // que no sugerir nada.
+      console.warn('[datos] sugerencias:', err?.message || err);
+      if (!rubro) return [];
+      return sugerir(texto, { rubro: null, cantidad });
+    }
+
+    const vistos = new Set();
+    const salida = [];
+    for (const snap of resultados) {
+      for (const d of snap.docs) {
+        if (vistos.has(d.id)) continue;
+        vistos.add(d.id);
+        const p = armarProducto(d);
+        // Todas las palabras escritas tienen que aparecer, en cualquier orden.
+        // La ultima suele estar a medio escribir, por eso alcanza con que sea
+        // el comienzo de alguna palabra del producto.
+        const entra = palabras.every(w =>
+          p.tokens.some(t => t.startsWith(w)) || normalizar(p.nombre).includes(w));
+        if (!entra) continue;
+        salida.push(p);
+      }
+    }
+
+    return salida
+      .sort((a, b) => {
+        // Lo que hay en stock primero, y despues lo que empieza con lo escrito:
+        // es lo que la persona tenia en la cabeza al empezar a tipear.
+        if ((a.stock > 0) !== (b.stock > 0)) return a.stock > 0 ? -1 : 1;
+        const ea = normalizar(a.nombre).startsWith(q) ? 0 : 1;
+        const eb = normalizar(b.nombre).startsWith(q) ? 0 : 1;
+        if (ea !== eb) return ea - eb;
+        return a.nombre.length - b.nombre.length;
+      })
+      .slice(0, cantidad);
   });
 }
