@@ -31,13 +31,15 @@ db = firestore.client()
 # dedujo de la direccion suponiendo el barrio equivocado. Con un radio de reparto
 # de 12 km, un error asi manda cada cotizacion al tramo que no es.
 #
-# Este valor sale de geocodificar la calle en Parque Liceo Primera Seccion, que
-# es el barrio correcto, pero es un punto de la calle y no la puerta del local.
-# Antes de que el calculo de envio cobre plata de verdad hay que afinarlo: la
-# forma buena es geocodificar la direccion completa con la misma clave de Google
-# que usa el checkout, que devuelve la altura exacta.
-ORIGEN = {'lat': -31.3539177, 'lng': -64.1695459}
-ORIGEN_VERIFICADO = False
+# Verificado: sale de geocodificar la direccion completa con Places API, la
+# misma clave que usa el checkout. Google resuelve la altura exacta.
+#
+# Historia de este valor, porque cada correccion importa:
+#   1. Deducido a ojo suponiendo Villa Cabrera  -> 6.190 m de error
+#   2. Calle geocodificada en Parque Liceo      ->   370 m de error
+#   3. Direccion completa por Places API        -> este
+ORIGEN = {'lat': -31.3540169, 'lng': -64.1734488}
+ORIGEN_VERIFICADO = True
 
 AJUSTES = {
     'abierta': True,
@@ -88,5 +90,4 @@ db.collection('tienda_config').document('publicacion').set(PUBLICACION, merge=Tr
 print('tienda_config/settings y tienda_config/publicacion creados.')
 print(f'Rubros habilitados: {", ".join(PUBLICACION["rubros"])}')
 print(f'Origen del reparto: {ORIGEN["lat"]}, {ORIGEN["lng"]}')
-print('\nOjo: las coordenadas del local son aproximadas. Se ajustan desde el')
-print('panel cuando este la pantalla de configuracion, o a mano en Firestore.')
+print('\nOrigen verificado con Places API sobre la direccion completa.')
