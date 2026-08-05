@@ -1,6 +1,6 @@
 import { cargarConfig, cargarRubros, traerDestacados, traerProductos } from '../datos.js';
 import { cardProducto, grilla, grillaCargando, pie } from '../componentes.js';
-import { franjaMarca, icono } from '../iconos.js';
+import { franjaMarca, icono, resplandores } from '../iconos.js';
 import { esc } from '../formato.js';
 
 /**
@@ -49,7 +49,7 @@ function tira(rubro, productos) {
         <a class="tira__ver" href="/catalogo/${encodeURIComponent(rubro.clave)}">Ver todo</a>
       </div>
       <div class="tira__productos">
-        ${productos.map((p, i) => cardProducto(p, i)).join('')}
+        ${productos.map((p, i) => cardProducto(p, i, { conRubro: false })).join('')}
       </div>
     </section>`;
 }
@@ -60,7 +60,8 @@ export async function inicio({ montar }) {
   // La portada se pinta antes de tener productos: no depende de ninguna consulta,
   // así que aparece de inmediato y la primera pantalla nunca está en blanco.
   montar(`
-    <section class="marco-oscuro">
+    <section class="marco-oscuro marco-oscuro--vivo">
+      ${resplandores()}
       <div class="contenedor" style="padding-block:var(--e-7)">
         <div class="portada__cuerpo">
           <div>
@@ -98,8 +99,9 @@ export async function inicio({ montar }) {
       ${grillaCargando(6)}
     </div>
 
-    <section class="marco-oscuro">
+    <section class="marco-oscuro marco-oscuro--vivo">
       ${franjaMarca()}
+      ${resplandores()}
       <div class="contenedor">
         <div class="pasos">
           <div style="--paso-color:var(--liceo-violeta)">
@@ -131,8 +133,12 @@ export async function inicio({ montar }) {
     cajaRubros.innerHTML = rubros.map(r => `
       <a class="rubro-ficha" data-rubro="${esc(r.clave)}" href="/catalogo/${encodeURIComponent(r.clave)}">
         <span class="rubro-ficha__nombre">${esc(r.nombre)}</span>
-        <span class="rubro-ficha__cuenta">${r.cantidad.toLocaleString('es-AR')} productos</span>
+        <span class="rubro-ficha__cuenta">${(r.con_stock ?? r.cantidad).toLocaleString('es-AR')} disponibles</span>
       </a>`).join('');
+
+  // Se muestra lo que se puede comprar hoy, no el total publicado. De los 4.163
+  // de Libreria hay stock de 1.024: prometer 4.163 y que el cliente entre a ver
+  // una pantalla de agotados es peor que decir 1.024 de entrada.
   }
 
   const cajaTiras = document.querySelector('[data-tiras]');
@@ -143,10 +149,21 @@ export async function inicio({ montar }) {
   // Las consultas de todos los rubros salen juntas. En serie serían seis viajes
   // encadenados y la portada tardaría seis veces más en llenarse.
   const conProductos = await Promise.all(
-    rubros.map(async r => ({
-      rubro: r,
-      productos: (await traerProductos({ rubro: r.clave, cantidad: 6 })).productos,
-    })),
+    rubros.map(async r => {
+      // Se salta a un punto al azar dentro del rubro. Sin esto cada tira
+      // muestra siempre los primeros alfabeticamente, y en Libreria eso son
+      // seis abrochadoras seguidas.
+      //
+      // El salto se limita al tramo que tiene stock (el orden lo pone primero),
+      // asi las tiras nunca arrancan con productos agotados. Se restan 6 para
+      // no caer al final y volver con menos de los que entran en la fila.
+      const tope = Math.max(0, (r.con_stock || r.cantidad) - 6);
+      const desde = tope > 0 ? Math.floor(Math.random() * tope) : 0;
+      return {
+        rubro: r,
+        productos: (await traerProductos({ rubro: r.clave, desde, cantidad: 6 })).productos,
+      };
+    }),
   );
 
   const partes = [];

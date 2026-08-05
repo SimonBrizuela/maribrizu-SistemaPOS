@@ -63,3 +63,16 @@ export function fichasMarca() {
 export function franjaMarca() {
   return '<div class="franja-marca"><i></i><i></i><i></i><i></i><i></i></div>';
 }
+
+/**
+ * Capa de resplandores de marca para los bloques oscuros.
+ * Puramente visual, por eso no la ve ningun lector de pantalla.
+ */
+export function resplandores() {
+  return `<div class="resplandores" aria-hidden="true">
+    <span class="resplandor resplandor--1"></span>
+    <span class="resplandor resplandor--2"></span>
+    <span class="resplandor resplandor--3"></span>
+    <span class="resplandor resplandor--4"></span>
+  </div>`;
+}

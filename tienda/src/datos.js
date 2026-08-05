@@ -131,18 +131,25 @@ function armarProducto(snap) {
  * ese caso se cae a una consulta sin orden y se ordena del lado del cliente, que
  * es peor pero deja la tienda funcionando en vez de mostrar un error.
  */
-export async function traerProductos({ rubro = null, cursor = null, cantidad = POR_PAGINA } = {}) {
+export async function traerProductos({ rubro = null, cursor = null, desde = 0,
+                                      cantidad = POR_PAGINA } = {}) {
   const col = collection(db, 'tienda_productos');
+
+  // Dentro de un rubro se ordena por `orden_rubro`, que numera de cero en cada
+  // rubro. El orden global tiene los rubros entremezclados, asi que no permite
+  // saltar a un punto concreto de un rubro sin caer en otro.
+  const campoOrden = rubro ? 'orden_rubro' : 'orden';
 
   const partes = [];
   if (rubro) partes.push(where('rubro', '==', rubro));
-  partes.push(orderBy('orden'), orderBy(documentId()));
+  if (desde > 0) partes.push(where(campoOrden, '>=', desde));
+  partes.push(orderBy(campoOrden), orderBy(documentId()));
   if (cursor) partes.push(startAfter(...cursor));
   partes.push(limit(cantidad));
 
   try {
     const snap = await getDocs(query(col, ...partes));
-    return leerPagina(snap, cantidad);
+    return leerPagina(snap, cantidad, campoOrden);
   } catch (err) {
     if (err?.code !== 'failed-precondition') throw err;
 
@@ -157,12 +164,12 @@ export async function traerProductos({ rubro = null, cursor = null, cantidad = P
   }
 }
 
-function leerPagina(snap, cantidad) {
+function leerPagina(snap, cantidad, campoOrden = 'orden') {
   const productos = snap.docs.map(armarProducto);
   const ultimo = snap.docs[snap.docs.length - 1];
   return {
     productos,
-    cursor: ultimo ? [ultimo.get('orden'), ultimo.id] : null,
+    cursor: ultimo ? [ultimo.get(campoOrden), ultimo.id] : null,
     hayMas: snap.docs.length === cantidad,
   };
 }

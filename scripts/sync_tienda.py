@@ -276,8 +276,23 @@ def main():
         print(f'    {cantidad:5d} descartados: {motivo}')
 
     # ── Numerar para el orden del catalogo ────────────────────────────────
-    for i, doc_id in enumerate(sorted(publicables, key=lambda k: clave_de_orden(publicables[k]))):
+    ordenados = sorted(publicables, key=lambda k: clave_de_orden(publicables[k]))
+
+    # `orden` es global: sirve para el listado completo del catalogo.
+    for i, doc_id in enumerate(ordenados):
         publicables[doc_id]['orden'] = i
+
+    # `orden_rubro` numera de nuevo dentro de cada rubro. Sin esto no se puede
+    # pedir "seis productos de Libreria a partir del numero 340": el orden
+    # global tiene los rubros entremezclados, asi que saltar a un punto al azar
+    # cae casi siempre en otro rubro. Y sin poder saltar, las tiras de la portada
+    # muestran siempre los primeros alfabeticamente, que en Libreria son seis
+    # abrochadoras seguidas.
+    contador = {}
+    for doc_id in ordenados:
+        rubro = publicables[doc_id]['rubro']
+        publicables[doc_id]['orden_rubro'] = contador.get(rubro, 0)
+        contador[rubro] = contador.get(rubro, 0) + 1
 
     # ── Que hay hoy en el espejo ──────────────────────────────────────────
     espejo = {d.id for d in db.collection('tienda_productos').select([]).stream()}
@@ -288,15 +303,24 @@ def main():
 
     # ── Rubros con su conteo, para la portada ─────────────────────────────
     conteo = {}
+    con_stock = {}
     for doc in publicables.values():
-        if doc['rubro']:
-            conteo[doc['rubro']] = conteo.get(doc['rubro'], 0) + 1
-    lista_rubros = [{'nombre': nombre_bonito(r), 'clave': r, 'cantidad': c}
+        if not doc['rubro']:
+            continue
+        conteo[doc['rubro']] = conteo.get(doc['rubro'], 0) + 1
+        if doc['stock'] > 0:
+            con_stock[doc['rubro']] = con_stock.get(doc['rubro'], 0) + 1
+
+    # `con_stock` es hasta donde puede saltar la portada al elegir un punto al
+    # azar. Como el orden pone primero lo que hay en stock, saltar dentro de ese
+    # tramo garantiza que las tiras nunca arranquen con productos agotados.
+    lista_rubros = [{'nombre': nombre_bonito(r), 'clave': r,
+                     'cantidad': c, 'con_stock': con_stock.get(r, 0)}
                     for r, c in sorted(conteo.items(), key=lambda x: -x[1])]
 
     print('\nRubros publicados:')
     for r in lista_rubros:
-        print(f'  {r["cantidad"]:5d}  {r["nombre"]}')
+        print(f'  {r["cantidad"]:5d}  {r["nombre"]:<14} ({r["con_stock"]} con stock)')
 
     if args.simular:
         print('\n(simulacion: no se escribio nada)')

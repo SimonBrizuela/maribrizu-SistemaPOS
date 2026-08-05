@@ -12,7 +12,7 @@ import { icono, fichasMarca, franjaMarca } from './iconos.js';
  * arriba con z-index. Envolver el boton dentro del <a> seria HTML invalido y en
  * la practica haria que cada toque en el signo abriera la ficha del producto.
  */
-export function cardProducto(p, indice = 0) {
+export function cardProducto(p, indice = 0, { conRubro = true } = {}) {
   const agotado = p.stock <= 0;
   const foto = p.imagenes?.[0];
 
@@ -73,7 +73,7 @@ export function cardProducto(p, indice = 0) {
       ${cinta}
       ${bloqueFoto}
       <div class="card-producto__cuerpo">
-        <span class="card-producto__rubro">${esc(etiqueta)}</span>
+        ${conRubro ? `<span class="card-producto__rubro">${esc(etiqueta)}</span>` : ''}
         <h3 class="card-producto__nombre">
           <a class="card-producto__enlace" href="/p/${esc(p.id)}"
              style="color:inherit;text-decoration:none">${esc(p.nombre)}</a>

@@ -1013,6 +1013,81 @@ textarea.campo__control { min-height: 96px; resize: vertical; line-height: var(-
 .marco-oscuro {
   background: var(--ink-superficie);
   color: var(--ink-texto);
+  position: relative;
+  isolation: isolate;
+}
+
+/* Grano.
+   Un negro plano en pantalla grande se ve como un agujero, y en el celular
+   ocupa media pantalla de nada. Una textura finisima lo convierte en un
+   material: no se nota mirandolo, se nota cuando no esta. Va en un SVG
+   incrustado, pesa unos 200 bytes y no pide ningun archivo. */
+.marco-oscuro::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  opacity: .5;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='140' height='140'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='3'/%3E%3C/filter%3E%3Crect width='140' height='140' filter='url(%23n)' opacity='.055'/%3E%3C/svg%3E");
+}
+
+/* ── Resplandores de marca ───────────────────────────────────────────────────
+   Manchas de color muy difusas que se desplazan despacio detras del contenido.
+   Es lo que hace que el bloque oscuro respire en vez de ser una pared negra,
+   sobre todo en el celular, donde el mosaico de la portada no entra.
+
+   Se dibujan con degradados radiales y no con filter: blur(). Un blur de 100 px
+   sobre un elemento grande obliga al telefono a rasterizar de nuevo en cada
+   cuadro y se nota en el scroll; el degradado ya viene suave y no cuesta nada.
+   Solo se anima transform, que va por GPU. */
+.marco-oscuro--vivo { overflow: hidden; }
+
+.resplandores {
+  position: absolute;
+  inset: -20%;
+  z-index: -1;
+  pointer-events: none;
+}
+.resplandor {
+  position: absolute;
+  border-radius: 50%;
+  opacity: .5;
+  will-change: transform;
+}
+.resplandor--1 {
+  width: 46%; padding-bottom: 46%; left: -6%; top: 4%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--liceo-violeta) 62%, transparent) 0%, transparent 68%);
+  animation: deriva-1 34s ease-in-out infinite alternate;
+}
+.resplandor--2 {
+  width: 40%; padding-bottom: 40%; right: 2%; top: -8%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--liceo-cyan) 48%, transparent) 0%, transparent 68%);
+  animation: deriva-2 44s ease-in-out infinite alternate;
+}
+.resplandor--3 {
+  width: 38%; padding-bottom: 38%; right: 16%; bottom: -12%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--liceo-rojo) 42%, transparent) 0%, transparent 68%);
+  animation: deriva-3 38s ease-in-out infinite alternate;
+}
+.resplandor--4 {
+  width: 34%; padding-bottom: 34%; left: 22%; bottom: -16%;
+  background: radial-gradient(circle, color-mix(in srgb, var(--liceo-naranja) 34%, transparent) 0%, transparent 68%);
+  animation: deriva-4 52s ease-in-out infinite alternate;
+}
+
+/* Recorridos distintos y de duraciones que no son multiplos entre si: si
+   coincidieran, el conjunto volveria a la misma postura cada tanto y se notaria
+   el bucle. */
+@keyframes deriva-1 { to { transform: translate3d(14%, 10%, 0) scale(1.15); } }
+@keyframes deriva-2 { to { transform: translate3d(-12%, 16%, 0) scale(1.2); } }
+@keyframes deriva-3 { to { transform: translate3d(-16%, -12%, 0) scale(1.1); } }
+@keyframes deriva-4 { to { transform: translate3d(18%, -14%, 0) scale(1.25); } }
+
+/* Quien pidio menos movimiento igual ve el color: se quedan quietos donde
+   estan, que ya es una composicion. */
+@media (prefers-reduced-motion: reduce) {
+  .resplandor { animation: none; }
 }
 .marco-oscuro h1, .marco-oscuro h2, .marco-oscuro h3 { color: var(--ink-texto); }
 .marco-oscuro a { color: var(--ink-texto); }
