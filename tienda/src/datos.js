@@ -110,6 +110,7 @@ function armarProducto(snap) {
     stock: Number(d.stock) || 0,
     rubro: d.rubro || '',
     categoria: d.categoria || '',
+    sub_rubro: d.sub_rubro || '',
     marca: d.marca || '',
     imagenes: Array.isArray(d.imagenes) ? d.imagenes : [],
     variedades: Array.isArray(d.variedades) ? d.variedades : [],

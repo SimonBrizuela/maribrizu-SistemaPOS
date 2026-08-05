@@ -1,0 +1,42 @@
+{
+  "indexes": [
+    {
+      "//": "Catálogo filtrado por rubro y ordenado. Sin este índice la tienda cae a traer 300 productos y ordenarlos en el navegador, que anda pero es lento y no pagina.",
+      "collectionGroup": "tienda_productos",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "rubro", "order": "ASCENDING" },
+        { "fieldPath": "orden", "order": "ASCENDING" },
+        { "fieldPath": "__name__", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "//": "Destacados de la portada, en el orden del catálogo.",
+      "collectionGroup": "tienda_productos",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "destacado", "order": "ASCENDING" },
+        { "fieldPath": "orden", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "//": "Búsqueda por palabra, con lo que hay en stock primero.",
+      "collectionGroup": "tienda_productos",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "tokens", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "orden", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "//": "Tablero de pedidos del panel: los nuevos arriba.",
+      "collectionGroup": "tienda_pedidos",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "estado", "order": "ASCENDING" },
+        { "fieldPath": "creado", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

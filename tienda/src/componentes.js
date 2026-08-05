@@ -22,6 +22,10 @@ export function cardProducto(p, indice = 0) {
   // es el que le da el color a la card.
   const etiqueta = nombreBonito(p.rubro) || p.categoria;
 
+  // Segunda linea de contexto. Sin foto, la marca o la subcategoria son lo unico
+  // que separa "Bolsa Carton Color 30X32" de "Bolsa Carton Color 30X41".
+  const detalle = [p.marca, p.sub_rubro].filter(Boolean).join(' · ');
+
   const bloqueFoto = foto
     ? `<div class="card-producto__foto">
          <img src="${esc(foto)}" alt="${esc(p.nombre)}" loading="lazy"
@@ -74,6 +78,7 @@ export function cardProducto(p, indice = 0) {
           <a class="card-producto__enlace" href="/p/${esc(p.id)}"
              style="color:inherit;text-decoration:none">${esc(p.nombre)}</a>
         </h3>
+        ${detalle ? `<span class="card-producto__detalle">${esc(detalle)}</span>` : ''}
         ${tiraVariedades}
         <div class="card-producto__pie">
           <div>${anterior}<span class="card-producto__precio cifra">${pesos(p.precio)}</span></div>

@@ -84,6 +84,139 @@
 }
 .portada__acciones { display: flex; flex-wrap: wrap; gap: var(--e-3); }
 
+/* En pantalla ancha el texto se queda en su columna y el resto se llena con el
+   mosaico. Antes el titulo ocupaba un tercio y los otros dos tercios eran negro
+   vacio: se veia sin terminar. */
+.portada__cuerpo { display: grid; gap: var(--e-7); align-items: center; }
+@media (min-width: 1000px) {
+  .portada__cuerpo { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); }
+}
+
+/* ── Mosaico de la portada ───────────────────────────────────────────────────
+   Las fichas del logo, agrandadas y con palabras adentro.
+
+   No es decoracion de relleno: es el mismo recurso grafico de la marca (rectangulos
+   de color inclinados sobre negro) diciendo en cuatro palabras que vende el local.
+   Sirve donde una tienda normal pondria una foto de portada, que esta libreria no
+   tiene, y no envejece cuando cambia el catalogo. */
+.mosaico {
+  display: none;
+  position: relative;
+  height: 380px;
+}
+@media (min-width: 1000px) { .mosaico { display: block; } }
+
+.mosaico__ficha {
+  position: absolute;
+  display: grid;
+  place-items: center;
+  padding: var(--e-4);
+  border-radius: var(--r-lg);
+  font-family: var(--font-titulo);
+  font-weight: var(--peso-bold);
+  letter-spacing: -.02em;
+  line-height: 1;
+  text-align: center;
+  box-shadow: var(--s-4);
+  /* Cada ficha entra desde un poco mas abajo y girada de mas, y se acomoda en su
+     lugar. Ocurre una sola vez al cargar; despues queda quieto. */
+  animation: ficha-entra var(--m-lento) var(--curva) backwards;
+}
+@keyframes ficha-entra {
+  from { opacity: 0; transform: translateY(24px) rotate(0deg) scale(.94); }
+}
+
+/* ── Tiras por rubro ─────────────────────────────────────────────────────────
+   La portada mostraba una sola grilla de diez productos consecutivos del
+   catalogo, y como estan ordenados alfabeticamente salian cuatro "Bolsa Carton"
+   seguidas. Una tira por rubro trae variedad de verdad, mete el color del rubro
+   en toda la pagina y le da un motivo a seguir scrolleando. */
+.tira { margin-bottom: var(--e-7); }
+
+.tira__cabecera {
+  display: flex;
+  align-items: center;
+  gap: var(--e-3);
+  margin-bottom: var(--e-4);
+}
+.tira__marca {
+  width: 6px;
+  height: 30px;
+  border-radius: 3px;
+  background: var(--rubro);
+  flex: none;
+}
+.tira__titulo {
+  font-family: var(--font-titulo);
+  font-size: var(--t-lg);
+  font-weight: var(--peso-bold);
+  letter-spacing: -.02em;
+}
+.tira__cuenta {
+  font-size: var(--t-sm);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+.tira__ver {
+  margin-left: auto;
+  font-size: var(--t-sm);
+  font-weight: var(--peso-semi);
+  color: var(--rubro-txt);
+  white-space: nowrap;
+}
+
+/* En celular la tira se desliza de costado: mostrar seis productos apilados por
+   cada uno de los seis rubros serian treinta y seis pantallazos de scroll. */
+.tira__productos {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: 46%;
+  gap: var(--e-3);
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  scrollbar-width: none;
+  margin-inline: calc(var(--e-4) * -1);
+  padding-inline: var(--e-4);
+  padding-bottom: var(--e-2);
+}
+.tira__productos::-webkit-scrollbar { display: none; }
+.tira__productos > * { scroll-snap-align: start; }
+
+@media (min-width: 600px) { .tira__productos { grid-auto-columns: 30%; } }
+@media (min-width: 900px) {
+  .tira__productos {
+    grid-auto-flow: row;
+    grid-template-columns: repeat(5, minmax(0, 1fr));
+    overflow: visible;
+    margin-inline: 0;
+    padding-inline: 0;
+  }
+}
+@media (min-width: 1200px) {
+  .tira__productos { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+}
+
+/* ── Cómo funciona ───────────────────────────────────────────────────────────
+   Sobre negro. Tres bloques de texto flotando en un vacio blanco al final de la
+   pagina no cerraban nada; el mismo contenido sobre el color de marca cierra la
+   pagina igual que la abre. */
+.pasos {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+  gap: var(--e-6);
+  padding-block: var(--e-7);
+}
+.pasos__numero {
+  font-family: var(--font-titulo);
+  font-size: var(--t-2xl);
+  font-weight: var(--peso-bold);
+  line-height: 1;
+  color: var(--paso-color);
+  margin-bottom: var(--e-3);
+}
+.pasos h3 { margin-bottom: var(--e-2); font-size: var(--t-md); }
+.pasos p { color: var(--ink-texto-2); font-size: var(--t-sm); line-height: 1.65; }
+
 .boton--sobre-negro {
   background: transparent;
   border-color: var(--ink-borde);
