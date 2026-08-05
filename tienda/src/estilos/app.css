@@ -136,8 +136,9 @@
 .tira__cabecera {
   display: flex;
   align-items: center;
-  gap: var(--e-3);
+  gap: var(--e-2);
   margin-bottom: var(--e-4);
+  min-width: 0;
 }
 .tira__marca {
   width: 6px;
@@ -151,6 +152,13 @@
   font-size: var(--t-lg);
   font-weight: var(--peso-bold);
   letter-spacing: -.02em;
+  /* En 375 px "Perfumeria" + la cuenta + "Ver todo" no entran los tres. El
+     titulo cede primero porque es el unico que puede recortarse sin perder
+     sentido. */
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .tira__cuenta {
   font-size: var(--t-sm);
@@ -170,19 +178,37 @@
 .tira__productos {
   display: grid;
   grid-auto-flow: column;
-  grid-auto-columns: 46%;
+  /* 78% deja asomando un pedazo de la card siguiente. Ese asomo es lo que
+     avisa que hay mas para el costado; sin el, la fila parece terminar ahi.
+     Antes era 46%, que metia dos cards enteras y media a la fuerza en 375 px:
+     el nombre entraba a cuatro palabras por linea y todo se veia apretado. */
+  grid-auto-columns: 78%;
   gap: var(--e-3);
   overflow-x: auto;
+  overflow-y: hidden;
+  /* Que el desplazamiento lateral no se contagie a la pagina cuando la tira
+     llega al final: si no, arrastrar de costado termina moviendo el navegador. */
+  overscroll-behavior-inline: contain;
   scroll-snap-type: x proximity;
   scrollbar-width: none;
   margin-inline: calc(var(--e-4) * -1);
   padding-inline: var(--e-4);
   padding-bottom: var(--e-2);
+  /* Al frenar en una card, que quede alineada con el margen de la pagina y no
+     pegada al borde de la pantalla. */
+  scroll-padding-inline: var(--e-4);
 }
 .tira__productos::-webkit-scrollbar { display: none; }
 .tira__productos > * { scroll-snap-align: start; }
+/* Aire al final del recorrido: sin esto la ultima card queda tocando el borde
+   derecho y parece cortada en vez de terminada. */
+.tira__productos::after {
+  content: '';
+  width: var(--e-1);
+}
 
-@media (min-width: 600px) { .tira__productos { grid-auto-columns: 30%; } }
+@media (min-width: 480px) { .tira__productos { grid-auto-columns: 56%; } }
+@media (min-width: 600px) { .tira__productos { grid-auto-columns: 34%; } }
 @media (min-width: 900px) {
   .tira__productos {
     grid-auto-flow: row;
@@ -267,8 +293,11 @@
   margin-inline: calc(var(--e-4) * -1);
   padding-inline: var(--e-4);
   scroll-snap-type: x proximity;
+  scroll-padding-inline: var(--e-4);
+  overscroll-behavior-inline: contain;
 }
 .filtros::-webkit-scrollbar { display: none; }
+.filtros::after { content: ''; width: var(--e-1); flex: none; }
 .filtros > * { scroll-snap-align: start; flex: none; }
 @media (min-width: 768px) {
   .filtros { flex-wrap: wrap; overflow: visible; margin-inline: 0; padding-inline: 0; }
@@ -480,4 +509,49 @@ body.sin-cabecera .barra-catalogo { top: 0; }
    desaparecer sin transición es justo el tipo de salto que molesta. */
 @media (prefers-reduced-motion: reduce) {
   .cabecera--oculta { transform: none; }
+}
+
+
+/* ── Nada se sale de la pantalla a lo ancho ──────────────────────────────────
+   Las tiras y los filtros usan margen negativo para llegar de borde a borde. Si
+   alguno se pasa aunque sea un pixel, aparece la barra horizontal del navegador
+   y la pagina entera se puede arrastrar de costado, que es la sensacion mas
+   clara de que algo esta roto.
+
+   Va `clip` y no `hidden`: `hidden` crea un contexto de desplazamiento y romperia
+   el encabezado pegajoso. */
+html, body { overflow-x: clip; max-width: 100%; }
+
+/* ── Ajustes de pantalla chica ───────────────────────────────────────────── */
+@media (max-width: 480px) {
+  /* El titulo de portada llegaba al borde. 13ch corta antes y deja margen. */
+  .portada__titulo { max-width: 13ch; }
+
+  /* Los dos botones de portada, uno al lado del otro, quedaban de 150 px cada
+     uno con el texto al limite. A lo ancho completo se leen y se tocan bien. */
+  .portada__acciones { flex-direction: column; align-items: stretch; }
+  .portada__acciones .boton { width: 100%; }
+
+  /* Una sola columna de rubros: dos de 150 px dejaban "Perfumeria" y la cuenta
+     pegadas contra el borde. */
+  .rubros { grid-template-columns: 1fr 1fr; gap: var(--e-2); }
+  .rubro-ficha { padding: var(--e-3); }
+  .rubro-ficha__nombre { font-size: var(--t-base); }
+
+  /* Menos separacion entre secciones: en pantalla chica los 48 px se sienten
+     como un hueco, no como respiro. */
+  .seccion { padding-block: var(--e-5); }
+  .tira { margin-bottom: var(--e-6); }
+
+  /* La grilla del catalogo va a dos columnas, asi que cada card mide unos
+     165 px. Con el nombre a 16 px entran nueve caracteres por linea y
+     "Abrochadora Grap Pinza 10/50 E/c" se corta antes de terminar. A 14 px
+     entran once y el nombre completo cierra en tres lineas.
+
+     Solo aplica a la grilla: en las tiras la card mide 268 px y ahi el nombre
+     grande se lee mejor. */
+  .grilla .card-producto--sin-foto .card-producto__nombre { font-size: var(--t-sm); }
+  .grilla .card-producto--sin-foto .card-producto__precio { font-size: var(--t-md); }
+  .grilla .card-producto__cuerpo { padding: var(--e-3); }
+  .grilla .card-producto__detalle { font-size: 11px; }
 }
