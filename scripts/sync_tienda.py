@@ -168,6 +168,26 @@ def se_publica(datos, rubros_habilitados):
     if precio <= 0:
         return False, 'sin precio'
 
+    # Sin stock no sale a la web.
+    #
+    # De 7.648 productos publicables solo 2.315 tenian stock: Regaleria mostraba
+    # 599 y se podian comprar 53. Una tienda donde siete de cada diez productos
+    # dicen "sin stock" se lee como un local que cerro, no como uno surtido.
+    #
+    # El stock real de un producto con variedades es la suma de las variedades;
+    # el campo `stock` del padre cuenta packs cerrados y da cero cuando hay
+    # mercaderia suelta para vender.
+    variedades = variedades_de(datos)
+    if variedades:
+        stock = sum(v['stock'] for v in variedades)
+    else:
+        try:
+            stock = int(float(datos.get('stock') or 0))
+        except (TypeError, ValueError):
+            stock = 0
+    if stock <= 0:
+        return False, 'sin stock'
+
     if marca_manual is True:
         return True, 'incluido a mano'
 
