@@ -1,0 +1,284 @@
+/* Fuentes self-host: no se le piden a Google en cada visita. Solo los pesos que
+   se usan de verdad, para no arrastrar medio megabyte al celular del cliente. */
+@import '@fontsource/rubik/latin-400.css';
+@import '@fontsource/rubik/latin-500.css';
+@import '@fontsource/rubik/latin-600.css';
+@import '@fontsource/rubik/latin-700.css';
+@import '@fontsource/nunito-sans/latin-400.css';
+@import '@fontsource/nunito-sans/latin-600.css';
+@import '@fontsource/nunito-sans/latin-700.css';
+
+@import '../../design/tokens.css';
+@import '../../design/components.css';
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Estructura de la aplicacion. Lo de acá es composición de pantalla; los
+   componentes viven en design/components.css.
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+/* El enlace de salto aparece solo al llegar con el teclado. */
+.saltar {
+  position: absolute;
+  left: var(--e-4);
+  top: -100px;
+  z-index: calc(var(--z-toast) + 1);
+  padding: var(--e-3) var(--e-4);
+  border-radius: var(--r-md);
+  background: var(--ink-superficie);
+  color: var(--ink-texto);
+  font-weight: var(--peso-semi);
+  transition: top var(--m-normal) var(--curva);
+}
+.saltar:focus { top: var(--e-3); text-decoration: none; }
+
+.app {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+}
+
+.principal { flex: 1; }
+
+/* Deja lugar a la barra inferior para que no tape el ultimo producto. */
+@media (max-width: 767px) {
+  .principal { padding-bottom: calc(var(--alto-nav-inferior) + env(safe-area-inset-bottom, 0px)); }
+}
+
+.seccion { padding-block: var(--e-6); }
+.seccion__cabecera {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--e-3);
+  margin-bottom: var(--e-4);
+}
+.seccion__cabecera h2 { font-size: var(--t-lg); }
+@media (min-width: 768px) {
+  .seccion { padding-block: var(--e-7); }
+  .seccion__cabecera h2 { font-size: var(--t-xl); }
+}
+
+/* ── Portada ─────────────────────────────────────────────────────────────── */
+
+.portada__lugar {
+  font-size: var(--t-sm);
+  font-weight: var(--peso-semi);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--ink-texto-2);
+  margin-bottom: var(--e-4);
+}
+.portada__titulo {
+  font-size: var(--t-hero);
+  font-weight: var(--peso-bold);
+  letter-spacing: -.035em;
+  max-width: 15ch;
+  margin-bottom: var(--e-4);
+}
+.portada__bajada {
+  font-size: var(--t-md);
+  line-height: var(--alto-suelto);
+  color: var(--ink-texto-2);
+  max-width: 48ch;
+  margin-bottom: var(--e-6);
+}
+.portada__acciones { display: flex; flex-wrap: wrap; gap: var(--e-3); }
+
+.boton--sobre-negro {
+  background: transparent;
+  border-color: var(--ink-borde);
+  color: var(--ink-texto);
+}
+.boton--sobre-negro:hover:not(:disabled) {
+  background: var(--ink-superficie-2);
+  border-color: var(--ink-texto-2);
+}
+
+/* Fichas de rubro de la portada. Cada una toma su color del logo, así el
+   bloque negro se convierte en el logo desarmado. */
+.rubros {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: var(--e-3);
+}
+.rubro-ficha {
+  display: block;
+  padding: var(--e-4);
+  border-radius: var(--r-md);
+  background: var(--rubro);
+  color: var(--rubro-tinta);
+  text-decoration: none;
+  transition: transform var(--m-normal) var(--curva), filter var(--m-normal) var(--curva);
+}
+.rubro-ficha:hover { transform: translateY(-3px); filter: brightness(1.06); text-decoration: none; }
+.rubro-ficha:active { transform: scale(.98); }
+.rubro-ficha__nombre {
+  display: block;
+  font-family: var(--font-titulo);
+  font-weight: var(--peso-bold);
+  font-size: var(--t-md);
+  line-height: 1.2;
+}
+.rubro-ficha__cuenta { display: block; font-size: var(--t-xs); opacity: .8; margin-top: 2px; }
+
+/* ── Barra de filtros del catálogo ───────────────────────────────────────── */
+
+/* Se desplaza en horizontal en el celular, sin barra visible. El desbordamiento
+   lo maneja este contenedor; el body nunca se mueve de lado. */
+.filtros {
+  display: flex;
+  gap: var(--e-2);
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding-block: var(--e-1);
+  margin-inline: calc(var(--e-4) * -1);
+  padding-inline: var(--e-4);
+  scroll-snap-type: x proximity;
+}
+.filtros::-webkit-scrollbar { display: none; }
+.filtros > * { scroll-snap-align: start; flex: none; }
+@media (min-width: 768px) {
+  .filtros { flex-wrap: wrap; overflow: visible; margin-inline: 0; padding-inline: 0; }
+}
+
+.barra-catalogo {
+  position: sticky;
+  top: var(--alto-nav);
+  z-index: calc(var(--z-nav) - 1);
+  background: var(--bg);
+  padding-block: var(--e-3);
+  border-bottom: 1px solid var(--border);
+}
+
+.resultado-cuenta {
+  font-size: var(--t-sm);
+  color: var(--text-2);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Ficha de producto ───────────────────────────────────────────────────── */
+
+.ficha-producto {
+  display: grid;
+  gap: var(--e-5);
+  padding-block: var(--e-5);
+}
+@media (min-width: 900px) {
+  .ficha-producto {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 420px);
+    gap: var(--e-8);
+    align-items: start;
+  }
+}
+
+.ficha-producto__foto {
+  aspect-ratio: 1 / 1;
+  border-radius: var(--r-lg);
+  overflow: hidden;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+.ficha-producto__foto img { width: 100%; height: 100%; object-fit: cover; }
+
+.ficha-producto__datos { display: flex; flex-direction: column; gap: var(--e-4); }
+.ficha-producto__titulo { font-size: var(--t-xl); letter-spacing: -.025em; }
+.ficha-producto__precio {
+  font-family: var(--font-titulo);
+  font-size: var(--t-2xl);
+  font-weight: var(--peso-bold);
+  letter-spacing: -.02em;
+}
+
+.variedades { display: flex; flex-direction: column; gap: var(--e-2); }
+.variedades__lista { display: flex; flex-wrap: wrap; gap: var(--e-2); }
+
+.variedad {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e-2);
+  min-height: 44px;
+  padding: 0 var(--e-4);
+  border: 1.5px solid var(--borde-control);
+  border-radius: var(--r-full);
+  background: var(--surface);
+  font-size: var(--t-sm);
+  font-weight: var(--peso-semi);
+  cursor: pointer;
+  transition: border-color var(--m-rapido) var(--curva), background var(--m-rapido) var(--curva);
+  touch-action: manipulation;
+}
+.variedad:hover:not(:disabled) { background: var(--surface-2); }
+.variedad[aria-pressed="true"] {
+  border-color: var(--primary);
+  background: var(--primary-bg);
+  color: var(--primary-txt);
+}
+.variedad:disabled { opacity: .4; cursor: not-allowed; text-decoration: line-through; }
+.variedad__punto {
+  width: 16px; height: 16px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .18);
+  flex: none;
+}
+
+.dato-stock {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e-2);
+  font-size: var(--t-sm);
+  font-weight: var(--peso-semi);
+}
+
+.migas {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--e-2);
+  font-size: var(--t-xs);
+  color: var(--text-2);
+  padding-block: var(--e-3);
+}
+.migas a { color: var(--text-2); }
+.migas span { color: var(--text-3); }
+
+/* ── Pie ─────────────────────────────────────────────────────────────────── */
+
+.pie__grilla {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: var(--e-5);
+  padding-block: var(--e-6);
+}
+.pie__titulo {
+  font-size: var(--t-xs);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  margin-bottom: var(--e-3);
+  color: var(--ink-texto);
+}
+.pie__texto { font-size: var(--t-sm); line-height: 1.7; color: var(--ink-texto-2); }
+.pie__legal {
+  border-top: 1px solid var(--ink-borde);
+  padding-block: var(--e-4);
+  font-size: var(--t-xs);
+  color: var(--ink-texto-2);
+}
+
+/* ── Aviso de tienda cerrada ─────────────────────────────────────────────── */
+
+.aviso-cerrada {
+  background: var(--alerta-bg);
+  color: var(--alerta);
+  text-align: center;
+  padding: var(--e-3) var(--e-4);
+  font-size: var(--t-sm);
+  font-weight: var(--peso-semi);
+}
+
+/* ── Cargar más ──────────────────────────────────────────────────────────── */
+
+.cargar-mas {
+  display: flex;
+  justify-content: center;
+  padding-block: var(--e-6);
+}

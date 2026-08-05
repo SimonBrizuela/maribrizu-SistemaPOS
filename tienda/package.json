@@ -1,0 +1,22 @@
+{
+  "name": "tienda-liceo",
+  "version": "0.1.0",
+  "description": "Tienda online de Libreria Liceo",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "disenio": "node design/build.mjs",
+    "contraste": "node design/contraste.mjs"
+  },
+  "dependencies": {
+    "@fontsource/nunito-sans": "^5.2.5",
+    "@fontsource/rubik": "^5.2.5",
+    "firebase": "^11.0.0"
+  },
+  "devDependencies": {
+    "vite": "^5.4.0"
+  }
+}
