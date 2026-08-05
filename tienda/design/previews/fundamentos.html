@@ -1,0 +1,147 @@
+<!-- @dsCard group="Base" name="Fundamentos" subtitle="Paleta de marca, color por rubro, tipografía, espaciado y movimiento" -->
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">Marca</h2>
+  <div class="pv-fila" style="gap:var(--e-2)">
+    <div class="marca-fichas" style="transform:scale(2.2);transform-origin:left center;margin-right:var(--e-6)">
+      <i></i><i></i><i></i><i></i><i></i>
+    </div>
+    <div style="font-family:var(--font-titulo);font-size:var(--t-xl);font-weight:700;letter-spacing:-.02em">Librería Liceo</div>
+  </div>
+  <p class="pv-nota">
+    Las cinco fichas del logo, reducidas a barras. Se leen a 16&nbsp;px de alto, donde el
+    logo completo sería una mancha. Van en el encabezado, el pie y el ticket.
+  </p>
+</section>
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">Paleta</h2>
+  <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:var(--e-3)">
+    <div>
+      <div style="height:80px;border-radius:var(--r-md);background:var(--liceo-violeta)"></div>
+      <div style="margin-top:var(--e-2);font-size:var(--t-xs);font-weight:600">Violeta</div>
+      <div style="font-size:var(--t-xs);color:var(--text-2);font-variant-numeric:tabular-nums">#7B3FA6</div>
+    </div>
+    <div>
+      <div style="height:80px;border-radius:var(--r-md);background:var(--liceo-verde)"></div>
+      <div style="margin-top:var(--e-2);font-size:var(--t-xs);font-weight:600">Verde</div>
+      <div style="font-size:var(--t-xs);color:var(--text-2);font-variant-numeric:tabular-nums">#8EC63F</div>
+    </div>
+    <div>
+      <div style="height:80px;border-radius:var(--r-md);background:var(--liceo-naranja)"></div>
+      <div style="margin-top:var(--e-2);font-size:var(--t-xs);font-weight:600">Naranja</div>
+      <div style="font-size:var(--t-xs);color:var(--text-2);font-variant-numeric:tabular-nums">#F39C12</div>
+    </div>
+    <div>
+      <div style="height:80px;border-radius:var(--r-md);background:var(--liceo-cyan)"></div>
+      <div style="margin-top:var(--e-2);font-size:var(--t-xs);font-weight:600">Cyan</div>
+      <div style="font-size:var(--t-xs);color:var(--text-2);font-variant-numeric:tabular-nums">#29ABCA</div>
+    </div>
+    <div>
+      <div style="height:80px;border-radius:var(--r-md);background:var(--liceo-rojo)"></div>
+      <div style="margin-top:var(--e-2);font-size:var(--t-xs);font-weight:600">Rojo</div>
+      <div style="font-size:var(--t-xs);color:var(--text-2);font-variant-numeric:tabular-nums">#E63946</div>
+    </div>
+  </div>
+
+  <div style="margin-top:var(--e-5);padding:var(--e-4);border-radius:var(--r-md);background:var(--alerta-bg);border:1px solid color-mix(in srgb, var(--alerta) 25%, transparent)">
+    <div style="font-weight:700;font-size:var(--t-sm);color:var(--alerta);margin-bottom:var(--e-2)">Los colores del logo no sirven para texto</div>
+    <div class="pv-fila" style="gap:var(--e-5)">
+      <div>
+        <div style="font-size:var(--t-md);font-weight:700;color:var(--liceo-verde)">Verde del logo</div>
+        <div style="font-size:var(--t-xs);color:var(--text-2)">1,9:1 — ilegible</div>
+      </div>
+      <div>
+        <div style="font-size:var(--t-md);font-weight:700;color:var(--liceo-verde-txt)">Verde de texto</div>
+        <div style="font-size:var(--t-xs);color:var(--text-2)">5,4:1 — cumple</div>
+      </div>
+    </div>
+    <p style="margin-top:var(--e-3);font-size:var(--t-xs);color:var(--text-2);line-height:1.5">
+      Cada color de marca tiene una variante oscurecida para texto. Las de saturación
+      plena van en bloques, fichas y superficies grandes; nunca en palabras sobre
+      fondo claro.
+    </p>
+  </div>
+</section>
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">Color por rubro</h2>
+  <div class="pv-fila">
+    <span class="ficha ficha--rubro" data-rubro="LIBRERÍA">Librería</span>
+    <span class="ficha ficha--rubro" data-rubro="PAPELERA">Papelera</span>
+    <span class="ficha ficha--rubro" data-rubro="MERCERÍA">Mercería</span>
+    <span class="ficha ficha--rubro" data-rubro="REGALERÍA">Regalería</span>
+    <span class="ficha ficha--rubro" data-rubro="JUGUETERÍA">Juguetería</span>
+    <span class="ficha ficha--rubro" data-rubro="PERFUMERÍA">Perfumería</span>
+  </div>
+  <p class="pv-nota">
+    Cada rubro hereda una ficha del logo. El catálogo se lee de un vistazo sin
+    dibujar un ícono por categoría, y la marca aparece en toda la tienda sin
+    repetir el logo en cada esquina. Se aplica con <code>data-rubro</code> en
+    cualquier contenedor; los hijos usan <code>var(--rubro)</code> sin saber cuál es.
+  </p>
+</section>
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">Tipografía</h2>
+  <div class="pv-columna">
+    <div>
+      <div style="font-family:var(--font-titulo);font-size:var(--t-hero);font-weight:700;letter-spacing:-.03em;line-height:1.05">Todo para el cole</div>
+      <div style="font-size:var(--t-xs);color:var(--text-3);margin-top:var(--e-2)">Rubik 700 · título de portada · clamp(2,25rem, 7vw, 3,75rem)</div>
+    </div>
+    <div>
+      <div style="font-family:var(--font-titulo);font-size:var(--t-xl);font-weight:700">Lo más pedido</div>
+      <div style="font-size:var(--t-xs);color:var(--text-3);margin-top:var(--e-1)">Rubik 700 · 28&nbsp;px</div>
+    </div>
+    <div>
+      <div style="font-size:var(--t-base);line-height:var(--alto-suelto);max-width:var(--ancho-texto)">
+        Somos una librería de barrio en Córdoba. Preparamos tu pedido el mismo día y
+        te lo llevamos a tu casa, o lo pasás a buscar cuando te queda cómodo.
+      </div>
+      <div style="font-size:var(--t-xs);color:var(--text-3);margin-top:var(--e-2)">Nunito Sans 400 · 16&nbsp;px · interlineado 1,7</div>
+    </div>
+    <div class="pv-fila" style="gap:var(--e-5)">
+      <div><span class="cifra" style="font-family:var(--font-titulo);font-size:var(--t-2xl);font-weight:700">$14.900</span>
+        <div style="font-size:var(--t-xs);color:var(--text-3)">Precio · números de ancho fijo</div></div>
+    </div>
+  </div>
+  <p class="pv-nota">
+    Rubik en títulos por su parentesco con la tipografía del logo. Nunito Sans en
+    texto: redonda y cálida, que es lo que separa una librería de barrio de un
+    marketplace. El texto base nunca baja de 16&nbsp;px en celular — abajo de eso
+    iOS hace zoom solo al tocar un campo y descuadra el checkout.
+  </p>
+</section>
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">Espaciado</h2>
+  <div class="pv-columna" style="gap:var(--e-2)">
+    <div class="pv-fila"><div style="width:var(--e-1);height:24px;background:var(--primary);border-radius:2px"></div><span style="font-size:var(--t-xs);color:var(--text-2)">4 · interior de ficha</span></div>
+    <div class="pv-fila"><div style="width:var(--e-2);height:24px;background:var(--primary);border-radius:2px"></div><span style="font-size:var(--t-xs);color:var(--text-2)">8 · entre elementos hermanos</span></div>
+    <div class="pv-fila"><div style="width:var(--e-4);height:24px;background:var(--primary);border-radius:2px"></div><span style="font-size:var(--t-xs);color:var(--text-2)">16 · relleno de card, margen de pantalla</span></div>
+    <div class="pv-fila"><div style="width:var(--e-5);height:24px;background:var(--primary);border-radius:2px"></div><span style="font-size:var(--t-xs);color:var(--text-2)">24 · entre bloques</span></div>
+    <div class="pv-fila"><div style="width:var(--e-7);height:24px;background:var(--primary);border-radius:2px"></div><span style="font-size:var(--t-xs);color:var(--text-2)">48 · entre secciones</span></div>
+    <div class="pv-fila"><div style="width:var(--e-9);height:24px;background:var(--primary);border-radius:2px"></div><span style="font-size:var(--t-xs);color:var(--text-2)">96 · respiro de portada</span></div>
+  </div>
+  <p class="pv-nota">Rejilla de 4. Todo espacio de la tienda sale de esta escala.</p>
+</section>
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">Movimiento</h2>
+  <div class="pv-columna">
+    <div style="font-size:var(--t-sm);line-height:1.7">
+      <strong style="font-weight:600">140&nbsp;ms</strong> — respuesta al tocar: color, hundido<br>
+      <strong style="font-weight:600">220&nbsp;ms</strong> — cambios de estado: filtros, contadores<br>
+      <strong style="font-weight:600">320&nbsp;ms</strong> — algo que entra: panel, card, hoja<br>
+      <strong style="font-weight:600">150&nbsp;ms</strong> — algo que sale
+    </div>
+    <div style="font-family:ui-monospace,monospace;font-size:var(--t-xs);color:var(--text-2);background:var(--surface-2);padding:var(--e-3);border-radius:var(--r-sm)">cubic-bezier(.22, 1, .36, 1)</div>
+  </div>
+  <p class="pv-nota">
+    Una sola curva para todo lo que entra: la tienda tiene un ritmo propio en vez de
+    que cada componente se mueva a su manera. Lo que sale va más rápido que lo que
+    entra — es lo que hace que se sienta ágil y no pesada. Con
+    <code>prefers-reduced-motion</code> activado todo baja a 1&nbsp;ms: los cambios
+    siguen siendo visibles, pero no se mueve nada.
+  </p>
+</section>

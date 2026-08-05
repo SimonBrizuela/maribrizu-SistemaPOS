@@ -1,0 +1,145 @@
+<!-- @dsCard group="Compra" name="Pedido confirmado y seguimiento" subtitle="Comprobante con código, línea de estados y ticket de reparto" -->
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">Pedido confirmado</h2>
+
+  <div class="pv-marco" style="max-width:480px">
+    <div style="padding:var(--e-7) var(--e-5) var(--e-5);text-align:center;background:linear-gradient(180deg, var(--liceo-verde-bg), var(--surface))">
+      <div style="width:64px;height:64px;margin:0 auto var(--e-4);border-radius:50%;background:var(--exito);color:#fff;display:grid;place-items:center">
+        <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+      </div>
+      <h2 style="font-size:var(--t-xl);margin-bottom:var(--e-2)">¡Listo, Carolina!</h2>
+      <p style="color:var(--text-2);font-size:var(--t-sm);line-height:1.5;max-width:34ch;margin-inline:auto">
+        Ya nos llegó tu pedido. Te escribimos al 351&nbsp;704&nbsp;6684 cuando salga para tu casa.
+      </p>
+
+      <div style="margin-top:var(--e-5);padding:var(--e-4);border-radius:var(--r-md);background:var(--surface);border:1.5px dashed var(--border-2)">
+        <div style="font-size:var(--t-xs);color:var(--text-2);letter-spacing:.08em;text-transform:uppercase;font-weight:700">Tu código</div>
+        <div class="cifra" style="font-family:var(--font-titulo);font-size:var(--t-2xl);font-weight:700;letter-spacing:.06em;margin-top:var(--e-1)">K7M2XQ</div>
+        <div style="font-size:var(--t-xs);color:var(--text-2);margin-top:var(--e-1)">Guardalo para consultar el estado</div>
+      </div>
+    </div>
+
+    <div style="padding:var(--e-5);border-top:1px solid var(--border)">
+      <div class="totales">
+        <div class="totales__fila"><span>Productos (4)</span><strong class="cifra">$25.050</strong></div>
+        <div class="totales__fila"><span>Envío · 4,1&nbsp;km</span><strong class="cifra">$2.500</strong></div>
+        <div class="totales__fila totales__fila--total"><span>Total a pagar</span><strong class="cifra">$27.550</strong></div>
+      </div>
+      <div class="pv-fila" style="margin-top:var(--e-5);flex-wrap:nowrap">
+        <button class="boton boton--secundario" style="flex:1">Seguir comprando</button>
+        <button class="boton boton--primario" style="flex:1">Ver el estado</button>
+      </div>
+    </div>
+  </div>
+
+  <p class="pv-nota">
+    <strong>El código no sale de un contador.</strong> Se deriva del identificador del
+    pedido, que ya es aleatorio e irrepetible. Un contador secuencial obligaría a que
+    el cliente escriba en un documento compartido para incrementarlo, y dos pedidos
+    simultáneos se pisarían.
+  </p>
+</section>
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">Estado del pedido</h2>
+
+  <div class="pv-marco" style="max-width:480px;padding:var(--e-5)">
+    <div class="pv-fila" style="justify-content:space-between;margin-bottom:var(--e-5)">
+      <div>
+        <div style="font-family:var(--font-titulo);font-weight:700;font-size:var(--t-lg)">Pedido K7M2XQ</div>
+        <div style="font-size:var(--t-xs);color:var(--text-2)">Hoy 13:24 · 4 productos</div>
+      </div>
+      <span class="ficha ficha--rubro" data-rubro="LIBRERÍA">En preparación</span>
+    </div>
+
+    <div class="progreso">
+      <div class="progreso__paso progreso__paso--hecho">
+        <span class="progreso__marca">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+        </span>
+        <span class="progreso__texto">
+          <span class="progreso__titulo">Recibimos tu pedido</span>
+          <span class="progreso__hora">13:24</span>
+        </span>
+      </div>
+      <div class="progreso__paso progreso__paso--actual">
+        <span class="progreso__marca">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><path d="M3 6h18"/></svg>
+        </span>
+        <span class="progreso__texto">
+          <span class="progreso__titulo">Lo estamos preparando</span>
+          <span class="progreso__hora">Estamos juntando todo en el local</span>
+        </span>
+      </div>
+      <div class="progreso__paso">
+        <span class="progreso__marca">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h11v10H3zM14 10h4l3 3v4h-7z"/><circle cx="7" cy="18" r="2"/><circle cx="17.5" cy="18" r="2"/></svg>
+        </span>
+        <span class="progreso__texto">
+          <span class="progreso__titulo">Salió para tu casa</span>
+        </span>
+      </div>
+      <div class="progreso__paso">
+        <span class="progreso__marca">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 10 9-7 9 7v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+        </span>
+        <span class="progreso__texto">
+          <span class="progreso__titulo">Entregado</span>
+        </span>
+      </div>
+    </div>
+
+    <div style="margin-top:var(--e-5);padding-top:var(--e-4);border-top:1px solid var(--border);display:flex;gap:var(--e-3);align-items:center">
+      <span style="flex:none;color:var(--text-3)">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></svg>
+      </span>
+      <span style="font-size:var(--t-sm);line-height:1.4">
+        Av. Rafael Núñez 4520<br>
+        <span style="color:var(--text-2);font-size:var(--t-xs)">Portón verde, timbre 2</span>
+      </span>
+    </div>
+  </div>
+
+  <p class="pv-nota">
+    El paso actual late suavemente: es el único elemento animado de la pantalla, así
+    que la atención va justo donde tiene que ir. Cada estado lleva ícono y texto —
+    el color no es lo único que distingue lo hecho de lo pendiente.
+  </p>
+</section>
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">Ticket de reparto · impresora del local</h2>
+  <div style="width:302px;background:#fff;color:#000;padding:16px;font-family:ui-monospace,'Cascadia Mono',monospace;font-size:12px;line-height:1.45;border:1px solid var(--border-2);border-radius:var(--r-sm);box-shadow:var(--s-2)">
+    <div style="text-align:center;font-weight:700;font-size:14px;letter-spacing:.05em">LIBRERIA LICEO</div>
+    <div style="text-align:center;font-size:11px">Av. Alfonsina Storni 168</div>
+    <div style="text-align:center;font-size:11px;margin-bottom:8px">Tel 3517046684</div>
+    <div style="border-top:1px dashed #000;margin:8px 0"></div>
+    <div style="text-align:center;font-weight:700;font-size:15px;letter-spacing:.1em">DELIVERY  K7M2XQ</div>
+    <div style="text-align:center;font-size:11px;margin-bottom:8px">05/08/2026 13:24</div>
+    <div style="border-top:1px dashed #000;margin:8px 0"></div>
+    <div style="font-weight:700">CAROLINA RUIZ</div>
+    <div>351 704 6684</div>
+    <div style="margin-top:4px">Av. Rafael Nunez 4520</div>
+    <div>Porton verde, timbre 2</div>
+    <div style="margin-top:4px">4,1 km</div>
+    <div style="border-top:1px dashed #000;margin:8px 0"></div>
+    <div style="display:flex;justify-content:space-between"><span>2 Cuaderno Rivadavia T/D</span><span>9.700</span></div>
+    <div style="display:flex;justify-content:space-between"><span>1 Boligrafo Filgo Azul</span><span>1.400</span></div>
+    <div style="display:flex;justify-content:space-between"><span>1 Rompecabezas 1000pz</span><span>13.950</span></div>
+    <div style="border-top:1px dashed #000;margin:8px 0"></div>
+    <div style="display:flex;justify-content:space-between"><span>Productos</span><span>25.050</span></div>
+    <div style="display:flex;justify-content:space-between"><span>Envio</span><span>2.500</span></div>
+    <div style="display:flex;justify-content:space-between;font-weight:700;font-size:15px;margin-top:4px"><span>TOTAL</span><span>27.550</span></div>
+    <div style="border-top:1px dashed #000;margin:8px 0"></div>
+    <div style="text-align:center;font-weight:700">COBRAR AL ENTREGAR</div>
+    <div style="text-align:center;font-size:11px;margin-top:2px">Efectivo o transferencia</div>
+    <div style="margin-top:10px;font-size:11px;border:1px solid #000;padding:4px;text-align:center">Nota: el cuaderno que sea cuadriculado si tenes</div>
+  </div>
+  <p class="pv-nota">
+    Sale solo por la impresora térmica del local apenas entra el pedido — el POS ya
+    escucha la base y ya sabe imprimir. Sin acentos ni caracteres especiales: las
+    térmicas de 58&nbsp;mm los imprimen como símbolos raros. El código arriba es el
+    mismo que ve el cliente en el celular.
+  </p>
+</section>

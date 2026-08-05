@@ -224,6 +224,69 @@ service cloud.firestore {
       allow read, write: if authorized();
     }
 
+    // ═════════════════════════════════════════════════════════════════════
+    //  NIVEL PÚBLICO — TIENDA ONLINE
+    //  Único punto de la base que se lee sin sesión. Por eso la tienda NUNCA
+    //  toca `catalogo`: ahí viven costo, margen y proveedor. Lee un espejo
+    //  con solo los campos publicables.
+    // ═════════════════════════════════════════════════════════════════════
+
+    // ── ESPEJO PÚBLICO DEL CATÁLOGO ───────────────────────────────────────
+    // Lo escribe el panel (al publicar un producto) y el sync del POS
+    // (precio y stock). Nadie sin sesión puede modificarlo.
+    match /tienda_productos/{productoId} {
+      allow read:  if true;
+      allow write: if authorized();
+    }
+
+    // ── CONFIGURACIÓN DE LA TIENDA ────────────────────────────────────────
+    // Horarios, tramos de envío, origen del reparto, textos del sitio.
+    // Lectura pública porque la tienda necesita mostrarlos antes del login
+    // (que no existe para el cliente).
+    match /tienda_config/{docId} {
+      allow read:  if true;
+      allow write: if isAdmin();
+    }
+
+    // ── PEDIDOS ───────────────────────────────────────────────────────────
+    // El cliente crea su pedido sin estar autenticado, así que la validación
+    // de forma vive acá: es la única barrera entre la colección y cualquiera
+    // con la apiKey del bundle.
+    //
+    //   · `get` abierto / `list` cerrado — el cliente consulta el suyo por ID
+    //     exacto (autogenerado, 20 caracteres aleatorios: no se adivina) pero
+    //     nadie puede listar la colección y llevarse los datos de todos.
+    //   · El estado inicial y los flags operativos se fuerzan acá: un pedido
+    //     no puede nacer 'entregado' ni marcado como impreso.
+    //   · El total tiene que cerrar contra subtotal + envío.
+    function pedidoValido() {
+      let d = request.resource.data;
+      return d.keys().hasAll(['estado', 'creado', 'cliente', 'entrega',
+                              'items', 'subtotal', 'envio', 'total'])
+             && d.estado == 'nuevo'
+             && d.creado == request.time
+             && d.impreso == false
+             && d.visto == false
+             && d.cliente.nombre is string
+             && d.cliente.nombre.size() >= 2 && d.cliente.nombre.size() <= 80
+             && d.cliente.telefono is string
+             && d.cliente.telefono.size() >= 6 && d.cliente.telefono.size() <= 30
+             && d.entrega.modo in ['delivery', 'retiro']
+             && d.items is list
+             && d.items.size() >= 1 && d.items.size() <= 100
+             && d.subtotal is number && d.subtotal >= 0
+             && d.envio is number    && d.envio >= 0
+             && d.total is number    && d.total == d.subtotal + d.envio
+             && d.nota is string     && d.nota.size() <= 500;
+    }
+
+    match /tienda_pedidos/{pedidoId} {
+      allow get:    if true;
+      allow list:   if authorized();
+      allow create: if pedidoValido();
+      allow update, delete: if authorized();
+    }
+
     // ── BLOQUEAR TODO LO DEMÁS ────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;

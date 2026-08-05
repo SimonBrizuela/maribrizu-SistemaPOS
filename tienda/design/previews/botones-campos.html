@@ -1,0 +1,131 @@
+<!-- @dsCard group="Base" name="Botones, campos y avisos" subtitle="Variantes, tamaños, estados de carga, validación y toasts" -->
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">Botones</h2>
+  <div class="pv-fila" style="margin-bottom:var(--e-4)">
+    <button class="boton boton--primario">Confirmar pedido</button>
+    <button class="boton boton--secundario">Seguir comprando</button>
+    <button class="boton boton--fantasma">Vaciar carrito</button>
+    <button class="boton boton--rubro" data-rubro="JUGUETERÍA">Ver juguetería</button>
+  </div>
+  <div class="pv-fila" style="margin-bottom:var(--e-4)">
+    <button class="boton boton--primario boton--chico">Chico · 36</button>
+    <button class="boton boton--primario">Normal · 44</button>
+    <button class="boton boton--primario boton--grande">Grande · 52</button>
+  </div>
+  <div class="pv-fila">
+    <button class="boton boton--primario boton--cargando">Confirmar pedido</button>
+    <button class="boton boton--primario" disabled>Sin stock</button>
+    <button class="boton boton--secundario" disabled>Deshabilitado</button>
+  </div>
+  <p class="pv-nota">
+    Ninguna variante baja de 44&nbsp;px de alto: es el mínimo táctil de Apple y
+    Android, y en un checkout desde el celular es la diferencia entre comprar y
+    abandonar. El botón cargando conserva su ancho — si encogiera al perder el
+    texto, todo lo que tiene al lado saltaría de lugar.
+  </p>
+</section>
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">Campos</h2>
+  <div class="pv-columna" style="max-width:420px">
+    <div class="campo">
+      <label class="campo__label" for="pv-c1">Tu nombre</label>
+      <input class="campo__control" id="pv-c1" type="text" placeholder="Nombre y apellido">
+    </div>
+    <div class="campo">
+      <label class="campo__label" data-obligatorio for="pv-c2">Teléfono</label>
+      <input class="campo__control" id="pv-c2" type="tel" value="351 704 6684" inputmode="tel">
+      <span class="campo__ayuda">Te escribimos por acá cuando el pedido esté listo.</span>
+    </div>
+    <div class="campo campo--error">
+      <label class="campo__label" data-obligatorio for="pv-c3">Teléfono</label>
+      <input class="campo__control" id="pv-c3" type="tel" value="351" aria-invalid="true" aria-describedby="pv-c3-err">
+      <span class="campo__error" id="pv-c3-err" role="alert">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" style="margin-top:2px;flex:none" aria-hidden="true"><path d="M12 8v5M12 16.5v.5"/><circle cx="12" cy="12" r="9"/></svg>
+        Faltan números. Poné el teléfono completo con característica, así te podemos avisar.
+      </span>
+    </div>
+  </div>
+  <p class="pv-nota">
+    <strong>La etiqueta va siempre visible.</strong> Un placeholder como única etiqueta
+    desaparece apenas el cliente escribe y deja el formulario mudo — justo cuando va a
+    revisar antes de confirmar.<br><br>
+    <strong>El error va pegado al campo</strong> y dice qué hacer, no solo que algo está
+    mal. «Dato inválido» no ayuda a nadie. Se valida al salir del campo, no en cada
+    tecla: marcar en rojo mientras todavía está escribiendo es hostil.
+  </p>
+</section>
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">Avisos</h2>
+  <div class="pv-columna" style="max-width:420px">
+    <div class="toast toast--exito" style="position:static;transform:none;animation:none">
+      <span class="toast__icono">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+      </span>
+      Agregaste Cuaderno Rivadavia
+      <button style="margin-left:auto;background:none;border:none;color:#fff;font-weight:700;font-size:var(--t-xs);cursor:pointer;text-decoration:underline">Deshacer</button>
+    </div>
+    <div class="toast toast--error" style="position:static;transform:none;animation:none">
+      <span class="toast__icono">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M12 8v5M12 16.5v.5"/><circle cx="12" cy="12" r="9"/></svg>
+      </span>
+      No pudimos calcular el envío
+      <button style="margin-left:auto;background:none;border:none;color:#fff;font-weight:700;font-size:var(--t-xs);cursor:pointer;text-decoration:underline">Reintentar</button>
+    </div>
+  </div>
+  <p class="pv-nota">
+    Todo aviso que informa de una acción trae la acción inversa. Sacar algo del carrito
+    sin poder deshacerlo obliga a buscar el producto de nuevo en el catálogo. Los
+    avisos se anuncian con <code>aria-live</code> pero no roban el foco: si lo hicieran,
+    quien navega con teclado perdería el lugar en el formulario.
+  </p>
+</section>
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">Modo oscuro</h2>
+  <div style="border-radius:var(--r-lg);overflow:hidden;border:1px solid var(--border)">
+    <div data-tema="oscuro" style="background:var(--bg);padding:var(--e-5);color:var(--text)">
+      <div class="pv-fila" style="margin-bottom:var(--e-4)">
+        <button class="boton boton--primario">Confirmar pedido</button>
+        <button class="boton boton--secundario">Seguir comprando</button>
+        <span class="ficha ficha--rubro" data-rubro="MERCERÍA">Mercería</span>
+        <span class="ficha ficha--exito">En camino</span>
+      </div>
+      <div class="grilla" style="grid-template-columns:repeat(2,minmax(0,1fr));max-width:340px">
+        <article class="card-producto" data-rubro="LIBRERÍA">
+          <div class="card-producto__foto"><div class="card-producto__placa"><span>C</span></div></div>
+          <div class="card-producto__cuerpo">
+            <span class="card-producto__rubro">Librería</span>
+            <h3 class="card-producto__nombre">Cuaderno Rivadavia Tapa Dura</h3>
+            <div class="card-producto__pie">
+              <span class="card-producto__precio cifra">$4.850</span>
+              <button class="card-producto__agregar" aria-label="Agregar">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+              </button>
+            </div>
+          </div>
+        </article>
+        <article class="card-producto" data-rubro="JUGUETERÍA">
+          <div class="card-producto__foto"><div class="card-producto__placa"><span>R</span></div></div>
+          <div class="card-producto__cuerpo">
+            <span class="card-producto__rubro">Juguetería</span>
+            <h3 class="card-producto__nombre">Rompecabezas 1000 Piezas</h3>
+            <div class="card-producto__pie">
+              <span class="card-producto__precio cifra">$13.950</span>
+              <button class="card-producto__agregar" aria-label="Agregar">
+                <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+              </button>
+            </div>
+          </div>
+        </article>
+      </div>
+    </div>
+  </div>
+  <p class="pv-nota">
+    El modo oscuro no es el claro invertido. Los colores de marca se aclaran y
+    desaturan un punto para no vibrar sobre fondo oscuro, y los textos de color usan
+    las variantes claras. El fondo es el negro del logo, no un gris genérico.
+  </p>
+</section>

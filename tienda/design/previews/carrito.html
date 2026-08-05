@@ -1,0 +1,126 @@
+<!-- @dsCard group="Compra" name="Carrito" subtitle="Panel lateral, renglones con cantidad, totales y carrito vacío" -->
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">Panel del carrito</h2>
+
+  <div class="pv-marco" style="max-width:440px">
+    <div style="display:flex;flex-direction:column;height:620px;background:var(--surface)">
+
+      <div class="panel__cabecera">
+        <h2 style="font-size:var(--t-lg)">Tu pedido</h2>
+        <button class="icono-boton" aria-label="Cerrar carrito">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg>
+        </button>
+      </div>
+
+      <div class="panel__cuerpo">
+
+        <div class="renglon">
+          <div class="renglon__foto"><div style="width:100%;height:100%;background:linear-gradient(145deg,#3F51B5,#7B3FA6)"></div></div>
+          <div class="renglon__datos">
+            <div class="renglon__nombre">Cuaderno Rivadavia Tapa Dura 50 Hojas Rayado</div>
+            <div class="contador" style="margin-top:var(--e-1)">
+              <button class="contador__boton" aria-label="Quitar uno">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg>
+              </button>
+              <span class="contador__valor" aria-live="polite">2</span>
+              <button class="contador__boton" aria-label="Agregar uno">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="renglon__lado">
+            <span class="renglon__precio cifra">$9.700</span>
+            <button class="icono-boton" style="width:32px;height:32px;color:var(--text-3)" aria-label="Sacar Cuaderno Rivadavia del pedido">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="renglon">
+          <div class="renglon__foto" data-rubro="LIBRERÍA"><div class="card-producto__placa"><span style="font-size:1.5rem">B</span></div></div>
+          <div class="renglon__datos">
+            <div class="renglon__nombre">Bolígrafo Filgo Gel Borrable Borrax</div>
+            <div class="renglon__variedad">Color: Azul</div>
+            <div class="contador" style="margin-top:var(--e-1)">
+              <button class="contador__boton" aria-label="Quitar uno" disabled>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg>
+              </button>
+              <span class="contador__valor" aria-live="polite">1</span>
+              <button class="contador__boton" aria-label="Agregar uno">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="renglon__lado">
+            <span class="renglon__precio cifra">$1.400</span>
+            <button class="icono-boton" style="width:32px;height:32px;color:var(--text-3)" aria-label="Sacar Bolígrafo Filgo del pedido">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+            </button>
+          </div>
+        </div>
+
+        <div class="renglon">
+          <div class="renglon__foto"><div style="width:100%;height:100%;background:linear-gradient(145deg,#F39C12,#E63946)"></div></div>
+          <div class="renglon__datos">
+            <div class="renglon__nombre">Rompecabezas 1000 Piezas Paisaje</div>
+            <div class="renglon__variedad" style="color:var(--liceo-rojo-txt);font-weight:600">25% off</div>
+            <div class="contador" style="margin-top:var(--e-1)">
+              <button class="contador__boton" aria-label="Quitar uno" disabled>
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M5 12h14"/></svg>
+              </button>
+              <span class="contador__valor" aria-live="polite">1</span>
+              <button class="contador__boton" aria-label="Agregar uno">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg>
+              </button>
+            </div>
+          </div>
+          <div class="renglon__lado">
+            <span class="renglon__precio cifra">$13.950</span>
+            <button class="icono-boton" style="width:32px;height:32px;color:var(--text-3)" aria-label="Sacar Rompecabezas del pedido">
+              <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4a1 1 0 0 1 1-1h6a1 1 0 0 1 1 1v2M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+            </button>
+          </div>
+        </div>
+
+      </div>
+
+      <div class="panel__pie">
+        <div class="totales" style="margin-bottom:var(--e-4)">
+          <div class="totales__fila"><span>Productos (4)</span><strong class="cifra">$25.050</strong></div>
+          <div class="totales__fila"><span>Envío a Villa Cabrera · 3,4&nbsp;km</span><strong class="cifra">$2.500</strong></div>
+          <div class="totales__fila totales__fila--total"><span>Total</span><strong class="cifra">$27.550</strong></div>
+        </div>
+        <button class="boton boton--primario boton--grande boton--bloque">
+          Continuar
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 18 6-6-6-6"/></svg>
+        </button>
+      </div>
+
+    </div>
+  </div>
+
+  <p class="pv-nota">
+    <strong>El menos se deshabilita en 1</strong>, no baja a cero. Sacar un producto es
+    una decisión distinta a bajar la cantidad, y tiene su propio botón: si el menos
+    borrara el renglón, un toque de más lo haría desaparecer sin aviso.<br><br>
+    <strong>El envío aparece en el carrito, no recién al final.</strong> El costo de
+    envío revelado en el último paso es la causa número uno de carritos abandonados.<br><br>
+    En celular el panel sube desde abajo — de donde el pulgar espera que venga — y
+    deja ver una franja de la tienda arriba para no perder el contexto.
+  </p>
+</section>
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">Carrito vacío</h2>
+  <div class="pv-marco" style="max-width:440px">
+    <div class="vacio" style="padding:var(--e-9) var(--e-5)">
+      <div class="vacio__icono">
+        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+      </div>
+      <div class="vacio__titulo">Todavía no cargaste nada</div>
+      <p class="vacio__texto">Mirá lo más pedido de la semana o buscá lo que necesitás.</p>
+      <button class="boton boton--primario" style="margin-top:var(--e-2)">Ver el catálogo</button>
+    </div>
+  </div>
+</section>

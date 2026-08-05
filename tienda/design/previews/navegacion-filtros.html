@@ -1,0 +1,96 @@
+<!-- @dsCard group="Catálogo" name="Navegación y filtros" subtitle="Encabezado, buscador, barra inferior móvil, fichas de filtro y estado vacío" -->
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">Encabezado · escritorio</h2>
+  <div class="pv-marco">
+    <header class="cabecera" style="position:static">
+      <div class="contenedor cabecera__fila">
+        <a class="cabecera__logo" href="#">
+          <span class="marca-fichas"><i></i><i></i><i></i><i></i><i></i></span>
+          Librería Liceo
+        </a>
+        <div class="buscador">
+          <span class="buscador__icono">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          </span>
+          <input class="buscador__input" type="search" placeholder="Buscar cuadernos, hilos, juguetes…" aria-label="Buscar productos">
+        </div>
+        <button class="icono-boton carrito-boton" aria-label="Carrito, 3 productos">
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+          <span class="carrito-boton__globo cifra">3</span>
+        </button>
+      </div>
+    </header>
+  </div>
+</section>
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">Filtros por rubro</h2>
+  <div class="pv-fila">
+    <button class="ficha-filtro ficha-filtro--sin-punto" aria-pressed="true" style="--rubro:var(--ink)">Todo</button>
+    <button class="ficha-filtro" data-rubro="LIBRERÍA" aria-pressed="false">Librería</button>
+    <button class="ficha-filtro" data-rubro="PAPELERA" aria-pressed="false">Papelera</button>
+    <button class="ficha-filtro" data-rubro="MERCERÍA" aria-pressed="true">Mercería</button>
+    <button class="ficha-filtro" data-rubro="REGALERÍA" aria-pressed="false">Regalería</button>
+    <button class="ficha-filtro" data-rubro="JUGUETERÍA" aria-pressed="false">Juguetería</button>
+  </div>
+  <p class="pv-nota">
+    El punto de color adelanta de qué rubro es el filtro incluso apagado, así el
+    color no es el único indicador: hay texto, punto y estado presionado. La ficha
+    activa se rellena con el color del rubro. Alto 40&nbsp;px y separación de
+    8&nbsp;px entre fichas para que no se toque la de al lado sin querer.
+  </p>
+</section>
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">Barra inferior · celular</h2>
+  <div class="pv-telefono">
+    <div style="height:120px;background:var(--surface-2);display:grid;place-items:center;color:var(--text-3);font-size:var(--t-xs)">contenido</div>
+    <nav class="nav-inferior" style="position:static">
+      <a class="nav-inferior__item" href="#" aria-current="page">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 10 9-7 9 7v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M9 22V12h6v10"/></svg>
+        Inicio
+      </a>
+      <a class="nav-inferior__item" href="#">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+        Catálogo
+      </a>
+      <a class="nav-inferior__item" href="#">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/></svg>
+        Carrito
+      </a>
+      <a class="nav-inferior__item" href="#">
+        <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12h14"/><path d="M5 12a7 7 0 0 1 14 0"/><path d="M7 12v6a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-6"/></svg>
+        Mi pedido
+      </a>
+    </nav>
+  </div>
+  <p class="pv-nota">
+    Cuatro destinos, ícono y texto en cada uno. Solo ícono se ve más limpio pero
+    nadie sabe qué hace cada botón. La marca superior indica dónde estás sin
+    depender del color. El relleno inferior respeta el área del gesto de home del
+    iPhone.
+  </p>
+</section>
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">Sin resultados</h2>
+  <div class="pv-marco">
+    <div class="vacio">
+      <div class="vacio__icono">
+        <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+      </div>
+      <div class="vacio__titulo">No encontramos «cuardeno»</div>
+      <p class="vacio__texto">Probá con otra palabra, o escribinos y te decimos si lo tenemos en el local.</p>
+      <div class="pv-fila" style="justify-content:center;margin-top:var(--e-2)">
+        <button class="boton boton--secundario">Ver todo el catálogo</button>
+        <button class="boton boton--primario">Consultar por WhatsApp</button>
+      </div>
+    </div>
+  </div>
+  <p class="pv-nota">
+    El vacío no es un callejón sin salida: siempre ofrece la salida siguiente. Una
+    búsqueda fallida es el mejor momento para pasar a WhatsApp, porque el cliente ya
+    dijo exactamente qué quiere.
+  </p>
+</section>

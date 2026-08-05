@@ -1,0 +1,142 @@
+<!-- @dsCard group="Compra" name="Checkout y envío" subtitle="Datos, retiro o delivery, dirección con autocompletado y cotización por distancia" -->
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">Cómo lo recibís</h2>
+
+  <div class="pv-marco" style="max-width:560px;padding:var(--e-5)">
+    <div class="pv-columna">
+
+      <div class="campo">
+        <label class="campo__label" data-obligatorio for="pv-nombre">Tu nombre</label>
+        <input class="campo__control" id="pv-nombre" type="text" value="Carolina Ruiz" autocomplete="name">
+      </div>
+
+      <div class="campo">
+        <label class="campo__label" data-obligatorio for="pv-tel">Teléfono</label>
+        <input class="campo__control" id="pv-tel" type="tel" value="351 704 6684" autocomplete="tel" inputmode="tel">
+        <span class="campo__ayuda">Te escribimos por acá cuando el pedido esté listo.</span>
+      </div>
+
+      <div style="display:flex;flex-direction:column;gap:var(--e-3);margin-top:var(--e-2)">
+        <span class="campo__label">Cómo lo recibís</span>
+
+        <button class="opcion" role="radio" aria-checked="false">
+          <span class="opcion__marca"></span>
+          <span class="opcion__texto">
+            <span class="opcion__titulo">Lo paso a buscar</span>
+            <span class="opcion__detalle">Av. Alfonsina Storni 168 · Lun a sáb de 9 a 13 y de 16:30 a 20:30</span>
+          </span>
+          <span class="opcion__precio" style="color:var(--exito)">Gratis</span>
+        </button>
+
+        <button class="opcion" role="radio" aria-checked="true">
+          <span class="opcion__marca"></span>
+          <span class="opcion__texto">
+            <span class="opcion__titulo">Me lo llevan</span>
+            <span class="opcion__detalle">Repartimos en Córdoba capital, hasta 12&nbsp;km del local</span>
+          </span>
+          <span class="opcion__precio">Según distancia</span>
+        </button>
+      </div>
+
+      <div class="campo">
+        <label class="campo__label" data-obligatorio for="pv-dir">Dirección de entrega</label>
+        <input class="campo__control" id="pv-dir" type="text" value="Av. Rafael Núñez 4520, Córdoba" autocomplete="street-address">
+        <span class="campo__ayuda">Empezá a escribir y elegí tu dirección de la lista.</span>
+      </div>
+
+      <div class="pv-fila" style="gap:var(--e-3);flex-wrap:nowrap">
+        <div class="campo" style="flex:1">
+          <label class="campo__label" for="pv-piso">Piso / depto</label>
+          <input class="campo__control" id="pv-piso" type="text" placeholder="Opcional">
+        </div>
+        <div class="campo" style="flex:1.4">
+          <label class="campo__label" for="pv-ref">Referencia</label>
+          <input class="campo__control" id="pv-ref" type="text" placeholder="Portón verde, timbre 2">
+        </div>
+      </div>
+
+      <!-- Cotización resuelta -->
+      <div data-rubro="LIBRERÍA" style="display:flex;align-items:center;gap:var(--e-3);padding:var(--e-4);border-radius:var(--r-md);background:var(--exito-bg);border:1px solid color-mix(in srgb, var(--exito) 30%, transparent)">
+        <span style="flex:none;display:grid;place-items:center;width:40px;height:40px;border-radius:50%;background:var(--exito);color:#fff">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+        </span>
+        <span style="flex:1;min-width:0">
+          <span style="display:block;font-weight:700;font-size:var(--t-sm);color:var(--exito)">Entramos en zona</span>
+          <span style="display:block;font-size:var(--t-xs);color:var(--text-2)">4,1&nbsp;km desde el local · llega en 24 a 48&nbsp;hs</span>
+        </span>
+        <span class="cifra" style="font-family:var(--font-titulo);font-weight:700;font-size:var(--t-md)">$2.500</span>
+      </div>
+
+      <div class="campo">
+        <label class="campo__label" for="pv-nota">Nota para el pedido</label>
+        <textarea class="campo__control" id="pv-nota" placeholder="Ej: el cuaderno que sea de hojas cuadriculadas si tenés"></textarea>
+      </div>
+
+      <div class="totales" style="margin-top:var(--e-2)">
+        <div class="totales__fila"><span>Productos (4)</span><strong class="cifra">$25.050</strong></div>
+        <div class="totales__fila"><span>Envío</span><strong class="cifra">$2.500</strong></div>
+        <div class="totales__fila totales__fila--total"><span>Total</span><strong class="cifra">$27.550</strong></div>
+      </div>
+
+      <button class="boton boton--primario boton--grande boton--bloque">Confirmar pedido</button>
+      <p style="font-size:var(--t-xs);color:var(--text-2);text-align:center;line-height:1.5">
+        Pagás al recibir el pedido. Efectivo o transferencia.
+      </p>
+
+    </div>
+  </div>
+</section>
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">Estados del cálculo de envío</h2>
+  <div class="pv-columna" style="max-width:560px">
+
+    <div style="display:flex;align-items:center;gap:var(--e-3);padding:var(--e-4);border-radius:var(--r-md);background:var(--surface-2);border:1px solid var(--border)">
+      <span style="flex:none;width:40px;height:40px;border-radius:50%;display:grid;place-items:center;background:var(--surface);border:1px solid var(--border)">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="var(--text-3)" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 0 1 16 0"/><circle cx="12" cy="10" r="3"/></svg>
+      </span>
+      <span style="flex:1">
+        <span style="display:block;font-weight:600;font-size:var(--t-sm)">Escribí tu dirección</span>
+        <span style="display:block;font-size:var(--t-xs);color:var(--text-2)">Calculamos el envío según la distancia al local</span>
+      </span>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:var(--e-3);padding:var(--e-4);border-radius:var(--r-md);background:var(--surface-2);border:1px solid var(--border)">
+      <span style="flex:none;width:40px;height:40px;border-radius:50%;display:grid;place-items:center;background:var(--surface);border:1px solid var(--border)">
+        <span style="width:18px;height:18px;border:2.5px solid var(--primary);border-top-color:transparent;border-radius:50%;animation:girar .6s linear infinite;display:block"></span>
+      </span>
+      <span style="flex:1">
+        <span style="display:block;font-weight:600;font-size:var(--t-sm)">Calculando el envío…</span>
+        <span style="display:block;font-size:var(--t-xs);color:var(--text-2)">Av. Rafael Núñez 4520</span>
+      </span>
+      <span class="esqueleto" style="width:64px;height:20px;border-radius:var(--r-sm)"></span>
+    </div>
+
+    <div style="display:flex;align-items:flex-start;gap:var(--e-3);padding:var(--e-4);border-radius:var(--r-md);background:var(--alerta-bg);border:1px solid color-mix(in srgb, var(--alerta) 30%, transparent)">
+      <span style="flex:none;display:grid;place-items:center;width:40px;height:40px;border-radius:50%;background:var(--alerta);color:#fff">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" aria-hidden="true"><path d="M12 8v5M12 16.5v.5"/><circle cx="12" cy="12" r="9"/></svg>
+      </span>
+      <span style="flex:1">
+        <span style="display:block;font-weight:700;font-size:var(--t-sm);color:var(--alerta)">Nos queda lejos para repartir</span>
+        <span style="display:block;font-size:var(--t-xs);color:var(--text-2);line-height:1.5;margin-bottom:var(--e-3)">
+          Estás a 18,6&nbsp;km y llegamos hasta 12&nbsp;km. Podés pasar a buscarlo por el local
+          cuando quieras — te lo dejamos preparado.
+        </span>
+        <button class="boton boton--secundario boton--chico">Cambiar a retiro en el local</button>
+      </span>
+    </div>
+
+  </div>
+
+  <p class="pv-nota">
+    <strong>Fuera de zona no es un rechazo.</strong> El pedido ya está armado: cortarlo
+    ahí es perder la venta. Se ofrece el retiro con un botón que deja todo cargado.<br><br>
+    <strong>El precio del envío se calcula en el servidor</strong>, no en el navegador.
+    La clave de Google queda fuera del alcance del cliente y el monto no se puede
+    editar desde la consola.<br><br>
+    <strong>La dirección se elige de la lista, no se tipea libre.</strong> Así llega con
+    coordenadas y no con un texto que el repartidor tiene que interpretar. El campo de
+    referencia existe porque en Córdoba media entrega depende de «el portón verde».
+  </p>
+</section>

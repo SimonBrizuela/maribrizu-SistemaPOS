@@ -65,6 +65,10 @@ certs_backup_*/
 webapp/node_modules/
 webapp/netlify/functions/node_modules/
 
+# Node modules (tienda online)
+tienda/node_modules/
+tienda/netlify/functions/node_modules/
+
 # Imágenes sueltas (capturas de pantalla, no son parte del sistema)
 2026-*.png
 Tabla Cobre.png

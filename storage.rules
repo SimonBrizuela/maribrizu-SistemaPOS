@@ -1,0 +1,29 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Instaladores y manifiesto de updates de la webapp.
+    // Lectura publica (descarga directa), escritura solo via Admin SDK.
+    match /downloads/{file=**} {
+      allow read: if true;
+      allow write: if false;
+    }
+
+    // Fotos de producto de la tienda online.
+    // Lectura publica: las sirve el navegador de cualquier cliente.
+    // Escritura solo con sesion del panel, acotada a imagenes de hasta 2 MB
+    // (el uploader ya comprime a WebP ~100 KB; el tope corta subidas crudas
+    // desde la consola).
+    match /tienda/{allPaths=**} {
+      allow read: if true;
+      allow write: if request.auth != null
+                   && (request.auth.token.admin == true || request.auth.token.staff == true)
+                   && request.resource.size < 2 * 1024 * 1024
+                   && request.resource.contentType.matches('image/.*');
+    }
+
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}
