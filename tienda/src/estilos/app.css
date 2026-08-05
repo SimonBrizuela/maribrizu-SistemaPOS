@@ -486,41 +486,41 @@
    la página para pegarse. */
 [data-cabecera] { display: contents; }
 
-/* Al bajar se va, al subir vuelve.
-   Un encabezado fijo permanente se come 64 px de pantalla todo el tiempo, que en
-   un celular es mucho. Al revés, uno que solo aparece arriba de todo obliga a
-   scrollear hasta el techo para buscar algo. El punto medio es el que usan las
-   apps: baja con vos, y apenas hacés el gesto de subir aparece. */
+/* El encabezado se queda mientras se navega.
+   La version anterior lo escondia al bajar y lo traia al subir. Sobre el papel
+   ahorra 64 px, en la mano se siente como que la barra se te escapa: bajas,
+   desaparece, y para buscar algo hay que hacer un gesto hacia arriba primero.
+
+   Se queda siempre. Lo que cambia es que al despegarse del tope se compacta y
+   levanta una sombra, para que se lea como una capa por encima del contenido y
+   no como parte de la pagina. */
 .cabecera {
-  transition: transform var(--m-normal) var(--curva);
-  will-change: transform;
+  transition:
+    box-shadow var(--m-normal) var(--curva),
+    background var(--m-normal) var(--curva);
 }
-.cabecera--oculta {
-  /* El 101% cubre el borde inferior, que si no queda asomando una línea. */
-  transform: translateY(-101%);
-}
+.cabecera--compacta { box-shadow: 0 6px 20px rgba(14, 13, 16, .35); }
 
-/* La barra de filtros del catálogo va pegada abajo del encabezado, así que
-   cuando el encabezado se va, sube a ocupar su lugar. */
-.barra-catalogo { transition: top var(--m-normal) var(--curva); }
-body.sin-cabecera .barra-catalogo { top: 0; }
-
-/* Con movimiento reducido el encabezado no se esconde nunca: aparecer y
-   desaparecer sin transición es justo el tipo de salto que molesta. */
-@media (prefers-reduced-motion: reduce) {
-  .cabecera--oculta { transform: none; }
+/* En el celular la fila se achica un poco al bajar: 64 px fijos sobre una
+   pantalla de 667 es bastante, y 52 alcanzan para el buscador y el carrito. */
+@media (max-width: 767px) {
+  .cabecera__fila { transition: height var(--m-normal) var(--curva); }
+  .cabecera--compacta .cabecera__fila { height: 52px; }
+  /* El nombre se guarda y quedan las cinco fichas, que ya identifican la
+     tienda y liberan el ancho para el buscador. */
+  .cabecera--compacta .cabecera__logo span:not(.marca-fichas) { display: none; }
 }
 
 
 /* ── Nada se sale de la pantalla a lo ancho ──────────────────────────────────
-   Las tiras y los filtros usan margen negativo para llegar de borde a borde. Si
-   alguno se pasa aunque sea un pixel, aparece la barra horizontal del navegador
-   y la pagina entera se puede arrastrar de costado, que es la sensacion mas
-   clara de que algo esta roto.
+   Las tiras y los filtros usan margen negativo para llegar de borde a borde. El
+   margen negativo es exactamente el relleno de .contenedor, asi que llegan al
+   borde y no lo pasan: la cuenta cierra sola y no hace falta ninguna guarda.
 
-   Va `clip` y no `hidden`: `hidden` crea un contexto de desplazamiento y romperia
-   el encabezado pegajoso. */
-html, body { overflow-x: clip; max-width: 100%; }
+   Antes habia un overflow-x en html y body por las dudas. Se saco: cualquier
+   overflow en un ancestro cambia cual es el marco de referencia de
+   position: sticky, y era justo lo que impedia que el encabezado se quedara
+   pegado al bajar. */
 
 /* ── Ajustes de pantalla chica ───────────────────────────────────────────── */
 @media (max-width: 480px) {
@@ -554,4 +554,20 @@ html, body { overflow-x: clip; max-width: 100%; }
   .grilla .card-producto--sin-foto .card-producto__precio { font-size: var(--t-md); }
   .grilla .card-producto__cuerpo { padding: var(--e-3); }
   .grilla .card-producto__detalle { font-size: 11px; }
+}
+
+
+/* ── Encabezado en escritorio ────────────────────────────────────────────────
+   El buscador tenia flex: 1 y se estiraba a todo lo que quedaba entre el logo y
+   el carrito: en una pantalla de 1920 son casi 900 px de campo vacio, que
+   desbalancea la barra y hace que el logo y el carrito parezcan tirados a los
+   extremos.
+
+   Con un ancho maximo y centrado en el espacio sobrante, los tres elementos
+   quedan repartidos y el campo tiene el tamano de lo que se escribe en el. */
+@media (min-width: 768px) {
+  .cabecera__fila .buscador {
+    max-width: 520px;
+    margin-inline: auto;
+  }
 }

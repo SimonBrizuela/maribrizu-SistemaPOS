@@ -46,6 +46,8 @@ function enConstruccion(nombre) {
 let cabeceraNodo = null;
 let navNodo = null;
 
+let reponerCompacta = () => {};
+
 function pintarEstructura() {
   app.className = 'app';
   app.innerHTML = `
@@ -71,6 +73,7 @@ function refrescarChrome() {
   if (navNodo) {
     navNodo.innerHTML = navInferior(location.pathname, unidades);
   }
+  reponerCompacta();
 }
 
 function montar(html) {
@@ -120,10 +123,6 @@ async function dibujar() {
 
 alNavegar(async () => {
   await dibujar();
-  // La pantalla nueva arranca con el encabezado a la vista: si quedaba
-  // escondido de la anterior, el buscador aparecia recien al hacer scroll.
-  document.querySelector('.cabecera')?.classList.remove('cabecera--oculta');
-  document.body.classList.remove('sin-cabecera');
   // Cada pantalla nueva arranca arriba, y el foco va al contenido para que un
   // lector de pantalla no siga leyendo desde el encabezado anterior.
   window.scrollTo({ top: 0, behavior: 'instant' });
@@ -199,45 +198,44 @@ document.addEventListener('submit', ev => {
 // que cada pantalla tenga que acordarse de actualizarlos.
 carrito.suscribir(() => { if (!estaAbierto()) refrescarChrome(); });
 
-/* ── El encabezado acompaña el scroll ──────────────────────────────────────────
-   Al bajar se va, al subir vuelve. Así el buscador está a un gesto de distancia
-   en cualquier punto de la página, sin comerse 64 px de pantalla todo el rato.
+/* ── El encabezado se queda ────────────────────────────────────────────────────
+   No se esconde al bajar. La version anterior lo hacia y en la mano se sentia
+   como que la barra se escapa: bajabas, desaparecia, y para buscar algo habia
+   que hacer un gesto hacia arriba primero.
 
-   El umbral de 6 px evita el temblequeo: sin él, el rebote del scroll en iOS y
-   los micromovimientos del trackpad hacen que el encabezado parpadee. */
+   Lo unico que cambia con el scroll es que se compacta y levanta sombra apenas
+   se despega del tope, para que se lea como una capa por encima del contenido
+   en vez de como parte de la pagina. */
 function seguirScroll() {
-  const UMBRAL = 6;
-  const DESDE = 120;   // arriba de todo nunca se esconde
-  let anterior = window.scrollY;
+  let compacta = false;
   let pendiente = false;
 
   function evaluar() {
     pendiente = false;
-    const actual = window.scrollY;
-    const cabeceraNodo = document.querySelector('.cabecera');
-    if (!cabeceraNodo) { anterior = actual; return; }
+    // Histeresis: se compacta a los 24 px y se vuelve a expandir recien abajo de
+    // 8. Con un solo umbral, quedar justo en el limite hace que la barra cambie
+    // de alto en cada micromovimiento del scroll.
+    const y = window.scrollY;
+    const deberia = compacta ? y > 8 : y > 24;
+    if (deberia === compacta) return;
 
-    const diferencia = actual - anterior;
-    if (Math.abs(diferencia) < UMBRAL) return;
-
-    // Mientras el buscador está abierto en el celular el encabezado se queda:
-    // esconderlo con el teclado desplegado le saca el campo de abajo del dedo.
-    const buscando = cabeceraNodo.hasAttribute('data-buscando');
-    const esconder = diferencia > 0 && actual > DESDE && !buscando && !estaAbierto();
-
-    cabeceraNodo.classList.toggle('cabecera--oculta', esconder);
-    document.body.classList.toggle('sin-cabecera', esconder);
-    anterior = actual;
+    compacta = deberia;
+    document.querySelector('.cabecera')?.classList.toggle('cabecera--compacta', compacta);
   }
 
-  // El listener es pasivo y el trabajo se hace en el siguiente cuadro: leer
-  // scrollY dentro del evento fuerza al navegador a recalcular el layout en
-  // medio del scroll, que es exactamente lo que lo hace ir a los tirones.
+  // Listener pasivo y el trabajo en el cuadro siguiente: leer scrollY dentro del
+  // evento fuerza al navegador a recalcular el layout en medio del scroll, que
+  // es lo que lo hace ir a los tirones.
   window.addEventListener('scroll', () => {
     if (pendiente) return;
     pendiente = true;
     requestAnimationFrame(evaluar);
   }, { passive: true });
+
+  // El estado se vuelve a aplicar despues de cada repintado del encabezado, que
+  // reemplaza el elemento y se lleva la clase puesta.
+  return () => document.querySelector('.cabecera')
+    ?.classList.toggle('cabecera--compacta', compacta);
 }
 
 /* ── Arranque ─────────────────────────────────────────────────────────────── */
@@ -245,7 +243,7 @@ function seguirScroll() {
 async function arrancar() {
   pintarEstructura();
   iniciarRutas();
-  seguirScroll();
+  reponerCompacta = seguirScroll();
   await dibujar();
 
   // Aviso de tienda cerrada: se consulta después del primer pintado para no

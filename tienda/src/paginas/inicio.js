@@ -15,12 +15,16 @@ import { esc } from '../formato.js';
  * Las posiciones estan escritas a mano, no generadas al azar: al azar salen
  * choques y huecos, y hay que mirarlo igual para corregirlo.
  */
+// Las coordenadas van en porcentaje del alto y ancho del mosaico. Estan
+// calculadas para que el conjunto ocupe de 0 a 98 en los dos ejes: la version
+// anterior llegaba al 84% a lo ancho y dejaba una franja muerta a la derecha,
+// que hacia ver todo el bloque corrido hacia la izquierda.
 const MOSAICO = [
-  { texto: 'Cuadernos', color: 'violeta', x: 2,  y: 4,  ancho: 42, alto: 46, giro: -4, tam: 1.6 },
-  { texto: 'Hilos',     color: 'verde',   x: 47, y: 0,  ancho: 30, alto: 30, giro: 3,  tam: 1.2 },
-  { texto: 'Mochilas',  color: 'naranja', x: 48, y: 33, ancho: 34, alto: 34, giro: -3, tam: 1.3 },
-  { texto: 'Témperas',  color: 'cyan',    x: 6,  y: 53, ancho: 36, alto: 34, giro: 4,  tam: 1.3 },
-  { texto: 'Regalos',   color: 'rojo',    x: 46, y: 70, ancho: 38, alto: 26, giro: -2, tam: 1.2 },
+  { texto: 'Cuadernos', color: 'violeta', x: 0,  y: 6,  ancho: 46, alto: 44, giro: -4, tam: 1.6 },
+  { texto: 'Hilos',     color: 'verde',   x: 52, y: 0,  ancho: 36, alto: 30, giro: 3,  tam: 1.25 },
+  { texto: 'Mochilas',  color: 'naranja', x: 56, y: 34, ancho: 42, alto: 34, giro: -3, tam: 1.35 },
+  { texto: 'Témperas',  color: 'cyan',    x: 4,  y: 56, ancho: 42, alto: 36, giro: 4,  tam: 1.35 },
+  { texto: 'Regalos',   color: 'rojo',    x: 50, y: 72, ancho: 44, alto: 26, giro: -2, tam: 1.25 },
 ];
 
 function mosaico() {
