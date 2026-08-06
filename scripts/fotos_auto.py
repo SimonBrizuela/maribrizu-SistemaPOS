@@ -65,6 +65,45 @@ ESTADO = {
 }
 CANDADO = threading.Lock()
 
+# Sitios que estampan su logo sobre la foto.
+#
+# No hay forma confiable de detectar una marca de agua mirando la imagen, asi
+# que la decide una persona: en la pagina, "Nunca de este sitio" agrega el
+# dominio aca y cambia de una todas las fotos que hayan salido de el. La lista
+# queda en disco y se aplica desde la primera busqueda de la corrida siguiente.
+BLOQUEADOS = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                          'sitios_bloqueados.txt')
+_bloqueados = set()
+
+
+def cargar_bloqueados():
+    if not os.path.exists(BLOQUEADOS):
+        return
+    with open(BLOQUEADOS, encoding='utf-8') as f:
+        for linea in f:
+            linea = linea.strip().lower()
+            if linea and not linea.startswith('#'):
+                _bloqueados.add(linea)
+
+
+def bloquear_sitio(dominio):
+    dominio = (dominio or '').strip().lower()
+    if not dominio or dominio in _bloqueados:
+        return False
+    _bloqueados.add(dominio)
+    nuevo = not os.path.exists(BLOQUEADOS)
+    with open(BLOQUEADOS, 'a', encoding='utf-8') as f:
+        if nuevo:
+            f.write('# Sitios que estampan marca de agua. Uno por linea.\n'
+                    '# Los agrega el boton "Nunca de este sitio" de fotos_auto.py.\n')
+        f.write(dominio + '\n')
+    return True
+
+
+def esta_bloqueado(origen):
+    o = (origen or '').lower()
+    return any(b in o for b in _bloqueados)
+
 # Una sola subida a la vez. El trabajador y los botones de la pagina escriben
 # sobre lo mismo, y dos escrituras cruzadas sobre el mismo producto dejarian la
 # foto de una y la URL de la otra.
@@ -125,6 +164,49 @@ def puntuar(candidata, producto):
             puntaje -= 0.2
 
     return round(puntaje, 3)
+
+
+def variantes_de_consulta(producto):
+    """
+    La consulta principal y sus planes B, en orden de mas precisa a mas amplia.
+
+    Los que se quedan sin foto casi siempre fallan por lo mismo: el nombre trae
+    un codigo interno ("Agenda Em Cosida A5 Tapa Entelada MB-2627"), una
+    abreviatura que solo se usa en el local ("Sobre Paperland Color / Fsia") o
+    una medida escrita raro ("12.5X 19"). Ninguna de las tres aparece en la
+    pagina de un fabricante, y con una sola de ellas adentro la busqueda vuelve
+    vacia.
+
+    Se prueban de a una y se corta apenas alguna trae algo que sirva, asi el
+    caso normal sigue costando una sola consulta.
+    """
+    principal = bf.armar_consulta(producto)
+    palabras = principal.split()
+
+    # Sin codigos: lo que mezcla letras y numeros o tiene guion en el medio.
+    sin_codigos = [p for p in palabras
+                   if not (re.search(r'\d', p) and re.search(r'[a-zA-Z]', p))]
+
+    marca = (producto.get('marca') or '').strip()
+    sin_marca = [p for p in palabras if normalizar(p) not in normalizar(marca).split()]
+
+    variantes = [
+        principal,
+        ' '.join(sin_codigos),
+        ' '.join(sin_codigos[:4]),
+        ' '.join(sin_marca[:4]),
+    ]
+
+    # Se sacan las repetidas y las que quedaron demasiado cortas para
+    # significar algo.
+    vistas, salida = set(), []
+    for v in variantes:
+        v = ' '.join(v.split())
+        if len(v) < 6 or v.lower() in vistas:
+            continue
+        vistas.add(v.lower())
+        salida.append(v)
+    return salida
 
 
 def bajar(url):
@@ -188,17 +270,97 @@ def quitar(db, producto, simular=False):
 
 # ── Trabajador ──────────────────────────────────────────────────────────────
 
+def rastrear(producto, clave, minimo):
+    """
+    Busca con la consulta principal y, si no trae nada que sirva, con sus
+    planes B. Devuelve (consulta que se uso, candidatas puntuadas).
+    """
+    mejores, consulta_usada = [], ''
+
+    for consulta in variantes_de_consulta(producto):
+        crudas = bf.buscar(consulta, clave, cantidad=8)
+        candidatas = [c for c in crudas if not esta_bloqueado(c['origen'])]
+        for c in candidatas:
+            c['puntaje'] = puntuar(c, producto)
+        candidatas.sort(key=lambda c: -c['puntaje'])
+
+        if not consulta_usada:
+            consulta_usada, mejores = consulta, candidatas
+
+        if candidatas and candidatas[0]['puntaje'] >= minimo:
+            return consulta, candidatas
+
+        # La variante trajo algo mejor que la anterior, aunque no alcance el
+        # piso: se guarda como la mejor apuesta hasta ahora.
+        if candidatas and (not mejores or candidatas[0]['puntaje'] > mejores[0]['puntaje']):
+            consulta_usada, mejores = consulta, candidatas
+
+    return consulta_usada, mejores
+
+
+def avanzar(item, db, bucket, clave, simular, piso=None):
+    """
+    Sube la siguiente candidata que sirva y deja el item apuntando a ella.
+
+    Salta las de sitios bloqueados y las que no se pueden bajar, que son
+    bastantes: certificados vencidos, hotlink cerrado, enlaces muertos.
+
+    `piso` corta cuando la candidata no llega a ese puntaje. Como estan
+    ordenadas de mejor a peor, la primera que no llega garantiza que las
+    siguientes tampoco. Ese caso no consume la candidata, asi un segundo
+    intento con el piso mas bajo la vuelve a considerar.
+
+    Devuelve (subio algo, motivos de lo que fallo).
+    """
+    if not item.get('buscada'):
+        consulta, candidatas = rastrear(item, clave, piso if piso is not None else 0.55)
+        with CANDADO:
+            item.update({'consulta': consulta, 'candidatas': candidatas,
+                         'buscada': True, 'indice': -1})
+
+    fallos = []
+    while True:
+        with CANDADO:
+            siguiente = item['indice'] + 1
+            candidata = (item['candidatas'][siguiente]
+                         if siguiente < len(item['candidatas']) else None)
+
+        if not candidata:
+            return False, fallos
+        if piso is not None and candidata['puntaje'] < piso:
+            return False, fallos
+
+        with CANDADO:
+            item['indice'] = siguiente
+
+        if esta_bloqueado(candidata['origen']):
+            continue
+
+        try:
+            with CANDADO_SUBIDA:
+                url, peso, tam = publicar(db, bucket, item, candidata, simular)
+        except Exception as e:
+            fallos.append(f'{candidata["origen"]}: {str(e)[:70]}')
+            continue
+
+        with CANDADO:
+            if item['estado'] != 'ok':
+                ESTADO['con_foto'] += 1
+                ESTADO['sin_foto'] -= 1
+            item.update({
+                'url': url, 'origen': candidata['origen'], 'titulo': candidata['titulo'],
+                'puntaje': candidata['puntaje'], 'peso': peso,
+                'medidas': f'{tam[0]}x{tam[1]}', 'estado': 'ok',
+            })
+        return True, fallos
+
+
 def trabajar(productos, clave, db, bucket, minimo, simular):
     for p in productos:
         with CANDADO:
             ESTADO['actual'] = p['nombre']
 
-        consulta = bf.armar_consulta(p)
-        candidatas = bf.buscar(consulta, clave, cantidad=8)
-
-        for c in candidatas:
-            c['puntaje'] = puntuar(c, p)
-        candidatas.sort(key=lambda c: -c['puntaje'])
+        consulta, candidatas = rastrear(p, clave, minimo)
 
         item = {
             'doc_id': p['doc_id'],
@@ -215,34 +377,32 @@ def trabajar(productos, clave, db, bucket, minimo, simular):
             'titulo': '',
             'puntaje': 0,
             'peso': 0,
+            'dudosa': False,
             'estado': 'sin_candidata',
         }
 
-        elegida = candidatas[0] if candidatas and candidatas[0]['puntaje'] >= minimo else None
-
-        if elegida:
-            try:
-                with CANDADO_SUBIDA:
-                    url, peso, tam = publicar(db, bucket, p, elegida, simular)
-                item.update({
-                    'indice': 0, 'url': url, 'origen': elegida['origen'],
-                    'titulo': elegida['titulo'], 'puntaje': elegida['puntaje'],
-                    'peso': peso, 'medidas': f'{tam[0]}x{tam[1]}', 'estado': 'ok',
-                })
-            except Exception as e:
-                item['estado'] = 'error'
-                item['error'] = str(e)[:120]
-
+        # Entra a la lista antes de subir para que avanzar() mueva los
+        # contadores una sola vez y desde un estado conocido.
         with CANDADO:
             ESTADO['items'].append(item)
             ESTADO['procesados'] += 1
-            if item['estado'] == 'ok':
-                ESTADO['con_foto'] += 1
-            else:
-                ESTADO['sin_foto'] += 1
+            ESTADO['sin_foto'] += 1
 
-        estado_txt = 'OK ' if item['estado'] == 'ok' else '-- '
-        print(f'[{ESTADO["procesados"]}/{ESTADO["total"]}] {estado_txt}'
+        subio, _ = avanzar(item, db, bucket, clave, simular, piso=minimo)
+
+        # Segunda pasada con el piso mas bajo. Sube igual pero queda marcada:
+        # para un producto que si no se queda sin nada, una foto floja
+        # senalada es mejor que un hueco, y la decision final es de quien
+        # revisa.
+        if not subio and candidatas:
+            subio, _ = avanzar(item, db, bucket, clave, simular, piso=minimo * 0.55)
+            if subio:
+                with CANDADO:
+                    item['dudosa'] = True
+
+        marca = 'OK ' if item['estado'] == 'ok' and not item['dudosa'] else \
+                ('~~ ' if item['dudosa'] else '-- ')
+        print(f'[{ESTADO["procesados"]}/{ESTADO["total"]}] {marca}'
               f'{p["nombre"][:44]:<46} {item["puntaje"]:.2f}  {item["origen"][:28]}')
 
         time.sleep(0.3)
@@ -339,58 +499,50 @@ class Manejador(BaseHTTPRequestHandler):
             return
 
         if self.path.startswith('/otra'):
-            # Las que ya tenian foto de una corrida anterior entran a la pagina
-            # sin candidatas: se buscan recien cuando alguien pide otra, para no
-            # gastar una consulta por producto que quiza nadie mire.
+            subio, fallos = avanzar(item, self.db, self.bucket, self.clave, self.simular)
+            if not subio:
+                self._responder(json.dumps({
+                    'ok': False,
+                    'motivo': fallos[-1] if fallos else 'No quedan candidatas.',
+                }))
+                return
             with CANDADO:
-                falta_buscar = not item.get('buscada')
-            if falta_buscar:
-                consulta = item.get('consulta') or bf.armar_consulta(item)
-                candidatas = bf.buscar(consulta, self.clave, cantidad=8)
-                for c in candidatas:
-                    c['puntaje'] = puntuar(c, item)
-                candidatas.sort(key=lambda c: -c['puntaje'])
-                with CANDADO:
-                    item.update({'consulta': consulta, 'candidatas': candidatas,
-                                 'buscada': True, 'indice': -1})
-
-            # Se avanza hasta la primera que se pueda bajar y subir. Muchas
-            # fallan por certificado vencido, hotlink bloqueado o un enlace que
-            # ya no existe, y quedarse en la primera que falla dejaba el boton
-            # apretando siempre sobre la misma.
-            fallos = []
-            while True:
-                with CANDADO:
-                    siguiente = item['indice'] + 1
-                    candidata = (item['candidatas'][siguiente]
-                                 if siguiente < len(item['candidatas']) else None)
-                if not candidata:
-                    self._responder(json.dumps({
-                        'ok': False,
-                        'motivo': fallos[-1] if fallos else 'No quedan candidatas.',
-                    }))
-                    return
-
-                try:
-                    with CANDADO_SUBIDA:
-                        url, peso, tam = publicar(self.db, self.bucket, item,
-                                                  candidata, self.simular)
-                    break
-                except Exception as e:
-                    fallos.append(f'{candidata["origen"]}: {str(e)[:70]}')
-                    with CANDADO:
-                        item['indice'] = siguiente
-
-            with CANDADO:
-                if item['estado'] != 'ok':
-                    ESTADO['con_foto'] += 1
-                    ESTADO['sin_foto'] -= 1
-                item.update({
-                    'indice': siguiente, 'url': url, 'origen': candidata['origen'],
-                    'titulo': candidata['titulo'], 'puntaje': candidata['puntaje'],
-                    'peso': peso, 'medidas': f'{tam[0]}x{tam[1]}', 'estado': 'ok',
-                })
+                item['dudosa'] = False
             self._responder(json.dumps({'ok': True, 'saltadas': len(fallos)}))
+            return
+
+        if self.path.startswith('/bloquear'):
+            dominio = (item.get('origen') or '').strip()
+            if not dominio:
+                self._responder(json.dumps({'ok': False, 'motivo': 'Esta foto no tiene sitio.'}))
+                return
+
+            bloquear_sitio(dominio)
+
+            # Se cambian todas las que hayan salido de ese sitio, no solo la que
+            # se estaba mirando: si estampa el logo, lo estampa en todas.
+            with CANDADO:
+                afectados = [i for i in ESTADO['items']
+                             if i['estado'] == 'ok' and i.get('origen') == dominio]
+
+            cambiados = 0
+            for otro in afectados:
+                subio, _ = avanzar(otro, self.db, self.bucket, self.clave, self.simular)
+                if subio:
+                    cambiados += 1
+                else:
+                    with CANDADO:
+                        quitar(self.db, otro, self.simular)
+                        if otro['estado'] == 'ok':
+                            ESTADO['con_foto'] -= 1
+                            ESTADO['sin_foto'] += 1
+                        otro.update({'url': None, 'estado': 'quitada', 'puntaje': 0})
+
+            print(f'  bloqueado {dominio}: {cambiados} de {len(afectados)} cambiadas')
+            self._responder(json.dumps({
+                'ok': True, 'dominio': dominio,
+                'afectados': len(afectados), 'cambiados': cambiados,
+            }))
             return
 
         self._responder(json.dumps({'ok': False}))
@@ -446,7 +598,14 @@ PAGINA = r"""<!doctype html>
   button:hover:not(:disabled) { border-color:var(--primario); color:var(--primario); }
   button:disabled { opacity:.4; cursor:default; }
   .aviso:not(:empty) { font-size:11.5px; color:var(--alerta); line-height:1.35; margin-top:2px; }
+  .bloquear { font-size:11.5px; color:var(--texto2); }
+  .bloquear:hover:not(:disabled) { border-color:#c0392b; color:#c0392b; }
   .card[data-estado="quitada"] .foto, .card[data-estado="sin_candidata"] .foto { background:var(--fondo); }
+  /* Las de la segunda pasada: ninguna candidata llegaba al piso, se subio la
+     mejor de todas formas. Van senaladas para mirarlas primero. */
+  .card[data-dudosa="1"] { border-color:var(--alerta); }
+  .dudosa-marca { position:absolute; top:8px; right:8px; background:var(--alerta); color:#fff;
+                  font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:99px; }
   .vacio { color:var(--texto2); padding:40px 0; text-align:center; }
 </style>
 </head>
@@ -475,11 +634,13 @@ function card(it) {
   const el = document.createElement('div');
   el.className = 'card';
   el.dataset.estado = it.estado;
+  el.dataset.dudosa = it.dudosa ? '1' : '0';
   el.innerHTML = `
     <div class="foto">
       ${it.url
         ? `<img src="${it.url}" alt="" loading="lazy">
-           <span class="puntaje">${it.puntaje.toFixed(2)}</span>`
+           <span class="puntaje">${it.puntaje.toFixed(2)}</span>
+           ${it.dudosa ? '<span class="dudosa-marca">revisar</span>' : ''}`
         : `<span class="nada">${it.estado === 'quitada' ? 'Quitada'
              : it.estado === 'error' ? ('Error: ' + (it.error || ''))
              : 'Sin candidata que sirva'}</span>`}
@@ -493,6 +654,11 @@ function card(it) {
     <div class="acciones">
       <button data-act="otra">Otra${it.quedan ? ` (${it.quedan})` : ''}</button>
       <button data-act="quitar">Quitar</button>
+    </div>
+    <div class="acciones" style="padding-top:0">
+      <button data-act="bloquear" class="bloquear" title="Cambia todas las fotos que salieron de este sitio">
+        Nunca de este sitio
+      </button>
     </div>`;
 
   // textContent y no innerHTML: los nombres y los títulos vienen de páginas
@@ -501,10 +667,9 @@ function card(it) {
   el.querySelector('.origen').textContent = it.origen || '';
   el.querySelector('.consulta').textContent = it.consulta;
 
-  const otra = el.querySelector('[data-act="otra"]');
-  const quitar = el.querySelector('[data-act="quitar"]');
-  otra.disabled = !it.quedan;
-  quitar.disabled = !it.url;
+  el.querySelector('[data-act="otra"]').disabled = !it.quedan;
+  el.querySelector('[data-act="quitar"]').disabled = !it.url;
+  el.querySelector('[data-act="bloquear"]').disabled = !it.origen;
 
   el.addEventListener('click', async ev => {
     const act = ev.target.closest('[data-act]');
@@ -512,7 +677,7 @@ function card(it) {
 
     const etiqueta = act.textContent;
     act.disabled = true;
-    act.textContent = act.dataset.act === 'otra' ? 'Buscando…' : '…';
+    act.textContent = act.dataset.act === 'quitar' ? '…' : 'Buscando…';
 
     let r = {};
     try {
@@ -558,7 +723,7 @@ async function refrescar() {
   // Se repinta solo lo que cambió: con 300 tarjetas, rehacer la grilla entera
   // en cada refresco corta el scroll y hace parpadear las imágenes.
   for (const it of e.items) {
-    const firma = `${it.estado}|${it.url}|${it.quedan}`;
+    const firma = `${it.estado}|${it.url}|${it.quedan}|${it.dudosa}`;
     const previo = pintados.get(it.doc_id);
     if (previo && previo.firma === firma) continue;
 
@@ -644,6 +809,10 @@ def main():
     print(f'{len(clave)} clave{"s" if len(clave) > 1 else ""} de Serper cargada'
           f'{"s" if len(clave) > 1 else ""}.')
 
+    cargar_bloqueados()
+    if _bloqueados:
+        print(f'{len(_bloqueados)} sitios bloqueados por marca de agua.')
+
     db, bucket = imp.conectar()
 
     print('Buscando productos sin foto...')
@@ -657,7 +826,7 @@ def main():
         ESTADO['items'].append({
             **p, 'consulta': '', 'candidatas': [], 'buscada': False, 'indice': -1,
             'url': p['imagen'], 'origen': '', 'titulo': '', 'puntaje': 0,
-            'peso': 0, 'estado': 'ok',
+            'peso': 0, 'dudosa': False, 'estado': 'ok',
         })
     ESTADO['procesados'] = len(ya)
     ESTADO['con_foto'] = len(ya)
