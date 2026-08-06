@@ -61,10 +61,17 @@ def partir_nombre(archivo):
     return base, 1
 
 
-def preparar(ruta):
-    """Achica, corrige la orientacion y devuelve los bytes en WebP."""
+def preparar(origen):
+    """
+    Achica, corrige la orientacion y devuelve los bytes en WebP.
+
+    `origen` es la ruta de un archivo o directamente los bytes de la imagen.
+    Lo segundo es lo que usa fotos_auto.py, que las baja de internet y no tiene
+    por que escribirlas al disco para volver a leerlas.
+    """
     from io import BytesIO
-    with Image.open(ruta) as im:
+    fuente = BytesIO(origen) if isinstance(origen, (bytes, bytearray)) else origen
+    with Image.open(fuente) as im:
         # Las fotos de celular traen la orientacion en los metadatos EXIF. Sin
         # esto, la mitad sale acostada.
         im = ImageOps.exif_transpose(im)
