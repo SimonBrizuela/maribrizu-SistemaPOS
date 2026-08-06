@@ -51,6 +51,12 @@ const CONFIG_POR_DEFECTO = {
     envio_gratis_desde: null,
     demora_texto: '24 a 48 hs',
   },
+  // Datos para transferir. Mientras no estén cargados el checkout dice que se
+  // pasan al confirmar, en vez de mostrar un alias vacío.
+  pago: {
+    alias: null,
+    titular: null,
+  },
   banner: null,
 };
 
@@ -69,6 +75,7 @@ export async function cargarConfig() {
         ...CONFIG_POR_DEFECTO,
         ...datos,
         entrega: { ...CONFIG_POR_DEFECTO.entrega, ...(datos.entrega || {}) },
+        pago: { ...CONFIG_POR_DEFECTO.pago, ...(datos.pago || {}) },
       };
     } catch (err) {
       console.error('[datos] no se pudo leer la config:', err);

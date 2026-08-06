@@ -11,6 +11,9 @@ import { iniciarSugerencias, fijarAmbito, cerrarSugerencias } from './sugerencia
 import { inicio } from './paginas/inicio.js';
 import { catalogo } from './paginas/catalogo.js';
 import { producto } from './paginas/producto.js';
+import { checkout } from './paginas/checkout.js';
+import { pedido } from './paginas/pedido.js';
+import { seguimiento } from './paginas/seguimiento.js';
 
 const app = document.getElementById('app');
 
@@ -20,27 +23,9 @@ ruta('/', inicio);
 ruta('/catalogo', catalogo);
 ruta('/catalogo/:rubro', catalogo);
 ruta('/p/:id', producto);
-ruta('/checkout', enConstruccion('Checkout'));
-ruta('/seguimiento', enConstruccion('Seguimiento de pedidos'));
-
-/**
- * Las pantallas que todavía no existen lo dicen, en vez de mostrar una página en
- * blanco que parece un error.
- */
-function enConstruccion(nombre) {
-  return async ({ montar }) => {
-    const cfg = await cargarConfig();
-    montar(`
-      <div class="contenedor">
-        ${vacio({
-          titulo: `${nombre} todavía no está listo`,
-          texto: 'Esta parte de la tienda está en construcción. Tu pedido quedó guardado y no se pierde.',
-          acciones: '<a class="boton boton--primario" href="/catalogo">Seguir mirando</a>',
-        })}
-      </div>
-      ${pie(cfg)}`);
-  };
-}
+ruta('/checkout', checkout);
+ruta('/pedido/:id', pedido);
+ruta('/seguimiento', seguimiento);
 
 /* ── Armado de la pantalla ────────────────────────────────────────────────── */
 

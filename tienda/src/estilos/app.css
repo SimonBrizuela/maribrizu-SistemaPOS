@@ -979,3 +979,293 @@
   font-size: var(--t-sm);
   text-align: center;
 }
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Checkout
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.checkout { padding-block: var(--e-5) var(--e-8); }
+
+.checkout__volver {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e-1);
+  font-size: var(--t-sm);
+  font-weight: var(--peso-semi);
+  color: var(--text-2);
+  margin-bottom: var(--e-4);
+}
+.checkout__volver:hover { color: var(--text); text-decoration: none; }
+
+.checkout__titulo {
+  font-size: var(--t-xl);
+  font-weight: var(--peso-bold);
+  letter-spacing: -.03em;
+  margin-bottom: var(--e-5);
+}
+
+/* En pantalla ancha el resumen acompaña al formulario y queda pegado arriba: el
+   total tiene que estar a la vista mientras se completan los datos, no al final
+   de un scroll largo. En celular va abajo, después de los cuatro bloques. */
+.checkout__grilla { display: grid; gap: var(--e-5); align-items: start; }
+@media (min-width: 900px) {
+  .checkout__grilla { grid-template-columns: minmax(0, 1fr) 340px; gap: var(--e-6); }
+  /* Debajo del encabezado, que también está pegado al tope. */
+  .checkout__resumen { position: sticky; top: calc(var(--alto-nav) + var(--e-4)); }
+}
+
+.checkout__form { display: flex; flex-direction: column; gap: var(--e-5); }
+
+.checkout__bloque {
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  padding: var(--e-4);
+}
+@media (min-width: 600px) { .checkout__bloque { padding: var(--e-5); } }
+
+.checkout__bloque-titulo {
+  display: flex;
+  align-items: center;
+  gap: var(--e-3);
+  font-size: var(--t-md);
+  font-weight: var(--peso-bold);
+  letter-spacing: -.02em;
+  margin-bottom: var(--e-4);
+}
+
+/* El número no es decoración: dice cuántos pasos son y en cuál va. */
+.checkout__numero {
+  flex: none;
+  width: 28px; height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--primary-bg);
+  color: var(--primary-txt);
+  font-family: var(--font-titulo);
+  font-size: var(--t-sm);
+  font-weight: var(--peso-bold);
+}
+
+.checkout__bloque-cuerpo { display: flex; flex-direction: column; gap: var(--e-4); }
+
+.opciones { display: flex; flex-direction: column; gap: var(--e-3); }
+
+.checkout__domicilio {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-4);
+  padding-top: var(--e-4);
+  border-top: 1px solid var(--border);
+}
+.checkout__domicilio[hidden] { display: none; }
+
+.checkout__caja {
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  padding: var(--e-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-4);
+  box-shadow: var(--s-2);
+}
+
+.checkout__caja-titulo {
+  font-size: var(--t-base);
+  font-weight: var(--peso-bold);
+  letter-spacing: -.01em;
+}
+
+.resumen-items {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-3);
+  /* Un pedido de veinte renglones no puede empujar el total abajo del pliegue:
+     la lista scrollea adentro de la caja y el total queda siempre a la vista. */
+  max-height: 260px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+
+.resumen-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  gap: var(--e-3);
+  align-items: baseline;
+  font-size: var(--t-sm);
+}
+.resumen-item__cantidad {
+  font-weight: var(--peso-bold);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.resumen-item__nombre { min-width: 0; line-height: 1.35; }
+.resumen-item__nombre em {
+  display: block;
+  font-style: normal;
+  font-size: var(--t-xs);
+  color: var(--text-2);
+}
+.resumen-item__precio { font-weight: var(--peso-semi); white-space: nowrap; }
+
+.checkout__nota-envio {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--e-2);
+  font-size: var(--t-xs);
+  line-height: 1.5;
+  color: var(--text-2);
+  padding: var(--e-3);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+.checkout__nota-envio svg { flex: none; margin-top: 1px; }
+
+.checkout__legal {
+  font-size: var(--t-xs);
+  color: var(--text-2);
+  line-height: 1.5;
+  text-align: center;
+}
+
+/* Lo que cambió mientras el cliente armaba el pedido. Va arriba de todo y en
+   color de alerta: es lo único de esta pantalla que puede sorprenderlo. */
+.checkout__cambios {
+  border: 1px solid var(--alerta);
+  background: var(--alerta-bg);
+  border-radius: var(--r-md);
+  padding: var(--e-4);
+  margin-bottom: var(--e-5);
+}
+.checkout__cambios-titulo {
+  display: flex;
+  align-items: center;
+  gap: var(--e-2);
+  font-size: var(--t-sm);
+  font-weight: var(--peso-bold);
+  color: var(--alerta);
+  margin-bottom: var(--e-2);
+}
+.checkout__cambios ul {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-1);
+  margin: 0;
+  padding-left: var(--e-5);
+  font-size: var(--t-sm);
+  line-height: 1.5;
+  color: var(--text);
+}
+
+/* ═══════════════════════════════════════════════════════════════════════════
+   Pedido confirmado y seguimiento
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+.pedido {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-4);
+  padding-block: var(--e-6) var(--e-8);
+  max-width: 760px;
+}
+
+.pedido__cabecera { display: flex; align-items: flex-start; gap: var(--e-3); }
+.pedido__marca {
+  flex: none;
+  width: 44px; height: 44px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--exito-bg);
+  color: var(--exito);
+}
+.pedido__titulo {
+  font-size: var(--t-xl);
+  font-weight: var(--peso-bold);
+  letter-spacing: -.03em;
+  line-height: var(--alto-apretado);
+}
+.pedido__bajada { color: var(--text-2); line-height: var(--alto-suelto); margin-top: var(--e-1); }
+
+/* El código en grande y separado del resto: es el único dato de esta pantalla
+   que la persona va a tener que leer en voz alta. */
+.pedido__codigo {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--e-1);
+  padding: var(--e-5);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  border: 1px dashed var(--border-2);
+}
+.pedido__codigo-etiqueta {
+  font-size: var(--t-xs);
+  font-weight: var(--peso-semi);
+  letter-spacing: .12em;
+  text-transform: uppercase;
+  color: var(--text-2);
+}
+.pedido__codigo-valor {
+  font-family: var(--font-titulo);
+  font-size: 2.5rem;
+  font-weight: var(--peso-bold);
+  letter-spacing: .18em;
+  line-height: 1;
+  color: var(--primary-txt);
+}
+.pedido__codigo-ayuda { font-size: var(--t-xs); color: var(--text-2); }
+
+.pedido__grilla { display: grid; gap: var(--e-4); }
+@media (min-width: 700px) { .pedido__grilla { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+
+.pedido__caja {
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  padding: var(--e-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-4);
+}
+
+.pedido__dato { font-size: var(--t-sm); line-height: var(--alto-suelto); }
+.pedido__dato .apagado { color: var(--text-2); }
+
+.pedido__acciones { display: flex; flex-wrap: wrap; gap: var(--e-3); }
+
+.pedidos-lista { display: flex; flex-direction: column; gap: var(--e-3); }
+
+.pedido-fila {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto auto;
+  gap: var(--e-3);
+  align-items: center;
+  padding: var(--e-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  color: var(--text);
+  transition: border-color var(--m-rapido) var(--curva), box-shadow var(--m-rapido) var(--curva);
+}
+.pedido-fila:hover {
+  border-color: var(--primary);
+  box-shadow: var(--s-2);
+  text-decoration: none;
+}
+.pedido-fila__codigo {
+  font-family: var(--font-titulo);
+  font-weight: var(--peso-bold);
+  letter-spacing: .1em;
+  color: var(--primary-txt);
+}
+.pedido-fila__datos { display: flex; flex-direction: column; min-width: 0; }
+.pedido-fila__cuando { font-size: var(--t-sm); font-weight: var(--peso-semi); }
+.pedido-fila__modo { font-size: var(--t-xs); color: var(--text-2); }
+.pedido-fila__total { font-weight: var(--peso-bold); white-space: nowrap; }
+.pedido-fila__flecha { color: var(--text-3); display: grid; place-items: center; }
