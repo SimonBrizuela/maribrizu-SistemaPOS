@@ -27,6 +27,16 @@ const TRAZOS = {
   reloj:    '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>',
   whatsapp: '<path d="M20.5 3.5A11 11 0 0 0 3.2 16.9L2 22l5.2-1.2A11 11 0 1 0 20.5 3.5"/><path d="M8.5 8.2c.2-.5.4-.5.7-.5h.6c.2 0 .4 0 .6.5l.8 1.9c.1.3 0 .5-.1.7l-.5.6c-.2.2-.3.4-.1.7a7.4 7.4 0 0 0 3.4 3c.3.2.5.1.7-.1l.6-.7c.2-.2.4-.2.6-.1l1.9.9c.3.1.4.3.4.5v.7c0 .5-.4 1-1 1.2a3 3 0 0 1-1.4.1c-1.2-.2-3.3-1-5.2-2.9s-2.7-4-2.9-5.2a3 3 0 0 1 .1-1.4"/>',
   local:    '<path d="M4 9h16v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"/><path d="m4 9 1.6-5A1 1 0 0 1 6.6 3h10.8a1 1 0 0 1 1 .7L20 9"/><path d="M9 21v-6h6v6"/>',
+
+  // Uno por rubro. Se eligio el objeto mas reconocible de cada uno a tamaño
+  // chico, no el mas representativo: a 20 px una maquina de coser es una mancha,
+  // un boton de cuatro agujeros se entiende de una.
+  lapiz:    '<path d="M3 21 4 16.5 16.5 4a2.1 2.1 0 0 1 3 3L7 20z"/><path d="m14.5 6 3.5 3.5"/>',
+  hoja:     '<path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/><path d="M9 13h6M9 17h4"/>',
+  boton:    '<circle cx="12" cy="12" r="8.5"/><circle cx="9.6" cy="9.6" r="1.15"/><circle cx="14.4" cy="9.6" r="1.15"/><circle cx="9.6" cy="14.4" r="1.15"/><circle cx="14.4" cy="14.4" r="1.15"/>',
+  regalo:   '<rect x="3" y="9" width="18" height="12" rx="1.5"/><path d="M3 13.5h18M12 9v12"/><path d="M12 9C10.4 6.1 8.2 5 7.2 6.1 6 7.4 8.2 9 12 9zM12 9c1.6-2.9 3.8-4 4.8-2.9C18 7.4 15.8 9 12 9z"/>',
+  bloques:  '<rect x="8" y="3.5" width="8" height="7.5" rx="1.3"/><rect x="3" y="13" width="8" height="7.5" rx="1.3"/><rect x="13" y="13" width="8" height="7.5" rx="1.3"/>',
+  perfume:  '<rect x="7" y="9" width="10" height="12" rx="2"/><path d="M10 9V6h4v3"/><path d="M14 4.5h3.5V8"/><path d="M20.5 5v.01M20.5 8v.01"/>',
 };
 
 /**
@@ -62,6 +72,32 @@ export function fichasMarca() {
 /** Franja de cinco colores que cierra los bloques oscuros. */
 export function franjaMarca() {
   return '<div class="franja-marca"><i></i><i></i><i></i><i></i><i></i></div>';
+}
+
+/**
+ * El icono que le toca a un rubro del catalogo.
+ *
+ * Se compara sin acentos porque en el catalogo conviven "MERCERÍA" y "MERCERIA"
+ * segun quien haya cargado el producto. Un rubro que no este en la lista cae en
+ * la grilla generica en vez de quedarse sin icono: son seis hoy, pero el dia que
+ * alguien agregue uno la portada no tiene que romperse.
+ */
+const ICONO_RUBRO = {
+  libreria:   'lapiz',
+  papelera:   'hoja',
+  merceria:   'boton',
+  regaleria:  'regalo',
+  jugueteria: 'bloques',
+  perfumeria: 'perfume',
+};
+
+export function iconoDeRubro(rubro) {
+  const clave = String(rubro || '')
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .trim();
+  return ICONO_RUBRO[clave] || 'grilla';
 }
 
 /**

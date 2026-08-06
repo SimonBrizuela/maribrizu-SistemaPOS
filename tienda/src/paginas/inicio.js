@@ -1,6 +1,6 @@
 import { cargarConfig, cargarRubros, traerDestacados, traerProductos } from '../datos.js';
 import { cardProducto, grilla, grillaCargando, pie } from '../componentes.js';
-import { franjaMarca, icono, resplandores } from '../iconos.js';
+import { franjaMarca, icono, iconoDeRubro, resplandores } from '../iconos.js';
 import { esc } from '../formato.js';
 
 /**
@@ -122,8 +122,11 @@ export async function inicio({ montar }) {
   if (cajaRubros) {
     cajaRubros.innerHTML = rubros.map(r => `
       <a class="rubro-ficha" data-rubro="${esc(r.clave)}" href="/catalogo/${encodeURIComponent(r.clave)}">
-        <span class="rubro-ficha__nombre">${esc(r.nombre)}</span>
-        <span class="rubro-ficha__cuenta">${(r.con_stock ?? r.cantidad).toLocaleString('es-AR')} disponibles</span>
+        <span class="rubro-ficha__icono">${icono(iconoDeRubro(r.clave), { tam: 20 })}</span>
+        <span class="rubro-ficha__texto">
+          <span class="rubro-ficha__nombre">${esc(r.nombre)}</span>
+          <span class="rubro-ficha__cuenta">${(r.con_stock ?? r.cantidad).toLocaleString('es-AR')} disponibles</span>
+        </span>
       </a>`).join('');
 
   // Se muestra lo que se puede comprar hoy, no el total publicado. De los 4.163
