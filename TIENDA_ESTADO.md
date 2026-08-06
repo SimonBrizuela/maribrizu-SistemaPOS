@@ -1,4 +1,4 @@
-# Tienda online · estado al 5 de agosto de 2026
+# Tienda online · estado al 6 de agosto de 2026
 
 Tienda pública para Librería Liceo, conectada al catálogo del POS.
 Código en `tienda/`, scripts de datos en `scripts/`.
@@ -126,31 +126,79 @@ confirmar, en vez de mostrar un alias vacío.
 - Subida de fotos desde el panel
 - Configuración de la tienda: horarios, tramos de envío, radio
 
-### 3. Tablero de pedidos
+### 3. POS: escuchar pedidos e imprimir el ticket de reparto
 
-Estados (Nuevo, Preparando, Listo, En camino, Entregado), aviso sonoro de pedido
-nuevo, mapa del punto de entrega. Y la página pública de seguimiento por código.
+**Es lo único que falta del circuito de pedidos.** Listener de `tienda_pedidos`
+siguiendo el patrón de `pos_system/ui/remote_terminal_listener.py`, con impresión
+automática vía `ticket_printer.py`. Requiere bump de versión, tag y push.
 
-### 4. POS: escuchar pedidos e imprimir el ticket de reparto
+El tablero de pedidos en la webapp ya está hecho (`webapp/src/pages/pedidos_tienda.js`),
+y el watcher con sonido y notificación también (`webapp/src/pedidos_watcher.js`).
 
-Listener de `tienda_pedidos` siguiendo el patrón de
-`pos_system/ui/remote_terminal_listener.py`, con impresión automática vía
-`ticket_printer.py`. Requiere bump de versión, tag y push.
+### 4. Deploy
 
-### 5. Deploy
+Sitio de Netlify aparte para la tienda, con `tienda/netlify.toml` que ya está.
+Falta definir el dominio.
 
-Sitio de Netlify aparte para la tienda. Falta definir el dominio.
+**Ya no hace falta separar la clave de Google en dos.** Places y Routes se llaman
+las dos desde funciones de servidor, así que ninguna necesita restricción por
+dominio y alcanza con una sola clave.
 
-**Antes de publicar hay que separar la clave de Google en dos:** la de Places la
-usa el navegador y se restringe por dominio; la de Routes la usa el servidor y no
-puede tener restricción de dominio. En la misma clave hay que elegir una
-restricción que no sirve para las dos.
+### 5. Mercado Libre
+
+Quedó **dentro del alcance comercial** junto con la tienda. Todavía no está
+empezado. Son cinco piezas: alta de la cuenta, publicación de hasta 150 productos
+con categoría y atributos, sincronización de stock desde el POS, entrada de
+pedidos al mismo tablero que ya existe, y un panel en la web de gestión.
+
+La lista de los 110 candidatos reales está en `FOTOS_MERCADOLIBRE.xlsx`, cruzando
+precio, margen y rotación, con el precio sugerido de ML que conserva la ganancia
+en pesos. No está en el repositorio: tiene datos comerciales del cliente y el
+repositorio es público.
+
+**Antes de publicar nada hay que verificar el precio de mercado.** La planilla
+dice dónde se gana plata, no dónde se vende. La API pública de Mercado Libre
+devuelve `403` sin autenticación, así que esa comparación se hace recién con la
+cuenta abierta.
+
+Dos cosas medidas que conviene no olvidar: el punto de equilibrio está en **$4.800**
+—abajo de eso cada venta deja pérdida— y **los dos formularios de automotor son el
+43% de la facturación de la lista**, con demanda que probablemente sea solo local.
 
 ---
 
 ## Las fotos
 
-**Ningún producto tiene foto todavía.** Es el techo visual de la tienda.
+**Cargadas automáticamente.** Al 6 de agosto van unos 2.000 productos con foto
+de los 2.315 publicados.
+
+```
+python scripts/fotos_auto.py --cantidad 1300
+→ abre http://localhost:8770 y va mostrando lo que sube, en vivo
+```
+
+Busca, puntúa, elige, achica y sube sola, y al mismo tiempo levanta un servidor
+local donde se ve lo que va subiendo. Desde ahí se descarta una foto, se pide la
+siguiente candidata, o se bloquea un sitio entero cuando estampa marca de agua
+—eso último cambia de una todas las fotos que hayan salido de ese dominio y
+guarda el dominio en `scripts/sitios_bloqueados.txt`.
+
+Al arrancar carga también los productos que ya tienen foto, así reiniciar el
+script no deja fuera de la pantalla lo subido antes.
+
+Lo que no llega al puntaje mínimo se sube igual en una segunda pasada, marcado
+como "revisar". Es preferible una foto floja señalada que un hueco, y quien
+revisa decide.
+
+**Falta el repaso a mano.** Las fotos salen de sitios de otras tiendas, buscadas
+por el nombre del producto. La mayoría acierta pero algunas no, y ese repaso lo
+tiene que hacer alguien que conozca el catálogo.
+
+### Por qué no se pueden usar en Mercado Libre
+
+Publicar ahí con fotos de otro vendedor termina en denuncia y publicación dada de
+baja. Para Mercado Libre hacen falta fotos propias, fondo blanco y varios
+ángulos.
 
 Está medido por qué no se pueden conseguir de forma automática:
 

@@ -191,3 +191,9 @@ claves_google.txt
 fotos_candidatas.json
 fotos_aprobadas.json
 FOTOS_PENDIENTES.xlsx
+
+# Documentos comerciales: tienen facturacion, margenes y precios del cliente.
+# El repositorio es publico.
+PRESUPUESTO_*.md
+PRESUPUESTO_*.xlsx
+FOTOS_MERCADOLIBRE.xlsx
