@@ -638,9 +638,11 @@ def main():
                     help='busca y puntua, pero no sube ni escribe nada')
     args = ap.parse_args()
 
-    clave = bf.leer_claves().get('SERPER_API_KEY')
+    clave = bf.claves_serper()
     if not clave:
         sys.exit('Falta SERPER_API_KEY en claves_google.txt')
+    print(f'{len(clave)} clave{"s" if len(clave) > 1 else ""} de Serper cargada'
+          f'{"s" if len(clave) > 1 else ""}.')
 
     db, bucket = imp.conectar()
 

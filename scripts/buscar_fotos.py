@@ -175,35 +175,68 @@ def dominio_de(candidata):
         return ''
 
 
-def buscar(consulta, clave, cantidad=6):
-    """Una consulta a la API. Devuelve [] si falla, para no cortar el lote."""
-    peticion = urllib.request.Request(
-        'https://google.serper.dev/images',
-        data=json.dumps({
-            'q': consulta,
-            'gl': 'ar',
-            'hl': 'es',
-            'num': max(cantidad * 2, 10),  # se piden de mas: el filtro descarta
-        }).encode('utf-8'),
-        headers={'X-API-KEY': clave, 'Content-Type': 'application/json'},
-    )
-    try:
-        with urllib.request.urlopen(peticion, timeout=25) as r:
-            datos = json.load(r)
-    except urllib.error.HTTPError as e:
-        cuerpo = e.read().decode('utf-8', 'replace')[:200]
-        if e.code in (401, 403):
-            print(f'\n  La clave de Serper no sirve o se agoto el saldo: {cuerpo}')
-            print('  Lo buscado hasta aca queda guardado.')
-            raise SystemExit(1)
-        if e.code == 429:
-            print('\n  Serper esta limitando el ritmo. Lo buscado hasta aca queda guardado.')
-            raise SystemExit(1)
-        print(f'    error HTTP {e.code}: {cuerpo}')
-        return []
-    except Exception as e:
-        print(f'    error: {e}')
-        return []
+def claves_serper(valores=None):
+    """
+    Todas las claves de Serper cargadas, en orden.
+
+    Se admite mas de una porque la cuenta gratis trae 2.500 consultas y el
+    catalogo entero son 2.315: alcanza justo, y quedarse sin saldo a mitad de
+    una corrida larga obliga a arrancarla de nuevo.
+    """
+    valores = valores if valores is not None else leer_claves()
+    return [v for k, v in sorted(valores.items())
+            if k.startswith('SERPER_API_KEY') and v]
+
+
+# Cual de las claves se esta usando. Cuando una se agota se pasa a la siguiente
+# y no se vuelve: reintentar la muerta seria una llamada perdida por producto.
+_clave_activa = 0
+
+
+def buscar(consulta, claves, cantidad=6):
+    """
+    Una consulta a la API. Devuelve [] si falla, para no cortar el lote.
+
+    `claves` es una clave sola o la lista de todas.
+    """
+    global _clave_activa
+    disponibles = [claves] if isinstance(claves, str) else list(claves)
+
+    while _clave_activa < len(disponibles):
+        peticion = urllib.request.Request(
+            'https://google.serper.dev/images',
+            data=json.dumps({
+                'q': consulta,
+                'gl': 'ar',
+                'hl': 'es',
+                'num': max(cantidad * 2, 10),  # se piden de mas: el filtro descarta
+            }).encode('utf-8'),
+            headers={
+                'X-API-KEY': disponibles[_clave_activa],
+                'Content-Type': 'application/json',
+            },
+        )
+        try:
+            with urllib.request.urlopen(peticion, timeout=25) as r:
+                datos = json.load(r)
+            break
+        except urllib.error.HTTPError as e:
+            cuerpo = e.read().decode('utf-8', 'replace')[:200]
+            if e.code in (401, 403, 429):
+                _clave_activa += 1
+                if _clave_activa < len(disponibles):
+                    print(f'    la clave {_clave_activa} se agoto, sigo con la siguiente')
+                    continue
+                print(f'\n  Se agotaron todas las claves de Serper: {cuerpo}')
+                print('  Lo subido hasta aca queda guardado. Agregá otra en claves_google.txt.')
+                raise SystemExit(1)
+            print(f'    error HTTP {e.code}: {cuerpo}')
+            return []
+        except Exception as e:
+            print(f'    error: {e}')
+            return []
+    else:
+        raise SystemExit(1)
 
     salida = []
     for it in datos.get('images', []):
@@ -239,8 +272,7 @@ def main():
                     help='vuelve a buscar los que ya estaban, en vez de saltearlos')
     args = ap.parse_args()
 
-    claves = leer_claves()
-    clave = claves.get('SERPER_API_KEY')
+    clave = claves_serper()
     if not clave:
         print(__doc__)
         sys.exit('Falta SERPER_API_KEY. Ver los pasos de configuracion de arriba.')
