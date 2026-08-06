@@ -37,6 +37,7 @@ tienen marca, que son los que la busqueda acierta.
 import argparse
 import json
 import os
+import re
 import sys
 import time
 import unicodedata
@@ -193,6 +194,21 @@ def claves_serper(valores=None):
 _clave_activa = 0
 
 
+def limpiar_consulta(texto):
+    """
+    Saca lo que el buscador interpreta como operador.
+
+    Las comillas son el caso real: "Pantalla Lcd 8.5\" Pizarra Magica" lleva las
+    comillas de las pulgadas, Serper las lee como busqueda exacta y las cuentas
+    gratis rechazan el pedido entero con "Query pattern not allowed for free
+    accounts". Lo mismo con los parentesis y la barra vertical, y con el guion
+    pegado al principio de una palabra, que significa "excluir".
+    """
+    limpio = re.sub(r'["“”‘’\'|()\[\]]', ' ', str(texto or ''))
+    limpio = re.sub(r'(^|\s)-+(?=\S)', ' ', limpio)
+    return ' '.join(limpio.split())
+
+
 def buscar(consulta, claves, cantidad=6):
     """
     Una consulta a la API. Devuelve [] si falla, para no cortar el lote.
@@ -201,6 +217,9 @@ def buscar(consulta, claves, cantidad=6):
     """
     global _clave_activa
     disponibles = [claves] if isinstance(claves, str) else list(claves)
+    consulta = limpiar_consulta(consulta)
+    if not consulta:
+        return []
 
     while _clave_activa < len(disponibles):
         peticion = urllib.request.Request(
