@@ -23,7 +23,7 @@ import { esc } from '../formato.js';
 function ilustracion() {
   return `
     <div class="portada__imagen" aria-hidden="true">
-      <img src="/portada.webp" alt="" width="1400" height="933"
+      <img src="/portada.webp" alt="" width="1200" height="800"
            fetchpriority="high" decoding="async">
     </div>`;
 }

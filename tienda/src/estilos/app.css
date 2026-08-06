@@ -104,11 +104,15 @@
   display: none;
   animation: portada-entra var(--m-lento) var(--curva) backwards;
 }
+/* La imagen viene recortada, con el fondo transparente, asi que apoya
+   directamente sobre el negro de la seccion y no hay rectangulo que disimular.
+   La version anterior era opaca y necesitaba una mascara que le desvaneciera los
+   bordes; con el recorte de verdad esa mascara sobra y ademas comeria las
+   esquinas del dibujo. */
 .portada__imagen img {
   display: block;
   width: 100%;
   height: auto;
-  border-radius: var(--r-lg);
 }
 @keyframes portada-entra {
   from { opacity: 0; transform: translateY(16px) scale(.98); }
