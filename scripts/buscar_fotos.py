@@ -101,6 +101,23 @@ def normalizar(t):
     return ' '.join(''.join(c for c in s if unicodedata.category(c) != 'Mn').split())
 
 
+# Abreviaturas de packaging del POS. No aparecen en ninguna pagina de
+# fabricante y solo ensucian la busqueda.
+#
+# Se descartan por palabra y no por texto: sacar la cadena ' X 1' de
+# "Silicona Cbx X 100 Cc" dejaba "Silicona Cbx 00 Cc", y como despues los
+# numeros sueltos tambien se descartaban, el error pasaba desapercibido.
+BASURA = {'e/c', 'c/u', 'x1', 'unid', 'und', 'un', 'uds'}
+
+# Unidades de medida que le dan sentido al numero que tienen delante.
+UNIDADES = {
+    'gr', 'grs', 'gramos', 'kg', 'cc', 'ml', 'lt', 'litros',
+    'gb', 'tb', 'mb', 'mts', 'mt', 'metros', 'cm', 'mm',
+    'hjs', 'hojas', 'hs', 'folios', 'pag', 'pags',
+    'w', 'v', 'un', 'uds',
+}
+
+
 def armar_consulta(producto):
     """
     La consulta se arma con marca + nombre, sacando lo que solo confunde.
@@ -108,12 +125,30 @@ def armar_consulta(producto):
     Los codigos internos ("C12-003", "353011") y las abreviaturas de packaging
     ("E/C", "X 1") no aparecen en ninguna pagina de fabricante y hacen que la
     busqueda no devuelva nada.
-    """
-    nombre = producto['nombre']
-    for basura in (' E/C', ' X 1', ' X1', ' C/U', ' UNID', ' UND'):
-        nombre = nombre.replace(basura, ' ')
 
-    partes = [p for p in nombre.split() if len(p) > 1 and not p.isdigit()]
+    Los numeros sueltos se descartan por eso mismo, pero no todos: el que viene
+    pegado a una unidad de medida y el de dos a cuatro cifras se quedan. En
+    "Silicona Liquida CBX X 100 Cc" el 100 es lo que separa ese producto del de
+    30 cc, y en "Pila Energizer 2032" el 2032 es el modelo. Sacarlos traia el
+    envase o la pila equivocada. Los codigos internos del POS son mas largos
+    (`1000015`, `900420`), asi que el largo alcanza para distinguirlos.
+    """
+    palabras = producto['nombre'].split()
+
+    partes = []
+    for i, p in enumerate(palabras):
+        # La 'X' suelta de "X 100 Cc" cae sola por tener una letra, pero se mira
+        # la palabra siguiente sobre la lista original para que el numero
+        # todavia vea su unidad.
+        if normalizar(p) in BASURA or len(p) <= 1:
+            continue
+        if p.isdigit():
+            siguiente = normalizar(palabras[i + 1]) if i + 1 < len(palabras) else ''
+            if siguiente.strip('.') in UNIDADES or 2 <= len(p) <= 4:
+                partes.append(p)
+            continue
+        partes.append(p)
+
     consulta = ' '.join(partes[:8])
 
     marca = producto.get('marca') or ''
@@ -200,6 +235,8 @@ def main():
     ap.add_argument('--meses', type=int, default=4)
     ap.add_argument('--solo-con-marca', action='store_true',
                     help='solo los que tienen marca cargada: la busqueda acierta mucho mas')
+    ap.add_argument('--rehacer', action='store_true',
+                    help='vuelve a buscar los que ya estaban, en vez de saltearlos')
     args = ap.parse_args()
 
     claves = leer_claves()
@@ -250,13 +287,17 @@ def main():
     ya = {}
     if os.path.exists(CANDIDATAS):
         ya = {p['doc_id']: p for p in json.load(open(CANDIDATAS, encoding='utf-8'))}
-        print(f'{len(ya)} productos ya buscados antes, se saltean.\n')
+        print(f'{len(ya)} productos ya buscados antes, '
+              f'{"se rehacen" if args.rehacer else "se saltean"}.\n')
 
-    resultados = list(ya.values())
+    # Con --rehacer se reemplazan los de esta tanda y se dejan intactos los que
+    # no entran en ella, en vez de borrar el archivo entero.
+    a_rehacer = {p['doc_id'] for p in productos} if args.rehacer else set()
+    resultados = [p for p in ya.values() if p['doc_id'] not in a_rehacer]
     nuevos = 0
 
     for i, p in enumerate(productos, 1):
-        if p['doc_id'] in ya:
+        if p['doc_id'] in ya and not args.rehacer:
             continue
         consulta = armar_consulta(p)
         print(f'[{i}/{len(productos)}] {p["nombre"][:48]:<50} <- {consulta[:44]}')
