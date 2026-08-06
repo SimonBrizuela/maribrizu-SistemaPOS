@@ -1,10 +1,12 @@
 """
 Busca fotos candidatas para los productos de la tienda, por nombre.
 
-Usa la API de Custom Search de Google en modo imagenes. Es la via oficial: se
-consulta con una clave propia, devuelve la URL de la imagen y de que sitio
-salio, y no rompe los terminos de nadie. Raspar los resultados de Google a mano
-si los rompe, ademas de cortarse a las pocas consultas.
+Usa Serper, que devuelve resultados de imagenes de Google por API. Antes esto
+iba contra la Custom Search JSON API de Google y quedo descartada: da
+`403 PERMISSION_DENIED` desde tres proyectos distintos, dos cuentas, con y sin
+organizacion, y con dos motores de busqueda. Lo unico que compartian los tres
+proyectos era no tener facturacion vinculada. Serper no depende de Google Cloud
+y las primeras 2.500 consultas son gratis, que es mas de lo que hace falta.
 
 Por que hace falta revisar a mano lo que devuelve: el catalogo no tiene codigo
 de barras real (7 productos de 2.315), asi que la unica forma de buscar es por
@@ -15,28 +17,19 @@ equivocada llega al cliente y se transforma en una devolucion.
 
 Configuracion (una sola vez):
 
-  1. console.cloud.google.com, proyecto mari-d7c71
-     APIs y servicios > Biblioteca > "Custom Search API" > Habilitar
+  1. serper.dev, entrar con Google. La cuenta gratis trae 2.500 consultas.
 
-  2. APIs y servicios > Credenciales > Crear credenciales > Clave de API
-     Restringila a "Custom Search API" y nada mas. No hace falta restringir
-     por dominio: esta clave la usa este script, no el navegador.
+  2. Copiar la clave del panel y agregarla a `claves_google.txt`, en la raiz
+     del proyecto:
 
-  3. programmablesearchengine.google.com/controlpanel/create
-     Marcar "Buscar en toda la web". Una vez creado, en el panel activar
-     "Busqueda de imagenes". Copiar el ID del motor de busqueda.
+       SERPER_API_KEY=...
 
-  4. Crear el archivo `claves_google.txt` en la raiz del proyecto con:
+     Ese archivo esta en .gitignore y no se sube a ningun lado. Ahi conviven
+     las claves locales; las de Places y Routes siguen siendo de Google.
 
-       GOOGLE_CSE_KEY=AIza...
-       GOOGLE_CSE_CX=a1b2c3d4e5f6...
-
-     Ese archivo esta en .gitignore y no se sube a ningun lado.
-
-Cuota: 100 consultas gratis por dia. Pasado eso hace falta facturacion
-activa y sale US$5 cada 1.000, con tope de 10.000 por dia. Los 2.315
-productos publicados salen unos 11 dolares por unica vez, pero conviene
-arrancar por los que tienen marca, que son los que la busqueda acierta.
+Cuota: 2.500 consultas gratis por unica vez, una por producto. Los 2.315
+productos publicados entran casi justo, pero conviene arrancar por los que
+tienen marca, que son los que la busqueda acierta.
 
     python scripts/buscar_fotos.py --cantidad 50
     python scripts/buscar_fotos.py --cantidad 200 --solo-con-marca
@@ -47,6 +40,7 @@ import os
 import sys
 import time
 import unicodedata
+import urllib.error
 import urllib.parse
 import urllib.request
 from collections import defaultdict
@@ -79,8 +73,7 @@ def leer_claves():
     es donde siempre se olvidan.
     """
     valores = {
-        'GOOGLE_CSE_KEY': os.environ.get('GOOGLE_CSE_KEY', ''),
-        'GOOGLE_CSE_CX': os.environ.get('GOOGLE_CSE_CX', ''),
+        'SERPER_API_KEY': os.environ.get('SERPER_API_KEY', ''),
     }
     ruta = os.path.join(RAIZ, 'claves_google.txt')
     if os.path.exists(ruta):
@@ -129,22 +122,47 @@ def armar_consulta(producto):
     return consulta.strip()
 
 
-def buscar(consulta, clave, cx, cantidad=6):
-    """Una consulta a la API. Devuelve [] si falla, para no cortar el lote."""
-    url = 'https://www.googleapis.com/customsearch/v1?' + urllib.parse.urlencode({
-        'key': clave, 'cx': cx, 'q': consulta,
-        'searchType': 'image', 'num': cantidad,
-        'imgSize': 'medium', 'safe': 'active',
-        'gl': 'ar', 'hl': 'es',
-    })
+def dominio_de(candidata):
+    """
+    De donde salio la imagen.
+
+    Serper manda a veces `domain` y a veces solo el enlace a la pagina. Se
+    prueba primero el campo y si no esta se saca del enlace, porque de esto
+    depende el filtro de sitios excluidos: sin dominio no hay filtro.
+    """
+    dominio = (candidata.get('domain') or '').strip()
+    if dominio:
+        return dominio.lower()
+    enlace = candidata.get('link') or candidata.get('imageUrl') or ''
     try:
-        with urllib.request.urlopen(url, timeout=25) as r:
+        return urllib.parse.urlparse(enlace).netloc.lower()
+    except Exception:
+        return ''
+
+
+def buscar(consulta, clave, cantidad=6):
+    """Una consulta a la API. Devuelve [] si falla, para no cortar el lote."""
+    peticion = urllib.request.Request(
+        'https://google.serper.dev/images',
+        data=json.dumps({
+            'q': consulta,
+            'gl': 'ar',
+            'hl': 'es',
+            'num': max(cantidad * 2, 10),  # se piden de mas: el filtro descarta
+        }).encode('utf-8'),
+        headers={'X-API-KEY': clave, 'Content-Type': 'application/json'},
+    )
+    try:
+        with urllib.request.urlopen(peticion, timeout=25) as r:
             datos = json.load(r)
     except urllib.error.HTTPError as e:
         cuerpo = e.read().decode('utf-8', 'replace')[:200]
+        if e.code in (401, 403):
+            print(f'\n  La clave de Serper no sirve o se agoto el saldo: {cuerpo}')
+            print('  Lo buscado hasta aca queda guardado.')
+            raise SystemExit(1)
         if e.code == 429:
-            print('\n  Se acabo la cuota diaria de la API (100 consultas gratis por dia).')
-            print('  Lo buscado hasta aca queda guardado; segui manana o activa facturacion.')
+            print('\n  Serper esta limitando el ritmo. Lo buscado hasta aca queda guardado.')
             raise SystemExit(1)
         print(f'    error HTTP {e.code}: {cuerpo}')
         return []
@@ -153,18 +171,24 @@ def buscar(consulta, clave, cx, cantidad=6):
         return []
 
     salida = []
-    for it in datos.get('items', []):
-        origen = it.get('displayLink', '')
+    for it in datos.get('images', []):
+        origen = dominio_de(it)
         if any(x in origen for x in EXCLUIDOS):
             continue
+        if not it.get('imageUrl'):
+            continue
         salida.append({
-            'url': it.get('link'),
-            'miniatura': (it.get('image') or {}).get('thumbnailLink'),
+            'url': it.get('imageUrl'),
+            # Cuando no viene miniatura se usa la imagen entera: la pagina de
+            # revision muestra algo igual, solo que tarda un poco mas.
+            'miniatura': it.get('thumbnailUrl') or it.get('imageUrl'),
             'origen': origen,
-            'titulo': it.get('title', '')[:120],
-            'ancho': (it.get('image') or {}).get('width'),
-            'alto': (it.get('image') or {}).get('height'),
+            'titulo': (it.get('title') or '')[:120],
+            'ancho': it.get('imageWidth'),
+            'alto': it.get('imageHeight'),
         })
+        if len(salida) >= cantidad:
+            break
     return salida
 
 
@@ -179,11 +203,10 @@ def main():
     args = ap.parse_args()
 
     claves = leer_claves()
-    clave = claves.get('GOOGLE_CSE_KEY')
-    cx = claves.get('GOOGLE_CSE_CX')
-    if not clave or not cx:
+    clave = claves.get('SERPER_API_KEY')
+    if not clave:
         print(__doc__)
-        sys.exit('Faltan las claves. Ver los pasos de configuracion de arriba.')
+        sys.exit('Falta SERPER_API_KEY. Ver los pasos de configuracion de arriba.')
 
     db = conectar()
 
@@ -221,8 +244,9 @@ def main():
 
     print(f'Buscando fotos para {len(productos)} productos.\n')
 
-    # Se retoma lo ya buscado: la cuota diaria es de 100 consultas, asi que un
-    # lote grande se hace en varios dias sin repetir nada.
+    # Se retoma lo ya buscado. La cuota es de 2.500 consultas por unica vez, y
+    # gastarlas dos veces en el mismo producto por cortar el script a la mitad
+    # seria tirar la mitad del presupuesto.
     ya = {}
     if os.path.exists(CANDIDATAS):
         ya = {p['doc_id']: p for p in json.load(open(CANDIDATAS, encoding='utf-8'))}
@@ -237,7 +261,7 @@ def main():
         consulta = armar_consulta(p)
         print(f'[{i}/{len(productos)}] {p["nombre"][:48]:<50} <- {consulta[:44]}')
 
-        candidatas = buscar(consulta, clave, cx)
+        candidatas = buscar(consulta, clave)
         print(f'    {len(candidatas)} candidatas')
 
         p['consulta'] = consulta

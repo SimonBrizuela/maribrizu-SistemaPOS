@@ -195,45 +195,41 @@ esas dos llamadas resuelven 16 productos que facturan $700 mil.
 
 ---
 
-## PENDIENTE: la Custom Search API sigue bloqueada
+## La Custom Search API quedó descartada
 
-Quedó a medias y es lo primero para retomar.
+Se abandonó después de agotar todas las variables. Siempre el mismo error:
 
 ```
 403 PERMISSION_DENIED
 This project does not have the access to Custom Search JSON API.
 ```
 
-**Todo lo verificable de nuestro lado está correcto**, y cada hipótesis quedó
-descartada con una prueba:
-
-| Prueba | Resultado |
+| Variable | Lo que se probó |
 |---|---|
-| Clave inventada | `400 API key not valid` → la nuestra es válida |
-| La clave contra YouTube | `blocked` → la restricción permite Custom Search |
-| Un `cx` público de Google | mismo 403 → no es el buscador |
-| Búsqueda web sin imágenes | mismo 403 → no es específico de imágenes |
-| La clave contra Firestore | OK → la clave es de `mari-d7c71` |
+| Proyecto | Mari, uno nuevo (Liceo Fotos) y uno nuevo con cuenta personal |
+| Cuenta | `programacion@brizuela.org` y un Gmail personal |
+| Organización | Dentro de `brizuela.org` y sin organización |
+| Buscador (`cx`) | Dos motores distintos |
+| Clave | Cuatro, una de ellas por el asistente "Get a Key" |
+| API habilitada | Confirmado en consola, con tráfico contado en las métricas |
 
-La consola muestra `customsearch.googleapis.com` **habilitada** en el proyecto
-Mari. Se probó durante más de una hora sin destrabar. La cuenta de servicio no
-tiene permiso de Service Usage, así que no se puede verificar desde el código.
+Dos hipótesis intermedias resultaron falsas y conviene dejarlas anotadas para no
+volver a caer:
 
-### Qué probar mañana, en orden
+- **"Es el proyecto Mari"**: no. Un proyecto nuevo da lo mismo.
+- **"Es el buscador"**: no. Parecía serlo porque un `cx` inventado devuelve
+  `400 invalid argument` y el nuestro `403`, pero ese 400 es solo validación de
+  formato: nunca llega al control de permisos. Un `cx` nuevo da el mismo 403.
 
-1. **Botón "Probar esta API"**, al lado de *Administrar* en la pantalla de la
-   API. Usa la sesión de Google en vez de la clave: si ahí funciona el problema
-   es la clave, si ahí falla es el proyecto.
-2. **Asistente "Obtener una clave"** en
-   https://developers.google.com/custom-search/v1/introduction — habilita la API
-   y crea la clave en un solo paso, que es distinto a lo que hicimos.
-3. **Inhabilitar y volver a habilitar** la API.
-4. **Entrar con la cuenta principal**, no con `authuser=1`. Si esa segunda cuenta
-   tiene permisos parciales sobre Mari, la consola puede mostrar "habilitada" sin
-   que el cambio haya aplicado.
-5. **Google Cloud Support**. Es gratis para habilitación de APIs.
+Lo único que comparten los tres proyectos es no tener facturación vinculada.
+Puede ser eso, pero no se verificó: a esa altura ya no valía la pena. La API de
+búsqueda es intercambiable y el cuello de botella real son las fotos, no de
+dónde salen las candidatas.
 
-Cuando destrabe:
+**Se reemplazó por Serper** (`serper.dev`), que devuelve resultados de imágenes
+de Google por API, no depende de Google Cloud y trae 2.500 consultas gratis.
+`buscar_fotos.py` solo cambió de endpoint: armar la consulta desde el nombre y
+la marca, filtrar marketplaces y guardar el avance quedó igual.
 
 ```
 python scripts/buscar_fotos.py --cantidad 300 --solo-con-marca
@@ -251,12 +247,16 @@ cualquier cosa.
 `claves_google.txt` en la raíz (está en `.gitignore`):
 
 ```
-GOOGLE_CSE_KEY   clave de Custom Search + Places + Routes
-GOOGLE_CSE_CX    87d0a61ac4b674485
+GOOGLE_CSE_KEY   clave de Places + Routes
+SERPER_API_KEY   búsqueda de imágenes para las fotos
 ```
 
+La misma clave de Google sirve para Places y Routes y no hace falta partirla en
+dos: las dos se llaman desde funciones de servidor, así que ninguna necesita
+restricción por dominio. Esa era la razón de tener que separarlas.
+
 Proyecto de Google Cloud: **Mari** (`mari-d7c71`).
-APIs habilitadas: Custom Search (bloqueada), Places API (New), Routes API.
+APIs habilitadas: Places API (New) y Routes API. Custom Search quedó descartada.
 
 ### Colecciones nuevas en Firestore
 
@@ -274,11 +274,19 @@ APIs habilitadas: Custom Search (bloqueada), Places API (New), Routes API.
 scripts/sync_tienda.py         catálogo → espejo público (--simular para probar)
 scripts/seed_tienda_config.py  configuración inicial de la tienda
 scripts/lista_fotos.py         Excel priorizado de fotos pendientes
-scripts/buscar_fotos.py        busca candidatas por nombre (bloqueado)
+scripts/buscar_fotos.py        busca candidatas por nombre (Serper)
 scripts/revisar_fotos.html     página para elegir cuál sirve
 scripts/importar_fotos.py      sube fotos a Storage y las publica
 tienda/design/build.mjs        genera las previsualizaciones del design system
 tienda/design/contraste.mjs    verifica el contraste de todos los pares de color
+```
+
+### Funciones de servidor
+
+```
+tienda/netlify/functions/envio.mjs           distancia real con Routes + tramos
+tienda/netlify/functions/direcciones.mjs     autocompletado con Places
+tienda/netlify/functions/avisar-pedido.mjs   WhatsApp al local
 ```
 
 El sync está pensado para correr cada 15 minutos desde el Programador de tareas
