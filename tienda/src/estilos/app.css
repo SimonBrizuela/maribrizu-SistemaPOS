@@ -1269,3 +1269,59 @@
 .pedido-fila__modo { font-size: var(--t-xs); color: var(--text-2); }
 .pedido-fila__total { font-weight: var(--peso-bold); white-space: nowrap; }
 .pedido-fila__flecha { color: var(--text-3); display: grid; place-items: center; }
+
+/* ── Autocompletado de direcciones ────────────────────────────────────────────
+   Desplegable propio en vez del componente de Google: entra con el estilo del
+   resto del formulario y no obliga a cargar la librería de Maps en el
+   navegador para un solo campo. */
+
+.direcciones { position: relative; }
+
+.direcciones__lista {
+  position: absolute;
+  top: calc(100% + var(--e-1));
+  left: 0;
+  right: 0;
+  z-index: var(--z-nav);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--s-3);
+  overflow: hidden;
+  animation: sugerencias-entra var(--m-rapido) var(--curva);
+}
+.direcciones__lista[hidden] { display: none; }
+
+.direccion {
+  display: flex;
+  align-items: center;
+  gap: var(--e-3);
+  width: 100%;
+  padding: var(--e-3) var(--e-4);
+  border: none;
+  border-bottom: 1px solid var(--border);
+  background: transparent;
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.direccion:last-child { border-bottom: none; }
+.direccion:hover,
+.direccion[aria-selected="true"] { background: var(--surface-2); }
+
+.direccion__pin { flex: none; color: var(--primary); display: grid; place-items: center; }
+.direccion__texto { display: flex; flex-direction: column; min-width: 0; }
+.direccion__titulo {
+  font-size: var(--t-sm);
+  font-weight: var(--peso-semi);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.direccion__detalle {
+  font-size: var(--t-xs);
+  color: var(--text-2);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

@@ -19,6 +19,7 @@ import { avisar } from '../avisos.js';
 import { ir } from '../router.js';
 import { crearPedido } from '../pedidos.js';
 import { cotizar, rangoDeTramos, llegaAEnvioGratis } from '../envio.js';
+import { montarDirecciones } from '../direcciones.js';
 
 export async function checkout({ montar }) {
   const cfg = await cargarConfig();
@@ -90,9 +91,9 @@ function pintarFormulario({ montar, cfg, cambios }) {
   let modo = hayRetiro ? 'retiro' : 'delivery';
   let formaPago = 'efectivo';
 
-  // Coordenadas del domicilio. Hoy quedan en null porque el autocompletado de
-  // direcciones todavia no esta enganchado; en cuanto lo este, esto se llena y
-  // la cotizacion pasa de "a confirmar" a un numero.
+  // Coordenadas del domicilio, cuando el cliente elige una direccion del
+  // autocompletado. Sin ellas la cotizacion queda en "a confirmar": no hay
+  // forma de medir una distancia contra un texto escrito a mano.
   let destino = null;
   let cotizacion = { estado: 'a_confirmar', precio: 0, km: null };
 
@@ -326,6 +327,15 @@ function pintarFormulario({ montar, cfg, cambios }) {
 
   document.querySelectorAll('[data-modo]').forEach(boton => {
     boton.addEventListener('click', () => cambiarModo(boton.dataset.modo));
+  });
+
+  // Al elegir una dirección del desplegable llegan sus coordenadas y se cotiza
+  // en el momento. Al volver a escribir llega null: la dirección dejó de estar
+  // verificada y el precio anterior ya no corresponde a lo que dice el campo.
+  montarDirecciones(document.getElementById('direccion'), elegida => {
+    const antes = destino;
+    destino = elegida ? { lat: elegida.lat, lng: elegida.lng } : null;
+    if (destino || antes) recotizar();
   });
 
   document.querySelectorAll('[data-pago]').forEach(boton => {

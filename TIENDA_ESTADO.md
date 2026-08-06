@@ -26,6 +26,27 @@ botones o escribiendo el largo exacto.
 **Buscador con sugerencias** mientras se escribe, que además sabe en qué rubro
 estás parado.
 
+**Checkout andando.** Una sola pantalla con cuatro bloques: datos, retiro o
+envío, efectivo o transferencia, y una nota. Revalida precios y stock contra la
+base al entrar y otra vez al confirmar, y muestra lo que cambió en vez de
+corregirlo en silencio. El pedido queda en `tienda_pedidos`.
+
+**Pedido con código y seguimiento en vivo.** Código corto de cuatro caracteres
+para decir por teléfono, sin las letras que se confunden al dictarlas. El estado
+se actualiza solo mientras el cliente mira la pantalla. La lista de "mis
+pedidos" sale de localStorage: las reglas no dejan listar la colección, y está
+bien que no lo dejen, porque listarla sería entregar el teléfono y la dirección
+de todos los clientes.
+
+**Aviso automático de pedido nuevo**, por tres caminos porque cada uno falla en
+un caso distinto: WhatsApp al local, y en la webapp de gestión sonido, toast que
+no se va solo y notificación del navegador. La primera carga no dispara un aviso
+por pedido, sale un resumen.
+
+**Cálculo de envío y autocompletado de direcciones**, los dos contra funciones
+de servidor. La clave de Google nunca viaja al navegador, así que no hace falta
+partirla en dos.
+
 **Permisos cerrados y verificados.** Probado contra la API REST sin sesión:
 `tienda_productos` y `tienda_config` se leen; `catalogo`, `ventas`,
 `perfiles_facturacion` y el listado de pedidos dan `PERMISSION_DENIED`. El
@@ -63,22 +84,38 @@ medía lo mismo que su contenido y no le dejaba margen para moverse.
 
 ## Lo que falta
 
-### 1. Checkout y cálculo de envío — es lo que sigue
+### 1. Desplegar la tienda — es lo que sigue
 
-Sin esto la tienda es un catálogo: no toma pedidos.
+El checkout está escrito y las tres funciones también, pero hasta que no haya un
+sitio de Netlify no hay servidor que las ejecute. Sin eso la tienda cotiza el
+envío como "a confirmar" y no salen los avisos de WhatsApp. El pedido entra
+igual: nada de esto bloquea el checkout, es a propósito.
 
-- Selector retiro / delivery
-- Dirección con autocompletado de Places (devuelve coordenadas, no texto suelto)
-- Netlify Function que calcula la distancia real con Routes y aplica los tramos.
-  Va en el servidor para que la clave no viaje en el navegador y el precio no se
-  pueda editar desde la consola
-- Fuera de radio ofrece retiro en vez de rechazar el pedido
+Sitio de Netlify aparte del de la webapp, con `tienda/netlify.toml` que ya está.
+Falta definir el dominio.
 
-Las reglas de `tienda_pedidos` ya están escritas y desplegadas, con validación de
-forma para el `create` sin sesión.
+Variables de entorno del sitio:
 
-**Todo lo que necesita ya está andando y probado:** Places API (New) y Routes API
-habilitadas, y el origen del local verificado.
+| Variable | Para qué |
+|---|---|
+| `GOOGLE_ROUTES_KEY` | distancia real hasta el domicilio |
+| `GOOGLE_PLACES_KEY` | autocompletado de direcciones (si falta usa la de Routes) |
+| `CALLMEBOT_TELEFONO` + `CALLMEBOT_APIKEY` | WhatsApp al local, la vía rápida |
+| `WHATSAPP_TOKEN` + `WHATSAPP_PHONE_ID` + `WHATSAPP_DESTINO` | la vía oficial de Meta |
+
+Para CallMeBot el dueño le manda `I allow callmebot to send me messages` al
++34 644 51 95 23 y recibe su apikey. Es lo más rápido para arrancar; la Cloud
+API de Meta es el camino formal y necesita cuenta de Business y plantilla
+aprobada, porque fuera de la ventana de 24 horas solo deja mandar plantillas.
+
+Las tres funciones leen lo que necesitan de Firestore por la API REST sin
+credenciales, aprovechando que `tienda_config` es público y que un pedido se
+puede leer sabiendo su id. No hay cuenta de servicio en el servidor de la
+tienda.
+
+También falta cargar `pago.alias` y `pago.titular` en `tienda_config/settings`.
+Sin eso el checkout dice que los datos de la transferencia se pasan al
+confirmar, en vez de mostrar un alias vacío.
 
 ### 2. Panel de administración
 
