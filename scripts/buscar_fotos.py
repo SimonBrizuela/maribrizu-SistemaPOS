@@ -61,9 +61,18 @@ CANDIDATAS = os.path.join(RAIZ, 'fotos_candidatas.json')
 # fabricante. Tomarlas es copiarle el trabajo a un competidor, y ademas suelen
 # tener el logo o la marca de agua de la tienda encima.
 EXCLUIDOS = [
+    # Marketplaces: la foto es del vendedor, no del fabricante, y suele venir
+    # con su marca de agua encima.
     'mercadolibre.com', 'mercadolibre.com.ar', 'mlstatic.com',
     'shopee.', 'aliexpress.', 'amazon.',
     'pinterest.', 'ebay.',
+
+    # Video y redes: lo que devuelven son miniaturas y capturas, nunca una foto
+    # de producto. Salio de ver un "Set Policia Military" que trajo el cuadro de
+    # un video de YouTube.
+    'youtube.com', 'youtu.be', 'ytimg.com',
+    'tiktok.com', 'instagram.com', 'facebook.com', 'fbcdn.net',
+    'twitter.com', 'x.com', 'reddit.com',
 ]
 
 

@@ -181,6 +181,14 @@ def variantes_de_consulta(producto):
     caso normal sigue costando una sola consulta.
     """
     principal = bf.armar_consulta(producto)
+
+    # "Ametralladora 639" y "Pistola Lanza Dardos" son juguetes, pero la
+    # busqueda no lo sabe y trae armas de verdad. Decir el rubro lo resuelve, y
+    # de paso mejora todo lo demas de jugueteria: "Espada con Luz y Sonido"
+    # tambien trae mejores resultados con la palabra juguete adelante.
+    if normalizar(producto.get('rubro') or '').startswith('juguet'):
+        principal = f'juguete {principal}'
+
     palabras = principal.split()
 
     # Sin codigos: lo que mezcla letras y numeros o tiene guion en el medio.
@@ -744,7 +752,7 @@ setInterval(refrescar, 1500);
 
 # ── Arranque ────────────────────────────────────────────────────────────────
 
-def elegir_productos(db, cantidad, solo_con_marca, meses=4):
+def elegir_productos(db, cantidad, solo_con_marca, meses=4, rehacer=False, contiene=None):
     """
     Los que hay que buscar y los que ya tienen foto, ordenados por lo que
     facturan.
@@ -776,13 +784,22 @@ def elegir_productos(db, cantidad, solo_con_marca, meses=4):
             'codigo': x.get('codigo') or d.id,
             'nombre': x.get('nombre') or '',
             'marca': (x.get('marca') or '').strip(),
+            'rubro': x.get('rubro') or '',
             'importe': round(importe.get(bf.normalizar(nombre_original.get(d.id, '')), 0)),
         }
+        # `contiene` acota a los productos cuyo nombre incluya alguno de los
+        # terminos. Sirve para rehacer un grupo puntual sin volver a buscar el
+        # catalogo entero: las armas de jugueteria, una marca, un rubro.
+        if contiene and not any(t in normalizar(p['nombre']) for t in contiene):
+            continue
+
         imagenes = x.get('imagenes') or []
-        if imagenes:
+        if imagenes and not rehacer:
             p['imagen'] = imagenes[0]
             con_foto.append(p)
         else:
+            if imagenes:
+                p['imagen'] = imagenes[0]
             productos.append(p)
 
     productos.sort(key=lambda p: -p['importe'])
@@ -799,9 +816,16 @@ def main():
     ap.add_argument('--minimo', type=float, default=0.55,
                     help='puntaje minimo para subir una foto (0 a 1.5, por defecto 0.55)')
     ap.add_argument('--puerto', type=int, default=8770)
+    ap.add_argument('--rehacer', action='store_true',
+                    help='vuelve a buscar tambien los que ya tienen foto')
+    ap.add_argument('--contiene', metavar='TEXTO',
+                    help='solo los productos cuyo nombre incluya alguno de estos '
+                         'terminos, separados por coma')
     ap.add_argument('--simular', action='store_true',
                     help='busca y puntua, pero no sube ni escribe nada')
     args = ap.parse_args()
+
+    contiene = [normalizar(t) for t in args.contiene.split(',') if t.strip()] if args.contiene else None
 
     clave = bf.claves_serper()
     if not clave:
@@ -816,7 +840,8 @@ def main():
     db, bucket = imp.conectar()
 
     print('Buscando productos sin foto...')
-    productos, ya = elegir_productos(db, args.cantidad, args.solo_con_marca)
+    productos, ya = elegir_productos(db, args.cantidad, args.solo_con_marca,
+                                     rehacer=args.rehacer, contiene=contiene)
     if not productos and not ya:
         sys.exit('No hay productos que cumplan el filtro.')
 
