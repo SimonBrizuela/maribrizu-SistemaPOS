@@ -222,7 +222,12 @@ def buscar(consulta, claves, cantidad=6):
             break
         except urllib.error.HTTPError as e:
             cuerpo = e.read().decode('utf-8', 'replace')[:200]
-            if e.code in (401, 403, 429):
+            # Serper avisa que se acabo el saldo con un 400 y el motivo en el
+            # cuerpo ("Not enough credits"), no con un 402 ni un 429. Mirando
+            # solo el codigo, la clave agotada se seguia usando hasta el final
+            # de la corrida y todos los productos quedaban sin foto.
+            sin_saldo = e.code == 400 and 'credit' in cuerpo.lower()
+            if e.code in (401, 403, 429) or sin_saldo:
                 _clave_activa += 1
                 if _clave_activa < len(disponibles):
                     print(f'    la clave {_clave_activa} se agoto, sigo con la siguiente')
