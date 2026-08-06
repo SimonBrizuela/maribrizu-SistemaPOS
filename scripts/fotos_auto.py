@@ -24,10 +24,12 @@ import argparse
 import json
 import os
 import re
+import ssl
 import sys
 import threading
 import time
 import unicodedata
+import urllib.error
 import urllib.request
 import webbrowser
 from collections import defaultdict
@@ -42,6 +44,10 @@ import importar_fotos as imp
 
 NAVEGADOR = ('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 '
              '(KHTML, like Gecko) Chrome/126.0 Safari/537.36')
+
+SIN_VERIFICAR = ssl.create_default_context()
+SIN_VERIFICAR.check_hostname = False
+SIN_VERIFICAR.verify_mode = ssl.CERT_NONE
 
 # Palabras que aparecen en casi todos los nombres y no ayudan a decidir si una
 # candidata es del producto correcto.
@@ -122,9 +128,24 @@ def puntuar(candidata, producto):
 
 
 def bajar(url):
+    """
+    Baja la imagen.
+
+    Si el certificado del sitio no valida se reintenta sin verificarlo. Es una
+    concesion consciente y acotada: se estan bajando bytes de una imagen publica
+    que despues Pillow vuelve a codificar, no se manda ninguna credencial ni se
+    ejecuta nada de lo que llega. Muchas tiendas argentinas tienen el
+    certificado vencido y sin esto se pierden fotos que estan bien.
+    """
     pedido = urllib.request.Request(url, headers={'User-Agent': NAVEGADOR})
-    with urllib.request.urlopen(pedido, timeout=25) as r:
-        return r.read()
+    try:
+        with urllib.request.urlopen(pedido, timeout=25) as r:
+            return r.read()
+    except urllib.error.URLError as e:
+        if not isinstance(getattr(e, 'reason', None), ssl.SSLError):
+            raise
+        with urllib.request.urlopen(pedido, timeout=25, context=SIN_VERIFICAR) as r:
+            return r.read()
 
 
 def publicar(db, bucket, producto, candidata, simular=False):
@@ -187,6 +208,7 @@ def trabajar(productos, clave, db, bucket, minimo, simular):
             'importe': p.get('importe', 0),
             'consulta': consulta,
             'candidatas': candidatas,
+            'buscada': True,
             'indice': -1,
             'url': None,
             'origen': '',
@@ -241,9 +263,23 @@ def buscar_item(doc_id):
     return None
 
 
+def quedan_de(item):
+    """
+    Cuantas candidatas de repuesto le quedan.
+
+    Las que todavia no se buscaron cuentan como que tienen: el boton "Otra"
+    tiene que estar habilitado para poder disparar esa busqueda. Cuantas van a
+    aparecer no se sabe hasta pedirlas.
+    """
+    if not item.get('buscada'):
+        return 8
+    return max(0, len(item['candidatas']) - item['indice'] - 1)
+
+
 class Manejador(BaseHTTPRequestHandler):
     db = None
     bucket = None
+    clave = ''
     simular = False
 
     def log_message(self, *_):
@@ -270,7 +306,7 @@ class Manejador(BaseHTTPRequestHandler):
                     'actual': ESTADO['actual'],
                     # Lo ultimo primero: es lo que la persona esta esperando ver.
                     'items': [{k: v for k, v in it.items() if k != 'candidatas'}
-                              | {'quedan': max(0, len(it['candidatas']) - it['indice'] - 1)}
+                              | {'quedan': quedan_de(it)}
                               for it in reversed(ESTADO['items'])],
                 }, ensure_ascii=False))
             return
@@ -303,20 +339,47 @@ class Manejador(BaseHTTPRequestHandler):
             return
 
         if self.path.startswith('/otra'):
+            # Las que ya tenian foto de una corrida anterior entran a la pagina
+            # sin candidatas: se buscan recien cuando alguien pide otra, para no
+            # gastar una consulta por producto que quiza nadie mire.
             with CANDADO:
-                siguiente = item['indice'] + 1
-                candidata = item['candidatas'][siguiente] if siguiente < len(item['candidatas']) else None
+                falta_buscar = not item.get('buscada')
+            if falta_buscar:
+                consulta = item.get('consulta') or bf.armar_consulta(item)
+                candidatas = bf.buscar(consulta, self.clave, cantidad=8)
+                for c in candidatas:
+                    c['puntaje'] = puntuar(c, item)
+                candidatas.sort(key=lambda c: -c['puntaje'])
+                with CANDADO:
+                    item.update({'consulta': consulta, 'candidatas': candidatas,
+                                 'buscada': True, 'indice': -1})
 
-            if not candidata:
-                self._responder(json.dumps({'ok': False, 'motivo': 'sin_mas'}))
-                return
+            # Se avanza hasta la primera que se pueda bajar y subir. Muchas
+            # fallan por certificado vencido, hotlink bloqueado o un enlace que
+            # ya no existe, y quedarse en la primera que falla dejaba el boton
+            # apretando siempre sobre la misma.
+            fallos = []
+            while True:
+                with CANDADO:
+                    siguiente = item['indice'] + 1
+                    candidata = (item['candidatas'][siguiente]
+                                 if siguiente < len(item['candidatas']) else None)
+                if not candidata:
+                    self._responder(json.dumps({
+                        'ok': False,
+                        'motivo': fallos[-1] if fallos else 'No quedan candidatas.',
+                    }))
+                    return
 
-            try:
-                with CANDADO_SUBIDA:
-                    url, peso, tam = publicar(self.db, self.bucket, item, candidata, self.simular)
-            except Exception as e:
-                self._responder(json.dumps({'ok': False, 'motivo': str(e)[:120]}))
-                return
+                try:
+                    with CANDADO_SUBIDA:
+                        url, peso, tam = publicar(self.db, self.bucket, item,
+                                                  candidata, self.simular)
+                    break
+                except Exception as e:
+                    fallos.append(f'{candidata["origen"]}: {str(e)[:70]}')
+                    with CANDADO:
+                        item['indice'] = siguiente
 
             with CANDADO:
                 if item['estado'] != 'ok':
@@ -327,7 +390,7 @@ class Manejador(BaseHTTPRequestHandler):
                     'titulo': candidata['titulo'], 'puntaje': candidata['puntaje'],
                     'peso': peso, 'medidas': f'{tam[0]}x{tam[1]}', 'estado': 'ok',
                 })
-            self._responder(json.dumps({'ok': True}))
+            self._responder(json.dumps({'ok': True, 'saltadas': len(fallos)}))
             return
 
         self._responder(json.dumps({'ok': False}))
@@ -382,6 +445,7 @@ PAGINA = r"""<!doctype html>
            font-weight:600; cursor:pointer; }
   button:hover:not(:disabled) { border-color:var(--primario); color:var(--primario); }
   button:disabled { opacity:.4; cursor:default; }
+  .aviso:not(:empty) { font-size:11.5px; color:var(--alerta); line-height:1.35; margin-top:2px; }
   .card[data-estado="quitada"] .foto, .card[data-estado="sin_candidata"] .foto { background:var(--fondo); }
   .vacio { color:var(--texto2); padding:40px 0; text-align:center; }
 </style>
@@ -424,6 +488,7 @@ function card(it) {
       <div class="nombre"></div>
       <div class="meta origen"></div>
       <div class="meta consulta"></div>
+      <div class="aviso"></div>
     </div>
     <div class="acciones">
       <button data-act="otra">Otra${it.quedan ? ` (${it.quedan})` : ''}</button>
@@ -444,12 +509,30 @@ function card(it) {
   el.addEventListener('click', async ev => {
     const act = ev.target.closest('[data-act]');
     if (!act) return;
+
+    const etiqueta = act.textContent;
     act.disabled = true;
-    await fetch('/' + act.dataset.act, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ doc_id: it.doc_id }),
-    });
+    act.textContent = act.dataset.act === 'otra' ? 'Buscando…' : '…';
+
+    let r = {};
+    try {
+      r = await (await fetch('/' + act.dataset.act, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ doc_id: it.doc_id }),
+      })).json();
+    } catch (e) {
+      r = { ok: false, motivo: 'No se pudo hablar con el servidor.' };
+    }
+
+    // Sin esto, cuando falla la tarjeta queda igual, no se repinta y el botón
+    // se queda deshabilitado para siempre: parece que la página se colgó.
+    if (!r.ok) {
+      act.disabled = false;
+      act.textContent = etiqueta;
+      el.querySelector('.aviso').textContent = r.motivo || 'No se pudo cambiar.';
+      return;
+    }
     refrescar();
   });
 
@@ -497,7 +580,15 @@ setInterval(refrescar, 1500);
 # ── Arranque ────────────────────────────────────────────────────────────────
 
 def elegir_productos(db, cantidad, solo_con_marca, meses=4):
-    """Los que no tienen foto, ordenados por lo que facturan."""
+    """
+    Los que hay que buscar y los que ya tienen foto, ordenados por lo que
+    facturan.
+
+    Los que ya la tienen se devuelven aparte para que la pagina los muestre
+    igual. Si no, al reiniciar el script se perderia de vista todo lo subido en
+    la corrida anterior y no habria forma de descartar una foto mala mas que
+    volviendo a mirar la tienda producto por producto.
+    """
     desde = datetime.now(timezone.utc) - timedelta(days=meses * 30)
     importe = defaultdict(float)
     for d in db.collection('ventas_por_dia').where('fecha_dt', '>=', desde).stream():
@@ -510,23 +601,28 @@ def elegir_productos(db, cantidad, solo_con_marca, meses=4):
     nombre_original = {d.id: (d.to_dict() or {}).get('nombre') or ''
                        for d in db.collection('catalogo').select(['nombre']).stream()}
 
-    productos = []
+    productos, con_foto = [], []
     for d in db.collection('tienda_productos').stream():
         x = d.to_dict() or {}
-        if x.get('imagenes'):
-            continue
         if solo_con_marca and not (x.get('marca') or '').strip():
             continue
-        productos.append({
+        p = {
             'doc_id': d.id,
             'codigo': x.get('codigo') or d.id,
             'nombre': x.get('nombre') or '',
             'marca': (x.get('marca') or '').strip(),
             'importe': round(importe.get(bf.normalizar(nombre_original.get(d.id, '')), 0)),
-        })
+        }
+        imagenes = x.get('imagenes') or []
+        if imagenes:
+            p['imagen'] = imagenes[0]
+            con_foto.append(p)
+        else:
+            productos.append(p)
 
     productos.sort(key=lambda p: -p['importe'])
-    return productos[:cantidad]
+    con_foto.sort(key=lambda p: -p['importe'])
+    return productos[:cantidad], con_foto
 
 
 def main():
@@ -549,16 +645,29 @@ def main():
     db, bucket = imp.conectar()
 
     print('Buscando productos sin foto...')
-    productos = elegir_productos(db, args.cantidad, args.solo_con_marca)
-    if not productos:
-        sys.exit('No hay productos sin foto que cumplan el filtro.')
+    productos, ya = elegir_productos(db, args.cantidad, args.solo_con_marca)
+    if not productos and not ya:
+        sys.exit('No hay productos que cumplan el filtro.')
 
-    ESTADO['total'] = len(productos)
-    print(f'{len(productos)} productos.'
-          f'{"  (SIMULACION: no se sube nada)" if args.simular else ""}\n')
+    # Las de corridas anteriores entran a la pagina ya resueltas, sin candidatas:
+    # se buscan recien si alguien pide otra.
+    for p in ya:
+        ESTADO['items'].append({
+            **p, 'consulta': '', 'candidatas': [], 'buscada': False, 'indice': -1,
+            'url': p['imagen'], 'origen': '', 'titulo': '', 'puntaje': 0,
+            'peso': 0, 'estado': 'ok',
+        })
+    ESTADO['procesados'] = len(ya)
+    ESTADO['con_foto'] = len(ya)
+    ESTADO['total'] = len(productos) + len(ya)
+
+    print(f'{len(productos)} para buscar' +
+          (f', {len(ya)} ya tienen foto y se muestran para revisar' if ya else '') +
+          ('  (SIMULACION: no se sube nada)' if args.simular else '') + '\n')
 
     Manejador.db = db
     Manejador.bucket = bucket
+    Manejador.clave = clave
     Manejador.simular = args.simular
 
     servidor = ThreadingHTTPServer(('127.0.0.1', args.puerto), Manejador)
