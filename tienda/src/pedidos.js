@@ -95,7 +95,34 @@ export async function crearPedido({ cliente, entrega, pago, items, subtotal, env
     modo: entrega.modo,
   });
 
+  avisarAlLocal(referencia.id);
+
   return { id: referencia.id, codigo };
+}
+
+/**
+ * Le toca el timbre al local.
+ *
+ * No se espera la respuesta ni se propaga el error: el pedido ya esta guardado
+ * y el cliente tiene que ver su confirmacion ahora, no cuando conteste un
+ * servidor de WhatsApp. Si el aviso no sale, el local igual ve el pedido por la
+ * webapp de gestion y por el POS, que escuchan la coleccion en vivo.
+ *
+ * `keepalive` es lo que hace que la llamada sobreviva al cambio de pantalla:
+ * sin eso el navegador cancela la peticion al navegar y el aviso se pierde
+ * justo en el unico momento en que importa.
+ */
+function avisarAlLocal(id) {
+  try {
+    fetch('/.netlify/functions/avisar-pedido', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id }),
+      keepalive: true,
+    }).catch(() => {});
+  } catch (err) {
+    console.warn('[pedidos] no se pudo avisar al local:', err);
+  }
 }
 
 export async function traerPedido(id) {

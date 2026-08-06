@@ -1,0 +1,30 @@
+# Sitio de Netlify de la tienda pública. Es un sitio aparte del de la webapp de
+# gestión: son dos aplicaciones distintas, con dominios distintos y públicos
+# distintos, y compartir un sitio significaría que un despliegue de una
+# arrastra a la otra.
+
+[build]
+  base = "tienda"
+  command = "npm run build"
+  publish = "dist"
+  functions = "netlify/functions"
+
+# El index nunca se cachea: es el que trae la lista de assets con hash. Si queda
+# cacheado, el navegador sigue pidiendo el JS de la versión anterior.
+[[headers]]
+  for = "/index.html"
+  [headers.values]
+    Cache-Control = "no-cache, no-store, must-revalidate"
+
+[[headers]]
+  for = "/assets/*"
+  [headers.values]
+    Cache-Control = "public, max-age=31536000, immutable"
+
+# Rutas de verdad, sin almohadilla: /p/:id y /pedido/:id las resuelve el router
+# del navegador, pero al entrar directo o al recargar el pedido llega al
+# servidor y hay que devolverle el index igual.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200

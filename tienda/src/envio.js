@@ -80,15 +80,18 @@ export async function cotizar(destino, entrega, subtotal = 0) {
     const datos = await respuesta.json();
     const km = Number(datos?.km);
     if (!Number.isFinite(km)) {
-      return { estado: 'a_confirmar', precio: 0, km: null, motivo: 'respuesta_invalida' };
+      return { estado: 'a_confirmar', precio: 0, km: null, motivo: datos?.motivo || 'respuesta_invalida' };
     }
 
-    const radio = Number(entrega?.radio_max_km) || 0;
-    if (radio > 0 && km > radio) {
-      return { estado: 'fuera_de_radio', precio: 0, km };
-    }
+    if (datos.fuera_de_radio) return { estado: 'fuera_de_radio', precio: 0, km };
 
-    const precio = precioPorDistancia(km, entrega);
+    // El precio que manda el servidor manda. Se recalcula acá solo si no vino:
+    // el numero que decide cuanto se cobra no puede salir de una cuenta que
+    // corre en el navegador del que paga.
+    const precio = Number.isFinite(Number(datos.precio))
+      ? Number(datos.precio)
+      : precioPorDistancia(km, entrega);
+
     if (precio === null) return { estado: 'fuera_de_radio', precio: 0, km };
 
     return { estado: 'ok', precio, km };

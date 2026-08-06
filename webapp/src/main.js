@@ -9,6 +9,7 @@ import { hasSessionHint, onAuthReady, isLoginLink, completeLinkSignIn, logout } 
 import { initTheme, toggleTheme, getTheme } from './theme.js';
 import { initNotifications, obtenerAlertasActivas, onAlertasCambian, refrescarAlertas } from './notifications.js';
 import { initConsumiblesWatcher } from './consumibles_watcher.js';
+import { initPedidosWatcher } from './pedidos_watcher.js';
 import { initCalendarioBadge, proximosEventos, textoSobre } from './pages/calendario_core.js';
 import { renderSkeleton } from './skeletons.js';
 import { initAutostart, getAutostart, setAutostart, isTauriApp } from './autostart.js';
@@ -883,6 +884,11 @@ function initApp(session) {
   // descarga. Queda fuera de bootPreload porque pinta badge y toasts: no deben
   // aparecer sobre la pantalla de login.
   initNotifications(db);
+
+  // Pedidos de la tienda online. Va acá y no dentro de bootPreload por lo
+  // mismo que las notificaciones: suena y pinta toasts, y no puede hacerlo
+  // sobre la pantalla de login.
+  initPedidosWatcher(db);
 
   // Cuando cualquier colección del store recibe cambios desde el server,
   // re-renderizar la página activa sin spinner (datos ya están en cache).
