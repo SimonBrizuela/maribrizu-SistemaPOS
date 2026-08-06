@@ -9,7 +9,7 @@ import { hasSessionHint, onAuthReady, isLoginLink, completeLinkSignIn, logout } 
 import { initTheme, toggleTheme, getTheme } from './theme.js';
 import { initNotifications, obtenerAlertasActivas, onAlertasCambian, refrescarAlertas } from './notifications.js';
 import { initConsumiblesWatcher } from './consumibles_watcher.js';
-import { initPedidosWatcher } from './pedidos_watcher.js';
+import { initPedidosWatcher, onPedidosCambian } from './pedidos_watcher.js';
 import { initCalendarioBadge, proximosEventos, textoSobre } from './pages/calendario_core.js';
 import { renderSkeleton } from './skeletons.js';
 import { initAutostart, getAutostart, setAutostart, isTauriApp } from './autostart.js';
@@ -67,6 +67,7 @@ const pages = {
   pcs:             { title: 'Estado de PCs',           loader: () => import('./pages/pcs.js'),              render: 'renderPcs',             cacheKey: null,                      needs: [] },
   notificaciones:  { title: 'Notificaciones',          loader: () => import('./pages/notificaciones.js'),   render: 'renderNotificaciones',  cacheKey: null,                      needs: ['catalogo'] },
   centro_compras:  { title: 'Centro de Compras',        loader: () => import('./pages/centro_compras.js'),   render: 'renderCentroCompras',   cacheKey: null,                      needs: ['catalogo', 'ventas_por_dia'] },
+  pedidos_tienda:  { title: 'Pedidos de la Tienda',     loader: () => import('./pages/pedidos_tienda.js'),   render: 'renderPedidosTienda',   cacheKey: null,                      needs: [] },
 };
 
 // Caché de módulos ya descargados (evita repetir import() tras la primera carga)
@@ -889,6 +890,7 @@ function initApp(session) {
   // mismo que las notificaciones: suena y pinta toasts, y no puede hacerlo
   // sobre la pantalla de login.
   initPedidosWatcher(db);
+  onPedidosCambian(actualizarBadgePedidos);
 
   // Cuando cualquier colección del store recibe cambios desde el server,
   // re-renderizar la página activa sin spinner (datos ya están en cache).
@@ -1070,6 +1072,19 @@ function actualizarBadgeFiados() {
     if (k && k !== 'local:null') claves.add(k);
   });
   const n = claves.size;
+  badge.textContent = n > 99 ? '99+' : String(n);
+  badge.style.display = n > 0 ? 'inline-flex' : 'none';
+  refrescarBadgesGrupo();
+  renderPinned();
+}
+
+// Pedidos de la tienda sin ver. Es el unico badge que cuenta plata de alguien
+// esperando del otro lado, asi que va aunque el grupo este colapsado: el badge
+// del grupo lo suma solo.
+function actualizarBadgePedidos(pendientes) {
+  const badge = document.getElementById('navPedidosBadge');
+  if (!badge) return;
+  const n = (pendientes || []).length;
   badge.textContent = n > 99 ? '99+' : String(n);
   badge.style.display = n > 0 ? 'inline-flex' : 'none';
   refrescarBadgesGrupo();

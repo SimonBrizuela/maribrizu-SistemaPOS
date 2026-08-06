@@ -6,16 +6,94 @@
   <title>Librería Liceo · POS</title>
   <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
   <link rel="apple-touch-icon" href="/libreria-liceo-512.png" />
+  <script>
+    // Anti-FOUC: aplica el tema guardado antes del primer paint (default claro).
+    try {
+      var t = localStorage.getItem('ll-theme');
+      if (t === 'dark') document.documentElement.setAttribute('data-theme', 'dark');
+    } catch (e) {}
+  </script>
+  <style>
+    /* ── Splash de arranque (animaciones compositadas: no se congelan aunque
+          el hilo principal esté ocupado cargando datos) ── */
+    #ll-splash {
+      position: fixed; inset: 0; z-index: 99999;
+      display: flex; flex-direction: column; align-items: center; justify-content: center;
+      gap: 30px;
+      background: #111111;
+      background-image:
+        radial-gradient(circle at 15% 20%, rgba(123,63,166,.18), transparent 42%),
+        radial-gradient(circle at 85% 22%, rgba(142,198,63,.14), transparent 42%),
+        radial-gradient(circle at 22% 85%, rgba(41,171,202,.14), transparent 42%),
+        radial-gradient(circle at 82% 82%, rgba(243,156,18,.14), transparent 42%);
+      transition: opacity .45s ease;
+      will-change: opacity;
+    }
+    #ll-splash.ll-hide { opacity: 0; pointer-events: none; }
+    #ll-splash .ll-logo {
+      width: min(240px, 58vw); height: auto;
+      filter: drop-shadow(0 10px 34px rgba(0,0,0,.55));
+      animation: ll-logo-in .7s cubic-bezier(.2,.7,.3,1) both, ll-logo-pulse 2.6s ease-in-out .7s infinite;
+      will-change: transform, opacity;
+    }
+    @keyframes ll-logo-in { from { opacity:0; transform: translateY(10px) scale(.96); } to { opacity:1; transform: none; } }
+    @keyframes ll-logo-pulse { 0%,100% { transform: scale(1); } 50% { transform: scale(1.035); } }
+    #ll-splash .ll-bar {
+      position: relative; width: min(210px, 48vw); height: 4px;
+      border-radius: 999px; background: rgba(255,255,255,.09); overflow: hidden;
+    }
+    #ll-splash .ll-bar::after {
+      content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 45%;
+      border-radius: 999px;
+      background: linear-gradient(90deg, #7b3fa6, #8ec63f, #f39c12, #29abca, #e63946);
+      transform: translateX(-120%);
+      animation: ll-bar-slide 1.15s ease-in-out infinite;
+      will-change: transform;
+    }
+    @keyframes ll-bar-slide { 0% { transform: translateX(-120%); } 100% { transform: translateX(360%); } }
+    @media (prefers-reduced-motion: reduce) {
+      #ll-splash .ll-logo { animation: ll-logo-in .3s ease both; }
+      #ll-splash .ll-bar::after { animation-duration: 2.4s; }
+    }
+  </style>
   <link rel="stylesheet" href="/src/styles/main.css" />
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <!-- Fuentes: self-host vía @fontsource + material-icons (importadas en main.css).
+       Ya no se piden a fonts.googleapis.com — arranque sin red ni FOUC. -->
   <link rel="preconnect" href="https://firestore.googleapis.com" crossorigin>
-  <link rel="preconnect" href="https://cdn.jsdelivr.net" crossorigin>
   <link rel="dns-prefetch" href="https://firebaseinstallations.googleapis.com">
-  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-  <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
 </head>
 <body>
+  <!-- Splash de arranque: se muestra al instante y se desvanece cuando aparece
+       la primera pantalla real (login o dashboard). Cubre el tramo "trabado"
+       del arranque con una animación fluida (compositada). -->
+  <div id="ll-splash" role="status" aria-label="Cargando Librería Liceo">
+    <img class="ll-logo" src="/libreria-liceo-512.png" alt="Librería Liceo" decoding="async" />
+    <div class="ll-bar"></div>
+  </div>
+  <script>
+    (function () {
+      var s = document.getElementById('ll-splash');
+      if (!s) return;
+      var done = false;
+      function hide() {
+        if (done) return; done = true;
+        s.classList.add('ll-hide');
+        setTimeout(function () { if (s.parentNode) s.parentNode.removeChild(s); }, 500);
+      }
+      window.__llHideSplash = hide;
+      function ready() {
+        var pc = document.getElementById('pageContent');
+        if (pc && pc.children.length > 0) return true;          // dashboard/página ya pintó
+        if (document.querySelector('.login-page')) return true; // login visible
+        return false;
+      }
+      if (ready()) { hide(); return; }
+      var obs = new MutationObserver(function () { if (ready()) { obs.disconnect(); hide(); } });
+      try { obs.observe(document.body, { childList: true, subtree: true }); } catch (e) {}
+      setTimeout(hide, 9000); // fallback duro por si algo no dispara
+    })();
+  </script>
+
   <div class="sidebar-overlay" id="sidebarOverlay"></div>
 
   <div id="app" style="display:none">
@@ -23,81 +101,109 @@
     <nav class="sidebar" id="sidebar">
       <div class="sidebar-header">
         <img src="/libreria-liceo-512.png" alt="Librería Liceo" class="sidebar-logo-img" loading="eager" decoding="async" />
+        <button id="sidebarCollapseInner" title="Ocultar menú"><span class="material-icons">menu_open</span></button>
       </div>
 
-      <div class="nav-links">
+      <div class="nav-links" id="navLinks">
+
+        <!-- Accesos rápidos: se fijan con clic derecho sobre cualquier página -->
+        <div class="nav-pinned" id="navPinned" style="display:none">
+          <div class="nav-group-header nav-pinned-header" title="Clic derecho sobre cualquier página para fijarla o quitarla de acá">
+            <span class="nav-group-label">Accesos rápidos</span>
+            <span class="material-icons nav-pinned-hint">push_pin</span>
+          </div>
+          <div class="nav-group-items open nav-pinned-items" id="navPinnedItems"></div>
+        </div>
 
         <!-- Grupo: Analíticas -->
         <div class="nav-group" data-group="analiticas">
           <button class="nav-group-header">
-            <span class="material-icons">bar_chart</span>
+            <span class="material-icons nav-group-icon">bar_chart</span>
             <span class="nav-group-label">Analíticas</span>
             <span class="material-icons nav-group-arrow">expand_more</span>
           </button>
           <div class="nav-group-items">
-            <a href="#" class="nav-link" data-page="control_total"><span class="material-icons">account_balance_wallet</span> Control Total</a>
-            <a href="#" class="nav-link" data-page="dashboard"><span class="material-icons">dashboard</span> Dashboard</a>
-            <a href="#" class="nav-link" data-page="ventas"><span class="material-icons">receipt_long</span> Ventas</a>
-            <a href="#" class="nav-link" data-page="historial"><span class="material-icons">calendar_month</span> Historial Diario</a>
-            <a href="#" class="nav-link" data-page="cierres"><span class="material-icons">lock_clock</span> Cierres de Caja</a>
-            <a href="#" class="nav-link" data-page="resumenes"><span class="material-icons">bar_chart</span> Resúmenes</a>
+            <a href="#" class="nav-link" data-page="control_total"><span class="material-icons">account_balance_wallet</span><span class="nav-label">Control Total</span></a>
+            <a href="#" class="nav-link" data-page="dashboard"><span class="material-icons">dashboard</span><span class="nav-label">Dashboard</span></a>
+            <a href="#" class="nav-link" data-page="ventas"><span class="material-icons">receipt_long</span><span class="nav-label">Ventas</span></a>
+            <a href="#" class="nav-link" data-page="historial"><span class="material-icons">calendar_month</span><span class="nav-label">Historial Diario</span></a>
+            <a href="#" class="nav-link" data-page="cierres"><span class="material-icons">lock_clock</span><span class="nav-label">Cierres de Caja</span></a>
+            <a href="#" class="nav-link" data-page="resumenes"><span class="material-icons">bar_chart</span><span class="nav-label">Resúmenes</span></a>
+            <a href="#" class="nav-link" data-page="calendario">
+              <span class="material-icons">event</span><span class="nav-label">Calendario</span>
+              <span id="navCalBadge" class="nav-badge nav-badge-pulse" style="display:none">HOY</span>
+            </a>
           </div>
         </div>
 
         <!-- Grupo: Productos -->
         <div class="nav-group" data-group="productos">
           <button class="nav-group-header">
-            <span class="material-icons">inventory_2</span>
+            <span class="material-icons nav-group-icon">inventory_2</span>
             <span class="nav-group-label">Productos</span>
             <span class="material-icons nav-group-arrow">expand_more</span>
           </button>
           <div class="nav-group-items">
-            <a href="#" class="nav-link" data-page="catalogo"><span class="material-icons">menu_book</span> Catálogo</a>
+            <a href="#" class="nav-link" data-page="catalogo"><span class="material-icons">menu_book</span><span class="nav-label">Catálogo</span></a>
             <a href="#" class="nav-link" data-page="notificaciones">
-              <span class="material-icons">notifications</span> Notificaciones
+              <span class="material-icons">notifications</span><span class="nav-label">Notificaciones</span>
               <span id="navNotifBadge" class="nav-badge" style="display:none"></span>
             </a>
-            <a href="#" class="nav-link" data-page="productos"><span class="material-icons">trending_up</span> Más Vendidos</a>
-            <a href="#" class="nav-link" data-page="articulos_unicos"><span class="material-icons">link</span> Artículos Únicos</a>
-            <a href="#" class="nav-link" data-page="promociones"><span class="material-icons">local_offer</span> Promociones</a>
+            <a href="#" class="nav-link" data-page="centro_compras">
+              <span class="material-icons">savings</span><span class="nav-label">Centro de Compras</span>
+              <span id="navCCNuevo" class="nav-nuevo" style="display:none">Nuevo</span>
+            </a>
+            <a href="#" class="nav-link" data-page="productos"><span class="material-icons">trending_up</span><span class="nav-label">Más Vendidos</span></a>
+            <a href="#" class="nav-link" data-page="articulos_unicos"><span class="material-icons">link</span><span class="nav-label">Artículos Únicos</span></a>
+            <a href="#" class="nav-link" data-page="promociones"><span class="material-icons">local_offer</span><span class="nav-label">Promociones</span></a>
           </div>
         </div>
 
         <!-- Grupo: LAB (zona de pruebas, aislada del POS) -->
         <div class="nav-group" data-group="lab">
           <button class="nav-group-header">
-            <span class="material-icons">science</span>
+            <span class="material-icons nav-group-icon">science</span>
             <span class="nav-group-label">LAB</span>
             <span class="material-icons nav-group-arrow">expand_more</span>
           </button>
           <div class="nav-group-items">
-            <a href="#" class="nav-link" data-page="lab_productos"><span class="material-icons">account_tree</span> Productos Madre</a>
+            <a href="#" class="nav-link" data-page="lab_productos"><span class="material-icons">account_tree</span><span class="nav-label">Productos Madre</span></a>
           </div>
         </div>
 
         <!-- Grupo: Gestión -->
         <div class="nav-group" data-group="gestion">
           <button class="nav-group-header">
-            <span class="material-icons">manage_accounts</span>
+            <span class="material-icons nav-group-icon">manage_accounts</span>
             <span class="nav-group-label">Gestión</span>
             <span class="material-icons nav-group-arrow">expand_more</span>
           </button>
           <div class="nav-group-items">
-            <a href="#" class="nav-link" data-page="turnos"><span class="material-icons">badge</span> Turnos / Cajeros</a>
-            <a href="#" class="nav-link" data-page="presupuestos"><span class="material-icons">description</span> Presupuestos</a>
-            <a href="#" class="nav-link" data-page="facturas"><span class="material-icons">request_quote</span> Facturación AFIP</a>
-            <a href="#" class="nav-link" data-page="perfiles"><span class="material-icons">manage_accounts</span> Perfiles ARCA</a>
-            <a href="#" class="nav-link" data-page="clientes"><span class="material-icons">contacts</span> Clientes</a>
-            <a href="#" class="nav-link" data-page="observaciones"><span class="material-icons">sticky_note_2</span> Observaciones</a>
-            <a href="#" class="nav-link" data-page="pcs"><span class="material-icons">desktop_windows</span> Estado de PCs</a>
+            <a href="#" class="nav-link" data-page="turnos"><span class="material-icons">badge</span><span class="nav-label">Turnos / Cajeros</span></a>
+            <a href="#" class="nav-link" data-page="presupuestos"><span class="material-icons">description</span><span class="nav-label">Presupuestos</span></a>
+            <a href="#" class="nav-link" data-page="facturas"><span class="material-icons">request_quote</span><span class="nav-label">Facturación AFIP</span></a>
+            <a href="#" class="nav-link" data-page="perfiles"><span class="material-icons">manage_accounts</span><span class="nav-label">Perfiles ARCA</span></a>
+            <a href="#" class="nav-link" data-page="clientes"><span class="material-icons">contacts</span><span class="nav-label">Clientes</span></a>
+            <a href="#" class="nav-link" data-page="fiados">
+              <span class="material-icons">account_balance_wallet</span><span class="nav-label">Fiados</span>
+              <span class="nav-badge" id="navFiadoBadge" style="display:none"></span>
+            </a>
+            <a href="#" class="nav-link" data-page="pedidos_tienda">
+              <span class="material-icons">shopping_bag</span><span class="nav-label">Pedidos de la Tienda</span>
+              <span class="nav-badge" id="navPedidosBadge" style="display:none"></span>
+            </a>
+            <a href="#" class="nav-link" data-page="observaciones"><span class="material-icons">sticky_note_2</span><span class="nav-label">Observaciones</span></a>
+            <a href="#" class="nav-link" data-page="pcs"><span class="material-icons">desktop_windows</span><span class="nav-label">Estado de PCs</span></a>
           </div>
         </div>
 
       </div>
 
       <div class="sidebar-footer">
-        <span class="status-dot" id="statusDot"></span>
-        <span id="statusText">Conectando...</span>
+        <div class="sidebar-status">
+          <span class="status-dot" id="statusDot"></span>
+          <span id="statusText">Conectando...</span>
+        </div>
       </div>
     </nav>
 
@@ -105,6 +211,7 @@
     <main class="main-content">
       <header class="topbar">
         <button class="menu-btn" id="menuBtn"><span class="material-icons">menu</span></button>
+        <button id="sidebarCollapseBtn" title="Ocultar / mostrar menú"><span class="material-icons">menu_open</span></button>
         <h2 id="pageTitle">Dashboard</h2>
         <div class="topbar-right">
           <span class="material-icons" id="refreshBtn" title="Actualizar" style="cursor:pointer">refresh</span>
@@ -113,6 +220,8 @@
       </header>
 
       <div class="refresh-hint">↕ Deslizá la tabla para ver más columnas</div>
+
+      <div id="calAviso" class="cal-aviso" style="display:none"></div>
 
       <div class="page-content" id="pageContent"></div>
     </main>

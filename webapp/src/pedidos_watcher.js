@@ -155,10 +155,10 @@ function _mostrarToast(p) {
       </div>
       <div style="display:flex;gap:8px;margin-top:8px">
         <button data-act="ver" style="background:#2f7a3d;color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">
-          Marcar visto
+          Ver el pedido
         </button>
-        <button data-act="cerrar" style="background:transparent;color:var(--text-muted);border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">
-          Después
+        <button data-act="visto" style="background:transparent;color:var(--text-muted);border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">
+          Marcar visto
         </button>
       </div>
     </div>`;
@@ -166,7 +166,10 @@ function _mostrarToast(p) {
   toast.addEventListener('click', ev => {
     const act = ev.target.closest('[data-act]')?.dataset.act;
     if (!act) return;
-    if (act === 'ver') marcarVisto(p.id);
+    // El aviso tiene que terminar en la pantalla donde se trabaja el pedido. Un
+    // toast que solo dice que entro algo obliga a buscarlo a mano despues.
+    if (act === 'ver') window.navigateToPage?.('pedidos_tienda');
+    if (act === 'visto') marcarVisto(p.id);
     _cerrarToast(toast);
   });
 
@@ -224,7 +227,11 @@ function _notificarNavegador(p) {
       // alguien en el mostrador, el pedido queda sin ver.
       requireInteraction: true,
     });
-    n.onclick = () => { window.focus(); n.close(); };
+    n.onclick = () => {
+      window.focus();
+      window.navigateToPage?.('pedidos_tienda');
+      n.close();
+    };
   } catch (e) {
     console.warn('[pedidos] no se pudo notificar:', e);
   }
