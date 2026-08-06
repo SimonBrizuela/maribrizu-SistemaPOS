@@ -4,42 +4,28 @@ import { franjaMarca, icono, resplandores } from '../iconos.js';
 import { esc } from '../formato.js';
 
 /**
- * Mosaico de la portada.
+ * Imagen de la portada.
  *
- * Donde una tienda pondria una foto de portada, esta libreria no tiene ninguna.
- * En vez de dejar dos tercios de la pantalla en negro vacio, se usa el recurso
- * grafico de la marca (fichas de color inclinadas sobre negro) diciendo en pocas
- * palabras que se vende. Es lo mismo que hace el logo, y no envejece cuando
- * cambia el catalogo.
+ * Antes eran fichas de color armadas con CSS, con el nombre de cada rubro
+ * escrito adentro. Cumplian mientras no hubo ninguna foto en el catalogo, pero
+ * eran cinco rectangulos con texto: decian que se vende sin mostrarlo. La
+ * imagen mantiene el mismo recurso grafico de la marca (fichas de color
+ * inclinadas sobre negro) y ademas trae los productos de verdad.
  *
- * Las posiciones estan escritas a mano, no generadas al azar: al azar salen
- * choques y huecos, y hay que mirarlo igual para corregirlo.
+ * Va como <img> y no como fondo en CSS para que el navegador la trate como
+ * contenido: la descarga con prioridad alta, la puede servir en el tamano que
+ * corresponde y no desaparece al imprimir.
+ *
+ * aria-hidden porque no aporta nada que no diga ya el titulo de al lado. Que un
+ * lector de pantalla lea "cuadernos, hilos, mochilas, temperas, regalos"
+ * despues del titulo es repetir el menu en desorden.
  */
-// Las coordenadas van en porcentaje del alto y ancho del mosaico. Estan
-// calculadas para que el conjunto ocupe de 0 a 98 en los dos ejes: la version
-// anterior llegaba al 84% a lo ancho y dejaba una franja muerta a la derecha,
-// que hacia ver todo el bloque corrido hacia la izquierda.
-const MOSAICO = [
-  { texto: 'Cuadernos', color: 'violeta', x: 0,  y: 6,  ancho: 46, alto: 44, giro: -4, tam: 1.6 },
-  { texto: 'Hilos',     color: 'verde',   x: 52, y: 0,  ancho: 36, alto: 30, giro: 3,  tam: 1.25 },
-  { texto: 'Mochilas',  color: 'naranja', x: 56, y: 34, ancho: 42, alto: 34, giro: -3, tam: 1.35 },
-  { texto: 'Témperas',  color: 'cyan',    x: 4,  y: 56, ancho: 42, alto: 36, giro: 4,  tam: 1.35 },
-  { texto: 'Regalos',   color: 'rojo',    x: 50, y: 72, ancho: 44, alto: 26, giro: -2, tam: 1.25 },
-];
-
-function mosaico() {
-  const fichas = MOSAICO.map((f, i) => `
-    <div class="mosaico__ficha"
-         style="left:${f.x}%; top:${f.y}%; width:${f.ancho}%; height:${f.alto}%;
-                transform:rotate(${f.giro}deg);
-                background:var(--liceo-${f.color});
-                color:var(--liceo-${f.color}-tinta);
-                font-size:${f.tam}rem;
-                animation-delay:${i * 70}ms">${f.texto}</div>`).join('');
-
-  // aria-hidden: para un lector de pantalla son cinco palabras sueltas sin
-  // contexto. Lo que hay que leer ya está en el título de al lado.
-  return `<div class="mosaico" aria-hidden="true">${fichas}</div>`;
+function ilustracion() {
+  return `
+    <div class="portada__imagen" aria-hidden="true">
+      <img src="/portada.webp" alt="" width="1400" height="933"
+           fetchpriority="high" decoding="async">
+    </div>`;
 }
 
 /** Una tira de productos de un rubro. */
@@ -86,7 +72,7 @@ export async function inicio({ montar }) {
               </a>
             </div>
           </div>
-          ${mosaico()}
+          ${ilustracion()}
         </div>
       </div>
 

@@ -84,47 +84,40 @@
 }
 .portada__acciones { display: flex; flex-wrap: wrap; gap: var(--e-3); }
 
-/* En pantalla ancha el texto se queda en su columna y el resto se llena con el
-   mosaico. Antes el titulo ocupaba un tercio y los otros dos tercios eran negro
+/* En pantalla ancha el texto se queda en su columna y el resto se llena con la
+   imagen. Antes el titulo ocupaba un tercio y los otros dos tercios eran negro
    vacio: se veia sin terminar. */
 .portada__cuerpo { display: grid; gap: var(--e-7); align-items: center; }
 @media (min-width: 1000px) {
   .portada__cuerpo { grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); }
 }
 
-/* ── Mosaico de la portada ───────────────────────────────────────────────────
-   Las fichas del logo, agrandadas y con palabras adentro.
+/* ── Imagen de la portada ────────────────────────────────────────────────────
+   Reemplaza al mosaico de fichas que se armaba con CSS. Aquel cumplia mientras
+   el catalogo no tenia ninguna foto, pero eran cinco rectangulos con texto:
+   decian que se vende sin mostrarlo.
 
-   No es decoracion de relleno: es el mismo recurso grafico de la marca (rectangulos
-   de color inclinados sobre negro) diciendo en cuatro palabras que vende el local.
-   Sirve donde una tienda normal pondria una foto de portada, que esta libreria no
-   tiene, y no envejece cuando cambia el catalogo. */
-.mosaico {
+   La imagen ya viene sobre fondo negro, el mismo del bloque, asi que no lleva
+   marco ni recuadro: se funde con la seccion y se lee como parte de la pagina y
+   no como una foto pegada encima. */
+.portada__imagen {
   display: none;
-  position: relative;
-  height: 380px;
+  animation: portada-entra var(--m-lento) var(--curva) backwards;
 }
-@media (min-width: 1000px) { .mosaico { display: block; } }
-
-.mosaico__ficha {
-  position: absolute;
-  display: grid;
-  place-items: center;
-  padding: var(--e-4);
+.portada__imagen img {
+  display: block;
+  width: 100%;
+  height: auto;
   border-radius: var(--r-lg);
-  font-family: var(--font-titulo);
-  font-weight: var(--peso-bold);
-  letter-spacing: -.02em;
-  line-height: 1;
-  text-align: center;
-  box-shadow: var(--s-4);
-  /* Cada ficha entra desde un poco mas abajo y girada de mas, y se acomoda en su
-     lugar. Ocurre una sola vez al cargar; despues queda quieto. */
-  animation: ficha-entra var(--m-lento) var(--curva) backwards;
 }
-@keyframes ficha-entra {
-  from { opacity: 0; transform: translateY(24px) rotate(0deg) scale(.94); }
+@keyframes portada-entra {
+  from { opacity: 0; transform: translateY(16px) scale(.98); }
 }
+
+/* Aparece cuando hay dos columnas. Abajo de eso la portada es titulo, bajada y
+   los dos botones: meter la imagen ahi empuja el "Ver el catalogo" abajo del
+   pliegue, que es lo unico que la portada tiene que lograr en el celular. */
+@media (min-width: 1000px) { .portada__imagen { display: block; } }
 
 /* ── Tiras por rubro ─────────────────────────────────────────────────────────
    La portada mostraba una sola grilla de diez productos consecutivos del
