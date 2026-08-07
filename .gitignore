@@ -197,3 +197,7 @@ FOTOS_PENDIENTES.xlsx
 PRESUPUESTO_*.md
 PRESUPUESTO_*.xlsx
 FOTOS_MERCADOLIBRE.xlsx
+
+# Estudio de Mercado Libre: tiene costos y margenes del local
+ESTUDIO_ML*.md
+ESTUDIO_ML*.xlsx
