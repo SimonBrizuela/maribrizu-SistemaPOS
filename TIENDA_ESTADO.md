@@ -102,24 +102,39 @@ medía lo mismo que su contenido y no le dejaba margen para moverse.
 
 ## Lo que falta
 
-### 1. Desplegar la tienda — es lo que sigue
+### 1. El aviso de WhatsApp
 
-El checkout está escrito y las tres funciones también, pero hasta que no haya un
-sitio de Netlify no hay servidor que las ejecute. Sin eso la tienda cotiza el
-envío como "a confirmar" y no salen los avisos de WhatsApp. El pedido entra
-igual: nada de esto bloquea el checkout, es a propósito.
+La tienda ya está publicada en **https://libreria-liceo.netlify.app**, sitio
+aparte del de la webapp. Las direcciones y el envío andan contra el servidor de
+verdad: probado con `Rafael Núñez 4500`, que da $3.500 por 7,46 km, y con
+`Av Colón 4500` escrita entera, que la resuelve sola y da fuera de radio con
+14,83 km.
 
-Sitio de Netlify aparte del de la webapp, con `tienda/netlify.toml` que ya está.
-Falta definir el dominio.
+Falta el dominio propio, que se engancha desde el panel de Netlify.
+
+Lo que todavía no sale es el aviso de WhatsApp al local, porque le faltan sus
+variables. El pedido entra igual y aparece en el tablero de la webapp: nada de
+esto bloquea el checkout, es a propósito.
 
 Variables de entorno del sitio:
 
-| Variable | Para qué |
+| Variable | Estado |
 |---|---|
-| `GOOGLE_ROUTES_KEY` | distancia real hasta el domicilio |
-| `GOOGLE_PLACES_KEY` | autocompletado de direcciones (si falta usa la de Routes) |
-| `CALLMEBOT_TELEFONO` + `CALLMEBOT_APIKEY` | WhatsApp al local, la vía rápida |
-| `WHATSAPP_TOKEN` + `WHATSAPP_PHONE_ID` + `WHATSAPP_DESTINO` | la vía oficial de Meta |
+| `GOOGLE_ROUTES_KEY` | cargada — distancia real hasta el domicilio |
+| `GOOGLE_PLACES_KEY` | cargada — autocompletado de direcciones |
+| `CALLMEBOT_TELEFONO` + `CALLMEBOT_APIKEY` | falta — WhatsApp al local, la vía rápida |
+| `WHATSAPP_TOKEN` + `WHATSAPP_PHONE_ID` + `WHATSAPP_DESTINO` | falta — la vía oficial de Meta |
+
+Las dos de Google son la misma clave, la que estaba cargada en
+`claves_google.txt` como `GOOGLE_CSE_KEY` de cuando se usaba para Custom Search.
+Sirve para Places y para Routes; **Maps Static no está habilitada** en el
+proyecto, y el mapa del checkout está hecho para no necesitarla.
+
+Se publica con:
+
+```
+cd tienda && npm run build && npx netlify deploy --prod --dir=dist --functions=netlify/functions
+```
 
 Para CallMeBot el dueño le manda `I allow callmebot to send me messages` al
 +34 644 51 95 23 y recibe su apikey. Es lo más rápido para arrancar; la Cloud
@@ -153,14 +168,10 @@ automática vía `ticket_printer.py`. Requiere bump de versión, tag y push.
 El tablero de pedidos en la webapp ya está hecho (`webapp/src/pages/pedidos_tienda.js`),
 y el watcher con sonido y notificación también (`webapp/src/pedidos_watcher.js`).
 
-### 4. Deploy
+### 4. El dominio propio
 
-Sitio de Netlify aparte para la tienda, con `tienda/netlify.toml` que ya está.
-Falta definir el dominio.
-
-**Ya no hace falta separar la clave de Google en dos.** Places y Routes se llaman
-las dos desde funciones de servidor, así que ninguna necesita restricción por
-dominio y alcanza con una sola clave.
+El sitio está publicado en `libreria-liceo.netlify.app`. Falta engancharle el
+dominio definitivo desde el panel de Netlify.
 
 ### 5. Mercado Libre
 

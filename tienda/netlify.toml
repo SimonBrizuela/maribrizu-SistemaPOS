@@ -3,8 +3,10 @@
 # distintos, y compartir un sitio significaría que un despliegue de una
 # arrastra a la otra.
 
+# Las rutas van relativas a esta carpeta, no a la raíz del repositorio: el sitio
+# está vinculado acá. Es como está el de la webapp, que tiene su carpeta base
+# configurada del lado de Netlify.
 [build]
-  base = "tienda"
   command = "npm run build"
   publish = "dist"
   functions = "netlify/functions"

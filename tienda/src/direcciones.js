@@ -247,6 +247,15 @@ export function montarDirecciones(input, alCambiar) {
   // de alguien que justo estaba haciendo clic en una sugerencia.
   function alSalir() {
     setTimeout(() => {
+      // Se cancela la búsqueda de sugerencias que todavía estaba esperando su
+      // turno. No solo es inútil para una lista que se está cerrando: al
+      // arrancar después se lleva el número de petición y la respuesta de
+      // resolverEscrito llega con el número viejo y se descarta.
+      //
+      // En local no se notaba porque la resolución volvía antes que venciera la
+      // espera. Contra el servidor, con dos consultas a Google de por medio,
+      // el campo se quedaba sin coordenadas y el envío en "a confirmar".
+      clearTimeout(temporizador);
       cerrar();
       resolverEscrito();
     }, 200);
