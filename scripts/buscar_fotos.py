@@ -65,7 +65,7 @@ EXCLUIDOS = [
     # con su marca de agua encima.
     'mercadolibre.com', 'mercadolibre.com.ar', 'mlstatic.com',
     'shopee.', 'aliexpress.', 'amazon.',
-    'pinterest.', 'ebay.',
+    'pinterest.', 'ebay.', 'picclick.',
 
     # Video y redes: lo que devuelven son miniaturas y capturas, nunca una foto
     # de producto. Salio de ver un "Set Policia Military" que trajo el cuadro de
@@ -73,6 +73,18 @@ EXCLUIDOS = [
     'youtube.com', 'youtu.be', 'ytimg.com',
     'tiktok.com', 'instagram.com', 'facebook.com', 'fbcdn.net',
     'twitter.com', 'x.com', 'reddit.com',
+
+    # Bancos de imagen: la foto viene con la marca de agua estampada y ademas
+    # es de una foto de archivo, no del producto que vende el local.
+    'dreamstime.com', 'shutterstock.com', 'istockphoto.com', 'alamy.com',
+    'gettyimages.', 'depositphotos.com', '123rf.com', 'freepik.',
+
+    # Armerias, tiro y coleccionismo. Un juguete que se llama "Pistola" o
+    # "Ametralladora" cae ahi de una, y lo que devuelven son armas de verdad
+    # fotografiadas en una mesa. "Pistola Lanza Corcho Game Start" habia quedado
+    # con la foto de una escopeta sobre una cama, sacada de un clasificado.
+    'armeria', 'armas', 'airsoft', 'gunshop', 'guns.', 'municion',
+    'todocoleccion.net', 'milanuncios.com', 'olx.com', 'wallapop.com',
 ]
 
 

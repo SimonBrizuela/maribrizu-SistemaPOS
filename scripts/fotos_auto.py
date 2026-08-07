@@ -104,6 +104,7 @@ def esta_bloqueado(origen):
     o = (origen or '').lower()
     return any(b in o for b in _bloqueados)
 
+
 # Una sola subida a la vez. El trabajador y los botones de la pagina escriben
 # sobre lo mismo, y dos escrituras cruzadas sobre el mismo producto dejarian la
 # foto de una y la URL de la otra.
@@ -118,6 +119,54 @@ def normalizar(t):
 def palabras_de(texto):
     limpio = re.sub(r'[^a-z0-9]+', ' ', normalizar(texto))
     return [p for p in limpio.split() if p and p not in VACIAS]
+
+
+# ── Juguetes que se llaman como un arma ─────────────────────────────────────
+#
+# El catalogo tiene "Ametralladora 639", "Pistola Lanza Corcho" y una decena
+# mas. Son juguetes de plastico, pero el nombre no lo dice y la busqueda por
+# nombre devuelve armas de verdad: fusiles negros fotografiados sobre una mesa y
+# una escopeta arriba de una cama, sacada de un clasificado. En el catalogo
+# publico de una libreria de barrio eso no puede pasar.
+#
+# Poner "juguete" adelante de la consulta mejora los resultados pero no alcanza,
+# porque el buscador igual mezcla. Asi que ademas se le exige a la candidata que
+# lo diga: o el titulo tiene una palabra de juguete, o la foto sale de una
+# jugueteria. La que no lo dice se descarta, no se penaliza: un puntaje bajo
+# igual gana cuando no hay nada mejor, y aca lo correcto es quedarse sin foto.
+DE_FUEGO = {
+    'pistola', 'pistolita', 'revolver', 'escopeta', 'rifle', 'fusil', 'subfusil',
+    'ametralladora', 'metralleta', 'uzi', 'ak47', 'arma', 'armas', 'armamento',
+    'bala', 'balas', 'balin', 'balines', 'municion', 'municiones', 'cartucho',
+    'granada', 'bazuca', 'francotirador', 'sniper',
+}
+
+# Se comparan contra las palabras del titulo ya normalizadas, asi que van sin
+# acentos, sin guiones y en singular y plural: "x-shot" llega partido en "shot".
+SENAL_JUGUETE = {
+    'juguete', 'juguetes', 'jugueteria', 'jugueteria', 'juguetera', 'toy', 'toys',
+    'infantil', 'infantiles', 'nino', 'ninos', 'nina', 'ninas', 'chicos', 'kids',
+    'juego', 'juegos', 'jugar', 'nerf', 'shot', 'blaster', 'dardo', 'dardos',
+    'plastico', 'didactico', 'didactica',
+}
+
+SENAL_JUGUETE_DOMINIO = ('juguet', 'toys', 'kids', 'bebe', 'chicos', 'jugar',
+                         'peques', 'ludico')
+
+
+def nombra_un_arma(producto):
+    """Si el producto es de jugueteria y su nombre nombra un arma de fuego."""
+    if not normalizar(producto.get('rubro') or '').startswith('juguet'):
+        return False
+    return any(p in DE_FUEGO for p in palabras_de(producto.get('nombre')))
+
+
+def parece_juguete(candidata):
+    """Si la candidata se presenta como juguete, por el titulo o por el sitio."""
+    if any(p in SENAL_JUGUETE for p in palabras_de(candidata.get('titulo'))):
+        return True
+    origen = normalizar(candidata.get('origen') or '')
+    return any(s in origen for s in SENAL_JUGUETE_DOMINIO)
 
 
 def puntuar(candidata, producto):
@@ -284,10 +333,13 @@ def rastrear(producto, clave, minimo):
     planes B. Devuelve (consulta que se uso, candidatas puntuadas).
     """
     mejores, consulta_usada = [], ''
+    solo_juguetes = nombra_un_arma(producto)
 
     for consulta in variantes_de_consulta(producto):
         crudas = bf.buscar(consulta, clave, cantidad=8)
         candidatas = [c for c in crudas if not esta_bloqueado(c['origen'])]
+        if solo_juguetes:
+            candidatas = [c for c in candidatas if parece_juguete(c)]
         for c in candidatas:
             c['puntaje'] = puntuar(c, producto)
         candidatas.sort(key=lambda c: -c['puntaje'])
@@ -375,6 +427,10 @@ def trabajar(productos, clave, db, bucket, minimo, simular):
             'codigo': p['codigo'],
             'nombre': p['nombre'],
             'marca': p.get('marca', ''),
+            # El rubro viaja con el item porque el boton "Otra" vuelve a buscar
+            # desde aca, y sin el se pierden el prefijo "juguete" y el filtro de
+            # armas de verdad.
+            'rubro': p.get('rubro', ''),
             'importe': p.get('importe', 0),
             'consulta': consulta,
             'candidatas': candidatas,
