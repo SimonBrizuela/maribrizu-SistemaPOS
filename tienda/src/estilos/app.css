@@ -1392,9 +1392,10 @@
 .direccion-estado--aprox { color: var(--alerta); }
 
 /* ── Mapa del envío ───────────────────────────────────────────────────────────
-   Mosaicos de OpenStreetMap posicionados a mano. Ver src/mapa.js: no hay
-   librería de mapas, así que todo lo que se mueve acá se mueve con `left`
-   y `top` en línea. */
+   El fondo es una imagen de la Static API de Google; los marcadores los pone
+   src/mapa.js encima, con los colores de la marca. Van posicionados en
+   porcentaje porque la imagen se pide a 640 de ancho y el navegador la estira
+   al ancho real del bloque: en píxeles se despegarían del punto. */
 
 .mapa {
   margin: 0;
@@ -1414,12 +1415,14 @@
   contain: paint;
 }
 
-.mapa__mosaico {
+.mapa__fondo {
   position: absolute;
-  width: 256px;
-  height: 256px;
-  /* Los mosaicos vienen de un servidor externo: si uno falla no puede dejar un
-     rectángulo roto en medio del checkout. */
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  /* Si la imagen no llega, que no quede el icono de rota: el mapa entero se
+     saca desde el JS, y mientras tanto se ve el fondo del lienzo. */
   color: transparent;
   user-select: none;
   pointer-events: none;
@@ -1428,6 +1431,8 @@
 .mapa__vinculo {
   position: absolute;
   inset: 0;
+  width: 100%;
+  height: 100%;
   pointer-events: none;
 }
 .mapa__vinculo line {
@@ -1487,10 +1492,3 @@
 }
 
 .mapa__enlace { font-weight: var(--peso-semi); color: var(--primary-txt); }
-
-.mapa__credito {
-  font-size: 10px;
-  color: var(--text-3);
-  text-align: right;
-  margin-top: calc(var(--e-2) * -1);
-}

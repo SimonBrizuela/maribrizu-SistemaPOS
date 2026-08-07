@@ -7,29 +7,38 @@
  * una direccion que no vio es un numero que no puede discutir; el mapa se la
  * muestra antes de que confirme.
  *
- * Esta escrito a mano en vez de traer Leaflet o la libreria de Maps. Son ~230
- * lineas contra 150 kB de dependencia, y de un mapa que no se arrastra ni hace
- * zoom se usa el 5% de lo que traen esas librerias. Los mosaicos salen de
- * OpenStreetMap por CARTO, que no pide clave: la Maps Static API de Google
- * habria servido igual pero no esta habilitada en el proyecto, y habilitarla
- * significa una llamada facturada por cada vez que alguien abre el checkout.
+ * El fondo es una imagen de la Maps Static API, servida por
+ * `netlify/functions/mapa.mjs` para que la clave no viaje al navegador. Los
+ * marcadores los dibuja este archivo encima, con los colores de la marca en vez
+ * de los pines rojos de Google: como el centro y el zoom se calculan aca, se
+ * sabe exactamente en que pixel cae cada punto.
  *
- * Si los mosaicos no cargan —sin internet, o el servidor de CARTO caido— quedan
- * los dos marcadores sobre el fondo y el enlace a Google Maps. Se ve peor pero
- * sigue diciendo lo que tiene que decir.
+ * Se probo antes con mosaicos de OpenStreetMap por CARTO, que no necesitan
+ * clave. Se descarto: los basemaps de CARTO piden licencia Enterprise para uso
+ * comercial y esto es una tienda que vende. Google, en cambio, ya es el
+ * proveedor de las direcciones y del calculo de envio, tiene 10.000 mapas por
+ * mes sin cargo y esta tienda no se acerca a ese numero.
+ *
+ * Si la imagen no carga —la API sin habilitar, la funcion sin desplegar, sin
+ * internet— el mapa se saca solo y el checkout sigue igual. Es una ayuda para
+ * mirar, nunca un requisito para comprar.
  */
 import { icono } from './iconos.js';
 import { esc, distancia } from './formato.js';
 
+const FUNCION = '/.netlify/functions/mapa';
+
 const TILE = 256;
 const ZOOM_MAX = 17;
 const ZOOM_MIN = 9;
+
+// Tope de la Static API. Se pide hasta esto y el navegador la estira: con
+// `scale=2` llegan 1.280 px reales, de sobra para el ancho del bloque.
+const LADO_MAXIMO = 640;
+
 // Aire alrededor de los marcadores para que ninguno quede pegado al borde. Es
 // mas arriba que abajo porque el marcador cuelga hacia arriba de su punto.
 const AIRE = { arriba: 54, abajo: 26, costado: 40 };
-
-const MOSAICOS = 'https://basemaps.cartocdn.com/light_all';
-const CREDITO = '© OpenStreetMap · CARTO';
 
 /**
  * @param {HTMLElement} contenedor  donde se dibuja; se vacia
@@ -55,10 +64,15 @@ export function montarMapa(contenedor, opciones) {
   function dibujar() {
     const medido = Math.round(contenedor.clientWidth);
     // El primer render puede caer con el contenedor todavia en cero, y volver a
-    // pedir los mismos mosaicos en cada resize de un pixel es tirar pedidos.
+    // pedir la misma imagen en cada resize de un pixel es tirar llamadas.
     if (medido < 80 || medido === ancho) return;
     ancho = medido;
     contenedor.innerHTML = pintar(ancho, opciones);
+
+    // Si el fondo no llega, no queda un rectangulo vacio con dos pines
+    // flotando: se saca el mapa entero.
+    contenedor.querySelector('[data-fondo]')
+      ?.addEventListener('error', () => { contenedor.innerHTML = ''; ancho = 0; });
   }
 
   dibujar();
@@ -79,29 +93,48 @@ export function montarMapa(contenedor, opciones) {
 /* ── Dibujo ───────────────────────────────────────────────────────────────── */
 
 function pintar(ancho, { local, destino, direccionLocal, direccionDestino, km }) {
-  const alto = Math.round(Math.min(280, Math.max(190, ancho * 0.52)));
-  const zoom = zoomQueEntra(local, destino, ancho, alto);
+  // El alto que se querria, y el tamaño que se le pide de verdad a Google. La
+  // proporcion sale del pedido y no al reves, asi la imagen entra exacta y los
+  // marcadores caen donde tienen que caer y no medio pixel al costado.
+  const altoDeseado = Math.min(280, Math.max(190, ancho * 0.52));
+  const pedidoAncho = Math.min(LADO_MAXIMO, Math.round(ancho));
+  const pedidoAlto = Math.min(LADO_MAXIMO, Math.round(pedidoAncho * altoDeseado / ancho));
+  const alto = Math.round(ancho * pedidoAlto / pedidoAncho);
+
+  const zoom = zoomQueEntra(local, destino, pedidoAncho, pedidoAlto);
 
   const a = aPixeles(local, zoom);
   const b = aPixeles(destino, zoom);
   const centro = { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 };
+  const centroEnGrados = aGrados(centro, zoom);
 
-  // Esquina superior izquierda del recorte, en pixeles del mundo a este zoom.
-  const origen = { x: centro.x - ancho / 2, y: centro.y - alto / 2 };
+  // Esquina superior izquierda de la imagen, en pixeles del mundo a este zoom.
+  const origen = { x: centro.x - pedidoAncho / 2, y: centro.y - pedidoAlto / 2 };
 
-  const enPantalla = p => ({ x: Math.round(p.x - origen.x), y: Math.round(p.y - origen.y) });
-  const pLocal = enPantalla(a);
-  const pDestino = enPantalla(b);
+  // En porcentaje y no en pixeles: la imagen se pide hasta 640 de ancho y el
+  // navegador la estira al ancho real del bloque, asi que los marcadores tienen
+  // que estirarse con ella.
+  const enPantalla = p => ({
+    x: (p.x - origen.x) / pedidoAncho * 100,
+    y: (p.y - origen.y) / pedidoAlto * 100,
+  });
+
+  const fondo = `${FUNCION}?lat=${centroEnGrados.lat.toFixed(6)}`
+              + `&lng=${centroEnGrados.lng.toFixed(6)}`
+              + `&zoom=${zoom}&ancho=${pedidoAncho}&alto=${pedidoAlto}`;
 
   return `
     <figure class="mapa" style="--mapa-alto:${alto}px">
       <div class="mapa__lienzo">
-        ${mosaicos(origen, ancho, alto, zoom)}
-        <svg class="mapa__vinculo" width="${ancho}" height="${alto}" aria-hidden="true">
-          <line x1="${pLocal.x}" y1="${pLocal.y}" x2="${pDestino.x}" y2="${pDestino.y}"/>
+        <img class="mapa__fondo" data-fondo src="${fondo}" alt="" aria-hidden="true"
+             width="${pedidoAncho}" height="${pedidoAlto}" decoding="async">
+        <svg class="mapa__vinculo" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+          <line x1="${enPantalla(a).x}" y1="${enPantalla(a).y}"
+                x2="${enPantalla(b).x}" y2="${enPantalla(b).y}"
+                vector-effect="non-scaling-stroke"/>
         </svg>
-        ${marcador(pDestino, 'casa', 'destino', direccionDestino || 'Tu dirección')}
-        ${marcador(pLocal, 'local', 'local', direccionLocal || 'El local')}
+        ${marcador(enPantalla(b), 'casa', 'destino', direccionDestino || 'Tu dirección')}
+        ${marcador(enPantalla(a), 'local', 'local', direccionLocal || 'El local')}
       </div>
 
       <figcaption class="mapa__pie">
@@ -112,42 +145,16 @@ function pintar(ancho, { local, destino, direccionLocal, direccionDestino, km })
         </span>
         <a class="mapa__enlace" target="_blank" rel="noopener"
            href="https://www.google.com/maps/dir/?api=1&origin=${local.lat},${local.lng}&destination=${destino.lat},${destino.lng}">
-          Ver en Google Maps
+          Cómo llegar
         </a>
       </figcaption>
-      <p class="mapa__credito">${CREDITO}</p>
     </figure>`;
-}
-
-function mosaicos(origen, ancho, alto, zoom) {
-  const total = 2 ** zoom;
-  const desdeX = Math.floor(origen.x / TILE);
-  const desdeY = Math.floor(origen.y / TILE);
-  const hastaX = Math.floor((origen.x + ancho) / TILE);
-  const hastaY = Math.floor((origen.y + alto) / TILE);
-
-  const piezas = [];
-  for (let y = desdeY; y <= hastaY; y++) {
-    // Arriba del polo norte y abajo del sur no hay mosaico. En Córdoba no pasa,
-    // pero pedirlos devolveria 404 y dejaria huecos grises.
-    if (y < 0 || y >= total) continue;
-    for (let x = desdeX; x <= hastaX; x++) {
-      // El mundo da la vuelta en horizontal: el mosaico -1 es el ultimo.
-      const xMundo = ((x % total) + total) % total;
-      piezas.push(`
-        <img class="mapa__mosaico" alt="" aria-hidden="true" decoding="async"
-             src="${MOSAICOS}/${zoom}/${xMundo}/${y}.png"
-             srcset="${MOSAICOS}/${zoom}/${xMundo}/${y}@2x.png 2x"
-             style="left:${Math.round(x * TILE - origen.x)}px;top:${Math.round(y * TILE - origen.y)}px">`);
-    }
-  }
-  return piezas.join('');
 }
 
 function marcador(punto, nombre, tipo, titulo) {
   return `
     <span class="mapa__marcador mapa__marcador--${tipo}"
-          style="left:${punto.x}px;top:${punto.y}px" title="${esc(titulo)}">
+          style="left:${punto.x.toFixed(3)}%;top:${punto.y.toFixed(3)}%" title="${esc(titulo)}">
       <span class="mapa__globo">${icono(nombre, { tam: 16, grosor: 2.2 })}</span>
       <span class="solo-lectores">${esc(titulo)}</span>
     </span>`;
@@ -166,6 +173,15 @@ function aPixeles({ lat, lng }, zoom) {
   return {
     x: (Number(lng) + 180) / 360 * lado,
     y: (0.5 - Math.log((1 + seno) / (1 - seno)) / (4 * Math.PI)) * lado,
+  };
+}
+
+/** La vuelta: la necesita el `center` que se le manda a Google. */
+function aGrados({ x, y }, zoom) {
+  const lado = TILE * 2 ** zoom;
+  return {
+    lng: x / lado * 360 - 180,
+    lat: 90 - 360 * Math.atan(Math.exp((y / lado - 0.5) * 2 * Math.PI)) / Math.PI,
   };
 }
 

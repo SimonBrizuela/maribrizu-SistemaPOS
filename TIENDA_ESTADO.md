@@ -60,10 +60,23 @@ elegirle una dirección por él.
 
 **Mapa con el local y el domicilio**, abajo del campo. Está para que el cliente
 vea que la dirección que quedó cargada es la suya, sobre todo cuando la
-resolvimos nosotros: de esa coordenada sale cuánto paga. Son mosaicos de
-OpenStreetMap posicionados a mano (`tienda/src/mapa.js`), sin librería de mapas
-ni clave: la Maps Static API de Google no está habilitada en el proyecto y
-habilitarla sería una llamada facturada por cada checkout abierto.
+resolvimos nosotros: de esa coordenada sale cuánto paga.
+
+El fondo es una imagen de la Maps Static API, servida por
+`netlify/functions/mapa.mjs` para que la clave no viaje al navegador. Los
+marcadores los dibuja `src/mapa.js` encima, en violeta y rosa de la marca en vez
+de los pines rojos de Google: como el centro y el zoom se calculan del lado de la
+tienda, se sabe en qué píxel cae cada punto. Se apagan los puntos de interés y el
+transporte, que competían con los dos marcadores que importan.
+
+Se probó primero con mosaicos de OpenStreetMap por CARTO, que no necesitan clave.
+**Se descartó: los basemaps de CARTO piden licencia Enterprise para uso comercial**
+y esto es una tienda que vende. Google ya es el proveedor de las direcciones y del
+envío, tiene 10.000 mapas por mes sin cargo y esta tienda no se acerca a ese
+número. Cada imagen se cachea un día en el navegador y una semana en el CDN.
+
+La función solo genera mapas a menos de 60 km del local. Sin ese cerrojo sería un
+generador de mapas de cualquier parte del mundo con la clave de la librería.
 
 **Permisos cerrados y verificados.** Probado contra la API REST sin sesión:
 `tienda_productos` y `tienda_config` se leen; `catalogo`, `ventas`,
@@ -127,8 +140,15 @@ Variables de entorno del sitio:
 
 Las dos de Google son la misma clave, la que estaba cargada en
 `claves_google.txt` como `GOOGLE_CSE_KEY` de cuando se usaba para Custom Search.
-Sirve para Places y para Routes; **Maps Static no está habilitada** en el
-proyecto, y el mapa del checkout está hecho para no necesitarla.
+Es "Clave de API 3" en el proyecto `mari-d7c71` y hoy tiene habilitados Places,
+Routes, Maps Static y Custom Search.
+
+Cuidado con esto: en Google Cloud **hay dos cosas que habilitar, no una**. La API
+en el proyecto (`gcloud services enable static-maps-backend.googleapis.com`) y
+además el servicio en las restricciones de la clave. Con la API habilitada pero
+la clave restringida a Places y Routes, Static Maps devuelve `403 This API key is
+not authorized to use this service`, que no se parece en nada al error de una API
+sin habilitar.
 
 Se publica con:
 
