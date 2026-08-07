@@ -367,7 +367,44 @@ class FirebaseSync:
                     if isinstance(conjunto_colores_raw, list) and conjunto_colores_raw:
                         try:
                             import json as _json
+
+                            # Campos que esta funcion normaliza a mano. Todo lo
+                            # que NO este aca se copia tal cual: ver el comentario
+                            # de _norm_color.
+                            _CONOCIDOS = {
+                                'color', 'unidades', 'restante', 'precio',
+                                'contenido', 'precio_pack', 'costo', 'margen',
+                                'codigo',
+                            }
+
+                            def _copiable(v):
+                                """Solo lo que sobrevive a json.dumps para SQLite."""
+                                if isinstance(v, (str, int, float, bool)) or v is None:
+                                    return True
+                                if isinstance(v, list):
+                                    return all(_copiable(x) for x in v)
+                                if isinstance(v, dict):
+                                    return all(isinstance(k, str) and _copiable(x)
+                                               for k, x in v.items())
+                                return False
+
                             def _norm_color(c):
+                                # Los campos que el POS entiende se normalizan de
+                                # a uno; los que no, se copian sin tocar.
+                                #
+                                # Antes esto era una lista blanca cerrada y ahi
+                                # estaba el bug: la webapp guarda por variedad el
+                                # stock_min, el stock_max y la unidad de ese
+                                # umbral, y ninguno figuraba aca. Se perdian al
+                                # bajar a SQLite, y como despues CADA VENTA de un
+                                # producto conjunto vuelve a subir el array
+                                # completo desde SQLite, la alerta que alguien
+                                # habia cargado en la webapp desaparecia sola. El
+                                # dueno la volvia a cargar y se borraba de nuevo.
+                                #
+                                # Copiando lo desconocido, cualquier campo que la
+                                # webapp agregue en el futuro sobrevive al viaje
+                                # sin tener que tocar el POS.
                                 out = {
                                     'color':    str(c.get('color', '') or ''),
                                     'unidades': float(c.get('unidades') or 0),
@@ -423,6 +460,11 @@ class FirebaseSync:
                                     cod_s = str(cod).strip()
                                     if cod_s:
                                         out['codigo'] = cod_s
+                                # Lo que el POS no interpreta viaja igual: es de
+                                # la webapp y tiene que volver intacto.
+                                for k, v in c.items():
+                                    if k not in _CONOCIDOS and _copiable(v):
+                                        out[k] = v
                                 return out
                             conjunto_colores = _json.dumps([
                                 _norm_color(c)

@@ -62,7 +62,7 @@ class EditarColoresDialog(QDialog):
         if colores:
             for c in colores:
                 self._add_row(c['color'], c['unidades'], c['restante'],
-                              precio=float(c.get('precio') or 0))
+                              precio=float(c.get('precio') or 0), original=c)
         else:
             # Si no había colores cargados, ofrecer una fila inicial vacía
             self._add_row('', 0, 0)
@@ -199,12 +199,22 @@ class EditarColoresDialog(QDialog):
         fh.addWidget(save, 2)
         root.addWidget(ft)
 
-    def _add_row(self, color_name, unidades, restante, precio=0):
+    def _add_row(self, color_name, unidades, restante, precio=0, original=None):
         row = QFrame()
         # Preservar el precio por variedad cargado desde el catálogo. Esta
         # ventana no lo edita (se setea desde la webapp), pero hay que
         # mantenerlo en el round-trip para no perderlo al guardar.
         row._precio_variedad = float(precio or 0)
+        # Y con el mismo criterio, la variedad entera tal como vino. Esta
+        # ventana edita el nombre, las unidades y el restante; todo lo demás
+        # —costo, margen, precio del pack, stock mínimo y máximo, la unidad de
+        # ese umbral— lo carga la webapp y acá sólo está de paso.
+        #
+        # Guardarla completa y volver a escribirla encima es lo que evita que
+        # ajustar el stock de un color desde el mostrador borre en silencio la
+        # alerta que alguien configuró. Antes se rearmaba la variedad de cero
+        # con cuatro campos y el resto se perdía sin aviso.
+        row._variedad_original = dict(original) if isinstance(original, dict) else {}
         row.setStyleSheet(
             f'QFrame {{ background: #fff; border: 1px solid {_GC["border_soft"]};'
             f'           border-radius: 8px; }}'
@@ -282,14 +292,19 @@ class EditarColoresDialog(QDialog):
             name = (nombre.text() or '').strip()
             if not name:
                 continue
-            item = {
+            # Se parte de la variedad completa y se le pisan los tres campos que
+            # esta ventana edita. Lo que no toca sobrevive.
+            item = dict(getattr(_row, '_variedad_original', None) or {})
+            item.update({
                 'color':    name,
                 'unidades': float(u.value()),
                 'restante': float(r.value()),
-            }
+            })
             pr = float(getattr(_row, '_precio_variedad', 0) or 0)
             if pr > 0:
                 item['precio'] = pr
+            else:
+                item.pop('precio', None)
             out.append(item)
         return out
 
