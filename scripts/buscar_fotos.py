@@ -79,6 +79,13 @@ EXCLUIDOS = [
     'dreamstime.com', 'shutterstock.com', 'istockphoto.com', 'alamy.com',
     'gettyimages.', 'depositphotos.com', '123rf.com', 'freepik.',
 
+    # Cine y series. Hay juguetes que se llaman como una pelicula y la busqueda
+    # se va derecho al afiche: "Arrastre Auto JP0219 Baby Driver" habia quedado
+    # con un fotograma de la persecucion de la pelicula, un Subaru de verdad.
+    'imdb.com', 'themoviedb.org', 'filmaffinity.com', 'sensacine.',
+    'rottentomatoes.com', 'letterboxd.com', 'fandom.com', 'wikia.',
+    'netflix.com', 'primevideo.', 'disneyplus.', 'ecartelera.com',
+
     # Armerias, tiro y coleccionismo. Un juguete que se llama "Pistola" o
     # "Ametralladora" cae ahi de una, y lo que devuelven son armas de verdad
     # fotografiadas en una mesa. "Pistola Lanza Corcho Game Start" habia quedado
