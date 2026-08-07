@@ -35,21 +35,26 @@ function ilustracion() {
  * apaisada y ocupa la mitad derecha de la portada; en una pantalla de 390 px esa
  * proporcion deja una franja de 120 px de alto donde no se distingue nada.
  *
- * Va DEBAJO del texto, no de fondo. Con el texto encima hay que cargarle un velo
- * tan oscuro para que el blanco se lea sobre la mochila violeta que apaga
- * justamente lo que la foto tiene para mostrar. Abajo, cada cosa tiene su lugar
- * y la foto va sin velo.
+ * Va de fondo de la portada entera y bien difuminada. Nitida detras del texto no
+ * se puede: para que el blanco se lea sobre la mochila violeta hace falta un
+ * velo tan cargado que apaga la foto. Desenfocada deja de competir —queda como
+ * luz de color, no como imagen— y el texto se lee sin pelear con nada.
  *
- * Y no le cuesta altura al boton "Ver el catalogo", que es la razon por la que
- * la imagen estaba oculta en el celular: el bloque de texto queda igual que
- * antes y la foto arranca donde antes habia fondo vacio.
+ * Ademas no le cuesta un pixel de altura a la portada, que es la razon por la
+ * que la imagen estaba oculta en el celular: el boton "Ver el catalogo" tiene
+ * que entrar en la primera pantalla.
+ *
+ * El archivo va chico a proposito, 360 px de ancho y 17 kB. Con 26 px de
+ * desenfoque el detalle no sobrevive, asi que mandar la version grande seria
+ * gastar 86 kB del plan de datos del cliente para que se vean las mismas
+ * manchas de color.
  */
 function ilustracionMovil() {
   return `
     <div class="portada__fondo" aria-hidden="true">
       <img src="/portada-movil.webp"
            srcset="/portada-movil.webp 480w, /portada-movil@2x.webp 960w"
-           sizes="100vw" alt="" width="480" height="720"
+           sizes="100vw" alt="" width="480" height="596"
            fetchpriority="high" decoding="async">
     </div>`;
 }
@@ -77,6 +82,7 @@ export async function inicio({ montar }) {
   // así que aparece de inmediato y la primera pantalla nunca está en blanco.
   montar(`
     <section class="marco-oscuro marco-oscuro--vivo portada">
+      ${ilustracionMovil()}
       ${resplandores()}
       <div class="contenedor portada__hero" style="padding-block:var(--e-7)">
         <div class="portada__cuerpo">
@@ -100,7 +106,6 @@ export async function inicio({ montar }) {
           </div>
           ${ilustracion()}
         </div>
-        ${ilustracionMovil()}
       </div>
 
       <div class="contenedor" style="padding-bottom:var(--e-7)">

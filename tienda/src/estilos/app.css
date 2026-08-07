@@ -135,65 +135,71 @@
 .portada__fondo { display: none; }
 
 @media (max-width: 999px) {
-  /* La foto NO va atrás del texto, va abajo.
-     Se probó de fondo con el texto encima y no funciona: para que el blanco se
-     lea sobre una mochila violeta y unos fibrones fluor hace falta un velo tan
-     cargado que apaga justo lo que la foto tiene para mostrar, que es el color.
-     Puesta abajo, cada cosa tiene su lugar: el texto sobre negro limpio y la
-     foto entera, sin velo.
-
-     Y sigue sin costarle altura al botón: el bloque de texto queda igual que
-     antes y la foto empieza donde antes había fondo vacío. */
-  .portada__hero {
+  /* La foto va de fondo de la portada entera, y bien desenfocada.
+     Nítida detrás del texto no funciona: para que el blanco se lea sobre la
+     mochila violeta y los fibrones fluor hace falta un velo tan cargado que
+     apaga justo lo que la foto tiene para mostrar. Con un desenfoque suave se
+     ve la mochila, los cuadernos y los fibrones, pero sin bordes duros que
+     compitan con las letras. Y no le cuesta un píxel de altura a la portada,
+     que es lo que hay que cuidar acá. */
+  .portada {
     position: relative;
     overflow: hidden;
-    padding-bottom: 0 !important;
+    isolation: isolate;
   }
 
   .portada__fondo {
     display: block;
-    position: relative;
-    /* Sangra hasta los bordes, saliéndose del padding del contenedor. */
-    width: 100vw;
-    margin-left: 50%;
-    transform: translateX(-50%);
-    margin-top: var(--e-5);
-    /* Alto fijo: es una franja de la foto, no la foto entera. Lo que entra es
-       la parte de abajo, que es la más rica —los libros, la cartuchera, el
-       anotador— y la que mejor se lee a este tamaño. */
-    height: 210px;
+    position: absolute;
+    /* Se pasa de los bordes a propósito: el desenfoque come el borde de la
+       imagen y deja una franja clara si el elemento termina justo. */
+    inset: -12%;
+    z-index: -1;
   }
   .portada__fondo img {
     width: 100%;
     height: 100%;
     object-fit: cover;
-    object-position: center 78%;
+    filter: blur(6px) saturate(1.2);
   }
 
-  /* Se desvanece contra el negro arriba y abajo, así la franja no queda con dos
-     cortes rectos y se lee como parte de la sección y no como una foto pegada
-     encima. */
+  /* Dos capas encima. La pareja baja todo hasta que el texto blanco tiene
+     contraste de sobra; la vertical cierra contra el negro del encabezado
+     arriba y contra la sección de productos abajo, para que el bloque no
+     termine en un corte. */
   .portada__fondo::after {
     content: '';
     position: absolute;
     inset: 0;
+    /* El velo no es parejo: carga arriba, donde están el título y la bajada, y
+       afloja abajo, donde sólo hay fichas de color que se defienden solas. Con
+       poco desenfoque la foto tiene detalle y el texto necesita esa ayuda. */
     background: linear-gradient(to bottom,
       var(--ink-superficie) 0%,
-      transparent 22%,
-      transparent 74%,
+      color-mix(in srgb, var(--ink-superficie) 62%, transparent) 18%,
+      color-mix(in srgb, var(--ink-superficie) 62%, transparent) 52%,
+      color-mix(in srgb, var(--ink-superficie) 34%, transparent) 78%,
       var(--ink-superficie) 100%);
   }
 
-  .portada__cuerpo,
-  .portada > .resplandores { position: relative; z-index: 1; }
+  /* Con la foto de fondo, los cuatro halos de color eran color de más sobre lo
+     mismo. Quedan apenas, para que el borde de arriba siga teniendo el tinte
+     de marca. */
+  .portada > .resplandores { opacity: .35; }
 
-  /* Menos resplandor: con la foto abajo, los cuatro halos de color encima del
-     texto eran color de más para la misma pantalla. */
-  .portada > .resplandores { opacity: .5; }
-
-  /* La sección de rubros arranca pegada a la foto, sin el escalón de aire que
-     dejaba el padding de la portada. */
-  .portada > .contenedor:not(.portada__hero) { padding-top: var(--e-5); }
+  /* Sobre la foto, el gris de apoyo se queda en 3,3:1 y hace falta 4,5:1.
+     Medido, no estimado: ver el contraste contra el píxel más claro que le toca
+     debajo. Se sube el texto a blanco en vez de cargarle más velo a la foto,
+     que es justo lo que no queremos tapar. La sombra suave hace el resto contra
+     los puntos más brillantes de la imagen. */
+  .portada__lugar,
+  .portada__bajada {
+    color: var(--ink-texto);
+    text-shadow: 0 1px 14px color-mix(in srgb, var(--ink-superficie) 80%, transparent);
+  }
+  .portada__titulo {
+    text-shadow: 0 2px 18px color-mix(in srgb, var(--ink-superficie) 70%, transparent);
+  }
 }
 
 /* Con el teclado del sistema en "menos movimiento", la foto se queda quieta
