@@ -5,6 +5,11 @@
  * telefono y no se pueden pintar con los tokens del tema. Todos comparten la
  * misma grilla de 24, el mismo grosor de trazo y las mismas terminaciones
  * redondeadas, que es lo que hace que un juego de iconos se vea de una pieza.
+ *
+ * El trazo tiene que quedar entre 1 y 23 en los dos ejes. El grosor de 2 se
+ * reparte una unidad para cada lado del camino, y lo que se sale del viewBox se
+ * recorta sin aviso: un icono dibujado sobre una grilla mas grande no se ve
+ * chico, se ve mordido contra el borde.
  */
 
 const TRAZOS = {
@@ -25,7 +30,12 @@ const TRAZOS = {
   izquierda:'<path d="m15 18-6-6 6-6"/>',
   abajo:    '<path d="m6 9 6 6 6-6"/>',
   reloj:    '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>',
-  whatsapp: '<path d="M20.5 3.5A11 11 0 0 0 3.2 16.9L2 22l5.2-1.2A11 11 0 1 0 20.5 3.5"/><path d="M8.5 8.2c.2-.5.4-.5.7-.5h.6c.2 0 .4 0 .6.5l.8 1.9c.1.3 0 .5-.1.7l-.5.6c-.2.2-.3.4-.1.7a7.4 7.4 0 0 0 3.4 3c.3.2.5.1.7-.1l.6-.7c.2-.2.4-.2.6-.1l1.9.9c.3.1.4.3.4.5v.7c0 .5-.4 1-1 1.2a3 3 0 0 1-1.4.1c-1.2-.2-3.3-1-5.2-2.9s-2.7-4-2.9-5.2a3 3 0 0 1 .1-1.4"/>',
+  // La burbuja estaba dibujada para una grilla de 28: se salia tres unidades por
+  // la derecha y una por arriba, y como el contenido fuera del viewBox se
+  // recorta, el circulo aparecia aplanado contra el borde. Redibujada sobre un
+  // circulo de radio 9 centrado en (13, 11), que es lo mas grande que entra
+  // dejandole lugar a la cola en la esquina de abajo a la izquierda.
+  whatsapp: '<path d="M4.27 13.18A9 9 0 1 1 8.5 18.79L2.7 21.3Z"/><path d="M8.7 6.5c.2-.5.4-.5.7-.5h.6c.2 0 .4 0 .6.5l.8 1.9c.1.3 0 .5-.1.7l-.5.6c-.2.2-.3.4-.1.7a7.4 7.4 0 0 0 3.4 3c.3.2.5.1.7-.1l.6-.7c.2-.2.4-.2.6-.1l1.9.9c.3.1.4.3.4.5v.7c0 .5-.4 1-1 1.2a3 3 0 0 1-1.4.1c-1.2-.2-3.3-1-5.2-2.9s-2.7-4-2.9-5.2a3 3 0 0 1 .1-1.4"/>',
   local:    '<path d="M4 9h16v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"/><path d="m4 9 1.6-5A1 1 0 0 1 6.6 3h10.8a1 1 0 0 1 1 .7L20 9"/><path d="M9 21v-6h6v6"/>',
 
   // Uno por rubro. Se eligio el objeto mas reconocible de cada uno a tamaño
