@@ -5,6 +5,13 @@
  * elige una, resuelve sus coordenadas y las devuelve: son las que le permiten a
  * la tienda cobrar el envio que corresponde en vez de "a confirmar".
  *
+ * Y cuando no elige ninguna —que es lo que hace mucha gente: escribe la
+ * direccion entera y le da a confirmar— al salir del campo se le pide al
+ * servidor que resuelva ese texto. Si dice exactamente lo mismo que la primera
+ * sugerencia, se toma esa; si es ambiguo, se deja sin coordenadas. Lo que sale
+ * de ahi viaja marcado como aproximada, para que el checkout se lo muestre en
+ * vez de cobrar un envio calculado sobre una direccion que el cliente no vio.
+ *
  * Degrada solo. Si la funcion del servidor no esta desplegada o no tiene clave,
  * las sugerencias no aparecen y el campo sigue siendo un campo de texto: el
  * cliente escribe su direccion, el pedido entra igual y el envio se confirma al
@@ -16,15 +23,20 @@ import { icono } from './iconos.js';
 
 const FUNCION = '/.netlify/functions/direcciones';
 const ESPERA_MS = 300;
+const MINIMO_PARA_RESOLVER = 6;
 
 /**
  * @param {HTMLInputElement} input
- * @param {(elegida: {direccion:string, lat:number, lng:number}|null) => void} alElegir
- *        Recibe null cuando el cliente vuelve a escribir: la direccion dejo de
- *        estar verificada y la cotizacion anterior ya no vale.
+ * @param {(cambio: {estado:string, direccion?:string, lat?:number, lng?:number}) => void} alCambiar
+ *        `estado` es uno de:
+ *          escribiendo   el cliente esta tecleando; lo de antes ya no vale
+ *          ubicada       eligio del desplegable, con coordenadas
+ *          aproximada    lo escribio entero y el servidor lo resolvio
+ *          no_ubicada    lo escribio entero y no se pudo resolver
+ *          sin_servicio  la funcion no esta desplegada o no tiene clave
  * @returns {() => void} para desenganchar
  */
-export function montarDirecciones(input, alElegir) {
+export function montarDirecciones(input, alCambiar) {
   if (!input) return () => {};
 
   // El desplegable se posiciona contra este envoltorio, no contra el campo:
@@ -45,6 +57,44 @@ export function montarDirecciones(input, alElegir) {
   let temporizador = null;
   let peticion = 0;
   let apagado = false;
+
+  // Agrupa todas las teclas de este campo con el detalle final en una sola
+  // sesion de Places. Google la factura como una busqueda en vez de una por
+  // tecla. Se renueva despues de cada direccion resuelta, porque ahi la sesion
+  // se cerro y las teclas siguientes son una busqueda nueva.
+  let sesion = nuevaSesion();
+
+  // El ultimo texto que ya se intento resolver contra el servidor, para no
+  // repetir la consulta cada vez que el campo pierde el foco sin cambios.
+  let resuelto = '';
+
+  function nuevaSesion() {
+    return crypto.randomUUID
+      ? crypto.randomUUID()
+      // Safari viejo no tiene randomUUID. El token solo tiene que ser unico y
+      // con forma de uuid v4: el servidor rechaza cualquier otra cosa.
+      : '10000000-1000-4000-8000-100000000000'.replace(/[018]/g, c =>
+          (c ^ (crypto.getRandomValues(new Uint8Array(1))[0] & (15 >> (c / 4)))).toString(16));
+  }
+
+  async function pedir(cuerpo) {
+    const respuesta = await fetch(FUNCION, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ ...cuerpo, sesion }),
+    });
+
+    // 503 es "no hay clave configurada" y 404 es "la funcion todavia no esta
+    // desplegada". En los dos casos no tiene sentido seguir preguntando en cada
+    // tecla: se apaga y el campo queda como texto libre.
+    if (respuesta.status === 503 || respuesta.status === 404) {
+      apagado = true;
+      alCambiar({ estado: 'sin_servicio' });
+      return null;
+    }
+    if (!respuesta.ok) return null;
+    return respuesta.json();
+  }
 
   function cerrar() {
     lista.hidden = true;
@@ -77,22 +127,13 @@ export function montarDirecciones(input, alElegir) {
 
     const mio = ++peticion;
     try {
-      const respuesta = await fetch(FUNCION, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ q }),
-      });
-
-      // 503 es "no hay clave configurada". No tiene sentido seguir preguntando
-      // en cada tecla: se apaga y el campo queda como texto libre.
-      if (respuesta.status === 503) { apagado = true; cerrar(); return; }
-      if (!respuesta.ok) { cerrar(); return; }
+      const datos = await pedir({ q });
+      if (!datos) { cerrar(); return; }
 
       // Llegó tarde: el cliente siguió escribiendo y ya hay otra consulta en
       // vuelo. Pintar esta le cambiaría la lista por una vieja.
       if (mio !== peticion) return;
 
-      const datos = await respuesta.json();
       sugerencias = datos.sugerencias || [];
       marcada = -1;
       pintar();
@@ -109,21 +150,60 @@ export function montarDirecciones(input, alElegir) {
     input.value = [s.titulo, s.detalle].filter(Boolean).join(', ');
 
     try {
-      const respuesta = await fetch(FUNCION, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ placeId: s.id }),
-      });
-      if (!respuesta.ok) return;
+      const datos = await pedir({ placeId: s.id });
+      if (!datos) return;
 
-      const datos = await respuesta.json();
       if (datos.direccion) input.value = datos.direccion;
+      resuelto = input.value;
+      sesion = nuevaSesion();
 
       if (Number.isFinite(datos.lat) && Number.isFinite(datos.lng)) {
-        alElegir({ direccion: input.value, lat: datos.lat, lng: datos.lng });
+        alCambiar({ estado: 'ubicada', direccion: input.value, lat: datos.lat, lng: datos.lng });
       }
     } catch (err) {
       console.warn('[direcciones] no se pudo resolver el lugar:', err);
+    }
+  }
+
+  /**
+   * Resuelve lo que quedó escrito sin haber elegido del desplegable.
+   * Silencioso a proposito: si no se puede, el campo queda como estaba y el
+   * envio se cotiza al preparar el pedido.
+   */
+  async function resolverEscrito() {
+    const texto = input.value.trim();
+    if (apagado || texto.length < MINIMO_PARA_RESOLVER || texto === resuelto) return;
+
+    resuelto = texto;
+    const mio = ++peticion;
+
+    try {
+      const datos = await pedir({ texto });
+      if (!datos || mio !== peticion) return;
+
+      // Solo si el campo sigue diciendo lo mismo: el cliente pudo volver y
+      // corregirlo mientras la consulta viajaba.
+      if (input.value.trim() !== texto) return;
+
+      if (!Number.isFinite(datos.lat) || !Number.isFinite(datos.lng)) {
+        alCambiar({ estado: 'no_ubicada' });
+        return;
+      }
+
+      if (datos.direccion) {
+        input.value = datos.direccion;
+        resuelto = input.value;
+      }
+      sesion = nuevaSesion();
+
+      alCambiar({
+        estado: 'aproximada',
+        direccion: input.value,
+        lat: datos.lat,
+        lng: datos.lng,
+      });
+    } catch (err) {
+      console.warn('[direcciones] no se pudo resolver lo escrito:', err);
     }
   }
 
@@ -133,7 +213,7 @@ export function montarDirecciones(input, alElegir) {
     // Cualquier tecla invalida la dirección verificada: si el cliente eligió
     // una del desplegable y después le agregó algo, las coordenadas guardadas
     // ya no son de lo que dice el campo.
-    alElegir(null);
+    alCambiar({ estado: 'escribiendo' });
 
     if (apagado) return;
     clearTimeout(temporizador);
@@ -162,9 +242,14 @@ export function montarDirecciones(input, alElegir) {
   }
 
   // El clic en una sugerencia dispara el blur del campo antes que su propio
-  // click. Sin el retraso, la lista se cierra y el clic cae en el vacío.
+  // click. Sin el retraso, la lista se cierra y el clic cae en el vacío; y sin
+  // el mismo retraso antes de resolver, se resolvería el texto a medio escribir
+  // de alguien que justo estaba haciendo clic en una sugerencia.
   function alSalir() {
-    setTimeout(cerrar, 150);
+    setTimeout(() => {
+      cerrar();
+      resolverEscrito();
+    }, 200);
   }
 
   input.setAttribute('role', 'combobox');

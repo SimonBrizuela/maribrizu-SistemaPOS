@@ -20,6 +20,7 @@ import { ir } from '../router.js';
 import { crearPedido } from '../pedidos.js';
 import { cotizar, rangoDeTramos, llegaAEnvioGratis } from '../envio.js';
 import { montarDirecciones } from '../direcciones.js';
+import { montarMapa } from '../mapa.js';
 
 export async function checkout({ montar }) {
   const cfg = await cargarConfig();
@@ -97,6 +98,12 @@ function pintarFormulario({ montar, cfg, cambios }) {
   let destino = null;
   let cotizacion = { estado: 'a_confirmar', precio: 0, km: null };
 
+  // Como se consiguio esa coordenada. Cambia lo que se le dice al cliente: una
+  // direccion que eligio de la lista es suya; una que resolvimos nosotros a
+  // partir de lo que escribio tiene que poder mirarla antes de confirmar.
+  let ubicacion = 'escribiendo';
+  let soltarMapa = null;
+
   const rango = rangoDeTramos(entrega);
 
   montar(`
@@ -164,14 +171,16 @@ function pintarFormulario({ montar, cfg, cambios }) {
                 id: 'direccion',
                 etiqueta: 'Dirección',
                 obligatorio: true,
-                ayuda: 'Calle y altura. Si el mapa no la encuentra, la confirmamos por teléfono.',
+                ayuda: 'Calle y altura. Elegí de la lista para que te calculemos el envío exacto.',
                 extra: 'autocomplete="street-address" maxlength="120" placeholder="Av. Alfonsina Storni 168"',
               })}
+              <p class="direccion-estado" role="status" data-estado hidden></p>
               ${campo({
                 id: 'referencia',
                 etiqueta: 'Piso, departamento o referencia',
                 extra: 'maxlength="120" placeholder="Piso 2 depto B · casa con reja verde"',
               })}
+              <div data-mapa></div>
             </div>
           `)}
 
@@ -221,6 +230,8 @@ function pintarFormulario({ montar, cfg, cambios }) {
   const form = document.querySelector('[data-form]');
   const cajaDomicilio = document.querySelector('[data-domicilio]');
   const cajaResumen = document.querySelector('[data-resumen]');
+  const cajaEstado = document.querySelector('[data-estado]');
+  const cajaMapa = document.querySelector('[data-mapa]');
 
   /* ── Resumen ────────────────────────────────────────────────────────────── */
 
@@ -323,19 +334,53 @@ function pintarFormulario({ montar, cfg, cambios }) {
     const subtotal = sumar(carrito.items());
     cotizacion = await cotizar(destino, entrega, subtotal);
     pintarResumen();
+    pintarDomicilio();
   }
 
   document.querySelectorAll('[data-modo]').forEach(boton => {
     boton.addEventListener('click', () => cambiarModo(boton.dataset.modo));
   });
 
+  /**
+   * El estado de la dirección y el mapa.
+   *
+   * El mapa aparece recién cuando hay coordenadas, y se rehace en cada
+   * cotización para que el cartel de los kilómetros no quede diciendo la
+   * distancia de la dirección anterior.
+   */
+  function pintarDomicilio() {
+    soltarMapa?.();
+    soltarMapa = null;
+
+    const aviso = AVISOS_DIRECCION[ubicacion];
+    cajaEstado.hidden = !aviso;
+    if (aviso) {
+      cajaEstado.className = `direccion-estado ${aviso.clase}`;
+      cajaEstado.innerHTML = `${icono(aviso.icono, { tam: 14, grosor: 2.5 })}<span>${aviso.texto}</span>`;
+    }
+
+    if (!destino || !cfg.origen) return;
+    soltarMapa = montarMapa(cajaMapa, {
+      local: cfg.origen,
+      destino,
+      direccionLocal: cfg.direccion,
+      direccionDestino: valor('direccion'),
+      km: cotizacion.estado === 'ok' ? cotizacion.km : null,
+    });
+  }
+
   // Al elegir una dirección del desplegable llegan sus coordenadas y se cotiza
-  // en el momento. Al volver a escribir llega null: la dirección dejó de estar
+  // en el momento. Al volver a escribir se pierden: la dirección dejó de estar
   // verificada y el precio anterior ya no corresponde a lo que dice el campo.
-  montarDirecciones(document.getElementById('direccion'), elegida => {
+  montarDirecciones(document.getElementById('direccion'), cambio => {
     const antes = destino;
-    destino = elegida ? { lat: elegida.lat, lng: elegida.lng } : null;
+    ubicacion = cambio.estado;
+    destino = Number.isFinite(cambio.lat) && Number.isFinite(cambio.lng)
+      ? { lat: cambio.lat, lng: cambio.lng }
+      : null;
+
     if (destino || antes) recotizar();
+    else pintarDomicilio();
   });
 
   document.querySelectorAll('[data-pago]').forEach(boton => {
@@ -455,6 +500,37 @@ function pintarFormulario({ montar, cfg, cambios }) {
 }
 
 /* ── Piezas ───────────────────────────────────────────────────────────────── */
+
+/**
+ * Lo que se le dice al cliente sobre su dirección.
+ *
+ * Mientras escribe no se dice nada: un cartel que cambia en cada tecla es
+ * ruido. Los otros tres estados sí se dicen, porque de esa coordenada sale
+ * cuánto paga de envío y tiene derecho a saber de dónde salió.
+ *
+ * `sin_servicio` no tiene aviso a propósito: que la función no esté desplegada
+ * es un problema nuestro, no del cliente, y el resumen ya le dice que el envío
+ * se confirma antes de salir.
+ */
+const AVISOS_DIRECCION = {
+  ubicada: {
+    clase: 'direccion-estado--ok',
+    icono: 'tilde',
+    texto: 'Dirección ubicada. El envío sale de la distancia real hasta acá.',
+  },
+  aproximada: {
+    clase: 'direccion-estado--aprox',
+    icono: 'atencion',
+    texto: 'Ubicamos tu dirección a partir de lo que escribiste. ' +
+           'Miralá en el mapa y corregila si no es esa.',
+  },
+  no_ubicada: {
+    clase: '',
+    icono: 'pin',
+    texto: 'No la encontramos en el mapa. El pedido entra igual y el envío ' +
+           'te lo confirmamos por teléfono.',
+  },
+};
 
 function bloque(numero, titulo, contenido) {
   return `

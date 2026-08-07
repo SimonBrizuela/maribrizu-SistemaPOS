@@ -47,6 +47,24 @@ por pedido, sale un resumen.
 de servidor. La clave de Google nunca viaja al navegador, así que no hace falta
 partirla en dos.
 
+Las sugerencias salen restringidas al área de reparto, no sesgadas hacia ella:
+con sesgo, escribir la dirección del propio local traía primero la calle
+homónima de Villa Carlos Paz, a 35 km. Y van con token de sesión, así todas las
+teclas de un campo se facturan como una búsqueda en vez de una por tecla.
+
+**El que escribe la dirección entera y no toca la lista también recibe su
+cotización.** Al salir del campo se resuelve ese texto contra Places, y se
+acepta solo si dice la misma altura y las mismas palabras que escribió. Cuando
+es ambiguo se deja sin coordenadas y el envío queda a confirmar, en vez de
+elegirle una dirección por él.
+
+**Mapa con el local y el domicilio**, abajo del campo. Está para que el cliente
+vea que la dirección que quedó cargada es la suya, sobre todo cuando la
+resolvimos nosotros: de esa coordenada sale cuánto paga. Son mosaicos de
+OpenStreetMap posicionados a mano (`tienda/src/mapa.js`), sin librería de mapas
+ni clave: la Maps Static API de Google no está habilitada en el proyecto y
+habilitarla sería una llamada facturada por cada checkout abierto.
+
 **Permisos cerrados y verificados.** Probado contra la API REST sin sesión:
 `tienda_productos` y `tienda_config` se leen; `catalogo`, `ventas`,
 `perfiles_facturacion` y el listado de pedidos dan `PERMISSION_DENIED`. El
@@ -193,6 +211,15 @@ revisa decide.
 **Falta el repaso a mano.** Las fotos salen de sitios de otras tiendas, buscadas
 por el nombre del producto. La mayoría acierta pero algunas no, y ese repaso lo
 tiene que hacer alguien que conozca el catálogo.
+
+**Los juguetes que se llaman como un arma tienen su propio filtro.** Decir
+"juguete" adelante de la consulta no alcanzaba: "Ametralladora 639" había
+quedado con dos fusiles negros y "Pistola Lanza Corcho" con una escopeta sobre
+una cama, de un clasificado. Ahora la candidata tiene que decir que es un
+juguete —en el título o en el sitio— o se descarta, y quedarse sin foto es
+preferible. Están bloqueadas además las armerías, los clasificados de segunda
+mano, los bancos de imagen y los sitios de cine: "Arrastre Auto JP0219 Baby
+Driver" se había traído un fotograma de la película.
 
 ### Por qué no se pueden usar en Mercado Libre
 

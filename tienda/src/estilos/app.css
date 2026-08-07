@@ -1374,3 +1374,123 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* El estado de la dirección: si quedó ubicada, si la ubicamos nosotros a partir
+   de lo que escribió, o si va a confirmarse por teléfono. Se dice siempre,
+   porque de esa coordenada sale cuánto paga de envío. */
+.direccion-estado {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--e-2);
+  font-size: var(--t-xs);
+  line-height: 1.45;
+  color: var(--text-2);
+}
+.direccion-estado[hidden] { display: none; }
+.direccion-estado svg { flex: none; margin-top: 1px; }
+.direccion-estado--ok { color: var(--exito); }
+.direccion-estado--aprox { color: var(--alerta); }
+
+/* ── Mapa del envío ───────────────────────────────────────────────────────────
+   Mosaicos de OpenStreetMap posicionados a mano. Ver src/mapa.js: no hay
+   librería de mapas, así que todo lo que se mueve acá se mueve con `left`
+   y `top` en línea. */
+
+.mapa {
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-2);
+}
+
+.mapa__lienzo {
+  position: relative;
+  height: var(--mapa-alto, 220px);
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  /* Se ve mientras los mosaicos cargan, y queda como fondo si no llegan. */
+  background: var(--surface-2);
+  contain: paint;
+}
+
+.mapa__mosaico {
+  position: absolute;
+  width: 256px;
+  height: 256px;
+  /* Los mosaicos vienen de un servidor externo: si uno falla no puede dejar un
+     rectángulo roto en medio del checkout. */
+  color: transparent;
+  user-select: none;
+  pointer-events: none;
+}
+
+.mapa__vinculo {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+}
+.mapa__vinculo line {
+  stroke: var(--primary);
+  stroke-width: 2;
+  stroke-dasharray: 3 5;
+  stroke-linecap: round;
+  opacity: .5;
+}
+
+.mapa__marcador {
+  position: absolute;
+  /* El punto de la coordenada es la punta de abajo del globo. */
+  transform: translate(-50%, -100%);
+  filter: drop-shadow(0 3px 6px rgba(14, 13, 16, .28));
+}
+
+.mapa__globo {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border-radius: var(--r-full) var(--r-full) 3px var(--r-full);
+  rotate: 45deg;
+  border: 2px solid var(--surface);
+}
+.mapa__globo svg { rotate: -45deg; }
+
+.mapa__marcador--local .mapa__globo { background: var(--primary); color: var(--primary-ink); }
+.mapa__marcador--destino .mapa__globo { background: var(--liceo-rosa); color: #FFF; }
+
+.mapa__pie {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--e-2) var(--e-3);
+  font-size: var(--t-xs);
+  color: var(--text-2);
+}
+
+.mapa__leyenda { display: flex; align-items: center; gap: var(--e-2); }
+.mapa__punto {
+  width: 9px;
+  height: 9px;
+  border-radius: var(--r-full);
+  display: inline-block;
+}
+.mapa__punto--local { background: var(--primary); }
+.mapa__punto--destino { background: var(--liceo-rosa); margin-left: var(--e-2); }
+
+.mapa__km {
+  font-weight: var(--peso-semi);
+  color: var(--text);
+  padding-left: var(--e-2);
+  border-left: 1px solid var(--border-2);
+}
+
+.mapa__enlace { font-weight: var(--peso-semi); color: var(--primary-txt); }
+
+.mapa__credito {
+  font-size: 10px;
+  color: var(--text-3);
+  text-align: right;
+  margin-top: calc(var(--e-2) * -1);
+}

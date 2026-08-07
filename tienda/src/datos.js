@@ -38,6 +38,10 @@ const CONFIG_POR_DEFECTO = {
   whatsapp: '5493517046684',
   email: 'libreria.liceo@hotmail.com',
   direccion: 'Av. Alfonsina Storni 168, X5019 Córdoba',
+  // Coordenada del local, verificada contra Places sobre la dirección completa.
+  // Está acá y no solo en Firestore porque el mapa del checkout la necesita
+  // para dibujarse, y un mapa con un solo marcador no dice nada.
+  origen: { lat: -31.3540169, lng: -64.1734488 },
   horarios_texto: 'Lunes a viernes de 9 a 13 y de 16:30 a 20:30 · Sábados de 9 a 13',
   entrega: {
     retiro_habilitado: true,
