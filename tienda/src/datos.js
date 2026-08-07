@@ -42,7 +42,10 @@ const CONFIG_POR_DEFECTO = {
   // Está acá y no solo en Firestore porque el mapa del checkout la necesita
   // para dibujarse, y un mapa con un solo marcador no dice nada.
   origen: { lat: -31.3540169, lng: -64.1734488 },
-  horarios_texto: 'Lunes a viernes de 9 a 13 y de 16:30 a 20:30 · Sábados de 9 a 13',
+  // Los del perfil de WhatsApp Business del local, que son los de verdad. Este
+  // valor es sólo el de arranque: el que manda es el de `tienda_config`.
+  horarios_texto: 'Lunes a viernes de 9 a 13 y de 17 a 20:30 · '
+                + 'Sábados de 9 a 13 y de 17:30 a 20:30 · Domingos cerrado',
   entrega: {
     retiro_habilitado: true,
     delivery_habilitado: true,

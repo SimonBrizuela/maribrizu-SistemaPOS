@@ -51,8 +51,11 @@ AJUSTES = {
     'barrio': 'Parque Liceo 1ª Sección',
     'origen': ORIGEN,
     'origen_verificado': ORIGEN_VERIFICADO,
-    'horarios_texto': ('Lunes a viernes de 9 a 13 y de 16:30 a 20:30 · '
-                       'Sábados de 9 a 13'),
+    # Copiados del perfil de WhatsApp Business del local. Los que habia antes
+    # estaban mal en dos cosas: la tarde arranca 17 y no 16:30, y el sabado
+    # tambien abre a la tarde, media hora mas tarde que el resto de la semana.
+    'horarios_texto': ('Lunes a viernes de 9 a 13 y de 17 a 20:30 · '
+                       'Sábados de 9 a 13 y de 17:30 a 20:30 · Domingos cerrado'),
     'entrega': {
         'retiro_habilitado': True,
         'delivery_habilitado': True,
