@@ -123,6 +123,86 @@
    pliegue, que es lo unico que la portada tiene que lograr en el celular. */
 @media (min-width: 1000px) { .portada__imagen { display: block; } }
 
+/* ── La imagen del celular ───────────────────────────────────────────────────
+   La regla de arriba sigue valiendo: en el celular la imagen no puede EMPUJAR
+   nada. Por eso esta va de fondo y el texto encima, así no le cuesta un solo
+   píxel de altura a la portada y el botón sigue entrando en la primera
+   pantalla.
+
+   La foto ya viene sobre negro y con las esquinas oscuras, que es lo que hace
+   que esto funcione: el degradado sólo tiene que reforzar lo que la imagen ya
+   trae, no tapar una foto clara. */
+.portada__fondo { display: none; }
+
+@media (max-width: 999px) {
+  /* La foto NO va atrás del texto, va abajo.
+     Se probó de fondo con el texto encima y no funciona: para que el blanco se
+     lea sobre una mochila violeta y unos fibrones fluor hace falta un velo tan
+     cargado que apaga justo lo que la foto tiene para mostrar, que es el color.
+     Puesta abajo, cada cosa tiene su lugar: el texto sobre negro limpio y la
+     foto entera, sin velo.
+
+     Y sigue sin costarle altura al botón: el bloque de texto queda igual que
+     antes y la foto empieza donde antes había fondo vacío. */
+  .portada__hero {
+    position: relative;
+    overflow: hidden;
+    padding-bottom: 0 !important;
+  }
+
+  .portada__fondo {
+    display: block;
+    position: relative;
+    /* Sangra hasta los bordes, saliéndose del padding del contenedor. */
+    width: 100vw;
+    margin-left: 50%;
+    transform: translateX(-50%);
+    margin-top: var(--e-5);
+    /* Alto fijo: es una franja de la foto, no la foto entera. Lo que entra es
+       la parte de abajo, que es la más rica —los libros, la cartuchera, el
+       anotador— y la que mejor se lee a este tamaño. */
+    height: 210px;
+  }
+  .portada__fondo img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    object-position: center 78%;
+  }
+
+  /* Se desvanece contra el negro arriba y abajo, así la franja no queda con dos
+     cortes rectos y se lee como parte de la sección y no como una foto pegada
+     encima. */
+  .portada__fondo::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(to bottom,
+      var(--ink-superficie) 0%,
+      transparent 22%,
+      transparent 74%,
+      var(--ink-superficie) 100%);
+  }
+
+  .portada__cuerpo,
+  .portada > .resplandores { position: relative; z-index: 1; }
+
+  /* Menos resplandor: con la foto abajo, los cuatro halos de color encima del
+     texto eran color de más para la misma pantalla. */
+  .portada > .resplandores { opacity: .5; }
+
+  /* La sección de rubros arranca pegada a la foto, sin el escalón de aire que
+     dejaba el padding de la portada. */
+  .portada > .contenedor:not(.portada__hero) { padding-top: var(--e-5); }
+}
+
+/* Con el teclado del sistema en "menos movimiento", la foto se queda quieta
+   igual: no anima nada. Se deja anotado porque la portada de escritorio sí
+   entra con una animación. */
+@media (prefers-reduced-motion: reduce) {
+  .portada__imagen { animation: none; }
+}
+
 /* ── Tiras por rubro ─────────────────────────────────────────────────────────
    La portada mostraba una sola grilla de diez productos consecutivos del
    catalogo, y como estan ordenados alfabeticamente salian cuatro "Bolsa Carton"
