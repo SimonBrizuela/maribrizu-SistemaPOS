@@ -17,7 +17,7 @@
  */
 import { cargarConfig } from '../datos.js';
 import { pie, vacio } from '../componentes.js';
-import { pesos, esc, distancia, cuando, haceCuanto } from '../formato.js';
+import { pesos, esc, distancia, cuando, haceCuanto, lineasDeHorario } from '../formato.js';
 import { icono, franjaMarca } from '../iconos.js';
 import { montarMapa } from '../mapa.js';
 import { traerPedido, seguirPedido, pasosDe, indiceDeEstado } from '../pedidos.js';
@@ -352,7 +352,8 @@ function ficha(p, cfg, modo) {
 
   const domicilio = retiro
     ? `<p class="pedido-ficha__valor">${esc(cfg.direccion)}</p>
-       <p class="pedido-ficha__apoyo">${esc(cfg.horarios_texto)}</p>`
+       ${lineasDeHorario(cfg.horarios_texto)
+           .map(l => `<p class="pedido-ficha__apoyo">${esc(l)}</p>`).join('')}`
     : `<p class="pedido-ficha__valor">${esc(p.entrega?.direccion || '')}</p>
        ${p.entrega?.referencia
          ? `<p class="pedido-ficha__apoyo">${esc(p.entrega.referencia)}</p>` : ''}

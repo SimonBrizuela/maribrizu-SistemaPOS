@@ -24,6 +24,24 @@ export function distancia(km) {
 }
 
 /**
+ * Los horarios, partidos en renglones.
+ *
+ * En la config viven como un solo texto separado por puntos medios
+ * ("Lunes a viernes de 9 a 13 · Sábados de 9 a 13 · Domingos cerrado"), que es
+ * comodo de editar pero se lee mal: en el pie y en la opcion de retiro del
+ * checkout entra en una sola linea, se corta y hay que adivinar el resto.
+ *
+ * Cada tramo va en su renglon. El punto medio se acepta con y sin espacios
+ * alrededor, y tambien el punto y coma, porque el texto lo escribe una persona.
+ */
+export function lineasDeHorario(texto) {
+  return String(texto || '')
+    .split(/\s*[·;]\s*/)
+    .map(l => l.trim())
+    .filter(Boolean);
+}
+
+/**
  * Lo que venga de Firestore, pasado a Date.
  *
  * Un campo de fecha llega como Timestamp cuando el documento ya volvio del

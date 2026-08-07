@@ -12,7 +12,7 @@
  */
 import { cargarConfig } from '../datos.js';
 import { pie, vacio } from '../componentes.js';
-import { pesos, esc, distancia } from '../formato.js';
+import { pesos, esc, distancia, lineasDeHorario } from '../formato.js';
 import { icono } from '../iconos.js';
 import * as carrito from '../carrito.js';
 import { avisar } from '../avisos.js';
@@ -143,7 +143,11 @@ function pintarFormulario({ montar, cfg, cambios }) {
                   <span class="opcion__marca" aria-hidden="true"></span>
                   <span class="opcion__texto">
                     <span class="opcion__titulo">Lo retiro del local</span>
-                    <span class="opcion__detalle">${esc(cfg.direccion)}<br>${esc(cfg.horarios_texto)}</span>
+                    <span class="opcion__detalle">
+                      ${esc(cfg.direccion)}
+                      ${lineasDeHorario(cfg.horarios_texto)
+                        .map(l => `<br>${esc(l)}`).join('')}
+                    </span>
                   </span>
                   <span class="opcion__precio" style="color:var(--exito)">Sin cargo</span>
                 </button>` : ''}

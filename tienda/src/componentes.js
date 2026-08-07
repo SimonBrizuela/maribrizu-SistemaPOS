@@ -2,7 +2,7 @@
  * Piezas de interfaz que se repiten en varias pantallas.
  * Devuelven HTML como texto; quien las usa lo inserta y engancha los eventos.
  */
-import { pesos, esc, nombreBonito, colorDeVariedad } from './formato.js';
+import { pesos, esc, nombreBonito, colorDeVariedad, lineasDeHorario } from './formato.js';
 import { icono, fichasMarca, franjaMarca } from './iconos.js';
 
 /**
@@ -187,7 +187,9 @@ export function pie(cfg) {
         </div>
         <div>
           <h3 class="pie__titulo">Horarios</h3>
-          <p class="pie__texto">${esc(cfg.horarios_texto)}</p>
+          <ul class="pie__horarios">
+            ${lineasDeHorario(cfg.horarios_texto).map(l => `<li>${esc(l)}</li>`).join('')}
+          </ul>
         </div>
         <div>
           <h3 class="pie__titulo">Contacto</h3>

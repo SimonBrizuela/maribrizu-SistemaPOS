@@ -467,6 +467,18 @@
   color: var(--ink-texto);
 }
 .pie__texto { font-size: var(--t-sm); line-height: 1.7; color: var(--ink-texto-2); }
+
+/* Un renglón por tramo. Todo junto en una línea entraba justo, se cortaba, y
+   había que adivinar si el sábado abría a la tarde. */
+.pie__horarios {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-size: var(--t-sm);
+  line-height: 1.6;
+  color: var(--ink-texto-2);
+}
+.pie__horarios li + li { margin-top: 2px; }
 .pie__legal {
   border-top: 1px solid var(--ink-borde);
   padding-block: var(--e-4);
