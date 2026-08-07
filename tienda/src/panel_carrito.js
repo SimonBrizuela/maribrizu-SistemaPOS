@@ -152,37 +152,52 @@ function renglon(r) {
   const paso = carrito.pasoDe(r.unidad);
   const cantidad = carrito.formatearCantidad(r.cantidad, r.unidad);
 
-  const detalle = r.es_pack
-    ? `<div class="renglon__variedad">Pack cerrado · ${r.pack_contenido} unidades</div>`
-    : (r.variedad ? `<div class="renglon__variedad">${esc(r.variedad)}</div>` : '');
+  // Arriba se muestra el total del renglón, así que el precio de a uno hace
+  // falta apenas hay más de uno: sin él, tres cuadernos son "$9.300" y no hay
+  // forma de saber cuánto sale el cuaderno.
+  const unitario = r.cantidad !== 1
+    ? `${pesos(r.precio)} ${r.unidad === 'metro' ? 'el metro' : 'c/u'}`
+    : '';
+
+  const notas = [
+    r.es_pack ? `Pack cerrado · ${r.pack_contenido} unidades` : (r.variedad || ''),
+    unitario,
+  ].filter(Boolean);
+
+  const detalle = notas.length
+    ? `<div class="renglon__variedad">${notas.map(esc).join(' · ')}</div>`
+    : '';
 
   return `
     <div class="renglon" data-rubro="${esc(r.rubro)}">
       <div class="renglon__foto">${foto}</div>
       <div class="renglon__datos">
-        <div class="renglon__nombre">${esc(r.nombre)}</div>
+        <div class="renglon__cabecera">
+          <div class="renglon__nombre">${esc(r.nombre)}</div>
+          <span class="renglon__precio cifra">${pesos(r.precio * r.cantidad)}</span>
+        </div>
         ${detalle}
-        <div class="contador" style="margin-top:var(--e-1)">
-          <button class="contador__boton" data-restar ${datos}
-                  ${r.cantidad <= paso ? 'disabled' : ''}
-                  aria-label="${r.unidad === 'metro' ? 'Medio metro menos' : 'Quitar uno'}">
-            ${icono('menos', { tam: 16, grosor: 2.5 })}
-          </button>
-          <span class="contador__valor" style="min-width:52px" aria-live="polite">${cantidad}</span>
-          <button class="contador__boton" data-sumar ${datos}
-                  ${tope ? 'disabled' : ''}
-                  aria-label="${r.unidad === 'metro' ? 'Medio metro más' : 'Agregar uno'}">
-            ${icono('mas', { tam: 16, grosor: 2.5 })}
+        <div class="renglon__acciones">
+          <div class="contador">
+            <button class="contador__boton" data-restar ${datos}
+                    ${r.cantidad <= paso ? 'disabled' : ''}
+                    aria-label="${r.unidad === 'metro' ? 'Medio metro menos' : 'Quitar uno'}">
+              ${icono('menos', { tam: 16, grosor: 2.5 })}
+            </button>
+            <span class="contador__valor" style="min-width:${r.unidad === 'metro' ? 52 : 32}px"
+                  aria-live="polite">${cantidad}</span>
+            <button class="contador__boton" data-sumar ${datos}
+                    ${tope ? 'disabled' : ''}
+                    aria-label="${r.unidad === 'metro' ? 'Medio metro más' : 'Agregar uno'}">
+              ${icono('mas', { tam: 16, grosor: 2.5 })}
+            </button>
+          </div>
+          <button class="icono-boton renglon__sacar" data-sacar ${datos}
+                  aria-label="Sacar ${esc(r.nombre)} del pedido">
+            ${icono('tacho', { tam: 17 })}
           </button>
         </div>
-        ${tope ? `<span style="font-size:var(--t-xs);color:var(--alerta)">Es todo lo que hay</span>` : ''}
-      </div>
-      <div class="renglon__lado">
-        <span class="renglon__precio cifra">${pesos(r.precio * r.cantidad)}</span>
-        <button class="icono-boton" style="width:32px;height:32px;color:var(--text-3)"
-                data-sacar ${datos} aria-label="Sacar ${esc(r.nombre)} del pedido">
-          ${icono('tacho', { tam: 17 })}
-        </button>
+        ${tope ? '<span class="renglon__tope">Es todo lo que hay</span>' : ''}
       </div>
     </div>`;
 }

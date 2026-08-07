@@ -837,9 +837,16 @@ textarea.campo__control { min-height: 96px; resize: vertical; line-height: var(-
 
 /* ── Renglón del carrito ────────────────────────────────────────────────── */
 
+/* Dos columnas y no tres: la foto, y todo lo demás.
+   Con una tercera columna para el precio y el tacho, el contador se estiraba a
+   lo ancho de la del medio y quedaba una pastilla enorme con el número flotando
+   adentro, mientras el precio y el tacho se separaban a los extremos de la
+   altura de la fila. La fila se leía partida y con un hueco al costado.
+   Ahora el precio va arriba a la derecha, pegado al borde, y el tacho abajo a
+   la derecha, en la misma línea que el contador. */
 .renglon {
   display: grid;
-  grid-template-columns: 64px 1fr auto;
+  grid-template-columns: 64px minmax(0, 1fr);
   gap: var(--e-3);
   padding: var(--e-3) 0;
   border-bottom: 1px solid var(--border);
@@ -854,6 +861,14 @@ textarea.campo__control { min-height: 96px; resize: vertical; line-height: var(-
 }
 .renglon__foto img { width: 100%; height: 100%; object-fit: cover; }
 .renglon__datos { display: flex; flex-direction: column; gap: var(--e-1); min-width: 0; }
+
+.renglon__cabecera {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--e-3);
+}
+
 .renglon__nombre {
   font-size: var(--t-sm);
   font-weight: var(--peso-semi);
@@ -864,8 +879,31 @@ textarea.campo__control { min-height: 96px; resize: vertical; line-height: var(-
   overflow: hidden;
 }
 .renglon__variedad { font-size: var(--t-xs); color: var(--text-2); }
-.renglon__lado { display: flex; flex-direction: column; align-items: flex-end; justify-content: space-between; gap: var(--e-2); }
-.renglon__precio { font-family: var(--font-titulo); font-weight: var(--peso-bold); font-size: var(--t-sm); white-space: nowrap; }
+
+.renglon__precio {
+  font-family: var(--font-titulo);
+  font-weight: var(--peso-bold);
+  font-size: var(--t-sm);
+  white-space: nowrap;
+  flex: none;
+}
+
+.renglon__acciones {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--e-3);
+  margin-top: var(--e-1);
+}
+/* El contador se queda del tamaño de su contenido: como hijo de un flex en
+   columna se estiraba a todo lo ancho. */
+.renglon__acciones .contador { flex: none; }
+.renglon__sacar { flex: none; width: 32px; height: 32px; color: var(--text-3); }
+
+.renglon__tope {
+  font-size: var(--t-xs);
+  color: var(--alerta);
+}
 
 .contador {
   display: inline-flex;
