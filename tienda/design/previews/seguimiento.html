@@ -53,42 +53,40 @@
       <span class="ficha ficha--rubro" data-rubro="LIBRERÍA">En preparación</span>
     </div>
 
-    <div class="progreso">
-      <div class="progreso__paso progreso__paso--hecho">
-        <span class="progreso__marca">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg>
+    <ol class="linea">
+      <li class="linea__paso linea__paso--hecho">
+        <span class="linea__marca" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6 9 17l-5-5"/></svg></span>
+        <span class="linea__texto">
+          <span class="linea__titulo">Recibimos tu pedido</span>
+          <span class="linea__meta">Hoy 13:24</span>
         </span>
-        <span class="progreso__texto">
-          <span class="progreso__titulo">Recibimos tu pedido</span>
-          <span class="progreso__hora">13:24</span>
+      </li>
+      <li class="linea__paso linea__paso--actual">
+        <span class="linea__marca" aria-hidden="true"></span>
+        <span class="linea__texto">
+          <span class="linea__titulo">Lo estamos preparando</span>
+          <span class="linea__meta">Juntando los productos en el local.</span>
         </span>
-      </div>
-      <div class="progreso__paso progreso__paso--actual">
-        <span class="progreso__marca">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><path d="M3 6h18"/></svg>
+      </li>
+      <li class="linea__paso">
+        <span class="linea__marca" aria-hidden="true"></span>
+        <span class="linea__texto">
+          <span class="linea__titulo">Listo para salir</span>
         </span>
-        <span class="progreso__texto">
-          <span class="progreso__titulo">Lo estamos preparando</span>
-          <span class="progreso__hora">Estamos juntando todo en el local</span>
+      </li>
+      <li class="linea__paso">
+        <span class="linea__marca" aria-hidden="true"></span>
+        <span class="linea__texto">
+          <span class="linea__titulo">En camino</span>
         </span>
-      </div>
-      <div class="progreso__paso">
-        <span class="progreso__marca">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7h11v10H3zM14 10h4l3 3v4h-7z"/><circle cx="7" cy="18" r="2"/><circle cx="17.5" cy="18" r="2"/></svg>
+      </li>
+      <li class="linea__paso">
+        <span class="linea__marca" aria-hidden="true"></span>
+        <span class="linea__texto">
+          <span class="linea__titulo">Entregado</span>
         </span>
-        <span class="progreso__texto">
-          <span class="progreso__titulo">Salió para tu casa</span>
-        </span>
-      </div>
-      <div class="progreso__paso">
-        <span class="progreso__marca">
-          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m3 10 9-7 9 7v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
-        </span>
-        <span class="progreso__texto">
-          <span class="progreso__titulo">Entregado</span>
-        </span>
-      </div>
-    </div>
+      </li>
+    </ol>
 
     <div style="margin-top:var(--e-5);padding-top:var(--e-4);border-top:1px solid var(--border);display:flex;gap:var(--e-3);align-items:center">
       <span style="flex:none;color:var(--text-3)">

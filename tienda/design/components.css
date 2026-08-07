@@ -960,55 +960,109 @@ textarea.campo__control { min-height: 96px; resize: vertical; line-height: var(-
 
 /* ── Progreso de estados del pedido ─────────────────────────────────────── */
 
-.progreso { display: flex; flex-direction: column; gap: 0; }
-.progreso__paso {
+/* ── Los pasos ──────────────────────────────────────────────────────────────
+   Tres tamaños de marcador, no tres colores del mismo círculo: lo hecho es
+   chico, lo que falta es un anillo fino, y el paso actual es el grande. Se lee
+   de lejos sin tener que leer el texto. */
+
+.linea {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.linea__paso {
   display: grid;
-  grid-template-columns: 32px 1fr;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
   gap: var(--e-3);
   position: relative;
-  padding-bottom: var(--e-5);
+  padding-block: var(--e-2);
+  min-height: 44px;
 }
-.progreso__paso:last-child { padding-bottom: 0; }
-/* La línea une un paso con el siguiente, por eso no va en el último. */
-.progreso__paso:not(:last-child)::before {
+
+/* La línea une un paso con el siguiente, por eso no va en el último. Sólida
+   hasta donde llegó el pedido y punteada de ahí en adelante: la diferencia
+   entre lo que pasó y lo que falta no puede depender solo del color. */
+.linea__paso:not(:last-child)::before {
   content: '';
   position: absolute;
-  left: 15px;
-  top: 32px;
-  bottom: 0;
+  left: 13px;
+  top: 50%;
+  bottom: calc(-50% + 1px);
   width: 2px;
-  background: var(--border);
+  background: linear-gradient(var(--border-2) 0 0) 0 0 / 2px 100% no-repeat;
 }
-.progreso__paso--hecho:not(:last-child)::before { background: var(--exito); }
-.progreso__marca {
-  width: 32px; height: 32px;
-  border-radius: 50%;
-  display: grid; place-items: center;
-  background: var(--surface-2);
-  color: var(--text-3);
-  border: 2px solid var(--border);
+.linea__paso--hecho:not(:last-child)::before {
+  background: var(--exito);
+}
+.linea__paso--actual:not(:last-child)::before,
+.linea__paso:not(.linea__paso--hecho):not(.linea__paso--actual):not(:last-child)::before {
+  background-image: repeating-linear-gradient(
+    var(--border-2) 0 4px, transparent 4px 9px);
+}
+
+.linea__marca {
+  justify-self: center;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-full);
   z-index: 1;
-  transition: background var(--m-normal) var(--curva), border-color var(--m-normal) var(--curva);
+  transition: width var(--m-normal) var(--curva), height var(--m-normal) var(--curva),
+              background var(--m-normal) var(--curva);
 }
-.progreso__paso--hecho .progreso__marca {
+
+/* Lo que falta: un anillo fino. */
+.linea__paso .linea__marca {
+  width: 12px; height: 12px;
+  background: var(--bg);
+  box-shadow: inset 0 0 0 2px var(--border-2);
+}
+
+/* Lo hecho: sólido y en verde, pero chico. Es historia. */
+.linea__paso--hecho .linea__marca {
+  width: 20px; height: 20px;
   background: var(--exito-solido);
-  border-color: var(--exito-solido);
   color: var(--exito-tinta);
+  box-shadow: none;
 }
-.progreso__paso--actual .progreso__marca {
+
+/* El actual: el grande. Es la respuesta a la pregunta que traía el cliente. */
+.linea__paso--actual .linea__marca {
+  width: 28px; height: 28px;
   background: var(--primary);
-  border-color: var(--primary);
-  color: var(--primary-ink);
-  animation: latido 2s ease-in-out infinite;
+  box-shadow: 0 0 0 4px var(--primary-bg);
 }
-@keyframes latido {
-  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--primary) 45%, transparent); }
-  50%      { box-shadow: 0 0 0 8px transparent; }
+.linea__paso--actual .linea__marca::after {
+  content: '';
+  width: 9px; height: 9px;
+  border-radius: var(--r-full);
+  background: var(--primary-ink);
+  animation: pulso-paso 2.4s var(--curva) infinite;
 }
-.progreso__texto { display: flex; flex-direction: column; gap: 2px; padding-top: var(--e-1); }
-.progreso__titulo { font-weight: var(--peso-semi); font-size: var(--t-sm); }
-.progreso__paso:not(.progreso__paso--hecho):not(.progreso__paso--actual) .progreso__titulo { color: var(--text-3); }
-.progreso__hora { font-size: var(--t-xs); color: var(--text-2); }
+@keyframes pulso-paso {
+  0%, 100% { transform: scale(1);   opacity: 1; }
+  55%      { transform: scale(.55); opacity: .55; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .linea__paso--actual .linea__marca::after { animation: none; }
+}
+
+.linea__texto { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.linea__titulo {
+  font-size: var(--t-sm);
+  font-weight: var(--peso-semi);
+  color: var(--text-3);
+}
+.linea__paso--hecho .linea__titulo { color: var(--text-2); }
+.linea__paso--actual .linea__titulo {
+  font-size: var(--t-base);
+  font-weight: var(--peso-bold);
+  color: var(--text);
+}
+.linea__meta { font-size: var(--t-xs); color: var(--text-2); }
 
 /* ── Encabezado ─────────────────────────────────────────────────────────── */
 

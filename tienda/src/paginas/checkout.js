@@ -471,6 +471,11 @@ function pintarFormulario({ montar, cfg, cambios }) {
         items: renglones.map(r => ({
           id: r.id,
           nombre: r.nombre,
+          // La foto viaja adentro del pedido y no se busca despues por id: el
+          // pedido es una foto de lo que se compro ese dia, y el producto puede
+          // cambiar de imagen o dejar de publicarse. Ademas ahorra una lectura
+          // por renglon cada vez que el cliente mira el seguimiento.
+          foto: r.foto || null,
           variedad: r.variedad,
           unidad: r.unidad,
           es_pack: r.es_pack,

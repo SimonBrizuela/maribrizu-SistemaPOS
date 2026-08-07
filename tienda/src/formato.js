@@ -24,6 +24,70 @@ export function distancia(km) {
 }
 
 /**
+ * Lo que venga de Firestore, pasado a Date.
+ *
+ * Un campo de fecha llega como Timestamp cuando el documento ya volvio del
+ * servidor, pero como null en el instante entre que se escribe con
+ * `serverTimestamp()` y que el servidor confirma. El seguimiento pinta en ese
+ * hueco, asi que devolver null en vez de una fecha inventada es parte del
+ * contrato.
+ */
+export function aFecha(valor) {
+  if (!valor) return null;
+  const fecha = typeof valor?.toDate === 'function' ? valor.toDate() : new Date(valor);
+  return Number.isNaN(fecha.getTime()) ? null : fecha;
+}
+
+// `hour12: false` explícito: es-AR devuelve "02:17 p. m." por defecto y acá la
+// hora se lee de un vistazo, no se interpreta.
+const HORA = new Intl.DateTimeFormat('es-AR', {
+  hour: '2-digit', minute: '2-digit', hour12: false,
+});
+const DIA = new Intl.DateTimeFormat('es-AR', { day: 'numeric', month: 'long' });
+
+/** "Hoy 14:33" · "Ayer 19:02" · "5 de agosto, 14:33" */
+export function cuando(valor) {
+  const fecha = aFecha(valor);
+  if (!fecha) return '';
+
+  const dias = diasDeDiferencia(fecha, new Date());
+  if (dias === 0) return `Hoy ${HORA.format(fecha)}`;
+  if (dias === 1) return `Ayer ${HORA.format(fecha)}`;
+  return `${DIA.format(fecha)}, ${HORA.format(fecha)}`;
+}
+
+/**
+ * "recién" · "hace 12 minutos" · "hace 3 horas" · "hace 2 días"
+ *
+ * Es lo que le da a la pantalla la sensacion de estar viva cuando el cliente
+ * vuelve a mirarla. Se corta en los dias: mas atras que eso, la hora exacta
+ * dice mas que el tiempo transcurrido.
+ */
+export function haceCuanto(valor) {
+  const fecha = aFecha(valor);
+  if (!fecha) return '';
+
+  const minutos = Math.floor((Date.now() - fecha.getTime()) / 60000);
+  if (minutos < 1) return 'recién';
+  if (minutos < 60) return `hace ${plural(minutos, 'minuto')}`;
+
+  const horas = Math.floor(minutos / 60);
+  if (horas < 24) return `hace ${plural(horas, 'hora')}`;
+
+  return `hace ${plural(Math.floor(horas / 24), 'día')}`;
+}
+
+/** Dias de calendario entre dos fechas, no de 24 horas: "ayer" es ayer. */
+function diasDeDiferencia(a, b) {
+  const soloDia = f => new Date(f.getFullYear(), f.getMonth(), f.getDate()).getTime();
+  return Math.round((soloDia(b) - soloDia(a)) / 86_400_000);
+}
+
+function plural(n, palabra) {
+  return `${n} ${palabra}${n === 1 ? '' : 's'}`;
+}
+
+/**
  * Quita acentos y pasa a minusculas para comparar.
  * "BOLÍGRAFO" y "boligrafo" tienen que encontrarse mutuamente: nadie escribe
  * los acentos al buscar desde el celular.

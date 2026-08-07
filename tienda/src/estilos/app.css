@@ -1218,73 +1218,255 @@
 .pedido {
   display: flex;
   flex-direction: column;
-  gap: var(--e-4);
-  padding-block: var(--e-6) var(--e-8);
-  max-width: 760px;
+  gap: var(--e-6);
+  padding-block: var(--e-5) var(--e-8);
+  max-width: 940px;
 }
 
-.pedido__cabecera { display: flex; align-items: flex-start; gap: var(--e-3); }
-.pedido__marca {
-  flex: none;
-  width: 44px; height: 44px;
+/* ── El bloque negro ──────────────────────────────────────────────────────────
+   Va sobre negro por lo mismo que el encabezado y la portada: el logo es color
+   saturado sobre negro y esa tensión es la marca. Y de paso separa lo que se
+   mira una sola vez —el código— de lo que se vuelve a mirar cada vez. */
+
+.pedido-hero {
+  position: relative;
+  overflow: hidden;
+  border-radius: var(--r-lg);
+  background: var(--ink-superficie);
+  color: var(--ink-texto);
+  padding: var(--e-6) var(--e-5) calc(var(--e-6) + 5px);
   display: grid;
-  place-items: center;
-  border-radius: 50%;
-  background: var(--exito-bg);
-  color: var(--exito);
+  gap: var(--e-5);
 }
-.pedido__titulo {
-  font-size: var(--t-xl);
+@media (min-width: 720px) {
+  .pedido-hero {
+    grid-template-columns: minmax(0, 1fr) auto;
+    align-items: center;
+    gap: var(--e-7);
+    padding: var(--e-7) var(--e-7) calc(var(--e-7) + 5px);
+  }
+}
+
+.pedido-hero .franja-marca { position: absolute; left: 0; right: 0; bottom: 0; }
+
+.pedido-hero__cuerpo { display: flex; flex-direction: column; gap: var(--e-2); }
+
+/* El estado en vivo. Es lo único de esta pantalla que cambia solo mientras
+   alguien la mira, así que es lo único que se mueve. */
+.pedido-hero__estado {
+  display: flex;
+  align-items: center;
+  gap: var(--e-2);
+  font-size: var(--t-sm);
+  font-weight: var(--peso-semi);
+  color: var(--liceo-verde);
+}
+.pedido-hero__pulso {
+  width: 8px; height: 8px;
+  border-radius: var(--r-full);
+  background: currentColor;
+  animation: pulso-estado 2.4s var(--curva) infinite;
+}
+@keyframes pulso-estado {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--liceo-verde) 55%, transparent); }
+  60%      { box-shadow: 0 0 0 7px transparent; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pedido-hero__pulso { animation: none; }
+}
+
+.pedido-hero--cancelado .pedido-hero__estado { color: var(--liceo-rojo); }
+
+.pedido-hero__titulo {
+  font-size: clamp(1.75rem, 4vw, 2.25rem);
   font-weight: var(--peso-bold);
   letter-spacing: -.03em;
   line-height: var(--alto-apretado);
+  /* Los h1 traen `color: var(--text)` de la base, que es casi negro. Sobre el
+     bloque oscuro hay que devolverles el color del contenedor o el título
+     desaparece. */
+  color: inherit;
 }
-.pedido__bajada { color: var(--text-2); line-height: var(--alto-suelto); margin-top: var(--e-1); }
+.pedido-hero__bajada {
+  color: var(--ink-texto-2);
+  line-height: var(--alto-normal);
+  max-width: 46ch;
+}
+.pedido-hero__desde { font-size: var(--t-xs); color: var(--ink-texto-2); opacity: .75; }
 
-/* El código en grande y separado del resto: es el único dato de esta pantalla
-   que la persona va a tener que leer en voz alta. */
-.pedido__codigo {
+/* El código: lo único que alguien va a tener que leer en voz alta por teléfono.
+   Blanco y no en color de marca, porque acá manda la legibilidad. */
+.pedido-hero__codigo {
   display: flex;
   flex-direction: column;
   align-items: center;
   gap: var(--e-1);
-  padding: var(--e-5);
-  border-radius: var(--r-lg);
-  background: var(--surface-2);
-  border: 1px dashed var(--border-2);
+  padding: var(--e-4) var(--e-5);
+  border: 1px solid var(--ink-borde);
+  border-radius: var(--r-md);
+  background: var(--ink-superficie-2);
+  text-align: center;
 }
-.pedido__codigo-etiqueta {
+.pedido-hero__etiqueta {
   font-size: var(--t-xs);
   font-weight: var(--peso-semi);
+  letter-spacing: .14em;
+  text-transform: uppercase;
+  color: var(--ink-texto-2);
+}
+.pedido-hero__valor {
+  font-family: var(--font-titulo);
+  font-size: 2.75rem;
+  font-weight: var(--peso-bold);
+  line-height: 1;
+  letter-spacing: .16em;
+  /* El letter-spacing agrega el espacio también DESPUÉS de la última letra, y
+     en un bloque centrado eso corre el código a la izquierda. Se descuenta. */
+  margin-right: -.16em;
+  font-variant-numeric: tabular-nums;
+}
+.pedido-hero__ayuda {
+  font-size: var(--t-xs);
+  color: var(--ink-texto-2);
+  max-width: 22ch;
+}
+
+/* ── Cuerpo ─────────────────────────────────────────────────────────────────
+   La columna del costado es angosta y fija. Antes eran dos columnas iguales que
+   se estiraban a la misma altura, y la derecha —tres renglones contra cinco
+   pasos— quedaba medio vacía. `align-items: start` es lo que evita que vuelva
+   a pasar. */
+
+.pedido__grilla {
+  display: grid;
+  gap: var(--e-6);
+  align-items: start;
+  /* En el celular la dirección va antes que la lista de productos: recién
+     confirmado, lo que se vuelve a leer es a dónde lo llevamos. En escritorio
+     entra al costado y el orden deja de importar. */
+  grid-template-areas:
+    'linea'
+    'ficha'
+    'items';
+}
+@media (min-width: 860px) {
+  .pedido__grilla {
+    grid-template-columns: minmax(0, 1fr) 320px;
+    grid-template-areas:
+      'linea ficha'
+      'items ficha';
+  }
+}
+
+.pedido__ficha-hueco { grid-area: ficha; min-width: 0; }
+
+.pedido-seccion { display: flex; flex-direction: column; gap: var(--e-4); }
+.pedido-seccion__titulo {
+  font-size: var(--t-xs);
+  font-weight: var(--peso-bold);
   letter-spacing: .12em;
   text-transform: uppercase;
   color: var(--text-2);
+  padding-bottom: var(--e-2);
+  border-bottom: 1px solid var(--border);
 }
-.pedido__codigo-valor {
+
+/* ── Lo que pediste ───────────────────────────────────────────────────────── */
+
+.pedido-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-3);
+}
+
+.pedido-item {
+  display: grid;
+  grid-template-columns: 48px minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: var(--e-3);
+}
+
+.pedido-item__foto {
+  width: 48px; height: 48px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  overflow: hidden;
+  display: grid;
+  place-items: center;
+}
+.pedido-item__foto img { width: 100%; height: 100%; object-fit: cover; }
+.pedido-item__inicial {
   font-family: var(--font-titulo);
-  font-size: 2.5rem;
   font-weight: var(--peso-bold);
-  letter-spacing: .18em;
-  line-height: 1;
-  color: var(--primary-txt);
+  color: var(--text-3);
 }
-.pedido__codigo-ayuda { font-size: var(--t-xs); color: var(--text-2); }
 
-.pedido__grilla { display: grid; gap: var(--e-4); }
-@media (min-width: 700px) { .pedido__grilla { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.pedido-item__texto { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
+.pedido-item__nombre { font-size: var(--t-sm); font-weight: var(--peso-semi); line-height: 1.3; }
+.pedido-item__nota { font-size: var(--t-xs); color: var(--text-2); }
 
-.pedido__caja {
+.pedido-item__cantidad {
+  font-size: var(--t-sm);
+  font-weight: var(--peso-bold);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.pedido-item__cantidad::before { content: '×'; margin-right: 2px; opacity: .6; }
+
+.pedido-item__precio {
+  font-size: var(--t-sm);
+  font-weight: var(--peso-semi);
+  white-space: nowrap;
+  min-width: 5.5ch;
+  text-align: right;
+}
+
+/* ── La ficha del costado ─────────────────────────────────────────────────── */
+
+.pedido-ficha {
   border: 1px solid var(--border);
   border-radius: var(--r-lg);
   background: var(--surface);
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.pedido-ficha__parte {
   padding: var(--e-4);
   display: flex;
   flex-direction: column;
-  gap: var(--e-4);
+  gap: var(--e-1);
 }
+.pedido-ficha__parte + .pedido-ficha__parte { border-top: 1px solid var(--border); }
 
-.pedido__dato { font-size: var(--t-sm); line-height: var(--alto-suelto); }
-.pedido__dato .apagado { color: var(--text-2); }
+.pedido-ficha__titulo {
+  display: flex;
+  align-items: center;
+  gap: var(--e-2);
+  font-size: var(--t-xs);
+  font-weight: var(--peso-bold);
+  letter-spacing: .1em;
+  text-transform: uppercase;
+  color: var(--text-2);
+  margin-bottom: var(--e-1);
+}
+.pedido-ficha__titulo svg { color: var(--primary); }
+
+.pedido-ficha__valor { font-size: var(--t-sm); line-height: var(--alto-normal); }
+.pedido-ficha__valor--nota { color: var(--text-2); font-style: italic; }
+.pedido-ficha__apoyo { font-size: var(--t-xs); color: var(--text-2); line-height: var(--alto-normal); }
+.pedido-ficha__apoyo--enlinea { display: inline; }
+
+/* El mapa va a sangre entre dos partes de la ficha: enmarcarlo otra vez sería
+   una caja adentro de otra caja. */
+.pedido-ficha__mapa { border-block: 1px solid var(--border); }
+.pedido-ficha__mapa .mapa { gap: 0; }
+.pedido-ficha__mapa .mapa__lienzo { border: none; border-radius: 0; }
+.pedido-ficha__mapa .mapa__pie { padding: var(--e-3) var(--e-4); }
 
 .pedido__acciones { display: flex; flex-wrap: wrap; gap: var(--e-3); }
 
