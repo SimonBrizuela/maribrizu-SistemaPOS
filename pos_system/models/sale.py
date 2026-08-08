@@ -6,6 +6,9 @@ from datetime import datetime
 from pos_system.utils.firebase_sync import now_ar
 from typing import List, Dict, Optional
 from pos_system.database.db_manager import DatabaseManager
+from pos_system.models.conjunto import (
+    contenido_de, repartir_total, total_conjunto, total_variedad,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -268,19 +271,22 @@ class Sale:
                         colores = []
                 except Exception:
                     colores = []
-                # Actualizar el color correspondiente
+                # Actualizar el color correspondiente. La variedad puede venir en
+                # otra presentacion que el resto del producto, asi que el pack
+                # que vale es el suyo y no el del producto.
                 encontrado = False
                 antes_color = 0.0
+                cont_var = contenido
                 for c in colores:
                     if isinstance(c, dict) and str(c.get('color', '')).strip() == color:
-                        antes_color = (float(c.get('unidades') or 0) * contenido
-                                       + float(c.get('restante') or 0))
+                        cont_var = contenido_de(c, contenido)
+                        antes_color = total_variedad(c, contenido)
                         c['unidades'] = after_u
                         c['restante'] = after_r
                         encontrado = True
                         break
                 consumido_base = max(
-                    0.0, antes_color - (after_u * contenido + after_r)
+                    0.0, antes_color - (after_u * cont_var + after_r)
                 )
                 if not encontrado:
                     colores.append({
@@ -291,10 +297,7 @@ class Sale:
                 # Agregados = suma de todos los colores
                 sum_u = sum(float(c.get('unidades') or 0) for c in colores if isinstance(c, dict))
                 sum_r = sum(float(c.get('restante') or 0) for c in colores if isinstance(c, dict))
-                sum_total = sum(
-                    float(c.get('unidades') or 0) * contenido + float(c.get('restante') or 0)
-                    for c in colores if isinstance(c, dict)
-                )
+                sum_total = total_conjunto(colores, contenido)
                 cursor.execute(
                     """UPDATE products
                        SET conjunto_unidades = ?,
@@ -470,20 +473,19 @@ class Sale:
                 colores = []
             entry = next((c for c in colores if isinstance(c, dict)
                           and str(c.get('color', '')).strip() == color), None)
-            total_actual = ((float(entry.get('unidades') or 0) * contenido
-                             + float(entry.get('restante') or 0)) if entry else 0.0)
+            cont_var = contenido_de(entry, contenido) if entry else contenido
+            total_actual = total_variedad(entry, contenido) if entry else 0.0
         else:
+            cont_var = contenido
             total_actual = float(row[2] or 0)
 
+        # Devolver lo consumido y volver a partirlo en cerrados + sueltos. Antes
+        # se sumaba un pack cuando quedaba resto, y ese pack no existia: con 35
+        # sueltas y cajas de 60 el producto quedaba figurando 95.
         nuevo_total = total_actual + consumido
-        cerrados = int(nuevo_total // contenido)
-        resto    = nuevo_total - cerrados * contenido
-        if resto > 1e-9:
-            reverso['conjunto_after_unidades'] = cerrados + 1
-            reverso['conjunto_after_restante'] = resto
-        else:
-            reverso['conjunto_after_unidades'] = cerrados
-            reverso['conjunto_after_restante'] = 0
+        after_u, after_r = repartir_total(nuevo_total, cont_var)
+        reverso['conjunto_after_unidades'] = after_u
+        reverso['conjunto_after_restante'] = after_r
         return True
 
     def _propagar_stock_a_firebase(self, items: List[Dict],
@@ -773,14 +775,7 @@ class Sale:
 
             if t_es_conj and t_contenido > 0:
                 nuevo_total = max(0.0, t_total - delta)
-                cerrados    = int(nuevo_total // t_contenido)
-                resto       = nuevo_total - cerrados * t_contenido
-                if resto > 0:
-                    nueva_unid = cerrados + 1
-                    nueva_rest = resto
-                else:
-                    nueva_unid = cerrados
-                    nueva_rest = 0
+                nueva_unid, nueva_rest = repartir_total(nuevo_total, t_contenido)
                 # `stock` clásico = espejo entero del total para que el POS que
                 # aún no entiende conjunto vea un stock razonable.
                 stock_mirror = max(0, int(nuevo_total))

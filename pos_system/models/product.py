@@ -2,6 +2,7 @@
 from datetime import datetime
 from typing import List, Dict, Optional
 from pos_system.database.db_manager import DatabaseManager
+from pos_system.models.conjunto import total_variedad
 from pos_system.utils.validators import (
     validate_product_name, validate_price, validate_stock, 
     validate_barcode, validate_category, sanitize_string, ValidationError
@@ -289,7 +290,7 @@ class Product:
                 for c in color_lista:
                     if not isinstance(c, dict):
                         continue
-                    t_color = float(c.get('unidades') or 0) * contenido + float(c.get('restante') or 0)
+                    t_color = total_variedad(c, contenido)
                     if t_color <= umbral:
                         color_bajo = True
                         bajos_color_lista.append({

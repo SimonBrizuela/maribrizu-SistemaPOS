@@ -17,6 +17,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from pos_system.models.product import Product
+from pos_system.models.conjunto import contenido_de, total_variedad
 from pos_system.models.sale import Sale
 from pos_system.models.cash_register import CashRegister
 from pos_system.models.promotion import Promotion
@@ -134,8 +135,7 @@ def stock_resumen(p, db=None, targets_index=None):
             # `nombre` es sólo para mostrar.
             crudo = str(c.get('color') or '')
             nombre = crudo.strip() or '—'
-            total_color = (float(c.get('unidades') or 0) * contenido
-                           + float(c.get('restante') or 0))
+            total_color = total_variedad(c, contenido)
             filas.append({
                 'label':  nombre,
                 'valor':  f'{_fmt_qty(total_color)} {um}'.strip(),
@@ -2074,6 +2074,9 @@ class SalesView(QWidget):
                               and str(c.get('color', '')).strip() == color), None)
                 base_u = float(entry.get('unidades') or 0) if entry else 0.0
                 base_r = float(entry.get('restante') or 0) if entry else 0.0
+                # La variedad puede venir en otra presentacion que el producto.
+                if entry:
+                    contenido = contenido_de(entry, contenido)
             else:
                 base_u = float(live.get('conjunto_unidades') or 0)
                 base_r = float(live.get('conjunto_restante') or 0)
@@ -3719,7 +3722,7 @@ class SalesView(QWidget):
                     tooltip_lines.append('')
                     tooltip_lines.append('Stock por color:')
                     for _c in _colores_list:
-                        _ct = _c['unidades'] * contenido + _c['restante']
+                        _ct = total_variedad(_c, contenido)
                         marca = ''
                         if _smin is not None and _ct <= _smin:
                             marca = '  ⚠ STOCK BAJO'
