@@ -67,10 +67,17 @@ export function funcionesEnDesarrollo() {
         ? fs.readdirSync(carpeta).filter(f => f.endsWith('.mjs')).map(f => f.replace(/\.mjs$/, ''))
         : [];
 
+      // Cada clave que falta se nombra por separado: "responden 503" a secas
+      // manda a revisar las cinco funciones cuando la que falta es una sola.
+      const faltan = [
+        process.env.GOOGLE_PLACES_KEY ? null : 'GOOGLE_PLACES_KEY (direcciones, envío, mapa)',
+        process.env.GEMINI_API_KEY ? null : 'GEMINI_API_KEY (el chat del catálogo)',
+      ].filter(Boolean);
+
       servidor.config.logger.info(
         disponibles.length
           ? `  ➜  Funciones:  ${disponibles.join(', ')}` +
-            (process.env.GOOGLE_PLACES_KEY ? '' : '  (sin clave de Google: responden 503)')
+            (faltan.length ? `\n  ➜  Sin clave:   ${faltan.join('\n                  ')}` : '')
           : '  ➜  Funciones:  ninguna');
 
       servidor.middlewares.use(async (peticion, respuesta, siguiente) => {

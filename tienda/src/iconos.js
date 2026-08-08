@@ -30,6 +30,7 @@ const TRAZOS = {
   izquierda:'<path d="m15 18-6-6 6-6"/>',
   abajo:    '<path d="m6 9 6 6 6-6"/>',
   reloj:    '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3.5 2"/>',
+  chat:     '<path d="M21 6v8a2 2 0 0 1-2 2h-7l-5 4v-4H5a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/>',
   // La burbuja estaba dibujada para una grilla de 28: se salia tres unidades por
   // la derecha y una por arriba, y como el contenido fuera del viewBox se
   // recorta, el circulo aparecia aplanado contra el borde. Redibujada sobre un

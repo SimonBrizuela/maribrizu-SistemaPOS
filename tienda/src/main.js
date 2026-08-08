@@ -7,6 +7,7 @@ import * as carrito from './carrito.js';
 import { abrir as abrirCarrito, estaAbierto } from './panel_carrito.js';
 import { avisar } from './avisos.js';
 import { iniciarSugerencias, fijarAmbito, cerrarSugerencias } from './sugerencias.js';
+import { iniciarAsistente } from './asistente.js';
 
 import { inicio } from './paginas/inicio.js';
 import { catalogo } from './paginas/catalogo.js';
@@ -238,6 +239,11 @@ async function arrancar() {
   reponerCompacta = seguirScroll();
   iniciarSugerencias();
   await dibujar();
+
+  // El chat se agrega después del primer pintado: es un extra sobre el
+  // catálogo, y montarlo antes le agrega trabajo a la primera pantalla, que es
+  // la que decide si alguien se queda.
+  iniciarAsistente();
 
   // Aviso de tienda cerrada: se consulta después del primer pintado para no
   // demorar la portada por un caso que casi nunca pasa.

@@ -1772,3 +1772,364 @@
 }
 
 .mapa__enlace { font-weight: var(--peso-semi); color: var(--primary-txt); }
+
+/* ── El chat del catálogo ────────────────────────────────────────────────────
+   Un botón flotante y un panel donde se pregunta por un producto en castellano.
+   El texto lo escribe el modelo; los precios y el botón de agregar los pinta la
+   tienda con lo que salió de Firestore, así que lo que se lee y lo que se cobra
+   son el mismo dato.
+
+   El botón vive fuera de `.principal`, pegado al viewport, y en el celular se
+   levanta por encima de la barra inferior: apoyado sobre ella tapa el carrito,
+   que es justo el botón que no se puede tapar en una tienda. */
+
+.asistente {
+  position: fixed;
+  right: var(--e-4);
+  bottom: calc(var(--alto-nav-inferior) + var(--e-3) + env(safe-area-inset-bottom, 0px));
+  z-index: var(--z-nav);
+}
+
+@media (min-width: 768px) {
+  .asistente { bottom: var(--e-5); right: var(--e-5); }
+}
+
+.asistente__boton {
+  display: flex;
+  align-items: center;
+  gap: var(--e-2);
+  padding: var(--e-3) var(--e-4);
+  border: none;
+  border-radius: var(--r-full);
+  background: var(--primary);
+  color: var(--primary-ink);
+  font-family: var(--font-texto);
+  font-size: var(--t-sm);
+  font-weight: var(--peso-semi);
+  cursor: pointer;
+  box-shadow: var(--s-3);
+  transition: transform var(--m-rapido) var(--curva),
+              background var(--m-rapido) var(--curva);
+}
+
+.asistente__boton:hover { background: var(--primary-dark); transform: translateY(-1px); }
+.asistente__boton:active { transform: translateY(0); }
+
+/* En pantallas angostas queda solo el ícono: la palabra al lado del globo del
+   carrito son dos pastillas peleando por el mismo rincón. */
+@media (max-width: 419px) {
+  .asistente__boton-texto { display: none; }
+  .asistente__boton { padding: var(--e-3); }
+}
+
+/* ── El panel ─────────────────────────────────────────────────────────────── */
+
+.asistente-panel { position: fixed; inset: 0; z-index: var(--z-drawer); }
+
+.asistente-panel__fondo {
+  position: absolute;
+  inset: 0;
+  background: var(--overlay);
+  animation: asistente-aparecer var(--m-normal) var(--curva);
+}
+
+.asistente-panel__caja {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: 85vh;
+  background: var(--surface);
+  border-radius: var(--r-xl) var(--r-xl) 0 0;
+  box-shadow: var(--s-4);
+  animation: asistente-subir var(--m-normal) var(--curva);
+}
+
+/* En escritorio no es una hoja que sube de abajo sino una ventanita apoyada
+   sobre el botón que la abrió: ocupar el ancho completo de un monitor para una
+   conversación de tres renglones se ve desproporcionado. */
+@media (min-width: 768px) {
+  .asistente-panel__caja {
+    inset-inline: auto 0;
+    right: var(--e-5);
+    bottom: var(--e-5);
+    width: 400px;
+    height: 580px;
+    max-height: calc(100vh - var(--e-7));
+    border-radius: var(--r-lg);
+  }
+  .asistente-panel__fondo { background: transparent; }
+}
+
+@keyframes asistente-aparecer { from { opacity: 0 } }
+@keyframes asistente-subir { from { opacity: 0; transform: translateY(16px) } }
+
+@media (prefers-reduced-motion: reduce) {
+  .asistente-panel__caja,
+  .asistente-panel__fondo { animation: none; }
+}
+
+.asistente-panel__cabecera {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--e-3);
+  padding: var(--e-4);
+  border-bottom: 1px solid var(--border);
+}
+
+.asistente-panel__titulo {
+  font-size: var(--t-base);
+  font-weight: var(--peso-bold);
+  line-height: var(--alto-apretado);
+}
+
+.asistente-panel__bajada {
+  margin-top: 2px;
+  font-size: var(--t-xs);
+  color: var(--text-2);
+}
+
+.asistente-panel__cerrar {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: none;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.asistente-panel__cerrar:hover { background: var(--surface-3); color: var(--text); }
+
+.asistente-panel__charla {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: var(--e-4);
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-3);
+}
+
+/* ── Lo que se dice ───────────────────────────────────────────────────────── */
+
+.asistente-msj {
+  max-width: 85%;
+  padding: var(--e-3);
+  border-radius: var(--r-md);
+  font-size: var(--t-sm);
+  line-height: var(--alto-normal);
+}
+
+.asistente-msj--cliente {
+  align-self: flex-end;
+  background: var(--primary);
+  color: var(--primary-ink);
+  border-bottom-right-radius: var(--r-sm);
+}
+
+.asistente-msj--tienda {
+  align-self: flex-start;
+  background: var(--surface-2);
+  color: var(--text);
+  border-bottom-left-radius: var(--r-sm);
+}
+
+/* Los productos ensanchan la burbuja: una foto de 40 px más el nombre y el
+   precio no entran en el 85% pensado para texto. */
+.asistente-msj:has(.asistente-hallazgos) { max-width: 100%; width: 100%; }
+
+.asistente-msj__texto { white-space: pre-wrap; }
+
+.asistente-msj--pensando {
+  display: flex;
+  gap: 5px;
+  padding: var(--e-3) var(--e-4);
+}
+.asistente-msj--pensando span {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-full);
+  background: var(--text-3);
+  animation: asistente-latir 1.2s infinite var(--curva);
+}
+.asistente-msj--pensando span:nth-child(2) { animation-delay: .15s; }
+.asistente-msj--pensando span:nth-child(3) { animation-delay: .3s; }
+
+@keyframes asistente-latir {
+  0%, 60%, 100% { opacity: .3 }
+  30% { opacity: 1 }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .asistente-msj--pensando span { animation: none; opacity: .6; }
+}
+
+/* ── Los productos encontrados ────────────────────────────────────────────── */
+
+.asistente-hallazgos {
+  margin-top: var(--e-3);
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-1);
+}
+
+.asistente-hallazgo {
+  display: flex;
+  align-items: center;
+  gap: var(--e-2);
+  padding: var(--e-2);
+  border-radius: var(--r-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+
+.asistente-hallazgo__enlace {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: var(--e-2);
+  color: inherit;
+  text-decoration: none;
+}
+
+/* El subrayado va sólo sobre el nombre, no sobre toda la fila. Sin esto la
+   regla general de `a:hover` subraya el enlace entero, que incluye la foto, y
+   queda una raya suelta al costado de la miniatura. */
+.asistente-hallazgo__enlace:hover { text-decoration: none; }
+.asistente-hallazgo__enlace:hover .asistente-hallazgo__nombre {
+  text-decoration: underline;
+}
+
+.asistente-hallazgo__foto {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+.asistente-hallazgo__foto--vacia { display: block; }
+
+.asistente-hallazgo__nombre {
+  font-size: var(--t-xs);
+  font-weight: var(--peso-semi);
+  line-height: 1.3;
+  /* Dos renglones y corta: los nombres del catálogo llegan a los ochenta
+     caracteres ("Cinta Floral para Forrar X 30MTS - Tape Cbx X 30 M X 2
+     Rollos") y sin tope el renglón se convierte en un párrafo. */
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.asistente-hallazgo__precio {
+  flex-shrink: 0;
+  font-size: var(--t-sm);
+  font-weight: var(--peso-bold);
+  text-align: right;
+}
+.asistente-hallazgo__precio small {
+  display: block;
+  font-size: 10px;
+  font-weight: var(--peso-semi);
+  color: var(--text-2);
+}
+
+.asistente-hallazgo__agregar {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: none;
+  border-radius: var(--r-full);
+  background: var(--primary);
+  color: var(--primary-ink);
+  cursor: pointer;
+}
+.asistente-hallazgo__agregar:hover { background: var(--primary-dark); }
+.asistente-hallazgo__agregar:disabled { opacity: .5; cursor: default; }
+
+/* ── La bienvenida ────────────────────────────────────────────────────────── */
+
+.asistente-bienvenida {
+  font-size: var(--t-sm);
+  color: var(--text-2);
+  line-height: var(--alto-normal);
+}
+
+.asistente-bienvenida__ejemplos {
+  margin-top: var(--e-3);
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--e-2);
+}
+
+/* Las tres preguntas de ejemplo no son decoración: frente a un campo de texto
+   vacío la primera reacción es no saber qué se puede pedir, y sin un empujón
+   la mitad de la gente lo cierra sin escribir nada. */
+.asistente-ejemplo {
+  padding: var(--e-2) var(--e-3);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-full);
+  background: var(--surface);
+  color: var(--primary-txt);
+  font-family: var(--font-texto);
+  font-size: var(--t-xs);
+  font-weight: var(--peso-semi);
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--m-rapido) var(--curva);
+}
+.asistente-ejemplo:hover { background: var(--primary-bg); }
+
+/* ── Escribir ─────────────────────────────────────────────────────────────── */
+
+.asistente-panel__pie {
+  display: flex;
+  gap: var(--e-2);
+  padding: var(--e-3) var(--e-4)
+           calc(var(--e-3) + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--border);
+}
+
+.asistente-panel__campo {
+  flex: 1;
+  min-width: 0;
+  padding: var(--e-3);
+  border: 1px solid var(--borde-control);
+  border-radius: var(--r-full);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-texto);
+  /* 16px justos: abajo de eso iOS hace zoom solo al enfocar y deja la tienda
+     descuadrada cuando el teclado se cierra. */
+  font-size: var(--t-base);
+}
+.asistente-panel__campo:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+  border-color: var(--primary);
+}
+
+.asistente-panel__enviar {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  border: none;
+  border-radius: var(--r-full);
+  background: var(--primary);
+  color: var(--primary-ink);
+  cursor: pointer;
+}
+.asistente-panel__enviar:hover { background: var(--primary-dark); }
