@@ -4129,21 +4129,27 @@ export async function renderCatalogo(container, db) {
           cR = cRraw === '' ? null : (parseFloat(cRraw) || 0);
         }
 
-        // Total = (cajas/rollos cerrados × contenido por caja) + sueltos en abierto.
-        // Para UM=unidades, cR vale 0 y se reduce a cU × cC (ej: 5 cajas × 80 = 400 unidades).
-        // Si una variedad tiene su propio `contenido`, se usa ese; si no, el global.
+        // Total = packs cerrados × contenido + unidades sueltas.
+        //
+        // `unidades` son SOLO los packs cerrados y `restante` las sueltas: los dos
+        // se suman sin descontar nada. Cuando se abre un pack, baja de `unidades`
+        // y su contenido pasa a `restante`, así que nunca se cuentan dos veces. Si
+        // una variedad tiene su propio `contenido`, se usa ese; si no, el global.
+        //
+        // Antes se restaba un pack cuando había sueltos, dando por hecho que los
+        // sueltos salían de una caja ya contada en `unidades`. Por eso el total
+        // guardado quedaba corto un pack por variedad —una resma de 500 hojas en
+        // los papeles— mientras la grilla, que nunca restó, mostraba otro número.
         let cTotal;
         if (tieneColores) {
           cTotal = coloresArr.reduce((acc, c) => {
             const u = c.unidades || 0;
             const r = c.restante || 0;
             const contenidoFila = (c.contenido && c.contenido > 0) ? c.contenido : cC;
-            const cerrados = r > 0 ? Math.max(0, u - 1) : u;
-            return acc + (cerrados * contenidoFila) + r;
+            return acc + (u * contenidoFila) + r;
           }, 0);
         } else {
-          const cerrados = cR !== null && cR > 0 ? Math.max(0, cU - 1) : cU;
-          cTotal = cerrados * cC + (cR || 0);
+          cTotal = cU * cC + (cR || 0);
         }
 
         conjuntoFields = {
