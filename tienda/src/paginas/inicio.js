@@ -3,6 +3,11 @@ import { cardProducto, grilla, grillaCargando, pie } from '../componentes.js';
 import { franjaMarca, icono, iconoDeRubro, resplandores } from '../iconos.js';
 import { esc } from '../formato.js';
 
+// Hasta dónde puede saltar una tira de la portada dentro de su rubro. El sync
+// ordena por lo que se vende, así que los primeros treinta son los que valen
+// mostrar; más allá empieza la cola larga.
+const CABEZA_DE_TIRA = 30;
+
 /**
  * Imagen de la portada.
  *
@@ -175,15 +180,18 @@ export async function inicio({ montar }) {
   // encadenados y la portada tardaría seis veces más en llenarse.
   const conProductos = await Promise.all(
     rubros.map(async r => {
-      // Se salta a un punto al azar dentro del rubro. Sin esto cada tira
-      // muestra siempre los primeros alfabeticamente, y en Libreria eso son
-      // seis abrochadoras seguidas.
+      // Cada tira arranca dentro de lo que más se vende de ese rubro.
       //
-      // El salto se limita al tramo que tiene stock (el orden lo pone primero),
-      // asi las tiras nunca arrancan con productos agotados. Se restan 6 para
-      // no caer al final y volver con menos de los que entran en la fila.
-      const tope = Math.max(0, (r.con_stock || r.cantidad) - 6);
-      const desde = tope > 0 ? Math.floor(Math.random() * tope) : 0;
+      // Antes saltaba a un punto al azar de todo el rubro, porque el catálogo
+      // estaba ordenado alfabéticamente y las tiras mostraban seis abrochadoras
+      // seguidas. Ahora el sync lo ordena por ventas: saltar lejos sería
+      // esconder justo lo que la gente compra.
+      //
+      // Queda un salto corto, dentro de la cabeza de la lista, para que la
+      // portada no sea idéntica en cada visita. El tramo se acota también al
+      // stock, así ninguna tira arranca con algo agotado.
+      const cabeza = Math.min(CABEZA_DE_TIRA, Math.max(0, (r.con_stock || r.cantidad) - 6));
+      const desde = cabeza > 0 ? Math.floor(Math.random() * cabeza) : 0;
       return {
         rubro: r,
         productos: (await traerProductos({ rubro: r.clave, desde, cantidad: 6 })).productos,

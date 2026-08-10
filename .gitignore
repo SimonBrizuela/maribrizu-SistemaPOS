@@ -198,9 +198,13 @@ PRESUPUESTO_*.md
 PRESUPUESTO_*.xlsx
 FOTOS_MERCADOLIBRE.xlsx
 
-# Estudio de Mercado Libre: tiene costos y margenes del local
+# Estudios: tienen costos, margenes y facturacion del local
 ESTUDIO_ML*.md
 ESTUDIO_ML*.xlsx
+ESTUDIO_NEGOCIO*.md
+ESTUDIO_CANALES*.md
+estudio_negocio.json
+estudio_canales.json
 
 # Salida de la tarea programada del sync de la tienda
 logs/

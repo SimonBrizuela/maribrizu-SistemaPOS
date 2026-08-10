@@ -22,7 +22,7 @@ import os
 import re
 import sys
 import unicodedata
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -42,6 +42,10 @@ NOMBRES_EXCLUIDOS = (
 
 MENORES = {'de', 'del', 'la', 'las', 'el', 'los', 'y', 'con', 'sin',
            'para', 'por', 'a', 'en'}
+
+# Cuantos destacados elegir solos cuando no hay ninguno marcado a mano. Doce
+# llenan las dos tiras de la portada sin que se repita nada.
+DESTACADOS_AUTOMATICOS = 12
 
 # Palabras que no distinguen nada al buscar y solo engordan el indice.
 VACIAS = {'de', 'del', 'la', 'las', 'el', 'los', 'y', 'con', 'sin', 'para',
@@ -349,17 +353,63 @@ def armar_documento(doc_id, datos):
 
 def clave_de_orden(doc):
     """
-    Orden del catalogo: primero lo destacado, despues lo que hay en stock, y
-    dentro de cada grupo alfabetico.
+    Orden del catalogo: primero lo destacado, despues lo que hay en stock,
+    despues lo que mas se vende, y recien al final alfabetico.
 
-    Mostrar productos agotados arriba es la forma mas rapida de que alguien
-    cierre la pagina.
+    Ordenar alfabetico era ordenar por nada. El catalogo real arranca con
+    Abecedario, Abrojal, Abrochadora, Abrochadora: la primera pantalla de la
+    tienda mostraba cuatro abrochadoras y parecia rota. Medido sobre cuatro
+    meses de ventas, 100 productos hacen la mitad de la facturacion y 500 hacen
+    el 78%: esos son los que tienen que estar arriba.
+
+    `vendidos` son las unidades de los ultimos meses. Se ordena descendente, y
+    empatados en cero —que son la mayoria— queda el alfabetico de siempre.
     """
     return (
         0 if doc['destacado'] else 1,
         0 if doc['stock'] > 0 else 1,
+        -doc.get('vendidos', 0),
         normalizar(doc['nombre']),
     )
+
+
+def leer_ventas(db, dias=120):
+    """
+    Cuanto se vendio de cada producto, para ordenar la tienda por eso.
+
+    El renglon de venta no guarda el codigo del producto: guarda el nombre, y
+    encima decorado con lo que se eligio al vender ("[Celeste] CARTULINA · 1 u",
+    "PAPEL OBRA · 10 pack(s)"). Cruzar por el nombre crudo pierde el 38% de las
+    ventas, y no cualquier 38%: los productos con variedad y los que se venden
+    por pack, que son los que mas rotan. Por eso se limpia antes de comparar.
+
+    Devuelve unidades e importe por nombre normalizado.
+    """
+    desde = datetime.now(timezone.utc) - timedelta(days=dias)
+    unidades = {}
+    importe = {}
+
+    for d in db.collection('ventas_por_dia').where('fecha_dt', '>=', desde).stream():
+        x = d.to_dict() or {}
+        if x.get('deleted') is True:
+            continue
+        clave = clave_de_venta(x.get('producto'))
+        if not clave:
+            continue
+        unidades[clave] = unidades.get(clave, 0) + float(x.get('cantidad') or 0)
+        importe[clave] = importe.get(clave, 0) + float(x.get('subtotal') or 0)
+
+    return unidades, importe
+
+
+def clave_de_venta(nombre):
+    """El nombre de un renglon de venta, sin la variedad ni el pack pegados."""
+    limpio = str(nombre or '')
+    if limpio.lstrip().startswith('['):
+        cierre = limpio.find(']')
+        if cierre != -1:
+            limpio = limpio[cierre + 1:]
+    return normalizar(limpio.split('·')[0])
 
 
 def main():
@@ -403,6 +453,37 @@ def main():
     for motivo, cantidad in sorted(descartes.items(), key=lambda x: -x[1]):
         print(f'    {cantidad:5d} descartados: {motivo}')
 
+    # ── Que se vende, para ordenar la tienda por eso ──────────────────────
+    print('\nLeyendo ventas de los ultimos 4 meses...')
+    unidades, importe = leer_ventas(db)
+    print(f'  {len(unidades)} productos con movimiento')
+
+    for doc_id, doc in publicables.items():
+        clave = normalizar(doc['nombre'])
+        doc['vendidos'] = unidades.get(clave, 0)
+        doc['facturado'] = importe.get(clave, 0)
+
+    # Los destacados de la portada.
+    #
+    # Si nadie marco ninguno a mano, se eligen los que mas se venden: sin esto
+    # la portada dice "Del catalogo" y muestra una tanda al azar. Un destacado
+    # puesto a mano desde el panel gana siempre, y con uno solo que haya se
+    # respeta esa eleccion y no se agrega nada.
+    a_mano = [d for d in publicables.values() if d['destacado']]
+    if not a_mano:
+        candidatos = sorted(
+            (d for d in publicables.values() if d['stock'] > 0 and d['imagenes']),
+            key=lambda d: -d['vendidos'])
+        for doc in candidatos[:DESTACADOS_AUTOMATICOS]:
+            if doc['vendidos'] > 0:
+                doc['destacado'] = True
+        elegidos = [d for d in publicables.values() if d['destacado']]
+        print(f'  {len(elegidos)} destacados elegidos por lo que se vende:')
+        for doc in sorted(elegidos, key=lambda d: -d['vendidos']):
+            print(f'      {doc["vendidos"]:7.0f} vendidos  {doc["nombre"][:48]}')
+    else:
+        print(f'  {len(a_mano)} destacados marcados a mano en el panel')
+
     # ── Numerar para el orden del catalogo ────────────────────────────────
     ordenados = sorted(publicables, key=lambda k: clave_de_orden(publicables[k]))
 
@@ -432,21 +513,28 @@ def main():
     # ── Rubros con su conteo, para la portada ─────────────────────────────
     conteo = {}
     con_stock = {}
+    factura = {}
     for doc in publicables.values():
         if not doc['rubro']:
             continue
         conteo[doc['rubro']] = conteo.get(doc['rubro'], 0) + 1
+        factura[doc['rubro']] = factura.get(doc['rubro'], 0) + doc['facturado']
         if doc['stock'] > 0:
             con_stock[doc['rubro']] = con_stock.get(doc['rubro'], 0) + 1
 
-    # `con_stock` es hasta donde puede saltar la portada al elegir un punto al
-    # azar. Como el orden pone primero lo que hay en stock, saltar dentro de ese
-    # tramo garantiza que las tiras nunca arranquen con productos agotados.
+    # Los rubros salen ordenados por lo que facturan, no por cuantos productos
+    # tienen. Son dos ordenes muy distintos: Regaleria tiene 594 productos y
+    # vende $947 mil; Papelera tiene 244 y vende $2,3 millones. La portada
+    # mostraba primero el que mas cosas tiene, que es el que mas espacio ocupa
+    # en el deposito y no el que mas le interesa a quien entra.
+    #
+    # El numero de facturacion NO se publica: se usa para ordenar y se descarta.
+    # `tienda_config` lo lee cualquiera sin sesion.
     lista_rubros = [{'nombre': nombre_bonito(r), 'clave': r,
-                     'cantidad': c, 'con_stock': con_stock.get(r, 0)}
-                    for r, c in sorted(conteo.items(), key=lambda x: -x[1])]
+                     'cantidad': conteo[r], 'con_stock': con_stock.get(r, 0)}
+                    for r, _ in sorted(factura.items(), key=lambda x: -x[1])]
 
-    print('\nRubros publicados:')
+    print('\nRubros publicados (ordenados por lo que venden):')
     for r in lista_rubros:
         print(f'  {r["cantidad"]:5d}  {r["nombre"]:<14} ({r["con_stock"]} con stock)')
 
@@ -466,6 +554,11 @@ def main():
         return db.batch(), 0
 
     for doc_id, doc in publicables.items():
+        # Cuanto se vendio de cada cosa no sale a la web: `tienda_productos` lo
+        # lee cualquiera sin sesion, y son las ventas del local. Se usaron para
+        # ordenar y se descartan acá.
+        doc.pop('vendidos', None)
+        doc.pop('facturado', None)
         lote.set(db.collection('tienda_productos').document(doc_id), doc)
         pendientes += 1
         escritos += 1
