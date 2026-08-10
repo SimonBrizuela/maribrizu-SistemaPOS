@@ -17,8 +17,9 @@
  * Los valores por defecto son los mismos que tiene la tienda en
  * `tienda/src/datos.js`: si el documento no existe, la tienda igual funciona.
  */
-import { collection, doc, getDoc, getDocs, orderBy, query, setDoc } from 'firebase/firestore';
+import { collection, doc, getDocs, orderBy, query, setDoc } from 'firebase/firestore';
 import { getCached, invalidateCache } from '../cache.js';
+import { leerDocRapido } from '../config.js';
 import { alertDialog, confirmDialog, escHtml } from '../components/dialogs.js';
 import { espejarLote, recomputarRubros, motivoDeNoPublicar, nombreBonito } from '../tienda_espejo.js';
 import { textoDeHorarios } from '../../../tienda/src/horarios.js';
@@ -52,17 +53,30 @@ let _tramos = [];
 let _habilitados = [];
 let _catalogo = [];
 let _horarios = null;
+// Si alguien ya empezó a editar, la revalidación contra el server no repinta.
+let _tocado = false;
 
 /* ── Lectura ──────────────────────────────────────────────────────────────── */
 
-async function leerConfig(db) {
-  const snap = await getDoc(doc(db, 'tienda_config', 'settings'));
-  const datos = snap.exists() ? snap.data() : {};
+function completarConfig(datos) {
+  const d = datos || {};
   return {
-    ...POR_DEFECTO, ...datos,
-    entrega: { ...POR_DEFECTO.entrega, ...(datos.entrega || {}) },
-    pago: { ...POR_DEFECTO.pago, ...(datos.pago || {}) },
+    ...POR_DEFECTO, ...d,
+    entrega: { ...POR_DEFECTO.entrega, ...(d.entrega || {}) },
+    pago: { ...POR_DEFECTO.pago, ...(d.pago || {}) },
   };
+}
+
+async function leerConfig(db, alRevalidar) {
+  // Cache-first, igual que el Balance: el getDoc al server queda encolado
+  // detrás de los listeners grandes del store y esta pantalla no pinta hasta
+  // que vuelve.
+  const datos = await leerDocRapido(doc(db, 'tienda_config', 'settings'), {
+    etiqueta: 'tienda_config/settings',
+    vacio: {},
+    alRevalidar: frescos => alRevalidar?.(completarConfig(frescos)),
+  });
+  return completarConfig(datos);
 }
 
 /* ── Pintado ──────────────────────────────────────────────────────────────── */
@@ -236,14 +250,27 @@ function pintarRubros() {
 
 export async function renderTiendaAjustes(container, db) {
   _db = db;
+  _tocado = false;
 
   container.innerHTML = `<div style="display:flex;flex-direction:column;gap:12px">
     ${Array(4).fill('<div class="skel skel-card" style="height:120px"></div>').join('')}
   </div>`;
 
+  // La copia del cache puede estar vieja si alguien guardó desde otra PC. Si la
+  // del server llega distinta se repinta la pantalla, pero solo mientras nadie
+  // haya tocado nada: pisar un formulario a medio llenar es peor que mostrar un
+  // dato viejo unos segundos.
+  const alLlegarDelServer = frescos => {
+    if (_tocado || !container.isConnected) return;
+    if (JSON.stringify(frescos) === JSON.stringify(_config)) return;
+    console.log('[tienda] la configuración cambió desde otra PC, se repinta');
+    renderTiendaAjustes(container, db);
+  };
+
   const [config, publicacion, catalogo] = await Promise.all([
-    leerConfig(db),
-    getDoc(doc(db, 'tienda_config', 'publicacion')),
+    leerConfig(db, alLlegarDelServer),
+    leerDocRapido(doc(db, 'tienda_config', 'publicacion'),
+                  { etiqueta: 'tienda_config/publicacion', vacio: {} }),
     getCached('catalogo:all', async () => {
       const snap = await getDocs(query(collection(db, 'catalogo'), orderBy('nombre')));
       return snap.docs.map(d => ({ ...d.data(), doc_id: d.id }));
@@ -255,8 +282,8 @@ export async function renderTiendaAjustes(container, db) {
     hasta_km: Number(t.hasta_km) || 0, precio: Number(t.precio) || 0,
   }));
   _horarios = normalizarHorarios(config.horarios);
-  _habilitados = Array.isArray(publicacion.data()?.rubros)
-    ? publicacion.data().rubros.map(r => String(r).trim().toUpperCase()) : [];
+  _habilitados = Array.isArray(publicacion?.rubros)
+    ? publicacion.rubros.map(r => String(r).trim().toUpperCase()) : [];
   _catalogo = (catalogo || []).filter(d => d && d.doc_id)
     .map(d => (typeof d.doc_id === 'string' ? d : { ...d, doc_id: String(d.doc_id) }));
 
@@ -365,6 +392,13 @@ export async function renderTiendaAjustes(container, db) {
 
   /* ── Eventos ── */
   const $ = sel => container.querySelector(sel);
+
+  // Apenas alguien toca algo, la pantalla deja de repintarse sola aunque llegue
+  // una versión más nueva del server.
+  const marcarTocado = () => { _tocado = true; };
+  container.addEventListener('input', marcarTocado);
+  container.addEventListener('change', marcarTocado);
+  container.addEventListener('click', marcarTocado);
 
   $('#cfgAbierta').addEventListener('click', () => {
     const abierta = $('#cfgAbierta').getAttribute('aria-checked') !== 'true';

@@ -11,10 +11,15 @@
  * paso siguiente. Elegir el estado de una lista desplegable obliga a saber cual
  * viene despues; el boton ya lo sabe.
  */
-import { collection, doc, getDoc, onSnapshot, query, orderBy, limit, updateDoc } from 'firebase/firestore';
+import { collection, doc, onSnapshot, query, orderBy, limit, updateDoc } from 'firebase/firestore';
 import { marcarVisto } from '../pedidos_watcher.js';
 import { enlaceAviso } from '../avisos_pedido.js';
 import { imprimirPedido } from '../ticket_pedido.js';
+import { leerDocRapido } from '../config.js';
+// Los botones de esta pantalla son los mismos que los de las otras dos de la
+// sección. Sin esta línea salían sin estilo: la hoja la importaban solo el
+// catálogo y la configuración, y entrar directo a Pedidos no la cargaba nunca.
+import '../styles/tienda.css';
 
 // El camino normal de un pedido. `cancelado` queda afuera a proposito: no es un
 // paso, es una salida.
@@ -42,6 +47,12 @@ const ETIQUETA_ACCION = {
   en_camino:  'Salió el reparto',
   entregado:  'Entregado',
 };
+
+// El color del botón no siempre es el del estado al que lleva. "Entregado" en
+// gris —el gris con el que después se marca el pedido cerrado— parece un botón
+// apagado, justo el que cierra la venta.
+const COLOR_ACCION = { ...Object.fromEntries(
+  Object.entries(FLUJO).map(([k, v]) => [k, v.color])), entregado: '#2f7a3d' };
 
 const FILTROS = [
   { clave: 'pendientes', texto: 'Pendientes', estados: ['nuevo', 'preparando', 'listo', 'en_camino'] },
@@ -238,7 +249,7 @@ function tarjeta(p) {
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         ${siguiente ? `
           <button class="pc-btn" data-act="avanzar" data-estado="${siguiente}"
-                  style="flex:1;min-width:170px;justify-content:center;background:${FLUJO[siguiente].color};
+                  style="flex:1;min-width:170px;justify-content:center;background:${COLOR_ACCION[siguiente]};
                          color:#fff;border:none;font-weight:700">
             <span class="material-icons" style="font-size:18px">${FLUJO[siguiente].icono}</span>
             ${ETIQUETA_ACCION[siguiente]}
@@ -301,9 +312,11 @@ export async function renderPedidosTienda(container, db) {
   _db = db;
 
   // El nombre, la dirección y el teléfono del local van en el encabezado del
-  // ticket. Se leen una vez y si fallan el ticket sale igual, sin encabezado.
-  getDoc(doc(db, 'tienda_config', 'settings'))
-    .then(s => { if (s.exists()) _config = s.data(); })
+  // ticket. Se leen del cache del SDK y se revalidan atrás: si fallan, el ticket
+  // sale igual, sin encabezado.
+  leerDocRapido(doc(db, 'tienda_config', 'settings'),
+                { etiqueta: 'tienda_config/settings', vacio: {} })
+    .then(datos => { _config = datos || {}; })
     .catch(() => {});
 
   container.innerHTML = `
@@ -322,6 +335,14 @@ export async function renderPedidosTienda(container, db) {
     <div id="pedidosLista" style="display:flex;flex-direction:column;gap:12px">
       <div class="empty-state"><span class="material-icons">hourglass_empty</span><p>Cargando pedidos…</p></div>
     </div>`;
+
+  // Los pedidos de la visita anterior siguen en memoria: se pintan ya y el
+  // snapshot los corrige cuando llega. Volver a Pedidos era esperar de nuevo la
+  // consulta entera para ver, casi siempre, exactamente lo mismo.
+  if (_pedidos.length) {
+    pintarContadores();
+    pintarLista();
+  }
 
   // ── Eventos ──
   document.getElementById('pedidosFiltros').addEventListener('click', ev => {

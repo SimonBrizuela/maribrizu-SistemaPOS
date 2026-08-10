@@ -14,8 +14,11 @@
   padding: 7px 8px; border-radius: 6px; border: 1px solid var(--border);
   background: var(--card-bg); color: var(--text); font-size: 12px;
   font-weight: 600; cursor: pointer; transition: all .15s; font-family: inherit;
+  /* Algunos son <a> —el aviso de WhatsApp abre en otra pestaña— y el subrayado
+     de enlace adentro de un botón lo deja con cara de texto pegado. */
+  text-decoration: none;
 }
-.pc-btn:hover:not(:disabled) { background: var(--bg); border-color: var(--text-muted); }
+.pc-btn:hover:not(:disabled) { background: var(--bg); border-color: var(--text-muted); text-decoration: none; }
 .pc-btn:disabled { opacity: .5; cursor: not-allowed; }
 .pc-btn .material-icons { font-size: 14px !important; }
 .pc-btn.active { background: var(--tint-blue-bg); color: var(--tint-blue-fg); border-color: transparent; }

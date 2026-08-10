@@ -17,8 +17,9 @@
  * vez que se abre esta pantalla. Como cada cambio se espeja al instante, lo que
  * se ve acá es lo que hay publicado.
  */
-import { collection, doc, getDoc, getDocs, orderBy, query } from 'firebase/firestore';
+import { collection, doc, getDocs, orderBy, query } from 'firebase/firestore';
 import { getCached } from '../cache.js';
+import { leerDocRapido } from '../config.js';
 import { alertDialog, escHtml } from '../components/dialogs.js';
 import {
   guardarYEspejar, motivoDeNoPublicar, medidasDe, nombreBonito, normalizar,
@@ -80,8 +81,11 @@ function preparar(datos, rubrosHabilitados) {
 
 async function leerRubrosHabilitados(db) {
   return getCached('tienda:publicacion', async () => {
-    const snap = await getDoc(doc(db, 'tienda_config', 'publicacion'));
-    const lista = snap.exists() ? snap.data().rubros : null;
+    // Cache-first: un getDoc suelto al server queda encolado detrás de los
+    // listeners grandes del store, y este doc gatea el pintado de la pantalla.
+    const datos = await leerDocRapido(doc(db, 'tienda_config', 'publicacion'),
+                                      { etiqueta: 'tienda_config/publicacion', vacio: {} });
+    const lista = datos?.rubros;
     return Array.isArray(lista) ? lista.map(r => String(r).trim().toUpperCase()) : [];
   }, { ttl: 60000, memOnly: true });
 }
