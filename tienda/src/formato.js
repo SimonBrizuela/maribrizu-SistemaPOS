@@ -119,6 +119,38 @@ export function normalizar(texto) {
 }
 
 /**
+ * Palabras que el sync NO guarda como token al indexar (`VACIAS` en
+ * scripts/sync_tienda.py). Tienen que ser exactamente las mismas: si la
+ * consulta pide una palabra que el indice nunca guardo, la busqueda devuelve
+ * cero aunque el producto exista.
+ *
+ * Lo que pasaba: "Goma Borrar Maped" queda indexado como [goma, borrar, maped],
+ * sin el "de". Buscar "goma de borrar" exigia un token que empieza con "de" y
+ * no lo tiene ningun producto del catalogo. Medido: "goma de borrar" devolvia 0
+ * y "goma borrar" 21.
+ */
+export const VACIAS = new Set([
+  'de', 'del', 'la', 'las', 'el', 'los', 'y', 'con', 'sin',
+  'para', 'por', 'a', 'en', 'un', 'una', 'marca',
+]);
+
+/**
+ * La consulta partida en palabras, con el mismo criterio con el que el sync
+ * arma los `tokens` de cada producto.
+ *
+ * Se corta por caracter no alfanumerico y no por espacio, porque el sync hace
+ * lo mismo: "2,5cm" queda como el token "5cm".
+ *
+ * @param {string} texto
+ * @param {Set<string>} [extras]  palabras a descartar ademas de las del indice
+ */
+export function despiezar(texto, extras = null) {
+  return normalizar(texto)
+    .split(/[^0-9a-z]+/)
+    .filter(p => p.length >= 2 && !VACIAS.has(p) && !(extras && extras.has(p)));
+}
+
+/**
  * El catalogo guarda los nombres en mayusculas porque el POS los muestra asi en
  * pantalla chica. Gritados en una tienda se ven agresivos y baratos, asi que se
  * pasan a formato titulo.

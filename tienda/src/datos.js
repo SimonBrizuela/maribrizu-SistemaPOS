@@ -9,7 +9,7 @@ import {
   limit, startAfter, documentId,
 } from 'firebase/firestore';
 import { db } from './firebase.js';
-import { normalizar } from './formato.js';
+import { normalizar, despiezar, VACIAS } from './formato.js';
 
 export const POR_PAGINA = 24;
 
@@ -260,45 +260,99 @@ export async function traerProducto(id) {
  *
  * Firestore no tiene busqueda de texto completo. El sync guarda en cada
  * producto un arreglo `tokens` con las palabras de su nombre normalizadas; se
- * consulta por la palabra mas larga que escribio el cliente (la mas
- * distintiva: en "cuaderno rivadavia" filtrar por "rivadavia" descarta muchisimo
- * mas que filtrar por "cuaderno") y el resto se filtra sobre ese resultado.
+ * consulta por una de las palabras que escribio el cliente (la mas larga es la
+ * mas distintiva: en "cuaderno rivadavia" filtrar por "rivadavia" descarta
+ * muchisimo mas que filtrar por "cuaderno") y el resto se puntua sobre ese
+ * resultado.
+ *
+ * Dos cosas que esta busqueda tuvo mal y devolvian cero con el producto en el
+ * catalogo y con stock:
+ *
+ *   · La consulta se partia por espacios y se exigian todas las palabras. El
+ *     indice no guarda los conectores, asi que "goma de borrar" pedia un token
+ *     "de" que no tiene ningun producto. Ahora se despieza igual que el sync.
+ *   · Exigir todas las palabras tambien fallaba cuando una era un color:
+ *     "cartulina luma celeste" no encontraba nada porque el color vive en las
+ *     variedades, no en el nombre. Ahora se puntua cuantas coinciden y se
+ *     devuelve el mejor grupo.
  *
  * Es suficiente para un catalogo de libreria y no cuesta un servicio aparte.
  * Si algun dia el catalogo crece mucho, el reemplazo natural es un indice
  * externo, pero no antes de necesitarlo.
  */
 export async function buscar(texto, { cantidad = 60 } = {}) {
-  const palabras = normalizar(texto).split(/\s+/).filter(p => p.length >= 2);
+  const palabras = despiezar(texto);
   if (!palabras.length) return [];
 
   const clave = `buscar:${palabras.slice().sort().join('+')}`;
   return cacheado(clave, async () => {
-    const ancla = palabras.slice().sort((a, b) => b.length - a.length)[0];
-    const resto = palabras.filter(p => p !== ancla);
-
-    try {
-      const snap = await getDocs(query(
-        collection(db, 'tienda_productos'),
-        where('tokens', 'array-contains', ancla),
-        limit(cantidad * 4),
-      ));
-
-      return snap.docs
-        .map(armarProducto)
-        .filter(p => resto.every(r => p.tokens.some(t => t.startsWith(r))))
-        .sort((a, b) => {
-          // Lo que hay en stock primero: ofrecer algo agotado como primer
-          // resultado de una busqueda es la peor respuesta posible.
-          if ((a.stock > 0) !== (b.stock > 0)) return a.stock > 0 ? -1 : 1;
-          return a.nombre.localeCompare(b.nombre, 'es');
-        })
-        .slice(0, cantidad);
-    } catch (err) {
-      console.error('[datos] busqueda:', err);
-      return [];
+    for (const ancla of anclasDe(palabras)) {
+      try {
+        const snap = await getDocs(query(
+          collection(db, 'tienda_productos'),
+          where('tokens', 'array-contains', ancla),
+          limit(cantidad * 4),
+        ));
+        if (!snap.docs.length) continue;
+        return mejores(snap.docs.map(armarProducto), palabras, ancla).slice(0, cantidad);
+      } catch (err) {
+        console.error('[datos] busqueda:', err);
+        return [];
+      }
     }
+    return [];
   });
+}
+
+/**
+ * Por que palabra se pregunta al indice, y en que orden.
+ *
+ * Se prueban las tres mas largas, no solo la primera: la gente escribe como
+ * habla y mete palabras que no son de ningun producto ("tijera para chicos":
+ * "chicos" no existe en el catalogo, "tijera" si). Con una sola ancla, una
+ * palabra inventada devolvia cero.
+ *
+ * Las de dos letras quedan afuera mientras haya otra mas larga. Son las que
+ * enganchan cualquier cosa: "zzzz no existe" devolvia "Abrochadora Kangaro No.
+ * 384556" por el token "no", que es peor que no devolver nada. Si el cliente
+ * escribio solo eso ("a4"), se usa igual: es todo lo que hay.
+ */
+export function anclasDe(palabras) {
+  const porLargo = palabras.slice().sort((a, b) => b.length - a.length);
+  const fuertes = porLargo.filter(p => p.length >= 3);
+  return (fuertes.length ? fuertes : porLargo).slice(0, 3);
+}
+
+/**
+ * Ordena por relevancia y se queda con el grupo que mas palabras cumple.
+ *
+ * Cuando algo coincide con todo lo escrito, lo que coincide a medias sobra y
+ * ensucia: buscando "cuaderno rivadavia abc" no tiene sentido listar los otros
+ * cuarenta cuadernos. Pero si nada cumple todo, mostrar el mejor parcial es
+ * infinitamente mejor que "no se encontro nada".
+ */
+export function mejores(productos, palabras, ancla) {
+  const escrito = palabras.join(' ');
+
+  const cuantas = p => palabras.filter(w => p.tokens.some(t => t.startsWith(w))).length;
+  const tope = productos.reduce((m, p) => Math.max(m, cuantas(p)), 0);
+
+  return productos
+    .filter(p => cuantas(p) === tope)
+    .sort((a, b) => {
+      // Lo que hay en stock primero: ofrecer algo agotado como primer resultado
+      // es la peor respuesta posible.
+      if ((a.stock > 0) !== (b.stock > 0)) return a.stock > 0 ? -1 : 1;
+      // Lo que EMPIEZA con lo buscado. Sin esto "mochila" trae primero
+      // "Hebilla para Mochila": en el catalogo la palabra aparece igual de
+      // valida en el medio del nombre.
+      const na = normalizar(a.nombre);
+      const nb = normalizar(b.nombre);
+      const ea = na.startsWith(escrito) ? 0 : na.startsWith(ancla) ? 1 : 2;
+      const eb = nb.startsWith(escrito) ? 0 : nb.startsWith(ancla) ? 1 : 2;
+      if (ea !== eb) return ea - eb;
+      return a.nombre.localeCompare(b.nombre, 'es');
+    });
 }
 
 /**
@@ -334,10 +388,19 @@ export async function sugerir(texto, { rubro = null, cantidad = 6 } = {}) {
       where('nombre_busqueda', '<=', q + ''),
       limit(cantidad * 2)));
 
-    // La ultima palabra puede estar a medio escribir, asi que para tokens se
-    // usa la anterior completa; si hay una sola palabra, se usa esa.
-    const palabras = q.split(/\s+/).filter(Boolean);
-    const completa = palabras.length > 1 ? palabras[palabras.length - 2] : palabras[0];
+    // La ultima palabra puede estar a medio escribir, asi que se trata aparte:
+    // de ella solo se pide que sea el comienzo de algo. Las anteriores se
+    // despiezan igual que en el indice, sin conectores — pedir el token "de"
+    // de "goma de borrar" no sugeria nada, porque no existe en ningun producto.
+    const partes = q.split(/[^0-9a-z]+/).filter(Boolean);
+    const parcial = partes[partes.length - 1] || '';
+    const completas = despiezar(partes.slice(0, -1).join(' '));
+
+    // Para el array-contains hace falta una palabra entera: la ultima completa
+    // que haya, y si el cliente escribio una sola, esa misma.
+    const completa = completas.length
+      ? completas[completas.length - 1]
+      : (VACIAS.has(parcial) ? '' : parcial);
 
     const porPalabra = completa && completa.length >= 3
       ? getDocs(query(col, ...base,
@@ -365,7 +428,10 @@ export async function sugerir(texto, { rubro = null, cantidad = 6 } = {}) {
         // Todas las palabras escritas tienen que aparecer, en cualquier orden.
         // La ultima suele estar a medio escribir, por eso alcanza con que sea
         // el comienzo de alguna palabra del producto.
-        const entra = palabras.every(w =>
+        const exigidas = parcial && !VACIAS.has(parcial)
+          ? [...completas, parcial]
+          : completas;
+        const entra = exigidas.every(w =>
           p.tokens.some(t => t.startsWith(w)) || normalizar(p.nombre).includes(w));
         if (!entra) continue;
         salida.push(p);

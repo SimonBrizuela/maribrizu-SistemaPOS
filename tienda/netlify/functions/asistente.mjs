@@ -32,7 +32,7 @@
  * Sin clave devuelve 503 y la tienda esconde el chat, que es como degradan las
  * otras funciones cuando les falta su clave.
  */
-import { normalizar } from '../../src/formato.js';
+import { normalizar, despiezar as despiezarBase } from '../../src/formato.js';
 
 const PROYECTO = 'mari-d7c71';
 const MODELO = 'gemini-3.5-flash-lite';
@@ -410,34 +410,25 @@ function ordenar(productos, palabras, ancla) {
 }
 
 /**
- * La consulta partida en palabras, con el mismo criterio con el que el sync
- * arma los `tokens` de cada producto (`tokenizar()` en scripts/sync_tienda.py).
+ * Palabras de conversacion, solo del lado de la consulta.
  *
- * Tiene que ser el mismo o la busqueda miente. El sync no guarda los conectores,
- * asi que "Goma Borrar Maped" queda como [goma, borrar, maped]: buscar "goma de
- * borrar" exigiendo tambien "de" no encuentra absolutamente nada, porque ningun
- * producto tiene esa palabra. Y se corta por caracter no alfanumerico, no por
- * espacio, porque el sync hace lo mismo: "2,5cm" es el token "5cm".
+ * Las del indice (los conectores que el sync no guarda) viven en
+ * `formato.js` y las comparte la busqueda de la tienda: tienen que ser las
+ * mismas o la busqueda miente. Estas son de mas y solo tienen sentido aca: el
+ * sync no necesita filtrarlas porque no aparecen en el nombre de un producto,
+ * pero alguna vez coinciden por casualidad. Sin ellas "zzzz no existe" devolvia
+ * "Juego de Mesa Uno No Mercy" y "Abrochadora Kangaro No. 384556", enganchadas
+ * del token "no", y el asistente pasaba de no encontrar nada a ofrecer dos
+ * productos cualquiera.
  */
-const VACIAS = new Set([
-  // Las mismas que descarta el sync al indexar.
-  'de', 'del', 'la', 'las', 'el', 'los', 'y', 'con', 'sin',
-  'para', 'por', 'a', 'en', 'un', 'una', 'marca',
-  // Estas son de mas, solo del lado de la consulta: son palabras de conversacion
-  // que el sync no necesita filtrar porque no aparecen en el nombre de un
-  // producto, pero que alguna vez coinciden por casualidad. Sin ellas
-  // "zzzz no existe" devolvia "Juego de Mesa Uno No Mercy" y "Abrochadora
-  // Kangaro No. 384556", enganchadas del token "no", y el asistente pasaba de
-  // no encontrar nada a ofrecer dos productos cualquiera.
+const CHARLA = new Set([
   'no', 'si', 'que', 'me', 'mi', 'te', 'lo', 'le', 'se', 'es', 'al',
-  'hay', 'tenes', 'tienen', 'tiene', 'tenes', 'hola', 'buenas',
+  'hay', 'tenes', 'tienen', 'tiene', 'hola', 'buenas',
   'quiero', 'necesito', 'busco', 'buscaba', 'queria', 'cuanto', 'como',
 ]);
 
 function despiezar(texto) {
-  return normalizar(texto)
-    .split(/[^0-9a-z]+/)
-    .filter(p => p.length >= 2 && !VACIAS.has(p));
+  return despiezarBase(texto, CHARLA);
 }
 
 function armarProducto(documento) {
