@@ -178,7 +178,7 @@ export async function producto({ montar, params }) {
             ${p.marca ? `<p style="color:var(--text-2);font-size:var(--t-sm);margin-top:var(--e-1)">${esc(p.marca)}</p>` : ''}
           </div>
 
-          <div>
+          <div class="ficha-precio">
             <div class="ficha-producto__precio cifra" data-precio>${pesos(p.precio)}${
               porMetro ? '<small style="font-size:var(--t-base);font-weight:600;color:var(--text-2)"> el metro</small>' : ''
             }</div>
@@ -188,6 +188,7 @@ export async function producto({ montar, params }) {
 
           ${p.descripcion ? `<p style="color:var(--text-2);line-height:var(--alto-suelto)">${esc(p.descripcion)}</p>` : ''}
 
+          <div class="${agotado ? '' : 'ficha-compra'}">
           ${listaVariedades}
 
           ${agotado ? `
@@ -236,15 +237,16 @@ export async function producto({ montar, params }) {
                 </span>
                 <span class="opcion-pack__precio cifra">${pesos(p.precio_pack)}</span>
               </button>` : ''}`}
+          </div>
 
-          <div style="display:flex;flex-direction:column;gap:var(--e-2);padding-top:var(--e-3);border-top:1px solid var(--border)">
-            <span style="display:flex;gap:var(--e-2);align-items:center;font-size:var(--t-sm);color:var(--text-2)">
+          <div class="ficha-entrega">
+            <span>
               ${icono('camion', { tam: 18 })} Envío a domicilio en Córdoba, se calcula por distancia
             </span>
-            <span style="display:flex;gap:var(--e-2);align-items:center;font-size:var(--t-sm);color:var(--text-2)">
+            <span>
               ${icono('local', { tam: 18 })} Retiro sin costo en ${esc(cfg.direccion)}
             </span>
-            <span style="display:flex;gap:var(--e-2);align-items:center;font-size:var(--t-sm);color:var(--text-2)">
+            <span>
               ${icono('reloj', { tam: 18 })} Demora ${esc(cfg.entrega.demora_texto)}
             </span>
           </div>

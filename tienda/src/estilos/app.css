@@ -483,7 +483,61 @@
 }
 .ficha-producto__foto img { width: 100%; height: 100%; object-fit: cover; }
 
-.ficha-producto__datos { display: flex; flex-direction: column; gap: var(--e-4); }
+/* La columna de datos.
+ *
+ * El ancho tiene tope por dos motivos: un renglón de texto de 60 caracteres se
+ * lee y uno de 90 no, y el botón flotante del chat vive abajo a la derecha —
+ * sin tope, las líneas de envío y retiro pasaban por debajo y quedaban
+ * cortadas a la mitad.
+ *
+ * El espaciado no es parejo a propósito: precio, stock y mínimo son un solo
+ * bloque de información y van juntos; elegir color y cantidad es otra cosa y
+ * respira. */
+.ficha-producto__datos {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-4);
+  max-width: 62ch;
+}
+/* Precio, stock y mínimo son un solo bloque de información: van pegados. */
+.ficha-precio { display: flex; flex-direction: column; gap: var(--e-2); }
+.ficha-precio .dato-stock,
+.ficha-precio .aviso-minimo { margin-top: 0; }
+
+/* Cómo se entrega: lo último de la ficha, en gris y sin pesar.
+ *
+ * En escritorio deja libre la esquina de abajo a la derecha, que es donde vive
+ * el botón del chat: sin ese hueco, "Retiro sin costo en Av. Alfonsina Storni
+ * 168, X5019 Córdoba" quedaba cortado a la mitad por el globo. */
+.ficha-entrega {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-2);
+  padding-top: var(--e-3);
+  border-top: 1px solid var(--border);
+}
+.ficha-entrega span {
+  display: flex;
+  gap: var(--e-2);
+  align-items: flex-start;
+  font-size: var(--t-sm);
+  line-height: 1.45;
+  color: var(--text-2);
+}
+.ficha-entrega svg { flex: none; margin-top: 1px; }
+
+@media (min-width: 768px) {
+  .ficha-entrega { padding-right: 168px; }
+}
+
+/* Elegir color y cantidad es otra cosa, y respira: una línea fina y aire. */
+.ficha-compra {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-4);
+  padding-top: var(--e-4);
+  border-top: 1px solid var(--border);
+}
 .ficha-producto__titulo { font-size: var(--t-xl); letter-spacing: -.025em; }
 .ficha-producto__precio {
   font-family: var(--font-titulo);
@@ -1320,10 +1374,12 @@
 .opcion-pack {
   display: flex;
   align-items: center;
-  gap: var(--e-3);
+  gap: var(--e-4);
   width: 100%;
   padding: var(--e-3) var(--e-4);
-  border: 1.5px dashed var(--borde-control);
+  /* Borde entero y no punteado: el punteado se lee como "esto está a medio
+     hacer" y esto es una oferta real, la de llevarse el rollo. */
+  border: 1px solid var(--border-2);
   border-radius: var(--r-md);
   background: var(--surface);
   cursor: pointer;
@@ -1331,9 +1387,27 @@
   transition: border-color var(--m-rapido) var(--curva), background var(--m-rapido) var(--curva);
 }
 .opcion-pack:hover { border-color: var(--primary); background: var(--primary-bg); }
-.opcion-pack__texto { flex: 1; min-width: 0; }
-.opcion-pack__titulo { font-weight: var(--peso-semi); font-size: var(--t-sm); }
-.opcion-pack__ahorro { font-size: var(--t-xs); color: var(--exito); font-weight: var(--peso-semi); }
+.opcion-pack__texto {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+.opcion-pack__titulo {
+  font-weight: var(--peso-semi);
+  font-size: var(--t-sm);
+  line-height: 1.35;
+}
+/* El ahorro va en su propio renglón. Pegado al título se partía en el medio de
+   la frase: "Ahorrás 7% contra / comprar de a uno". */
+.opcion-pack__ahorro {
+  display: block;
+  font-size: var(--t-xs);
+  color: var(--exito);
+  font-weight: var(--peso-semi);
+  line-height: 1.35;
+}
 .opcion-pack__precio {
   font-family: var(--font-titulo);
   font-weight: var(--peso-bold);
