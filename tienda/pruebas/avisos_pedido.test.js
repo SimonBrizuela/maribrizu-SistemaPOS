@@ -32,9 +32,21 @@ describe('el número para WhatsApp', () => {
       .toBe('5493517046684');
   });
 
-  it('respeta el que ya viene con código de país', () => {
+  it('respeta el que ya viene con código de país y el 9', () => {
     expect(whatsappDe(pedido({ cliente: { telefono: '+54 9 351 704 6684' } })))
       .toBe('5493517046684');
+  });
+
+  it('le pone el 9 al que vino con 54 pero sin él', () => {
+    // Salió de un pedido real: el cliente copió su número de un contacto y
+    // quedó +543516194411, que no resuelve a ningún celular en WhatsApp.
+    expect(whatsappDe(pedido({ cliente: { telefono: '+543516194411' } })))
+      .toBe('5493516194411');
+  });
+
+  it('saca el 15 de las agendas viejas', () => {
+    expect(whatsappDe(pedido({ cliente: { telefono: '0351 15 619-4411' } })))
+      .toBe('5493516194411');
   });
 
   it('sin teléfono no inventa uno', () => {

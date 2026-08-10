@@ -11,9 +11,10 @@
  * paso siguiente. Elegir el estado de una lista desplegable obliga a saber cual
  * viene despues; el boton ya lo sabe.
  */
-import { collection, doc, onSnapshot, query, orderBy, limit, updateDoc } from 'firebase/firestore';
+import { collection, doc, getDoc, onSnapshot, query, orderBy, limit, updateDoc } from 'firebase/firestore';
 import { marcarVisto } from '../pedidos_watcher.js';
 import { enlaceAviso } from '../avisos_pedido.js';
+import { imprimirPedido } from '../ticket_pedido.js';
 
 // El camino normal de un pedido. `cancelado` queda afuera a proposito: no es un
 // paso, es una salida.
@@ -54,6 +55,7 @@ let _pedidos = [];
 let _filtro = 'pendientes';
 let _busqueda = '';
 let _db = null;
+let _config = {};
 
 function cleanup() {
   _unsub?.();
@@ -108,6 +110,14 @@ function cuando(marca) {
  * saber si se le avisó o no — que es justo lo que uno quiere saber cuando
  * alguien llama preguntando.
  */
+async function marcarImpreso(id) {
+  try {
+    await updateDoc(doc(_db, 'tienda_pedidos', id), { impreso: true });
+  } catch (e) {
+    console.warn('[pedidos] no se pudo anotar la impresión:', e);
+  }
+}
+
 async function marcarAvisado(id, estado) {
   try {
     await updateDoc(doc(_db, 'tienda_pedidos', id), { avisado: estado });
@@ -240,6 +250,9 @@ function tarjeta(p) {
             <span class="material-icons" style="font-size:18px">chat</span>
             ${p.avisado === p.estado ? 'Volver a avisar' : 'Avisarle al cliente'}
           </a>` : ''}
+        <button class="pc-btn" data-act="imprimir" style="justify-content:center">
+          <span class="material-icons" style="font-size:18px">print</span> Imprimir
+        </button>
         ${p.estado !== 'cancelado' && p.estado !== 'entregado' ? `
           <button class="pc-btn danger" data-act="cancelar" style="justify-content:center">
             <span class="material-icons" style="font-size:18px">cancel</span> Cancelar
@@ -287,6 +300,12 @@ export async function renderPedidosTienda(container, db) {
   cleanup();
   _db = db;
 
+  // El nombre, la dirección y el teléfono del local van en el encabezado del
+  // ticket. Se leen una vez y si fallan el ticket sale igual, sin encabezado.
+  getDoc(doc(db, 'tienda_config', 'settings'))
+    .then(s => { if (s.exists()) _config = s.data(); })
+    .catch(() => {});
+
   container.innerHTML = `
     <div class="filter-bar" id="pedidosFiltros"
          style="margin-bottom:16px;flex-wrap:wrap;gap:8px;align-items:center">
@@ -330,6 +349,17 @@ export async function renderPedidosTienda(container, db) {
       // de este estado, para que el botón no quede pidiendo lo mismo.
       const p = _pedidos.find(x => x.id === id);
       if (p) marcarAvisado(id, p.estado);
+      return;
+    }
+
+    if (boton.dataset.act === 'imprimir') {
+      const p = _pedidos.find(x => x.id === id);
+      if (p) {
+        imprimirPedido(p, _config);
+        // Queda anotado que se imprimio: el POS usa el mismo campo, asi que un
+        // pedido impreso desde aca no se vuelve a imprimir solo alla.
+        marcarImpreso(id);
+      }
       return;
     }
 

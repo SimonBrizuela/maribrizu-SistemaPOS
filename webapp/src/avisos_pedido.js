@@ -41,17 +41,34 @@ export function nombreCorto(pedido) {
 /**
  * El número del cliente, como lo quiere wa.me.
  *
- * En Córdoba la gente escribe 3517046684, y a veces con espacios, guiones o
- * paréntesis. WhatsApp necesita 5493517046684: código de país, el 9 de celular
- * y nada más que dígitos. Si ya viene con el 54 adelante se respeta.
+ * WhatsApp necesita 549 + código de área + número, sin el 0 ni el 15. La gente
+ * lo escribe de todas las formas posibles y ninguna es esa:
+ *
+ *     3516194411          como lo dice cualquiera
+ *     0351 15 619-4411    como está en la agenda de papel
+ *     +54 351 619 4411    copiado de un contacto, y le falta el 9
+ *
+ * El último es el que rompía: empieza con 54, así que se tomaba por bueno y se
+ * mandaba `wa.me/543516194411`, que no resuelve a ningún celular. Salió de un
+ * pedido real del tablero.
+ *
+ * Los fijos quedan mal —les agrega un 9 que no les corresponde— y está bien:
+ * WhatsApp no funciona en un fijo, así que ese aviso no iba a llegar igual.
  */
 export function whatsappDe(pedido) {
-  const crudo = String(pedido?.cliente?.telefono || '').replace(/\D/g, '');
-  if (crudo.length < 6) return null;
-  if (crudo.startsWith('54')) return crudo;
-  // 11 dígitos es un número con el 0 y el 15 metidos en el medio; 10 es el
-  // limpio (código de área + número).
-  return `549${crudo.replace(/^0/, '')}`;
+  let d = String(pedido?.cliente?.telefono || '').replace(/\D/g, '');
+  if (d.length < 8) return null;
+
+  if (d.startsWith('00')) d = d.slice(2);
+  if (d.startsWith('54')) d = d.slice(2);
+  d = d.replace(/^0/, '');
+  if (d.startsWith('9') && d.length > 10) d = d.slice(1);
+  // Un número nacional mide diez dígitos: código de área (dos a cuatro) más el
+  // abonado. Con doce, esos dos de más son el 15 que se metía antes del número
+  // para llamar a un celular.
+  if (d.length === 12) d = d.replace(/^(\d{2,4})15/, '$1');
+
+  return d.length >= 8 ? `549${d}` : null;
 }
 
 /** El enlace a WhatsApp con el mensaje del estado actual, o null si no aplica. */
