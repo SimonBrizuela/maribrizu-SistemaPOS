@@ -10,6 +10,7 @@ import { iniciarSugerencias, fijarAmbito, cerrarSugerencias } from './sugerencia
 import { iniciarAsistente } from './asistente.js';
 import { iniciarBarraPedido, refrescarBarraPedido } from './barra_pedido.js';
 import { iniciarCuenta } from './cuenta.js';
+import { estadoDelLocal, textoDeCerrado } from './horarios.js';
 
 import { inicio } from './paginas/inicio.js';
 import { catalogo } from './paginas/catalogo.js';
@@ -267,10 +268,10 @@ async function arrancar() {
   // Si están los dos, el de cerrada va primero: es el que cambia lo que la
   // persona puede hacer.
   const cfg = await cargarConfig();
+  const estado = estadoDelLocal(cfg);
   const avisos = [];
-  if (cfg.abierta === false) {
-    avisos.push(['aviso-cerrada',
-      'La tienda está cerrada por ahora. Podés mirar el catálogo, pero no tomamos pedidos.']);
+  if (!estado.abierto) {
+    avisos.push(['aviso-cerrada', textoDeCerrado(estado)]);
   }
   if (cfg.banner) avisos.push(['aviso-banner', String(cfg.banner)]);
 

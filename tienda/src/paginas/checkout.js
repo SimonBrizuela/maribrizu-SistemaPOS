@@ -18,6 +18,7 @@ import * as carrito from '../carrito.js';
 import { avisar } from '../avisos.js';
 import { ir } from '../router.js';
 import { crearPedido } from '../pedidos.js';
+import { estadoDelLocal } from '../horarios.js';
 import { datosParaCompletar, recordarDelPedido, sesion } from '../cuenta.js';
 import { olvidar } from '../cliente.js';
 import { cotizar, rangoDeTramos, llegaAEnvioGratis } from '../envio.js';
@@ -97,11 +98,15 @@ function pintarFormulario({ montar, cfg, cambios }) {
   const hayRetiro = entrega.retiro_habilitado !== false;
   const hayDelivery = entrega.delivery_habilitado !== false;
 
-  // Con la tienda cerrada el pedido no entra. Se deja ver el checkout entero
-  // igual —con el total, el envio y todo— y se traba solo el boton: sacar la
-  // pantalla del medio le esconde al cliente lo que ya habia armado, y el
+  // Con el local cerrado el pedido no entra. Se deja ver el checkout entero
+  // igual —con el total, el envío y todo— y se traba solo el botón: sacar la
+  // pantalla del medio le esconde al cliente lo que ya había armado, y el
   // carrito sobrevive al cierre.
-  const cerrada = cfg.abierta === false;
+  //
+  // Cierra por horario o porque lo cerraron a mano desde el panel; para el
+  // cliente es lo mismo, salvo que en el primer caso se le dice cuándo abrimos.
+  const estadoLocal = estadoDelLocal(cfg);
+  const cerrada = !estadoLocal.abierto;
 
   // Monto mínimo del pedido. No se esconde el checkout ni se traba el carrito:
   // se muestra cuánto falta, que es lo único accionable. Un cartel que dice
@@ -366,8 +371,11 @@ function pintarFormulario({ montar, cfg, cambios }) {
 
         <p class="checkout__legal">
           ${cerrada
-            ? `Ahora no estamos tomando pedidos. Tu carrito queda guardado:
-               volvé cuando abramos y confirmalo de una.`
+            ? (estadoLocal.abre
+                ? `Ahora está cerrado, abrimos ${esc(estadoLocal.abre)}. Tu carrito queda
+                   guardado: volvé y confirmalo de una.`
+                : `Ahora no estamos tomando pedidos. Tu carrito queda guardado:
+                   volvé cuando abramos y confirmalo de una.`)
             : `No se cobra nada ahora. El pedido queda reservado y lo pagás
                ${modo === 'retiro' ? 'al retirarlo' : 'al recibirlo'}.`}
         </p>
@@ -498,8 +506,10 @@ function pintarFormulario({ montar, cfg, cambios }) {
 
   async function confirmar() {
     if (cerrada) {
-      avisar('Ahora no estamos tomando pedidos. Tu carrito queda guardado.',
-             { tipo: 'error', duracion: 6000 });
+      avisar(estadoLocal.abre
+        ? `Ahora está cerrado. Abrimos ${estadoLocal.abre} y tu carrito queda guardado.`
+        : 'Ahora no estamos tomando pedidos. Tu carrito queda guardado.',
+        { tipo: 'error', duracion: 6000 });
       return;
     }
 

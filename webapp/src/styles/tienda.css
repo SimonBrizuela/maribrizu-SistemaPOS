@@ -222,3 +222,48 @@
   font-weight: 700;
 }
 .pc-btn.avisar-pendiente:hover { background: var(--tint-green-bg); filter: brightness(.96); }
+
+/* ── El horario, día por día ──────────────────────────────────────────────
+   Dos tramos por día porque así trabaja el local: abre a la mañana, cierra al
+   mediodía y vuelve a la tarde. Un día sin tramos es un día cerrado, y de ahí
+   sale que el domingo aparezca cerrado en la tienda sin apagar nada a mano. */
+.tienda-horarios { display: flex; flex-direction: column; gap: 6px; }
+
+.tienda-dia {
+  /* El nombre arriba y las horas abajo: la tarjeta de configuración mide unos
+     340 px y en una sola fila los dos relojes y la cruz de quitar quedaban
+     cortados contra el borde. */
+  display: grid;
+  grid-template-columns: 42px 1fr;
+  gap: 6px 10px;
+  align-items: center;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  background: var(--card-bg);
+}
+.tienda-dia__tramos { grid-column: 2; }
+.tienda-dia.cerrado { opacity: .72; }
+.tienda-dia__nombre { font-size: 13px; font-weight: 600; }
+.tienda-dia__cerrado { grid-column: 2; font-size: 12px; color: var(--text-muted); }
+
+.tienda-dia__tramos { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.tienda-dia__tramo { display: inline-flex; align-items: center; gap: 5px; }
+.tienda-dia__tramo span { font-size: 12px; color: var(--text-muted); }
+.tienda-dia__tramo input[type="time"] {
+  padding: 5px 7px;
+  border: 1.5px solid var(--border);
+  border-radius: 7px;
+  background: var(--card-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+.tienda-dia__tramo input[type="time"]:focus { border-color: #4361ee; outline: none; }
+.tienda-dia__tramo .pc-btn { padding: 3px; }
+.tienda-dia__tramo .pc-btn .material-icons { font-size: 13px !important; }
+
+/* Los relojes nativos son anchos; con dos tramos, cada uno en su renglón. */
+.tienda-dia__tramos { flex-direction: column; align-items: flex-start; }
+.tienda-dia__tramo { flex-wrap: nowrap; }

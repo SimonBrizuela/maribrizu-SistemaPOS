@@ -21,6 +21,7 @@ import { collection, doc, getDoc, getDocs, orderBy, query, setDoc } from 'fireba
 import { getCached, invalidateCache } from '../cache.js';
 import { alertDialog, confirmDialog, escHtml } from '../components/dialogs.js';
 import { espejarLote, recomputarRubros, motivoDeNoPublicar, nombreBonito } from '../tienda_espejo.js';
+import { textoDeHorarios } from '../../../tienda/src/horarios.js';
 import '../styles/tienda.css';
 
 const POR_DEFECTO = {
@@ -50,6 +51,7 @@ let _config = null;
 let _tramos = [];
 let _habilitados = [];
 let _catalogo = [];
+let _horarios = null;
 
 /* ── Lectura ──────────────────────────────────────────────────────────────── */
 
@@ -129,6 +131,71 @@ function pintarTramosResumen(tramos) {
     : '<div>Sin tramos cargados: la tienda cotiza "a confirmar".</div>';
 }
 
+const DIAS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
+
+/** Siete días, con el horario de siempre si nunca se cargó ninguno. */
+function normalizarHorarios(horarios) {
+  const base = Array.isArray(horarios) && horarios.length === 7 ? horarios : null;
+  if (base) {
+    // En Firestore cada día es un mapa con `tramos` adentro: la base no admite
+    // arreglos anidados y guardar un arreglo de arreglos falla.
+    return base.map(dia => {
+      const lista = Array.isArray(dia) ? dia : (Array.isArray(dia?.tramos) ? dia.tramos : []);
+      return lista.slice(0, 2).map(t => ({
+        desde: String(t?.desde || ''), hasta: String(t?.hasta || ''),
+      }));
+    });
+  }
+  const habil = [{ desde: '09:00', hasta: '13:00' }, { desde: '17:00', hasta: '20:30' }];
+  return [habil, habil, habil, habil, habil,
+          [{ desde: '09:00', hasta: '13:00' }, { desde: '17:30', hasta: '20:30' }],
+          []].map(d => d.map(t => ({ ...t })));
+}
+
+/**
+ * El horario, día por día.
+ *
+ * Dos tramos por día porque así trabaja el local: abre a la mañana, cierra al
+ * mediodía y vuelve a la tarde. Un día sin tramos es un día cerrado, y así es
+ * como el domingo aparece cerrado en la tienda sin que nadie lo apague a mano.
+ */
+function pintarHorarios() {
+  const caja = document.getElementById('cfgHorarios');
+  if (!caja) return;
+
+  caja.innerHTML = _horarios.map((tramos, dia) => {
+    const cerrado = !tramos.length;
+    return `
+      <div class="tienda-dia ${cerrado ? 'cerrado' : ''}" data-dia="${dia}">
+        <button class="tienda-switch" data-dia-abrir aria-checked="${!cerrado}"
+                title="${cerrado ? 'Abrir este día' : 'Cerrar todo el día'}"></button>
+        <span class="tienda-dia__nombre">${DIAS[dia]}</span>
+        ${cerrado ? '<span class="tienda-dia__cerrado">Cerrado todo el día</span>' : `
+          <div class="tienda-dia__tramos">
+            ${tramos.map((t, i) => `
+              <span class="tienda-dia__tramo">
+                <input type="time" data-tramo="${i}" data-punta="desde" value="${escHtml(t.desde)}">
+                <span>a</span>
+                <input type="time" data-tramo="${i}" data-punta="hasta" value="${escHtml(t.hasta)}">
+                ${tramos.length > 1 ? `<button class="pc-btn danger" data-quitar-tramo="${i}"
+                    title="Quitar este tramo"><span class="material-icons">close</span></button>` : ''}
+              </span>`).join('')}
+            ${tramos.length < 2
+              ? '<button class="pc-btn" data-sumar-tramo>+ Otro tramo</button>' : ''}
+          </div>`}
+      </div>`;
+  }).join('')
+  + `<button class="pc-btn" id="cfgCopiarHabiles" style="margin-top:8px">
+       <span class="material-icons">content_copy</span> Copiar el lunes a los días hábiles
+     </button>`;
+
+  const texto = document.getElementById('cfgHorariosTexto');
+  if (texto) {
+    texto.innerHTML = 'Así se va a leer en la tienda:<br><b>'
+      + escHtml(textoDeHorarios(_horarios) || 'sin horarios') + '</b>';
+  }
+}
+
 function pintarRubros() {
   const caja = document.getElementById('cfgRubros');
   if (!caja) return;
@@ -187,6 +254,7 @@ export async function renderTiendaAjustes(container, db) {
   _tramos = (config.entrega.tramos || []).map(t => ({
     hasta_km: Number(t.hasta_km) || 0, precio: Number(t.precio) || 0,
   }));
+  _horarios = normalizarHorarios(config.horarios);
   _habilitados = Array.isArray(publicacion.data()?.rubros)
     ? publicacion.data().rubros.map(r => String(r).trim().toUpperCase()) : [];
   _catalogo = (catalogo || []).filter(d => d && d.doc_id)
@@ -216,11 +284,9 @@ export async function renderTiendaAjustes(container, db) {
           { pista: 'Con código de país y sin signos: 5493517046684' })}
         ${campo('cfgEmail', 'Email', config.email)}
         <div class="tienda-campo">
-          <label for="cfgHorarios">Horarios</label>
-          <textarea id="cfgHorarios" rows="3">${escHtml(config.horarios_texto || '')}</textarea>
-          <div class="tienda-pista">
-            Separados por punto medio (·). Cada tramo se muestra en su renglón.
-          </div>
+          <label>Horarios de atención</label>
+          <div id="cfgHorarios" class="tienda-horarios"></div>
+          <div class="tienda-pista" id="cfgHorariosTexto"></div>
         </div>
         ${campo('cfgBanner', 'Aviso en la portada', config.banner,
           { placeholder: 'Vacío = sin aviso',
@@ -294,6 +360,7 @@ export async function renderTiendaAjustes(container, db) {
     </div>`;
 
   pintarTramos();
+  pintarHorarios();
   pintarRubros();
 
   /* ── Eventos ── */
@@ -327,6 +394,61 @@ export async function renderTiendaAjustes(container, db) {
     // Se repinta solo el resumen: repintar los campos mientras se escribe
     // pierde el cursor.
     pintarTramosResumen(_tramos);
+  });
+
+  // ── Horarios ──
+  $('#cfgHorarios').addEventListener('click', ev => {
+    const fila = ev.target.closest('[data-dia]');
+    if (!fila) return;
+    const dia = Number(fila.dataset.dia);
+
+    if (ev.target.closest('#cfgCopiarHabiles')) return;
+
+    if (ev.target.closest('[data-dia-abrir]')) {
+      // Al reabrir un día se le pone el horario del lunes, que es lo que casi
+      // siempre corresponde; dejarlo vacío obliga a tipear cuatro horas.
+      _horarios[dia] = _horarios[dia].length
+        ? []
+        : (_horarios[0].length
+            ? _horarios[0].map(t => ({ ...t }))
+            : [{ desde: '09:00', hasta: '13:00' }]);
+      pintarHorarios();
+      return;
+    }
+
+    const quitar = ev.target.closest('[data-quitar-tramo]');
+    if (quitar) {
+      _horarios[dia].splice(Number(quitar.dataset.quitarTramo), 1);
+      pintarHorarios();
+      return;
+    }
+
+    if (ev.target.closest('[data-sumar-tramo]')) {
+      _horarios[dia].push({ desde: '17:00', hasta: '20:30' });
+      pintarHorarios();
+    }
+  });
+
+  $('#cfgHorarios').addEventListener('change', ev => {
+    const campo = ev.target.closest('[data-tramo]');
+    if (!campo) return;
+    const dia = Number(campo.closest('[data-dia]').dataset.dia);
+    const tramo = _horarios[dia][Number(campo.dataset.tramo)];
+    if (tramo) tramo[campo.dataset.punta] = campo.value;
+    // Solo se repinta el texto de abajo: repintar la grilla mientras se elige
+    // una hora cierra el reloj del navegador.
+    const texto = document.getElementById('cfgHorariosTexto');
+    if (texto) {
+      texto.innerHTML = 'Así se va a leer en la tienda:<br><b>'
+        + escHtml(textoDeHorarios(_horarios) || 'sin horarios') + '</b>';
+    }
+  });
+
+  container.addEventListener('click', ev => {
+    if (!ev.target.closest('#cfgCopiarHabiles')) return;
+    const lunes = _horarios[0].map(t => ({ ...t }));
+    for (let dia = 1; dia <= 4; dia++) _horarios[dia] = lunes.map(t => ({ ...t }));
+    pintarHorarios();
   });
 
   $('#cfgGuardar').addEventListener('click', () => guardarTodo(container));
@@ -383,7 +505,13 @@ async function guardarTodo(container) {
       telefono: texto('#cfgTelefono'),
       whatsapp: texto('#cfgWhatsapp'),
       email: texto('#cfgEmail'),
-      horarios_texto: $('#cfgHorarios').value.trim(),
+      // Un mapa por día y no un arreglo de arreglos: Firestore no admite
+      // arreglos anidados y rechaza el documento entero.
+      horarios: _horarios.map(tramos => ({ tramos })),
+      // El texto se genera desde la estructura y no se edita a mano: dos
+      // fuentes para lo mismo terminan diciendo cosas distintas, y la que
+      // decide si la tienda abre es la estructura.
+      horarios_texto: textoDeHorarios(_horarios),
       banner: texto('#cfgBanner'),
       entrega: {
         retiro_habilitado: $('#cfgRetiro').checked,
