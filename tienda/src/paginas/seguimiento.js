@@ -14,23 +14,36 @@ import { cargarConfig } from '../datos.js';
 import { pie, vacio } from '../componentes.js';
 import { pesos, esc } from '../formato.js';
 import { icono } from '../iconos.js';
-import { misPedidos } from '../pedidos.js';
+import { misPedidos, pedidosDeLaCuenta } from '../pedidos.js';
+import { sesion, iniciarCuenta } from '../cuenta.js';
 
 export async function seguimiento({ montar }) {
   const cfg = await cargarConfig();
   document.title = 'Mis pedidos · Librería Liceo';
 
-  const lista = misPedidos();
+  // Con cuenta, la lista sale de la base y vale desde cualquier aparato. Los de
+  // este navegador se suman igual: pueden ser de antes de crear la cuenta, o de
+  // una compra hecha sin entrar.
+  await iniciarCuenta();
+  const cuenta = sesion();
+  const deLaCuenta = cuenta ? await pedidosDeLaCuenta(cuenta.uid) : [];
+
+  const vistos = new Set(deLaCuenta.map(p => p.id));
+  const lista = [...deLaCuenta, ...misPedidos().filter(p => !vistos.has(p.id))]
+    .sort((a, b) => (b.cuando || 0) - (a.cuando || 0));
 
   if (!lista.length) {
     montar(`
       <div class="contenedor">
         ${vacio({
           titulo: 'Todavía no hiciste ningún pedido',
-          texto: 'Cuando hagas uno va a aparecer acá, con su código y en qué anda. ' +
-                 'Si pediste desde otro teléfono, escribinos y lo buscamos por tu nombre.',
+          texto: cuenta
+            ? 'Cuando hagas uno va a aparecer acá, con su código y en qué anda.'
+            : 'Cuando hagas uno va a aparecer acá, con su código y en qué anda. ' +
+              'Si pediste desde otro teléfono, entrá a tu cuenta y los vas a ver todos.',
           acciones: `
             <a class="boton boton--primario" href="/catalogo">Ver el catálogo</a>
+            ${cuenta ? '' : '<a class="boton boton--secundario" href="/cuenta">Entrar a mi cuenta</a>'}
             <a class="boton boton--secundario" href="https://wa.me/${esc(cfg.whatsapp)}"
                target="_blank" rel="noopener">${icono('whatsapp', { tam: 16 })} Escribirnos</a>`,
         })}
@@ -43,7 +56,10 @@ export async function seguimiento({ montar }) {
     <div class="contenedor" style="padding-block:var(--e-6)">
       <h1 class="checkout__titulo">Mis pedidos</h1>
       <p style="color:var(--text-2);margin-bottom:var(--e-5)">
-        Los que hiciste desde este teléfono.
+        ${cuenta
+          ? 'Todos los que hiciste con tu cuenta, desde cualquier teléfono.'
+          : `Los que hiciste desde este teléfono.
+             <a href="/cuenta">Entrá a tu cuenta</a> para verlos todos.`}
       </p>
 
       <div class="pedidos-lista">

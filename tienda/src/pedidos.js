@@ -12,7 +12,8 @@
  * una cuenta en una libreria de barrio es perder el pedido.
  */
 import {
-  collection, doc, addDoc, getDoc, onSnapshot, serverTimestamp,
+  addDoc, collection, doc, getDoc, getDocs, limit, onSnapshot,
+  orderBy, query, serverTimestamp, where,
 } from 'firebase/firestore';
 import { db } from './firebase.js';
 
@@ -152,6 +153,45 @@ export function seguirPedido(id, alCambiar) {
 }
 
 /* ── Los pedidos de este navegador ───────────────────────────────────────── */
+
+/**
+ * Los pedidos de la cuenta, traidos de la base.
+ *
+ * Es lo que hace que "Mis pedidos" funcione desde otro telefono. Las reglas
+ * dejan listar solo los que llevan el uid de quien pregunta, asi que esta
+ * consulta tiene que filtrar por uid o Firestore la rechaza entera — no
+ * devuelve "los que puede": no devuelve nada.
+ *
+ * Sin cuenta devuelve vacio y la pantalla se queda con los de este navegador.
+ */
+export async function pedidosDeLaCuenta(uid, cantidad = 50) {
+  if (!uid) return [];
+  try {
+    // Sin `orderBy`: filtrar por uno y ordenar por otro necesita un indice
+    // compuesto, y crear indices pide permisos que la tienda no tiene que
+    // tener. Se ordena de este lado, que sobre cincuenta pedidos de una persona
+    // no se nota.
+    const snap = await getDocs(query(
+      collection(db, 'tienda_pedidos'),
+      where('uid', '==', uid),
+      limit(cantidad),
+    ));
+    return snap.docs.map(d => ({
+      id: d.id,
+      codigo: d.data().codigo,
+      total: d.data().total,
+      estado: d.data().estado,
+      modo: d.data().entrega?.modo,
+      cuando: d.data().creado?.toMillis?.() || 0,
+      deLaCuenta: true,
+    })).sort((a, b) => (b.cuando || 0) - (a.cuando || 0));
+  } catch (err) {
+    // Falta el indice compuesto, o se cayo la conexion. La pantalla igual
+    // muestra los de este navegador: es peor una lista vacia que una corta.
+    console.warn('[pedidos] no se pudieron leer los de la cuenta:', err?.code || err);
+    return [];
+  }
+}
 
 export function misPedidos() {
   try {

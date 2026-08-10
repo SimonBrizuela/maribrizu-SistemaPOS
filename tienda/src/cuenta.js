@@ -80,6 +80,12 @@ function marcarSesion(hay) {
   } catch { /* modo privado */ }
 }
 
+/** Toma la sesión ya, sin esperar el aviso del SDK, que llega un rato después. */
+function adoptar(u) {
+  usuario = u;
+  marcarSesion(!!u);
+}
+
 export function sesion() {
   return usuario ? { uid: usuario.uid, email: usuario.email } : null;
 }
@@ -102,7 +108,10 @@ export async function crearCuenta({ email, clave, nombre, telefono }) {
   const cred = await createUserWithEmailAndPassword(a, email.trim(), clave);
 
   if (nombre) await updateProfile(cred.user, { displayName: nombre }).catch(() => {});
-  marcarSesion(true);
+  // El usuario se toma de acá y no se espera a `onAuthStateChanged`: ese aviso
+  // llega un instante después, y en ese instante `guardarPerfil` veía la sesión
+  // vacía y no guardaba nada.
+  adoptar(cred.user);
 
   // Lo que ya había escrito en este teléfono se sube a la cuenta: quien compró
   // como invitado y después se registra no tiene por qué volver a cargar su
@@ -120,16 +129,20 @@ export async function crearCuenta({ email, clave, nombre, telefono }) {
 export async function entrar({ email, clave }) {
   const a = await sdk();
   const { signInWithEmailAndPassword } = await import('firebase/auth');
-  await signInWithEmailAndPassword(a, email.trim(), clave);
-  marcarSesion(true);
+  const cred = await signInWithEmailAndPassword(a, email.trim(), clave);
+  adoptar(cred.user);
+  perfilCargado = await leerPerfil(cred.user.uid);
+  avisar();
   return sesion();
 }
 
 export async function entrarConGoogle() {
   const a = await sdk();
   const { GoogleAuthProvider, signInWithPopup } = await import('firebase/auth');
-  await signInWithPopup(a, new GoogleAuthProvider());
-  marcarSesion(true);
+  const cred = await signInWithPopup(a, new GoogleAuthProvider());
+  adoptar(cred.user);
+  perfilCargado = await leerPerfil(cred.user.uid);
+  avisar();
   return sesion();
 }
 
