@@ -15,12 +15,12 @@
  * camino" sin recargar es lo que convierte esta pagina en un seguimiento de
  * verdad y le saca al local la mitad de las llamadas preguntando.
  */
-import { cargarConfig } from '../datos.js';
+import { cargarConfig, configEnCache } from '../datos.js';
 import { pie, vacio } from '../componentes.js';
 import { pesos, esc, distancia, cuando, haceCuanto, lineasDeHorario } from '../formato.js';
 import { icono, franjaMarca } from '../iconos.js';
 import { montarMapa } from '../mapa.js';
-import { traerPedido, seguirPedido, pasosDe, indiceDeEstado } from '../pedidos.js';
+import { seguirPedido, pasosDe, indiceDeEstado } from '../pedidos.js';
 import { avisar } from '../avisos.js';
 
 // Viven fuera de la funcion a proposito: al navegar a otra pantalla el nodo se
@@ -35,37 +35,15 @@ export async function pedido({ montar, params }) {
   soltarMapa?.();
   soltarMapa = null;
 
-  const cfg = await cargarConfig();
+  const cfg = configEnCache() || await cargarConfig();
 
-  let datos;
-  try {
-    datos = await traerPedido(params.id);
-  } catch (err) {
-    console.error('[pedido] no se pudo leer:', err);
-    datos = null;
-  }
-
-  if (!datos) {
-    document.title = 'No encontramos el pedido · Librería Liceo';
-    montar(`
-      <div class="contenedor">
-        ${vacio({
-          titulo: 'No encontramos este pedido',
-          texto: 'Puede que el enlace esté cortado. Si ya lo hiciste, buscalo en "Mi pedido"; ' +
-                 'y si no aparece, escribinos con tu nombre y lo ubicamos.',
-          acciones: `
-            <a class="boton boton--primario" href="/seguimiento">Ver mis pedidos</a>
-            <a class="boton boton--secundario" href="https://wa.me/${esc(cfg.whatsapp)}"
-               target="_blank" rel="noopener">${icono('whatsapp', { tam: 16 })} Escribirnos</a>`,
-        })}
-      </div>
-      ${pie(cfg)}`);
-    return;
-  }
-
-  document.title = `Pedido ${datos.codigo || ''} · Librería Liceo`;
-
-  montar(`<div class="contenedor" data-pedido></div>${pie(cfg)}`);
+  // Se pinta el armazón antes de tener el pedido. Antes esta pantalla hacía dos
+  // viajes a la red en fila —una lectura suelta y después la suscripción, que
+  // trae exactamente lo mismo— y no mostraba nada hasta que volvían los dos.
+  // Ahora el único viaje es la suscripción, y mientras tanto hay algo en
+  // pantalla en vez de un blanco.
+  document.title = 'Pedido · Librería Liceo';
+  montar(`<div class="contenedor" data-pedido>${esqueleto()}</div>${pie(cfg)}`);
   const caja = document.querySelector('[data-pedido]');
 
   function pintar(p) {
@@ -107,7 +85,19 @@ export async function pedido({ montar, params }) {
     }
   });
 
-  pintar(datos);
+  /** Cuando el pedido no existe, o cuando no se pudo leer. */
+  function pintarPerdido() {
+    document.title = 'No encontramos el pedido · Librería Liceo';
+    caja.innerHTML = vacio({
+      titulo: 'No encontramos este pedido',
+      texto: 'Puede que el enlace esté cortado. Si ya lo hiciste, buscalo en "Mi pedido"; ' +
+             'y si no aparece, escribinos con tu nombre y lo ubicamos.',
+      acciones: `
+        <a class="boton boton--primario" href="/seguimiento">Ver mis pedidos</a>
+        <a class="boton boton--secundario" href="https://wa.me/${esc(cfg.whatsapp)}"
+           target="_blank" rel="noopener">${icono('whatsapp', { tam: 16 })} Escribirnos</a>`,
+    });
+  }
 
   cortarSeguimiento = seguirPedido(params.id, actualizado => {
     // Si la pantalla ya no está en el documento, la persona navegó a otra cosa
@@ -119,8 +109,32 @@ export async function pedido({ montar, params }) {
       soltarMapa = null;
       return;
     }
-    if (actualizado) pintar(actualizado);
+    if (actualizado) {
+      document.title = `Pedido ${actualizado.codigo || ''} · Librería Liceo`;
+      pintar(actualizado);
+    } else {
+      pintarPerdido();
+    }
+  }, () => {
+    if (document.contains(caja)) pintarPerdido();
   });
+}
+
+/**
+ * El armazón mientras llega el pedido.
+ *
+ * Repite la forma de lo que viene —la tarjeta oscura de arriba y los pasos— así
+ * el contenido real no reacomoda la pantalla al entrar.
+ */
+function esqueleto() {
+  return `
+    <div class="pedido-esqueleto" aria-hidden="true">
+      <div class="pedido-esqueleto__tapa"></div>
+      <div class="pedido-esqueleto__barra" style="width:45%"></div>
+      <div class="pedido-esqueleto__barra" style="width:80%"></div>
+      <div class="pedido-esqueleto__barra" style="width:65%"></div>
+    </div>
+    <p class="pedido-esqueleto__aviso" role="status">Buscando tu pedido</p>`;
 }
 
 /* ── Pantalla ─────────────────────────────────────────────────────────────── */

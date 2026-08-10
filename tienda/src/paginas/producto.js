@@ -59,52 +59,60 @@ function textoMinimo(p) {
 /**
  * Los colores y modelos.
  *
- * Con pocas variedades el nombre entero se lee bien y ayuda. Con veinticinco,
- * cada una en su cápsula, la pantalla del celular se llena de botones y el de
- * "Agregar al pedido" queda tres pantallas más abajo: la cartulina Luma tiene
- * 29 colores y había que scrollear todo eso para poder comprar.
+ * Con pocas variedades las cápsulas entran en dos renglones y no molestan. Con
+ * treinta —la cartulina Luma tiene treinta— la pantalla del celular se llena de
+ * botones y "Agregar al pedido" queda tres pantallas más abajo.
  *
- * Arriba de doce se pasa a muestras de color, que es como se elige un color en
- * cualquier lado: se ve el color, no se lee su nombre. El nombre del elegido
- * aparece arriba, y las que no tienen un color reconocible —"surtido",
- * "fantasía"— siguen mostrando el texto, porque de esas el nombre es lo único
- * que hay.
+ * La salida no es sacar el nombre. Se probó con muestras de color solas y el
+ * problema es peor: en este catálogo hay siete verdes y cuatro rosas que en un
+ * círculo de 34 píxeles son el mismo círculo, así que elegir pasa a ser tocar a
+ * ver qué sale. El nombre es justamente lo que distingue "Rosa Pastel" de "Rosa
+ * Luma".
+ *
+ * Entonces arriba de doce el mismo botón se ordena en una pista de dos filas
+ * que se corre de costado: el alto queda fijo en dos renglones tenga cuatro
+ * colores o cuarenta, y los nombres siguen ahí. El degradé del borde derecho es
+ * lo que avisa que hay más; se apaga al llegar al final.
  */
 const MUCHAS_VARIEDADES = 12;
+
+/** "· 30 colores" cuando casi todas tienen color; si no, "· 30 opciones". */
+function comoSeLlaman(variedades) {
+  const conColor = variedades.filter(v => colorDeVariedad(v.nombre)).length;
+  return conColor > variedades.length / 2 ? 'colores' : 'opciones';
+}
 
 function listaDeVariedades(variedades) {
   if (!variedades.length) return '';
 
-  const compacto = variedades.length > MUCHAS_VARIEDADES;
+  const enPista = variedades.length > MUCHAS_VARIEDADES;
   const disponibles = variedades.filter(v => v.stock > 0).length;
 
   const botones = variedades.map(v => {
     const color = colorDeVariedad(v.nombre);
     const sinStock = v.stock <= 0;
-    // En compacto, lo que no tiene color reconocible no puede ser una muestra
-    // vacía: se muestra con su nombre, más angosto.
-    const comoMuestra = compacto && color;
 
     return `
-      <button class="variedad${comoMuestra ? ' variedad--muestra' : ''}"
-              data-variedad="${esc(v.nombre)}" aria-pressed="false"
+      <button class="variedad" data-variedad="${esc(v.nombre)}" aria-pressed="false"
               ${sinStock ? 'disabled' : ''}
-              title="${esc(v.nombre)}${sinStock ? ' · sin stock' : ''}"
-              aria-label="${esc(v.nombre)}${sinStock ? ', sin stock' : ''}">
+              title="${esc(v.nombre)}${sinStock ? ' · sin stock' : ''}">
         ${color ? `<span class="variedad__punto" style="background:${color}"></span>` : ''}
-        ${comoMuestra ? '' : esc(v.nombre)}
+        <span class="variedad__nombre">${esc(v.nombre)}</span>
       </button>`;
   }).join('');
+
+  const lista = `
+    <div class="variedades__lista${enPista ? ' variedades__lista--pista' : ''}"
+         role="group" aria-labelledby="tit-variedades"${enPista ? ' data-pista' : ''}>${botones}</div>`;
 
   return `
     <div class="variedades">
       <span class="campo__label" id="tit-variedades">
         Elegí el color o modelo
         <em data-elegida class="variedades__elegida">${
-          compacto ? `· ${disponibles} disponibles` : ''}</em>
+          enPista ? `· ${disponibles} ${comoSeLlaman(variedades)}` : ''}</em>
       </span>
-      <div class="variedades__lista${compacto ? ' variedades__lista--compacta' : ''}"
-           role="group" aria-labelledby="tit-variedades">${botones}</div>
+      ${enPista ? `<div class="variedades__marco">${lista}</div>` : lista}
     </div>`;
 }
 
@@ -266,12 +274,13 @@ export async function producto({ montar, params }) {
   const botonAgregar = document.querySelector('[data-agregar]');
   const cajaPrecio = document.querySelector('[data-precio]');
 
-  // Con las muestras de color el nombre no está en el botón, así que el del
-  // elegido se escribe al lado del título: sin eso se elige un color y no hay
-  // forma de saber cuál quedó.
+  // En la pista el elegido se puede quedar fuera de la parte visible, así que
+  // su nombre se repite al lado del título: sin eso se elige un color, se
+  // arrastra la pista y ya no hay forma de saber cuál quedó.
   const cajaElegida = document.querySelector('[data-elegida]');
   const cuantasHay = disponibles.length;
-  const compacto = variedades.length > MUCHAS_VARIEDADES;
+  const enPista = variedades.length > MUCHAS_VARIEDADES;
+  const resumen = enPista ? `· ${cuantasHay} ${comoSeLlaman(variedades)}` : '';
 
   document.querySelectorAll('[data-variedad]').forEach(boton => {
     boton.addEventListener('click', () => {
@@ -284,9 +293,7 @@ export async function producto({ montar, params }) {
       });
 
       if (cajaElegida) {
-        cajaElegida.textContent = elegida
-          ? `· ${elegida}`
-          : (compacto ? `· ${cuantasHay} disponibles` : '');
+        cajaElegida.textContent = elegida ? `· ${elegida}` : resumen;
       }
 
       cajaPrecio.textContent = pesos(precioActual());
@@ -295,6 +302,23 @@ export async function producto({ montar, params }) {
       pintarCantidad();
     });
   });
+
+  /* ── La pista de colores ────────────────────────────────────────────────
+     El degradé del borde derecho es lo único que dice que hay más colores a la
+     derecha. Tiene que apagarse al llegar al final: dejarlo puesto hace que
+     parezca que siempre falta algo, y encima come el último botón. */
+  const pista = document.querySelector('[data-pista]');
+  if (pista) {
+    const marcarBordes = () => {
+      const resto = pista.scrollWidth - pista.clientWidth - pista.scrollLeft;
+      pista.classList.toggle('variedades__lista--fin', resto <= 4);
+      pista.classList.toggle('variedades__lista--inicio', pista.scrollLeft <= 4);
+    };
+    pista.addEventListener('scroll', marcarBordes, { passive: true });
+    // Al entrar puede no haber desborde: en la pantalla ancha de una PC entran
+    // los treinta y no hay nada que correr.
+    marcarBordes();
+  }
 
   /* ── Cuántos lleva ──────────────────────────────────────────────────────
      Lo que se corta del rollo se elige con la cinta métrica; lo demás, con un

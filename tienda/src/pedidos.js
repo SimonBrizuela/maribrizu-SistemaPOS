@@ -144,11 +144,17 @@ export async function traerPedido(id) {
  * solo, sin recargar, es la diferencia entre una pagina de seguimiento y una
  * captura de pantalla.
  */
-export function seguirPedido(id, alCambiar) {
+export function seguirPedido(id, alCambiar, alFallar = null) {
   return onSnapshot(
     doc(db, 'tienda_pedidos', id),
     snap => alCambiar(snap.exists() ? { id: snap.id, ...snap.data() } : null),
-    err => console.warn('[pedidos] se cortó el seguimiento:', err),
+    err => {
+      // La pantalla pinta con la primera respuesta de esta suscripcion, asi que
+      // si falla hay que avisarle: sin esto se queda con el esqueleto puesto
+      // para siempre.
+      console.warn('[pedidos] se cortó el seguimiento:', err);
+      alFallar?.(err);
+    },
   );
 }
 

@@ -29,6 +29,16 @@ export function limpiarCache() {
   _cache.clear();
 }
 
+/**
+ * La config ya cargada, o null si todavia no llego.
+ *
+ * Sirve para pintar una pantalla sin esperar a la red. La portada la pide en el
+ * arranque, asi que a partir de la segunda pantalla siempre esta.
+ */
+export function configEnCache() {
+  return _cache.get('config') || null;
+}
+
 /* ── Configuracion ───────────────────────────────────────────────────────── */
 
 const CONFIG_POR_DEFECTO = {

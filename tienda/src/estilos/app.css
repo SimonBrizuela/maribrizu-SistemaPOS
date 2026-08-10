@@ -553,37 +553,49 @@
   display: inline-flex;
   align-items: center;
   gap: var(--e-2);
-  min-height: 44px;
-  padding: 0 var(--e-4);
+  min-height: 42px;
+  padding: 0 var(--e-3);
   border: 1.5px solid var(--borde-control);
   border-radius: var(--r-full);
   background: var(--surface);
   font-size: var(--t-sm);
   font-weight: var(--peso-semi);
+  color: var(--text);
   cursor: pointer;
-  transition: border-color var(--m-rapido) var(--curva), background var(--m-rapido) var(--curva);
+  transition: border-color var(--m-rapido) var(--curva),
+              background var(--m-rapido) var(--curva),
+              box-shadow var(--m-rapido) var(--curva);
   touch-action: manipulation;
 }
-.variedad:hover:not(:disabled) { background: var(--surface-2); }
+.variedad:hover:not(:disabled) {
+  background: var(--surface-2);
+  border-color: var(--text-3, var(--text-2));
+}
 .variedad[aria-pressed="true"] {
   border-color: var(--primary);
   background: var(--primary-bg);
   color: var(--primary-txt);
+  /* El anillo hace que el elegido se distinga de un vistazo en medio de treinta
+     cápsulas iguales; el borde solo se pierde. */
+  box-shadow: 0 0 0 1.5px var(--primary);
 }
-.variedad:disabled { opacity: .4; cursor: not-allowed; text-decoration: line-through; }
+.variedad:disabled { opacity: .45; cursor: not-allowed; text-decoration: line-through; }
 .variedad__punto {
-  width: 16px; height: 16px;
+  width: 18px; height: 18px;
   border-radius: 50%;
   box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .18);
   flex: none;
 }
 
 /* ── Muchas variedades ────────────────────────────────────────────────────
-   Con veinticinco colores, cada uno en su cápsula con el nombre escrito, la
-   pantalla del celular se llena de botones y el de "Agregar al pedido" queda
-   tres pantallas más abajo. Arriba de doce se pasa a muestras: se ve el color,
-   que es como se elige un color en cualquier lado, y el nombre del elegido
-   aparece junto al título. */
+   Treinta cápsulas apiladas ocupan media pantalla de celular y empujan
+   "Agregar al pedido" fuera de la vista. Treinta círculos de color sin nombre
+   ocupan poco pero no se pueden leer: en este catálogo hay siete verdes y
+   cuatro rosas que a 34 píxeles son el mismo círculo.
+
+   La pista resuelve las dos cosas: los mismos botones, con su nombre, en dos
+   filas que se corren de costado. El alto queda fijo tenga cuatro colores o
+   cuarenta. */
 
 .variedades__elegida {
   font-style: normal;
@@ -591,38 +603,83 @@
   color: var(--text-2);
 }
 
-.variedades__lista--compacta { gap: var(--e-2); }
+.variedades__marco { position: relative; }
 
-.variedad--muestra {
-  width: 44px;
-  padding: 0;
-  justify-content: center;
-  /* Sin borde propio: el borde lo hace el color de la muestra. Una cápsula
-     alrededor de un círculo son dos bordes discutiendo por el mismo lugar. */
-  border-color: transparent;
-  background: none;
+.variedades__lista--pista {
+  display: grid;
+  grid-auto-flow: column;
+  grid-template-rows: repeat(2, auto);
+  justify-content: start;
+  align-items: start;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  overscroll-behavior-x: contain;
+  scroll-snap-type: x proximity;
+  /* Arriba y abajo para que el anillo del elegido no quede cortado por el
+     recorte del scroll; a la derecha para que el último botón no nazca pegado
+     al degradé. */
+  padding: 3px var(--e-4) 3px 3px;
+  /* Sin barra en el celular, donde el dedo ya sabe qué hacer con algo que se
+     corre y la barra queda como una raya suelta debajo de los botones. */
+  scrollbar-width: none;
+  /* El degradé se hace con máscara y no con un pseudo-elemento encima: así no
+     hay que adivinar el color del fondo de la ficha, que cambia en modo
+     oscuro. Va del lado donde queda algo por ver y se apaga en las puntas: un
+     degradé permanente hace creer que siempre falta algo más. */
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 34px,
+                                      #000 calc(100% - 34px), transparent 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 34px,
+                              #000 calc(100% - 34px), transparent 100%);
 }
-.variedad--muestra .variedad__punto { width: 34px; height: 34px; }
-.variedad--muestra:hover:not(:disabled) { background: none; }
-.variedad--muestra:hover:not(:disabled) .variedad__punto {
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .18), 0 0 0 3px var(--surface-3);
+.variedades__lista--pista.variedades__lista--inicio {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 34px), transparent 100%);
+  mask-image: linear-gradient(to right, #000 calc(100% - 34px), transparent 100%);
 }
-.variedad--muestra[aria-pressed="true"] {
-  background: none;
+.variedades__lista--pista.variedades__lista--fin {
+  -webkit-mask-image: linear-gradient(to right, transparent 0, #000 34px, #000 100%);
+  mask-image: linear-gradient(to right, transparent 0, #000 34px, #000 100%);
 }
-.variedad--muestra[aria-pressed="true"] .variedad__punto {
-  /* El anillo marca el elegido sin taparlo: un fondo violeta sobre una muestra
-     violeta no se distingue. El hueco blanco separa anillo de color. */
-  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .18),
-              0 0 0 2px var(--surface), 0 0 0 4px var(--primary);
+/* Las dos puestas es que no hay nada que correr: entran todos. */
+.variedades__lista--pista.variedades__lista--inicio.variedades__lista--fin {
+  -webkit-mask-image: none;
+  mask-image: none;
 }
-.variedad--muestra:disabled { text-decoration: none; opacity: 1; }
-.variedad--muestra:disabled .variedad__punto {
-  opacity: .3;
-  /* La barra cruzada dice "no hay" sin depender del color, que es lo único que
-     tiene una muestra. */
-  background-image: linear-gradient(to bottom right, transparent 45%,
-    var(--text) 45%, var(--text) 55%, transparent 55%);
+.variedades__lista--pista .variedad {
+  scroll-snap-align: start;
+  /* En la pista los botones no se estiran al alto de la fila más alta. */
+  align-self: start;
+}
+.variedades__lista--pista::-webkit-scrollbar { height: 0; }
+
+/* Con mouse sí: ahí no hay gesto de arrastre y la barra es la que avisa que la
+   pista se corre. */
+@media (hover: hover) and (pointer: fine) {
+  .variedades__lista--pista {
+    scrollbar-width: thin;
+    scrollbar-color: var(--surface-3) transparent;
+    padding-bottom: var(--e-2);
+  }
+  .variedades__lista--pista::-webkit-scrollbar { height: 8px; }
+  .variedades__lista--pista::-webkit-scrollbar-thumb {
+    background: var(--surface-3);
+    border-radius: var(--r-full);
+  }
+  .variedades__lista--pista::-webkit-scrollbar-track { background: transparent; }
+}
+
+/* Un nombre largo —"Naranja Pastel / Piel"— no puede hacer una columna del
+   ancho de la pantalla. */
+.variedad__nombre {
+  max-width: 15ch;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.variedad:disabled .variedad__punto {
+  /* La barra cruzada dice "no hay" sin depender del color. */
+  background-image: linear-gradient(to bottom right, transparent 42%,
+    var(--text) 42%, var(--text) 58%, transparent 58%);
 }
 
 /* ── El mínimo de venta ───────────────────────────────────────────────────
@@ -2110,6 +2167,59 @@
 .pedido-fila__modo { font-size: var(--t-xs); color: var(--text-2); }
 .pedido-fila__total { font-weight: var(--peso-bold); white-space: nowrap; }
 .pedido-fila__flecha { color: var(--text-3); display: grid; place-items: center; }
+
+/* El armazón de la ficha del pedido mientras llega de la base. Ocupa el mismo
+   lugar que el contenido real para que nada salte al entrar. */
+.pedido-esqueleto {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-3);
+  padding-block: var(--e-5);
+}
+.pedido-esqueleto__tapa,
+.pedido-esqueleto__barra {
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+  animation: respirar 1.4s var(--curva) infinite;
+}
+.pedido-esqueleto__tapa { height: 168px; border-radius: var(--r-lg); }
+.pedido-esqueleto__barra { height: 18px; }
+.pedido-esqueleto__aviso {
+  text-align: center;
+  font-size: var(--t-sm);
+  color: var(--text-2);
+}
+@keyframes respirar {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: .5; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pedido-esqueleto__tapa, .pedido-esqueleto__barra { animation: none; }
+}
+
+/* El renglón de "buscando" va al pie de la lista, no tapándola: lo que ya está
+   se lee mientras llega el resto. */
+.pedidos-buscando {
+  display: flex;
+  align-items: center;
+  gap: var(--e-2);
+  padding: var(--e-3) var(--e-4);
+  font-size: var(--t-sm);
+  color: var(--text-2);
+}
+.pedidos-buscando__punto {
+  width: 8px; height: 8px;
+  border-radius: 50%;
+  background: var(--primary);
+  animation: latido 1.1s var(--curva) infinite;
+}
+@keyframes latido {
+  0%, 100% { opacity: .25; transform: scale(.8); }
+  50%      { opacity: 1;   transform: scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pedidos-buscando__punto { animation: none; opacity: .6; }
+}
 
 /* ── Autocompletado de direcciones ────────────────────────────────────────────
    Desplegable propio en vez del componente de Google: entra con el estilo del
