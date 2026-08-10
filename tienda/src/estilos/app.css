@@ -39,9 +39,16 @@
 
 .principal { flex: 1; }
 
-/* Deja lugar a la barra inferior para que no tape el ultimo producto. */
+/* Deja lugar a lo que flota abajo —la navegación en el celular y la barra del
+   pedido en todos lados— para que no tapen el último producto. El alto de la
+   barra lo publica el JS cuando aparece; sin pedido no reserva nada. */
+.principal { padding-bottom: var(--alto-barra-pedido, 0px); }
+
 @media (max-width: 767px) {
-  .principal { padding-bottom: calc(var(--alto-nav-inferior) + env(safe-area-inset-bottom, 0px)); }
+  .principal {
+    padding-bottom: calc(var(--alto-nav-inferior) + var(--alto-barra-pedido, 0px)
+                         + env(safe-area-inset-bottom, 0px));
+  }
 }
 
 .seccion { padding-block: var(--e-6); }
@@ -517,6 +524,198 @@
   flex: none;
 }
 
+/* ── Muchas variedades ────────────────────────────────────────────────────
+   Con veinticinco colores, cada uno en su cápsula con el nombre escrito, la
+   pantalla del celular se llena de botones y el de "Agregar al pedido" queda
+   tres pantallas más abajo. Arriba de doce se pasa a muestras: se ve el color,
+   que es como se elige un color en cualquier lado, y el nombre del elegido
+   aparece junto al título. */
+
+.variedades__elegida {
+  font-style: normal;
+  font-weight: var(--peso-normal);
+  color: var(--text-2);
+}
+
+.variedades__lista--compacta { gap: var(--e-2); }
+
+.variedad--muestra {
+  width: 44px;
+  padding: 0;
+  justify-content: center;
+  /* Sin borde propio: el borde lo hace el color de la muestra. Una cápsula
+     alrededor de un círculo son dos bordes discutiendo por el mismo lugar. */
+  border-color: transparent;
+  background: none;
+}
+.variedad--muestra .variedad__punto { width: 34px; height: 34px; }
+.variedad--muestra:hover:not(:disabled) { background: none; }
+.variedad--muestra:hover:not(:disabled) .variedad__punto {
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .18), 0 0 0 3px var(--surface-3);
+}
+.variedad--muestra[aria-pressed="true"] {
+  background: none;
+}
+.variedad--muestra[aria-pressed="true"] .variedad__punto {
+  /* El anillo marca el elegido sin taparlo: un fondo violeta sobre una muestra
+     violeta no se distingue. El hueco blanco separa anillo de color. */
+  box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .18),
+              0 0 0 2px var(--surface), 0 0 0 4px var(--primary);
+}
+.variedad--muestra:disabled { text-decoration: none; opacity: 1; }
+.variedad--muestra:disabled .variedad__punto {
+  opacity: .3;
+  /* La barra cruzada dice "no hay" sin depender del color, que es lo único que
+     tiene una muestra. */
+  background-image: linear-gradient(to bottom right, transparent 45%,
+    var(--text) 45%, var(--text) 55%, transparent 55%);
+}
+
+/* ── El mínimo de venta ───────────────────────────────────────────────────
+   Va como cartel y no como renglón gris al pie del precio: ahí se perdía entre
+   el stock y los colores, y enterarse en el carrito de que el mínimo son dos
+   se siente como una trampa aunque no lo sea. */
+.aviso-minimo {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e-2);
+  margin-top: var(--e-2);
+  padding: var(--e-2) var(--e-3);
+  border-radius: var(--r-sm);
+  background: var(--primary-bg);
+  color: var(--primary-txt);
+  font-size: var(--t-sm);
+  line-height: 1.4;
+}
+.aviso-minimo svg { flex: none; }
+.aviso-minimo strong { font-weight: var(--peso-bold); }
+
+/* ══ La barra del pedido ══════════════════════════════════════════════════
+   Lo que se va llevando, siempre a la vista. Antes había un aviso que se iba a
+   los tres segundos: para saber qué llevabas había que abrir el carrito, y para
+   seguir comprando cerrarlo.
+
+   Va sobre la barra de navegación en el celular y flotando abajo en la
+   computadora. Entra deslizándose desde abajo; el alto real lo publica el JS en
+   `--alto-barra-pedido` para que el pie de la página no quede tapado. */
+
+.barra-pedido {
+  position: fixed;
+  left: 0; right: 0;
+  bottom: var(--alto-nav-inferior, 0px);
+  z-index: 60;
+  padding: var(--e-2) var(--e-3) calc(var(--e-2) + env(safe-area-inset-bottom, 0px));
+  pointer-events: none;
+
+  opacity: 0;
+  transform: translateY(120%);
+  transition: transform .28s var(--curva-salida, cubic-bezier(.22, 1, .36, 1)),
+              opacity .2s ease;
+}
+.barra-pedido--visible { opacity: 1; transform: translateY(0); pointer-events: auto; }
+
+.barra-pedido__cuerpo {
+  display: flex;
+  align-items: center;
+  gap: var(--e-3);
+  width: 100%;
+  max-width: 620px;
+  margin: 0 auto;
+  padding: var(--e-2) var(--e-3);
+  border: none;
+  border-radius: var(--r-full);
+  background: var(--ink-superficie);
+  color: var(--ink-texto);
+  box-shadow: 0 6px 24px rgba(14, 13, 16, .28);
+  cursor: pointer;
+  font: inherit;
+  text-align: left;
+  touch-action: manipulation;
+  transition: transform .18s var(--curva);
+}
+.barra-pedido__cuerpo:hover { transform: translateY(-2px); }
+.barra-pedido__cuerpo:active { transform: translateY(0); }
+
+/* El pulso al agregar: dice "entró" sin un cartel que tape nada. */
+.barra-pedido--latiendo .barra-pedido__cuerpo { animation: barraLate .45s var(--curva); }
+@keyframes barraLate {
+  0%   { transform: scale(1); }
+  35%  { transform: scale(1.025); }
+  100% { transform: scale(1); }
+}
+
+/* Las fotitas se pisan entre sí como un mazo de cartas: cuatro entran en el
+   ancho de dos y se lee igual cuántas cosas hay. */
+.barra-pedido__fotos { display: flex; align-items: center; flex: none; }
+.barra-pedido__foto {
+  width: 38px; height: 38px;
+  margin-right: -12px;
+  border-radius: var(--r-sm);
+  overflow: hidden;
+  background: var(--surface);
+  box-shadow: 0 0 0 2px var(--ink-superficie);
+  display: flex; align-items: center; justify-content: center;
+  flex: none;
+}
+.barra-pedido__foto img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.barra-pedido__inicial {
+  font-weight: var(--peso-bold);
+  color: var(--text-2);
+  font-size: var(--t-sm);
+}
+.barra-pedido__foto--nueva { animation: fotoEntra .32s var(--curva) both; }
+@keyframes fotoEntra {
+  from { transform: translateY(10px) scale(.7); opacity: 0; }
+  to   { transform: none; opacity: 1; }
+}
+.barra-pedido__mas {
+  margin-left: calc(12px + var(--e-2));
+  font-size: var(--t-xs);
+  font-weight: var(--peso-bold);
+  color: var(--ink-texto-2);
+}
+
+.barra-pedido__texto {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  min-width: 0;
+  flex: 1;
+  margin-left: var(--e-2);
+}
+.barra-pedido__texto strong { font-size: var(--t-sm); font-weight: var(--peso-semi); }
+.barra-pedido__total { font-size: var(--t-base); font-weight: var(--peso-bold); }
+
+.barra-pedido__accion {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e-1);
+  flex: none;
+  padding: var(--e-2) var(--e-3);
+  border-radius: var(--r-full);
+  background: var(--primary);
+  color: var(--primary-ink);
+  font-size: var(--t-sm);
+  font-weight: var(--peso-bold);
+}
+.barra-pedido__accion svg { flex: none; }
+
+/* En la computadora no hay barra de navegación abajo, así que la barra se
+   apoya en el borde. */
+@media (min-width: 768px) {
+  .barra-pedido { bottom: 0; padding-bottom: var(--e-4); }
+  .barra-pedido__cuerpo { max-width: 520px; margin-right: var(--e-6); margin-left: auto; }
+}
+
+/* Quien pidió menos movimiento igual necesita ver la barra: aparece, no se
+   desliza. */
+@media (prefers-reduced-motion: reduce) {
+  .barra-pedido { transition: opacity .15s linear; transform: none; }
+  .barra-pedido--visible { transform: none; }
+  .barra-pedido--latiendo .barra-pedido__cuerpo,
+  .barra-pedido__foto--nueva { animation: none; }
+}
+
 .dato-stock {
   display: inline-flex;
   align-items: center;
@@ -591,8 +790,8 @@
    "llegaron los cuadernos". Va en el color de la marca y no en el de alerta,
    que es para cuando algo no se puede hacer. */
 .aviso-banner {
-  background: var(--marca-suave);
-  color: var(--marca-fuerte);
+  background: var(--primary-bg);
+  color: var(--primary-txt);
 }
 
 /* ── Cargar más ──────────────────────────────────────────────────────────── */
@@ -1817,12 +2016,19 @@
 .asistente {
   position: fixed;
   right: var(--e-4);
-  bottom: calc(var(--alto-nav-inferior) + var(--e-3) + env(safe-area-inset-bottom, 0px));
+  bottom: calc(var(--alto-nav-inferior) + var(--alto-barra-pedido, 0px) + var(--e-3)
+               + env(safe-area-inset-bottom, 0px));
   z-index: var(--z-nav);
+  /* Se corre para arriba cuando aparece la barra del pedido, si no le queda
+     encima justo al botón que abre el pedido. */
+  transition: bottom .28s cubic-bezier(.22, 1, .36, 1);
 }
 
 @media (min-width: 768px) {
-  .asistente { bottom: var(--e-5); right: var(--e-5); }
+  .asistente {
+    bottom: calc(var(--e-5) + var(--alto-barra-pedido, 0px));
+    right: var(--e-5);
+  }
 }
 
 .asistente__boton {

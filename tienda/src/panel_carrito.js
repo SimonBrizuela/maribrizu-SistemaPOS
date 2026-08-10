@@ -10,6 +10,7 @@ import { icono } from './iconos.js';
 import { avisar } from './avisos.js';
 import { vacio } from './componentes.js';
 import { ir } from './router.js';
+import { refrescarBarraPedido } from './barra_pedido.js';
 
 let abierto = false;
 let velo = null;
@@ -43,6 +44,9 @@ export function abrir() {
   document.body.style.overflow = 'hidden';
 
   desuscribir = carrito.suscribir(pintar);
+  // La barra de abajo muestra lo mismo que este panel: mientras está abierto,
+  // sobra.
+  refrescarBarraPedido();
 
   document.addEventListener('keydown', alPresionarTecla);
   panel.addEventListener('click', alHacerClic);
@@ -61,6 +65,7 @@ export function cerrar() {
 
   velo.classList.add('velo--saliendo');
   panel.classList.add('panel--saliendo');
+  refrescarBarraPedido();
 
   const quitar = () => {
     velo?.remove();

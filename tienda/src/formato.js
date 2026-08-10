@@ -207,13 +207,35 @@ export function clases(...xs) {
  */
 const COLORES = {
   negro: '#1A1A1A', blanco: '#F5F5F5', gris: '#9AA0A6', plateado: '#C0C0C0',
-  rojo: '#D32F2F', bordo: '#7B1E1E', rosa: '#E91E8C', fucsia: '#D81B7A',
+  plata: '#C0C0C0', cobre: '#B87333',
+  rojo: '#D32F2F', bordo: '#7B1E1E', borravino: '#6E1B32',
+  rosa: '#E91E8C', fucsia: '#D81B7A', magenta: '#C2185B', coral: '#F06A5A',
+  salmon: '#F4978E',
   naranja: '#F57C00', amarillo: '#F9C400', dorado: '#C9A227',
+  mostaza: '#D6A400', ocre: '#C77B30',
   verde: '#2E7D32', 'verde agua': '#4DB6AC', turquesa: '#26A69A',
+  oliva: '#6B7C32',
   azul: '#1565C0', celeste: '#42A5F5', marino: '#152C5B',
   violeta: '#7B3FA6', lila: '#B388D9', morado: '#6A1B9A',
   marron: '#6D4C41', beige: '#D7C4A3', crema: '#EFE3C8',
   transparente: null, natural: '#E8DCC8', surtido: null,
+
+  // Los nombres que usa la mercería, que no son los del arcoíris. Sin estos,
+  // la cinta de raso —51 colores— mostraba doce cápsulas con el nombre escrito
+  // entremedio de las muestras y la grilla perdía el ritmo.
+  manteca: '#F5EBD0', tiza: '#F7F5F0', hueso: '#EDE6D8', marfil: '#F3EAD3',
+  habano: '#C9AE86', camel: '#C19A6B', arena: '#D9C9A8', tostado: '#B98B54',
+  canela: '#B06E38', chocolate: '#4E342E', cafe: '#5D4037', nuez: '#7A5230',
+  vison: '#8C7B6E', grafito: '#4A4A4A', plomo: '#7A7D80', perla: '#E6E2DC',
+  rubi: '#B0203C', cereza: '#C21E3A', ladrillo: '#B34A3A', terracota: '#C1633F',
+  vino: '#6E1B32', malbec: '#5C1A2B', frambuesa: '#C2185B', durazno: '#F7B389',
+  damasco: '#E9A46A', palo: '#D7A9A1',
+  lavanda: '#C3AED6', uva: '#6A3E8C', obispo: '#7B4FA0', ciruela: '#6C2C57',
+  purpura: '#7B1FA2',
+  menta: '#A8E0C8', lima: '#B7D34A', oliva2: '#6B7C32', musgo: '#5A6B34',
+  botella: '#0F5132', ingles: '#134E36', jade: '#26A17B', 'agua marina': '#3FBFB0',
+  aqua: '#4DD0C4', petroleo: '#1F5C63', jean: '#3F5E86', francia: '#0B4EA2',
+  electrico: '#0A58CA', cielo: '#8FC6F0',
 };
 
 export function colorDeVariedad(nombre) {

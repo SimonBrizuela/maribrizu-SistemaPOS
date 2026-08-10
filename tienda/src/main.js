@@ -8,6 +8,7 @@ import { abrir as abrirCarrito, estaAbierto } from './panel_carrito.js';
 import { avisar } from './avisos.js';
 import { iniciarSugerencias, fijarAmbito, cerrarSugerencias } from './sugerencias.js';
 import { iniciarAsistente } from './asistente.js';
+import { iniciarBarraPedido } from './barra_pedido.js';
 
 import { inicio } from './paginas/inicio.js';
 import { catalogo } from './paginas/catalogo.js';
@@ -151,10 +152,10 @@ document.addEventListener('click', async ev => {
     try {
       const p = await traerProducto(id);
       if (!p) { avisar('Este producto ya no está disponible', { tipo: 'error' }); return; }
+      // Sin aviso: la barra de abajo muestra la foto entrando y el total
+      // moverse, y a diferencia del aviso se queda ahí mientras se sigue
+      // comprando.
       carrito.agregar(p);
-      avisar(`Agregaste ${p.nombre}`, {
-        accion: { texto: 'Ver pedido', alHacer: abrirCarrito },
-      });
     } finally {
       agregar.disabled = false;
     }
@@ -239,6 +240,11 @@ async function arrancar() {
   reponerCompacta = seguirScroll();
   iniciarSugerencias();
   await dibujar();
+
+  // La barra que muestra lo que se va llevando. Se monta después del primer
+  // pintado igual que el chat, pero antes que él: si el carrito ya tiene algo
+  // de una visita anterior, tiene que aparecer enseguida.
+  iniciarBarraPedido();
 
   // El chat se agrega después del primer pintado: es un extra sobre el
   // catálogo, y montarlo antes le agrega trabajo a la primera pantalla, que es

@@ -4,7 +4,6 @@ import { pesos, esc, nombreBonito, colorDeVariedad } from '../formato.js';
 import { icono } from '../iconos.js';
 import * as carrito from '../carrito.js';
 import { avisar } from '../avisos.js';
-import { abrir as abrirCarrito } from '../panel_carrito.js';
 import { montarCinta } from '../cinta.js';
 import { fijarAmbito } from '../sugerencias.js';
 
@@ -16,10 +15,18 @@ import { fijarAmbito } from '../sugerencias.js';
  * para cualquier cosa.
  */
 function nombreDelPack(p) {
-  if (p.pack_nombre) return `${/^(el|la|los|las) /i.test(p.pack_nombre) ? '' : 'el '}${p.pack_nombre.toLowerCase()} entero`;
-  if (p.pack_tipo === 'rollo') return 'el rollo entero';
-  if (p.pack_tipo === 'caja') return 'la caja entera';
-  return 'el pack entero';
+  const nombre = String(p.pack_nombre || p.pack_tipo || 'pack').toLowerCase().trim();
+  if (!nombre) return 'el pack entero';
+
+  // Si ya viene con artículo ("la caja de 12"), se respeta tal cual: quien lo
+  // escribió en el panel ya decidió cómo se dice.
+  if (/^(el|la|los|las) /.test(nombre)) return `${nombre} entero`;
+
+  // Género por la última letra de la primera palabra. No es gramática, es lo
+  // que alcanza para rollo, caja, bolsa, bobina, cartón y pack — que es todo
+  // lo que existe en el catálogo. Sin esto salía "el bolsa entero".
+  const femenino = /a$/.test(nombre.split(' ')[0]);
+  return femenino ? `la ${nombre} entera` : `el ${nombre} entero`;
 }
 
 /**
@@ -27,20 +34,78 @@ function nombreDelPack(p) {
  *
  * Hay productos que en el mostrador se llevan de a uno y por la web no: un
  * pedido cuesta el mismo trabajo valga $100 o $10.000, y buscar una sola goma
- * entre dos mil cuatrocientos productos no lo paga nadie. Cuando hay un mínimo
- * tiene que leerse junto al precio, no descubrirse en el carrito.
+ * entre dos mil cuatrocientos productos no lo paga nadie.
+ *
+ * Esto tiene que leerse antes de tocar "Agregar", no descubrirse en el carrito.
+ * Va como cartel y no como renglón gris al pie del precio: en el celular ese
+ * renglón se pierde entre el stock y los colores, y enterarse tarde de que el
+ * mínimo son 2 se siente como una trampa aunque no lo sea.
  */
 function textoMinimo(p) {
   const minimo = carrito.minimoDe(p);
   if (minimo <= (p.unidad === 'metro' ? 0.5 : 1)) return '';
 
   const cuanto = p.unidad === 'metro'
-    ? `${minimo.toFixed(1).replace('.', ',')} m`
+    ? `${minimo.toFixed(1).replace('.', ',')} metros`
     : `${minimo} unidades`;
 
-  return `<p style="color:var(--text-2);font-size:var(--t-sm);margin-top:var(--e-1)">
-            Se vende desde ${cuanto} · ${pesos(p.precio * minimo)}
-          </p>`;
+  return `
+    <p class="aviso-minimo">
+      ${icono('atencion', { tam: 17 })}
+      <span>Se vende desde <strong>${cuanto}</strong> · ${pesos(p.precio * minimo)}</span>
+    </p>`;
+}
+
+/**
+ * Los colores y modelos.
+ *
+ * Con pocas variedades el nombre entero se lee bien y ayuda. Con veinticinco,
+ * cada una en su cápsula, la pantalla del celular se llena de botones y el de
+ * "Agregar al pedido" queda tres pantallas más abajo: la cartulina Luma tiene
+ * 29 colores y había que scrollear todo eso para poder comprar.
+ *
+ * Arriba de doce se pasa a muestras de color, que es como se elige un color en
+ * cualquier lado: se ve el color, no se lee su nombre. El nombre del elegido
+ * aparece arriba, y las que no tienen un color reconocible —"surtido",
+ * "fantasía"— siguen mostrando el texto, porque de esas el nombre es lo único
+ * que hay.
+ */
+const MUCHAS_VARIEDADES = 12;
+
+function listaDeVariedades(variedades) {
+  if (!variedades.length) return '';
+
+  const compacto = variedades.length > MUCHAS_VARIEDADES;
+  const disponibles = variedades.filter(v => v.stock > 0).length;
+
+  const botones = variedades.map(v => {
+    const color = colorDeVariedad(v.nombre);
+    const sinStock = v.stock <= 0;
+    // En compacto, lo que no tiene color reconocible no puede ser una muestra
+    // vacía: se muestra con su nombre, más angosto.
+    const comoMuestra = compacto && color;
+
+    return `
+      <button class="variedad${comoMuestra ? ' variedad--muestra' : ''}"
+              data-variedad="${esc(v.nombre)}" aria-pressed="false"
+              ${sinStock ? 'disabled' : ''}
+              title="${esc(v.nombre)}${sinStock ? ' · sin stock' : ''}"
+              aria-label="${esc(v.nombre)}${sinStock ? ', sin stock' : ''}">
+        ${color ? `<span class="variedad__punto" style="background:${color}"></span>` : ''}
+        ${comoMuestra ? '' : esc(v.nombre)}
+      </button>`;
+  }).join('');
+
+  return `
+    <div class="variedades">
+      <span class="campo__label" id="tit-variedades">
+        Elegí el color o modelo
+        <em data-elegida class="variedades__elegida">${
+          compacto ? `· ${disponibles} disponibles` : ''}</em>
+      </span>
+      <div class="variedades__lista${compacto ? ' variedades__lista--compacta' : ''}"
+           role="group" aria-labelledby="tit-variedades">${botones}</div>
+    </div>`;
 }
 
 export async function producto({ montar, params }) {
@@ -83,23 +148,7 @@ export async function producto({ montar, params }) {
     : `<div class="card-producto__placa"><span style="font-size:6rem">${
          esc((p.nombre || '?').charAt(0).toUpperCase())}</span></div>`;
 
-  const listaVariedades = hayVariedades ? `
-    <div class="variedades">
-      <span class="campo__label" id="tit-variedades">Elegí el color o modelo</span>
-      <div class="variedades__lista" role="group" aria-labelledby="tit-variedades">
-        ${variedades.map(v => {
-          const color = colorDeVariedad(v.nombre);
-          const sinStock = v.stock <= 0;
-          return `
-            <button class="variedad" data-variedad="${esc(v.nombre)}"
-                    aria-pressed="false" ${sinStock ? 'disabled' : ''}
-                    ${sinStock ? `aria-label="${esc(v.nombre)}, sin stock"` : ''}>
-              ${color ? `<span class="variedad__punto" style="background:${color}"></span>` : ''}
-              ${esc(v.nombre)}
-            </button>`;
-        }).join('')}
-      </div>
-    </div>` : '';
+  const listaVariedades = hayVariedades ? listaDeVariedades(variedades) : '';
 
   const restante = porMetro ? `${p.stock} metros` : `${p.stock}`;
   const estadoStock = agotado
@@ -202,6 +251,13 @@ export async function producto({ montar, params }) {
   const botonAgregar = document.querySelector('[data-agregar]');
   const cajaPrecio = document.querySelector('[data-precio]');
 
+  // Con las muestras de color el nombre no está en el botón, así que el del
+  // elegido se escribe al lado del título: sin eso se elige un color y no hay
+  // forma de saber cuál quedó.
+  const cajaElegida = document.querySelector('[data-elegida]');
+  const cuantasHay = disponibles.length;
+  const compacto = variedades.length > MUCHAS_VARIEDADES;
+
   document.querySelectorAll('[data-variedad]').forEach(boton => {
     boton.addEventListener('click', () => {
       const nombre = boton.dataset.variedad;
@@ -211,6 +267,12 @@ export async function producto({ montar, params }) {
       document.querySelectorAll('[data-variedad]').forEach(otro => {
         otro.setAttribute('aria-pressed', String(otro.dataset.variedad === elegida));
       });
+
+      if (cajaElegida) {
+        cajaElegida.textContent = elegida
+          ? `· ${elegida}`
+          : (compacto ? `· ${cuantasHay} disponibles` : '');
+      }
 
       const v = variedades.find(x => x.nombre === elegida);
       if (v && v.precio) cajaPrecio.textContent = pesos(v.precio);
@@ -244,9 +306,6 @@ export async function producto({ montar, params }) {
 
   document.querySelector('[data-pack]')?.addEventListener('click', () => {
     carrito.agregar(p, { esPack: true });
-    avisar(`Agregaste ${nombreDelPack(p).replace(/ enter[oa]$/, '')} de ${p.nombre}`, {
-      accion: { texto: 'Ver pedido', alHacer: abrirCarrito },
-    });
   });
 
   botonAgregar?.addEventListener('click', () => {
@@ -258,14 +317,6 @@ export async function producto({ montar, params }) {
       return;
     }
     carrito.agregar(p, { variedad: elegida, cantidad: porMetro ? metros : null });
-    // Cuánto entró: los metros elegidos, o el mínimo del producto cuando se
-    // vende por unidad y ese mínimo no es uno.
-    const cuanto = porMetro
-      ? `${metros.toFixed(1).replace('.', ',')} m de `
-      : (minimo > 1 ? `${minimo} × ` : '');
-    avisar(`Agregaste ${cuanto}${p.nombre}${elegida ? ` · ${elegida}` : ''}`, {
-      accion: { texto: 'Ver pedido', alHacer: abrirCarrito },
-    });
   });
 
   /* ── Relacionados ───────────────────────────────────────────────────────── */
