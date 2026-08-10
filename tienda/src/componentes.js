@@ -139,6 +139,14 @@ export function cabecera({ unidades = 0, busqueda = '' } = {}) {
                  placeholder="Buscar cuadernos, hilos, juguetes…" value="${esc(busqueda)}">
         </form>
 
+        <!-- En el celular esto vive en la barra de abajo. En la computadora esa
+             barra no existe, así que no había forma de llegar a los pedidos
+             hechos salvo escribiendo la dirección a mano. -->
+        <a class="cabecera__mis-pedidos" href="/seguimiento" data-ruta>
+          ${icono('bolsa', { tam: 20 })}
+          <span>Mis pedidos</span>
+        </a>
+
         <button class="icono-boton carrito-boton" data-abrir-carrito
                 aria-label="Ver tu pedido${unidades ? `, ${unidades} producto${unidades === 1 ? '' : 's'}` : ', vacío'}">
           ${icono('carrito')}

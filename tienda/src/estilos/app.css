@@ -590,6 +590,58 @@
 .aviso-minimo svg { flex: none; }
 .aviso-minimo strong { font-weight: var(--peso-bold); }
 
+/* ── Guardá el enlace del pedido ──────────────────────────────────────────
+   La lista de "Mis pedidos" sale de este navegador, así que el enlace es la
+   única llave que abre el pedido desde otro aparato. */
+.pedido__guardar {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-3);
+  margin-top: var(--e-5);
+  padding: var(--e-4);
+  border: 1px dashed var(--border-2);
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+.pedido__guardar-texto {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--e-2);
+  font-size: var(--t-sm);
+  line-height: 1.5;
+  color: var(--text-2);
+}
+.pedido__guardar-texto svg { flex: none; margin-top: 1px; color: var(--primary); }
+.pedido__guardar-botones { display: flex; gap: var(--e-2); flex-wrap: wrap; }
+
+/* ── "Mis pedidos" en el encabezado ───────────────────────────────────────
+   En el celular vive en la barra de abajo. En la computadora esa barra no
+   existe y no había forma de llegar a los pedidos hechos salvo escribiendo la
+   dirección a mano, así que aparece acá y solo acá. */
+.cabecera__mis-pedidos {
+  display: none;
+  align-items: center;
+  gap: var(--e-2);
+  flex: none;
+  padding: var(--e-2) var(--e-3);
+  border-radius: var(--r-full);
+  color: var(--ink-texto);
+  font-size: var(--t-sm);
+  font-weight: var(--peso-semi);
+  white-space: nowrap;
+  transition: background var(--m-rapido) var(--curva);
+}
+.cabecera__mis-pedidos:hover {
+  background: rgba(255, 255, 255, .12);
+  text-decoration: none;
+  color: var(--ink-texto);
+}
+.cabecera__mis-pedidos svg { flex: none; }
+
+@media (min-width: 768px) {
+  .cabecera__mis-pedidos { display: inline-flex; }
+}
+
 /* ── Cuántos llevás ───────────────────────────────────────────────────────
    El contador de la ficha. Es el mismo del carrito pero más grande: acá es la
    decisión principal de la pantalla, allá es un ajuste. */

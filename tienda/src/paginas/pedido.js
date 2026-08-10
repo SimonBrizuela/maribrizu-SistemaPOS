@@ -21,6 +21,7 @@ import { pesos, esc, distancia, cuando, haceCuanto, lineasDeHorario } from '../f
 import { icono, franjaMarca } from '../iconos.js';
 import { montarMapa } from '../mapa.js';
 import { traerPedido, seguirPedido, pasosDe, indiceDeEstado } from '../pedidos.js';
+import { avisar } from '../avisos.js';
 
 // Viven fuera de la funcion a proposito: al navegar a otra pantalla el nodo se
 // reemplaza pero la suscripcion y el mapa seguirian vivos, escuchando y
@@ -87,6 +88,25 @@ export async function pedido({ montar, params }) {
     }
   }
 
+  // Copiar el enlace, con el aviso puesto en el propio botón: un toast más
+  // arriba de todo, en el celular, aparece fuera de la vista.
+  caja.addEventListener('click', async ev => {
+    const boton = ev.target.closest('[data-copiar]');
+    if (!boton) return;
+
+    try {
+      await navigator.clipboard.writeText(location.href);
+      const antes = boton.innerHTML;
+      boton.innerHTML = `${icono('tilde', { tam: 16 })} Copiado`;
+      setTimeout(() => { boton.innerHTML = antes; }, 2000);
+    } catch {
+      // Sin permiso de portapapeles —pasa en algunos navegadores del celular—
+      // se selecciona la dirección para que se pueda copiar a mano.
+      avisar('Copiá el enlace desde la barra de direcciones del navegador.',
+             { duracion: 6000 });
+    }
+  });
+
   pintar(datos);
 
   cortarSeguimiento = seguirPedido(params.id, actualizado => {
@@ -123,6 +143,31 @@ function contenido(p, cfg) {
         ${cancelado ? '' : seccion('Cómo viene', linea(p, modo), 'linea')}
         <aside class="pedido__ficha-hueco">${ficha(p, cfg, modo)}</aside>
         ${seccion('Lo que pediste', detalleDelPedido(p, modo), 'items')}
+      </div>
+
+      <!-- El enlace de este pedido es la unica llave que abre esta pantalla
+           desde otro telefono o desde la computadora: la lista de "Mis pedidos"
+           sale de este navegador, porque las reglas no dejan listar la
+           coleccion y esta bien que no lo dejen. Guardarlo es lo que hace que
+           el pedido no se pierda si la persona cambia de aparato o borra los
+           datos del navegador. -->
+      <div class="pedido__guardar">
+        <p class="pedido__guardar-texto">
+          ${icono('pin', { tam: 17 })}
+          <span>Guardá este enlace para seguir el pedido desde cualquier
+          teléfono o computadora.</span>
+        </p>
+        <div class="pedido__guardar-botones">
+          <button type="button" class="boton boton--secundario boton--chico" data-copiar>
+            ${icono('bolsa', { tam: 16 })} Copiar el enlace
+          </button>
+          <a class="boton boton--secundario boton--chico"
+             href="https://wa.me/?text=${encodeURIComponent(
+               `Mi pedido ${p.codigo || ''} en Librería Liceo: ${location.href}`)}"
+             target="_blank" rel="noopener">
+            ${icono('whatsapp', { tam: 16 })} Mandármelo por WhatsApp
+          </a>
+        </div>
       </div>
 
       <div class="pedido__acciones">
