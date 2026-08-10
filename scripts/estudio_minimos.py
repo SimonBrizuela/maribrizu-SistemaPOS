@@ -102,8 +102,13 @@ def leer_catalogo(db):
             continue
 
         productos.append({
+            'doc_id': d.id,
             'clave': clave_producto(nombre),
             'nombre': nombre,
+            # Lo que ya haya puesto el panel, para no reescribir lo mismo ni
+            # pisar una decision tomada a mano.
+            'tienda_minimo': numero('tienda_minimo') or None,
+            'tienda_paso': numero('tienda_paso') or None,
             'rubro': rubro or '(sin rubro)',
             'unidad': unidad,
             'precio': precio,

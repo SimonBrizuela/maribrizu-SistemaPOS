@@ -205,6 +205,8 @@ ESTUDIO_NEGOCIO*.md
 ESTUDIO_CANALES*.md
 estudio_negocio.json
 estudio_canales.json
+REGLAS_VENTA_TIENDA.md
+minimos_anteriores.json
 
 # Salida de la tarea programada del sync de la tienda
 logs/
