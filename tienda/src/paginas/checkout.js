@@ -255,9 +255,10 @@ function pintarFormulario({ montar, cfg, cambios }) {
     const subtotal = sumar(renglones);
     const gratis = modo === 'delivery' && llegaAEnvioGratis(subtotal, entrega);
     const envio = modo === 'delivery' && !gratis ? cotizacion.precio : 0;
-    // El mínimo se mide contra los productos, sin el envío: cobrar el envío
-    // para completar el mínimo sería hacerle pagar al cliente el piso.
-    const falta = Math.max(0, pedidoMinimo - subtotal);
+    // El mínimo se mide contra el total, con el envío adentro: es lo que entra
+    // por el pedido. Con retiro en el local, o mientras el envío está a
+    // confirmar, el envío es cero y queda medido contra los productos solos.
+    const falta = Math.max(0, pedidoMinimo - (subtotal + envio));
 
     const lineaEnvio = modo === 'retiro'
       ? '<strong style="color:var(--exito)">Sin cargo</strong>'
@@ -320,7 +321,8 @@ function pintarFormulario({ montar, cfg, cambios }) {
         ${falta > 0 ? `
           <div class="checkout__aviso-minimo">
             Te faltan <strong class="cifra">${pesos(falta)}</strong> para llegar al
-            pedido mínimo de <strong class="cifra">${pesos(pedidoMinimo)}</strong>.
+            pedido mínimo de <strong class="cifra">${pesos(pedidoMinimo)}</strong>${
+              envio > 0 ? ', contando el envío' : ''}.
             <a href="/catalogo">Seguir agregando</a>
           </div>` : ''}
 
@@ -442,7 +444,12 @@ function pintarFormulario({ montar, cfg, cambios }) {
       return;
     }
 
-    const faltante = pedidoMinimo - sumar(carrito.items());
+    // La misma cuenta que muestra el resumen, con el envío adentro.
+    const productos = sumar(carrito.items());
+    const gratis = modo === 'delivery' && llegaAEnvioGratis(productos, entrega);
+    const conEnvio = productos + (modo === 'delivery' && !gratis ? cotizacion.precio : 0);
+
+    const faltante = pedidoMinimo - conEnvio;
     if (faltante > 0) {
       avisar(`Te faltan ${pesos(faltante)} para llegar al pedido mínimo.`,
              { tipo: 'error', duracion: 6000 });
