@@ -201,3 +201,6 @@ FOTOS_MERCADOLIBRE.xlsx
 # Estudio de Mercado Libre: tiene costos y margenes del local
 ESTUDIO_ML*.md
 ESTUDIO_ML*.xlsx
+
+# Salida de la tarea programada del sync de la tienda
+logs/

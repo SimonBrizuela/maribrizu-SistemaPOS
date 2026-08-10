@@ -327,22 +327,6 @@ export async function renderTiendaAjustes(container, db) {
   $('#cfgGuardar').addEventListener('click', () => guardarTodo(container));
 }
 
-function pintarTramosResumen(tramos) {
-  const ordenados = [...tramos].sort((a, b) => a.hasta_km - b.hasta_km);
-  const resumen = document.getElementById('cfgTramosResumen');
-  if (!resumen) return;
-  resumen.innerHTML = ordenados.length
-    ? ordenados.map((t, i) => {
-        const desde = i === 0 ? 0 : ordenados[i - 1].hasta_km;
-        return `<div>De ${String(desde).replace('.', ',')} a
-                ${String(t.hasta_km).replace('.', ',')} km · <b>${pesos(t.precio)}</b></div>`;
-      }).join('')
-      + `<div style="margin-top:5px;color:var(--tint-red-fg)">
-           Más de ${String(ordenados[ordenados.length - 1].hasta_km).replace('.', ',')} km ·
-           fuera de reparto</div>`
-    : '<div>Sin tramos cargados: la tienda cotiza "a confirmar".</div>';
-}
-
 /* ── Guardar ──────────────────────────────────────────────────────────────── */
 
 async function guardarTodo(container) {
