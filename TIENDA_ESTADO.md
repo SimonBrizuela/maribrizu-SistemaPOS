@@ -1,12 +1,18 @@
-# Tienda online · estado al 6 de agosto de 2026
+# Tienda online · estado al 10 de agosto de 2026
 
 Tienda pública para Librería Liceo, conectada al catálogo del POS.
-Código en `tienda/`, scripts de datos en `scripts/`.
+Código en `tienda/`, panel en `webapp/`, scripts de datos en `scripts/`.
 
 ```
-cd tienda && npm run dev      → http://localhost:5180
+cd tienda  && npm run dev     → http://localhost:5180
                                 desde el celular: http://192.168.0.87:5180
+cd tienda  && npm test        → 55 pruebas: buscador, envío, carrito, espejo
+cd webapp  && npm run dev     → http://localhost:5173 · sección "Tienda"
+python scripts/probar_tienda.py  → 20 pruebas contra las reglas, sin sesión
 ```
+
+La tienda está publicada en **https://libreria-liceo.netlify.app**. Lo que hay
+en esta carpeta desde el 8 de agosto todavía no se desplegó.
 
 ---
 
@@ -86,6 +92,37 @@ espejo no expone costo, margen ni proveedor.
 **Sistema visual** en `tienda/design/`, con la paleta sacada del logo. Publicado
 en claude.ai/design como "Librería Liceo — Tienda Online".
 
+**Panel de administración**, en la webapp de gestión, sección "Tienda":
+
+- *Pedidos* — la pantalla de mostrador que ya existía.
+- *Catálogo de la tienda* — por producto: publicar, sacar o dejarlo librado al
+  rubro; destacarlo en la portada; nombre público y descripción; fotos (subir,
+  borrar, elegir la principal); si se vende por unidad o por metro; si se
+  ofrece el pack entero y cómo se llama; y qué variedades salen y con qué
+  nombre. Cada publicación dice a qué producto del catálogo está vinculada y se
+  salta a editarlo allá con un botón para volver.
+- *Configuración* — horarios, teléfono, dirección, aviso de portada, abrir y
+  cerrar la tienda, tramos de envío por distancia, radio, envío gratis, alias y
+  titular para transferir, y qué rubros salen a la web.
+
+Lo que se decide en el panel son campos `tienda_*` dentro del producto del
+catálogo: el POS no se entera y el sync los respeta. El precio y el stock
+siguen saliendo del catálogo y solo de ahí, que es con lo que se cobra en el
+mostrador. Cada cambio se espeja en `tienda_productos` al instante en vez de
+esperar los 15 minutos del sync.
+
+**El buscador entiende los conectores.** El índice no los guarda, así que "goma
+de borrar" pedía un token `de` que no tiene ningún producto y devolvía cero con
+21 gomas en el catálogo. Ahora la consulta se despieza con el mismo criterio que
+el índice y se puntúa cuántas palabras coinciden en vez de exigirlas todas.
+
+**Pruebas.** `npm test` en `tienda/` corre 55 casos sobre el buscador, los
+tramos de envío, el carrito y el documento del espejo — este último comparando
+lo que arma el panel (JavaScript) contra lo que arma el sync (Python) sobre los
+mismos casos, porque son dos implementaciones de la misma regla y separarse
+sería que la tienda cambie sola. `scripts/probar_tienda.py` pega contra las
+reglas desde afuera, sin sesión.
+
 ---
 
 ## Errores encontrados y corregidos
@@ -115,13 +152,29 @@ medía lo mismo que su contenido y no le dejaba margen para moverse.
 
 ## Lo que falta
 
+### 0. Desplegar — es lo que bloquea todo lo demás
+
+Al 10 de agosto el aviso de un pedido nuevo **no le llega a nadie**, por tres
+cosas al mismo tiempo:
+
+| Vía | Por qué no avisa |
+|---|---|
+| Tablero en la webapp | `posmr87.netlify.app` publicó por última vez el 2 de agosto; el tablero y el watcher son del 6. El bundle publicado no menciona `tienda_pedidos`. |
+| WhatsApp al local | faltan las variables de CallMeBot en el sitio de la tienda |
+| POS | no existe el listener de `tienda_pedidos` (nada en `pos_system/` lo nombra) |
+
+Hay un solo pedido en la base, el `P5HE` del 7 de agosto, de prueba. No se
+perdió ninguno real todavía.
+
+También falta desplegar la tienda: el buscador arreglado, el nombre del pack, el
+aviso de portada, el cierre y el reintento del chat están en esta carpeta y no
+en el aire.
+
 ### 1. El aviso de WhatsApp
 
-La tienda ya está publicada en **https://libreria-liceo.netlify.app**, sitio
-aparte del de la webapp. Las direcciones y el envío andan contra el servidor de
-verdad: probado con `Rafael Núñez 4500`, que da $3.500 por 7,46 km, y con
-`Av Colón 4500` escrita entera, que la resuelve sola y da fuera de radio con
-14,83 km.
+Las direcciones y el envío andan contra el servidor de verdad: probado con
+`Rafael Núñez 4500`, que da $3.500 por 7,46 km, y con `Av Colón 4500` escrita
+entera, que la resuelve sola y da fuera de radio con 14,83 km.
 
 Falta el dominio propio, que se engancha desde el panel de Netlify.
 
@@ -135,8 +188,11 @@ Variables de entorno del sitio:
 |---|---|
 | `GOOGLE_ROUTES_KEY` | cargada — distancia real hasta el domicilio |
 | `GOOGLE_PLACES_KEY` | cargada — autocompletado de direcciones |
+| `GEMINI_API_KEY` | cargada — el asistente del catálogo |
 | `CALLMEBOT_TELEFONO` + `CALLMEBOT_APIKEY` | falta — WhatsApp al local, la vía rápida |
 | `WHATSAPP_TOKEN` + `WHATSAPP_PHONE_ID` + `WHATSAPP_DESTINO` | falta — la vía oficial de Meta |
+
+Verificado el 10 de agosto con `npx netlify env:list --context production`.
 
 Las dos de Google son la misma clave, la que estaba cargada en
 `claves_google.txt` como `GOOGLE_CSE_KEY` de cuando se usaba para Custom Search.
@@ -166,27 +222,25 @@ credenciales, aprovechando que `tienda_config` es público y que un pedido se
 puede leer sabiendo su id. No hay cuenta de servicio en el servidor de la
 tienda.
 
-También falta cargar `pago.alias` y `pago.titular` en `tienda_config/settings`.
-Sin eso el checkout dice que los datos de la transferencia se pasan al
-confirmar, en vez de mostrar un alias vacío.
+También falta cargar el alias y el titular de la transferencia. Ya se cargan
+desde el panel (Tienda › Configuración › Transferencia); mientras estén vacíos
+el checkout dice que los datos se pasan al confirmar, en vez de mostrar un alias
+en blanco.
 
-### 2. Panel de administración
+### 2. Marcar los destacados
 
-- Interruptor "Publicar en tienda" por producto
-- Marcar destacados. Hasta que haya alguno, la portada dice "Del catálogo" en vez
-  de "Lo más pedido", que sería mentira
-- Nombre público y descripción, para arreglar los nombres internos del POS
-- Subida de fotos desde el panel
-- Configuración de la tienda: horarios, tramos de envío, radio
+El panel ya lo permite, pero no hay ninguno marcado: hasta que lo haya, la
+portada dice "Del catálogo" en vez de "Lo más pedido", que sería mentira.
 
 ### 3. POS: escuchar pedidos e imprimir el ticket de reparto
 
-**Es lo único que falta del circuito de pedidos.** Listener de `tienda_pedidos`
-siguiendo el patrón de `pos_system/ui/remote_terminal_listener.py`, con impresión
-automática vía `ticket_printer.py`. Requiere bump de versión, tag y push.
+Listener de `tienda_pedidos` siguiendo el patrón de
+`pos_system/ui/remote_terminal_listener.py`, con impresión automática vía
+`ticket_printer.py`. Requiere bump de versión, tag y push.
 
 El tablero de pedidos en la webapp ya está hecho (`webapp/src/pages/pedidos_tienda.js`),
 y el watcher con sonido y notificación también (`webapp/src/pedidos_watcher.js`).
+Los dos esperan el despliegue de la webapp.
 
 ### 4. El dominio propio
 
@@ -370,14 +424,39 @@ APIs habilitadas: Places API (New) y Routes API. Custom Search quedó descartada
 |---|---|---|
 | `tienda_productos` | espejo público del catálogo | `sync_tienda.py` |
 | `tienda_config/settings` | horarios, tramos de envío, origen | `seed_tienda_config.py` |
-| `tienda_config/publicacion` | rubros habilitados | a mano |
+| `tienda_config/publicacion` | rubros habilitados | el panel (Tienda › Configuración) |
 | `tienda_config/rubros` | conteo por rubro para la portada | `sync_tienda.py` |
 | `tienda_pedidos` | pedidos | la tienda (validado en las reglas) |
+
+### Lo que el panel guarda en el catálogo
+
+Todo vive dentro del documento del producto en `catalogo`, así que el POS no se
+entera y el sync lo respeta. Un campo ausente es "automático", que no es lo
+mismo que estar en falso.
+
+| Campo | Qué decide |
+|---|---|
+| `tienda_publicar` | `true` publica siempre, `false` nunca, ausente sigue al rubro |
+| `tienda_destacado` | aparece en la portada |
+| `tienda_nombre` | nombre público, en vez del del POS prolijado |
+| `tienda_descripcion` | el texto abajo del precio |
+| `tienda_imagenes` | las fotos, la primera es la principal |
+| `tienda_unidad` | `metro` o `unidad`, cuando el POS lo dedujo mal |
+| `tienda_ofrecer_pack` | si se ofrece el rollo o la caja entera |
+| `tienda_pack_nombre` | cómo se llama ese pack de cara al cliente |
+| `tienda_variedades` | por color: si se publica y con qué nombre. La clave es el nombre del catálogo normalizado, porque el visible cambia |
+
+El precio y el stock **no** están en esta lista a propósito: salen del catálogo
+y solo de ahí, que es con lo que se cobra en el mostrador.
 
 ### Scripts
 
 ```
 scripts/sync_tienda.py         catálogo → espejo público (--simular para probar)
+scripts/sync_tienda.bat        la corrida de la tarea programada, con log
+scripts/instalar_sync.ps1      instala la tarea cada 15 min (y la saca con -Quitar)
+scripts/probar_tienda.py       20 pruebas contra las reglas, sin sesión
+scripts/casos_espejo.py        salida del sync, para compararla con la del panel
 scripts/seed_tienda_config.py  configuración inicial de la tienda
 scripts/lista_fotos.py         Excel priorizado de fotos pendientes
 scripts/buscar_fotos.py        busca candidatas por nombre (Serper)
@@ -393,7 +472,24 @@ tienda/design/contraste.mjs    verifica el contraste de todos los pares de color
 tienda/netlify/functions/envio.mjs           distancia real con Routes + tramos
 tienda/netlify/functions/direcciones.mjs     autocompletado con Places
 tienda/netlify/functions/avisar-pedido.mjs   WhatsApp al local
+tienda/netlify/functions/mapa.mjs            el mapa del checkout, sin exponer la clave
+tienda/netlify/functions/asistente.mjs       el chat del catálogo (Gemini)
 ```
 
-El sync está pensado para correr cada 15 minutos desde el Programador de tareas
-de Windows en la PC del local. **Todavía no está agendado.**
+### La tarea programada del sync
+
+Corre cada 15 minutos desde el Programador de tareas de Windows, en la PC del
+local. Se instala **una vez**, con permisos de administrador:
+
+```
+powershell -ExecutionPolicy Bypass -File scripts\instalar_sync.ps1
+```
+
+Necesita `firebase_key.json` en la raíz y Python en el PATH; el instalador
+verifica las dos cosas antes de crear la tarea. El log queda en
+`logs/sync_tienda.log` y se recorta solo a los 2 MB.
+
+Quince minutos y no cinco porque el sync reescribe los 2.400 documentos
+publicados en cada corrida: son 230 mil escrituras por mes contra 690 mil. El
+desfasaje no llega al cliente igual, porque el checkout revalida precio y stock
+contra la base antes de confirmar.
