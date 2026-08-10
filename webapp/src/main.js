@@ -984,6 +984,18 @@ function initApp(session) {
       // destruía el DOM y reseteaba el cliente elegido y el scroll.
       if (currentPage === 'fiados') return;
 
+      // Configuración de la Tienda: es un formulario. Cada venta del POS toca
+      // `catalogo`, y sin esta exclusión la página se repintaba con el cliente
+      // escribiendo adentro: el alias a medio tipear desaparecía y, al guardar,
+      // se guardaba el campo vacío. Medido contra la base: el titular quedó
+      // grabado y el alias no.
+      if (currentPage === 'tienda_ajustes') return;
+
+      // Catálogo de la Tienda: guarda filtros, búsqueda y scroll, y actualiza
+      // sus propias filas después de cada cambio. Un re-render completo por una
+      // venta ajena tira todo eso.
+      if (currentPage === 'tienda_catalogo') return;
+
       // Si el usuario está interactuando, diferimos el refresh para no
       // pisar lo que está haciendo (buscar, editar, llenar un form).
       if (userBusy()) {
