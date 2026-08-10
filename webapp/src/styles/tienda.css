@@ -210,3 +210,15 @@
   .tienda-variedad { grid-template-columns: 42px minmax(0, 1fr); }
   .tienda-variedad .datos { grid-column: 2; }
 }
+
+/* ── Avisarle al cliente ──────────────────────────────────────────────────
+   El botón queda encendido mientras el cliente no fue avisado de este estado,
+   y se apaga cuando ya se le escribió. Sin eso no hay forma de saber si se le
+   avisó — que es justo lo que uno quiere saber cuando llama preguntando. */
+.pc-btn.avisar-pendiente {
+  background: var(--tint-green-bg);
+  color: var(--tint-green-fg);
+  border-color: transparent;
+  font-weight: 700;
+}
+.pc-btn.avisar-pendiente:hover { background: var(--tint-green-bg); filter: brightness(.96); }

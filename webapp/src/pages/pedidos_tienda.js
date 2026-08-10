@@ -41,6 +41,54 @@ const ETIQUETA_ACCION = {
   entregado:  'Entregado',
 };
 
+/**
+ * El mensaje que se le manda al cliente en cada momento.
+ *
+ * Mandarlo solo, sin que nadie toque nada, necesita la API de WhatsApp de Meta:
+ * cuenta de Business, plantilla aprobada y un costo por conversación, porque
+ * fuera de las 24 horas de la última respuesta del cliente solo se pueden
+ * mandar plantillas. CallMeBot, que es lo que avisa hoy al local, solo puede
+ * escribirle a un número que lo autorizó: sirve para el local, no para los
+ * clientes.
+ *
+ * Mientras tanto esto: el mensaje ya escrito, a un toque. Se abre WhatsApp con
+ * el texto puesto y solo hay que darle enviar.
+ */
+const MENSAJES = {
+  preparando: p => `Hola ${nombreCorto(p)}, estamos preparando tu pedido ${p.codigo}. `
+                 + 'Te avisamos apenas esté.',
+  listo: p => p?.entrega?.modo === 'delivery'
+    ? `Hola ${nombreCorto(p)}, tu pedido ${p.codigo} ya está listo y sale para tu casa.`
+    : `Hola ${nombreCorto(p)}, tu pedido ${p.codigo} ya está listo para que lo retires. `
+      + 'Te esperamos en Av. Alfonsina Storni 168.',
+  en_camino: p => `Hola ${nombreCorto(p)}, tu pedido ${p.codigo} salió para tu casa. `
+                + 'Llega en un rato.',
+  entregado: p => `Hola ${nombreCorto(p)}, gracias por tu compra. `
+                + 'Cualquier cosa que necesites, escribinos por acá.',
+  cancelado: p => `Hola ${nombreCorto(p)}, tuvimos que cancelar tu pedido ${p.codigo}. `
+                + 'Cualquier duda, escribinos.',
+};
+
+function nombreCorto(p) {
+  return String(p?.cliente?.nombre || '').trim().split(/\s+/)[0] || '';
+}
+
+/** El número del cliente, listo para wa.me: con código de país y sin signos. */
+function whatsappDe(p) {
+  const numero = String(p?.cliente?.telefono || '').replace(/\D/g, '');
+  if (!numero) return null;
+  // Un teléfono cordobés escrito como lo escribe la gente (3517046684) necesita
+  // el 549 adelante para que WhatsApp lo entienda.
+  return numero.length <= 10 ? `549${numero}` : numero;
+}
+
+function enlaceAviso(p) {
+  const numero = whatsappDe(p);
+  const armar = MENSAJES[p.estado];
+  if (!numero || !armar) return null;
+  return `https://wa.me/${numero}?text=${encodeURIComponent(armar(p))}`;
+}
+
 const FILTROS = [
   { clave: 'pendientes', texto: 'Pendientes', estados: ['nuevo', 'preparando', 'listo', 'en_camino'] },
   { clave: 'nuevo',      texto: 'Nuevos',     estados: ['nuevo'] },
@@ -100,6 +148,21 @@ function cuando(marca) {
 
 /* ── Acciones ────────────────────────────────────────────────────────────── */
 
+/**
+ * Deja anotado que al cliente ya se le avisó de este estado.
+ *
+ * Sin esto, el botón dice "Avisarle al cliente" para siempre y no hay forma de
+ * saber si se le avisó o no — que es justo lo que uno quiere saber cuando
+ * alguien llama preguntando.
+ */
+async function marcarAvisado(id, estado) {
+  try {
+    await updateDoc(doc(_db, 'tienda_pedidos', id), { avisado: estado });
+  } catch (e) {
+    console.warn('[pedidos] no se pudo anotar el aviso:', e);
+  }
+}
+
 async function cambiarEstado(id, estado) {
   try {
     await updateDoc(doc(_db, 'tienda_pedidos', id), { estado, visto: true });
@@ -128,6 +191,7 @@ function tarjeta(p) {
   const siguiente = siguienteDe(p);
   const entrega = p.entrega || {};
   const esDelivery = entrega.modo === 'delivery';
+  const aviso = enlaceAviso(p);
 
   const whatsapp = String(p?.cliente?.telefono || '').replace(/\D/g, '');
   const mensaje = encodeURIComponent(
@@ -216,6 +280,13 @@ function tarjeta(p) {
             <span class="material-icons" style="font-size:18px">${FLUJO[siguiente].icono}</span>
             ${ETIQUETA_ACCION[siguiente]}
           </button>` : ''}
+        ${aviso ? `
+          <a class="pc-btn ${p.avisado === p.estado ? '' : 'avisar-pendiente'}"
+             href="${esc(aviso)}" target="_blank" rel="noopener"
+             data-act="avisar" style="justify-content:center;min-width:150px">
+            <span class="material-icons" style="font-size:18px">chat</span>
+            ${p.avisado === p.estado ? 'Volver a avisar' : 'Avisarle al cliente'}
+          </a>` : ''}
         ${p.estado !== 'cancelado' && p.estado !== 'entregado' ? `
           <button class="pc-btn danger" data-act="cancelar" style="justify-content:center">
             <span class="material-icons" style="font-size:18px">cancel</span> Cancelar
@@ -300,6 +371,14 @@ export async function renderPedidosTienda(container, db) {
     if (!boton) return;
     const id = boton.closest('[data-id]')?.dataset.id;
     if (!id) return;
+
+    if (boton.dataset.act === 'avisar') {
+      // El enlace abre WhatsApp solo; acá únicamente se anota que ya se avisó
+      // de este estado, para que el botón no quede pidiendo lo mismo.
+      const p = _pedidos.find(x => x.id === id);
+      if (p) marcarAvisado(id, p.estado);
+      return;
+    }
 
     if (boton.dataset.act === 'avanzar') {
       boton.disabled = true;
