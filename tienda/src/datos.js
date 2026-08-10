@@ -127,6 +127,9 @@ function armarProducto(snap) {
     // Lo que sale el rollo o la caja entera, cuando existe.
     precio_pack: d.precio_pack ? Number(d.precio_pack) : null,
     pack_tipo: d.pack_tipo || null,
+    // Como se llama el pack de cara al cliente. Lo pone el panel; sin eso se
+    // cae al tipo del POS, que a veces no dice nada ("carton").
+    pack_nombre: d.pack_nombre || null,
     pack_contenido: Number(d.pack_contenido) || null,
     stock: Number(d.stock) || 0,
     rubro: d.rubro || '',

@@ -88,6 +88,12 @@ function pintarFormulario({ montar, cfg, cambios }) {
   const hayRetiro = entrega.retiro_habilitado !== false;
   const hayDelivery = entrega.delivery_habilitado !== false;
 
+  // Con la tienda cerrada el pedido no entra. Se deja ver el checkout entero
+  // igual —con el total, el envio y todo— y se traba solo el boton: sacar la
+  // pantalla del medio le esconde al cliente lo que ya habia armado, y el
+  // carrito sobrevive al cierre.
+  const cerrada = cfg.abierta === false;
+
   /** @type {'retiro'|'delivery'} */
   let modo = hayRetiro ? 'retiro' : 'delivery';
   let formaPago = 'efectivo';
@@ -305,13 +311,17 @@ function pintarFormulario({ montar, cfg, cambios }) {
 
         <button type="button" class="boton boton--primario boton--grande boton--bloque${
                   enviando ? ' boton--cargando' : ''}"
-                data-confirmar ${enviando ? 'disabled' : ''}>
-          ${enviando ? 'Enviando el pedido…' : 'Confirmar el pedido'}
+                data-confirmar ${enviando || cerrada ? 'disabled' : ''}>
+          ${cerrada ? 'La tienda está cerrada'
+                    : enviando ? 'Enviando el pedido…' : 'Confirmar el pedido'}
         </button>
 
         <p class="checkout__legal">
-          No se cobra nada ahora. El pedido queda reservado y lo pagás
-          ${modo === 'retiro' ? 'al retirarlo' : 'al recibirlo'}.
+          ${cerrada
+            ? `Ahora no estamos tomando pedidos. Tu carrito queda guardado:
+               volvé cuando abramos y confirmalo de una.`
+            : `No se cobra nada ahora. El pedido queda reservado y lo pagás
+               ${modo === 'retiro' ? 'al retirarlo' : 'al recibirlo'}.`}
         </p>
       </div>`;
   }
@@ -410,6 +420,12 @@ function pintarFormulario({ montar, cfg, cambios }) {
   });
 
   async function confirmar() {
+    if (cerrada) {
+      avisar('Ahora no estamos tomando pedidos. Tu carrito queda guardado.',
+             { tipo: 'error', duracion: 6000 });
+      return;
+    }
+
     const valores = {
       nombre: valor('nombre'),
       telefono: valor('telefono'),

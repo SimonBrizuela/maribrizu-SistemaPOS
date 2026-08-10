@@ -1,0 +1,128 @@
+[
+  {
+    "que_prueba": "Producto simple, sin conjunto ni variedades",
+    "doc_id": "p1",
+    "datos": {
+      "nombre": "CUADERNO RIVADAVIA ABC A4 TAPA DURA X 100",
+      "codigo": "1000015",
+      "marca": "RIVADAVIA",
+      "rubro": "libreria",
+      "categoria": "CUADERNOS",
+      "sub_rubro": "TAPA DURA",
+      "estado": "activo",
+      "precio_venta": 18500,
+      "stock": 12
+    }
+  },
+  {
+    "que_prueba": "Se vende por metro y ofrece el rollo entero",
+    "doc_id": "p2",
+    "datos": {
+      "nombre": "CINTA RASO 10 MM",
+      "codigo": "900420",
+      "marca": "SIN MARCA",
+      "rubro": "merceria",
+      "categoria": "CINTAS",
+      "sub_rubro": "",
+      "estado": "activo",
+      "es_conjunto": true,
+      "conjunto_tipo": "rollo",
+      "conjunto_unidad_medida": "metros",
+      "conjunto_contenido": 25,
+      "conjunto_precio_unidad": 300,
+      "conjunto_total": 84,
+      "precio_venta": 4500,
+      "stock": 3
+    }
+  },
+  {
+    "que_prueba": "Variedades de color con stock y precio propio",
+    "doc_id": "p3",
+    "datos": {
+      "nombre": "CARTULINA LUMA COMUN",
+      "codigo": "190500001037",
+      "marca": "LUMA",
+      "rubro": "libreria",
+      "categoria": "PAPELES",
+      "estado": "activo",
+      "es_conjunto": true,
+      "conjunto_tipo": "pack",
+      "conjunto_contenido": 10,
+      "conjunto_precio_unidad": 600,
+      "precio_venta": 5600,
+      "conjunto_colores": [
+        { "color": "CELESTE", "unidades": 1, "restante": 2 },
+        { "color": "ROSA VIEJO", "unidades": 0, "restante": 5, "precio": 900 },
+        { "color": "DORADA", "unidades": 2, "restante": 0 }
+      ]
+    }
+  },
+  {
+    "que_prueba": "Todo lo que puede decidir el panel, junto",
+    "doc_id": "p4",
+    "datos": {
+      "nombre": "CORDON RETORCIDO IMPORTADO LUREX 6MM",
+      "codigo": "105894",
+      "marca": "IMPORTADO",
+      "rubro": "merceria",
+      "categoria": "CORDONES",
+      "estado": "activo",
+      "es_conjunto": true,
+      "conjunto_tipo": "carton",
+      "conjunto_contenido": 50,
+      "conjunto_precio_unidad": 420,
+      "precio_venta": 18000,
+      "conjunto_colores": [
+        { "color": "PLATA", "unidades": 1, "restante": 0 },
+        { "color": "ORO VIEJO", "unidades": 0, "restante": 12 }
+      ],
+      "tienda_nombre": "Cordón de Lurex 6 mm",
+      "tienda_descripcion": "Se corta del rollo, el largo que necesites.",
+      "tienda_unidad": "metro",
+      "tienda_ofrecer_pack": true,
+      "tienda_pack_nombre": "Rollo",
+      "tienda_destacado": true,
+      "tienda_imagenes": ["https://ejemplo/cordon.webp"],
+      "tienda_variedades": {
+        "plata": { "publicar": true, "nombre": "Plateado" },
+        "oro viejo": { "publicar": false, "nombre": null }
+      }
+    }
+  },
+  {
+    "que_prueba": "El panel apaga el pack aunque el POS lo tenga",
+    "doc_id": "p5",
+    "datos": {
+      "nombre": "ABROJO 20 MM NEGRO",
+      "codigo": "3021",
+      "marca": "",
+      "rubro": "merceria",
+      "estado": "activo",
+      "es_conjunto": true,
+      "conjunto_tipo": "rollo",
+      "conjunto_unidad_medida": "metros",
+      "conjunto_contenido": 25,
+      "conjunto_precio_unidad": 850,
+      "conjunto_total": 40,
+      "precio_venta": 19000,
+      "tienda_ofrecer_pack": false
+    }
+  },
+  {
+    "que_prueba": "Marcado como conjunto pero suelto: no es un pack",
+    "doc_id": "p6",
+    "datos": {
+      "nombre": "BOLIGRAFO FILGO GEL BORRABLE BORRAX C12-003",
+      "codigo": "2210",
+      "marca": "FILGO",
+      "rubro": "libreria",
+      "estado": "activo",
+      "es_conjunto": true,
+      "conjunto_tipo": "unidad",
+      "conjunto_contenido": 1,
+      "conjunto_precio_unidad": 1400,
+      "conjunto_total": 60,
+      "precio_venta": 14900
+    }
+  }
+]

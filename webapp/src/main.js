@@ -68,6 +68,8 @@ const pages = {
   notificaciones:  { title: 'Notificaciones',          loader: () => import('./pages/notificaciones.js'),   render: 'renderNotificaciones',  cacheKey: null,                      needs: ['catalogo'] },
   centro_compras:  { title: 'Centro de Compras',        loader: () => import('./pages/centro_compras.js'),   render: 'renderCentroCompras',   cacheKey: null,                      needs: ['catalogo', 'ventas_por_dia'] },
   pedidos_tienda:  { title: 'Pedidos de la Tienda',     loader: () => import('./pages/pedidos_tienda.js'),   render: 'renderPedidosTienda',   cacheKey: null,                      needs: [] },
+  tienda_catalogo: { title: 'Catálogo de la Tienda',    loader: () => import('./pages/tienda_catalogo.js'),  render: 'renderTiendaCatalogo',  cacheKey: null,                      needs: ['catalogo'] },
+  tienda_ajustes:  { title: 'Configuración de la Tienda', loader: () => import('./pages/tienda_ajustes.js'), render: 'renderTiendaAjustes',   cacheKey: null,                      needs: ['catalogo'] },
 };
 
 // Caché de módulos ya descargados (evita repetir import() tras la primera carga)

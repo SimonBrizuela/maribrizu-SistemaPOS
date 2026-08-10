@@ -156,15 +156,7 @@ async function preguntar(texto) {
   const pensando = agregarPensando();
 
   try {
-    const respuesta = await fetch(RUTA, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      // Se manda el historial sin los productos: al modelo le importa lo que se
-      // dijo, no las cards que se pintaron de este lado.
-      body: JSON.stringify({
-        mensajes: historial.map(({ rol, texto }) => ({ rol, texto })),
-      }),
-    });
+    const respuesta = await consultar();
 
     if (respuesta.status === 503) {
       apagar();
@@ -188,6 +180,42 @@ async function preguntar(texto) {
       'No pude conectarme. Probá de nuevo, o escribinos por WhatsApp que te '
     + 'contestamos igual.');
   }
+}
+
+/**
+ * El pedido a la funcion, con un reintento.
+ *
+ * La funcion vive dormida y arranca con el primer mensaje del dia. Medido en
+ * produccion: los dos primeros intentos devolvieron 502 y el tercero contesto
+ * bien en un segundo. Ese 502 le tocaba entero al primer cliente, que veia "no
+ * pude conectarme" en un chat que en realidad funciona.
+ *
+ * Se reintenta una sola vez y solo ante un error del servidor o de red: un 400
+ * o un 503 son respuestas, no tropiezos, y repetirlas es gastar cuota al pedo.
+ */
+async function consultar() {
+  const pedido = () => fetch(RUTA, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    // Se manda el historial sin los productos: al modelo le importa lo que se
+    // dijo, no las cards que se pintaron de este lado.
+    body: JSON.stringify({
+      mensajes: historial.map(({ rol, texto }) => ({ rol, texto })),
+    }),
+  });
+
+  try {
+    const respuesta = await pedido();
+    if (respuesta.status < 500) return respuesta;
+    console.warn('[asistente] arranque en frio, reintentando:', respuesta.status);
+  } catch (err) {
+    console.warn('[asistente] no salio el pedido, reintentando:', err);
+  }
+
+  // Un respiro antes de volver: si la instancia se esta levantando, insistir en
+  // el mismo instante encuentra lo mismo.
+  await new Promise(listo => setTimeout(listo, 900));
+  return pedido();
 }
 
 /**

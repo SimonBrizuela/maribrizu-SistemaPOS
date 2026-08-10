@@ -245,16 +245,26 @@ async function arrancar() {
   // la que decide si alguien se queda.
   iniciarAsistente();
 
-  // Aviso de tienda cerrada: se consulta después del primer pintado para no
-  // demorar la portada por un caso que casi nunca pasa.
+  // Los avisos de arriba de todo se consultan después del primer pintado: son
+  // casos que casi nunca pasan y no valen demorar la portada.
+  //
+  // Si están los dos, el de cerrada va primero: es el que cambia lo que la
+  // persona puede hacer.
   const cfg = await cargarConfig();
+  const avisos = [];
   if (cfg.abierta === false) {
-    const aviso = document.createElement('div');
-    aviso.className = 'aviso-cerrada';
-    aviso.setAttribute('role', 'status');
-    aviso.textContent = 'La tienda está cerrada por ahora. Podés mirar el catálogo, pero no tomamos pedidos.';
-    cabeceraNodo.after(aviso);
+    avisos.push(['aviso-cerrada',
+      'La tienda está cerrada por ahora. Podés mirar el catálogo, pero no tomamos pedidos.']);
   }
+  if (cfg.banner) avisos.push(['aviso-banner', String(cfg.banner)]);
+
+  avisos.reverse().forEach(([clase, texto]) => {
+    const aviso = document.createElement('div');
+    aviso.className = clase;
+    aviso.setAttribute('role', 'status');
+    aviso.textContent = texto;
+    cabeceraNodo.after(aviso);
+  });
 }
 
 arrancar();

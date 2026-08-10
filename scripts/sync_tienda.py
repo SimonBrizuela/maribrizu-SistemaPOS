@@ -117,6 +117,10 @@ def medidas_de(datos):
 
     Devuelve el precio de una unidad, el del pack cuando existe de verdad, y en
     que se mide el producto.
+
+    Lo que decide el panel (campos `tienda_*` del catalogo) pisa lo que se
+    deduce del POS. El precio y el stock NO: esos salen del catalogo y solo del
+    catalogo, porque son los mismos con los que se cobra en el mostrador.
     """
     es_conjunto = datos.get('es_conjunto') is True
     tipo = str(datos.get('conjunto_tipo') or '').strip().lower()
@@ -132,19 +136,34 @@ def medidas_de(datos):
     precio_unidad = numero('conjunto_precio_unidad')
     contenido = int(numero('conjunto_contenido'))
 
-    unidad = 'metro' if um == 'metros' else 'unidad'
+    # Como se vende de cara al cliente. El POS lo deduce de la unidad de medida
+    # y a veces se equivoca (un cordon cargado sin "metros" se ofrecia por
+    # unidad); desde el panel se corrige sin tocar el catalogo del POS.
+    forzada = str(datos.get('tienda_unidad') or '').strip().lower()
+    unidad = forzada if forzada in ('metro', 'unidad') else ('metro' if um == 'metros' else 'unidad')
+
     variedades = variedades_de(datos)
 
     if not es_conjunto:
         return {
-            'unidad': 'unidad', 'precio': round(precio_venta), 'precio_pack': None,
-            'pack_tipo': None, 'pack_contenido': None,
+            'unidad': unidad, 'precio': round(precio_venta), 'precio_pack': None,
+            'pack_tipo': None, 'pack_nombre': None, 'pack_contenido': None,
             'stock': max(0, int(numero('stock'))), 'variedades': [],
         }
 
     # `conjunto_tipo: unidad` con contenido 1 no es un pack: es un producto
     # suelto que quedo marcado como conjunto. No se le ofrece "llevar el pack".
     hay_pack = contenido > 1 and tipo in ('rollo', 'caja', 'pack', 'bolsa', 'bobina', 'carton')
+
+    # El panel puede apagar la venta del pack entero aunque exista (no siempre
+    # se quiere ofrecer el rollo de 50 metros por la web) o encenderla cuando el
+    # POS no la dedujo. Encenderla sin contenido ni precio no tiene sentido:
+    # seria ofrecer "el pack" sin saber de cuanto es ni cuanto sale.
+    ofrecer = datos.get('tienda_ofrecer_pack')
+    if ofrecer is False:
+        hay_pack = False
+    elif ofrecer is True:
+        hay_pack = contenido > 1 and precio_venta > 0
 
     # El stock en unidades sale de `conjunto_total`, no del campo `stock`: ese
     # ultimo cuenta packs cerrados y queda desfasado. Medido sobre el catalogo:
@@ -159,6 +178,10 @@ def medidas_de(datos):
         'precio': round(precio_unidad or precio_venta),
         'precio_pack': round(precio_venta) if hay_pack else None,
         'pack_tipo': tipo if hay_pack else None,
+        # Como se llama el pack en la tienda: "Rollo", "Caja de 12". El nombre
+        # del POS es una clave interna y a veces no dice nada ("carton").
+        'pack_nombre': (str(datos.get('tienda_pack_nombre') or '').strip()
+                        or nombre_bonito(tipo)) if hay_pack else None,
         'pack_contenido': contenido if hay_pack else None,
         'stock': max(0, stock),
         'variedades': variedades,
@@ -172,6 +195,12 @@ def variedades_de(datos):
     En el catalogo cada color trae `unidades` (packs cerrados) y `restante`
     (sueltas del pack abierto). El stock real de esa variedad es
     unidades * contenido_del_pack + restante.
+
+    El panel puede esconder variedades y renombrarlas: eso vive en
+    `tienda_variedades`, un mapa con el nombre del catalogo normalizado como
+    clave. Se guarda normalizado porque el nombre visible cambia (el panel
+    muestra "Celeste", el catalogo dice "CELESTE") y una clave que depende de
+    como se escribio el color se pierde al primer retoque.
     """
     colores = datos.get('conjunto_colores') or []
     if not isinstance(colores, list):
@@ -183,6 +212,10 @@ def variedades_de(datos):
     except (TypeError, ValueError):
         contenido = 0
 
+    ajustes = datos.get('tienda_variedades')
+    if not isinstance(ajustes, dict):
+        ajustes = {}
+
     salida = []
     for color in colores:
         if not isinstance(color, dict):
@@ -190,6 +223,11 @@ def variedades_de(datos):
         nombre = str(color.get('color') or '').strip()
         if not nombre:
             continue
+
+        ajuste = ajustes.get(normalizar(nombre))
+        if isinstance(ajuste, dict) and ajuste.get('publicar') is False:
+            continue
+
         try:
             unidades = float(color.get('unidades') or 0)
             restante = float(color.get('restante') or 0)
@@ -198,8 +236,12 @@ def variedades_de(datos):
 
         stock = int(unidades * contenido + restante)
         precio = color.get('precio')
+        publico = ''
+        if isinstance(ajuste, dict):
+            publico = str(ajuste.get('nombre') or '').strip()
+
         salida.append({
-            'nombre': nombre_bonito(nombre),
+            'nombre': publico or nombre_bonito(nombre),
             'stock': max(0, stock),
             'precio': round(float(precio)) if precio else None,
         })
@@ -278,6 +320,8 @@ def armar_documento(doc_id, datos):
         # tienda lo ofrece como alternativa en la ficha del producto.
         'precio_pack': m['precio_pack'],
         'pack_tipo': m['pack_tipo'],
+        # Como se llama de cara al cliente: "Rollo", "Caja de 12".
+        'pack_nombre': m['pack_nombre'],
         'pack_contenido': m['pack_contenido'],
         # En que se mide: 'metro' para cintas, cordones y elastico; 'unidad'
         # para el resto.

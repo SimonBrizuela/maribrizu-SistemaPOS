@@ -1,0 +1,212 @@
+/**
+ * Sección Tienda del panel.
+ *
+ * Está en una hoja aparte y no en un <style> dentro de la página como hace el
+ * resto del panel, por dos motivos: las tres pantallas comparten la mitad de
+ * los estilos, y un <style> inyectado en el contenedor se va con la página al
+ * navegar. Eso último es lo que dejaba los botones de "Pedidos de la Tienda"
+ * sin estilo: usan `.pc-btn`, que se define dentro de "Estado de PCs".
+ */
+
+/* ── Botón base (compartido con Pedidos de la Tienda) ────────────────────── */
+.pc-btn {
+  display: flex; align-items: center; justify-content: center; gap: 4px;
+  padding: 7px 8px; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--card-bg); color: var(--text); font-size: 12px;
+  font-weight: 600; cursor: pointer; transition: all .15s; font-family: inherit;
+}
+.pc-btn:hover:not(:disabled) { background: var(--bg); border-color: var(--text-muted); }
+.pc-btn:disabled { opacity: .5; cursor: not-allowed; }
+.pc-btn .material-icons { font-size: 14px !important; }
+.pc-btn.active { background: var(--tint-blue-bg); color: var(--tint-blue-fg); border-color: transparent; }
+.pc-btn.danger { color: var(--tint-red-fg); border-color: rgba(220,53,69,.3); }
+.pc-btn.danger:hover:not(:disabled) { background: rgba(220,53,69,.08); }
+
+/* ── Encabezado con los números de la tienda ─────────────────────────────── */
+.tienda-resumen {
+  display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px; margin-bottom: 16px;
+}
+.tienda-dato {
+  background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 2px;
+}
+.tienda-dato b { font-size: 21px; font-weight: 800; line-height: 1.1; }
+.tienda-dato span { font-size: 12px; color: var(--text-muted); }
+.tienda-dato.alerta b { color: var(--tint-red-fg); }
+
+/* ── Lista de productos ──────────────────────────────────────────────────── */
+.tienda-fila {
+  display: grid;
+  grid-template-columns: 52px minmax(0, 1fr) 110px 92px 108px;
+  gap: 12px; align-items: center;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: 10px; padding: 9px 12px; cursor: pointer;
+  transition: border-color .15s, background .15s;
+}
+.tienda-fila:hover { border-color: var(--text-muted); background: var(--bg); }
+.tienda-fila.oculto { opacity: .62; }
+
+.tienda-foto {
+  width: 52px; height: 52px; border-radius: 8px; object-fit: cover;
+  background: var(--bg); border: 1px solid var(--border);
+}
+.tienda-foto--falta {
+  display: flex; align-items: center; justify-content: center;
+  color: var(--text-muted);
+}
+.tienda-foto--falta .material-icons { font-size: 22px !important; }
+
+.tienda-nombre { font-weight: 600; font-size: 14px; line-height: 1.3; }
+.tienda-sub { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+.tienda-precio { font-weight: 700; font-variant-numeric: tabular-nums; text-align: right; }
+.tienda-stock { font-size: 13px; color: var(--text-muted); text-align: right; font-variant-numeric: tabular-nums; }
+.tienda-stock.cero { color: var(--tint-red-fg); font-weight: 700; }
+
+.tienda-etiqueta {
+  display: inline-flex; align-items: center; gap: 3px; font-size: 10.5px;
+  font-weight: 700; text-transform: uppercase; letter-spacing: .3px;
+  padding: 2px 7px; border-radius: 99px; white-space: nowrap;
+}
+.tienda-etiqueta .material-icons { font-size: 12px !important; }
+.tienda-etiqueta.publicado { background: var(--tint-green-bg); color: var(--tint-green-fg); }
+.tienda-etiqueta.oculto    { background: var(--tint-red-bg);   color: var(--tint-red-fg); }
+.tienda-etiqueta.auto      { background: var(--bg);            color: var(--text-muted); }
+.tienda-etiqueta.destacado { background: var(--tint-yellow-bg); color: var(--tint-yellow-fg); }
+.tienda-etiqueta.sinfoto   { background: var(--bg); color: var(--text-muted); }
+
+/* ── Interruptor ─────────────────────────────────────────────────────────── */
+.tienda-switch {
+  position: relative; width: 42px; height: 24px; border-radius: 99px;
+  border: none; background: var(--border); cursor: pointer; padding: 0;
+  transition: background .18s; flex-shrink: 0;
+}
+.tienda-switch::after {
+  content: ''; position: absolute; top: 3px; left: 3px;
+  width: 18px; height: 18px; border-radius: 50%; background: #fff;
+  transition: transform .18s; box-shadow: 0 1px 3px rgba(0,0,0,.3);
+}
+.tienda-switch[aria-checked="true"] { background: var(--tint-green-fg); }
+.tienda-switch[aria-checked="true"]::after { transform: translateX(18px); }
+.tienda-switch:disabled { opacity: .5; cursor: wait; }
+
+/* ── Editor ──────────────────────────────────────────────────────────────── */
+.tienda-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.45); z-index: 9999;
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.tienda-editor {
+  background: var(--surface); border-radius: 14px; width: 100%; max-width: 720px;
+  max-height: 92vh; display: flex; flex-direction: column;
+  box-shadow: 0 8px 32px rgba(0,0,0,.22);
+}
+.tienda-editor header {
+  display: flex; align-items: flex-start; gap: 12px;
+  padding: 18px 22px; border-bottom: 1px solid var(--border);
+}
+.tienda-editor header h3 { margin: 0; font-size: 16px; font-weight: 700; }
+.tienda-editor header p { margin: 3px 0 0; font-size: 12.5px; color: var(--text-muted); }
+.tienda-editor .cuerpo { padding: 18px 22px; overflow-y: auto; }
+
+/* El enlace al producto del catálogo general: la publicación es una vidriera
+   de algo que vive en otro lado, y desde acá se llega a ese otro lado. */
+.tienda-vinculo {
+  display: inline-flex; align-items: center; gap: 3px; padding: 0;
+  background: none; border: none; cursor: pointer; font: inherit;
+  color: var(--tint-blue-fg); font-weight: 600; text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.tienda-vinculo .material-icons { font-size: 13px !important; }
+.tienda-vinculo:hover { color: #4361ee; }
+.tienda-editor footer {
+  display: flex; gap: 10px; justify-content: flex-end; align-items: center;
+  padding: 14px 22px; border-top: 1px solid var(--border);
+}
+
+.tienda-bloque { margin-bottom: 20px; }
+.tienda-bloque > h4 {
+  margin: 0 0 10px; font-size: 12px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: .5px; color: var(--text-muted);
+}
+.tienda-campo { margin-bottom: 12px; }
+.tienda-campo label { display: block; font-size: 12.5px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; }
+.tienda-campo input[type="text"],
+.tienda-campo input[type="number"],
+.tienda-campo textarea,
+.tienda-campo select {
+  width: 100%; padding: 8px 11px; border: 1.5px solid var(--border); border-radius: 8px;
+  font-size: 14px; font-family: inherit; box-sizing: border-box;
+  background: var(--card-bg); color: var(--text); outline: none;
+}
+.tienda-campo textarea { resize: vertical; min-height: 68px; line-height: 1.45; }
+.tienda-campo input:focus, .tienda-campo textarea:focus, .tienda-campo select:focus { border-color: #4361ee; }
+.tienda-pista { font-size: 11.5px; color: var(--text-muted); margin-top: 4px; line-height: 1.45; }
+.tienda-dos { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+
+/* Grupo de opciones excluyentes (publicar / ocultar / automático) */
+.tienda-opciones { display: flex; gap: 6px; flex-wrap: wrap; }
+.tienda-opcion {
+  flex: 1; min-width: 116px; padding: 9px 10px; border-radius: 8px; cursor: pointer;
+  border: 1.5px solid var(--border); background: var(--card-bg); color: var(--text);
+  font-size: 13px; font-weight: 600; font-family: inherit; text-align: center;
+}
+.tienda-opcion[aria-pressed="true"] { border-color: #4361ee; background: var(--tint-blue-bg); color: var(--tint-blue-fg); }
+
+/* Fotos */
+.tienda-fotos { display: flex; gap: 10px; flex-wrap: wrap; }
+.tienda-foto-item {
+  position: relative; width: 92px; height: 92px; border-radius: 10px;
+  overflow: hidden; border: 1px solid var(--border); background: var(--bg);
+}
+.tienda-foto-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tienda-foto-item .principal {
+  position: absolute; left: 0; bottom: 0; right: 0; text-align: center;
+  background: rgba(0,0,0,.62); color: #fff; font-size: 10px; font-weight: 700;
+  padding: 2px 0; letter-spacing: .3px;
+}
+.tienda-foto-acciones { position: absolute; top: 3px; right: 3px; display: flex; gap: 3px; }
+.tienda-foto-acciones button {
+  width: 22px; height: 22px; border-radius: 6px; border: none; cursor: pointer;
+  background: rgba(0,0,0,.62); color: #fff; display: flex; align-items: center; justify-content: center;
+}
+.tienda-foto-acciones .material-icons { font-size: 14px !important; }
+.tienda-subir {
+  width: 92px; height: 92px; border-radius: 10px; cursor: pointer;
+  border: 1.5px dashed var(--border); background: var(--card-bg); color: var(--text-muted);
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; font-size: 11.5px; font-weight: 600; font-family: inherit;
+}
+.tienda-subir:hover { border-color: #4361ee; color: #4361ee; }
+
+/* Variedades */
+.tienda-variedad {
+  display: grid; grid-template-columns: 42px minmax(0, 1fr) 1fr 84px;
+  gap: 10px; align-items: center; padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+.tienda-variedad:last-child { border-bottom: none; }
+.tienda-variedad .original { font-size: 13px; font-weight: 600; }
+.tienda-variedad .datos { font-size: 11.5px; color: var(--text-muted); }
+.tienda-variedad input {
+  width: 100%; padding: 6px 9px; border: 1.5px solid var(--border); border-radius: 7px;
+  font-size: 13px; font-family: inherit; box-sizing: border-box;
+  background: var(--card-bg); color: var(--text);
+}
+.tienda-variedad.apagada { opacity: .5; }
+
+/* Aviso de estado dentro del editor */
+.tienda-aviso {
+  display: flex; gap: 8px; align-items: flex-start; border-radius: 9px;
+  padding: 10px 12px; font-size: 12.5px; line-height: 1.45; margin-bottom: 16px;
+}
+.tienda-aviso .material-icons { font-size: 17px !important; flex-shrink: 0; }
+.tienda-aviso.ok    { background: var(--tint-green-bg); color: var(--tint-green-fg); }
+.tienda-aviso.freno { background: var(--tint-yellow-bg); color: var(--tint-yellow-fg); }
+
+@media (max-width: 720px) {
+  .tienda-fila { grid-template-columns: 44px minmax(0, 1fr) 92px; row-gap: 8px; }
+  .tienda-fila .tienda-stock { display: none; }
+  .tienda-dos { grid-template-columns: 1fr; }
+  .tienda-variedad { grid-template-columns: 42px minmax(0, 1fr); }
+  .tienda-variedad .datos { grid-column: 2; }
+}

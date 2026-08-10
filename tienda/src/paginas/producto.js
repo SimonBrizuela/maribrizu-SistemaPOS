@@ -8,6 +8,20 @@ import { abrir as abrirCarrito } from '../panel_carrito.js';
 import { montarCinta } from '../cinta.js';
 import { fijarAmbito } from '../sugerencias.js';
 
+/**
+ * Como se nombra el pack entero.
+ *
+ * El panel puede ponerle el nombre que quiera ("Rollo", "Caja de 12"); si no lo
+ * pusieron se usa el tipo que trae el POS, y de ultima "el pack", que sirve
+ * para cualquier cosa.
+ */
+function nombreDelPack(p) {
+  if (p.pack_nombre) return `${/^(el|la|los|las) /i.test(p.pack_nombre) ? '' : 'el '}${p.pack_nombre.toLowerCase()} entero`;
+  if (p.pack_tipo === 'rollo') return 'el rollo entero';
+  if (p.pack_tipo === 'caja') return 'la caja entera';
+  return 'el pack entero';
+}
+
 export async function producto({ montar, params }) {
   const cfg = await cargarConfig();
   const p = await traerProducto(params.id);
@@ -126,9 +140,7 @@ export async function producto({ montar, params }) {
             ${p.precio_pack ? `
               <button class="opcion-pack" data-pack>
                 <span class="opcion-pack__texto">
-                  <span class="opcion-pack__titulo">Llevar ${
-                    p.pack_tipo === 'rollo' ? 'el rollo entero' :
-                    p.pack_tipo === 'caja'  ? 'la caja entera'  : 'el pack entero'
+                  <span class="opcion-pack__titulo">Llevar ${esc(nombreDelPack(p))
                   } · ${p.pack_contenido}${porMetro ? ' m' : ' u'}</span>
                   <span class="opcion-pack__ahorro">${(() => {
                     const suelto = p.precio * p.pack_contenido;
@@ -205,7 +217,7 @@ export async function producto({ montar, params }) {
 
   document.querySelector('[data-pack]')?.addEventListener('click', () => {
     carrito.agregar(p, { esPack: true });
-    avisar(`Agregaste ${p.pack_tipo === 'rollo' ? 'el rollo' : 'la caja'} de ${p.nombre}`, {
+    avisar(`Agregaste ${nombreDelPack(p).replace(/ enter[oa]$/, '')} de ${p.nombre}`, {
       accion: { texto: 'Ver pedido', alHacer: abrirCarrito },
     });
   });

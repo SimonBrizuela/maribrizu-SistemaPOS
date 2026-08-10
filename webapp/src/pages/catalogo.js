@@ -8884,15 +8884,20 @@ export async function renderCatalogo(container, db) {
         setTimeout(() => { try { abrirEditorCompleto(prod); } catch (e) { console.warn('Deep-link a editor falló:', e); } }, 50);
       }
     }
-    // Si venimos del Centro de Compras, botón flotante para pegar la vuelta.
+    // Si venimos de otra página, botón flotante para pegar la vuelta.
     // Vive dentro del container (navegar a otra página lo elimina solo) pero
     // pinta POR ENCIMA del editor de producto (z-index en CSS > modales).
-    if (window.__catalogoVolverA === 'centro_compras') {
+    const VUELTAS = {
+      centro_compras:  'Centro de Compras',
+      tienda_catalogo: 'Catálogo de la Tienda',
+    };
+    if (VUELTAS[window.__catalogoVolverA]) {
+      const destino = window.__catalogoVolverA;
       window.__catalogoVolverA = null;
       const volver = document.createElement('button');
       volver.type = 'button';
       volver.className = 'cat-volver-cc';
-      volver.innerHTML = `<span class="material-icons">arrow_back</span> Volver a Centro de Compras`;
+      volver.innerHTML = `<span class="material-icons">arrow_back</span> Volver a ${VUELTAS[destino]}`;
       volver.addEventListener('click', () => {
         // Los modales del catálogo viven como hijos directos del body: cerrarlos
         // antes de irse para que no queden tapando la otra página.

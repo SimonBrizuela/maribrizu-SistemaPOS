@@ -574,13 +574,25 @@
 
 /* ── Aviso de tienda cerrada ─────────────────────────────────────────────── */
 
-.aviso-cerrada {
-  background: var(--alerta-bg);
-  color: var(--alerta);
+.aviso-cerrada,
+.aviso-banner {
   text-align: center;
   padding: var(--e-3) var(--e-4);
   font-size: var(--t-sm);
   font-weight: var(--peso-semi);
+}
+
+.aviso-cerrada {
+  background: var(--alerta-bg);
+  color: var(--alerta);
+}
+
+/* El aviso que escribe el local desde el panel: "cerramos por vacaciones",
+   "llegaron los cuadernos". Va en el color de la marca y no en el de alerta,
+   que es para cuando algo no se puede hacer. */
+.aviso-banner {
+  background: var(--marca-suave);
+  color: var(--marca-fuerte);
 }
 
 /* ── Cargar más ──────────────────────────────────────────────────────────── */
