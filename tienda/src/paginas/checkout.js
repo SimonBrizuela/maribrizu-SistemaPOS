@@ -507,7 +507,11 @@ function pintarFormulario({ montar, cfg, cambios }) {
           coordenadas: modo === 'delivery' ? destino : null,
           distancia_km: modo === 'delivery' ? cotizacion.km : null,
           // Le dice al local que el numero de envio todavia no es definitivo.
-          envio_a_confirmar: modo === 'delivery' && !gratis && cotizacion.estado !== 'ok',
+          // Sin altura el precio sale del centro de la calle, que puede caer en
+          // otro tramo: el pedido entra con el número que se calculó, pero
+          // marcado para que el local lo revise antes de salir.
+          envio_a_confirmar: modo === 'delivery' && !gratis
+            && (cotizacion.estado !== 'ok' || ubicacion === 'falta_altura'),
           demora_texto: entrega.demora_texto || null,
         },
         pago: { modo: formaPago, pagado: false },
@@ -571,6 +575,15 @@ const AVISOS_DIRECCION = {
     icono: 'atencion',
     texto: 'Ubicamos tu dirección a partir de lo que escribiste. ' +
            'Miralá en el mapa y corregila si no es esa.',
+  },
+  // Elegir la calle sin el número deja la coordenada en el medio de la cuadra
+  // —o de diez cuadras— y de ahí sale lo que paga de envío. Se pide el número
+  // en vez de cobrar un precio sacado de un punto que nadie eligió.
+  falta_altura: {
+    clase: 'direccion-estado--aprox',
+    icono: 'atencion',
+    texto: 'Falta la altura. Escribí el número de la puerta para que el envío ' +
+           'salga exacto.',
   },
   no_ubicada: {
     clase: '',

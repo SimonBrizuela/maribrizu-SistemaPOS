@@ -144,10 +144,15 @@ async function resolver(placeId, clave, sesion) {
   const url = `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`
             + (sesion ? `?sessionToken=${encodeURIComponent(sesion)}` : '');
 
+  // `addressComponents` es lo unico que dice con certeza si la direccion tiene
+  // altura. Sin ella, la coordenada es el centro de la calle: "Zorrilla de San
+  // Martin" son diez cuadras y la tienda cotizaba $1.500 con total confianza
+  // sobre un punto que el cliente no eligio. Mirar si el texto tiene un numero
+  // no alcanza — "9 de Julio" tiene uno y no es la altura.
   const respuesta = await fetch(url, {
     headers: {
       'X-Goog-Api-Key': clave,
-      'X-Goog-FieldMask': 'location,formattedAddress',
+      'X-Goog-FieldMask': 'location,formattedAddress,addressComponents',
     },
   });
 
@@ -157,7 +162,10 @@ async function resolver(placeId, clave, sesion) {
   }
 
   const datos = await respuesta.json();
-  return conCoordenadas(datos?.formattedAddress, datos?.location);
+  const tieneAltura = (datos?.addressComponents || [])
+    .some(c => (c.types || []).includes('street_number'));
+
+  return { ...conCoordenadas(datos?.formattedAddress, datos?.location), altura: tieneAltura };
 }
 
 /* ── Direccion escrita a mano ─────────────────────────────────────────────── */

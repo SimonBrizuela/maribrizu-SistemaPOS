@@ -158,7 +158,23 @@ export function montarDirecciones(input, alCambiar) {
       sesion = nuevaSesion();
 
       if (Number.isFinite(datos.lat) && Number.isFinite(datos.lng)) {
-        alCambiar({ estado: 'ubicada', direccion: input.value, lat: datos.lat, lng: datos.lng });
+        // Sin altura, la coordenada es el centro de la calle. "Zorrilla de San
+        // Martín" son diez cuadras y puede cruzar de tramo de envío: se pide el
+        // número en vez de cobrar un precio sacado de un punto que el cliente
+        // no eligió. El pedido puede entrar igual; el envío queda a confirmar.
+        alCambiar({
+          estado: datos.altura === false ? 'falta_altura' : 'ubicada',
+          direccion: input.value,
+          lat: datos.lat,
+          lng: datos.lng,
+        });
+
+        if (datos.altura === false) {
+          // El cursor va al final para que escribir el número sea seguir
+          // tipeando, no buscar dónde tocar.
+          input.focus();
+          input.setSelectionRange(input.value.length, input.value.length);
+        }
       }
     } catch (err) {
       console.warn('[direcciones] no se pudo resolver el lugar:', err);
