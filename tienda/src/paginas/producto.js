@@ -204,7 +204,20 @@ export async function producto({ montar, params }) {
               </a>
             </div>`
           : `
-            ${porMetro ? '<div data-cinta></div>' : ''}
+            ${porMetro ? '<div data-cinta></div>' : `
+              <div class="cantidad" data-cantidad>
+                <span class="cantidad__label" id="tit-cantidad">Cuántos llevás</span>
+                <div class="contador contador--grande" role="group" aria-labelledby="tit-cantidad">
+                  <button class="contador__boton" data-menos aria-label="Uno menos">
+                    ${icono('menos', { tam: 18, grosor: 2.5 })}
+                  </button>
+                  <span class="contador__valor" data-valor aria-live="polite">1</span>
+                  <button class="contador__boton" data-mas aria-label="Uno más">
+                    ${icono('mas', { tam: 18, grosor: 2.5 })}
+                  </button>
+                </div>
+                <span class="cantidad__tope" data-tope></span>
+              </div>`}
             <button class="boton boton--primario boton--grande boton--bloque" data-agregar>
               ${icono('carrito', { tam: 20 })} <span data-etiqueta-agregar>Agregar al pedido</span>
             </button>
@@ -274,35 +287,90 @@ export async function producto({ montar, params }) {
           : (compacto ? `· ${cuantasHay} disponibles` : '');
       }
 
-      const v = variedades.find(x => x.nombre === elegida);
-      if (v && v.precio) cajaPrecio.textContent = pesos(v.precio);
-      else cajaPrecio.textContent = pesos(p.precio);
+      cajaPrecio.textContent = pesos(precioActual());
+      // El contador se rehace con el stock y el precio de esta variedad: si de
+      // celeste hay 12, el tope pasa a ser 12 y el total del botón cambia.
+      pintarCantidad();
     });
   });
 
-  // ── Cinta métrica ───────────────────────────────────────────────────────
-  // Arranca en el mínimo que se despacha, no en un metro: si el corte mínimo
-  // son 3 m, mostrar 1 m es ofrecer algo que después no se puede comprar.
+  /* ── Cuántos lleva ──────────────────────────────────────────────────────
+     Lo que se corta del rollo se elige con la cinta métrica; lo demás, con un
+     contador. Los dos arrancan en el mínimo que se despacha —mostrar 1 cuando
+     el mínimo son 3 es ofrecer algo que después no se puede comprar— y ninguno
+     de los dos deja bajar de ahí.
+
+     El techo es el stock de la variedad elegida, no el del producto: la
+     cartulina tiene 1.180 en total y 12 celestes, y prometer 30 celestes
+     termina en una llamada incómoda. Por eso el contador se rearma cada vez que
+     se elige un color. */
   const minimo = carrito.minimoDe(p);
-  let metros = Math.max(minimo, Math.min(1, p.stock));
+  const paso = carrito.pasoDe(p);
   const cajaCinta = document.querySelector('[data-cinta]');
+  const cajaCantidad = document.querySelector('[data-cantidad]');
   const etiqueta = document.querySelector('[data-etiqueta-agregar]');
+
+  let cuantos = minimo;
+  let metros = Math.max(minimo, Math.min(1, p.stock));
+
+  /** El stock que corresponde: el de la variedad elegida, o el del producto. */
+  function stockDisponible() {
+    const v = variedades.find(x => x.nombre === elegida);
+    return v ? v.stock : p.stock;
+  }
+
+  /** El precio que corresponde: algunas variedades tienen el suyo. */
+  function precioActual() {
+    const v = variedades.find(x => x.nombre === elegida);
+    return (v && v.precio) ? v.precio : p.precio;
+  }
+
+  function pintarCantidad() {
+    if (!cajaCantidad) return;
+
+    const tope = Math.max(minimo, Math.floor(stockDisponible() / paso) * paso);
+    cuantos = Math.min(tope, Math.max(minimo, cuantos));
+
+    cajaCantidad.querySelector('[data-valor]').textContent =
+      Number.isInteger(cuantos) ? String(cuantos) : cuantos.toFixed(1).replace('.', ',');
+    cajaCantidad.querySelector('[data-menos]').disabled = cuantos <= minimo;
+    cajaCantidad.querySelector('[data-mas]').disabled = cuantos >= tope;
+
+    // El renglón de abajo explica el freno en vez de dejar un botón muerto.
+    const tomo = cajaCantidad.querySelector('[data-tope]');
+    tomo.textContent = cuantos >= tope && tope < 99
+      ? `Es todo lo que hay${elegida ? ` de ${elegida.toLowerCase()}` : ''}`
+      : (minimo > 1 ? `Mínimo ${minimo}` : '');
+
+    etiqueta.textContent = `Agregar ${cuantos} · ${pesos(precioActual() * cuantos)}`;
+  }
+
+  cajaCantidad?.addEventListener('click', ev => {
+    if (ev.target.closest('[data-menos]')) cuantos = Math.max(minimo, cuantos - paso);
+    else if (ev.target.closest('[data-mas]')) cuantos += paso;
+    else return;
+    // Los flotantes dejan restos al sumar de a 0,5.
+    cuantos = Math.round(cuantos * 10) / 10;
+    pintarCantidad();
+  });
 
   if (cajaCinta) {
     montarCinta(cajaCinta, {
       max: p.stock,
       valor: metros,
-      paso: carrito.pasoDe(p),
+      paso,
       minimo,
       alCambiar: m => {
         metros = m;
         // El botón dice cuánto se lleva y cuánto sale: sin eso hay que hacer la
         // multiplicación de cabeza antes de tocarlo.
         const texto = m.toFixed(1).replace('.', ',');
-        etiqueta.textContent = `Agregar ${texto} m · ${pesos(p.precio * m)}`;
+        etiqueta.textContent = `Agregar ${texto} m · ${pesos(precioActual() * m)}`;
       },
     });
   }
+
+  pintarCantidad();
 
   document.querySelector('[data-pack]')?.addEventListener('click', () => {
     carrito.agregar(p, { esPack: true });
@@ -316,7 +384,12 @@ export async function producto({ montar, params }) {
       document.querySelector('[data-variedad]:not([disabled])')?.focus();
       return;
     }
-    carrito.agregar(p, { variedad: elegida, cantidad: porMetro ? metros : null });
+    carrito.agregar(p, { variedad: elegida, cantidad: porMetro ? metros : cuantos });
+
+    // El contador vuelve al mínimo: dejarlo en 6 hace que el próximo toque
+    // sume otros 6 sin que nadie lo haya pedido.
+    cuantos = minimo;
+    pintarCantidad();
   });
 
   /* ── Relacionados ───────────────────────────────────────────────────────── */

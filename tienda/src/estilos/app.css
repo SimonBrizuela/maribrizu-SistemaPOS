@@ -590,6 +590,38 @@
 .aviso-minimo svg { flex: none; }
 .aviso-minimo strong { font-weight: var(--peso-bold); }
 
+/* ── Cuántos llevás ───────────────────────────────────────────────────────
+   El contador de la ficha. Es el mismo del carrito pero más grande: acá es la
+   decisión principal de la pantalla, allá es un ajuste. */
+
+.cantidad {
+  display: flex;
+  align-items: center;
+  gap: var(--e-3);
+  flex-wrap: wrap;
+}
+.cantidad__label {
+  font-size: var(--t-sm);
+  font-weight: var(--peso-semi);
+  color: var(--text-2);
+}
+.cantidad__tope {
+  font-size: var(--t-xs);
+  color: var(--text-3);
+  /* Ocupa su lugar aunque esté vacío: sin esto el botón de agregar salta un
+     renglón cada vez que se llega al tope. */
+  min-height: 1em;
+  flex: 1;
+  text-align: right;
+}
+
+.contador--grande .contador__boton { width: 46px; height: 46px; }
+.contador--grande .contador__valor {
+  min-width: 52px;
+  font-size: var(--t-lg);
+  font-weight: var(--peso-bold);
+}
+
 /* ══ La barra del pedido ══════════════════════════════════════════════════
    Lo que se va llevando, siempre a la vista. Antes había un aviso que se iba a
    los tres segundos: para saber qué llevabas había que abrir el carrito, y para

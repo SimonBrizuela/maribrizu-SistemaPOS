@@ -192,7 +192,7 @@ export function montarCinta(caja, { max, valor = 1, paso = 0.5, minimo = 0, alCa
       ArrowLeft: -PASO, ArrowDown: -PASO,
       PageUp: 1, PageDown: -1,
     };
-    if (ev.key === 'Home') { ev.preventDefault(); return fijar(PASO); }
+    if (ev.key === 'Home') { ev.preventDefault(); return fijar(PISO); }
     if (ev.key === 'End') { ev.preventDefault(); return fijar(tope); }
     if (!(ev.key in saltos)) return;
     ev.preventDefault();
