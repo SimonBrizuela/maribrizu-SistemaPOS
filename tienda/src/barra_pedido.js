@@ -28,6 +28,16 @@ import { abrir as abrirCarrito, estaAbierto } from './panel_carrito.js';
 // muestra "+N" en la última.
 const FOTOS_VISIBLES = 4;
 
+// Dónde no va. En el checkout el pedido está ahí arriba, en grande y con el
+// total: repetirlo abajo no agrega nada y encima tapa las opciones de entrega,
+// que es lo que hay que tocar. En la pantalla del pedido confirmado, lo mismo.
+const RUTAS_SIN_BARRA = ['/checkout', '/pedido'];
+
+function rutaLaEsconde() {
+  const camino = location.pathname;
+  return RUTAS_SIN_BARRA.some(r => camino === r || camino.startsWith(`${r}/`));
+}
+
 let barra = null;
 let ultimaClave = null;
 let cantidadAnterior = 0;
@@ -52,8 +62,9 @@ export function iniciarBarraPedido() {
 function pintar(renglones) {
   if (!barra) return;
 
-  // Con el pedido abierto la barra sobra: se está viendo lo mismo en grande.
-  const mostrar = renglones.length > 0 && !estaAbierto();
+  // Con el pedido abierto —el panel o la pantalla del checkout— la barra sobra:
+  // se está viendo lo mismo en grande.
+  const mostrar = renglones.length > 0 && !estaAbierto() && !rutaLaEsconde();
 
   if (!mostrar) {
     barra.classList.remove('barra-pedido--visible');
