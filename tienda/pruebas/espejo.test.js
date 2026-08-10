@@ -109,3 +109,28 @@ describe('lo que decide el panel', () => {
     expect(documentoEspejo(de('p4')).tokens).not.toContain('de');
   });
 });
+
+describe('de a cuánto se vende', () => {
+  const de = id => casos.find(c => c.doc_id === id).datos;
+
+  it('sin configurar, de a uno', () => {
+    expect(documentoEspejo(de('p1'))).toMatchObject({ minimo: 1, paso: 1 });
+  });
+
+  it('lo que se corta del rollo, de a medio metro', () => {
+    expect(documentoEspejo(de('p2'))).toMatchObject({ minimo: 0.5, paso: 0.5 });
+  });
+
+  it('respeta el mínimo y el paso que puso el panel', () => {
+    expect(documentoEspejo(de('p7'))).toMatchObject({ minimo: 12, paso: 6 });
+  });
+
+  it('un mínimo en metros conserva el paso de medio metro', () => {
+    expect(documentoEspejo(de('p8'))).toMatchObject({ minimo: 3, paso: 0.5 });
+  });
+
+  it('un mínimo que no cae en un paso se sube al siguiente', () => {
+    // Con mínimo 5 y paso 2 se salta de 4 a 6: el 5 no existe nunca.
+    expect(documentoEspejo(de('p9'))).toMatchObject({ minimo: 6, paso: 2 });
+  });
+});

@@ -146,6 +146,7 @@ export function medidasDe(datos) {
       unidad, precio: Math.round(precioVenta), precio_pack: null,
       pack_tipo: null, pack_nombre: null, pack_contenido: null,
       stock: Math.max(0, Math.trunc(numero(datos, 'stock'))), variedades: [],
+      ...ventaMinima(datos, unidad),
     };
   }
 
@@ -175,7 +176,40 @@ export function medidasDe(datos) {
     pack_contenido: hayPack ? contenido : null,
     stock: Math.max(0, stock),
     variedades,
+    ...ventaMinima(datos, unidad),
   };
+}
+
+/**
+ * De a cuánto se vende esto en la tienda.
+ *
+ * En el mostrador atender una venta cuesta cero: la persona ya está ahí. Un
+ * pedido online no — hay que leerlo, recorrer el local juntando las cosas,
+ * embalarlo y despacharlo. Vender un mapa de $100 que deja $40 no paga ni el
+ * minuto de ir a buscarlo.
+ *
+ * Los dos números van en la unidad del producto: metros para lo que se corta
+ * del rollo, unidades para el resto. Sin configurar queda como estaba —de a
+ * uno, medio metro para lo que se mide—, así que esto no cambia nada hasta que
+ * alguien lo toque. `scripts/estudio_minimos.py` calcula el valor que le
+ * corresponde a cada producto según lo que deja.
+ */
+export function ventaMinima(datos, unidad) {
+  const natural = unidad === 'metro' ? 0.5 : 1;
+
+  const positivo = (clave, porDefecto) => {
+    const v = Number(datos?.[clave]);
+    return Number.isFinite(v) && v > 0 ? v : porDefecto;
+  };
+
+  const paso = positivo('tienda_paso', natural);
+  let minimo = positivo('tienda_minimo', paso);
+
+  // El mínimo tiene que caer justo en un paso, o no se puede llegar con los
+  // botones: con mínimo 3 y paso 2 se salta de 2 a 4 y el 3 no existe nunca.
+  if (minimo % paso) minimo = Math.ceil(minimo / paso) * paso;
+
+  return { minimo: Math.round(minimo * 100) / 100, paso: Math.round(paso * 100) / 100 };
 }
 
 /** El documento tal cual va a `tienda_productos`. Gemelo de armar_documento(). */
@@ -198,6 +232,9 @@ export function documentoEspejo(datos) {
     pack_nombre: m.pack_nombre,
     pack_contenido: m.pack_contenido,
     unidad: m.unidad,
+    // De a cuánto se vende: lo mínimo que se puede llevar y de a cuánto sube.
+    minimo: m.minimo,
+    paso: m.paso,
     stock: m.stock,
     rubro: String(datos?.rubro ?? '').trim().toUpperCase(),
     categoria: nombreBonito(datos?.categoria),

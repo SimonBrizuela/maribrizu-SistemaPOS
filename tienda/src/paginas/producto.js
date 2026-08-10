@@ -22,6 +22,27 @@ function nombreDelPack(p) {
   return 'el pack entero';
 }
 
+/**
+ * "Se vende de a 5" bajo el precio.
+ *
+ * Hay productos que en el mostrador se llevan de a uno y por la web no: un
+ * pedido cuesta el mismo trabajo valga $100 o $10.000, y buscar una sola goma
+ * entre dos mil cuatrocientos productos no lo paga nadie. Cuando hay un mínimo
+ * tiene que leerse junto al precio, no descubrirse en el carrito.
+ */
+function textoMinimo(p) {
+  const minimo = carrito.minimoDe(p);
+  if (minimo <= (p.unidad === 'metro' ? 0.5 : 1)) return '';
+
+  const cuanto = p.unidad === 'metro'
+    ? `${minimo.toFixed(1).replace('.', ',')} m`
+    : `${minimo} unidades`;
+
+  return `<p style="color:var(--text-2);font-size:var(--t-sm);margin-top:var(--e-1)">
+            Se vende desde ${cuanto} · ${pesos(p.precio * minimo)}
+          </p>`;
+}
+
 export async function producto({ montar, params }) {
   const cfg = await cargarConfig();
   const p = await traerProducto(params.id);
@@ -113,6 +134,7 @@ export async function producto({ montar, params }) {
               porMetro ? '<small style="font-size:var(--t-base);font-weight:600;color:var(--text-2)"> el metro</small>' : ''
             }</div>
             ${estadoStock}
+            ${textoMinimo(p)}
           </div>
 
           ${p.descripcion ? `<p style="color:var(--text-2);line-height:var(--alto-suelto)">${esc(p.descripcion)}</p>` : ''}
@@ -197,14 +219,19 @@ export async function producto({ montar, params }) {
   });
 
   // ── Cinta métrica ───────────────────────────────────────────────────────
-  let metros = 1;
+  // Arranca en el mínimo que se despacha, no en un metro: si el corte mínimo
+  // son 3 m, mostrar 1 m es ofrecer algo que después no se puede comprar.
+  const minimo = carrito.minimoDe(p);
+  let metros = Math.max(minimo, Math.min(1, p.stock));
   const cajaCinta = document.querySelector('[data-cinta]');
   const etiqueta = document.querySelector('[data-etiqueta-agregar]');
 
   if (cajaCinta) {
     montarCinta(cajaCinta, {
       max: p.stock,
-      valor: Math.min(1, p.stock),
+      valor: metros,
+      paso: carrito.pasoDe(p),
+      minimo,
       alCambiar: m => {
         metros = m;
         // El botón dice cuánto se lleva y cuánto sale: sin eso hay que hacer la
@@ -230,8 +257,13 @@ export async function producto({ montar, params }) {
       document.querySelector('[data-variedad]:not([disabled])')?.focus();
       return;
     }
-    carrito.agregar(p, { variedad: elegida, cantidad: porMetro ? metros : 1 });
-    avisar(`Agregaste ${porMetro ? `${metros.toFixed(1).replace('.', ',')} m de ` : ''}${p.nombre}${elegida ? ` · ${elegida}` : ''}`, {
+    carrito.agregar(p, { variedad: elegida, cantidad: porMetro ? metros : null });
+    // Cuánto entró: los metros elegidos, o el mínimo del producto cuando se
+    // vende por unidad y ese mínimo no es uno.
+    const cuanto = porMetro
+      ? `${metros.toFixed(1).replace('.', ',')} m de `
+      : (minimo > 1 ? `${minimo} × ` : '');
+    avisar(`Agregaste ${cuanto}${p.nombre}${elegida ? ` · ${elegida}` : ''}`, {
       accion: { texto: 'Ver pedido', alHacer: abrirCarrito },
     });
   });

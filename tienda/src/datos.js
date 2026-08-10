@@ -57,6 +57,10 @@ const CONFIG_POR_DEFECTO = {
     ],
     envio_gratis_desde: null,
     demora_texto: '24 a 48 hs',
+    // Monto mínimo del pedido. Preparar uno cuesta lo mismo valga $500 o
+    // $50.000: leerlo, juntar las cosas, embalarlo, avisar. Sin un piso, los
+    // pedidos chicos dejan pérdida. En cero no se exige nada.
+    pedido_minimo: 0,
   },
   // Datos para transferir. Mientras no estén cargados el checkout dice que se
   // pasan al confirmar, en vez de mostrar un alias vacío.
@@ -124,6 +128,10 @@ function armarProducto(snap) {
     precio_anterior: d.precio_anterior ? Number(d.precio_anterior) : null,
     // 'metro' para lo que se corta del rollo, 'unidad' para el resto.
     unidad: d.unidad === 'metro' ? 'metro' : 'unidad',
+    // De a cuanto se vende. Lo decide el panel por producto; sin configurar
+    // queda en uno, o medio metro para lo que se mide.
+    minimo: Number(d.minimo) > 0 ? Number(d.minimo) : null,
+    paso: Number(d.paso) > 0 ? Number(d.paso) : null,
     // Lo que sale el rollo o la caja entera, cuando existe.
     precio_pack: d.precio_pack ? Number(d.precio_pack) : null,
     pack_tipo: d.pack_tipo || null,

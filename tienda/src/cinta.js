@@ -6,27 +6,39 @@
  * igual que cuando la vendedora estira el metro sobre el mostrador: el número
  * grande está para leerlo, la cinta está para entenderlo.
  *
- * Se arrastra con el dedo o se ajusta con los botones. El paso es medio metro,
- * que es como se corta en el local.
+ * Se arrastra con el dedo o se ajusta con los botones. El paso es medio metro
+ * —que es como se corta en el local— salvo que el panel le fije otro al
+ * producto, junto con el largo mínimo que se despacha.
  */
 import { icono } from './iconos.js';
 
 const PX_METRO = 88;
-const PASO = 0.5;
 
 /**
  * @param {HTMLElement} caja      dónde se dibuja
  * @param {object} opciones
- * @param {number} opciones.max   metros disponibles
+ * @param {number} opciones.max      metros disponibles
  * @param {number} [opciones.valor=1]
+ * @param {number} [opciones.paso=0.5]    de a cuánto sube
+ * @param {number} [opciones.minimo]      largo mínimo que se vende
  * @param {(metros:number)=>void} opciones.alCambiar
  */
-export function montarCinta(caja, { max, valor = 1, alCambiar }) {
-  const tope = Math.max(PASO, Math.floor(max / PASO) * PASO);
-  let metros = Math.min(tope, Math.max(PASO, valor));
+export function montarCinta(caja, { max, valor = 1, paso = 0.5, minimo = 0, alCambiar }) {
+  const PASO = paso > 0 ? paso : 0.5;
+  const PISO = Math.max(PASO, minimo || PASO);
+  const tope = Math.max(PISO, Math.floor(max / PASO) * PASO);
+  let metros = Math.min(tope, Math.max(PISO, valor));
 
   // Se arranca en 1 m cuando hay stock: a 0,5 la chapita del arranque queda
   // pegada al cursor y no se ve cuánta cinta hay para el otro lado.
+
+  // El texto de abajo dice el mínimo cuando hay uno: enterarse de que no se
+  // puede bajar de 3 m recién cuando el botón deja de responder es peor que
+  // leerlo antes.
+  const largo = m => `${m.toFixed(1).replace('.', ',')} m`;
+  const AYUDA = PISO > PASO
+    ? `Se corta desde ${largo(PISO)}, de a ${largo(PASO)}. Arrastrá la cinta o escribí el largo.`
+    : 'Arrastrá la cinta, usá los botones, o escribí el largo exacto.';
 
   // Se dibujan las marcas de metro entero hasta un poco más allá del tope, para
   // que al llegar al final la cinta no termine en el vacío.
@@ -39,7 +51,7 @@ export function montarCinta(caja, { max, valor = 1, alCambiar }) {
   caja.innerHTML = `
     <div class="cinta cinta--animada" role="slider" tabindex="0"
          aria-label="Cuántos metros llevás"
-         aria-valuemin="${PASO}" aria-valuemax="${tope}"
+         aria-valuemin="${PISO}" aria-valuemax="${tope}"
          aria-valuenow="${metros}" aria-valuetext="${texto(metros)}">
       <div class="cinta__regla" style="width:${(Math.ceil(tope) + 2) * PX_METRO}px">
         <span class="cinta__inicio"></span>
@@ -49,7 +61,7 @@ export function montarCinta(caja, { max, valor = 1, alCambiar }) {
     </div>
 
     <div class="cinta-control">
-      <button class="contador__boton" data-menos aria-label="Medio metro menos"
+      <button class="contador__boton" data-menos aria-label="Menos ${texto(PASO)}"
               style="border:1.5px solid var(--borde-control);border-radius:var(--r-full);width:44px;height:44px">
         ${icono('menos', { tam: 18, grosor: 2.5 })}
       </button>
@@ -57,14 +69,12 @@ export function montarCinta(caja, { max, valor = 1, alCambiar }) {
       <input class="cinta-valor" id="cinta-metros" data-valor
              type="text" inputmode="decimal" autocomplete="off"
              aria-describedby="cinta-ayuda">
-      <button class="contador__boton" data-mas aria-label="Medio metro más"
+      <button class="contador__boton" data-mas aria-label="Más ${texto(PASO)}"
               style="border:1.5px solid var(--borde-control);border-radius:var(--r-full);width:44px;height:44px">
         ${icono('mas', { tam: 18, grosor: 2.5 })}
       </button>
     </div>
-    <p class="cinta-ayuda" id="cinta-ayuda">
-      Arrastrá la cinta, usá los botones, o escribí el largo exacto.
-    </p>`;
+    <p class="cinta-ayuda" id="cinta-ayuda">${AYUDA}</p>`;
 
   const cinta = caja.querySelector('.cinta');
   const regla = caja.querySelector('.cinta__regla');
@@ -83,7 +93,7 @@ export function montarCinta(caja, { max, valor = 1, alCambiar }) {
     if (document.activeElement !== salida) {
       salida.value = metros.toFixed(1).replace('.', ',');
     }
-    menos.disabled = metros <= PASO;
+    menos.disabled = metros <= PISO;
     mas.disabled = metros >= tope;
     cinta.setAttribute('aria-valuenow', String(metros));
     cinta.setAttribute('aria-valuetext', texto(metros));
@@ -92,7 +102,7 @@ export function montarCinta(caja, { max, valor = 1, alCambiar }) {
 
   function fijar(nuevo, redondear = true) {
     const bruto = redondear ? Math.round(nuevo / PASO) * PASO : nuevo;
-    const acotado = Math.min(tope, Math.max(PASO, bruto));
+    const acotado = Math.min(tope, Math.max(PISO, bruto));
     // Los flotantes dejan restos tipo 2.4000000000000004; un decimal alcanza
     // para medio metro y evita que el precio salga con centavos fantasma.
     const limpio = Math.round(acotado * 10) / 10;
@@ -118,7 +128,7 @@ export function montarCinta(caja, { max, valor = 1, alCambiar }) {
       salida.value = metros.toFixed(1).replace('.', ',');
       return;
     }
-    const acotado = Math.min(tope, Math.max(PASO, Math.round(n * 10) / 10));
+    const acotado = Math.min(tope, Math.max(PISO, Math.round(n * 10) / 10));
     metros = acotado;
     pintar();
     // Si se paso del rollo, se avisa en vez de corregir en silencio: quien
@@ -127,10 +137,13 @@ export function montarCinta(caja, { max, valor = 1, alCambiar }) {
       salida.setAttribute('aria-invalid', 'true');
       caja.querySelector('.cinta-ayuda').textContent =
         `En el rollo quedan ${tope.toFixed(1).replace('.', ',')} m. Lo ajustamos a eso.`;
-    } else {
+    } else if (n < PISO) {
       salida.removeAttribute('aria-invalid');
       caja.querySelector('.cinta-ayuda').textContent =
-        'Arrastrá la cinta, usá los botones, o escribí el largo exacto.';
+        `El corte mínimo es de ${largo(PISO)}. Lo ajustamos a eso.`;
+    } else {
+      salida.removeAttribute('aria-invalid');
+      caja.querySelector('.cinta-ayuda').textContent = AYUDA;
     }
   }
 

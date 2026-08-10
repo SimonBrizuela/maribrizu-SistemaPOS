@@ -18,6 +18,7 @@ tareas de Windows en la PC del local, cada 15 minutos.
     python scripts/sync_tienda.py --simular  # muestra que haria, sin escribir
 """
 import argparse
+import math
 import os
 import re
 import sys
@@ -153,6 +154,7 @@ def medidas_de(datos):
             'unidad': unidad, 'precio': round(precio_venta), 'precio_pack': None,
             'pack_tipo': None, 'pack_nombre': None, 'pack_contenido': None,
             'stock': max(0, int(numero('stock'))), 'variedades': [],
+            **venta_minima(datos, unidad),
         }
 
     # `conjunto_tipo: unidad` con contenido 1 no es un pack: es un producto
@@ -189,7 +191,48 @@ def medidas_de(datos):
         'pack_contenido': contenido if hay_pack else None,
         'stock': max(0, stock),
         'variedades': variedades,
+        **venta_minima(datos, unidad),
     }
+
+
+def venta_minima(datos, unidad):
+    """
+    De a cuanto se vende esto en la tienda.
+
+    En el mostrador atender una venta cuesta cero: la persona ya esta ahi. Un
+    pedido online no: hay que leerlo, recorrer el local juntando las cosas,
+    embalarlo y despacharlo. Vender un mapa de $100 que deja $40 no paga ni el
+    minuto de ir a buscarlo.
+
+    Dos numeros, los dos configurables desde el panel por producto:
+
+      minimo — cuanto hay que llevar como poco
+      paso   — de a cuanto se suma o se resta
+
+    Van en la unidad del producto: para una cinta que se corta del rollo son
+    metros, para lo demas unidades. Sin configurar, queda como estaba: de a uno,
+    y medio metro para lo que se mide. `scripts/estudio_minimos.py` calcula que
+    valor le corresponde a cada producto segun lo que deja.
+    """
+    paso_natural = 0.5 if unidad == 'metro' else 1
+
+    def numero(clave, por_defecto):
+        try:
+            v = float(datos.get(clave))
+            return v if v > 0 else por_defecto
+        except (TypeError, ValueError):
+            return por_defecto
+
+    paso = numero('tienda_paso', paso_natural)
+    minimo = numero('tienda_minimo', paso)
+
+    # El minimo tiene que caer justo en un paso, o el cliente no puede llegar a
+    # el con los botones: con minimo 3 y paso 2 se pasa de 2 a 4 y el 3 no
+    # existe. Se sube al paso siguiente.
+    if minimo % paso:
+        minimo = math.ceil(minimo / paso) * paso
+
+    return {'minimo': round(minimo, 2), 'paso': round(paso, 2)}
 
 
 def variedades_de(datos):
@@ -330,6 +373,10 @@ def armar_documento(doc_id, datos):
         # En que se mide: 'metro' para cintas, cordones y elastico; 'unidad'
         # para el resto.
         'unidad': m['unidad'],
+        # De a cuanto se vende: lo minimo que se puede llevar y de a cuanto
+        # sube. Un pedido online cuesta trabajo aunque sea de $100.
+        'minimo': m['minimo'],
+        'paso': m['paso'],
         'stock': m['stock'],
         'rubro': str(datos.get('rubro') or '').strip().upper(),
         'categoria': nombre_bonito(datos.get('categoria')),

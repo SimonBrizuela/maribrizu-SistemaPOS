@@ -363,6 +363,22 @@ function abrirEditor(p) {
                    value="${escHtml(String(p.datos.tienda_pack_nombre || ''))}"
                    placeholder="${escHtml(nombreBonito(String(p.datos.conjunto_tipo || 'pack')))}">
           </div>
+
+          <div class="tienda-dos">
+            <div class="tienda-campo">
+              <label>Mínimo que se puede llevar</label>
+              <input type="number" id="edMinimo" min="0" step="0.5"
+                     value="${escHtml(String(p.datos.tienda_minimo ?? ''))}"
+                     placeholder="${m.unidad === 'metro' ? '0,5' : '1'}">
+            </div>
+            <div class="tienda-campo">
+              <label>De a cuánto sube</label>
+              <input type="number" id="edPaso" min="0" step="0.5"
+                     value="${escHtml(String(p.datos.tienda_paso ?? ''))}"
+                     placeholder="${m.unidad === 'metro' ? '0,5' : '1'}">
+            </div>
+          </div>
+          <div class="tienda-pista" id="edMinimoPista"></div>
           <div class="tienda-pista">
             ${m.precio_pack
               ? `Hoy se ofrece el ${escHtml((m.pack_nombre || '').toLowerCase())} de
@@ -452,6 +468,41 @@ function abrirEditor(p) {
   }
   $('#edPack').addEventListener('change', pintarPackNombre);
   pintarPackNombre();
+
+  /* ── De a cuánto se vende ── */
+  // Un pedido online cuesta el mismo trabajo valga $500 o $50.000: leerlo,
+  // buscar la cosa entre miles, embalarla, despacharla. Hay productos que en el
+  // mostrador se llevan de a uno y por la web no pagan ni el minuto de ir a
+  // buscarlos. Acá se ve en pesos cuánto deja el mínimo elegido, que es la
+  // única forma de decidirlo sin adivinar.
+  function pintarMinimo() {
+    const unidad = $('#edUnidad').value || m.unidad;
+    const natural = unidad === 'metro' ? 0.5 : 1;
+    const paso = Number($('#edPaso').value) > 0 ? Number($('#edPaso').value) : natural;
+    let minimo = Number($('#edMinimo').value) > 0 ? Number($('#edMinimo').value) : paso;
+    if (minimo % paso) minimo = Math.ceil(minimo / paso) * paso;
+
+    const comoSeVende = unidad === 'metro'
+      ? `desde ${String(minimo).replace('.', ',')} m, de a ${String(paso).replace('.', ',')} m`
+      : `desde ${minimo} ${minimo === 1 ? 'unidad' : 'unidades'}` +
+        (paso > 1 ? `, de a ${paso}` : '');
+
+    const ajustado = Number($('#edMinimo').value) > 0 && minimo !== Number($('#edMinimo').value)
+      ? ` El mínimo se subió a ${String(minimo).replace('.', ',')} para que caiga justo en un paso.`
+      : '';
+
+    $('#edMinimoPista').innerHTML =
+      `Se vende ${escHtml(comoSeVende)}: el renglón más chico queda en
+       <b>${pesos(m.precio * minimo)}</b>.${escHtml(ajustado)}
+       ${p.medidas.stock < minimo
+         ? '<b style="color:var(--tint-red-fg)"> No hay stock suficiente para ese mínimo:'
+           + ' el producto no se va a poder comprar.</b>' : ''}
+       En blanco queda como siempre: de a ${unidad === 'metro' ? 'medio metro' : 'uno'}.`;
+  }
+  ['#edMinimo', '#edPaso', '#edUnidad'].forEach(sel =>
+    $(sel).addEventListener('input', pintarMinimo));
+  $('#edUnidad').addEventListener('change', pintarMinimo);
+  pintarMinimo();
 
   /* ── Fotos ── */
   function pintarFotos() {
@@ -617,6 +668,8 @@ function abrirEditor(p) {
     const packNombre = $('#edPackNombre').value.trim();
     const unidad = $('#edUnidad').value;
     const pack = $('#edPack').value;
+    const minimo = Number($('#edMinimo').value) || 0;
+    const paso = Number($('#edPaso').value) || 0;
 
     try {
       const { publicado, motivo } = await guardar(p, {
@@ -627,6 +680,8 @@ function abrirEditor(p) {
         tienda_unidad: unidad || undefined,
         tienda_ofrecer_pack: pack === 'si' ? true : pack === 'no' ? false : undefined,
         tienda_pack_nombre: packNombre || undefined,
+        tienda_minimo: minimo > 0 ? minimo : undefined,
+        tienda_paso: paso > 0 ? paso : undefined,
         tienda_variedades: Object.keys(limpias).length ? limpias : undefined,
       });
 

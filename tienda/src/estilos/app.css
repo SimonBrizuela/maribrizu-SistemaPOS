@@ -1285,6 +1285,25 @@
 }
 .checkout__nota-envio svg { flex: none; margin-top: 1px; }
 
+/* Falta plata para el pedido mínimo. Va en el color de aviso y no en el de
+   error: no está mal lo que hizo el cliente, le falta algo. Y dice cuánto,
+   porque "mínimo $6.500" obliga a hacer la resta de cabeza. */
+.checkout__aviso-minimo {
+  font-size: var(--t-sm);
+  line-height: 1.55;
+  color: var(--alerta);
+  background: var(--alerta-bg);
+  padding: var(--e-3) var(--e-4);
+  border-radius: var(--r-sm);
+  margin-bottom: var(--e-3);
+}
+.checkout__aviso-minimo a {
+  display: inline-block;
+  margin-top: var(--e-1);
+  color: inherit;
+  font-weight: var(--peso-semi);
+}
+
 .checkout__legal {
   font-size: var(--t-xs);
   color: var(--text-2);

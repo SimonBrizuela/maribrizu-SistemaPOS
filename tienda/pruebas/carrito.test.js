@@ -79,6 +79,66 @@ describe('agregar', () => {
   });
 });
 
+describe('de a cuánto se vende', () => {
+  // Un mapa de $100 que deja $40 no paga el minuto de ir a buscarlo entre dos
+  // mil cuatrocientos productos: por eso hay mínimos que en el mostrador no
+  // existen.
+  const MAPA = { id: 'm1', nombre: 'Mapa Político', precio: 100, unidad: 'unidad',
+                 stock: 300, minimo: 12, paso: 6, rubro: 'LIBRERIA', imagenes: [] };
+  const CINTA_MIN = { ...CINTA, id: 'c9', minimo: 3, paso: 0.5 };
+
+  it('el primero entra directo en el mínimo', () => {
+    expect(carrito.agregar(MAPA)).toBe(12);
+    expect(carrito.subtotal()).toBe(1200);
+  });
+
+  it('después suma de a un paso', () => {
+    carrito.agregar(MAPA);
+    carrito.agregar(MAPA, { cantidad: 6 });
+    expect(carrito.cantidadDe('m1')).toBe(18);
+  });
+
+  it('no se puede bajar del mínimo', () => {
+    carrito.agregar(MAPA);
+    carrito.cambiarCantidad('m1', null, 1);
+    expect(carrito.cantidadDe('m1')).toBe(12);
+  });
+
+  it('funciona igual con metros', () => {
+    expect(carrito.agregar(CINTA_MIN)).toBe(3);
+    carrito.cambiarCantidad('c9', null, 0.5);
+    expect(carrito.cantidadDe('c9')).toBe(3);
+  });
+
+  it('el pack entero se lleva de a uno, aunque la unidad tenga mínimo', () => {
+    // El mínimo son 3 metros sueltos; el rollo es otra cosa y va de a uno.
+    expect(carrito.agregar(CINTA_MIN, { esPack: true })).toBe(1);
+  });
+
+  it('sin configurar nada queda como siempre', () => {
+    expect(carrito.agregar(CARTULINA)).toBe(1);
+    carrito.vaciar();
+    expect(carrito.agregar(CINTA)).toBe(0.5);
+  });
+
+  it('al revalidar, sube la cantidad si subió el mínimo', async () => {
+    carrito.agregar({ ...MAPA, minimo: 1, paso: 1 });
+    vi.mocked(traerProducto).mockResolvedValue(MAPA);
+
+    expect(await carrito.revalidar())
+      .toEqual([{ tipo: 'minimo', nombre: 'Mapa Político', antes: 1, ahora: 12 }]);
+    expect(carrito.cantidadDe('m1')).toBe(12);
+  });
+
+  it('si queda menos stock que el mínimo, sale del carrito', async () => {
+    carrito.agregar(MAPA);
+    vi.mocked(traerProducto).mockResolvedValue({ ...MAPA, stock: 5 });
+
+    expect(await carrito.revalidar()).toEqual([{ tipo: 'sin_stock', nombre: 'Mapa Político' }]);
+    expect(carrito.estaVacio()).toBe(true);
+  });
+});
+
 describe('subtotal', () => {
   it('suma precio por cantidad de cada renglon', () => {
     carrito.agregar(CINTA, { cantidad: 2.5 });          // 750

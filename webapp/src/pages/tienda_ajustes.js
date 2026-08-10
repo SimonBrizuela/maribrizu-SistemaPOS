@@ -40,6 +40,7 @@ const POR_DEFECTO = {
     tramos: [{ hasta_km: 3, precio: 1500 }, { hasta_km: 6, precio: 2500 }, { hasta_km: 12, precio: 3500 }],
     envio_gratis_desde: null,
     demora_texto: '24 a 48 hs',
+    pedido_minimo: 0,
   },
   pago: { alias: null, titular: null },
 };
@@ -249,6 +250,10 @@ export async function renderTiendaAjustes(container, db) {
         ${campo('cfgGratis', 'Envío gratis desde', e.envio_gratis_desde ?? '',
           { tipo: 'number', placeholder: 'Vacío = nunca',
             pista: 'Monto de productos, sin contar el envío.' })}
+        ${campo('cfgMinimo', 'Pedido mínimo', e.pedido_minimo ?? '',
+          { tipo: 'number', placeholder: 'Vacío = sin mínimo',
+            pista: 'Preparar un pedido cuesta lo mismo valga $500 o $50.000. '
+                 + 'Debajo del mínimo el checkout muestra cuánto falta y no deja confirmar.' })}
 
         <h4 style="margin-top:18px">Cuánto sale el envío</h4>
         <div id="cfgTramos"></div>
@@ -386,6 +391,7 @@ async function guardarTodo(container) {
         radio_max_km: numero('#cfgRadio') ?? 12,
         demora_texto: texto('#cfgDemora') || '24 a 48 hs',
         envio_gratis_desde: numero('#cfgGratis'),
+        pedido_minimo: numero('#cfgMinimo') ?? 0,
         tramos: _tramos
           .filter(t => t.hasta_km > 0)
           .sort((a, b) => a.hasta_km - b.hasta_km)

@@ -94,6 +94,11 @@ function pintarFormulario({ montar, cfg, cambios }) {
   // carrito sobrevive al cierre.
   const cerrada = cfg.abierta === false;
 
+  // Monto mínimo del pedido. No se esconde el checkout ni se traba el carrito:
+  // se muestra cuánto falta, que es lo único accionable. Un cartel que dice
+  // "mínimo $6.500" sin decir que faltan $900 obliga a hacer la cuenta.
+  const pedidoMinimo = Number(entrega.pedido_minimo) || 0;
+
   /** @type {'retiro'|'delivery'} */
   let modo = hayRetiro ? 'retiro' : 'delivery';
   let formaPago = 'efectivo';
@@ -250,6 +255,9 @@ function pintarFormulario({ montar, cfg, cambios }) {
     const subtotal = sumar(renglones);
     const gratis = modo === 'delivery' && llegaAEnvioGratis(subtotal, entrega);
     const envio = modo === 'delivery' && !gratis ? cotizacion.precio : 0;
+    // El mínimo se mide contra los productos, sin el envío: cobrar el envío
+    // para completar el mínimo sería hacerle pagar al cliente el piso.
+    const falta = Math.max(0, pedidoMinimo - subtotal);
 
     const lineaEnvio = modo === 'retiro'
       ? '<strong style="color:var(--exito)">Sin cargo</strong>'
@@ -309,10 +317,18 @@ function pintarFormulario({ montar, cfg, cambios }) {
 
         ${nota}
 
+        ${falta > 0 ? `
+          <div class="checkout__aviso-minimo">
+            Te faltan <strong class="cifra">${pesos(falta)}</strong> para llegar al
+            pedido mínimo de <strong class="cifra">${pesos(pedidoMinimo)}</strong>.
+            <a href="/catalogo">Seguir agregando</a>
+          </div>` : ''}
+
         <button type="button" class="boton boton--primario boton--grande boton--bloque${
                   enviando ? ' boton--cargando' : ''}"
-                data-confirmar ${enviando || cerrada ? 'disabled' : ''}>
+                data-confirmar ${enviando || cerrada || falta > 0 ? 'disabled' : ''}>
           ${cerrada ? 'La tienda está cerrada'
+                    : falta > 0 ? `Faltan ${pesos(falta)}`
                     : enviando ? 'Enviando el pedido…' : 'Confirmar el pedido'}
         </button>
 
@@ -422,6 +438,13 @@ function pintarFormulario({ montar, cfg, cambios }) {
   async function confirmar() {
     if (cerrada) {
       avisar('Ahora no estamos tomando pedidos. Tu carrito queda guardado.',
+             { tipo: 'error', duracion: 6000 });
+      return;
+    }
+
+    const faltante = pedidoMinimo - sumar(carrito.items());
+    if (faltante > 0) {
+      avisar(`Te faltan ${pesos(faltante)} para llegar al pedido mínimo.`,
              { tipo: 'error', duracion: 6000 });
       return;
     }
@@ -592,6 +615,7 @@ function avisoDeCambios(cambios) {
     if (c.tipo === 'sin_stock') return `<strong>${esc(c.nombre)}</strong> se quedó sin stock y lo sacamos del pedido.`;
     if (c.tipo === 'menos_stock') return `De <strong>${esc(c.nombre)}</strong> quedaban ${c.ahora}, así que ajustamos la cantidad.`;
     if (c.tipo === 'precio') return `<strong>${esc(c.nombre)}</strong> cambió de ${pesos(c.antes)} a ${pesos(c.ahora)}.`;
+    if (c.tipo === 'minimo') return `<strong>${esc(c.nombre)}</strong> se vende desde ${c.ahora}, así que ajustamos la cantidad.`;
     return esc(c.nombre);
   };
 

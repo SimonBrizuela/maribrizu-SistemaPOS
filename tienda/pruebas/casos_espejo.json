@@ -109,6 +109,52 @@
     }
   },
   {
+    "que_prueba": "Mínimo de venta en unidades, con paso",
+    "doc_id": "p7",
+    "datos": {
+      "nombre": "MAPA RIVADAVIA POLITICO X1",
+      "codigo": "4410",
+      "rubro": "libreria",
+      "estado": "activo",
+      "precio_venta": 100,
+      "stock": 300,
+      "tienda_minimo": 12,
+      "tienda_paso": 6
+    }
+  },
+  {
+    "que_prueba": "Mínimo en metros: se corta del rollo de a medio metro",
+    "doc_id": "p8",
+    "datos": {
+      "nombre": "CINTA RASO Nº 1",
+      "codigo": "3310",
+      "rubro": "merceria",
+      "estado": "activo",
+      "es_conjunto": true,
+      "conjunto_tipo": "rollo",
+      "conjunto_unidad_medida": "metros",
+      "conjunto_contenido": 50,
+      "conjunto_precio_unidad": 300,
+      "precio_venta": 12000,
+      "conjunto_total": 1685,
+      "tienda_minimo": 3
+    }
+  },
+  {
+    "que_prueba": "Un mínimo que no cae en un paso se sube al siguiente",
+    "doc_id": "p9",
+    "datos": {
+      "nombre": "FOLIO LIGGO CRISTAL A4",
+      "codigo": "2201",
+      "rubro": "libreria",
+      "estado": "activo",
+      "precio_venta": 150,
+      "stock": 2677,
+      "tienda_minimo": 5,
+      "tienda_paso": 2
+    }
+  },
+  {
     "que_prueba": "Marcado como conjunto pero suelto: no es un pack",
     "doc_id": "p6",
     "datos": {

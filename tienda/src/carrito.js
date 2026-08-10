@@ -13,9 +13,36 @@ import { traerProducto } from './datos.js';
 const CLAVE = 'liceo.carrito.v2';
 const MAX_UNIDADES = 99;
 
-/** Cuanto suma o resta un toque, segun como se venda el producto. */
-export function pasoDe(unidad) {
-  return unidad === 'metro' ? 0.5 : 1;
+/**
+ * Cuanto suma o resta un toque.
+ *
+ * Se acepta el producto entero o solo su unidad: el panel puede fijar un paso
+ * propio por producto ("de a 6"), y cuando no lo hizo vale el natural — medio
+ * metro para lo que se corta del rollo, uno para el resto.
+ */
+export function pasoDe(productoOUnidad) {
+  if (typeof productoOUnidad === 'object' && productoOUnidad) {
+    const propio = Number(productoOUnidad.paso);
+    if (propio > 0) return propio;
+    return productoOUnidad.unidad === 'metro' ? 0.5 : 1;
+  }
+  return productoOUnidad === 'metro' ? 0.5 : 1;
+}
+
+/**
+ * Lo minimo que se puede llevar de este producto.
+ *
+ * Un pedido online cuesta trabajo aunque sea de $100: hay que leerlo, buscar la
+ * cosa entre dos mil cuatrocientas, contarla, embalarla. Por eso hay productos
+ * que en el mostrador se venden de a uno y por la web no: medido, un mapa de
+ * $100 deja $40 y eso no paga ni el minuto de ir a buscarlo.
+ *
+ * Sin configurar es un paso, o sea como estaba siempre.
+ */
+export function minimoDe(producto) {
+  const propio = Number(producto?.minimo);
+  const paso = pasoDe(producto);
+  return propio > 0 ? Math.max(propio, paso) : paso;
 }
 
 /** 2.5 -> "2,5 m"  ·  3 -> "3" */
@@ -43,14 +70,17 @@ function leerDelDisco() {
       .filter(r => r && typeof r.id === 'string')
       .map(r => {
         const unidad = r.unidad === 'metro' ? 'metro' : 'unidad';
-        const paso = pasoDe(unidad);
+        const paso = Number(r.paso) > 0 ? Number(r.paso) : pasoDe(unidad);
+        const minimo = Number(r.minimo) > 0 ? Math.max(Number(r.minimo), paso) : paso;
         return {
           id: r.id,
           variedad: r.variedad || null,
           nombre: String(r.nombre || ''),
           precio: Number(r.precio) || 0,
-          cantidad: Math.min(MAX_UNIDADES, Math.max(paso, Number(r.cantidad) || paso)),
+          cantidad: Math.min(MAX_UNIDADES, Math.max(minimo, Number(r.cantidad) || minimo)),
           unidad,
+          paso,
+          minimo,
           es_pack: r.es_pack === true,
           pack_contenido: Number(r.pack_contenido) || null,
           foto: r.foto || null,
@@ -132,9 +162,12 @@ export function agregar(producto, { variedad = null, cantidad = null, esPack = f
     ? (producto.variedades || []).find(v => v.nombre === variedad)
     : null;
 
+  // El pack entero se lleva de a uno: el minimo y el paso del producto son de
+  // la unidad suelta (medio metro de cinta), no del rollo.
   const unidad = esPack ? 'unidad' : (producto.unidad || 'unidad');
-  const paso = pasoDe(unidad);
-  let cuanto = cantidad ?? paso;
+  const paso = esPack ? 1 : pasoDe(producto);
+  const minimo = esPack ? 1 : minimoDe(producto);
+  let cuanto = cantidad ?? minimo;
 
   // Llevar el rollo entero es otro producto a efectos del carrito: otro precio,
   // otra unidad, y descuenta del stock tantas unidades como trae el pack.
@@ -153,17 +186,25 @@ export function agregar(producto, { variedad = null, cantidad = null, esPack = f
     existente.cantidad = redondear(Math.min(tope, existente.cantidad + cuanto));
     existente.precio = precio;
     existente.stock = stock;
+    existente.minimo = minimo;
+    existente.paso = paso;
     guardar();
     return existente.cantidad;
   }
+
+  // El primero entra directo en el minimo. Sumar de a un paso desde cero
+  // obligaria a tocar el boton diez veces antes de poder comprar.
+  const inicial = Math.max(minimo, cuanto);
 
   renglones.push({
     id: producto.id,
     variedad,
     nombre: producto.nombre,
     precio,
-    cantidad: redondear(Math.min(tope, cuanto)),
+    cantidad: redondear(Math.min(tope, inicial)),
     unidad,
+    paso,
+    minimo,
     es_pack: esPack,
     pack_contenido: esPack ? contenido : null,
     foto: producto.imagenes?.[0] || null,
@@ -171,7 +212,7 @@ export function agregar(producto, { variedad = null, cantidad = null, esPack = f
     stock,
   });
   guardar();
-  return cuanto;
+  return redondear(Math.min(tope, inicial));
 }
 
 /**
@@ -186,9 +227,9 @@ function redondear(n) {
 export function cambiarCantidad(id, variedad, cantidad, esPack = false) {
   const r = renglones.find(x => mismaLinea(x, id, variedad, esPack));
   if (!r) return;
-  const paso = pasoDe(r.unidad);
+  const piso = r.minimo || pasoDe(r.unidad);
   const tope = r.stock > 0 ? Math.min(r.stock, MAX_UNIDADES) : MAX_UNIDADES;
-  r.cantidad = redondear(Math.max(paso, Math.min(tope, cantidad)));
+  r.cantidad = redondear(Math.max(piso, Math.min(tope, cantidad)));
   guardar();
 }
 
@@ -257,9 +298,28 @@ export async function revalidar() {
       ? Number(producto.precio_pack || 0)
       : (variante && variante.precio ? Number(variante.precio) : producto.precio);
 
+    // El minimo puede haber cambiado desde el panel mientras el carrito
+    // esperaba, asi que se relee y se aplica antes de comparar contra el stock.
+    const paso = r.es_pack ? 1 : pasoDe(producto);
+    const minimo = r.es_pack ? 1 : minimoDe(producto);
+    r.paso = paso;
+    r.minimo = minimo;
+
     if (stock <= 0) {
       cambios.push({ tipo: 'sin_stock', nombre: r.nombre });
       continue;
+    }
+
+    // Quedan tres cuando el minimo son cinco: no alcanza para venderlo. Es un
+    // "sin stock" desde donde lo mira el cliente.
+    if (stock < minimo) {
+      cambios.push({ tipo: 'sin_stock', nombre: r.nombre });
+      continue;
+    }
+
+    if (r.cantidad < minimo) {
+      cambios.push({ tipo: 'minimo', nombre: r.nombre, antes: r.cantidad, ahora: minimo });
+      r.cantidad = minimo;
     }
 
     if (stock < r.cantidad) {
