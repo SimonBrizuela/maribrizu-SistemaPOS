@@ -13,6 +13,7 @@
  */
 import { collection, doc, onSnapshot, query, orderBy, limit, updateDoc } from 'firebase/firestore';
 import { marcarVisto } from '../pedidos_watcher.js';
+import { enlaceAviso } from '../avisos_pedido.js';
 
 // El camino normal de un pedido. `cancelado` queda afuera a proposito: no es un
 // paso, es una salida.
@@ -40,54 +41,6 @@ const ETIQUETA_ACCION = {
   en_camino:  'Salió el reparto',
   entregado:  'Entregado',
 };
-
-/**
- * El mensaje que se le manda al cliente en cada momento.
- *
- * Mandarlo solo, sin que nadie toque nada, necesita la API de WhatsApp de Meta:
- * cuenta de Business, plantilla aprobada y un costo por conversación, porque
- * fuera de las 24 horas de la última respuesta del cliente solo se pueden
- * mandar plantillas. CallMeBot, que es lo que avisa hoy al local, solo puede
- * escribirle a un número que lo autorizó: sirve para el local, no para los
- * clientes.
- *
- * Mientras tanto esto: el mensaje ya escrito, a un toque. Se abre WhatsApp con
- * el texto puesto y solo hay que darle enviar.
- */
-const MENSAJES = {
-  preparando: p => `Hola ${nombreCorto(p)}, estamos preparando tu pedido ${p.codigo}. `
-                 + 'Te avisamos apenas esté.',
-  listo: p => p?.entrega?.modo === 'delivery'
-    ? `Hola ${nombreCorto(p)}, tu pedido ${p.codigo} ya está listo y sale para tu casa.`
-    : `Hola ${nombreCorto(p)}, tu pedido ${p.codigo} ya está listo para que lo retires. `
-      + 'Te esperamos en Av. Alfonsina Storni 168.',
-  en_camino: p => `Hola ${nombreCorto(p)}, tu pedido ${p.codigo} salió para tu casa. `
-                + 'Llega en un rato.',
-  entregado: p => `Hola ${nombreCorto(p)}, gracias por tu compra. `
-                + 'Cualquier cosa que necesites, escribinos por acá.',
-  cancelado: p => `Hola ${nombreCorto(p)}, tuvimos que cancelar tu pedido ${p.codigo}. `
-                + 'Cualquier duda, escribinos.',
-};
-
-function nombreCorto(p) {
-  return String(p?.cliente?.nombre || '').trim().split(/\s+/)[0] || '';
-}
-
-/** El número del cliente, listo para wa.me: con código de país y sin signos. */
-function whatsappDe(p) {
-  const numero = String(p?.cliente?.telefono || '').replace(/\D/g, '');
-  if (!numero) return null;
-  // Un teléfono cordobés escrito como lo escribe la gente (3517046684) necesita
-  // el 549 adelante para que WhatsApp lo entienda.
-  return numero.length <= 10 ? `549${numero}` : numero;
-}
-
-function enlaceAviso(p) {
-  const numero = whatsappDe(p);
-  const armar = MENSAJES[p.estado];
-  if (!numero || !armar) return null;
-  return `https://wa.me/${numero}?text=${encodeURIComponent(armar(p))}`;
-}
 
 const FILTROS = [
   { clave: 'pendientes', texto: 'Pendientes', estados: ['nuevo', 'preparando', 'listo', 'en_camino'] },
@@ -191,7 +144,7 @@ function tarjeta(p) {
   const siguiente = siguienteDe(p);
   const entrega = p.entrega || {};
   const esDelivery = entrega.modo === 'delivery';
-  const aviso = enlaceAviso(p);
+  const aviso = enlaceAviso(p, { direccionLocal: 'Av. Alfonsina Storni 168' });
 
   const whatsapp = String(p?.cliente?.telefono || '').replace(/\D/g, '');
   const mensaje = encodeURIComponent(
