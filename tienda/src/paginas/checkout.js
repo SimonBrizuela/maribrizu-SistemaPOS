@@ -18,6 +18,8 @@ import * as carrito from '../carrito.js';
 import { avisar } from '../avisos.js';
 import { ir } from '../router.js';
 import { crearPedido } from '../pedidos.js';
+import { datosParaCompletar, recordarDelPedido, sesion } from '../cuenta.js';
+import { olvidar } from '../cliente.js';
 import { cotizar, rangoDeTramos, llegaAEnvioGratis } from '../envio.js';
 import { montarDirecciones } from '../direcciones.js';
 import { montarMapa } from '../mapa.js';
@@ -85,6 +87,13 @@ function pantallaSinStock(cfg) {
 
 function pintarFormulario({ montar, cfg, cambios }) {
   const entrega = cfg.entrega || {};
+
+  // Lo que ya sabemos de esta persona: de su cuenta si entró, y si no, de lo
+  // que escribió la última vez en este teléfono. Escribir el nombre, el
+  // teléfono y la dirección de nuevo en cada pedido es la razón más tonta por
+  // la que alguien no vuelve a comprar.
+  const conocido = datosParaCompletar();
+  const guardadas = conocido?.direcciones || [];
   const hayRetiro = entrega.retiro_habilitado !== false;
   const hayDelivery = entrega.delivery_habilitado !== false;
 
@@ -130,10 +139,18 @@ function pintarFormulario({ montar, cfg, cambios }) {
         <form class="checkout__form" novalidate data-form>
 
           ${bloque(1, 'Tus datos', `
+            ${conocido ? `
+              <p class="checkout__conocido">
+                ${icono('tilde', { tam: 16 })}
+                <span>Hola de nuevo${conocido.nombre ? `, ${esc(conocido.nombre.split(' ')[0])}` : ''}.
+                Completamos tus datos.
+                <button type="button" data-no-soy-yo>No soy yo</button></span>
+              </p>` : ''}
             ${campo({
               id: 'nombre',
               etiqueta: 'Nombre y apellido',
               obligatorio: true,
+              valor: conocido?.nombre || '',
               extra: 'autocomplete="name" maxlength="80" placeholder="Como te conocen en el local"',
             })}
             ${campo({
@@ -141,6 +158,7 @@ function pintarFormulario({ montar, cfg, cambios }) {
               etiqueta: 'Teléfono',
               tipo: 'tel',
               obligatorio: true,
+              valor: conocido?.telefono || '',
               ayuda: 'Te escribimos por acá si falta algo del pedido.',
               extra: 'autocomplete="tel" inputmode="tel" maxlength="30" placeholder="351 704 6684"',
             })}
@@ -182,6 +200,17 @@ function pintarFormulario({ montar, cfg, cambios }) {
             </div>
 
             <div class="checkout__domicilio" data-domicilio hidden>
+              ${guardadas.length ? `
+                <div class="checkout__guardadas">
+                  <span class="campo__label">Tus direcciones</span>
+                  <div class="checkout__guardadas-lista">
+                    ${guardadas.map((d, i) => `
+                      <button type="button" class="checkout__guardada" data-usar-direccion="${i}">
+                        ${icono('pin', { tam: 15 })}
+                        <span>${esc(d.direccion)}</span>
+                      </button>`).join('')}
+                  </div>
+                </div>` : ''}
               ${campo({
                 id: 'direccion',
                 etiqueta: 'Dirección',
@@ -193,6 +222,7 @@ function pintarFormulario({ montar, cfg, cambios }) {
               ${campo({
                 id: 'referencia',
                 etiqueta: 'Piso, departamento o referencia',
+                valor: guardadas[0]?.referencia || '',
                 extra: 'maxlength="120" placeholder="Piso 2 depto B · casa con reja verde"',
               })}
               <div data-mapa></div>
@@ -415,6 +445,24 @@ function pintarFormulario({ montar, cfg, cambios }) {
     else pintarDomicilio();
   });
 
+  // Una dirección guardada trae sus coordenadas: se cotiza sin volver a
+  // preguntarle nada a Google ni al cliente.
+  document.querySelectorAll('[data-usar-direccion]').forEach(boton => {
+    boton.addEventListener('click', () => {
+      const d = guardadas[Number(boton.dataset.usarDireccion)];
+      if (!d) return;
+
+      const campoDireccion = document.getElementById('direccion');
+      campoDireccion.value = d.direccion;
+      if (d.referencia) document.getElementById('referencia').value = d.referencia;
+
+      ubicacion = Number.isFinite(d.lat) ? 'ubicada' : 'escribiendo';
+      destino = Number.isFinite(d.lat) && Number.isFinite(d.lng)
+        ? { lat: d.lat, lng: d.lng } : null;
+      recotizar();
+    });
+  });
+
   document.querySelectorAll('[data-pago]').forEach(boton => {
     boton.addEventListener('click', () => {
       formaPago = boton.dataset.pago;
@@ -435,6 +483,17 @@ function pintarFormulario({ montar, cfg, cambios }) {
 
   cajaResumen.addEventListener('click', ev => {
     if (ev.target.closest('[data-confirmar]')) confirmar();
+  });
+
+  document.querySelector('[data-no-soy-yo]')?.addEventListener('click', () => {
+    olvidar();
+    ['nombre', 'telefono', 'direccion', 'referencia'].forEach(id => {
+      const campo = document.getElementById(id);
+      if (campo) campo.value = '';
+    });
+    document.querySelector('.checkout__conocido')?.remove();
+    document.querySelector('.checkout__guardadas')?.remove();
+    document.getElementById('nombre')?.focus();
   });
 
   async function confirmar() {
@@ -505,8 +564,14 @@ function pintarFormulario({ montar, cfg, cambios }) {
       const gratis = modo === 'delivery' && llegaAEnvioGratis(subtotal, entrega);
       const envio = modo === 'delivery' && !gratis ? cotizacion.precio : 0;
 
+      const cuentaActual = sesion();
+
       const { id } = await crearPedido({
         cliente: { nombre: valores.nombre, telefono: valores.telefono },
+        // Firmado con la cuenta cuando hay una: es lo que después deja pedir
+        // "mis pedidos" desde cualquier aparato. Sin cuenta no va el campo, y
+        // el pedido entra igual.
+        ...(cuentaActual ? { uid: cuentaActual.uid } : {}),
         entrega: {
           modo,
           direccion: modo === 'delivery' ? valores.direccion : null,
@@ -541,6 +606,17 @@ function pintarFormulario({ montar, cfg, cambios }) {
         subtotal,
         envio,
         nota: valores.nota,
+      });
+
+      // Los datos quedan guardados recién ahora: a mitad de tipear el nombre es
+      // "Ma" y el teléfono tres dígitos, y eso no completa nada la próxima vez.
+      // Un pedido confirmado es la señal de que están bien.
+      await recordarDelPedido({
+        nombre: valores.nombre,
+        telefono: valores.telefono,
+        direccion: modo === 'delivery' ? valores.direccion : '',
+        referencia: modo === 'delivery' ? valores.referencia : '',
+        coordenadas: modo === 'delivery' ? destino : null,
       });
 
       carrito.vaciar();
@@ -611,10 +687,12 @@ function bloque(numero, titulo, contenido) {
     </section>`;
 }
 
-function campo({ id, etiqueta, tipo = 'text', ayuda = '', obligatorio = false, extra = '' }) {
+function campo({ id, etiqueta, tipo = 'text', ayuda = '', obligatorio = false, extra = '',
+                valor: inicial = '' }) {
   const control = tipo === 'textarea'
-    ? `<textarea class="campo__control" id="${id}" name="${id}" ${extra}></textarea>`
-    : `<input class="campo__control" id="${id}" name="${id}" type="${tipo}" ${extra}>`;
+    ? `<textarea class="campo__control" id="${id}" name="${id}" ${extra}>${esc(inicial)}</textarea>`
+    : `<input class="campo__control" id="${id}" name="${id}" type="${tipo}" ${extra}
+              value="${esc(inicial)}">`;
 
   return `
     <div class="campo" data-campo="${id}">

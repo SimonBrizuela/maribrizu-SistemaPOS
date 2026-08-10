@@ -248,6 +248,37 @@ service cloud.firestore {
       allow write: if isAdmin();
     }
 
+    // ── CLIENTES DE LA TIENDA ─────────────────────────────────────────────
+    // El perfil de quien se creó una cuenta: nombre, teléfono y direcciones,
+    // para no tener que escribirlos en cada pedido.
+    //
+    // Cada uno ve y escribe el suyo y nada más. Guardarlos bajo el número de
+    // teléfono en vez de bajo el uid —que fue la primera idea— habría sido un
+    // directorio abierto: los teléfonos se prueban de a miles y cualquiera se
+    // llevaría el nombre y la dirección de esa persona.
+    //
+    // El local los ve desde el panel, que entra con claim.
+    // La lectura y la escritura van por separado a propósito: `perfilValido()`
+    // mira `request.resource.data`, que en una lectura no existe. Juntas en un
+    // `allow read, write`, la condición falla al leer y el dueño no puede ver
+    // su propio perfil.
+    match /tienda_clientes/{uid} {
+      allow read:   if authorized() || esSuyo(uid);
+      allow create, update: if esSuyo(uid) && perfilValido();
+      allow delete: if esSuyo(uid) || authorized();
+    }
+
+    function esSuyo(uid) {
+      return request.auth != null && request.auth.uid == uid;
+    }
+
+    function perfilValido() {
+      let d = request.resource.data;
+      return d.nombre is string && d.nombre.size() <= 80
+          && d.telefono is string && d.telefono.size() <= 30
+          && (!('direcciones' in d) || (d.direcciones is list && d.direcciones.size() <= 6));
+    }
+
     // ── PEDIDOS ───────────────────────────────────────────────────────────
     // El cliente crea su pedido sin estar autenticado, así que la validación
     // de forma vive acá: es la única barrera entre la colección y cualquiera
@@ -277,12 +308,21 @@ service cloud.firestore {
              && d.subtotal is number && d.subtotal >= 0
              && d.envio is number    && d.envio >= 0
              && d.total is number    && d.total == d.subtotal + d.envio
-             && d.nota is string     && d.nota.size() <= 500;
+             && d.nota is string     && d.nota.size() <= 500
+             // El pedido puede venir firmado por una cuenta, y entonces tiene
+             // que ser la de quien lo está creando: sin esto, cualquiera
+             // firmaría pedidos con el uid de otro y se los metería en su
+             // historial.
+             && (!('uid' in d) || (request.auth != null && d.uid == request.auth.uid));
     }
 
     match /tienda_pedidos/{pedidoId} {
       allow get:    if true;
-      allow list:   if authorized();
+      // El local ve todos. Quien tiene cuenta ve los suyos: la consulta que
+      // hace la tienda filtra por `uid`, y esta regla se evalúa contra cada
+      // documento devuelto, así que una consulta sin ese filtro no pasa.
+      allow list:   if authorized()
+                    || (request.auth != null && resource.data.uid == request.auth.uid);
       allow create: if pedidoValido();
       allow update, delete: if authorized();
     }

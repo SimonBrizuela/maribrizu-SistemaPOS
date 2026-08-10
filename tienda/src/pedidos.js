@@ -64,7 +64,8 @@ function generarCodigo() {
  * con la del pedido: el reloj del celular del cliente puede estar corrido de
  * horas y no puede decidir cuando entro un pedido.
  */
-export async function crearPedido({ cliente, entrega, pago, items, subtotal, envio, nota = '' }) {
+export async function crearPedido({ cliente, entrega, pago, items, subtotal, envio,
+                                   nota = '', uid = null }) {
   const codigo = generarCodigo();
 
   const documento = {
@@ -76,6 +77,10 @@ export async function crearPedido({ cliente, entrega, pago, items, subtotal, env
     visto: false,
     codigo,
     cliente,
+    // Firmado con la cuenta cuando hay una: es lo que despues deja pedir "mis
+    // pedidos" desde cualquier aparato. Las reglas exigen que sea la cuenta de
+    // quien esta creando el pedido, no una cualquiera.
+    ...(uid ? { uid } : {}),
     entrega,
     pago,
     items,

@@ -9,6 +9,7 @@ import { avisar } from './avisos.js';
 import { iniciarSugerencias, fijarAmbito, cerrarSugerencias } from './sugerencias.js';
 import { iniciarAsistente } from './asistente.js';
 import { iniciarBarraPedido, refrescarBarraPedido } from './barra_pedido.js';
+import { iniciarCuenta } from './cuenta.js';
 
 import { inicio } from './paginas/inicio.js';
 import { catalogo } from './paginas/catalogo.js';
@@ -16,6 +17,7 @@ import { producto } from './paginas/producto.js';
 import { checkout } from './paginas/checkout.js';
 import { pedido } from './paginas/pedido.js';
 import { seguimiento } from './paginas/seguimiento.js';
+import { cuenta } from './paginas/cuenta.js';
 
 const app = document.getElementById('app');
 
@@ -28,6 +30,7 @@ ruta('/p/:id', producto);
 ruta('/checkout', checkout);
 ruta('/pedido/:id', pedido);
 ruta('/seguimiento', seguimiento);
+ruta('/cuenta', cuenta);
 
 /* ── Armado de la pantalla ────────────────────────────────────────────────── */
 
@@ -248,6 +251,10 @@ async function arrancar() {
   // pintado igual que el chat, pero antes que él: si el carrito ya tiene algo
   // de una visita anterior, tiene que aparecer enseguida.
   iniciarBarraPedido();
+
+  // La sesión se retoma sola si había una. El SDK de Auth se descarga recién
+  // ahí: quien nunca creó cuenta no paga esos 40 kB.
+  iniciarCuenta();
 
   // El chat se agrega después del primer pintado: es un extra sobre el
   // catálogo, y montarlo antes le agrega trabajo a la primera pantalla, que es

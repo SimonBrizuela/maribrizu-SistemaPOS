@@ -614,6 +614,130 @@
 .pedido__guardar-texto svg { flex: none; margin-top: 1px; color: var(--primary); }
 .pedido__guardar-botones { display: flex; gap: var(--e-2); flex-wrap: wrap; }
 
+/* ── Direcciones guardadas en el checkout ────────────────────────────────
+   Un toque en vez de escribir la dirección de nuevo. Traen sus coordenadas, así
+   que el envío se cotiza sin volver a preguntarle nada a Google. */
+.checkout__guardadas { margin-bottom: var(--e-4); }
+.checkout__guardadas-lista {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--e-2);
+  margin-top: var(--e-2);
+}
+.checkout__guardada {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e-2);
+  max-width: 100%;
+  padding: var(--e-2) var(--e-3);
+  border: 1.5px solid var(--borde-control);
+  border-radius: var(--r-full);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: var(--t-sm);
+  text-align: left;
+  cursor: pointer;
+  transition: border-color var(--m-rapido) var(--curva), background var(--m-rapido) var(--curva);
+}
+.checkout__guardada:hover { background: var(--surface-2); border-color: var(--primary); }
+.checkout__guardada svg { flex: none; color: var(--primary); }
+.checkout__guardada span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* ── La cuenta ────────────────────────────────────────────────────────────
+   Entrar, crear cuenta y recuperar la contraseña: el mismo formulario con un
+   campo de más o de menos. */
+.contenedor--angosto { max-width: 460px; }
+
+.cuenta__bajada {
+  color: var(--text-2);
+  font-size: var(--t-sm);
+  line-height: 1.55;
+  margin-bottom: var(--e-5);
+}
+.cuenta__form { display: flex; flex-direction: column; gap: var(--e-4); }
+.cuenta__form .boton { margin-top: var(--e-2); }
+
+.cuenta__enlace {
+  align-self: flex-start;
+  margin-top: var(--e-2);
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--primary-txt);
+  font: inherit;
+  font-size: var(--t-sm);
+  font-weight: var(--peso-semi);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+}
+
+/* La línea con el "o" en el medio: separa las dos formas de entrar sin decir
+   que una es mejor que la otra. */
+.cuenta__separador {
+  display: flex;
+  align-items: center;
+  gap: var(--e-3);
+  margin: var(--e-5) 0 var(--e-4);
+  color: var(--text-3);
+  font-size: var(--t-xs);
+}
+.cuenta__separador::before,
+.cuenta__separador::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+.cuenta__pie { margin-top: var(--e-5); font-size: var(--t-sm); color: var(--text-2); }
+.cuenta__pie .cuenta__enlace { display: inline; margin: 0; }
+
+.cuenta__ficha {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-3);
+  padding: var(--e-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  margin-bottom: var(--e-4);
+}
+.cuenta__dato { display: flex; justify-content: space-between; gap: var(--e-3); font-size: var(--t-sm); }
+.cuenta__dato span { color: var(--text-2); flex: none; }
+.cuenta__dato strong { text-align: right; word-break: break-word; }
+.cuenta__acciones { display: flex; flex-wrap: wrap; gap: var(--e-2); }
+
+/* El saludo arriba del checkout cuando ya lo conocemos. */
+.checkout__conocido {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--e-2);
+  margin-bottom: var(--e-4);
+  padding: var(--e-2) var(--e-3);
+  border-radius: var(--r-sm);
+  background: var(--exito-bg);
+  color: var(--exito);
+  font-size: var(--t-sm);
+  line-height: 1.45;
+}
+.checkout__conocido svg { flex: none; margin-top: 2px; }
+.checkout__conocido button {
+  margin-left: var(--e-2);
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 /* ── "Mis pedidos" en el encabezado ───────────────────────────────────────
    En el celular vive en la barra de abajo. En la computadora esa barra no
    existe y no había forma de llegar a los pedidos hechos salvo escribiendo la
