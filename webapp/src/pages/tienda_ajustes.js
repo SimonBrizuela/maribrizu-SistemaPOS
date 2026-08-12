@@ -330,6 +330,10 @@ function pintarRubros() {
  * encontrar "Abrochadora" a mano dejó de ser posible. Busca por rubro y por
  * subrubro: escribir un subrubro trae el rubro del que cuelga, ya abierto.
  *
+ * Sin `<datalist>`: con esta cantidad de opciones el desplegable nativo tapa
+ * media pantalla apenas se toca el campo, no se puede estilar y duplica lo que
+ * ya hace el filtrado en vivo, que además muestra el resultado en su lugar.
+ *
  * Los que no coinciden se **esconden**, no se sacan del DOM: al guardar se leen
  * todas las casillas, y quitarlas perdería lo tildado en un rubro que no
  * coincide con lo que quedó escrito en el buscador.
@@ -338,21 +342,6 @@ function prepararBuscadorDeRubros(lista) {
   const campo = document.getElementById('cfgBuscarRubro');
   const caja = document.getElementById('cfgRubros');
   if (!campo || !caja) return;
-
-  // Sugerencias del navegador mientras se escribe: los rubros primero, después
-  // los subrubros con su rubro al lado para distinguir los repetidos.
-  const sugeridos = document.getElementById('cfgRubrosSugeridos');
-  if (sugeridos) {
-    const opciones = [];
-    for (const [rubro, n] of lista) {
-      opciones.push(`<option value="${escHtml(nombreBonito(rubro))}">`);
-      for (const [sub] of n.subs) {
-        opciones.push(`<option value="${escHtml(nombreBonito(sub))}" `
-                    + `label="${escHtml(nombreBonito(sub))} · ${escHtml(nombreBonito(rubro))}">`);
-      }
-    }
-    sugeridos.innerHTML = opciones.join('');
-  }
 
   const cuenta = document.getElementById('cfgBuscarCuenta');
   const limpiar = document.getElementById('cfgBuscarLimpiar');
@@ -547,13 +536,12 @@ export async function renderTiendaAjustes(container, db) {
         <div class="tienda-buscador">
           <span class="material-icons tienda-buscador__lupa">search</span>
           <input type="text" id="cfgBuscarRubro" autocomplete="off" spellcheck="false"
-                 placeholder="Buscar rubro o subrubro…" list="cfgRubrosSugeridos">
+                 placeholder="Buscar rubro o subrubro…">
           <button type="button" class="tienda-buscador__x" id="cfgBuscarLimpiar"
                   title="Limpiar" hidden>
             <span class="material-icons">close</span>
           </button>
         </div>
-        <datalist id="cfgRubrosSugeridos"></datalist>
         <div class="tienda-pista" id="cfgBuscarCuenta" style="margin:6px 0 8px"></div>
 
         <div id="cfgRubros" style="display:flex;flex-direction:column;gap:6px;

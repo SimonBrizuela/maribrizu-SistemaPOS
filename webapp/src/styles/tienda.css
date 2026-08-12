@@ -339,17 +339,18 @@
    La lupa va DENTRO, posicionada sobre el campo — un contenedor con fondo y
    borde propios se lee como una barra pegada al costado, que es justo lo que
    no queremos. */
-.tienda-buscador { position: relative; }
+.tienda-buscador { position: relative; max-width: 260px; }
 
 .tienda-buscador input {
   width: 100%;
-  padding: 8px 34px 8px 34px;
+  height: 30px;
+  padding: 0 26px 0 28px;
   border: 1px solid var(--border);
-  border-radius: 8px;
+  border-radius: 7px;
   background: var(--surface);
   color: var(--text);
   font-family: inherit;
-  font-size: 13px;
+  font-size: 12.5px;
   outline: none;
   transition: border-color .15s, box-shadow .15s;
 }
@@ -360,22 +361,22 @@
 
 .tienda-buscador__lupa {
   position: absolute;
-  left: 9px;
+  left: 8px;
   top: 50%;
   transform: translateY(-50%);
-  font-size: 17px !important;
+  font-size: 15px !important;
   color: var(--text-muted);
   pointer-events: none;
 }
 
 .tienda-buscador__x {
   position: absolute;
-  right: 6px;
+  right: 4px;
   top: 50%;
   transform: translateY(-50%);
   display: grid;
   place-items: center;
-  width: 22px; height: 22px;
+  width: 19px; height: 19px;
   padding: 0;
   border: none;
   border-radius: 50%;
@@ -385,9 +386,6 @@
 }
 .tienda-buscador__x:hover { background: var(--bg); color: var(--text); }
 .tienda-buscador__x .material-icons { font-size: 15px !important; }
-
-/* El navegador ya lo esconde, pero en algunos temas asoma como una franja. */
-datalist { display: none; }
 
 /* Un subrubro que no coincide, dentro de un rubro que sí: se deja ver para no
    perder el contexto, pero apagado para que salte el que se buscaba. */

@@ -2,20 +2,32 @@
  * Fotos pedidas.
  *
  * La lista de trabajo que arma el personal desde la tienda: recorren el
- * catálogo con el modo oculto prendido (`?fotos=1`) y van tildando lo que hay
- * que fotografiar. Acá se ve junta, se imprime para llevarla al mostrador y se
- * saca lo que ya se resolvió.
+ * catálogo tildando lo que hay que fotografiar. Acá se ve junta, se le carga la
+ * foto a cada uno sin salir de la pantalla, y lo resuelto desaparece solo.
  *
  * La colección `tienda_fotos_pedidas` tiene un documento por producto, con el
- * id del producto como id del documento: marcar dos veces no duplica nada.
+ * id del producto como id del documento. Ese id es el mismo del `catalogo` y el
+ * del espejo `tienda_productos`, así que alcanza para ir a buscar la foto que
+ * tiene hoy y para guardarle la nueva.
+ *
+ * Subir una foto hace tres cosas en orden: la sube a Storage ya achicada, la
+ * guarda en el producto (que reescribe el espejo público en el momento) y recién
+ * ahí saca al producto de esta lista. Si algo falla en el medio, el producto
+ * sigue pendiente: es preferible que aparezca de más y no que se pierda.
  */
 import { collection, deleteDoc, doc, getDocs, orderBy, query } from 'firebase/firestore';
+import { getCached } from '../cache.js';
+import { leerDocRapido } from '../config.js';
 import { confirmDialog, escHtml } from '../components/dialogs.js';
-import { nombreBonito } from '../tienda_espejo.js';
+import { guardarYEspejar, nombreBonito, subirFoto } from '../tienda_espejo.js';
 import '../styles/tienda.css';
 
 let _db = null;
 let _lista = [];
+let _catalogo = new Map();      // doc_id -> datos del catálogo
+let _habilitados = [];
+let _subExcluidos = {};
+let _subiendo = false;          // una foto por vez: el input es uno solo
 
 export async function renderTiendaFotos(container, db) {
   _db = db;
@@ -27,8 +39,8 @@ export async function renderTiendaFotos(container, db) {
         <h2 style="margin:0">Fotos pedidas</h2>
         <p class="tienda-pista" style="margin:6px 0 0">
           Lo que se marcó desde la tienda. El tilde aparece en cada producto
-          apenas se entra, sin ningún link especial. Como lo ve cualquiera,
-          puede llegar algo de más: sacarlo de acá es un click.
+          apenas se entra, sin ningún link especial. Cargá la foto acá mismo:
+          al subirla, el producto sale de la lista y la tienda se actualiza.
         </p>
       </div>
       <div style="display:flex;gap:8px;align-items:center">
@@ -41,40 +53,53 @@ export async function renderTiendaFotos(container, db) {
       </div>
     </div>
 
+    <input type="file" id="fotosArchivo" accept="image/*" multiple hidden>
     <div id="fotosCuerpo"><div class="tienda-pista">Cargando…</div></div>`;
 
   document.getElementById('fotosRefrescar').addEventListener('click', cargar);
   document.getElementById('fotosImprimir').addEventListener('click', imprimir);
+  document.getElementById('fotosArchivo').addEventListener('change', alElegirArchivo);
 
   await cargar();
 }
+
+/* ── Lectura ──────────────────────────────────────────────────────────────── */
 
 async function cargar() {
   const cuerpo = document.getElementById('fotosCuerpo');
   if (!cuerpo) return;
 
   try {
-    // Ordenar por fecha necesita que todos los documentos tengan el campo. Si
-    // alguno quedó sin él, Firestore lo deja afuera en silencio, así que ante
-    // cualquier problema se cae a traer todo sin orden y se ordena acá.
-    let docs;
-    try {
-      const snap = await getDocs(query(
-        collection(_db, 'tienda_fotos_pedidas'), orderBy('pedido_en', 'desc')));
-      docs = snap.docs;
-    } catch (_) {
-      const snap = await getDocs(collection(_db, 'tienda_fotos_pedidas'));
-      docs = snap.docs;
-    }
+    // Las tres cosas a la vez: la lista, el catálogo (para la foto que tiene
+    // hoy) y qué se publica (para no despublicar sin querer al guardar).
+    const [docs, catalogo, publicacion] = await Promise.all([
+      traerPedidas(),
+      getCached('catalogo:all', async () => {
+        const snap = await getDocs(query(collection(_db, 'catalogo'), orderBy('nombre')));
+        return snap.docs.map(d => ({ ...d.data(), doc_id: d.id }));
+      }, { ttl: 10 * 60 * 1000, memOnly: true }),
+      leerDocRapido(doc(_db, 'tienda_config', 'publicacion'),
+                    { etiqueta: 'tienda_config/publicacion', vacio: {} }),
+    ]);
+
+    _catalogo = new Map((catalogo || []).map(d => [String(d.doc_id), d]));
+    _habilitados = Array.isArray(publicacion?.rubros)
+      ? publicacion.rubros.map(r => String(r).trim().toUpperCase()) : [];
+    _subExcluidos = publicacion?.subrubros_excluidos || {};
 
     _lista = docs.map(d => {
       const v = d.data() || {};
+      const producto = _catalogo.get(d.id);
       return {
         id: d.id,
-        nombre: v.nombre || '(sin nombre)',
-        rubro: v.rubro || '',
+        nombre: v.nombre || producto?.nombre || '(sin nombre)',
+        rubro: v.rubro || producto?.rubro || '',
         teniaFoto: v.tenia_foto === true,
         cuando: v.pedido_en?.toDate?.() || null,
+        // Lo que hoy se ve en la tienda. Es lo que hay que reemplazar, así que
+        // conviene tenerlo a la vista mientras se elige la nueva.
+        fotos: imagenesDe(producto),
+        enCatalogo: Boolean(producto),
       };
     }).sort((a, b) => (b.cuando?.getTime() || 0) - (a.cuando?.getTime() || 0));
 
@@ -82,11 +107,35 @@ async function cargar() {
   } catch (err) {
     console.error('[fotos] no se pudo leer la lista:', err);
     cuerpo.innerHTML = `
-      <div class="tienda-pista" style="color:var(--danger)">
+      <div class="tienda-pista" style="color:var(--tint-red-fg)">
         No se pudo leer la lista: ${escHtml(err?.message || String(err))}
       </div>`;
   }
 }
+
+async function traerPedidas() {
+  // Ordenar por fecha necesita que todos los documentos tengan el campo. Ante
+  // cualquier problema se cae a traer todo sin orden y se ordena en memoria.
+  try {
+    const snap = await getDocs(query(
+      collection(_db, 'tienda_fotos_pedidas'), orderBy('pedido_en', 'desc')));
+    return snap.docs;
+  } catch (_) {
+    const snap = await getDocs(collection(_db, 'tienda_fotos_pedidas'));
+    return snap.docs;
+  }
+}
+
+/** Las fotos publicadas del producto, con el mismo criterio que el espejo. */
+function imagenesDe(datos) {
+  if (!datos) return [];
+  const propias = datos.tienda_imagenes;
+  if (Array.isArray(propias) && propias.length) return propias.filter(Boolean).map(String);
+  const suelta = datos.imagen_url || datos.imagen;
+  return suelta ? [String(suelta)] : [];
+}
+
+/* ── Pintado ──────────────────────────────────────────────────────────────── */
 
 function pintar() {
   const cuerpo = document.getElementById('fotosCuerpo');
@@ -101,7 +150,7 @@ function pintar() {
     return;
   }
 
-  const sinFoto = _lista.filter(f => !f.teniaFoto).length;
+  const sinFoto = _lista.filter(f => !f.fotos.length).length;
 
   cuerpo.innerHTML = `
     <div class="tienda-resumen">
@@ -119,38 +168,139 @@ function pintar() {
     <table class="tienda-tabla" id="fotosTabla">
       <thead>
         <tr>
-          <th style="width:34px"></th>
+          <th style="width:54px">Foto</th>
           <th>Producto</th>
-          <th style="width:150px">Rubro</th>
-          <th style="width:120px">Estado</th>
-          <th style="width:120px">Marcado</th>
-          <th style="width:44px" data-no-imprimir></th>
+          <th style="width:140px">Rubro</th>
+          <th style="width:112px">Marcado</th>
+          <th style="width:210px" data-no-imprimir></th>
         </tr>
       </thead>
       <tbody>
-        ${_lista.map((f, i) => `
-          <tr data-fila="${escHtml(f.id)}">
-            <td style="color:var(--text-muted)">${i + 1}</td>
-            <td><b>${escHtml(f.nombre)}</b></td>
-            <td>${escHtml(nombreBonito(f.rubro))}</td>
-            <td>${f.teniaFoto
-                  ? '<span class="tienda-etiqueta auto">Cambiar la que tiene</span>'
-                  : '<span class="tienda-etiqueta oculto">No tiene foto</span>'}</td>
-            <td style="color:var(--text-muted)">${f.cuando ? fecha(f.cuando) : '—'}</td>
-            <td data-no-imprimir>
-              <button class="pc-btn" data-sacar="${escHtml(f.id)}" title="Sacar de la lista"
-                      style="padding:4px 7px">
-                <span class="material-icons" style="font-size:17px">close</span>
-              </button>
-            </td>
-          </tr>`).join('')}
+        ${_lista.map(f => filaHtml(f)).join('')}
       </tbody>
     </table>`;
 
-  cuerpo.querySelectorAll('[data-sacar]').forEach(boton => {
-    boton.addEventListener('click', () => sacar(boton.dataset.sacar));
+  cuerpo.querySelectorAll('[data-sacar]').forEach(b => {
+    b.addEventListener('click', () => sacar(b.dataset.sacar));
+  });
+  cuerpo.querySelectorAll('[data-cargar]').forEach(b => {
+    b.addEventListener('click', () => pedirArchivo(b.dataset.cargar));
   });
 }
+
+function filaHtml(f) {
+  const foto = f.fotos[0];
+  return `
+    <tr data-fila="${escHtml(f.id)}">
+      <td>
+        ${foto
+          ? `<img src="${escHtml(foto)}" alt="" class="tienda-foto" loading="lazy">`
+          : `<div class="tienda-foto tienda-foto--falta">
+               <span class="material-icons">image_not_supported</span>
+             </div>`}
+      </td>
+      <td>
+        <div class="tienda-nombre">${escHtml(f.nombre)}</div>
+        ${f.enCatalogo
+          ? (f.fotos.length > 1
+              ? `<div class="tienda-sub">${f.fotos.length} fotos cargadas</div>` : '')
+          : '<div class="tienda-sub" style="color:var(--tint-red-fg)">'
+            + 'Ya no está en el catálogo</div>'}
+      </td>
+      <td>${escHtml(nombreBonito(f.rubro))}</td>
+      <td style="color:var(--text-muted)">${f.cuando ? fecha(f.cuando) : '—'}</td>
+      <td data-no-imprimir>
+        <div style="display:flex;gap:6px;align-items:center;justify-content:flex-end">
+          <span class="tienda-pista" data-estado="${escHtml(f.id)}" style="margin:0"></span>
+          ${f.enCatalogo ? `
+            <button class="pc-btn" data-cargar="${escHtml(f.id)}"
+                    style="padding:6px 10px;white-space:nowrap">
+              <span class="material-icons">add_a_photo</span>
+              ${f.fotos.length ? 'Cambiar' : 'Cargar'}
+            </button>` : ''}
+          <button class="pc-btn" data-sacar="${escHtml(f.id)}" title="Sacar de la lista"
+                  style="padding:6px 8px">
+            <span class="material-icons" style="font-size:17px">close</span>
+          </button>
+        </div>
+      </td>
+    </tr>`;
+}
+
+function estado(id, texto, error = false) {
+  const nodo = document.querySelector(`[data-estado="${CSS.escape(id)}"]`);
+  if (!nodo) return;
+  nodo.textContent = texto || '';
+  nodo.style.color = error ? 'var(--tint-red-fg)' : 'var(--text-muted)';
+}
+
+/* ── Carga de la foto ─────────────────────────────────────────────────────── */
+
+function pedirArchivo(id) {
+  if (_subiendo) return;
+  const input = document.getElementById('fotosArchivo');
+  if (!input) return;
+  // El id del producto viaja en el propio input: el `change` llega después, y
+  // para entonces ya no hay forma de saber desde qué fila se abrió.
+  input.dataset.para = id;
+  input.value = '';
+  input.click();
+}
+
+async function alElegirArchivo(ev) {
+  const input = ev.target;
+  const id = input.dataset.para;
+  const archivos = [...(input.files || [])];
+  if (!id || !archivos.length || _subiendo) return;
+
+  const f = _lista.find(x => x.id === id);
+  if (!f) return;
+
+  _subiendo = true;
+  document.querySelectorAll('[data-cargar]').forEach(b => { b.disabled = true; });
+
+  try {
+    // Las nuevas van adelante: la primera de la lista es la que la tienda
+    // muestra en la card, y quien sube una foto la sube para que se vea.
+    const nuevas = [];
+    for (const [i, archivo] of archivos.entries()) {
+      const cual = archivos.length > 1 ? ` (${i + 1} de ${archivos.length})` : '';
+      const url = await subirFoto(id, archivo,
+        { alProgreso: t => estado(id, t + cual) });
+      nuevas.push(url);
+    }
+
+    estado(id, 'Guardando…');
+    const imagenes = [...nuevas, ...f.fotos];
+    const resultado = await guardarYEspejar(_db, id, { tienda_imagenes: imagenes },
+                                            _habilitados, _subExcluidos);
+
+    // El catálogo en memoria queda al día para que refrescar no la pierda.
+    const datos = _catalogo.get(id);
+    if (datos) datos.tienda_imagenes = imagenes;
+
+    // Con la foto cargada ya no está pendiente. Se saca recién ahora: si el
+    // guardado hubiera fallado, el producto tenía que seguir en la lista.
+    await deleteDoc(doc(_db, 'tienda_fotos_pedidas', id));
+    _lista = _lista.filter(x => x.id !== id);
+    pintar();
+
+    if (!resultado?.publicado) {
+      // Pasa cuando el producto está sin stock o su rubro no se publica: la
+      // foto quedó guardada igual, pero no se ve en la tienda todavía.
+      console.info(`[fotos] ${id}: foto guardada, sin publicar (${resultado?.motivo})`);
+    }
+  } catch (err) {
+    console.error('[fotos] no se pudo cargar la foto:', err);
+    estado(id, err?.message || 'No se pudo subir.', true);
+  } finally {
+    _subiendo = false;
+    document.querySelectorAll('[data-cargar]').forEach(b => { b.disabled = false; });
+    input.value = '';
+  }
+}
+
+/* ── Sacar de la lista ────────────────────────────────────────────────────── */
 
 async function sacar(id) {
   const f = _lista.find(x => x.id === id);
@@ -167,6 +317,7 @@ async function sacar(id) {
     pintar();
   } catch (err) {
     console.error('[fotos] no se pudo sacar:', err);
+    estado(id, 'No se pudo sacar.', true);
   }
 }
 
@@ -174,6 +325,8 @@ function fecha(d) {
   return d.toLocaleDateString('es-AR', { day: '2-digit', month: '2-digit' })
        + ' ' + d.toLocaleTimeString('es-AR', { hour: '2-digit', minute: '2-digit', hour12: false });
 }
+
+/* ── Impresión ────────────────────────────────────────────────────────────── */
 
 /**
  * Se imprime en una ventana aparte y no con `window.print()` sobre el panel:
@@ -188,7 +341,7 @@ function imprimir() {
       <td class="n">${i + 1}</td>
       <td>${escHtml(f.nombre)}</td>
       <td>${escHtml(nombreBonito(f.rubro))}</td>
-      <td>${f.teniaFoto ? 'Cambiar' : 'No tiene'}</td>
+      <td>${f.fotos.length ? 'Cambiar' : 'No tiene'}</td>
       <td class="tilde"></td>
     </tr>`).join('');
 
