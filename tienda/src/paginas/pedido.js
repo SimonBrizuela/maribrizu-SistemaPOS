@@ -258,7 +258,12 @@ function mensaje(p, modo, cancelado) {
     case 'en_camino':
       return {
         titulo: 'Tu pedido va en camino',
-        bajada: 'Salió para tu dirección. Tené el efectivo a mano si pagás así.',
+        // El recordatorio del efectivo sale del pago de ESTE pedido, no de la
+        // config: un pedido viejo cargado en efectivo lo sigue necesitando
+        // aunque la tienda ya no lo ofrezca.
+        bajada: p.pago?.modo === 'efectivo'
+          ? 'Salió para tu dirección. Tené el efectivo a mano.'
+          : 'Salió para tu dirección.',
       };
     case 'listo':
       return retiro

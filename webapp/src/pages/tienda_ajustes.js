@@ -44,7 +44,9 @@ const POR_DEFECTO = {
     demora_texto: '24 a 48 hs',
     pedido_minimo: 0,
   },
-  pago: { alias: null, titular: null },
+  // `efectivo_habilitado` en false es el estado que se quiere hoy: si el
+  // documento todavía no trae el campo, la tienda cobra solo por transferencia.
+  pago: { alias: null, titular: null, efectivo_habilitado: false },
 };
 
 let _db = null;
@@ -355,7 +357,20 @@ export async function renderTiendaAjustes(container, db) {
 
       <section class="tienda-bloque" style="background:var(--surface);border:1px solid var(--border);
                border-radius:12px;padding:18px 20px;margin:0">
-        <h4>Transferencia</h4>
+        <h4>Formas de pago</h4>
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13.5px;
+                      margin-bottom:14px">
+          <input type="checkbox" id="cfgEfectivo"
+                 ${config.pago?.efectivo_habilitado === true ? 'checked' : ''}
+                 style="width:17px;height:17px;cursor:pointer">
+          <span>Aceptar efectivo</span>
+        </label>
+        <div class="tienda-pista" style="margin-bottom:16px">
+          Apagado, el checkout ofrece solo transferencia y la portada deja de
+          prometer efectivo. Prenderlo lo vuelve a mostrar al instante, sin
+          publicar la tienda de nuevo.
+        </div>
+
         ${campo('cfgAlias', 'Alias', config.pago?.alias,
           { placeholder: 'libreria.liceo.mp' })}
         ${campo('cfgTitular', 'A nombre de', config.pago?.titular,
@@ -559,7 +574,11 @@ async function guardarTodo(container) {
           .sort((a, b) => a.hasta_km - b.hasta_km)
           .map(t => ({ hasta_km: t.hasta_km, precio: Math.max(0, t.precio) })),
       },
-      pago: { alias: texto('#cfgAlias'), titular: texto('#cfgTitular') },
+      pago: {
+        alias: texto('#cfgAlias'),
+        titular: texto('#cfgTitular'),
+        efectivo_habilitado: $('#cfgEfectivo').checked,
+      },
       // El origen no se toca desde acá: está verificado contra Places y de esa
       // coordenada sale lo que paga cada cliente. Se conserva tal cual estaba.
       origen: _config.origen,

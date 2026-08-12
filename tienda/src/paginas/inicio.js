@@ -144,7 +144,8 @@ export async function inicio({ montar }) {
           <div style="--paso-color:var(--liceo-verde)">
             <div class="pasos__numero">03</div>
             <h3>Pagás al recibirlo</h3>
-            <p>Efectivo o transferencia, cuando el pedido ya está en tus manos. Demora ${esc(cfg.entrega.demora_texto)}.</p>
+            <p>${cfg.pago?.efectivo_habilitado === true ? 'Efectivo o transferencia' : 'Por transferencia'
+              }, cuando el pedido ya está en tus manos. Demora ${esc(cfg.entrega.demora_texto)}.</p>
           </div>
         </div>
       </div>

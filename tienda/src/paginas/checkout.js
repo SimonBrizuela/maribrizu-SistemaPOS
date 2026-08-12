@@ -115,7 +115,12 @@ function pintarFormulario({ montar, cfg, cambios }) {
 
   /** @type {'retiro'|'delivery'} */
   let modo = hayRetiro ? 'retiro' : 'delivery';
-  let formaPago = 'efectivo';
+
+  // El efectivo se prende y se apaga desde el panel. Apagado, la única forma es
+  // la transferencia y el bloque muestra una sola opción, ya elegida: no se le
+  // pide al cliente que "elija" entre una cosa sola.
+  const hayEfectivo = cfg.pago?.efectivo_habilitado === true;
+  let formaPago = hayEfectivo ? 'efectivo' : 'transferencia';
 
   // Coordenadas del domicilio, cuando el cliente elige una direccion del
   // autocompletado. Sin ellas la cotizacion queda en "a confirmar": no hay
@@ -236,14 +241,16 @@ function pintarFormulario({ montar, cfg, cambios }) {
 
           ${bloque(3, 'Cómo pagás', `
             <div class="opciones" role="radiogroup" aria-label="Forma de pago">
+              ${hayEfectivo ? `
               <button type="button" class="opcion" role="radio" data-pago="efectivo" aria-checked="true">
                 <span class="opcion__marca" aria-hidden="true"></span>
                 <span class="opcion__texto">
                   <span class="opcion__titulo">Efectivo</span>
                   <span class="opcion__detalle" data-detalle-efectivo>Al retirarlo en el local.</span>
                 </span>
-              </button>
-              <button type="button" class="opcion" role="radio" data-pago="transferencia" aria-checked="false">
+              </button>` : ''}
+              <button type="button" class="opcion" role="radio" data-pago="transferencia"
+                      aria-checked="${hayEfectivo ? 'false' : 'true'}">
                 <span class="opcion__marca" aria-hidden="true"></span>
                 <span class="opcion__texto">
                   <span class="opcion__titulo">Transferencia</span>

@@ -77,6 +77,11 @@ const CONFIG_POR_DEFECTO = {
   pago: {
     alias: null,
     titular: null,
+    // Si se cobra en efectivo contra entrega. Apagado: la tienda ofrece solo
+    // transferencia. Se prende desde el panel (Ajustes de la tienda) sin tocar
+    // código ni volver a publicar. El default es el estado que se quiere hoy,
+    // así que la tienda queda sin efectivo aunque el documento no lo traiga.
+    efectivo_habilitado: false,
   },
   banner: null,
 };
