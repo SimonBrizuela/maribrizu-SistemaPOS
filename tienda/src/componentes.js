@@ -3,7 +3,7 @@
  * Devuelven HTML como texto; quien las usa lo inserta y engancha los eventos.
  */
 import { pesos, esc, nombreBonito, colorDeVariedad, lineasDeHorario } from './formato.js';
-import { icono, fichasMarca, franjaMarca } from './iconos.js';
+import { icono, franjaMarca } from './iconos.js';
 
 /**
  * Card de producto.
@@ -121,8 +121,7 @@ export function cabecera({ unidades = 0, busqueda = '' } = {}) {
     <header class="cabecera">
       <div class="contenedor cabecera__fila">
         <a class="cabecera__logo" href="/" data-ruta>
-          ${fichasMarca()}
-          <span>Librería Liceo</span>
+          <img src="/logo-liceo.png" alt="Librería Liceo" width="768" height="168">
         </a>
 
         <button class="icono-boton" data-abrir-busqueda aria-label="Buscar productos">
@@ -185,10 +184,8 @@ export function pie(cfg) {
       ${franjaMarca()}
       <div class="contenedor pie__grilla">
         <div>
-          <span class="cabecera__logo" style="color:var(--ink-texto)">
-            ${fichasMarca()}
-            <span>Librería Liceo</span>
-          </span>
+          <img class="pie__logo" src="/logo-liceo.png" alt="Librería Liceo"
+               width="768" height="168" loading="lazy" decoding="async">
           <p class="pie__texto" style="margin-top:var(--e-3)">
             ${esc(cfg.direccion)}
           </p>

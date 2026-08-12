@@ -1072,6 +1072,10 @@
 }
 .pie__texto { font-size: var(--t-sm); line-height: 1.7; color: var(--ink-texto-2); }
 
+/* En el pie hay más aire que en la barra de arriba, así que el logo va unos
+   píxeles más grande que los 28 del encabezado. */
+.pie__logo { display: block; height: 34px; width: auto; }
+
 /* Un renglón por tramo. Todo junto en una línea entraba justo, se cortaba, y
    había que adivinar si el sábado abría a la tarde. */
 .pie__horarios {
@@ -1150,10 +1154,13 @@
   .cabecera [data-cerrar-busqueda] { display: none; }
 }
 
-/* El nombre de la marca se guarda en pantallas muy angostas; las cinco fichas
-   solas ya identifican la tienda. */
+/* En pantallas muy angostas el logo cede unos píxeles: la fila lleva además la
+   lupa y el carrito, y a 320 px la cuenta queda justa.
+   Antes acá se escondía el nombre en texto y quedaban solo las fichas. Ahora el
+   encabezado es una imagen sola, y la regla vieja además apagaba el nombre del
+   pie, que tiene todo el ancho para mostrarlo. */
 @media (max-width: 359px) {
-  .cabecera__logo span:not(.marca-fichas) { display: none; }
+  .cabecera .cabecera__logo img { height: 22px; }
 }
 
 

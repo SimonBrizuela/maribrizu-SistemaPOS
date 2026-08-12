@@ -1219,6 +1219,17 @@ textarea.campo__control { min-height: 96px; resize: vertical; line-height: var(-
   flex: none;
 }
 .cabecera__logo:hover { text-decoration: none; }
+
+/* En el encabezado el nombre va dibujado, así que la imagen reemplaza a las
+   fichas y al texto. Se mide por altura y no por ancho: es una tira de 4.57:1
+   y atada al ancho no entra en una barra de 64 px que además se compacta a 52.
+   El pie sigue con las fichas y el nombre en texto, por eso la regla va
+   apuntada al encabezado y no al bloque de marca en general. */
+.cabecera .cabecera__logo img {
+  display: block;
+  height: 28px;
+  width: auto;
+}
 /* Las cinco fichas del logo, reducidas a su mínima expresión. Funciona a
    16px de alto donde el logo completo sería ilegible. */
 .marca-fichas { display: flex; gap: 2px; }
