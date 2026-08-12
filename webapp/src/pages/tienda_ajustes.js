@@ -286,7 +286,7 @@ function pintarRubros() {
             <input type="checkbox" data-subrubro="${escHtml(sub)}"
                    data-subrubro-de="${escHtml(rubro)}"
                    ${excluidos.includes(sub) ? '' : 'checked'}>
-            <span>${escHtml(nombreBonito(sub))}</span>
+            <span data-texto="${escHtml(nombreBonito(sub))}">${escHtml(nombreBonito(sub))}</span>
             <b>${s.publicables}</b>
           </label>`).join('')}
       </div>` : '';
@@ -299,7 +299,8 @@ function pintarRubros() {
                  ${prendido ? 'checked' : ''}
                  style="width:17px;height:17px;cursor:pointer">
           <span style="flex:1;min-width:0">
-            <b style="font-size:13.5px">${escHtml(nombreBonito(rubro))}</b>
+            <b style="font-size:13.5px"
+               data-texto="${escHtml(nombreBonito(rubro))}">${escHtml(nombreBonito(rubro))}</b>
             <span style="display:block;font-size:11.5px;color:var(--text-muted)">
               ${n.publicables} con stock de ${n.total}${
                 excluidos.length ? ` · ${excluidos.length} subrubro${
@@ -345,13 +346,32 @@ function prepararBuscadorDeRubros(lista) {
 
   const cuenta = document.getElementById('cfgBuscarCuenta');
   const limpiar = document.getElementById('cfgBuscarLimpiar');
+  // El orden con el que se pintó (por cuántos productos publica cada rubro).
+  // Se guarda para poder devolverlo cuando se limpia la búsqueda.
+  const ordenOriginal = [...caja.querySelectorAll('.tienda-rubro-caja')];
+
+  /** Resalta dentro del elemento la parte que coincide con lo buscado. */
+  const resaltar = (nodo, q) => {
+    if (!nodo) return;
+    const texto = nodo.dataset.texto ?? nodo.textContent;
+    if (!q) { nodo.textContent = texto; return; }
+    const desde = claveDeRubro(texto).indexOf(q);
+    if (desde === -1) { nodo.textContent = texto; return; }
+    nodo.innerHTML = escHtml(texto.slice(0, desde))
+      + '<mark class="tienda-marca">' + escHtml(texto.slice(desde, desde + q.length)) + '</mark>'
+      + escHtml(texto.slice(desde + q.length));
+  };
 
   const filtrar = () => {
     const q = claveDeRubro(campo.value);
     if (limpiar) limpiar.hidden = !q;
 
     let visibles = 0;
-    for (const bloque of caja.querySelectorAll('.tienda-rubro-caja')) {
+    // Peso de cada rubro para el orden: primero lo que EMPIEZA con lo escrito,
+    // que es lo que la persona tenía en la cabeza al tipear.
+    const pesos = new Map();
+
+    for (const bloque of ordenOriginal) {
       const check = bloque.querySelector('[data-rubro]');
       const rubro = check?.dataset.rubro || '';
       const subs = [...bloque.querySelectorAll('[data-subrubro]')]
@@ -364,6 +384,13 @@ function prepararBuscadorDeRubros(lista) {
       bloque.hidden = !entra;
       if (entra) visibles++;
 
+      pesos.set(bloque, !q ? 0
+        : rubro.startsWith(q) ? 0
+        : porRubro ? 1
+        : subs.some(s => s.startsWith(q)) ? 2
+        : porSub ? 3
+        : 9);
+
       // Si el que coincide es un subrubro, se abre el rubro para mostrarlo,
       // aunque esté apagado: es lo que la persona fue a buscar.
       const cajaSubs = bloque.querySelector('[data-subs-de]');
@@ -371,18 +398,31 @@ function prepararBuscadorDeRubros(lista) {
         cajaSubs.hidden = q ? !porSub && !(porRubro && check?.checked)
                             : !check?.checked;
       }
+
+      resaltar(bloque.querySelector('b[data-texto]'), porRubro ? q : '');
+
       for (const fila of bloque.querySelectorAll('.tienda-subrubro')) {
         // La clave del dataset y no el texto de la fila: el texto arrastra el
         // número de productos y "12" haría coincidir cualquier cosa.
         const clave = fila.querySelector('[data-subrubro]')?.dataset.subrubro || '';
         const coincide = !q || clave.includes(q);
         fila.classList.toggle('tienda-subrubro--apagado', !!q && porSub && !coincide);
+        resaltar(fila.querySelector('span[data-texto]'), coincide ? q : '');
       }
     }
 
+    // Lo encontrado sube. Con la lista dentro de una caja con scroll, esconder
+    // lo que no coincide no alcanza: si lo buscado estaba abajo, seguía abajo.
+    const ordenados = [...ordenOriginal].sort((a, b) => {
+      const d = pesos.get(a) - pesos.get(b);
+      return d !== 0 ? d : ordenOriginal.indexOf(a) - ordenOriginal.indexOf(b);
+    });
+    ordenados.forEach(bloque => caja.appendChild(bloque));
+    caja.scrollTop = 0;
+
     if (cuenta) {
       cuenta.textContent = q
-        ? `${visibles} de ${lista.length} rubros`
+        ? (visibles ? `${visibles} de ${lista.length} rubros` : 'Nada con ese nombre')
         : '';
     }
   };

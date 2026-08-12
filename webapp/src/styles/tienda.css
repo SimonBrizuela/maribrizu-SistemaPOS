@@ -390,3 +390,11 @@
 /* Un subrubro que no coincide, dentro de un rubro que sí: se deja ver para no
    perder el contexto, pero apagado para que salte el que se buscaba. */
 .tienda-subrubro--apagado { opacity: .38; }
+
+/* Lo que coincide con lo buscado, dentro del nombre del rubro o del subrubro. */
+.tienda-marca {
+  background: var(--tint-yellow-bg);
+  color: inherit;
+  border-radius: 3px;
+  padding: 0 1px;
+}
