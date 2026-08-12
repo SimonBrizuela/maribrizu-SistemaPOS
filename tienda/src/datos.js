@@ -47,6 +47,7 @@ const CONFIG_POR_DEFECTO = {
   telefono: '3517046684',
   whatsapp: '5493517046684',
   email: 'libreria.liceo@hotmail.com',
+  instagram: 'https://www.instagram.com/libreria.liceo/',
   direccion: 'Av. Alfonsina Storni 168, X5019 Córdoba',
   // Coordenada del local, verificada contra Places sobre la dirección completa.
   // Está acá y no solo en Firestore porque el mapa del checkout la necesita

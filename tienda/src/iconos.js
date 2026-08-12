@@ -38,6 +38,9 @@ const TRAZOS = {
   // dejandole lugar a la cola en la esquina de abajo a la izquierda.
   whatsapp: '<path d="M4.27 13.18A9 9 0 1 1 8.5 18.79L2.7 21.3Z"/><path d="M8.7 6.5c.2-.5.4-.5.7-.5h.6c.2 0 .4 0 .6.5l.8 1.9c.1.3 0 .5-.1.7l-.5.6c-.2.2-.3.4-.1.7a7.4 7.4 0 0 0 3.4 3c.3.2.5.1.7-.1l.6-.7c.2-.2.4-.2.6-.1l1.9.9c.3.1.4.3.4.5v.7c0 .5-.4 1-1 1.2a3 3 0 0 1-1.4.1c-1.2-.2-3.3-1-5.2-2.9s-2.7-4-2.9-5.2a3 3 0 0 1 .1-1.4"/>',
   local:    '<path d="M4 9h16v11a1 1 0 0 1-1 1H5a1 1 0 0 1-1-1z"/><path d="m4 9 1.6-5A1 1 0 0 1 6.6 3h10.8a1 1 0 0 1 1 .7L20 9"/><path d="M9 21v-6h6v6"/>',
+  // El marco, la lente y el punto del flash: es la silueta que se reconoce a
+  // 16 px, que es el tamaño al que se usa en el pie.
+  instagram: '<rect x="3" y="3" width="18" height="18" rx="5"/><circle cx="12" cy="12" r="3.6"/><circle cx="17.2" cy="6.8" r="0.6" fill="currentColor" stroke="none"/>',
 
   // Uno por rubro. Se eligio el objeto mas reconocible de cada uno a tamaño
   // chico, no el mas representativo: a 20 px una maquina de coser es una mancha,

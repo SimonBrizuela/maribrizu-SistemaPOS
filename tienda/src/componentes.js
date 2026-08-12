@@ -204,10 +204,17 @@ export function pie(cfg) {
             <a href="tel:${esc(cfg.telefono)}">${esc(cfg.telefono)}</a><br>
             <a href="mailto:${esc(cfg.email)}">${esc(cfg.email)}</a>
           </p>
-          <a class="boton boton--sobre-negro boton--chico" style="margin-top:var(--e-3)"
-             href="https://wa.me/${esc(cfg.whatsapp)}" target="_blank" rel="noopener">
-            ${icono('whatsapp', { tam: 16 })} WhatsApp
-          </a>
+          <div class="pie__redes">
+            <a class="boton boton--sobre-negro boton--chico"
+               href="https://wa.me/${esc(cfg.whatsapp)}" target="_blank" rel="noopener">
+              ${icono('whatsapp', { tam: 16 })} WhatsApp
+            </a>
+            ${cfg.instagram ? `
+              <a class="boton boton--sobre-negro boton--chico"
+                 href="${esc(cfg.instagram)}" target="_blank" rel="noopener">
+                ${icono('instagram', { tam: 16 })} Instagram
+              </a>` : ''}
+          </div>
         </div>
       </div>
       <div class="contenedor pie__legal">

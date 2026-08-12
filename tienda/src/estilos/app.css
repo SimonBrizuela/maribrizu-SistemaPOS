@@ -1113,6 +1113,15 @@
 }
 .pie__texto { font-size: var(--t-sm); line-height: 1.7; color: var(--ink-texto-2); }
 
+/* Los dos botones envuelven en el celular en vez de comprimirse: "WhatsApp" e
+   "Instagram" en una sola línea dejan los dos ilegibles. */
+.pie__redes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--e-2);
+  margin-top: var(--e-3);
+}
+
 /* En el pie hay más aire que en la barra de arriba, así que el logo va unos
    píxeles más grande que los 28 del encabezado. */
 .pie__logo { display: block; height: 34px; width: auto; }
