@@ -117,6 +117,11 @@ backup_ui_*/
 *.png
 2026-*.png
 
+# Los PNG de marca sí van al repo: son parte del sitio, no capturas sueltas.
+# Sin esto, un clone limpio deja el logo del encabezado y los iconos en 404.
+!tienda/public/*.png
+!proximamente/*.png
+
 # Build / dist binarios (los genera GitHub Actions)
 SistemaPOS_Portable.zip
 build_output/
