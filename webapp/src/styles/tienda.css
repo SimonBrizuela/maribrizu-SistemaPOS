@@ -335,43 +335,59 @@
 .tienda-subrubro:has(input:not(:checked)) span { color: var(--text-muted); text-decoration: line-through; }
 
 /* ── Buscador de la lista de rubros ──────────────────────────────────────── */
-.tienda-buscador {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 10px;
-  border: 1px solid var(--border);
-  border-radius: 9px;
-  background: var(--card-bg);
-  transition: border-color .15s;
-}
-.tienda-buscador:focus-within { border-color: #4361ee; }
-.tienda-buscador .material-icons { font-size: 18px; color: var(--text-muted); flex-shrink: 0; }
+/* El input es el mismo de todo el panel: borde fino, radio 8, alto de control.
+   La lupa va DENTRO, posicionada sobre el campo — un contenedor con fondo y
+   borde propios se lee como una barra pegada al costado, que es justo lo que
+   no queremos. */
+.tienda-buscador { position: relative; }
 
 .tienda-buscador input {
-  flex: 1;
-  min-width: 0;
-  border: none;
-  background: transparent;
+  width: 100%;
+  padding: 8px 34px 8px 34px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
   color: var(--text);
-  font: inherit;
-  font-size: 13.5px;
-  padding: 9px 0;
+  font-family: inherit;
+  font-size: 13px;
   outline: none;
+  transition: border-color .15s, box-shadow .15s;
 }
-/* La X nativa del type=search duplica el botón de limpiar. */
-.tienda-buscador input::-webkit-search-cancel-button { display: none; }
+.tienda-buscador input:focus {
+  border-color: #4361ee;
+  box-shadow: 0 0 0 3px rgba(67, 97, 238, .14);
+}
 
-.tienda-buscador button {
+.tienda-buscador__lupa {
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  transform: translateY(-50%);
+  font-size: 17px !important;
+  color: var(--text-muted);
+  pointer-events: none;
+}
+
+.tienda-buscador__x {
+  position: absolute;
+  right: 6px;
+  top: 50%;
+  transform: translateY(-50%);
   display: grid;
   place-items: center;
+  width: 22px; height: 22px;
+  padding: 0;
   border: none;
-  background: transparent;
-  padding: 2px;
-  cursor: pointer;
   border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
 }
-.tienda-buscador button:hover { background: var(--bg); }
+.tienda-buscador__x:hover { background: var(--bg); color: var(--text); }
+.tienda-buscador__x .material-icons { font-size: 15px !important; }
+
+/* El navegador ya lo esconde, pero en algunos temas asoma como una franja. */
+datalist { display: none; }
 
 /* Un subrubro que no coincide, dentro de un rubro que sí: se deja ver para no
    perder el contexto, pero apagado para que salte el que se buscaba. */

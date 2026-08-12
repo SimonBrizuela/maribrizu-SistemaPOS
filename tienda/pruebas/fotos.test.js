@@ -1,9 +1,9 @@
 /**
  * Modo "marcar fotos".
  *
- * Lo que importa acá es que un cliente no vea nunca el tilde y que lo marcado
- * sobreviva a cambiar de pantalla. Firestore se reemplaza por espías: lo que se
- * prueba es la decisión, no el SDK.
+ * Lo que importa acá es que el tilde esté a la vista apenas se entra, que se
+ * pueda apagar por aparato, y que lo marcado sobreviva a cambiar de pantalla.
+ * Firestore se reemplaza por espías: lo que se prueba es la decisión, no el SDK.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -40,41 +40,41 @@ beforeEach(() => {
 });
 
 describe('quién ve el tilde', () => {
-  it('un cliente que entra normal no ve nada', async () => {
-    const fotos = await cargarModulo();
-    fotos.aplicarModoDesdeURL();
-    expect(fotos.modoFotos()).toBe(false);
-    expect(fotos.tildeFoto(PRODUCTO)).toBe('');
-  });
-
-  it('con ?fotos=1 el modo queda prendido y aparece el tilde', async () => {
-    globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo?fotos=1' };
+  it('está apenas se entra, sin ningún parámetro', async () => {
     const fotos = await cargarModulo();
     fotos.aplicarModoDesdeURL();
     expect(fotos.modoFotos()).toBe(true);
     expect(fotos.tildeFoto(PRODUCTO)).toContain('data-marcar-foto="abc123"');
   });
 
-  it('sigue prendido en la visita siguiente, ya sin el parámetro', async () => {
-    globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo?fotos=1' };
+  it('?fotos=0 lo apaga en ese aparato', async () => {
+    globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo?fotos=0' };
+    const fotos = await cargarModulo();
+    fotos.aplicarModoDesdeURL();
+    expect(fotos.modoFotos()).toBe(false);
+    expect(fotos.tildeFoto(PRODUCTO)).toBe('');
+  });
+
+  it('apagado sigue apagado en la visita siguiente', async () => {
+    globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo?fotos=0' };
     let fotos = await cargarModulo();
     fotos.aplicarModoDesdeURL();
 
     globalThis.location = { href: 'https://beta.liceolibreria.com/p/abc123' };
     fotos = await cargarModulo();
     fotos.aplicarModoDesdeURL();
-    expect(fotos.modoFotos()).toBe(true);
+    expect(fotos.modoFotos()).toBe(false);
   });
 
-  it('?fotos=0 lo apaga', async () => {
-    globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo?fotos=1' };
+  it('?fotos=1 lo vuelve a prender donde se había apagado', async () => {
+    globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo?fotos=0' };
     let fotos = await cargarModulo();
     fotos.aplicarModoDesdeURL();
 
-    globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo?fotos=0' };
+    globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo?fotos=1' };
     fotos = await cargarModulo();
     fotos.aplicarModoDesdeURL();
-    expect(fotos.modoFotos()).toBe(false);
+    expect(fotos.modoFotos()).toBe(true);
   });
 
   it('el parámetro se borra de la barra de direcciones', async () => {
@@ -139,7 +139,6 @@ describe('marcar y desmarcar', () => {
   });
 
   it('el tilde de un producto ya marcado sale puesto', async () => {
-    globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo?fotos=1' };
     const fotos = await cargarModulo();
     fotos.aplicarModoDesdeURL();
     await fotos.alternarMarca(PRODUCTO);
@@ -150,7 +149,6 @@ describe('marcar y desmarcar', () => {
   });
 
   it('escapa el nombre del producto en los atributos', async () => {
-    globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo?fotos=1' };
     const fotos = await cargarModulo();
     fotos.aplicarModoDesdeURL();
 
@@ -167,15 +165,15 @@ describe('la casilla en la card, de punta a punta', () => {
     marca: '', sub_rubro: '', categoria: '', unidad: 'unidad',
   };
 
-  it('sin el modo prendido la card sale limpia', async () => {
+  it('apagado en ese aparato, la card sale limpia', async () => {
+    globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo?fotos=0' };
     const fotos = await cargarModulo();
     fotos.aplicarModoDesdeURL();
     const { cardProducto } = await import('../src/componentes.js');
     expect(cardProducto(PROD)).not.toContain('marca-foto');
   });
 
-  it('con el modo prendido la card trae la casilla', async () => {
-    globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo?fotos=1' };
+  it('la card trae la casilla sin hacer nada', async () => {
     const fotos = await cargarModulo();
     fotos.aplicarModoDesdeURL();
 
@@ -188,7 +186,6 @@ describe('la casilla en la card, de punta a punta', () => {
   });
 
   it('también en las cards que tienen foto', async () => {
-    globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo?fotos=1' };
     const fotos = await cargarModulo();
     fotos.aplicarModoDesdeURL();
 

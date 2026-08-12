@@ -1,13 +1,18 @@
 /**
  * Modo "marcar fotos".
  *
- * El personal recorre la tienda como un cliente más y va tildando los productos
- * cuya foto hay que cambiar, sin abrir la ficha de cada uno. La lista se lee
- * después desde el panel.
+ * El personal recorre la tienda y va tildando los productos cuya foto hay que
+ * cambiar, sin abrir la ficha de cada uno. La lista se lee después desde el
+ * panel.
  *
- * El modo está oculto: se prende una sola vez por dispositivo entrando con
- * `?fotos=1` y queda guardado. Un cliente común nunca ve el tilde, así que no
- * puede ensuciar la lista. Se apaga con `?fotos=0`.
+ * El tilde está a la vista apenas se entra, sin link aparte ni nada que
+ * recordar: es lo que se pidió, para que puedan marcar en el momento y desde
+ * cualquier aparato. La contra es que un cliente también puede tocarlo; lo peor
+ * que puede pasar es que llegue algún producto de más a la lista, y sacarlo del
+ * panel es un click.
+ *
+ * Se puede apagar en un aparato con `?fotos=0` (y volver con `?fotos=1`), que
+ * es lo que usa el botón "Salir" de la píldora.
  *
  * Lo marcado se escribe en `tienda_fotos_pedidas`, un documento por producto
  * (el id del doc ES el id del producto, así marcar dos veces no duplica nada).
@@ -20,7 +25,9 @@ import { db } from './firebase.js';
 import { esc } from './formato.js';
 import { icono } from './iconos.js';
 
-const CLAVE_MODO = 'll-modo-fotos';
+// Se guarda el APAGADO y no el prendido: el modo viene puesto de fábrica, así
+// que lo que hay que recordar de un aparato es que ahí lo sacaron a propósito.
+const CLAVE_APAGADO = 'll-fotos-apagado';
 const CLAVE_LISTA = 'll-fotos-pedidas';
 
 let _marcados = null;   // Set de ids, cargado una vez
@@ -31,9 +38,9 @@ let _marcados = null;   // Set de ids, cargado una vez
  * Lee `?fotos=` de la URL y lo deja guardado. Se llama una vez al arrancar,
  * antes del primer pintado.
  *
- * El parámetro se borra de la barra de direcciones después de aplicarlo: si
- * queda pegado, el personal lo comparte sin querer al mandar un link de un
- * producto y el modo se le enciende a un cliente.
+ * Solo hace falta para apagarlo (`?fotos=0`) o volver a prenderlo en un aparato
+ * donde se apagó. El parámetro se borra de la barra de direcciones después de
+ * aplicarlo, para que no viaje en un link compartido.
  */
 export function aplicarModoDesdeURL() {
   let valor = null;
@@ -44,11 +51,11 @@ export function aplicarModoDesdeURL() {
 
   try {
     if (valor === '0' || valor === 'no') {
-      localStorage.removeItem(CLAVE_MODO);
+      localStorage.setItem(CLAVE_APAGADO, '1');
     } else {
-      localStorage.setItem(CLAVE_MODO, '1');
+      localStorage.removeItem(CLAVE_APAGADO);
     }
-  } catch (_) { /* navegación privada sin storage: el modo dura la sesión */ }
+  } catch (_) { /* navegación privada sin storage: vale para esta sesión */ }
 
   try {
     const url = new URL(location.href);
@@ -57,11 +64,14 @@ export function aplicarModoDesdeURL() {
   } catch (_) { /* si no se puede reescribir, no es grave */ }
 }
 
+/** Prendido salvo que en este aparato lo hayan apagado a propósito. */
 export function modoFotos() {
   try {
-    return localStorage.getItem(CLAVE_MODO) === '1';
+    return localStorage.getItem(CLAVE_APAGADO) !== '1';
   } catch (_) {
-    return false;
+    // Sin storage (navegación privada) el tilde igual tiene que estar: es el
+    // caso normal, no la excepción.
+    return true;
   }
 }
 
@@ -159,11 +169,15 @@ export function tildeFoto(p) {
 }
 
 /**
- * La barra fija que cuenta lo marcado y deja apagar el modo.
- * Se monta una sola vez; después solo se actualiza el número.
+ * La píldora que cuenta lo marcado y deja apagar el modo.
+ *
+ * Aparece recién con el primer producto marcado. Ahora que el tilde lo ve
+ * cualquiera, una barra fija que dice "Modo fotos" en una tienda pública sería
+ * ruido para el cliente que no va a marcar nada; a quien marca, en cambio, le
+ * sirve para saber cuántos lleva y para salir.
  */
 export function iniciarBarraFotos() {
-  if (!modoFotos() || document.querySelector('.barra-fotos')) return;
+  if (!modoFotos() || !cuantosMarcados() || document.querySelector('.barra-fotos')) return;
 
   const barra = document.createElement('div');
   barra.className = 'barra-fotos';
@@ -178,7 +192,7 @@ export function iniciarBarraFotos() {
   document.body.classList.add('con-barra-fotos');
 
   barra.querySelector('[data-salir-fotos]').addEventListener('click', () => {
-    try { localStorage.removeItem(CLAVE_MODO); } catch (_) { /* sin storage */ }
+    try { localStorage.setItem(CLAVE_APAGADO, '1'); } catch (_) { /* sin storage */ }
     barra.remove();
     document.body.classList.remove('con-barra-fotos');
     document.querySelectorAll('.marca-foto').forEach(b => b.remove());
@@ -221,6 +235,8 @@ export function engancharTildes() {
       boton.classList.toggle('marca-foto--puesta', puesta);
       boton.setAttribute('aria-pressed', String(puesta));
       boton.title = puesta ? 'Sacar de la lista de fotos' : 'Marcar para cambiar la foto';
+      // La píldora nace con la primera marca; después solo se actualiza.
+      iniciarBarraFotos();
       refrescarCuenta();
     } catch (_) {
       boton.classList.add('marca-foto--error');

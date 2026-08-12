@@ -545,10 +545,11 @@ export async function renderTiendaAjustes(container, db) {
         </div>
 
         <div class="tienda-buscador">
-          <span class="material-icons">search</span>
-          <input type="search" id="cfgBuscarRubro" autocomplete="off" spellcheck="false"
+          <span class="material-icons tienda-buscador__lupa">search</span>
+          <input type="text" id="cfgBuscarRubro" autocomplete="off" spellcheck="false"
                  placeholder="Buscar rubro o subrubro…" list="cfgRubrosSugeridos">
-          <button type="button" id="cfgBuscarLimpiar" title="Limpiar" hidden>
+          <button type="button" class="tienda-buscador__x" id="cfgBuscarLimpiar"
+                  title="Limpiar" hidden>
             <span class="material-icons">close</span>
           </button>
         </div>

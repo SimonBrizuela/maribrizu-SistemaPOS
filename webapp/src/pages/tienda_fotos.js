@@ -26,9 +26,9 @@ export async function renderTiendaFotos(container, db) {
       <div style="min-width:260px;flex:1">
         <h2 style="margin:0">Fotos pedidas</h2>
         <p class="tienda-pista" style="margin:6px 0 0">
-          Lo que el personal marcó desde la tienda. Para marcar, abrir
-          <code>beta.liceolibreria.com/catalogo?fotos=1</code> en el celular:
-          aparece un tilde en cada producto y queda prendido en ese aparato.
+          Lo que se marcó desde la tienda. El tilde aparece en cada producto
+          apenas se entra, sin ningún link especial. Como lo ve cualquiera,
+          puede llegar algo de más: sacarlo de acá es un click.
         </p>
       </div>
       <div style="display:flex;gap:8px;align-items:center">
