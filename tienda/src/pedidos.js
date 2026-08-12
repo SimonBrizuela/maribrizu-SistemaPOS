@@ -12,8 +12,8 @@
  * una cuenta en una libreria de barrio es perder el pedido.
  */
 import {
-  addDoc, collection, doc, getDoc, getDocs, limit, onSnapshot,
-  orderBy, query, serverTimestamp, where,
+  collection, doc, getDoc, getDocs, limit, onSnapshot,
+  orderBy, query, serverTimestamp, setDoc, where,
 } from 'firebase/firestore';
 import { db } from './firebase.js';
 
@@ -65,8 +65,19 @@ function generarCodigo() {
  * con la del pedido: el reloj del celular del cliente puede estar corrido de
  * horas y no puede decidir cuando entro un pedido.
  */
+/**
+ * Reserva el id de un pedido que todavia no existe.
+ *
+ * Con transferencia, el comprobante se sube ANTES de crear el pedido: es lo que
+ * permite que el pedido nazca ya pagado en vez de quedar esperando. Para eso
+ * hace falta saber el id de antemano, y Firestore lo da sin escribir nada.
+ */
+export function nuevoIdDePedido() {
+  return doc(collection(db, 'tienda_pedidos')).id;
+}
+
 export async function crearPedido({ cliente, entrega, pago, items, subtotal, envio,
-                                   nota = '', uid = null }) {
+                                   nota = '', uid = null, id = null }) {
   const codigo = generarCodigo();
 
   const documento = {
@@ -91,7 +102,10 @@ export async function crearPedido({ cliente, entrega, pago, items, subtotal, env
     nota: String(nota || '').slice(0, 500),
   };
 
-  const referencia = await addDoc(collection(db, 'tienda_pedidos'), documento);
+  // Con un id reservado se escribe en ese lugar; sin el, lo elige Firestore.
+  const referencia = id ? doc(db, 'tienda_pedidos', id)
+                        : doc(collection(db, 'tienda_pedidos'));
+  await setDoc(referencia, documento);
 
   recordar({
     id: referencia.id,

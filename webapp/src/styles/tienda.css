@@ -398,3 +398,25 @@
   border-radius: 3px;
   padding: 0 1px;
 }
+
+/* ── Comprobante de transferencia en la tarjeta del pedido ───────────────── */
+.comprobante-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  align-self: flex-start;
+  padding: 5px 10px 5px 5px;
+  border: 1px solid var(--tint-green-fg);
+  border-radius: 99px;
+  background: var(--tint-green-bg);
+  color: var(--tint-green-fg);
+  font-size: 12.5px;
+  text-decoration: none;
+}
+.comprobante-chip:hover { text-decoration: none; filter: brightness(.97); }
+.comprobante-chip img {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  object-fit: cover;
+  background: var(--surface);
+}

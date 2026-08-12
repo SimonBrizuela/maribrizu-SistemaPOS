@@ -67,10 +67,59 @@ let _filtro = 'pendientes';
 let _busqueda = '';
 let _db = null;
 let _config = {};
+// id del pedido -> { url, tipo }. Lo que adjuntaron los clientes.
+let _comprobantes = new Map();
+let _unsubComprobantes = null;
 
 function cleanup() {
   _unsub?.();
   _unsub = null;
+  _unsubComprobantes?.();
+  _unsubComprobantes = null;
+}
+
+/**
+ * El comprobante que adjunto el cliente, dentro de la tarjeta del pedido.
+ *
+ * Se muestra la imagen chica y se abre en grande al tocarla; el PDF va como
+ * enlace, que es como se lee comodo. No se valida nada: el numero lo mira una
+ * persona contra el homebanking, que es lo unico que confirma que entro.
+ */
+function bloqueComprobante(p) {
+  const c = _comprobantes.get(p.id);
+  if (!c) {
+    if (p?.pago?.modo !== 'transferencia') return '';
+    return `<span style="color:var(--text-muted);font-size:12.5px">
+              <span class="material-icons" style="font-size:15px;vertical-align:-3px">hourglass_empty</span>
+              Sin comprobante todavía
+            </span>`;
+  }
+
+  return `
+    <a href="${esc(c.url)}" target="_blank" rel="noopener" class="comprobante-chip"
+       title="Abrir el comprobante en grande">
+      ${c.tipo === 'pdf'
+        ? '<span class="material-icons" style="font-size:19px">picture_as_pdf</span>'
+        : `<img src="${esc(c.url)}" alt="" loading="lazy">`}
+      <b>Comprobante ${c.tipo === 'pdf' ? 'en PDF' : 'adjuntado'}</b>
+      <span class="material-icons" style="font-size:15px">open_in_new</span>
+    </a>`;
+}
+
+/** Los comprobantes llegan en vivo: uno puede entrar con la pantalla abierta. */
+function escucharComprobantes() {
+  _unsubComprobantes?.();
+  _unsubComprobantes = onSnapshot(
+    collection(_db, 'tienda_comprobantes'),
+    snap => {
+      _comprobantes = new Map(snap.docs.map(d => {
+        const v = d.data() || {};
+        return [d.id, { url: v.url || '', tipo: v.tipo || 'imagen' }];
+      }));
+      pintarLista();
+    },
+    err => console.warn('[pedidos] comprobantes:', err?.code || err),
+  );
 }
 
 /* ── Formato ─────────────────────────────────────────────────────────────── */
@@ -224,6 +273,7 @@ function tarjeta(p) {
         <span style="color:var(--text-muted)">
           Paga con ${p?.pago?.modo === 'transferencia' ? 'transferencia' : 'efectivo'}
         </span>
+        ${bloqueComprobante(p)}
       </div>
 
       <div>${items}</div>
@@ -310,6 +360,11 @@ function pintarContadores() {
 export async function renderPedidosTienda(container, db) {
   cleanup();
   _db = db;
+
+  // Los comprobantes de transferencia que adjuntaron los clientes. Se leen
+  // aparte del pedido: viven en su propia coleccion para que el cliente no
+  // tenga que poder escribir en el documento del pedido.
+  escucharComprobantes();
 
   // El nombre, la dirección y el teléfono del local van en el encabezado del
   // ticket. Se leen del cache del SDK y se revalidan atrás: si fallan, el ticket

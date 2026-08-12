@@ -17,7 +17,8 @@ import { icono } from '../iconos.js';
 import * as carrito from '../carrito.js';
 import { avisar } from '../avisos.js';
 import { ir } from '../router.js';
-import { crearPedido } from '../pedidos.js';
+import { crearPedido, nuevoIdDePedido } from '../pedidos.js';
+import { esComprobanteValido } from '../comprobante.js';
 import { estadoDelLocal } from '../horarios.js';
 import { datosParaCompletar, recordarDelPedido, sesion } from '../cuenta.js';
 import { olvidar } from '../cliente.js';
@@ -583,7 +584,7 @@ function pintarFormulario({ montar, cfg, cambios }) {
 
       const cuentaActual = sesion();
 
-      const { id } = await crearPedido({
+      const payload = {
         cliente: { nombre: valores.nombre, telefono: valores.telefono },
         // Firmado con la cuenta cuando hay una: es lo que después deja pedir
         // "mis pedidos" desde cualquier aparato. Sin cuenta no va el campo, y
@@ -623,27 +624,151 @@ function pintarFormulario({ montar, cfg, cambios }) {
         subtotal,
         envio,
         nota: valores.nota,
-      });
+      };
 
-      // Los datos quedan guardados recién ahora: a mitad de tipear el nombre es
-      // "Ma" y el teléfono tres dígitos, y eso no completa nada la próxima vez.
-      // Un pedido confirmado es la señal de que están bien.
-      await recordarDelPedido({
-        nombre: valores.nombre,
-        telefono: valores.telefono,
-        direccion: modo === 'delivery' ? valores.direccion : '',
-        referencia: modo === 'delivery' ? valores.referencia : '',
-        coordenadas: modo === 'delivery' ? destino : null,
-      });
+      /** Lo que pasa una vez que el pedido ya se puede crear. */
+      const cerrarPedido = async (id = null) => {
+        const creado = await crearPedido({ ...payload, id });
 
-      carrito.vaciar();
-      ir(`/pedido/${id}`);
+        // Los datos quedan guardados recién ahora: a mitad de tipear el nombre
+        // es "Ma" y el teléfono tres dígitos, y eso no completa nada la próxima
+        // vez. Un pedido confirmado es la señal de que están bien.
+        await recordarDelPedido({
+          nombre: valores.nombre,
+          telefono: valores.telefono,
+          direccion: modo === 'delivery' ? valores.direccion : '',
+          referencia: modo === 'delivery' ? valores.referencia : '',
+          coordenadas: modo === 'delivery' ? destino : null,
+        });
+
+        carrito.vaciar();
+        ir(`/pedido/${creado.id}`);
+      };
+
+      // Con transferencia el pedido no nace acá: primero se le muestran el
+      // alias y el total, y nace recién cuando llega el comprobante. Así el
+      // local no recibe pedidos a la espera de un pago que quizá no llegue, y
+      // el cliente ve el alias en el momento en que lo necesita.
+      if (formaPago === 'transferencia') {
+        pantallaTransferencia({
+          cfg,
+          total: subtotal + envio,
+          alCrear: cerrarPedido,
+        });
+        return;
+      }
+
+      await cerrarPedido();
     } catch (err) {
       console.error('[checkout] no se pudo crear el pedido:', err);
       pintarResumen();
       avisar('No pudimos enviar el pedido. Probá de nuevo o escribinos por WhatsApp.',
              { tipo: 'error', duracion: 7000 });
     }
+  }
+
+  /* ── Pantalla de transferencia ──────────────────────────────────────────
+     El último paso: acá está el alias, el monto exacto y el pedido del
+     comprobante. El pedido todavía no existe; nace cuando el comprobante
+     llega. El id se reserva antes para poder guardar el archivo con el nombre
+     del pedido al que va a pertenecer. */
+  function pantallaTransferencia({ cfg, total, alCrear }) {
+    const id = nuevoIdDePedido();
+    const alias = cfg.pago?.alias;
+    const titular = cfg.pago?.titular;
+
+    document.title = 'Transferí y mandanos el comprobante · Librería Liceo';
+    montar(`
+      <div class="contenedor seccion">
+        <div class="transferencia">
+          <h1 class="transferencia__titulo">Ya casi</h1>
+          <p class="transferencia__bajada">
+            Transferí <strong>${pesos(total)}</strong> y mandanos el comprobante.
+            Con eso queda hecho tu pedido.
+          </p>
+
+          <div class="transferencia__datos">
+            ${alias ? `
+              <div class="transferencia__dato">
+                <span>Alias</span>
+                <b data-alias>${esc(alias)}</b>
+                <button type="button" class="boton boton--secundario boton--chico"
+                        data-copiar-alias>Copiar</button>
+              </div>` : `
+              <div class="transferencia__dato">
+                <span>Alias</span>
+                <b>Te lo pasamos por WhatsApp</b>
+              </div>`}
+            ${titular ? `
+              <div class="transferencia__dato">
+                <span>A nombre de</span><b>${esc(titular)}</b>
+              </div>` : ''}
+            <div class="transferencia__dato">
+              <span>Total</span><b>${pesos(total)}</b>
+            </div>
+          </div>
+
+          <p class="transferencia__pedido">
+            Si ya transferiste, sacale captura y pasanos el comprobante. ¡Gracias!
+          </p>
+
+          <input type="file" accept="image/*,application/pdf" hidden data-archivo>
+          <button type="button" class="boton boton--primario boton--grande transferencia__boton"
+                  data-adjuntar>
+            ${icono('hoja', { tam: 18 })} Subir el comprobante
+          </button>
+          <p class="transferencia__estado" data-estado></p>
+
+          <p class="transferencia__ayuda">
+            ¿Algún problema?
+            <a href="https://wa.me/${esc(cfg.whatsapp)}" target="_blank" rel="noopener">
+              Escribinos por WhatsApp</a> y lo resolvemos.
+          </p>
+        </div>
+      </div>
+      ${pie(cfg)}`);
+
+    const caja = document.querySelector('.transferencia');
+    const archivo = caja.querySelector('[data-archivo]');
+    const boton = caja.querySelector('[data-adjuntar]');
+    const estado = caja.querySelector('[data-estado]');
+    const decir = (texto, mal = false) => {
+      estado.textContent = texto || '';
+      estado.classList.toggle('transferencia__estado--mal', mal);
+    };
+
+    caja.querySelector('[data-copiar-alias]')?.addEventListener('click', async ev => {
+      try {
+        await navigator.clipboard.writeText(alias);
+        ev.target.textContent = 'Copiado';
+        setTimeout(() => { ev.target.textContent = 'Copiar'; }, 2000);
+      } catch { avisar('Copialo a mano: ' + alias, { duracion: 6000 }); }
+    });
+
+    boton.addEventListener('click', () => archivo.click());
+
+    archivo.addEventListener('change', async () => {
+      const elegido = archivo.files?.[0];
+      archivo.value = '';
+      if (!elegido) return;
+
+      const problema = esComprobanteValido(elegido);
+      if (problema) { decir(problema, true); return; }
+
+      boton.disabled = true;
+      boton.classList.add('boton--cargando');
+      try {
+        const { subirComprobante } = await import('../comprobante.js');
+        await subirComprobante(id, elegido, { alProgreso: t => decir(t) });
+        decir('Listo, lo recibimos. Armando tu pedido…');
+        await alCrear(id);
+      } catch (err) {
+        console.error('[checkout] comprobante:', err);
+        decir(err?.message || 'No se pudo subir. Probá de nuevo.', true);
+        boton.disabled = false;
+        boton.classList.remove('boton--cargando');
+      }
+    });
   }
 
   /* ── Arranque ───────────────────────────────────────────────────────────── */

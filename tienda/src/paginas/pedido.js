@@ -16,6 +16,9 @@
  * verdad y le saca al local la mitad de las llamadas preguntando.
  */
 import { cargarConfig, configEnCache } from '../datos.js';
+// La validación viene del módulo chico; el que sube (con el SDK de Storage
+// atrás) se carga recién cuando alguien elige un archivo.
+import { esComprobanteValido } from '../comprobante.js';
 import { pie, vacio } from '../componentes.js';
 import { pesos, esc, distancia, cuando, haceCuanto, lineasDeHorario } from '../formato.js';
 import { icono, franjaMarca } from '../iconos.js';
@@ -65,6 +68,55 @@ export async function pedido({ montar, params }) {
       });
     }
   }
+
+  /* ── Comprobante de transferencia ───────────────────────────────────────
+     Un solo listener en el contenedor: la pantalla se vuelve a pintar con cada
+     cambio de estado del pedido, así que enganchar el botón directo lo dejaría
+     muerto a la primera actualización. */
+  caja.addEventListener('click', ev => {
+    if (!ev.target.closest('[data-subir-comprobante]')) return;
+    caja.querySelector('[data-archivo-comprobante]')?.click();
+  });
+
+  caja.addEventListener('change', async ev => {
+    const input = ev.target.closest('[data-archivo-comprobante]');
+    if (!input) return;
+
+    const archivo = input.files?.[0];
+    input.value = '';
+    if (!archivo) return;
+
+    const bloque = caja.querySelector('[data-comprobante]');
+    const pista = bloque?.querySelector('[data-estado-comprobante]');
+    const boton = bloque?.querySelector('[data-subir-comprobante]');
+    const decir = (texto, mal = false) => {
+      if (!pista) return;
+      pista.textContent = texto;
+      pista.classList.toggle('comprobante__pista--mal', mal);
+    };
+
+    const problema = esComprobanteValido(archivo);
+    if (problema) { decir(problema, true); return; }
+
+    if (boton) boton.disabled = true;
+    try {
+      const { subirComprobante } = await import('../comprobante.js');
+      const { tipo } = await subirComprobante(params.id, archivo,
+                                              { alProgreso: t => decir(t) });
+      bloque.classList.add('comprobante--listo');
+      if (boton) {
+        boton.innerHTML = `${icono('tilde', { tam: 15 })} Comprobante enviado`;
+        boton.disabled = false;
+      }
+      decir(tipo === 'pdf'
+        ? 'Recibimos el PDF. Lo revisamos y te confirmamos.'
+        : 'Recibimos la foto. La revisamos y te confirmamos.');
+    } catch (err) {
+      console.error('[comprobante]', err);
+      decir(err?.message || 'No se pudo enviar. Probá de nuevo.', true);
+      if (boton) boton.disabled = false;
+    }
+  });
 
   // Copiar el enlace, con el aviso puesto en el propio botón: un toast más
   // arriba de todo, en el celular, aparece fuera de la vista.
@@ -410,6 +462,33 @@ function detalleDelPedido(p, modo) {
  * quedaba media caja en blanco. Ahora la columna es angosta, las cosas se
  * apilan y el mapa ocupa el lugar que sobraba diciendo algo.
  */
+/**
+ * Adjuntar el comprobante de la transferencia.
+ *
+ * Va acá y no en el checkout porque recién en esta pantalla el cliente tiene el
+ * alias y el monto para transferir: pedirle el comprobante antes sería pedirle
+ * algo que todavía no puede tener.
+ *
+ * Los pedidos ya entregados o cancelados no lo muestran: adjuntar ahí no le
+ * sirve a nadie.
+ */
+function bloqueComprobante(p) {
+  if (['entregado', 'cancelado'].includes(p.estado)) return '';
+
+  return `
+    <div class="comprobante" data-comprobante>
+      <input type="file" accept="image/*,application/pdf" hidden data-archivo-comprobante>
+      <button type="button" class="boton boton--secundario boton--chico"
+              data-subir-comprobante>
+        ${icono('hoja', { tam: 15 })} Adjuntar comprobante
+      </button>
+      <p class="comprobante__pista" data-estado-comprobante>
+        Sacale una foto a la transferencia o subí el PDF: lo revisamos y te
+        confirmamos el pedido.
+      </p>
+    </div>`;
+}
+
 function ficha(p, cfg, modo) {
   const retiro = modo === 'retiro';
   const hayMapa = !retiro && p.entrega?.coordenadas && cfg.origen;
@@ -448,6 +527,7 @@ function ficha(p, cfg, modo) {
         </p>
         ${p.pago?.modo === 'transferencia' && cfg.pago?.alias
           ? `<p class="pedido-ficha__apoyo">Alias <strong>${esc(cfg.pago.alias)}</strong></p>` : ''}
+        ${p.pago?.modo === 'transferencia' ? bloqueComprobante(p) : ''}
       </div>
 
       ${p.nota ? `

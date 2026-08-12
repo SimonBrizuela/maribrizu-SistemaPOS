@@ -327,6 +327,31 @@ service cloud.firestore {
       allow update, delete: if authorized();
     }
 
+    // ── COMPROBANTES DE TRANSFERENCIA ─────────────────────────────────────
+    // Lo que adjunta el cliente desde la pantalla de su pedido. Va en su propia
+    // colección y no adentro del pedido a propósito: el documento del pedido
+    // tiene el total y el estado, y esos los toca solo el local. Dejar que el
+    // cliente le escriba encima para adjuntar algo abriría esa puerta entera
+    // por una función accesoria.
+    //
+    // El id del documento es el del pedido, así que subir dos veces reemplaza
+    // en vez de acumular. Lo lee solo el local, desde el panel.
+    match /tienda_comprobantes/{pedidoId} {
+      allow read: if authorized();
+      allow create, update: if comprobanteValido(pedidoId);
+      allow delete: if authorized();
+    }
+
+    function comprobanteValido(pedidoId) {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['pedido_id', 'url', 'tipo', 'subido_en'])
+          && d.pedido_id is string && d.pedido_id == pedidoId
+          && d.url is string && d.url.size() <= 800
+          && d.url.matches('https://firebasestorage.googleapis.com/.*')
+          && d.tipo in ['imagen', 'pdf']
+          && d.subido_en is timestamp;
+    }
+
     // ── FOTOS PEDIDAS ─────────────────────────────────────────────────────
     // Lista de trabajo: los productos a los que hay que sacarles foto. La marca
     // el personal desde la tienda, con el modo oculto (?fotos=1), así que la
