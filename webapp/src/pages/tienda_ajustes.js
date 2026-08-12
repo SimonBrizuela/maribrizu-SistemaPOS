@@ -319,6 +319,87 @@ function pintarRubros() {
       if (subs) subs.hidden = !check.checked;
     });
   });
+
+  prepararBuscadorDeRubros(lista);
+}
+
+/**
+ * Buscador de la lista de rubros.
+ *
+ * Con los subrubros adentro la lista pasó de veinte líneas a varios cientos, y
+ * encontrar "Abrochadora" a mano dejó de ser posible. Busca por rubro y por
+ * subrubro: escribir un subrubro trae el rubro del que cuelga, ya abierto.
+ *
+ * Los que no coinciden se **esconden**, no se sacan del DOM: al guardar se leen
+ * todas las casillas, y quitarlas perdería lo tildado en un rubro que no
+ * coincide con lo que quedó escrito en el buscador.
+ */
+function prepararBuscadorDeRubros(lista) {
+  const campo = document.getElementById('cfgBuscarRubro');
+  const caja = document.getElementById('cfgRubros');
+  if (!campo || !caja) return;
+
+  // Sugerencias del navegador mientras se escribe: los rubros primero, después
+  // los subrubros con su rubro al lado para distinguir los repetidos.
+  const sugeridos = document.getElementById('cfgRubrosSugeridos');
+  if (sugeridos) {
+    const opciones = [];
+    for (const [rubro, n] of lista) {
+      opciones.push(`<option value="${escHtml(nombreBonito(rubro))}">`);
+      for (const [sub] of n.subs) {
+        opciones.push(`<option value="${escHtml(nombreBonito(sub))}" `
+                    + `label="${escHtml(nombreBonito(sub))} · ${escHtml(nombreBonito(rubro))}">`);
+      }
+    }
+    sugeridos.innerHTML = opciones.join('');
+  }
+
+  const cuenta = document.getElementById('cfgBuscarCuenta');
+  const limpiar = document.getElementById('cfgBuscarLimpiar');
+
+  const filtrar = () => {
+    const q = claveDeRubro(campo.value);
+    if (limpiar) limpiar.hidden = !q;
+
+    let visibles = 0;
+    for (const bloque of caja.querySelectorAll('.tienda-rubro-caja')) {
+      const check = bloque.querySelector('[data-rubro]');
+      const rubro = check?.dataset.rubro || '';
+      const subs = [...bloque.querySelectorAll('[data-subrubro]')]
+        .map(c => c.dataset.subrubro);
+
+      const porRubro = !q || rubro.includes(q);
+      const porSub = !!q && subs.some(s => s.includes(q));
+      const entra = porRubro || porSub;
+
+      bloque.hidden = !entra;
+      if (entra) visibles++;
+
+      // Si el que coincide es un subrubro, se abre el rubro para mostrarlo,
+      // aunque esté apagado: es lo que la persona fue a buscar.
+      const cajaSubs = bloque.querySelector('[data-subs-de]');
+      if (cajaSubs) {
+        cajaSubs.hidden = q ? !porSub && !(porRubro && check?.checked)
+                            : !check?.checked;
+      }
+      for (const fila of bloque.querySelectorAll('.tienda-subrubro')) {
+        // La clave del dataset y no el texto de la fila: el texto arrastra el
+        // número de productos y "12" haría coincidir cualquier cosa.
+        const clave = fila.querySelector('[data-subrubro]')?.dataset.subrubro || '';
+        const coincide = !q || clave.includes(q);
+        fila.classList.toggle('tienda-subrubro--apagado', !!q && porSub && !coincide);
+      }
+    }
+
+    if (cuenta) {
+      cuenta.textContent = q
+        ? `${visibles} de ${lista.length} rubros`
+        : '';
+    }
+  };
+
+  campo.addEventListener('input', filtrar);
+  limpiar?.addEventListener('click', () => { campo.value = ''; filtrar(); campo.focus(); });
 }
 
 /* ── Entrada ──────────────────────────────────────────────────────────────── */
@@ -462,6 +543,18 @@ export async function renderTiendaAjustes(container, db) {
           Lo tildado sale a la web. Un producto suelto se puede forzar o sacar
           desde el catálogo de la tienda, sin tocar el rubro entero.
         </div>
+
+        <div class="tienda-buscador">
+          <span class="material-icons">search</span>
+          <input type="search" id="cfgBuscarRubro" autocomplete="off" spellcheck="false"
+                 placeholder="Buscar rubro o subrubro…" list="cfgRubrosSugeridos">
+          <button type="button" id="cfgBuscarLimpiar" title="Limpiar" hidden>
+            <span class="material-icons">close</span>
+          </button>
+        </div>
+        <datalist id="cfgRubrosSugeridos"></datalist>
+        <div class="tienda-pista" id="cfgBuscarCuenta" style="margin:6px 0 8px"></div>
+
         <div id="cfgRubros" style="display:flex;flex-direction:column;gap:6px;
                                    max-height:340px;overflow-y:auto"></div>
       </section>

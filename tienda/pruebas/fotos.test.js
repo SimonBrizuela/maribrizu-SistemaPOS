@@ -159,3 +159,41 @@ describe('marcar y desmarcar', () => {
     expect(html).toContain('&quot;');
   });
 });
+
+describe('la casilla en la card, de punta a punta', () => {
+  const PROD = {
+    id: 'abc123', nombre: 'Cuaderno Rivadavia ABC', rubro: 'LIBRERIA',
+    precio: 1200, stock: 5, imagenes: [], variedades: [], tokens: [],
+    marca: '', sub_rubro: '', categoria: '', unidad: 'unidad',
+  };
+
+  it('sin el modo prendido la card sale limpia', async () => {
+    const fotos = await cargarModulo();
+    fotos.aplicarModoDesdeURL();
+    const { cardProducto } = await import('../src/componentes.js');
+    expect(cardProducto(PROD)).not.toContain('marca-foto');
+  });
+
+  it('con el modo prendido la card trae la casilla', async () => {
+    globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo?fotos=1' };
+    const fotos = await cargarModulo();
+    fotos.aplicarModoDesdeURL();
+
+    const { cardProducto } = await import('../src/componentes.js');
+    const html = cardProducto(PROD);
+    expect(html).toContain('class="marca-foto"');
+    expect(html).toContain('data-marcar-foto="abc123"');
+    // Tiene que quedar dentro de la card, no suelta al final.
+    expect(html.indexOf('marca-foto')).toBeLessThan(html.indexOf('card-producto__cuerpo'));
+  });
+
+  it('también en las cards que tienen foto', async () => {
+    globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo?fotos=1' };
+    const fotos = await cargarModulo();
+    fotos.aplicarModoDesdeURL();
+
+    const { grilla } = await import('../src/componentes.js');
+    const html = grilla([{ ...PROD, imagenes: ['https://x/1.webp'] }, PROD]);
+    expect((html.match(/marca-foto/g) || []).length).toBeGreaterThanOrEqual(2);
+  });
+});
