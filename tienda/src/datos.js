@@ -122,12 +122,25 @@ export async function cargarRubros() {
     try {
       const snap = await getDoc(doc(db, 'tienda_config', 'rubros'));
       if (!snap.exists()) return [];
-      return (snap.data().lista || []).filter(r => r.cantidad > 0);
+      return (snap.data().lista || [])
+        .filter(r => r.cantidad > 0)
+        // Los subrubros vienen del mismo agregado, ya con lo que quedó
+        // publicado en cada uno. Un rubro guardado antes de que existieran no
+        // los trae, y ahí la tienda simplemente no muestra la segunda fila.
+        .map(r => ({ ...r, subrubros: Array.isArray(r.subrubros) ? r.subrubros : [] }));
     } catch (err) {
       console.error('[datos] no se pudieron leer los rubros:', err);
       return [];
     }
   });
+}
+
+/** Los subrubros publicados de un rubro, para la segunda fila de filtros. */
+export async function subrubrosDe(rubro) {
+  if (!rubro) return [];
+  const rubros = await cargarRubros();
+  const encontrado = rubros.find(r => r.clave === rubro);
+  return (encontrado?.subrubros || []).filter(s => s.cantidad > 0);
 }
 
 /* ── Productos ───────────────────────────────────────────────────────────── */
@@ -178,8 +191,8 @@ function armarProducto(snap) {
  * ese caso se cae a una consulta sin orden y se ordena del lado del cliente, que
  * es peor pero deja la tienda funcionando en vez de mostrar un error.
  */
-export async function traerProductos({ rubro = null, cursor = null, desde = 0,
-                                      cantidad = POR_PAGINA } = {}) {
+export async function traerProductos({ rubro = null, sub = null, cursor = null,
+                                      desde = 0, cantidad = POR_PAGINA } = {}) {
   const col = collection(db, 'tienda_productos');
 
   // Dentro de un rubro se ordena por `orden_rubro`, que numera de cero en cada
@@ -189,6 +202,9 @@ export async function traerProductos({ rubro = null, cursor = null, desde = 0,
 
   const partes = [];
   if (rubro) partes.push(where('rubro', '==', rubro));
+  // El subrubro se guarda capitalizado ("Abrochadora"), asi que se compara con
+  // el mismo texto que trae el agregado y no con la clave en mayusculas.
+  if (sub) partes.push(where('sub_rubro', '==', sub));
   if (desde > 0) partes.push(where(campoOrden, '>=', desde));
   partes.push(orderBy(campoOrden), orderBy(documentId()));
   if (cursor) partes.push(startAfter(...cursor));
@@ -210,6 +226,9 @@ export async function traerProductos({ rubro = null, cursor = null, desde = 0,
       : query(col, limit(300));
     const snap = await getDocs(alternativa);
     const todos = snap.docs.map(armarProducto)
+      // El subrubro se filtra acá: el índice que falta es justamente el que
+      // permitiría pedírselo a Firestore.
+      .filter(p => !sub || p.sub_rubro === sub)
       .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
     return { productos: todos.slice(0, cantidad), cursor: null, hayMas: false };
   }

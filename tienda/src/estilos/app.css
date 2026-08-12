@@ -444,6 +444,47 @@
   .filtros { flex-wrap: wrap; overflow: visible; margin-inline: 0; padding-inline: 0; }
 }
 
+/* Segunda fila: los subrubros del rubro elegido. Deliberadamente más chica y
+   sin color de rubro — el que manda arriba es el rubro, y dos filas con el
+   mismo peso hacen dudar de cuál es cuál. */
+.filtros--sub { padding-top: 0; }
+
+.ficha-sub {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 31px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: transparent;
+  color: var(--text-2);
+  font-size: var(--t-xs);
+  font-weight: var(--peso-semi);
+  cursor: pointer;
+  white-space: nowrap;
+  transition:
+    background var(--m-rapido) var(--curva),
+    border-color var(--m-rapido) var(--curva),
+    color var(--m-rapido) var(--curva);
+  touch-action: manipulation;
+}
+
+.ficha-sub:hover { border-color: var(--borde-control); background: var(--surface-2); }
+
+.ficha-sub[aria-pressed="true"] {
+  background: var(--ink-superficie);
+  border-color: var(--ink-superficie);
+  color: var(--ink-texto);
+}
+
+.ficha-sub__n {
+  font-size: 10.5px;
+  font-weight: 700;
+  opacity: .62;
+  font-variant-numeric: tabular-nums;
+}
+
 .barra-catalogo {
   position: sticky;
   top: var(--alto-nav);

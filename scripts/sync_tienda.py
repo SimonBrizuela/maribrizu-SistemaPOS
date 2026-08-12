@@ -295,8 +295,14 @@ def variedades_de(datos):
     return salida
 
 
-def se_publica(datos, rubros_habilitados):
-    """Reglas de curado. El interruptor por producto gana sobre el rubro."""
+def se_publica(datos, rubros_habilitados, subrubros_excluidos=None):
+    """Reglas de curado. El interruptor por producto gana sobre el rubro.
+
+    El rubro manda: apagado no sale nada de el; prendido sale todo menos los
+    subrubros que el panel dejo afuera en `subrubros_excluidos`. Gemelo de
+    motivoDeNoPublicar() en webapp/src/tienda_espejo.js: si una de las dos
+    cambia sin la otra, el sync vuelve a subir lo que el panel saco.
+    """
     marca_manual = datos.get('tienda_publicar')
     if marca_manual is False:
         return False, 'excluido a mano'
@@ -336,10 +342,14 @@ def se_publica(datos, rubros_habilitados):
         return True, 'incluido a mano'
 
     rubro = str(datos.get('rubro') or '').strip().upper()
-    if rubro in rubros_habilitados:
-        return True, 'rubro habilitado'
+    if rubro not in rubros_habilitados:
+        return False, 'rubro no habilitado'
 
-    return False, 'rubro no habilitado'
+    sub = str(datos.get('sub_rubro') or '').strip().upper()
+    if sub and sub in (subrubros_excluidos or {}).get(rubro, set()):
+        return False, 'subrubro excluido'
+
+    return True, 'rubro habilitado'
 
 
 def armar_documento(doc_id, datos):
@@ -473,12 +483,20 @@ def main():
     datos_cfg = cfg.to_dict() if cfg.exists else {}
     rubros_habilitados = {str(r).strip().upper()
                           for r in (datos_cfg.get('rubros') or [])}
+    subrubros_excluidos = {
+        str(rubro).strip().upper(): {str(s).strip().upper() for s in (subs or [])}
+        for rubro, subs in (datos_cfg.get('subrubros_excluidos') or {}).items()
+    }
 
     if not rubros_habilitados:
         print('Ningun rubro habilitado en tienda_config/publicacion.')
         print('Se publican solo los productos marcados uno por uno.\n')
     else:
-        print(f'Rubros habilitados: {", ".join(sorted(rubros_habilitados))}\n')
+        print(f'Rubros habilitados: {", ".join(sorted(rubros_habilitados))}')
+        for rubro, subs in sorted(subrubros_excluidos.items()):
+            if subs:
+                print(f'  {rubro}: sin publicar {", ".join(sorted(subs))}')
+        print()
 
     # ── Leer el catalogo ──────────────────────────────────────────────────
     print('Leyendo catalogo...')
@@ -489,7 +507,7 @@ def main():
     for doc in db.collection('catalogo').stream():
         total += 1
         datos = doc.to_dict() or {}
-        ok, motivo = se_publica(datos, rubros_habilitados)
+        ok, motivo = se_publica(datos, rubros_habilitados, subrubros_excluidos)
         if ok:
             publicables[doc.id] = armar_documento(doc.id, datos)
         else:
@@ -561,6 +579,10 @@ def main():
     conteo = {}
     con_stock = {}
     factura = {}
+    # Los subrubros que quedaron publicados en cada rubro. Es la segunda fila de
+    # filtros de la tienda: sacarlos del catalogo entero mostraria filtros que
+    # no devuelven nada.
+    subrubros = {}
     for doc in publicables.values():
         if not doc['rubro']:
             continue
@@ -568,6 +590,10 @@ def main():
         factura[doc['rubro']] = factura.get(doc['rubro'], 0) + doc['facturado']
         if doc['stock'] > 0:
             con_stock[doc['rubro']] = con_stock.get(doc['rubro'], 0) + 1
+        sub = str(doc.get('sub_rubro') or '').strip().upper()
+        if sub:
+            dentro = subrubros.setdefault(doc['rubro'], {})
+            dentro[sub] = dentro.get(sub, 0) + 1
 
     # Los rubros salen ordenados por lo que facturan, no por cuantos productos
     # tienen. Son dos ordenes muy distintos: Regaleria tiene 594 productos y
@@ -578,7 +604,12 @@ def main():
     # El numero de facturacion NO se publica: se usa para ordenar y se descarta.
     # `tienda_config` lo lee cualquiera sin sesion.
     lista_rubros = [{'nombre': nombre_bonito(r), 'clave': r,
-                     'cantidad': conteo[r], 'con_stock': con_stock.get(r, 0)}
+                     'cantidad': conteo[r], 'con_stock': con_stock.get(r, 0),
+                     'subrubros': [
+                         {'nombre': nombre_bonito(s), 'clave': s, 'cantidad': n}
+                         for s, n in sorted(subrubros.get(r, {}).items(),
+                                            key=lambda x: -x[1])
+                     ]}
                     for r, _ in sorted(factura.items(), key=lambda x: -x[1])]
 
     print('\nRubros publicados (ordenados por lo que venden):')

@@ -261,7 +261,31 @@ export function documentoEspejo(datos) {
 const NOMBRES_INTERNOS = ['DESCUENTO POR CANTIDAD', 'VARIOS 1', 'VARIOS 2',
                           'SIN NOMBRE', 'PRUEBA'];
 
-export function motivoDeNoPublicar(datos, rubrosHabilitados = null) {
+/**
+ * Clave con la que se compara un rubro o un subrubro.
+ *
+ * En el catálogo el mismo subrubro aparece escrito de todas las formas
+ * ("Abrochadora", "ABROCHADORA", " abrochadora"). Comparar el texto crudo hacía
+ * que excluir uno dejara publicados sus hermanos mal tipeados.
+ */
+export function claveDeRubro(texto) {
+  return String(texto ?? '').trim().toUpperCase();
+}
+
+/**
+ * @param {object} datos                      producto del catálogo
+ * @param {string[]|null} rubrosHabilitados   rubros que salen a la web
+ * @param {object|null} subrubrosExcluidos    { RUBRO: ['SUBRUBRO', …] }
+ *
+ * El rubro manda: si está apagado no se publica nada de él. Prendido, sale todo
+ * salvo los subrubros destildados. Así no hay forma de que las dos listas se
+ * contradigan.
+ *
+ * El interruptor por producto sigue ganándole a las dos: es lo más específico
+ * que puede decir alguien, y por eso se evalúa antes.
+ */
+export function motivoDeNoPublicar(datos, rubrosHabilitados = null,
+                                   subrubrosExcluidos = null) {
   if (datos?.tienda_publicar === false) return 'excluido a mano';
   if (String(datos?.estado ?? '').toLowerCase() !== 'activo') return 'no está activo';
   if (datos?.duplicado === true) return 'marcado como duplicado';
@@ -273,14 +297,26 @@ export function motivoDeNoPublicar(datos, rubrosHabilitados = null) {
   if (medidasDe(datos).stock <= 0) return 'sin stock';
 
   if (datos?.tienda_publicar === true) return null;
-  if (!rubrosHabilitados) return null;
 
-  const rubro = String(datos?.rubro ?? '').trim().toUpperCase();
+  const rubro = claveDeRubro(datos?.rubro);
+
+  // Los subrubros se miran aunque no se haya pasado la lista de rubros: quien
+  // llama para saber "¿por qué no está en la tienda?" pasa `null` como rubros
+  // para preguntar por el resto de las reglas, y el subrubro excluido es una
+  // razón tan válida como la falta de stock.
+  const excluidos = subrubrosExcluidos?.[rubro];
+  if (excluidos?.length) {
+    const sub = claveDeRubro(datos?.sub_rubro);
+    if (sub && excluidos.includes(sub)) return 'el subrubro está excluido';
+  }
+
+  if (!rubrosHabilitados) return null;
   return rubrosHabilitados.includes(rubro) ? null : 'el rubro no está habilitado';
 }
 
-export function estaPublicable(datos, rubrosHabilitados = null) {
-  return motivoDeNoPublicar(datos, rubrosHabilitados) === null;
+export function estaPublicable(datos, rubrosHabilitados = null,
+                               subrubrosExcluidos = null) {
+  return motivoDeNoPublicar(datos, rubrosHabilitados, subrubrosExcluidos) === null;
 }
 
 /* ── Escritura ───────────────────────────────────────────────────────────── */
@@ -298,9 +334,11 @@ export function estaPublicable(datos, rubrosHabilitados = null) {
  * @param {string} docId       id del documento en `catalogo`
  * @param {object} cambios     campos `tienda_*` a guardar (undefined = borrar)
  * @param {string[]|null} rubrosHabilitados
+ * @param {object|null} subrubrosExcluidos
  * @returns {Promise<{publicado: boolean, motivo: string|null}>}
  */
-export async function guardarYEspejar(db, docId, cambios, rubrosHabilitados = null) {
+export async function guardarYEspejar(db, docId, cambios, rubrosHabilitados = null,
+                                      subrubrosExcluidos = null) {
   const referencia = doc(db, 'catalogo', docId);
 
   // Se limpia en vez de guardar `undefined`: un campo borrado vuelve al
@@ -314,12 +352,13 @@ export async function guardarYEspejar(db, docId, cambios, rubrosHabilitados = nu
   const snap = await getDoc(referencia);
   if (!snap.exists()) return { publicado: false, motivo: 'el producto ya no existe' };
 
-  return espejar(db, docId, snap.data(), rubrosHabilitados);
+  return espejar(db, docId, snap.data(), rubrosHabilitados, subrubrosExcluidos);
 }
 
 /** Escribe (o borra) el documento del espejo según corresponda. */
-export async function espejar(db, docId, datos, rubrosHabilitados = null) {
-  const motivo = motivoDeNoPublicar(datos, rubrosHabilitados);
+export async function espejar(db, docId, datos, rubrosHabilitados = null,
+                              subrubrosExcluidos = null) {
+  const motivo = motivoDeNoPublicar(datos, rubrosHabilitados, subrubrosExcluidos);
   const referencia = doc(db, 'tienda_productos', docId);
 
   if (motivo) {
@@ -359,7 +398,8 @@ export async function espejar(db, docId, datos, rubrosHabilitados = null) {
  * @param {(hechos: number, total: number) => void} [alProgreso]
  * @returns {Promise<{publicados: number, sacados: number}>}
  */
-export async function espejarLote(db, productos, rubrosHabilitados, alProgreso = null) {
+export async function espejarLote(db, productos, rubrosHabilitados, alProgreso = null,
+                                  subrubrosExcluidos = null) {
   let orden = await proximoOrden(db);
   let publicados = 0;
   let sacados = 0;
@@ -369,7 +409,7 @@ export async function espejarLote(db, productos, rubrosHabilitados, alProgreso =
   for (const [i, { id, datos }] of productos.entries()) {
     const referencia = doc(db, 'tienda_productos', id);
 
-    if (motivoDeNoPublicar(datos, rubrosHabilitados)) {
+    if (motivoDeNoPublicar(datos, rubrosHabilitados, subrubrosExcluidos)) {
       lote.delete(referencia);
       sacados++;
     } else {
@@ -398,15 +438,24 @@ export async function espejarLote(db, productos, rubrosHabilitados, alProgreso =
  * Lo escribe el sync en cada corrida, pero si el panel publica un rubro entero
  * y no lo actualiza, la portada sigue diciendo que ese rubro no tiene nada.
  */
-export async function recomputarRubros(db, productos, rubrosHabilitados) {
+export async function recomputarRubros(db, productos, rubrosHabilitados,
+                                       subrubrosExcluidos = null) {
   const conteo = new Map();
 
   for (const { datos } of productos) {
-    if (motivoDeNoPublicar(datos, rubrosHabilitados)) continue;
+    if (motivoDeNoPublicar(datos, rubrosHabilitados, subrubrosExcluidos)) continue;
     const rubro = String(datos?.rubro ?? '').trim().toUpperCase();
     if (!rubro) continue;
 
-    const actual = conteo.get(rubro) || { cantidad: 0, con_stock: 0 };
+    const actual = conteo.get(rubro) || { cantidad: 0, con_stock: 0, subrubros: new Map() };
+    if (!actual.subrubros) actual.subrubros = new Map();
+
+    // Los subrubros que de verdad quedaron publicados en ese rubro. Es lo que
+    // la tienda usa para la segunda fila de filtros: listarlos desde el
+    // catálogo entero mostraría filtros que no devuelven nada.
+    const sub = claveDeRubro(datos?.sub_rubro);
+    if (sub) actual.subrubros.set(sub, (actual.subrubros.get(sub) || 0) + 1);
+
     actual.cantidad++;
     // Publicado implica stock, pero se cuenta igual: el campo lo usa la portada
     // para saber hasta dónde puede saltar al elegir productos al azar.
@@ -415,7 +464,17 @@ export async function recomputarRubros(db, productos, rubrosHabilitados) {
   }
 
   const lista = [...conteo.entries()]
-    .map(([clave, n]) => ({ nombre: nombreBonito(clave), clave, ...n }))
+    .map(([clave, n]) => ({
+      nombre: nombreBonito(clave),
+      clave,
+      cantidad: n.cantidad,
+      con_stock: n.con_stock,
+      // Firestore no admite un Map: se guarda como lista, ordenada por peso
+      // igual que los rubros, para que el filtro más útil quede primero.
+      subrubros: [...(n.subrubros || new Map()).entries()]
+        .map(([sub, cantidad]) => ({ nombre: nombreBonito(sub), clave: sub, cantidad }))
+        .sort((a, b) => b.cantidad - a.cantidad),
+    }))
     .sort((a, b) => b.cantidad - a.cantidad);
 
   await setDoc(doc(db, 'tienda_config', 'rubros'), { lista, actualizado: serverTimestamp() });

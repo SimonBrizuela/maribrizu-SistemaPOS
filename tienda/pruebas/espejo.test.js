@@ -25,11 +25,14 @@ const RAIZ = join(AQUI, '..', '..');
 const casos = JSON.parse(readFileSync(join(AQUI, 'casos_espejo.json'), 'utf-8'));
 
 let documentoEspejo;
-let delSync = null;
+let motivoDeNoPublicar;
+let delSync = null;      // documentos armados por el sync
+let publicacionSync = null; // decisiones de se_publica() en el sync
 let porQueNo = '';
 
 beforeAll(async () => {
-  ({ documentoEspejo } = await import('../../webapp/src/tienda_espejo.js'));
+  ({ documentoEspejo, motivoDeNoPublicar } =
+    await import('../../webapp/src/tienda_espejo.js'));
 
   // Sin Python no se puede comparar. No se falla la prueba por eso: en una
   // máquina sin Python el resto de la suite tiene que poder correr igual.
@@ -37,7 +40,9 @@ beforeAll(async () => {
     try {
       const salida = execFileSync(python, [join(RAIZ, 'scripts', 'casos_espejo.py')],
         { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
-      delSync = JSON.parse(salida);
+      const crudo = JSON.parse(salida);
+      delSync = crudo.documentos;
+      publicacionSync = crudo.publicacion;
       break;
     } catch (err) {
       porQueNo = String(err?.stderr || err?.message || err).split('\n').slice(-6).join('\n');
@@ -132,5 +137,40 @@ describe('de a cuánto se vende', () => {
   it('un mínimo que no cae en un paso se sube al siguiente', () => {
     // Con mínimo 5 y paso 2 se salta de 4 a 6: el 5 no existe nunca.
     expect(documentoEspejo(de('p9'))).toMatchObject({ minimo: 6, paso: 2 });
+  });
+});
+
+/* ── La regla de rubros y subrubros ──────────────────────────────────────────
+   Se corre la misma tanda de casos en los dos lados. El sync devuelve su
+   decision y el panel la suya: si alguna de las dos cambia sola, el sync vuelve
+   a subir lo que el panel saco y el producto reaparece en la tienda. */
+describe('rubros y subrubros, panel contra sync', () => {
+  it('corre el sync para comparar la regla', () => {
+    if (!publicacionSync) console.warn('  [espejo] sin comparación de la regla');
+    expect(true).toBe(true);
+  });
+
+  it('las dos implementaciones deciden lo mismo', () => {
+    if (!publicacionSync) return;
+
+    for (const caso of publicacionSync) {
+      const delPanel = motivoDeNoPublicar(caso.datos, caso.rubros, caso.excluidos) === null;
+      expect(delPanel, `${caso.que_prueba} — el panel dice ${delPanel}, el sync ${caso.publica}`)
+        .toBe(caso.publica);
+    }
+  });
+
+  it('un subrubro excluido no sale, y el rubro apagado gana sobre todo', () => {
+    const base = { nombre: 'Abrochadora', estado: 'activo', precio_venta: 100,
+                   stock: 5, rubro: 'LIBRERIA', sub_rubro: 'Abrochadora' };
+
+    expect(motivoDeNoPublicar(base, ['LIBRERIA'], {})).toBe(null);
+    expect(motivoDeNoPublicar(base, ['LIBRERIA'], { LIBRERIA: ['ABROCHADORA'] }))
+      .toBe('el subrubro está excluido');
+    expect(motivoDeNoPublicar(base, ['PAPELERA'], { LIBRERIA: ['ABROCHADORA'] }))
+      .toBe('el subrubro está excluido');
+    // El mismo subrubro colgando de otro rubro no se toca.
+    expect(motivoDeNoPublicar({ ...base, rubro: 'PAPELERA' }, ['PAPELERA'],
+                              { LIBRERIA: ['ABROCHADORA'] })).toBe(null);
   });
 });

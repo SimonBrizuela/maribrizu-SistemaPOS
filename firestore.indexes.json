@@ -93,6 +93,29 @@
           "order": "ASCENDING"
         }
       ]
+    },
+    {
+      "//": "Segunda fila de filtros: un subrubro dentro de un rubro, paginado. Sin este indice la tienda cae a traer 300 y ordenar en el navegador.",
+      "collectionGroup": "tienda_productos",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "rubro",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "sub_rubro",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "orden_rubro",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "__name__",
+          "order": "ASCENDING"
+        }
+      ]
     }
   ],
   "fieldOverrides": []

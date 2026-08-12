@@ -21,7 +21,8 @@ import { collection, doc, getDocs, orderBy, query, setDoc } from 'firebase/fires
 import { getCached, invalidateCache } from '../cache.js';
 import { leerDocRapido } from '../config.js';
 import { alertDialog, confirmDialog, escHtml } from '../components/dialogs.js';
-import { espejarLote, recomputarRubros, motivoDeNoPublicar, nombreBonito } from '../tienda_espejo.js';
+import { espejarLote, recomputarRubros, motivoDeNoPublicar, nombreBonito,
+         claveDeRubro } from '../tienda_espejo.js';
 import { textoDeHorarios } from '../../../tienda/src/horarios.js';
 import '../styles/tienda.css';
 
@@ -53,6 +54,8 @@ let _db = null;
 let _config = null;
 let _tramos = [];
 let _habilitados = [];
+// { RUBRO: ['SUBRUBRO', …] } — lo que queda afuera dentro de un rubro prendido.
+let _subExcluidos = {};
 let _catalogo = [];
 let _horarios = null;
 // Si alguien ya empezó a editar, la revalidación contra el server no repinta.
@@ -67,6 +70,22 @@ function completarConfig(datos) {
     entrega: { ...POR_DEFECTO.entrega, ...(d.entrega || {}) },
     pago: { ...POR_DEFECTO.pago, ...(d.pago || {}) },
   };
+}
+
+/**
+ * Deja el mapa de subrubros excluidos en una forma sola: claves y valores en
+ * mayúsculas, sin vacíos. Lo que llega de Firestore puede venir escrito de
+ * cualquier manera si alguna vez se editó a mano.
+ */
+function normalizarExcluidos(crudo) {
+  const salida = {};
+  if (!crudo || typeof crudo !== 'object') return salida;
+  for (const [rubro, subs] of Object.entries(crudo)) {
+    if (!Array.isArray(subs)) continue;
+    const limpios = subs.map(claveDeRubro).filter(Boolean);
+    if (limpios.length) salida[claveDeRubro(rubro)] = limpios;
+  }
+  return salida;
 }
 
 async function leerConfig(db, alRevalidar) {
@@ -219,33 +238,87 @@ function pintarRubros() {
   // Cuántos productos entrarían por cada rubro si se habilita. Se calcula sobre
   // el catálogo entero con las reglas del sync, no adivinando: habilitar un
   // rubro de 600 productos donde 53 tienen stock publica 53.
+  //
+  // Lo mismo por subrubro, que es lo que permite destildar "Abrochadora" dentro
+  // de Librería sabiendo cuántos productos se van con él.
   const porRubro = new Map();
   for (const d of _catalogo) {
-    const rubro = String(d.rubro || '').trim().toUpperCase();
+    const rubro = claveDeRubro(d.rubro);
     if (!rubro) continue;
-    const actual = porRubro.get(rubro) || { total: 0, publicables: 0 };
+    const actual = porRubro.get(rubro) || { total: 0, publicables: 0, subs: new Map() };
     actual.total++;
     // Se pregunta como si el rubro estuviera habilitado: interesa cuántos
-    // entrarían, no cuántos entran hoy.
-    if (!motivoDeNoPublicar(d, null)) actual.publicables++;
+    // entrarían, no cuántos entran hoy. Y sin mirar los subrubros excluidos,
+    // que son justamente lo que se está por decidir en esta pantalla.
+    const entra = !motivoDeNoPublicar(d, null);
+    if (entra) actual.publicables++;
+
+    const sub = claveDeRubro(d.sub_rubro);
+    if (sub) {
+      const s = actual.subs.get(sub) || { total: 0, publicables: 0 };
+      s.total++;
+      if (entra) s.publicables++;
+      actual.subs.set(sub, s);
+    }
     porRubro.set(rubro, actual);
   }
 
   const lista = [...porRubro.entries()].sort((a, b) => b[1].publicables - a[1].publicables);
 
-  caja.innerHTML = lista.map(([rubro, n]) => `
-    <label style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;
-                  cursor:pointer;border:1px solid var(--border);background:var(--card-bg)">
-      <input type="checkbox" data-rubro="${escHtml(rubro)}"
-             ${_habilitados.includes(rubro) ? 'checked' : ''}
-             style="width:17px;height:17px;cursor:pointer">
-      <span style="flex:1;min-width:0">
-        <b style="font-size:13.5px">${escHtml(nombreBonito(rubro))}</b>
-        <span style="display:block;font-size:11.5px;color:var(--text-muted)">
-          ${n.publicables} con stock de ${n.total}
-        </span>
-      </span>
-    </label>`).join('');
+  caja.innerHTML = lista.map(([rubro, n]) => {
+    const prendido = _habilitados.includes(rubro);
+    const excluidos = _subExcluidos[rubro] || [];
+
+    // Solo los subrubros que aportan algo publicable. Los que no tienen nada
+    // con stock ensucian la lista con filtros que no cambian nada.
+    const subs = [...n.subs.entries()]
+      .filter(([, s]) => s.publicables > 0)
+      .sort((a, b) => b[1].publicables - a[1].publicables);
+
+    const cuerpoSubs = subs.length ? `
+      <div class="tienda-subrubros" data-subs-de="${escHtml(rubro)}"
+           ${prendido ? '' : 'hidden'}>
+        <div class="tienda-pista" style="margin:0 0 6px">
+          Destildá lo que no quieras publicar de este rubro.
+        </div>
+        ${subs.map(([sub, s]) => `
+          <label class="tienda-subrubro">
+            <input type="checkbox" data-subrubro="${escHtml(sub)}"
+                   data-subrubro-de="${escHtml(rubro)}"
+                   ${excluidos.includes(sub) ? '' : 'checked'}>
+            <span>${escHtml(nombreBonito(sub))}</span>
+            <b>${s.publicables}</b>
+          </label>`).join('')}
+      </div>` : '';
+
+    return `
+      <div class="tienda-rubro-caja">
+        <label style="display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:8px;
+                      cursor:pointer;border:1px solid var(--border);background:var(--card-bg)">
+          <input type="checkbox" data-rubro="${escHtml(rubro)}"
+                 ${prendido ? 'checked' : ''}
+                 style="width:17px;height:17px;cursor:pointer">
+          <span style="flex:1;min-width:0">
+            <b style="font-size:13.5px">${escHtml(nombreBonito(rubro))}</b>
+            <span style="display:block;font-size:11.5px;color:var(--text-muted)">
+              ${n.publicables} con stock de ${n.total}${
+                excluidos.length ? ` · ${excluidos.length} subrubro${
+                  excluidos.length === 1 ? '' : 's'} sin publicar` : ''}
+            </span>
+          </span>
+        </label>
+        ${cuerpoSubs}
+      </div>`;
+  }).join('');
+
+  // Los subrubros de un rubro apagado no se muestran: el rubro manda, así que
+  // ahí no hay nada que decidir.
+  caja.querySelectorAll('[data-rubro]').forEach(check => {
+    check.addEventListener('change', () => {
+      const subs = caja.querySelector(`[data-subs-de="${CSS.escape(check.dataset.rubro)}"]`);
+      if (subs) subs.hidden = !check.checked;
+    });
+  });
 }
 
 /* ── Entrada ──────────────────────────────────────────────────────────────── */
@@ -286,6 +359,7 @@ export async function renderTiendaAjustes(container, db) {
   _horarios = normalizarHorarios(config.horarios);
   _habilitados = Array.isArray(publicacion?.rubros)
     ? publicacion.rubros.map(r => String(r).trim().toUpperCase()) : [];
+  _subExcluidos = normalizarExcluidos(publicacion?.subrubros_excluidos);
   _catalogo = (catalogo || []).filter(d => d && d.doc_id)
     .map(d => (typeof d.doc_id === 'string' ? d : { ...d, doc_id: String(d.doc_id) }));
 
@@ -513,22 +587,45 @@ async function guardarTodo(container) {
   const elegidos = [...container.querySelectorAll('[data-rubro]')]
     .filter(c => c.checked).map(c => c.dataset.rubro);
 
+  // Los subrubros destildados, solo dentro de los rubros que quedan prendidos:
+  // guardar exclusiones de un rubro apagado sería ruido que después confunde.
+  const excluidos = {};
+  for (const check of container.querySelectorAll('[data-subrubro]')) {
+    if (check.checked) continue;
+    const rubro = check.dataset.subrubroDe;
+    if (!elegidos.includes(rubro)) continue;
+    (excluidos[rubro] ||= []).push(check.dataset.subrubro);
+  }
+
   const entraron = elegidos.filter(r => !_habilitados.includes(r));
   const salieron = _habilitados.filter(r => !elegidos.includes(r));
 
+  // Rubros donde cambió qué subrubros salen. Sus productos también hay que
+  // revisarlos, aunque el rubro haya estado prendido desde antes.
+  const mismos = (a = [], b = []) =>
+    a.length === b.length && [...a].sort().join('|') === [...b].sort().join('|');
+  const rubrosConSubsCambiados = [...new Set([
+    ...Object.keys(excluidos), ...Object.keys(_subExcluidos),
+  ])].filter(r => !mismos(excluidos[r], _subExcluidos[r]));
+
+  const cambioPublicacion = entraron.length || salieron.length
+                         || rubrosConSubsCambiados.length;
+
   // Mover un rubro entero es cientos de escrituras y se ve en la tienda al
   // instante. Se avisa antes con el número puesto, no después.
-  if (entraron.length || salieron.length) {
-    const afectados = _catalogo.filter(d => {
-      const rubro = String(d.rubro || '').trim().toUpperCase();
-      return entraron.includes(rubro) || salieron.includes(rubro);
-    });
+  if (cambioPublicacion) {
+    const tocados = [...new Set([...entraron, ...salieron, ...rubrosConSubsCambiados])];
+    const afectados = _catalogo.filter(d => tocados.includes(claveDeRubro(d.rubro)));
+
+    const sacadosPorSub = rubrosConSubsCambiados
+      .flatMap(r => (excluidos[r] || []).map(s => nombreBonito(s)));
 
     const ok = await confirmDialog({
-      title: 'Cambiar los rubros publicados',
+      title: 'Cambiar lo que se publica',
       message: [
         entraron.length ? `Entran: ${entraron.map(nombreBonito).join(', ')}.` : '',
         salieron.length ? `Salen: ${salieron.map(nombreBonito).join(', ')}.` : '',
+        sacadosPorSub.length ? `Subrubros sin publicar: ${sacadosPorSub.join(', ')}.` : '',
         `Se van a revisar ${afectados.length.toLocaleString('es-AR')} productos y la tienda`,
         'va a cambiar en el momento.',
       ].filter(Boolean).join(' '),
@@ -588,25 +685,28 @@ async function guardarTodo(container) {
 
     await setDoc(doc(_db, 'tienda_config', 'settings'), ajustes, { merge: true });
 
-    if (entraron.length || salieron.length) {
-      await setDoc(doc(_db, 'tienda_config', 'publicacion'), { rubros: elegidos });
+    if (cambioPublicacion) {
+      await setDoc(doc(_db, 'tienda_config', 'publicacion'), {
+        rubros: elegidos,
+        subrubros_excluidos: excluidos,
+      });
 
+      const tocados = [...new Set([...entraron, ...salieron, ...rubrosConSubsCambiados])];
       const afectados = _catalogo
-        .filter(d => {
-          const rubro = String(d.rubro || '').trim().toUpperCase();
-          return entraron.includes(rubro) || salieron.includes(rubro);
-        })
+        .filter(d => tocados.includes(claveDeRubro(d.rubro)))
         .map(d => ({ id: d.doc_id, datos: d }));
 
       const { publicados, sacados } = await espejarLote(
         _db, afectados, elegidos,
-        (hechos, total) => { estado.textContent = `Publicando… ${hechos} de ${total}`; });
+        (hechos, total) => { estado.textContent = `Publicando… ${hechos} de ${total}`; },
+        excluidos);
 
       estado.textContent = 'Actualizando la portada…';
       await recomputarRubros(_db,
-        _catalogo.map(d => ({ datos: d })), elegidos);
+        _catalogo.map(d => ({ datos: d })), elegidos, excluidos);
 
       _habilitados = elegidos;
+      _subExcluidos = excluidos;
       invalidateCache('tienda:publicacion');
       estado.textContent = `Guardado. ${publicados} productos en la tienda, ${sacados} afuera.`;
     } else {

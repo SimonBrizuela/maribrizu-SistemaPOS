@@ -299,3 +299,33 @@
 }
 .tienda-tabla tbody tr:last-child td { border-bottom: none; }
 .tienda-tabla tbody tr:hover { background: var(--bg); }
+
+/* ── Subrubros dentro de un rubro ────────────────────────────────────────── */
+.tienda-rubro-caja { display: flex; flex-direction: column; }
+
+/* Sangrados y con una guía a la izquierda: se lee de un vistazo que dependen
+   del rubro de arriba y no son otra lista suelta. */
+.tienda-subrubros {
+  margin: 4px 0 2px 22px;
+  padding: 8px 10px;
+  border-left: 2px solid var(--border);
+}
+
+.tienda-subrubro {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 0;
+  cursor: pointer;
+  font-size: 12.5px;
+}
+.tienda-subrubro input { width: 15px; height: 15px; cursor: pointer; }
+.tienda-subrubro span { flex: 1; min-width: 0; }
+.tienda-subrubro b {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+/* Lo destildado se atenúa: es lo que NO va a salir a la tienda. */
+.tienda-subrubro:has(input:not(:checked)) span { color: var(--text-muted); text-decoration: line-through; }
