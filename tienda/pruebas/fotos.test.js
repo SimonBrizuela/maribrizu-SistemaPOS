@@ -1,0 +1,161 @@
+/**
+ * Modo "marcar fotos".
+ *
+ * Lo que importa acá es que un cliente no vea nunca el tilde y que lo marcado
+ * sobreviva a cambiar de pantalla. Firestore se reemplaza por espías: lo que se
+ * prueba es la decisión, no el SDK.
+ */
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const setDoc = vi.fn(async () => {});
+const deleteDoc = vi.fn(async () => {});
+
+vi.mock('../src/firebase.js', () => ({ db: {} }));
+vi.mock('firebase/firestore', () => ({
+  doc: (_db, col, id) => ({ col, id }),
+  setDoc: (...args) => setDoc(...args),
+  deleteDoc: (...args) => deleteDoc(...args),
+  serverTimestamp: () => 'AHORA',
+}));
+
+const PRODUCTO = {
+  id: 'abc123',
+  nombre: 'Cuaderno Rivadavia ABC',
+  rubro: 'LIBRERIA',
+  imagenes: [],
+};
+
+/** Módulo nuevo por prueba: guarda estado en memoria además de localStorage. */
+async function cargarModulo() {
+  vi.resetModules();
+  return import('../src/fotos.js');
+}
+
+beforeEach(() => {
+  localStorage.clear();
+  setDoc.mockClear();
+  deleteDoc.mockClear();
+  globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo' };
+  globalThis.history = { replaceState: vi.fn() };
+});
+
+describe('quién ve el tilde', () => {
+  it('un cliente que entra normal no ve nada', async () => {
+    const fotos = await cargarModulo();
+    fotos.aplicarModoDesdeURL();
+    expect(fotos.modoFotos()).toBe(false);
+    expect(fotos.tildeFoto(PRODUCTO)).toBe('');
+  });
+
+  it('con ?fotos=1 el modo queda prendido y aparece el tilde', async () => {
+    globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo?fotos=1' };
+    const fotos = await cargarModulo();
+    fotos.aplicarModoDesdeURL();
+    expect(fotos.modoFotos()).toBe(true);
+    expect(fotos.tildeFoto(PRODUCTO)).toContain('data-marcar-foto="abc123"');
+  });
+
+  it('sigue prendido en la visita siguiente, ya sin el parámetro', async () => {
+    globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo?fotos=1' };
+    let fotos = await cargarModulo();
+    fotos.aplicarModoDesdeURL();
+
+    globalThis.location = { href: 'https://beta.liceolibreria.com/p/abc123' };
+    fotos = await cargarModulo();
+    fotos.aplicarModoDesdeURL();
+    expect(fotos.modoFotos()).toBe(true);
+  });
+
+  it('?fotos=0 lo apaga', async () => {
+    globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo?fotos=1' };
+    let fotos = await cargarModulo();
+    fotos.aplicarModoDesdeURL();
+
+    globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo?fotos=0' };
+    fotos = await cargarModulo();
+    fotos.aplicarModoDesdeURL();
+    expect(fotos.modoFotos()).toBe(false);
+  });
+
+  it('el parámetro se borra de la barra de direcciones', async () => {
+    globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo?fotos=1&q=goma' };
+    const fotos = await cargarModulo();
+    fotos.aplicarModoDesdeURL();
+
+    const [, , url] = globalThis.history.replaceState.mock.calls[0];
+    expect(url).not.toContain('fotos=');
+    expect(url).toContain('q=goma');
+  });
+});
+
+describe('marcar y desmarcar', () => {
+  it('marcar guarda en Firestore con el id del producto como id del documento', async () => {
+    const fotos = await cargarModulo();
+    const puesta = await fotos.alternarMarca(PRODUCTO);
+
+    expect(puesta).toBe(true);
+    expect(fotos.estaMarcado('abc123')).toBe(true);
+    const [ref, datos] = setDoc.mock.calls[0];
+    expect(ref).toEqual({ col: 'tienda_fotos_pedidas', id: 'abc123' });
+    expect(datos).toMatchObject({
+      producto_id: 'abc123',
+      nombre: 'Cuaderno Rivadavia ABC',
+      rubro: 'LIBRERIA',
+      tenia_foto: false,
+    });
+  });
+
+  it('distingue el que no tiene foto del que hay que reemplazar', async () => {
+    const fotos = await cargarModulo();
+    await fotos.alternarMarca({ ...PRODUCTO, imagenes: ['https://x/1.webp'] });
+    expect(setDoc.mock.calls[0][1].tenia_foto).toBe(true);
+  });
+
+  it('volver a tocar lo saca de la lista', async () => {
+    const fotos = await cargarModulo();
+    await fotos.alternarMarca(PRODUCTO);
+    const puesta = await fotos.alternarMarca(PRODUCTO);
+
+    expect(puesta).toBe(false);
+    expect(fotos.estaMarcado('abc123')).toBe(false);
+    expect(deleteDoc).toHaveBeenCalledTimes(1);
+  });
+
+  it('lo marcado sobrevive a recargar la página', async () => {
+    let fotos = await cargarModulo();
+    await fotos.alternarMarca(PRODUCTO);
+
+    fotos = await cargarModulo();
+    expect(fotos.estaMarcado('abc123')).toBe(true);
+    expect(fotos.cuantosMarcados()).toBe(1);
+  });
+
+  it('si Firestore falla, el tilde no queda puesto mintiendo', async () => {
+    const fotos = await cargarModulo();
+    setDoc.mockRejectedValueOnce(new Error('sin conexión'));
+
+    await expect(fotos.alternarMarca(PRODUCTO)).rejects.toThrow('sin conexión');
+    expect(fotos.estaMarcado('abc123')).toBe(false);
+  });
+
+  it('el tilde de un producto ya marcado sale puesto', async () => {
+    globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo?fotos=1' };
+    const fotos = await cargarModulo();
+    fotos.aplicarModoDesdeURL();
+    await fotos.alternarMarca(PRODUCTO);
+
+    const html = fotos.tildeFoto(PRODUCTO);
+    expect(html).toContain('marca-foto--puesta');
+    expect(html).toContain('aria-pressed="true"');
+  });
+
+  it('escapa el nombre del producto en los atributos', async () => {
+    globalThis.location = { href: 'https://beta.liceolibreria.com/catalogo?fotos=1' };
+    const fotos = await cargarModulo();
+    fotos.aplicarModoDesdeURL();
+
+    const html = fotos.tildeFoto({ ...PRODUCTO, nombre: 'Regla 30" <b>rota</b>' });
+    expect(html).not.toContain('<b>rota</b>');
+    expect(html).toContain('&quot;');
+  });
+});

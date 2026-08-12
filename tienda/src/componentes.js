@@ -4,6 +4,7 @@
  */
 import { pesos, esc, nombreBonito, colorDeVariedad, lineasDeHorario } from './formato.js';
 import { icono, franjaMarca } from './iconos.js';
+import { tildeFoto } from './fotos.js';
 
 /**
  * Card de producto.
@@ -71,6 +72,7 @@ export function cardProducto(p, indice = 0, { conRubro = true } = {}) {
                agotado ? ' card-producto--agotado' : ''}"
              data-rubro="${esc(p.rubro)}" style="--i:${indice}">
       ${cinta}
+      ${tildeFoto(p)}
       ${bloqueFoto}
       <div class="card-producto__cuerpo">
         ${conRubro ? `<span class="card-producto__rubro">${esc(etiqueta)}</span>` : ''}

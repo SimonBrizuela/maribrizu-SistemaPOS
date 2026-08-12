@@ -1345,3 +1345,78 @@ textarea.campo__control { min-height: 96px; resize: vertical; line-height: var(-
   background: var(--primary);
 }
 .nav-inferior__item:hover { text-decoration: none; color: var(--text-2); }
+
+/* ── Marcado de fotos ──────────────────────────────────────────────────────
+   Modo interno del personal: se prende con ?fotos=1 y no lo ve ningún cliente.
+   El tilde va arriba a la derecha porque arriba a la izquierda ya vive la cinta
+   de "Sin stock" / "Más pedido", y las dos aparecen juntas seguido. */
+.marca-foto {
+  position: absolute;
+  top: var(--e-3);
+  right: var(--e-3);
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 30px; height: 30px;
+  padding: 0;
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-full);
+  background: var(--surface);
+  color: var(--text-2);
+  cursor: pointer;
+  transition:
+    background var(--m-rapido) var(--curva),
+    color var(--m-rapido) var(--curva),
+    border-color var(--m-rapido) var(--curva),
+    transform var(--m-rapido) var(--curva);
+}
+
+.marca-foto:hover { border-color: var(--primary); color: var(--primary); }
+.marca-foto:active { transform: scale(0.92); }
+
+.marca-foto--puesta {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-ink);
+}
+
+/* El rojo del error dura poco: es un aviso de que no se pudo guardar, no un
+   estado. Con la marca deshecha, el tilde ya volvió a como estaba. */
+.marca-foto--error {
+  background: var(--liceo-rojo);
+  border-color: var(--liceo-rojo);
+  color: #fff;
+}
+
+/* Píldora fija con lo que se lleva marcado. Se apoya arriba de la nav inferior
+   y de la barra del pedido para no taparlas en el celular. */
+.barra-fotos {
+  position: fixed;
+  left: var(--e-3);
+  bottom: calc(var(--alto-nav-inferior, 0px) + var(--alto-barra-pedido, 0px) + var(--e-3));
+  z-index: var(--z-toast);
+  display: flex;
+  align-items: center;
+  gap: var(--e-3);
+  padding: 10px var(--e-3) 10px var(--e-4);
+  border-radius: var(--r-full);
+  background: var(--ink-superficie);
+  color: var(--ink-texto);
+  font-size: var(--t-sm);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+}
+
+.barra-fotos__texto b { font-variant-numeric: tabular-nums; }
+
+.barra-fotos__salir {
+  padding: 5px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: var(--r-full);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-weight: var(--peso-semi);
+  cursor: pointer;
+}
+
+.barra-fotos__salir:hover { background: rgba(255, 255, 255, 0.12); }

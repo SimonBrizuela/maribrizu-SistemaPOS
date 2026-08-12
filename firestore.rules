@@ -327,6 +327,34 @@ service cloud.firestore {
       allow update, delete: if authorized();
     }
 
+    // ── FOTOS PEDIDAS ─────────────────────────────────────────────────────
+    // Lista de trabajo: los productos a los que hay que sacarles foto. La marca
+    // el personal desde la tienda, con el modo oculto (?fotos=1), así que la
+    // escritura llega sin sesión igual que un pedido.
+    //
+    // La lectura es solo del local: quien marca no necesita leerla —la tienda
+    // se acuerda de lo suyo en el navegador— y así la lista no queda expuesta.
+    //
+    // Escribir y borrar quedan abiertos, con la forma validada y el id del
+    // documento atado al del producto. Es el mismo trato que `tienda_pedidos`,
+    // y acá lo peor que puede pasar es que haya que volver a marcar un
+    // producto: no hay dato de nadie ni plata en juego.
+    match /tienda_fotos_pedidas/{productoId} {
+      allow read: if authorized();
+      allow create, update: if fotoPedidaValida(productoId);
+      allow delete: if true;
+    }
+
+    function fotoPedidaValida(productoId) {
+      let d = request.resource.data;
+      return d.keys().hasOnly(['producto_id', 'nombre', 'rubro', 'tenia_foto', 'pedido_en'])
+          && d.producto_id is string && d.producto_id == productoId
+          && d.nombre is string && d.nombre.size() <= 200
+          && d.rubro is string && d.rubro.size() <= 60
+          && d.tenia_foto is bool
+          && d.pedido_en is timestamp;
+    }
+
     // ── BLOQUEAR TODO LO DEMÁS ────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;

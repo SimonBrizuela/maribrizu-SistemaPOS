@@ -270,3 +270,32 @@
 /* Los relojes nativos son anchos; con dos tramos, cada uno en su renglón. */
 .tienda-dia__tramos { flex-direction: column; align-items: flex-start; }
 .tienda-dia__tramo { flex-wrap: nowrap; }
+
+/* ── Tabla de fotos pedidas ──────────────────────────────────────────────── */
+.tienda-tabla {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+.tienda-tabla th {
+  text-align: left;
+  font-size: 10.5px;
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  color: var(--text-muted);
+  font-weight: 700;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg);
+}
+.tienda-tabla td {
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  vertical-align: middle;
+}
+.tienda-tabla tbody tr:last-child td { border-bottom: none; }
+.tienda-tabla tbody tr:hover { background: var(--bg); }

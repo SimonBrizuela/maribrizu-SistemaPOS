@@ -11,6 +11,7 @@ import { iniciarAsistente } from './asistente.js';
 import { iniciarBarraPedido, refrescarBarraPedido } from './barra_pedido.js';
 import { iniciarCuenta } from './cuenta.js';
 import { estadoDelLocal, textoDeCerrado } from './horarios.js';
+import { aplicarModoDesdeURL, engancharTildes, iniciarBarraFotos } from './fotos.js';
 
 import { inicio } from './paginas/inicio.js';
 import { catalogo } from './paginas/catalogo.js';
@@ -242,6 +243,10 @@ function seguirScroll() {
 /* ── Arranque ─────────────────────────────────────────────────────────────── */
 
 async function arrancar() {
+  // Antes de pintar: las cards preguntan si el modo fotos está prendido
+  // mientras se arman, así que llegar tarde las dejaría sin tilde.
+  aplicarModoDesdeURL();
+
   pintarEstructura();
   iniciarRutas();
   reponerCompacta = seguirScroll();
@@ -252,6 +257,11 @@ async function arrancar() {
   // pintado igual que el chat, pero antes que él: si el carrito ya tiene algo
   // de una visita anterior, tiene que aparecer enseguida.
   iniciarBarraPedido();
+
+  // Marcado de fotos. El listener va siempre —es uno solo y no cuesta nada—,
+  // pero la barra de abajo solo aparece con el modo prendido.
+  engancharTildes();
+  iniciarBarraFotos();
 
   // La sesión se retoma sola si había una. El SDK de Auth se descarga recién
   // ahí: quien nunca creó cuenta no paga esos 40 kB.
