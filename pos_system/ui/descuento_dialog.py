@@ -26,16 +26,26 @@ def _money(n):
     return f'{float(n or 0):,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.')
 
 
+# El redondeo saca la colita del total, no regala el ticket. Sin este freno un
+# total de $180 bajaba a $100: un 44% de descuento por apretar un botón que
+# promete acomodar centavos.
+TOPE_REDONDEO = 0.10
+
+
 def redondear_centena(total, monto, tope):
-    """Lleva el total a la centena, agrandando el descuento lo justo.
+    """Lleva el total a la centena de abajo, agrandando el descuento lo justo.
 
-    Misma regla que el ±100 del catálogo web (`redondearCentena` en
-    catalogo.js): centena, y si el monto es tan chico que eso daría cero, cae a
-    la decena. Acá va siempre PARA ABAJO — es un descuento, no puede terminar
-    cobrando más que la suma de los productos.
+    Misma idea que el ±100 del catálogo web (`redondearCentena` en
+    catalogo.js), con dos diferencias que hacen falta acá:
 
-    El ajuste tampoco puede pasarse del `tope` (lo que suman los renglones
-    elegidos): un descuento no puede superar a lo que descuenta.
+      · Va siempre PARA ABAJO. La web redondea a la centena más cercana, pero
+        esto es un descuento: subir el total sería cobrar de más.
+      · El ajuste no puede pasar del 10% del total. Si la centena de abajo está
+        demasiado lejos se prueba con la decena, y si tampoco entra no se toca
+        nada. Redondear es acomodar el vuelto, no hacer una oferta.
+
+    Tampoco puede pasarse del `tope` (lo que suman los renglones elegidos): un
+    descuento no puede superar a lo que descuenta.
 
     Devuelve (monto_final, ajuste).
     """
@@ -43,16 +53,15 @@ def redondear_centena(total, monto, tope):
     if queda <= 0:
         return monto, 0.0
 
-    objetivo = int(queda / 100) * 100
-    if objetivo <= 0:                       # totales chicos: a la decena
-        objetivo = int(queda / 10) * 10
-    if objetivo <= 0 or objetivo >= queda:
-        return monto, 0.0                   # ya está redondo
-
-    ajuste = min(round(queda - objetivo, 2), max(0.0, float(tope) - float(monto)))
-    if ajuste <= 0:
-        return monto, 0.0
-    return round(float(monto) + ajuste, 2), round(ajuste, 2)
+    limite = min(queda * TOPE_REDONDEO, max(0.0, float(tope) - float(monto)))
+    for unidad in (100, 10):
+        objetivo = int(queda / unidad) * unidad
+        if objetivo <= 0 or objetivo >= queda:
+            continue                        # ya termina redondo en esa unidad
+        ajuste = round(queda - objetivo, 2)
+        if ajuste <= limite:
+            return round(float(monto) + ajuste, 2), ajuste
+    return monto, 0.0
 
 
 class DescuentoDialog(QDialog):

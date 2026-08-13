@@ -137,11 +137,11 @@ class TestCarritoQueCambia:
 
 
 class TestRedondeo:
-    """El total tiene que terminar en una centena que se pueda pagar.
+    """El redondeo saca la colita del total, no regala el ticket.
 
-    Misma regla que el ±100 del catálogo web, con una diferencia: acá va siempre
-    para abajo. Es un descuento — no puede terminar cobrando más que la suma de
-    los productos.
+    Va siempre para abajo: es un descuento, subir el total sería cobrar de más.
+    Y no puede pasar del 10% — sin ese freno, apretar un botón que promete
+    acomodar el vuelto terminaba haciendo una oferta.
     """
 
     def test_baja_el_total_a_la_centena(self):
@@ -157,6 +157,19 @@ class TestRedondeo:
         monto, _ajuste = redondear_centena(9460.0, 0.0, tope=9460.0)
         assert 9460.0 - monto == 9400.0
 
+    def test_no_se_come_un_total_chico(self):
+        from pos_system.ui.descuento_dialog import redondear_centena
+        # $180 a la centena de abajo daría $100: un 44% de descuento. No.
+        monto, ajuste = redondear_centena(180.0, 0.0, tope=180.0)
+        assert (monto, ajuste) == (0.0, 0.0)
+
+    def test_cuando_la_centena_no_entra_prueba_la_decena(self):
+        from pos_system.ui.descuento_dialog import redondear_centena
+        # $185: bajar a $100 es demasiado, pero a $180 son $5 y sí entra.
+        monto, ajuste = redondear_centena(185.0, 0.0, tope=185.0)
+        assert (monto, ajuste) == (5.0, 5.0)
+        assert 185.0 - monto == 180.0
+
     def test_se_suma_al_descuento_que_ya_habia(self):
         from pos_system.ui.descuento_dialog import redondear_centena
         # 10% sobre 9.440 = 944 → quedan 8.496 → la centena de abajo es 8.400
@@ -169,17 +182,11 @@ class TestRedondeo:
         from pos_system.ui.descuento_dialog import redondear_centena
         assert redondear_centena(9400.0, 0.0, tope=9400.0) == (0.0, 0.0)
 
-    def test_totales_chicos_caen_a_la_decena(self):
-        from pos_system.ui.descuento_dialog import redondear_centena
-        # 74 a la centena daría 0 y regalaría el ticket entero: va a 70.
-        monto, _ajuste = redondear_centena(74.0, 0.0, tope=74.0)
-        assert 74.0 - monto == 70.0
-
     def test_no_puede_descontar_mas_que_los_renglones_elegidos(self):
         from pos_system.ui.descuento_dialog import redondear_centena
         # El descuento aplica a un renglón de $20 dentro de un total de 9.440
-        monto, _ajuste = redondear_centena(9440.0, 0.0, tope=20.0)
-        assert monto == 20.0     # se corta en el tope, no inventa plata
+        monto, ajuste = redondear_centena(9440.0, 0.0, tope=20.0)
+        assert (monto, ajuste) == (0.0, 0.0)   # no alcanza para llegar a la centena
 
     def test_con_centavos_igual_cierra(self):
         from pos_system.ui.descuento_dialog import redondear_centena
