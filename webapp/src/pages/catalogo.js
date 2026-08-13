@@ -7,6 +7,7 @@ import { getCached, invalidateCache, invalidateCacheByPrefix, peekCacheValue } f
 import { ensureCollections, onStoreChange } from '../store.js';
 import { initCatalogoHistory, fieldLabel } from '../catalogo_history.js';
 import { registrarMovimiento, movimientosDe, MOTIVOS } from '../stock_ledger.js';
+import { avisarStockALaTienda } from '../tienda_espejo.js';
 import {
   recomputarResumenInventario, resumenEstaVencido, computarResumen,
   sugerirCantidad, valorizarStock, validarInventario,
@@ -5929,6 +5930,7 @@ export async function renderCatalogo(container, db) {
             motivo: 'conteo', antes: a.sis, despues: a.cont,
             detalle: 'Conteo físico',
           });
+          avisarStockALaTienda(db, _docId, a.cont);
           ok += 1;
         } catch (e) { console.warn('conteo: error en', _docId, e.message); }
       }
@@ -6813,6 +6815,7 @@ export async function renderCatalogo(container, db) {
           motivo: 'reposicion', antes: stockBase, despues: nuevoStock,
           detalle: 'Reposición desde el panel',
         });
+        avisarStockALaTienda(db, _docId, nuevoStock);
         cerrar();
         const tc = document.getElementById('tabContent');
         if (tc) renderTabInventario(tc);
@@ -7184,6 +7187,7 @@ export async function renderCatalogo(container, db) {
         antes: _stockPrev, despues: valor,
         detalle: 'Editado desde el panel',
       });
+      avisarStockALaTienda(db, docId, valor);
       renderTabInventario(document.getElementById('tabContent'));
       renderStats();
       renderBannerCriticos();

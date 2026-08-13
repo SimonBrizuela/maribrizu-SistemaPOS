@@ -1,0 +1,63 @@
+name: Sincronizar tienda
+
+# La tienda no puede depender de que una PC del local este prendida.
+#
+# Hasta ahora el sync corria en el Programador de tareas de una PC: si esa
+# maquina estaba apagada, en mantenimiento o sin internet, la vidriera se
+# quedaba con el catalogo del ultimo dia que alguien la encendio. Medido el
+# 2026-08-13: el espejo tenia tres dias de atraso, con 230 productos ofrecidos
+# de mas y 7 en vidriera sin una sola unidad.
+#
+# Aca corre en los servidores de GitHub, gratis para repositorios publicos, y
+# no depende de nadie. El stock minuto a minuto lo empuja el POS en cada venta
+# (v3.0.60+); esto se ocupa de las altas, las fotos, los precios y las bajas.
+
+on:
+  schedule:
+    # Cada 6 horas. Cada corrida lee el catalogo entero (~9.700 lecturas de
+    # Firestore); a este ritmo son 39 mil por dia, adentro del plan gratuito.
+    - cron: '17 */6 * * *'
+  workflow_dispatch:        # y a mano desde la pestaña Actions cuando haga falta
+
+# Que no se pisen dos corridas si una se demora.
+concurrency:
+  group: sync-tienda
+  cancel-in-progress: false
+
+jobs:
+  sincronizar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Dependencias
+        run: pip install firebase-admin
+
+      - name: Credencial
+        env:
+          FIREBASE_KEY_JSON: ${{ secrets.FIREBASE_KEY_JSON }}
+        run: |
+          if [ -z "$FIREBASE_KEY_JSON" ]; then
+            echo "Falta el secreto FIREBASE_KEY_JSON en el repositorio."
+            echo "Settings -> Secrets and variables -> Actions -> New repository secret"
+            exit 1
+          fi
+          # La clave vive solo en el runner, que se destruye al terminar.
+          printf '%s' "$FIREBASE_KEY_JSON" > firebase_key.json
+          python -c "import json;d=json.load(open('firebase_key.json'));print('cuenta:', d['client_email'])"
+
+      - name: Sincronizar
+        run: python scripts/sync_tienda.py
+
+      - name: Borrar la credencial
+        if: always()
+        run: rm -f firebase_key.json

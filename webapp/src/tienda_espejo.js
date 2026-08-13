@@ -591,3 +591,34 @@ function aWebp(archivo) {
     lector.readAsDataURL(archivo);
   });
 }
+
+/**
+ * Le avisa a la tienda el stock nuevo de un producto, en el momento.
+ *
+ * El POS ya hace esto en cada venta. Esto cubre el otro lado: una reposición o
+ * un conteo cargado desde el panel. Sin esto, la vidriera se enteraba recién en
+ * la próxima corrida del sync.
+ *
+ * Misma regla que usa el POS y que usa el sync: si quedó en cero, el producto
+ * sale de la vidriera. `updateDoc` falla si el producto no está publicado, que
+ * es justo lo que queremos — no inventar fichas a medias para los 7.000
+ * productos que no salen a la web.
+ *
+ * Nunca tira error hacia arriba: que la vidriera no se entere no puede voltear
+ * una edición de stock que ya se guardó.
+ */
+export async function avisarStockALaTienda(db, docId, stock) {
+  if (!db || !docId) return;
+  const { doc, updateDoc, deleteDoc } = await import('firebase/firestore');
+  const n = Number(stock);
+  try {
+    const ref = doc(db, 'tienda_productos', String(docId));
+    if (Number.isFinite(n) && n > 0) {
+      await updateDoc(ref, { stock: Math.round(n) });
+    } else {
+      await deleteDoc(ref);
+    }
+  } catch {
+    // No está publicado (o ya no existe): no hay nada que avisar.
+  }
+}
