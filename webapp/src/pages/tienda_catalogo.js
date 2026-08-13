@@ -34,13 +34,20 @@ const POR_TANDA = 60;
 // "sin foto" son los que ya están publicados y "sin stock" los que volverían
 // solos con reponerlos. Los números al lado de cada uno evitan que la tarjeta
 // de arriba y la lista de abajo parezcan contradecirse.
+// Esta pantalla trabaja sobre lo que TIENE STOCK, que es lo único que puede
+// estar en la vidriera. Un producto sin stock no se gestiona desde acá: cuando
+// llega la mercadería y el POS le carga el stock, se publica solo. Tenerlos
+// mezclados eran 6.600 renglones que nadie iba a tocar tapando los 500 que sí.
+//
+// Igual quedan a un clic en "Sin stock", para el caso de querer dejarle la foto
+// y el nombre listos antes de que llegue.
 const FILTROS = [
-  { clave: 'todos',      texto: 'Todos' },
+  { clave: 'todos',      texto: 'Con stock' },
   { clave: 'publicados', texto: 'En la tienda' },
-  { clave: 'ocultos',    texto: 'Fuera' },
+  { clave: 'ocultos',    texto: 'Fuera de la tienda' },
   { clave: 'destacados', texto: 'Destacados' },
   { clave: 'sin_foto',   texto: 'Sin foto' },
-  { clave: 'sin_stock',  texto: 'Reponer y vuelven' },
+  { clave: 'sin_stock',  texto: 'Sin stock' },
 ];
 
 let _db = null;
@@ -105,20 +112,21 @@ function visibles() {
   const texto = normalizar(_busqueda.trim());
 
   return _productos.filter(p => {
+    // Sin stock queda fuera de todo salvo de su propio filtro: no es parte del
+    // mundo de la tienda hasta que llegue la mercadería.
+    const conStock = p.medidas.stock > 0 || p.publicado;
+    if (_filtro === 'sin_stock') {
+      if (conStock) return false;
+    } else if (!conStock) {
+      return false;
+    }
     if (_rubro && p.rubro !== _rubro) return false;
     if (_filtro === 'publicados' && !p.publicado) return false;
     if (_filtro === 'ocultos' && p.publicado) return false;
     if (_filtro === 'destacados' && !p.destacado) return false;
-    // "Sin foto" es la lista para trabajar: los que YA están en la tienda y
-    // salen con el cuadrito gris. Sin esta condición traía los 7.380 del
-    // catálogo entero —incluidos los 7.000 que ni se publican— y contradecía
-    // el "220 publicados sin foto" de la tarjeta de arriba.
+    // "Sin foto": los que ya están en la vidriera saliendo con el cuadrito
+    // gris. Es la lista con la que alguien se sienta a sacar fotos.
     if (_filtro === 'sin_foto' && (p.imagenes.length || !p.publicado)) return false;
-    // "Sin stock" también es una lista para trabajar: los que volverían solos a
-    // la tienda con reponerlos. Los que además no tienen precio, están fuera de
-    // un rubro publicado o se sacaron a mano no vuelven por reponer stock, así
-    // que ensucian la lista. `motivo` ya dice cuál es el primer impedimento.
-    if (_filtro === 'sin_stock' && p.motivo !== 'sin stock') return false;
     if (texto && !p.buscable.includes(texto)) return false;
     return true;
   });
@@ -225,7 +233,7 @@ function pintarResumen() {
     dato(sinFoto, 'publicados sin foto', sinFoto > 0),
     dato(destacados, 'destacados', destacados === 0),
     dato(excluidos, 'sacados a mano'),
-    dato(_productos.length, 'en el catálogo'),
+    dato(_productos.filter(p => p.medidas.stock > 0 || p.publicado).length, 'con stock'),
   ].join('');
 }
 
