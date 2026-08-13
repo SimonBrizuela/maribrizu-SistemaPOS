@@ -449,6 +449,99 @@
    mismo peso hacen dudar de cuál es cuál. */
 .filtros--sub { padding-top: 0; }
 
+/* "Ver todos": misma pastilla, pero con borde marcado — no es un filtro más,
+   abre la lista completa. */
+.ficha-sub--mas {
+  border-style: dashed;
+  border-color: var(--borde-control);
+}
+.ficha-sub--mas[aria-expanded="true"] {
+  border-style: solid;
+  background: var(--surface-2);
+}
+
+/* El panel con TODOS los subrubros. Altura propia y scroll adentro: por muchos
+   que sean, no empuja la grilla ni tapa la vidriera. Con el buscador arriba no
+   hace falta barrer 150 nombres con el ojo. */
+.panel-subs {
+  margin-top: var(--e-2);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  overflow: hidden;
+}
+.panel-subs__cabecera {
+  display: flex;
+  align-items: center;
+  gap: var(--e-2);
+  padding: var(--e-2);
+  border-bottom: 1px solid var(--border);
+}
+.panel-subs__buscar {
+  flex: 1;
+  min-width: 0;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: inherit;
+  font-family: inherit;
+  font-size: var(--t-sm);
+}
+.panel-subs__buscar:focus-visible { outline: 2px solid var(--liceo-violeta); outline-offset: 1px; }
+.panel-subs__cerrar {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-full);
+  background: transparent;
+  color: var(--text-2);
+  cursor: pointer;
+}
+.panel-subs__cerrar:hover { background: var(--surface-2); }
+
+.panel-subs__lista {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(190px, 1fr));
+  gap: 2px;
+  max-height: 46vh;
+  padding: var(--e-2);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+.panel-subs__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: var(--r-sm);
+  background: transparent;
+  color: inherit;
+  font-family: inherit;
+  font-size: var(--t-sm);
+  text-align: left;
+  cursor: pointer;
+}
+.panel-subs__item:hover { background: var(--surface-2); }
+.panel-subs__item[aria-pressed="true"] {
+  background: var(--ink-superficie);
+  color: var(--ink-texto);
+}
+.panel-subs__vacio {
+  margin: 0;
+  padding: var(--e-3);
+  color: var(--text-2);
+  font-size: var(--t-sm);
+  text-align: center;
+}
+
 .ficha-sub {
   display: inline-flex;
   align-items: center;

@@ -29,16 +29,65 @@ export async function catalogo({ montar, params, query }) {
               aria-pressed="${rubro === r.clave}">${esc(r.nombre)}</button>`),
   ].join('');
 
+  // Librería tiene 150 subrubros. Sueltos son dieciséis filas de pastillas antes
+  // del primer producto: la vidriera tapada por su propio índice.
+  //
+  // A la vista quedan los 14 primeros, que por venir ordenados por cantidad son
+  // los que cubren casi todo el rubro. El resto vive en un panel con buscador y
+  // scroll propio: abrirlo no empuja la página ni obliga a barrer 150 nombres
+  // con el ojo — se tipea "cuaderno" y aparece.
+  const A_LA_VISTA = 14;
+  const hayPanel = rubro && subrubros.length > A_LA_VISTA;
+  const visibles = hayPanel ? subrubros.slice(0, A_LA_VISTA) : subrubros;
+
+  const pastilla = s => `
+    <button class="ficha-sub" data-sub-filtro="${esc(s.nombre)}"
+            aria-pressed="${sub === s.nombre}">${esc(s.nombre)}
+      <span class="ficha-sub__n">${s.cantidad}</span>
+    </button>`;
+
+  // El elegido siempre a la vista, aunque esté en el fondo de la lista: si no,
+  // el filtro activo no se ve por ningún lado.
+  const elegidoOculto = sub && !visibles.some(s => s.nombre === sub)
+    ? subrubros.find(s => s.nombre === sub)
+    : null;
+
   // Segunda fila: los subrubros del rubro que se está mirando. Con uno solo no
   // se muestra nada — un filtro que no filtra es ruido.
   const fichasSub = (rubro && subrubros.length > 1) ? [
     `<button class="ficha-sub" data-sub-filtro="" aria-pressed="${!sub}">Todo</button>`,
-    ...subrubros.map(s => `
-      <button class="ficha-sub" data-sub-filtro="${esc(s.nombre)}"
-              aria-pressed="${sub === s.nombre}">${esc(s.nombre)}
-        <span class="ficha-sub__n">${s.cantidad}</span>
-      </button>`),
+    ...visibles.map(pastilla),
+    elegidoOculto ? pastilla(elegidoOculto) : '',
+    hayPanel ? `
+      <button class="ficha-sub ficha-sub--mas" data-abrir-subs aria-expanded="false">
+        Ver todos <span class="ficha-sub__n">${subrubros.length}</span>
+      </button>` : '',
   ].join('') : '';
+
+  // El panel con todos. Nace cerrado y con altura propia: por muchos que sean,
+  // la página de atrás no se mueve.
+  const panelSubs = hayPanel ? `
+    <div class="panel-subs" data-panel-subs hidden>
+      <div class="panel-subs__cabecera">
+        <input class="panel-subs__buscar" type="search" data-buscar-sub
+               placeholder="Buscar filtro…" aria-label="Buscar un filtro"
+               autocomplete="off">
+        <button class="panel-subs__cerrar" data-cerrar-subs aria-label="Cerrar">
+          ${icono('cerrar', { tam: 16 })}
+        </button>
+      </div>
+      <div class="panel-subs__lista" data-lista-subs>
+        ${subrubros.map(s => `
+          <button class="panel-subs__item" data-sub-filtro="${esc(s.nombre)}"
+                  data-nombre="${esc(s.nombre.toLowerCase())}"
+                  aria-pressed="${sub === s.nombre}">
+            <span>${esc(s.nombre)}</span>
+            <span class="ficha-sub__n">${s.cantidad}</span>
+          </button>`).join('')}
+      </div>
+      <p class="panel-subs__vacio" data-sin-subs hidden>Ningún filtro se llama así.</p>
+    </div>` : '';
+
 
   montar(`
     <div class="contenedor">
@@ -62,7 +111,8 @@ export async function catalogo({ montar, params, query }) {
           <div class="filtros" role="group" aria-label="Filtrar por rubro">${fichas}</div>
           ${fichasSub ? `
             <div class="filtros filtros--sub" role="group"
-                 aria-label="Filtrar dentro de ${esc(nombreBonito(rubro))}">${fichasSub}</div>` : ''}
+                 aria-label="Filtrar dentro de ${esc(nombreBonito(rubro))}">${fichasSub}</div>
+            ${panelSubs}` : ''}
         </div>
       </div>`}
 
@@ -83,6 +133,49 @@ export async function catalogo({ montar, params, query }) {
       ir(destino ? `/catalogo/${encodeURIComponent(destino)}` : '/catalogo');
     });
   });
+
+  // Panel de filtros: abrir, buscar, cerrar.
+  const abrirSubs = document.querySelector('[data-abrir-subs]');
+  const panel = document.querySelector('[data-panel-subs]');
+  if (abrirSubs && panel) {
+    const buscador = panel.querySelector('[data-buscar-sub]');
+    const sinNada = panel.querySelector('[data-sin-subs]');
+
+    const cerrar = () => {
+      panel.hidden = true;
+      abrirSubs.setAttribute('aria-expanded', 'false');
+    };
+
+    abrirSubs.addEventListener('click', () => {
+      panel.hidden = !panel.hidden;
+      abrirSubs.setAttribute('aria-expanded', String(!panel.hidden));
+      if (!panel.hidden) buscador.focus();
+    });
+
+    panel.querySelector('[data-cerrar-subs]').addEventListener('click', cerrar);
+
+    buscador.addEventListener('input', () => {
+      const q = buscador.value.trim().toLowerCase();
+      let visto = 0;
+      panel.querySelectorAll('.panel-subs__item').forEach(it => {
+        const entra = !q || it.dataset.nombre.includes(q);
+        it.hidden = !entra;
+        if (entra) visto += 1;
+      });
+      sinNada.hidden = visto > 0;
+    });
+
+    // Escape cierra, y un clic afuera también: un panel que se queda abierto
+    // tapando la grilla es el problema que vinimos a resolver.
+    document.addEventListener('keydown', ev => {
+      if (ev.key === 'Escape' && !panel.hidden) cerrar();
+    });
+    document.addEventListener('click', ev => {
+      if (panel.hidden) return;
+      if (!panel.contains(ev.target) && ev.target !== abrirSubs
+          && !abrirSubs.contains(ev.target)) cerrar();
+    });
+  }
 
   document.querySelectorAll('[data-sub-filtro]').forEach(boton => {
     boton.addEventListener('click', () => {
