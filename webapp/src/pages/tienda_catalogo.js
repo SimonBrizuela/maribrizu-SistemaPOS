@@ -29,13 +29,18 @@ import '../styles/tienda.css';
 
 const POR_TANDA = 60;
 
+// Cada filtro es una lista para TRABAJAR, no un corte del catálogo entero: la
+// pregunta que contesta esta pantalla es "qué le falta a la tienda", y para eso
+// "sin foto" son los que ya están publicados y "sin stock" los que volverían
+// solos con reponerlos. Los números al lado de cada uno evitan que la tarjeta
+// de arriba y la lista de abajo parezcan contradecirse.
 const FILTROS = [
   { clave: 'todos',      texto: 'Todos' },
   { clave: 'publicados', texto: 'En la tienda' },
   { clave: 'ocultos',    texto: 'Fuera' },
   { clave: 'destacados', texto: 'Destacados' },
   { clave: 'sin_foto',   texto: 'Sin foto' },
-  { clave: 'sin_stock',  texto: 'Sin stock' },
+  { clave: 'sin_stock',  texto: 'Reponer y vuelven' },
 ];
 
 let _db = null;
@@ -104,8 +109,16 @@ function visibles() {
     if (_filtro === 'publicados' && !p.publicado) return false;
     if (_filtro === 'ocultos' && p.publicado) return false;
     if (_filtro === 'destacados' && !p.destacado) return false;
-    if (_filtro === 'sin_foto' && p.imagenes.length) return false;
-    if (_filtro === 'sin_stock' && p.medidas.stock > 0) return false;
+    // "Sin foto" es la lista para trabajar: los que YA están en la tienda y
+    // salen con el cuadrito gris. Sin esta condición traía los 7.380 del
+    // catálogo entero —incluidos los 7.000 que ni se publican— y contradecía
+    // el "220 publicados sin foto" de la tarjeta de arriba.
+    if (_filtro === 'sin_foto' && (p.imagenes.length || !p.publicado)) return false;
+    // "Sin stock" también es una lista para trabajar: los que volverían solos a
+    // la tienda con reponerlos. Los que además no tienen precio, están fuera de
+    // un rubro publicado o se sacaron a mano no vuelven por reponer stock, así
+    // que ensucian la lista. `motivo` ya dice cuál es el primer impedimento.
+    if (_filtro === 'sin_stock' && p.motivo !== 'sin stock') return false;
     if (texto && !p.buscable.includes(texto)) return false;
     return true;
   });
@@ -216,9 +229,23 @@ function pintarResumen() {
   ].join('');
 }
 
+/** Cuántos productos trae cada filtro, con el rubro y la búsqueda ya aplicados. */
+function cuantosPor(clave) {
+  const guardado = _filtro;
+  _filtro = clave;
+  const n = visibles().length;
+  _filtro = guardado;
+  return n;
+}
+
 function pintarContadores() {
   document.querySelectorAll('#tiendaFiltros [data-filtro]').forEach(boton => {
     boton.classList.toggle('active', boton.dataset.filtro === _filtro);
+    // El número al lado de cada filtro evita la pregunta de "¿por qué acá dice
+    // 220 y abajo 7.380?": se ve lo que va a traer antes de tocarlo.
+    const texto = (FILTROS.find(f => f.clave === boton.dataset.filtro) || {}).texto || '';
+    boton.innerHTML = `${escHtml(texto)} <span class="pc-btn__n">${
+      cuantosPor(boton.dataset.filtro).toLocaleString('es-AR')}</span>`;
   });
 }
 

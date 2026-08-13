@@ -420,3 +420,18 @@
   object-fit: cover;
   background: var(--surface);
 }
+
+/* El número de cada filtro: cuántos productos trae. Sin esto, la tarjeta de
+   arriba y la lista de abajo mostraban dos números distintos sin explicación. */
+.pc-btn__n {
+  display: inline-block;
+  margin-left: 4px;
+  padding: 0 5px;
+  border-radius: 999px;
+  background: var(--surface-2, rgba(0,0,0,.06));
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  opacity: .75;
+}
+.pc-btn.active .pc-btn__n { background: rgba(255,255,255,.22); opacity: 1; }
