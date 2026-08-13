@@ -1,9 +1,53 @@
-import { collection, getDocs, query, orderBy, where } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, where, limit } from 'firebase/firestore';
 import { getCached } from '../cache.js';
 import { getFechaInicio, isVentaVarios2, isItemVarios2 } from '../config.js';
 import { getSaleNumberMap, displayNumForVenta } from '../sale_numbers.js';
+import { alertDialog, escHtml } from '../components/dialogs.js';
 
 export async function renderResumenes(container, db) {
+  // Shell vacío al toque: stat cards arriba + tabla con headers reales.
+  const _statCard = (label, color) => `
+    <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,0.08);border-left:4px solid ${color}">
+      <div style="font-size:11px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px">${label}</div>
+      <div style="font-size:24px;font-weight:700;color:var(--text-muted);margin-top:6px">—</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:2px">&nbsp;</div>
+    </div>`;
+  container.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:18px;flex-wrap:wrap;gap:12px">
+      <h2 style="margin:0;font-size:20px;font-weight:700">📊 Resúmenes Mensuales</h2>
+      <div style="display:flex;gap:8px">
+        <button class="skel" style="height:36px;width:140px;border-radius:8px" disabled></button>
+        <button class="skel" style="height:36px;width:140px;border-radius:8px" disabled></button>
+      </div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:24px">
+      ${_statCard('Total Acumulado', '#0d6efd')}
+      ${_statCard('Total Ventas', '#198754')}
+      ${_statCard('Mejor Mes', '#f59e0b')}
+    </div>
+    <div class="table-card">
+      <div class="table-card-header">
+        <h3>📅 Detalle por Mes</h3>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Mes</th>
+            <th style="text-align:center"># Ventas</th>
+            <th>Total</th>
+            <th>Efectivo</th>
+            <th>Transferencia</th>
+            <th>Descuentos</th>
+            <th>Ticket Prom.</th>
+          </tr></thead>
+          <tbody>
+            ${Array(6).fill('<tr><td colspan="7" style="padding:6px 12px"><div class="skel" style="height:28px;border-radius:6px"></div></td></tr>').join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+
   const fechaInicioStr = await getFechaInicio(db);
   const [inicioYear, inicioMonth] = fechaInicioStr.split('-').map(Number);
 
@@ -110,7 +154,7 @@ export async function renderResumenes(container, db) {
 
   container.innerHTML = `
     <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:20px;flex-wrap:wrap;gap:12px">
-      <h2 style="margin:0;font-size:20px;font-weight:700;color:#1e293b">📊 Resúmenes Mensuales</h2>
+      <h2 style="margin:0;font-size:20px;font-weight:700;color:var(--text-strong)">📊 Resúmenes Mensuales</h2>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button id="btnExportCSV" style="background:#198754;color:white;border:none;border-radius:8px;padding:8px 18px;font-weight:600;cursor:pointer;display:flex;align-items:center;gap:6px;font-size:13px">
           <span class="material-icons" style="font-size:16px">table_chart</span> Exportar Excel
@@ -123,20 +167,20 @@ export async function renderResumenes(container, db) {
 
     <!-- Tarjetas resumen -->
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:14px;margin-bottom:24px">
-      <div style="background:white;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,0.08);border-left:4px solid #0d6efd">
-        <div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Total Acumulado</div>
-        <div style="font-size:24px;font-weight:700;color:#1e293b;margin-top:6px">$${fmt(totalGeneral)}</div>
-        <div style="font-size:12px;color:#64748b;margin-top:2px">${meses.length} meses registrados</div>
+      <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,0.08);border-left:4px solid #0d6efd">
+        <div style="font-size:11px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px">Total Acumulado</div>
+        <div style="font-size:24px;font-weight:700;color:var(--text-strong);margin-top:6px">$${fmt(totalGeneral)}</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${meses.length} meses registrados</div>
       </div>
-      <div style="background:white;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,0.08);border-left:4px solid #198754">
-        <div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Total Ventas</div>
-        <div style="font-size:24px;font-weight:700;color:#198754;margin-top:6px">${totalVentas.toLocaleString('es-AR')}</div>
-        <div style="font-size:12px;color:#64748b;margin-top:2px">transacciones totales</div>
+      <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,0.08);border-left:4px solid #198754">
+        <div style="font-size:11px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px">Total Ventas</div>
+        <div style="font-size:24px;font-weight:700;color:var(--tint-green-fg);margin-top:6px">${totalVentas.toLocaleString('es-AR')}</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:2px">transacciones totales</div>
       </div>
-      <div style="background:white;border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,0.08);border-left:4px solid #f59e0b">
-        <div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.5px">Mejor Mes</div>
-        <div style="font-size:20px;font-weight:700;color:#1e293b;margin-top:6px">${mejorMes ? mejorMes.mes_nombre : '-'}</div>
-        <div style="font-size:12px;color:#64748b;margin-top:2px">${mejorMes ? '$' + fmt(mejorMes.total) : '-'}</div>
+      <div style="background:var(--surface);border-radius:12px;padding:18px;box-shadow:0 1px 4px rgba(0,0,0,0.08);border-left:4px solid #f59e0b">
+        <div style="font-size:11px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px">Mejor Mes</div>
+        <div style="font-size:20px;font-weight:700;color:var(--text-strong);margin-top:6px">${mejorMes ? mejorMes.mes_nombre : '-'}</div>
+        <div style="font-size:12px;color:var(--text-muted);margin-top:2px">${mejorMes ? '$' + fmt(mejorMes.total) : '-'}</div>
       </div>
     </div>
 
@@ -157,27 +201,27 @@ export async function renderResumenes(container, db) {
             <th>Ticket Prom.</th>
           </tr></thead>
           <tbody>
-            ${meses.length === 0 ? `<tr><td colspan="7" style="text-align:center;padding:40px;color:#94a3b8">Sin datos mensuales aún. Los resúmenes se generan automáticamente al realizar ventas.</td></tr>` :
+            ${meses.length === 0 ? `<tr><td colspan="7" style="text-align:center;padding:40px;color:var(--text-muted)">Sin datos mensuales aún. Los resúmenes se generan automáticamente al realizar ventas.</td></tr>` :
             meses.map((m, i) => `
               <tr class="mes-row" data-idx="${i}" style="cursor:pointer" title="Click para ver top productos">
-                <td><b style="color:#1e293b">${capFirst(m.mes_nombre || '-')}</b></td>
+                <td><b style="color:var(--text-strong)">${capFirst(m.mes_nombre || '-')}</b></td>
                 <td style="text-align:center"><span class="badge badge-blue">${m.num_ventas || 0}</span></td>
-                <td><b style="color:#198754">$${fmt(m.total)}</b></td>
+                <td><b style="color:var(--tint-green-fg)">$${fmt(m.total)}</b></td>
                 <td>$${fmt(m.efectivo)}</td>
                 <td>$${fmt(m.transferencia)}</td>
-                <td style="color:#dc3545">${(m.descuentos_total || 0) > 0 ? '-$' + fmt(m.descuentos_total) : '-'}</td>
+                <td style="color:var(--tint-red-fg)">${(m.descuentos_total || 0) > 0 ? '-$' + fmt(m.descuentos_total) : '-'}</td>
                 <td>$${fmt(m.ticket_promedio)}</td>
               </tr>
               <tr class="mes-detail" id="detail-${i}" style="display:none">
-                <td colspan="7" style="background:#f8fafc;padding:16px">
-                  <b style="color:#475569">🏆 Top productos de ${capFirst(m.mes_nombre || '')}:</b>
+                <td colspan="7" style="background:var(--surface-2);padding:16px">
+                  <b style="color:var(--text-muted)">🏆 Top productos de ${capFirst(m.mes_nombre || '')}:</b>
                   <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:8px">
-                    ${(m.top_productos || []).length === 0 ? '<span style="color:#94a3b8">Sin datos</span>' :
+                    ${(m.top_productos || []).length === 0 ? '<span style="color:var(--text-muted)">Sin datos</span>' :
                     (m.top_productos || []).map((p, j) => `
-                      <div style="background:white;border:1px solid #e2e8f0;border-radius:8px;padding:8px 14px;min-width:140px">
-                        <div style="font-size:11px;color:#64748b">#${j+1}</div>
-                        <div style="font-weight:600;color:#1e293b;font-size:13px">${p.producto || '-'}</div>
-                        <div style="font-size:12px;color:#198754;margin-top:2px">$${fmt(p.total)} · ${p.cantidad} un.</div>
+                      <div style="background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 14px;min-width:140px">
+                        <div style="font-size:11px;color:var(--text-muted)">#${j+1}</div>
+                        <div style="font-weight:600;color:var(--text-strong);font-size:13px">${p.producto || '-'}</div>
+                        <div style="font-size:12px;color:var(--tint-green-fg);margin-top:2px">$${fmt(p.total)} · ${p.cantidad} un.</div>
                       </div>
                     `).join('')}
                   </div>
@@ -201,7 +245,7 @@ export async function renderResumenes(container, db) {
       container.querySelectorAll('.mes-row').forEach(r => r.style.background = '');
       if (!isOpen) {
         detail.style.display = '';
-        row.style.background = '#eff6ff';
+        row.style.background = 'var(--tint-blue-bg)';
       }
     });
   });
@@ -227,19 +271,19 @@ export async function renderResumenes(container, db) {
     const intFmt = 'mso-number-format:"0"';
     const cellStyle = 'padding:6px 10px;border:1px solid #d0d7de;font-family:Calibri,Arial,sans-serif;font-size:11pt';
     const headStyle = `${cellStyle};background:#1a3a5c;color:#fff;font-weight:700;text-align:center`;
-    const totStyle  = `${cellStyle};background:#e8eef5;font-weight:700;border-top:2px solid #1a3a5c`;
+    const totStyle  = `${cellStyle};background:var(--surface-3);font-weight:700;border-top:2px solid #1a3a5c`;
 
     const dataRows = meses.map((m, i) => {
-      const bg = i % 2 === 0 ? '#ffffff' : '#f7f9fb';
+      const bg = i % 2 === 0 ? 'var(--surface)' : 'var(--surface-2)';
       const cs = `${cellStyle};background:${bg}`;
       return `
         <tr>
           <td style="${cs};font-weight:600">${capFirst(m.mes_nombre || '-')}</td>
           <td style="${cs};text-align:center;${intFmt}">${m.num_ventas || 0}</td>
-          <td style="${cs};text-align:right;${numFmt};color:#198754;font-weight:600">${(m.total||0).toFixed(2)}</td>
+          <td style="${cs};text-align:right;${numFmt};color:var(--tint-green-fg);font-weight:600">${(m.total||0).toFixed(2)}</td>
           <td style="${cs};text-align:right;${numFmt}">${(m.efectivo||0).toFixed(2)}</td>
           <td style="${cs};text-align:right;${numFmt}">${(m.transferencia||0).toFixed(2)}</td>
-          <td style="${cs};text-align:right;${numFmt};color:#dc3545">${(m.descuentos_total||0).toFixed(2)}</td>
+          <td style="${cs};text-align:right;${numFmt};color:var(--tint-red-fg)">${(m.descuentos_total||0).toFixed(2)}</td>
           <td style="${cs};text-align:right;${numFmt}">${(m.ticket_promedio||0).toFixed(2)}</td>
         </tr>`;
     }).join('');
@@ -259,7 +303,7 @@ export async function renderResumenes(container, db) {
   <style>
     table { border-collapse:collapse; }
     .title { font-family:Calibri,Arial,sans-serif; font-size:18pt; font-weight:700; color:#1a3a5c; }
-    .subtitle { font-family:Calibri,Arial,sans-serif; font-size:10pt; color:#666; }
+    .subtitle { font-family:Calibri,Arial,sans-serif; font-size:10pt; color:var(--text-muted); }
   </style>
 </head>
 <body>
@@ -277,14 +321,14 @@ export async function renderResumenes(container, db) {
       <th style="${headStyle}">Descuentos</th>
       <th style="${headStyle}">Ticket Prom.</th>
     </tr>
-    ${dataRows || `<tr><td colspan="7" style="${cellStyle};text-align:center;color:#94a3b8">Sin datos</td></tr>`}
+    ${dataRows || `<tr><td colspan="7" style="${cellStyle};text-align:center;color:var(--text-muted)">Sin datos</td></tr>`}
     <tr>
       <td style="${totStyle}">TOTAL GENERAL</td>
       <td style="${totStyle};text-align:center;${intFmt}">${ventasGen}</td>
-      <td style="${totStyle};text-align:right;${numFmt};color:#198754">${totalGen.toFixed(2)}</td>
+      <td style="${totStyle};text-align:right;${numFmt};color:var(--tint-green-fg)">${totalGen.toFixed(2)}</td>
       <td style="${totStyle};text-align:right;${numFmt}">${efectivoGen.toFixed(2)}</td>
       <td style="${totStyle};text-align:right;${numFmt}">${transferGen.toFixed(2)}</td>
-      <td style="${totStyle};text-align:right;${numFmt};color:#dc3545">${descuentosGen.toFixed(2)}</td>
+      <td style="${totStyle};text-align:right;${numFmt};color:var(--tint-red-fg)">${descuentosGen.toFixed(2)}</td>
       <td style="${totStyle};text-align:right;${numFmt}">${ticketGen.toFixed(2)}</td>
     </tr>
   </table>
@@ -367,29 +411,29 @@ export async function renderResumenes(container, db) {
       <title>Informe de Ventas</title>
       <style>
         * { margin:0; padding:0; box-sizing:border-box; }
-        body { font-family:'Segoe UI',Arial,sans-serif; color:#222; background:white; font-size:12px; }
+        body { font-family:'Segoe UI',Arial,sans-serif; color:#222; background:var(--surface); font-size:12px; }
 
         /* PORTADA */
         .portada { page-break-after:always; padding:80px 60px; display:flex; flex-direction:column; height:100vh; }
         .portada .top-bar { width:100%; height:6px; background:#1a3a5c; margin-bottom:60px; }
-        .portada .empresa { font-size:13px; color:#555; letter-spacing:1px; text-transform:uppercase; margin-bottom:6px; }
+        .portada .empresa { font-size:13px; color:var(--text-muted); letter-spacing:1px; text-transform:uppercase; margin-bottom:6px; }
         .portada h1 { font-size:32px; font-weight:700; color:#1a3a5c; margin-bottom:4px; letter-spacing:-0.5px; }
-        .portada .subtitulo { font-size:14px; color:#666; margin-bottom:50px; }
+        .portada .subtitulo { font-size:14px; color:var(--text-muted); margin-bottom:50px; }
         .portada .info-bloque { border-left:4px solid #1a3a5c; padding-left:20px; margin-bottom:40px; }
-        .portada .info-bloque p { font-size:13px; color:#444; margin-bottom:6px; }
+        .portada .info-bloque p { font-size:13px; color:var(--text); margin-bottom:6px; }
         .portada .info-bloque p b { color:#1a3a5c; }
         .portada .resumen-tabla { width:100%; border-collapse:collapse; margin-top:20px; }
         .portada .resumen-tabla td { padding:12px 16px; border:1px solid #dde3eb; font-size:13px; }
-        .portada .resumen-tabla td:first-child { color:#555; width:50%; }
+        .portada .resumen-tabla td:first-child { color:var(--text-muted); width:50%; }
         .portada .resumen-tabla td:last-child { font-weight:700; color:#1a3a5c; font-size:15px; }
-        .portada .resumen-tabla tr:nth-child(odd) td { background:#f7f9fb; }
-        .portada .bottom { margin-top:auto; font-size:10px; color:#aaa; border-top:1px solid #e0e0e0; padding-top:14px; display:flex; justify-content:space-between; }
+        .portada .resumen-tabla tr:nth-child(odd) td { background:var(--surface-2); }
+        .portada .bottom { margin-top:auto; font-size:10px; color:var(--text-muted); border-top:1px solid var(--border); padding-top:14px; display:flex; justify-content:space-between; }
 
         /* PÁGINAS */
         .page { padding:28px 35px; }
         .page-header { display:flex; justify-content:space-between; align-items:flex-end; border-bottom:2px solid #1a3a5c; padding-bottom:10px; margin-bottom:20px; }
         .page-header .titulo { font-size:16px; font-weight:700; color:#1a3a5c; }
-        .page-header .meta { font-size:10px; color:#888; text-align:right; }
+        .page-header .meta { font-size:10px; color:var(--text-muted); text-align:right; }
 
         .section-label { font-size:10px; font-weight:700; color:#1a3a5c; text-transform:uppercase; letter-spacing:1px; margin:20px 0 8px; border-bottom:1px solid #dde3eb; padding-bottom:4px; }
 
@@ -399,15 +443,15 @@ export async function renderResumenes(container, db) {
         .t th.r { text-align:right; }
         .t td { padding:8px 10px; border-bottom:1px solid #eaecef; }
         .t td.r { text-align:right; }
-        .t tr:nth-child(even) td { background:#f7f9fb; }
-        .t .tot td { background:#e8eef5; font-weight:700; border-top:1px solid #b0bec5; }
+        .t tr:nth-child(even) td { background:var(--surface-2); }
+        .t .tot td { background:var(--surface-3); font-weight:700; border-top:1px solid #b0bec5; }
 
         /* MES ENCABEZADO */
-        .mes-hdr { page-break-before:always; margin-bottom:16px; padding:14px 18px; background:#f7f9fb; border-left:5px solid #1a3a5c; display:flex; justify-content:space-between; align-items:center; }
+        .mes-hdr { page-break-before:always; margin-bottom:16px; padding:14px 18px; background:var(--surface-2); border-left:5px solid #1a3a5c; display:flex; justify-content:space-between; align-items:center; }
         .mes-hdr .mes-nombre { font-size:15px; font-weight:700; color:#1a3a5c; }
         .mes-hdr .mes-stats { display:flex; gap:28px; }
         .mes-hdr .mes-stats div { text-align:right; }
-        .mes-hdr .mes-stats .lbl { font-size:9px; color:#888; text-transform:uppercase; letter-spacing:0.5px; }
+        .mes-hdr .mes-stats .lbl { font-size:9px; color:var(--text-muted); text-transform:uppercase; letter-spacing:0.5px; }
         .mes-hdr .mes-stats .val { font-size:13px; font-weight:700; color:#1a3a5c; }
 
         /* TOP PRODUCTOS */
@@ -416,22 +460,22 @@ export async function renderResumenes(container, db) {
         .top-tabla th.r { text-align:right; }
         .top-tabla td { padding:6px 10px; border-bottom:1px solid #eaecef; }
         .top-tabla td.r { text-align:right; }
-        .top-tabla tr:nth-child(even) td { background:#f7f9fb; }
+        .top-tabla tr:nth-child(even) td { background:var(--surface-2); }
 
         /* TABLA VENTAS */
         .vt { width:100%; border-collapse:collapse; font-size:10.5px; }
         .vt th { background:#3d5a80; color:white; padding:6px 9px; text-align:left; font-size:9.5px; font-weight:600; text-transform:uppercase; letter-spacing:0.3px; }
         .vt th.r { text-align:right; }
-        .vt td { padding:5px 9px; border-bottom:1px solid #f0f0f0; vertical-align:top; }
+        .vt td { padding:5px 9px; border-bottom:1px solid var(--border); vertical-align:top; }
         .vt td.r { text-align:right; }
-        .vt .vr td { background:#eef2f7; font-weight:600; color:#1a3a5c; border-top:1px solid #d0d8e4; }
-        .vt .ir td { color:#555; padding-left:22px; font-size:10px; }
-        .vt .sr td { background:#f0f7f0; font-weight:700; color:#2d6a4f; font-size:10px; border-top:1px dashed #b7d7c2; }
+        .vt .vr td { background:var(--surface-2); font-weight:600; color:#1a3a5c; border-top:1px solid #d0d8e4; }
+        .vt .ir td { color:var(--text-muted); padding-left:22px; font-size:10px; }
+        .vt .sr td { background:var(--tint-green-bg); font-weight:700; color:#2d6a4f; font-size:10px; border-top:1px dashed #b7d7c2; }
         .vt .tmr td { background:#1a3a5c; color:white; font-weight:700; font-size:11px; padding:8px 9px; }
         .ef { color:#2d6a4f; font-weight:600; }
         .tr2 { color:#1a3a5c; font-weight:600; }
 
-        .page-footer { margin-top:20px; padding-top:8px; border-top:1px solid #e0e0e0; display:flex; justify-content:space-between; font-size:9px; color:#aaa; }
+        .page-footer { margin-top:20px; padding-top:8px; border-top:1px solid var(--border); display:flex; justify-content:space-between; font-size:9px; color:var(--text-muted); }
         @media print { body { -webkit-print-color-adjust:exact; print-color-adjust:exact; } }
       </style></head><body>`;
 
@@ -522,7 +566,7 @@ export async function renderResumenes(container, db) {
         html += `<div class="section-label">Detalle de ventas</div>`;
 
         if (!ventasDelMes.length) {
-          html += `<p style="color:#aaa;font-size:11px;padding:10px 0">Sin ventas registradas para este período.</p>`;
+          html += `<p style="color:var(--text-muted);font-size:11px;padding:10px 0">Sin ventas registradas para este período.</p>`;
         } else {
           html += `<table class="vt"><thead><tr>
             <th># Vta</th><th>Fecha</th><th>Hora</th><th>Producto</th><th>Categoría</th>
@@ -563,7 +607,7 @@ export async function renderResumenes(container, db) {
             } else {
               html += `<tr class="vr">
                 <td>#${numGlobal}</td><td>${fecha}</td><td>${hora}</td>
-                <td colspan="4" style="color:#aaa;font-style:italic;font-weight:400">Sin detalle de productos</td>
+                <td colspan="4" style="color:var(--text-muted);font-style:italic;font-weight:400">Sin detalle de productos</td>
                 <td class="r">$${fmt(v.total_amount)}</td>
                 <td><span class="${esCash?'ef':'tr2'}">${pago}</span></td><td>${cajero}</td>
               </tr>`;
@@ -590,7 +634,7 @@ export async function renderResumenes(container, db) {
       win.addEventListener('load', () => setTimeout(() => win.print(), 500));
 
     } catch(e) {
-      alert('Error generando PDF: ' + e.message);
+      alertDialog({ title: 'Error', message: 'No se pudo generar el PDF: ' + escHtml(e.message), type: 'error' });
       console.error(e);
     } finally {
       btn.disabled = false;

@@ -12,6 +12,7 @@ import {
 } from 'firebase/firestore';
 import { getCached, peekCache, invalidateCacheByPrefix } from '../cache.js';
 import { _registerCatalogoDeleted } from './catalogo.js';
+import { confirmDialog, alertDialog, escHtml } from '../components/dialogs.js';
 
 function fmt(n) {
   return Number(n || 0).toLocaleString('es-AR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -59,13 +60,37 @@ function esGrupoVariantes(base, items) {
 }
 
 export async function renderArticulosUnicos(container, db) {
-  if (!peekCache('artUnicos:catalogo', 120000)) {
-    container.innerHTML = `
-      <div style="text-align:center;padding:60px;color:var(--text-muted)">
-        <div class="spinner"></div>
-        <p>Detectando artículos con variantes...</p>
-      </div>`;
-  }
+  // Shell sincrónico al toque: header + búsqueda + grupos placeholder.
+  container.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;margin-bottom:20px">
+      <div>
+        <h2 style="margin:0;font-size:20px;font-weight:700">🔗 Artículos con Variantes</h2>
+        <p style="color:var(--text-muted);font-size:13px;margin:4px 0 0">
+          Productos que comparten el mismo nombre base con variantes de código o referencia
+        </p>
+      </div>
+      <div style="display:flex;gap:16px;flex-wrap:wrap">
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 20px;text-align:center">
+          <div style="font-size:22px;font-weight:700;color:var(--text-muted)">—</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Grupos</div>
+        </div>
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 20px;text-align:center">
+          <div style="font-size:22px;font-weight:700;color:var(--text-muted)">—</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:2px">Productos</div>
+        </div>
+      </div>
+    </div>
+    <div style="margin-bottom:16px">
+      <input type="text" placeholder="🔍 Buscar grupo o artículo..." style="width:100%;max-width:380px;padding:10px 14px;border:1px solid var(--border);border-radius:8px;font-size:14px" disabled />
+    </div>
+    <div>
+      ${Array(5).fill(`
+        <div style="background:var(--surface);border:1px solid var(--border);border-radius:12px;margin-bottom:14px;padding:14px 18px;display:flex;justify-content:space-between;align-items:center">
+          <div class="skel skel-line lg" style="width:280px"></div>
+          <div class="skel" style="width:60px;height:22px;border-radius:12px"></div>
+        </div>`).join('')}
+    </div>
+  `;
 
   // ── Cargar colección completa (cache 2 min en memoria) ────────────────
   const todos = await getCached('artUnicos:catalogo', async () => {
@@ -93,19 +118,19 @@ export async function renderArticulosUnicos(container, db) {
     <style>
       .variantes-header { display:flex; align-items:center; justify-content:space-between; flex-wrap:wrap; gap:12px; margin-bottom:20px; }
       .variantes-stats  { display:flex; gap:16px; flex-wrap:wrap; }
-      .var-stat { background:white; border:1px solid var(--border); border-radius:10px; padding:12px 20px; text-align:center; }
+      .var-stat { background:var(--surface); border:1px solid var(--border); border-radius:10px; padding:12px 20px; text-align:center; }
       .var-stat .n { font-size:22px; font-weight:700; color:var(--primary); }
       .var-stat .l { font-size:11px; color:var(--text-muted); margin-top:2px; }
 
-      .grupo-card { background:white; border:1px solid var(--border); border-radius:12px; margin-bottom:16px; overflow:hidden; }
+      .grupo-card { background:var(--surface); border:1px solid var(--border); border-radius:12px; margin-bottom:16px; overflow:hidden; }
       .grupo-header {
         display:flex; align-items:center; justify-content:space-between;
-        padding:12px 18px; background:#f8fafc; border-bottom:1px solid var(--border);
+        padding:12px 18px; background:var(--surface-2); border-bottom:1px solid var(--border);
         cursor:pointer; user-select:none;
       }
-      .grupo-header:hover { background:#f1f5f9; }
-      .grupo-nombre { font-weight:700; font-size:14px; color:#1e293b; }
-      .grupo-badge  { background:#e0e7ff; color:#4338ca; font-size:11px; font-weight:700;
+      .grupo-header:hover { background:var(--surface-2); }
+      .grupo-nombre { font-weight:700; font-size:14px; color:var(--text-strong); }
+      .grupo-badge  { background:var(--tint-blue-bg); color:#4338ca; font-size:11px; font-weight:700;
                       padding:2px 10px; border-radius:12px; }
       .grupo-body   { display:none; }
       .grupo-body.open { display:block; }
@@ -114,23 +139,23 @@ export async function renderArticulosUnicos(container, db) {
         display:grid;
         grid-template-columns: 2fr 80px 100px 100px 80px 120px;
         gap:8px; align-items:center;
-        padding:10px 18px; border-bottom:1px solid #f1f5f9;
+        padding:10px 18px; border-bottom:1px solid var(--border);
         font-size:13px;
       }
       .variante-row:last-child { border-bottom:none; }
-      .variante-row:hover { background:#f8fafc; }
+      .variante-row:hover { background:var(--surface-2); }
       .var-nombre { font-weight:600; color:#334155; word-break:break-word; }
-      .var-precio { color:#198754; font-weight:700; }
+      .var-precio { color:var(--tint-green-fg); font-weight:700; }
       .var-stock  { text-align:center; }
       .var-rubro  { color:var(--text-muted); font-size:12px; }
 
       .btn-edit-var {
-        background:#e8f0fe; border:none; border-radius:6px;
+        background:var(--tint-blue-bg); border:none; border-radius:6px;
         padding:5px 12px; cursor:pointer; font-size:12px;
-        color:#1877f2; font-weight:600;
+        color:var(--tint-blue-fg); font-weight:600;
         display:flex; align-items:center; gap:4px;
       }
-      .btn-edit-var:hover { background:#d2e3fc; }
+      .btn-edit-var:hover { background:var(--tint-blue-bg); }
 
       .btn-edit-all {
         background:var(--primary); color:white; border:none;
@@ -144,8 +169,8 @@ export async function renderArticulosUnicos(container, db) {
         grid-template-columns: 2fr 80px 100px 100px 80px 120px;
         gap:8px; padding:8px 18px;
         font-size:11px; font-weight:700; color:var(--text-muted);
-        text-transform:uppercase; background:#f8fafc;
-        border-bottom:1px solid #e2e8f0;
+        text-transform:uppercase; background:var(--surface-2);
+        border-bottom:1px solid var(--border);
       }
 
       .search-variantes {
@@ -156,14 +181,14 @@ export async function renderArticulosUnicos(container, db) {
 
       /* Editor inline */
       .editor-inline {
-        background:#f0fdf4; border:1.5px solid #86efac;
+        background:var(--tint-green-bg); border:1.5px solid var(--border);
         border-radius:10px; padding:16px 18px; margin:8px 18px 12px;
       }
-      .editor-inline h4 { font-size:13px; font-weight:700; color:#166534; margin-bottom:10px; }
+      .editor-inline h4 { font-size:13px; font-weight:700; color:var(--tint-green-fg); margin-bottom:10px; }
       .editor-grid { display:grid; grid-template-columns:repeat(auto-fill,minmax(160px,1fr)); gap:10px; }
-      .editor-field label { font-size:11px; color:#475569; font-weight:600; display:block; margin-bottom:3px; }
+      .editor-field label { font-size:11px; color:var(--text-muted); font-weight:600; display:block; margin-bottom:3px; }
       .editor-field input, .editor-field select {
-        width:100%; padding:7px 10px; border:1.5px solid #ced4da;
+        width:100%; padding:7px 10px; border:1.5px solid var(--border);
         border-radius:6px; font-size:13px; box-sizing:border-box;
       }
       .editor-field input:focus { border-color:var(--primary); outline:none; }
@@ -171,12 +196,12 @@ export async function renderArticulosUnicos(container, db) {
       .btn-save-var { background:#198754; color:white; border:none; border-radius:6px;
                       padding:8px 20px; cursor:pointer; font-weight:700; font-size:13px; }
       .btn-save-var:hover { background:#157347; }
-      .btn-cancel-var { background:#f8f9fa; border:1px solid #dee2e6; border-radius:6px;
-                        padding:8px 16px; cursor:pointer; font-size:13px; color:#495057; }
-      .btn-cancel-var:hover { background:#e9ecef; }
-      .btn-del-var { background:#fee2e2; color:#dc3545; border:1px solid #fecaca;
+      .btn-cancel-var { background:var(--surface-2); border:1px solid var(--border); border-radius:6px;
+                        padding:8px 16px; cursor:pointer; font-size:13px; color:var(--text-muted); }
+      .btn-cancel-var:hover { background:var(--surface-2); }
+      .btn-del-var { background:var(--tint-red-bg); color:var(--tint-red-fg); border:1px solid var(--border);
                      border-radius:6px; padding:8px 14px; cursor:pointer; font-size:12px; font-weight:600; }
-      .btn-del-var:hover { background:#fecaca; }
+      .btn-del-var:hover { background:var(--tint-red-bg); }
 
       @media (max-width: 600px) {
         .variante-row-header { display:none; }
@@ -280,7 +305,7 @@ export async function renderArticulosUnicos(container, db) {
                   <span class="badge ${(p.stock||0) > 0 ? 'badge-green' : 'badge-gray'}">${p.stock ?? '—'}</span>
                 </div>
                 <div class="var-precio">$${fmt(p.precio || p.precio_venta)}</div>
-                <div style="color:#64748b">$${fmt(p.costo || p.cost_price)}</div>
+                <div style="color:var(--text-muted)">$${fmt(p.costo || p.cost_price)}</div>
                 <div class="var-rubro">${p.rubro || p.categoria || '—'}</div>
                 <div>
                   <button class="btn-edit-var" onclick="editarVariante(${gi},${ii})">
@@ -396,7 +421,7 @@ export async function renderArticulosUnicos(container, db) {
   window.eliminarVariante = async function(gi, ii) {
     const [, items] = variantes[gi];
     const p = items[ii];
-    if (!confirm(`¿Eliminar "${p.nombre}"?\nEsta acción no se puede deshacer.`)) return;
+    if (!await confirmDialog({ title: 'Eliminar artículo', message: `¿Eliminar <b>"${escHtml(p.nombre)}"</b>?<br><span style="color:var(--text-muted)">Esta acción no se puede deshacer.</span>`, confirmText: 'Eliminar', danger: true })) return;
     try {
       await deleteDoc(doc(db, 'catalogo', p._id));
       await _registerCatalogoDeleted(db, p._id);
@@ -424,7 +449,7 @@ export async function renderArticulosUnicos(container, db) {
     edDiv.style.margin = '0 18px 12px';
     edDiv.innerHTML = `
       <h4>✏️ Editar TODOS los precios del grupo: ${base}</h4>
-      <p style="font-size:12px;color:#64748b;margin-bottom:10px">
+      <p style="font-size:12px;color:var(--text-muted);margin-bottom:10px">
         Esto actualizará el precio de venta y costo de las ${items.length} variantes a la vez.
       </p>
       <div class="editor-grid">
@@ -455,7 +480,7 @@ export async function renderArticulosUnicos(container, db) {
     const rubro  = document.getElementById(`eg-rubro-${gi}`)?.value.trim() || null;
 
     if (!precio && !costo && !rubro) {
-      alert('Completá al menos un campo para actualizar.');
+      alertDialog({ title: 'Nada para actualizar', message: 'Completá al menos un campo para actualizar.', type: 'warning' });
       return;
     }
 
@@ -492,8 +517,8 @@ export async function renderArticulosUnicos(container, db) {
     t.textContent = msg;
     t.style.cssText = `
       position:fixed; bottom:24px; right:24px; z-index:9999;
-      background:${tipo === 'error' ? '#fee2e2' : '#dcfce7'};
-      color:${tipo === 'error' ? '#dc3545' : '#166534'};
+      background:${tipo === 'error' ? 'var(--tint-red-bg)' : 'var(--tint-green-bg)'};
+      color:${tipo === 'error' ? 'var(--tint-red-fg)' : 'var(--tint-green-fg)'};
       border:1px solid ${tipo === 'error' ? '#fecaca' : '#86efac'};
       border-radius:10px; padding:12px 20px; font-size:14px; font-weight:600;
       box-shadow:0 4px 12px rgba(0,0,0,0.15);

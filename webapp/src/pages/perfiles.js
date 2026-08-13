@@ -10,6 +10,7 @@ import {
   getDoc, query, orderBy
 } from 'firebase/firestore';
 import { getCached, invalidateCacheByPrefix } from '../cache.js';
+import { confirmDialog, alertDialog, escHtml } from '../components/dialogs.js';
 
 const COL = 'perfiles_facturacion';
 const CFG_DOC = 'config/emisor_activo';
@@ -27,7 +28,7 @@ export async function renderPerfiles(container, db) {
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:8px">
         <div>
           <h2 style="margin:0;font-size:20px;font-weight:700">Perfiles ARCA</h2>
-          <p style="margin:4px 0 0;color:#6c757d;font-size:13px">
+          <p style="margin:4px 0 0;color:var(--text-muted);font-size:13px">
             Cada perfil es un emisor (dueño / socio). El cajero elige en cuál facturar al cobrar.
           </p>
         </div>
@@ -42,7 +43,7 @@ export async function renderPerfiles(container, db) {
 
       <!-- Lista de perfiles -->
       <div id="perfilesLista" style="display:flex;flex-direction:column;gap:12px">
-        <div style="text-align:center;padding:40px;color:#6c757d">
+        <div style="text-align:center;padding:40px;color:var(--text-muted)">
           <span class="material-icons" style="font-size:40px;display:block;margin-bottom:8px">hourglass_empty</span>
           Cargando perfiles...
         </div>
@@ -54,7 +55,7 @@ export async function renderPerfiles(container, db) {
         z-index:1000;align-items:center;justify-content:center;padding:16px
       ">
         <div style="
-          background:white;border-radius:16px;padding:24px;width:100%;
+          background:var(--surface);border-radius:16px;padding:24px;width:100%;
           max-width:520px;max-height:90vh;overflow-y:auto;
           box-shadow:0 20px 60px rgba(0,0,0,0.3)
         ">
@@ -62,7 +63,7 @@ export async function renderPerfiles(container, db) {
             <h3 id="modalTitulo" style="margin:0;font-size:18px;font-weight:700">Nuevo perfil</h3>
             <button id="modalCerrar" style="
               background:none;border:none;cursor:pointer;
-              color:#6c757d;font-size:24px;line-height:1;padding:0
+              color:var(--text-muted);font-size:24px;line-height:1;padding:0
             ">&times;</button>
           </div>
 
@@ -71,59 +72,59 @@ export async function renderPerfiles(container, db) {
 
             <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px">
               <div style="grid-column:1/-1">
-                <label style="font-size:13px;font-weight:600;color:#495057;display:block;margin-bottom:4px">
+                <label style="font-size:13px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">
                   Nombre en el botón *
                 </label>
                 <input id="fNombre" type="text" placeholder="Ej: María, Juan"
-                  style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #dee2e6;border-radius:8px;font-size:14px;font-family:inherit">
+                  style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit">
               </div>
 
               <div style="grid-column:1/-1">
-                <label style="font-size:13px;font-weight:600;color:#495057;display:block;margin-bottom:4px">
+                <label style="font-size:13px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">
                   Razón Social (para la factura)
                 </label>
                 <input id="fRazon" type="text" placeholder="Nombre completo fiscal"
-                  style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #dee2e6;border-radius:8px;font-size:14px;font-family:inherit">
+                  style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit">
               </div>
 
               <div>
-                <label style="font-size:13px;font-weight:600;color:#495057;display:block;margin-bottom:4px">
+                <label style="font-size:13px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">
                   CUIT *
                 </label>
                 <input id="fCuit" type="text" placeholder="20123456789"
-                  style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #dee2e6;border-radius:8px;font-size:14px;font-family:inherit">
+                  style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit">
               </div>
 
               <div>
-                <label style="font-size:13px;font-weight:600;color:#495057;display:block;margin-bottom:4px">
+                <label style="font-size:13px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">
                   Punto de Venta
                 </label>
                 <input id="fPV" type="number" value="1" min="1"
-                  style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #dee2e6;border-radius:8px;font-size:14px;font-family:inherit">
+                  style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit">
               </div>
 
               <div style="grid-column:1/-1">
-                <label style="font-size:13px;font-weight:600;color:#495057;display:block;margin-bottom:4px">
+                <label style="font-size:13px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">
                   Domicilio fiscal
                 </label>
                 <input id="fDomicilio" type="text" placeholder="Calle 123"
-                  style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #dee2e6;border-radius:8px;font-size:14px;font-family:inherit">
+                  style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit">
               </div>
 
               <div>
-                <label style="font-size:13px;font-weight:600;color:#495057;display:block;margin-bottom:4px">
+                <label style="font-size:13px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">
                   Localidad
                 </label>
                 <input id="fLocalidad" type="text"
-                  style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #dee2e6;border-radius:8px;font-size:14px;font-family:inherit">
+                  style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit">
               </div>
 
               <div>
-                <label style="font-size:13px;font-weight:600;color:#495057;display:block;margin-bottom:4px">
+                <label style="font-size:13px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">
                   Condición IVA
                 </label>
                 <select id="fCondIVA"
-                  style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #dee2e6;border-radius:8px;font-size:14px;font-family:inherit;background:white">
+                  style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:var(--surface)">
                   <option>Monotributista</option>
                   <option>Responsable Inscripto</option>
                   <option>Exento</option>
@@ -131,62 +132,62 @@ export async function renderPerfiles(container, db) {
               </div>
 
               <div style="grid-column:1/-1">
-                <label style="font-size:13px;font-weight:600;color:#495057;display:block;margin-bottom:4px">
+                <label style="font-size:13px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">
                   Entorno AFIP
                 </label>
                 <select id="fEntorno"
-                  style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid #dee2e6;border-radius:8px;font-size:14px;font-family:inherit;background:white">
+                  style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:var(--surface)">
                   <option value="1">Producción (real)</option>
                   <option value="0">Homologación (prueba)</option>
                 </select>
               </div>
 
-              <div style="grid-column:1/-1;background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:14px">
-                <p style="margin:0 0 12px;font-size:12px;color:#166534;font-weight:600;display:flex;align-items:center;gap:6px">
+              <div style="grid-column:1/-1;background:var(--tint-green-bg);border:1px solid var(--border);border-radius:8px;padding:14px">
+                <p style="margin:0 0 12px;font-size:12px;color:var(--tint-green-fg);font-weight:600;display:flex;align-items:center;gap:6px">
                   <span class="material-icons" style="font-size:16px">lock</span>
                   Certificados AFIP — se distribuyen automáticamente a todas las PCs
                 </p>
 
-                <label style="font-size:13px;font-weight:600;color:#495057;display:block;margin-bottom:4px">
+                <label style="font-size:13px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">
                   Certificado (.crt)
                 </label>
                 <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px">
                   <input id="fCertFile" type="file" accept=".crt,.pem" style="display:none">
                   <button type="button" id="btnCertFile" style="
-                    padding:8px 14px;background:#f8f9fa;border:1px solid #dee2e6;
+                    padding:8px 14px;background:var(--surface-2);border:1px solid var(--border);
                     border-radius:8px;font-size:13px;cursor:pointer;font-family:inherit;white-space:nowrap
                   ">Subir archivo</button>
-                  <span id="certFileName" style="font-size:13px;color:#6c757d;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                  <span id="certFileName" style="font-size:13px;color:var(--text-muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
                     Sin archivo
                   </span>
                 </div>
 
-                <label style="font-size:13px;font-weight:600;color:#495057;display:block;margin-bottom:4px">
+                <label style="font-size:13px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">
                   Clave privada (.key)
                 </label>
                 <div style="display:flex;align-items:center;gap:8px">
                   <input id="fKeyFile" type="file" accept=".key,.pem" style="display:none">
                   <button type="button" id="btnKeyFile" style="
-                    padding:8px 14px;background:#f8f9fa;border:1px solid #dee2e6;
+                    padding:8px 14px;background:var(--surface-2);border:1px solid var(--border);
                     border-radius:8px;font-size:13px;cursor:pointer;font-family:inherit;white-space:nowrap
                   ">Subir archivo</button>
-                  <span id="keyFileName" style="font-size:13px;color:#6c757d;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
+                  <span id="keyFileName" style="font-size:13px;color:var(--text-muted);flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">
                     Sin archivo
                   </span>
                 </div>
 
-                <p style="margin:10px 0 0;font-size:11px;color:#166534">
+                <p style="margin:10px 0 0;font-size:11px;color:var(--tint-green-fg)">
                   Al guardar, el POS descarga y configura los certificados automáticamente en cada PC.
                 </p>
               </div>
             </div>
 
-            <div id="perfilError" style="display:none;color:#dc3545;font-size:13px;padding:8px 12px;background:#fff0f0;border-radius:6px"></div>
+            <div id="perfilError" style="display:none;color:var(--tint-red-fg);font-size:13px;padding:8px 12px;background:var(--tint-red-bg);border-radius:6px"></div>
 
             <div style="display:flex;gap:10px;margin-top:4px">
               <button type="button" id="btnCancelarModal" style="
-                flex:1;padding:12px;border:1px solid #dee2e6;border-radius:8px;
-                background:white;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit
+                flex:1;padding:12px;border:1px solid var(--border);border-radius:8px;
+                background:var(--surface);font-size:14px;font-weight:600;cursor:pointer;font-family:inherit
               ">Cancelar</button>
               <button type="submit" id="btnGuardarPerfil" style="
                 flex:2;padding:12px;background:#0d6efd;color:white;border:none;
@@ -225,7 +226,7 @@ async function cargarPerfiles(db) {
 
     if (!activos.length) {
       lista.innerHTML = `
-        <div style="text-align:center;padding:48px 20px;color:#6c757d;background:white;border-radius:12px;border:2px dashed #dee2e6">
+        <div style="text-align:center;padding:48px 20px;color:var(--text-muted);background:var(--surface);border-radius:12px;border:2px dashed var(--border)">
           <span class="material-icons" style="font-size:48px;display:block;margin-bottom:12px;color:#adb5bd">person_add</span>
           <p style="margin:0;font-size:15px">No hay perfiles cargados</p>
           <p style="margin:6px 0 0;font-size:13px">Hacé clic en "Nuevo perfil" para agregar el primero</p>
@@ -244,7 +245,7 @@ async function cargarPerfiles(db) {
 
       const cardBorder = esActivo
         ? 'border:2px solid #198754;'
-        : 'border:1px solid #f0f0f0;';
+        : 'border:1px solid var(--border);';
       const iconBg = esActivo ? '#198754' : '#0d6efd';
       const activoBadge = esActivo
         ? `<span style="background:#198754;color:white;padding:2px 10px;border-radius:12px;font-size:12px;font-weight:700;display:inline-flex;align-items:center;gap:4px">
@@ -254,7 +255,7 @@ async function cargarPerfiles(db) {
 
       return `
         <div style="
-          background:white;border-radius:12px;padding:18px 20px;
+          background:var(--surface);border-radius:12px;padding:18px 20px;
           box-shadow:0 2px 8px rgba(0,0,0,0.07);${cardBorder}
           display:flex;align-items:center;gap:16px;flex-wrap:wrap
         ">
@@ -265,35 +266,35 @@ async function cargarPerfiles(db) {
             <span class="material-icons" style="color:white;font-size:26px">person</span>
           </div>
           <div style="flex:1;min-width:180px">
-            <div style="font-size:16px;font-weight:700;color:#212529">${p.nombre || '—'}</div>
-            <div style="font-size:13px;color:#6c757d;margin-top:2px">
+            <div style="font-size:16px;font-weight:700;color:var(--text-strong)">${p.nombre || '—'}</div>
+            <div style="font-size:13px;color:var(--text-muted);margin-top:2px">
               ${p.razon_social && p.razon_social !== p.nombre ? p.razon_social + ' · ' : ''}
               CUIT: <b>${p.cuit || '—'}</b> · PV: ${p.punto_venta || 1}
             </div>
             <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">
               ${activoBadge}
               ${entorno} ${cert}
-              <span style="background:#f8f9fa;color:#495057;padding:2px 10px;border-radius:12px;font-size:12px;font-weight:500;border:1px solid #dee2e6">${p.condicion_iva || 'Monotributista'}</span>
+              <span style="background:var(--surface-2);color:var(--text-muted);padding:2px 10px;border-radius:12px;font-size:12px;font-weight:500;border:1px solid var(--border)">${p.condicion_iva || 'Monotributista'}</span>
             </div>
           </div>
           <div style="display:flex;gap:8px;flex-shrink:0;flex-wrap:wrap">
             ${esActivo
               ? `<button data-docid="${p._docId}" data-action="desactivar" style="
-                  padding:8px 14px;background:#e8f5e9;border:1px solid #a5d6a7;
-                  color:#2e7d32;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit
+                  padding:8px 14px;background:var(--tint-green-bg);border:1px solid var(--border);
+                  color:var(--tint-green-fg);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit
                 ">★ Activo</button>`
               : `<button data-docid="${p._docId}" data-nombre="${p.nombre}" data-action="activar" style="
-                  padding:8px 14px;background:#f8f9fa;border:1px solid #dee2e6;
-                  color:#495057;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit
+                  padding:8px 14px;background:var(--surface-2);border:1px solid var(--border);
+                  color:var(--text-muted);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit
                 ">Activar hoy</button>`
             }
             <button data-docid="${p._docId}" data-action="editar" style="
-              padding:8px 14px;background:#f8f9fa;border:1px solid #dee2e6;
+              padding:8px 14px;background:var(--surface-2);border:1px solid var(--border);
               border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit
             ">Editar</button>
             <button data-docid="${p._docId}" data-nombre="${p.nombre}" data-action="eliminar" style="
-              padding:8px 14px;background:#fff0f0;border:1px solid #fca5a5;
-              color:#dc3545;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit
+              padding:8px 14px;background:var(--tint-red-bg);border:1px solid var(--border);
+              color:var(--tint-red-fg);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit
             ">Eliminar</button>
           </div>
         </div>
@@ -305,7 +306,7 @@ async function cargarPerfiles(db) {
     activos.forEach(p => { window._perfilesData[p._docId] = p; });
 
   } catch (e) {
-    lista.innerHTML = `<div style="color:#dc3545;padding:20px">Error cargando perfiles: ${e.message}</div>`;
+    lista.innerHTML = `<div style="color:var(--tint-red-fg);padding:20px">Error cargando perfiles: ${e.message}</div>`;
   }
 }
 
@@ -415,7 +416,7 @@ function setupEvents(db) {
     _certB64 = await leerArchivo(file);
     const lbl = document.getElementById('certFileName');
     lbl.textContent = file.name;
-    lbl.style.color = '#198754';
+    lbl.style.color = 'var(--tint-green-fg)';
   });
 
   // Cuando se selecciona un .key
@@ -425,7 +426,7 @@ function setupEvents(db) {
     _keyB64 = await leerArchivo(file);
     const lbl = document.getElementById('keyFileName');
     lbl.textContent = file.name;
-    lbl.style.color = '#198754';
+    lbl.style.color = 'var(--tint-green-fg)';
   });
 
   // Guardar perfil
@@ -484,7 +485,7 @@ function setupEvents(db) {
         invalidateCacheByPrefix('perfiles:');
         await cargarPerfiles(db);
       } catch (err) {
-        alert(`Error al activar emisor: ${err.message}`);
+        alertDialog({ title: 'Error', message: `No se pudo activar el emisor: ${escHtml(err.message)}`, type: 'error' });
       }
     }
 
@@ -498,19 +499,19 @@ function setupEvents(db) {
         invalidateCacheByPrefix('perfiles:');
         await cargarPerfiles(db);
       } catch (err) {
-        alert(`Error al desactivar emisor: ${err.message}`);
+        alertDialog({ title: 'Error', message: `No se pudo desactivar el emisor: ${escHtml(err.message)}`, type: 'error' });
       }
     }
 
     if (action === 'eliminar') {
       const nombre = btn.dataset.nombre || 'este perfil';
-      if (!confirm(`¿Eliminar "${nombre}"? Se sincronizará al POS.`)) return;
+      if (!await confirmDialog({ title: 'Eliminar perfil', message: `¿Eliminar <b>"${escHtml(nombre)}"</b>?<br><span style="color:var(--text-muted)">Se sincronizará al POS.</span>`, confirmText: 'Eliminar', danger: true })) return;
       try {
         await updateDoc(doc(db, COL, docId), { activo: false });
         invalidateCacheByPrefix('perfiles:');
         await cargarPerfiles(db);
       } catch (err) {
-        alert(`Error al eliminar: ${err.message}`);
+        alertDialog({ title: 'Error', message: `No se pudo eliminar: ${escHtml(err.message)}`, type: 'error' });
       }
     }
   });

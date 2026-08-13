@@ -295,25 +295,25 @@ async function cargarRubros(db) {
 
 // ── Estilos compartidos ──────────────────────────────────────────────────────
 function estiloInput() {
-  return 'width:100%;box-sizing:border-box;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:white';
+  return 'width:100%;box-sizing:border-box;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:var(--surface)';
 }
 function estiloBtnPri() {
   return 'flex:2;padding:12px;background:var(--primary);color:white;border:none;border-radius:8px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit';
 }
 function estiloBtnSec() {
-  return 'flex:1;padding:12px;border:1.5px solid var(--border);border-radius:8px;background:white;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit';
+  return 'flex:1;padding:12px;border:1.5px solid var(--border);border-radius:8px;background:var(--surface);font-size:14px;font-weight:600;cursor:pointer;font-family:inherit';
 }
 function campoLabel(label, html) {
   return `
     <div>
-      <label style="font-size:13px;font-weight:600;color:#495057;display:block;margin-bottom:4px">${label}</label>
+      <label style="font-size:13px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">${label}</label>
       ${html}
     </div>`;
 }
 function seccionTitulo(txt, hint = '') {
   return `
-    <div style="display:flex;align-items:center;gap:6px;margin:0 0 6px;padding:0 0 4px;border-bottom:1px dashed #fde68a">
-      <span style="font-size:10px;font-weight:800;letter-spacing:0.7px;color:#78350f;text-transform:uppercase">${escapeHtml(txt)}</span>
+    <div style="display:flex;align-items:center;gap:6px;margin:0 0 6px;padding:0 0 4px;border-bottom:1px dashed var(--border)">
+      <span style="font-size:10px;font-weight:800;letter-spacing:0.7px;color:var(--tint-orange-fg);text-transform:uppercase">${escapeHtml(txt)}</span>
       ${hint ? `<span title="${escapeHtml(hint)}" style="opacity:0.45;font-size:11px;cursor:help">ⓘ</span>` : ''}
     </div>`;
 }
@@ -329,7 +329,7 @@ export async function renderLabProductos(container, db) {
 
     <!-- Modal: Categoría -->
     <div id="lpCatModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1000;align-items:flex-start;justify-content:center;padding:24px 16px;overflow-y:auto">
-      <div style="background:white;border-radius:16px;padding:24px;width:100%;max-width:560px;box-shadow:0 20px 60px rgba(0,0,0,0.3);margin:auto">
+      <div style="background:var(--surface);border-radius:16px;padding:24px;width:100%;max-width:560px;box-shadow:0 20px 60px rgba(0,0,0,0.3);margin:auto">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:18px">
           <h3 id="lpCatTitulo" style="margin:0;font-size:20px;font-weight:700">Nueva categoría</h3>
           <button data-close="cat" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:28px;line-height:1;padding:0">&times;</button>
@@ -337,7 +337,7 @@ export async function renderLabProductos(container, db) {
         <form id="lpCatForm" style="display:flex;flex-direction:column;gap:14px">
           <input type="hidden" id="lpCatId" />
           <div>
-            <label style="font-size:13px;font-weight:600;color:#495057;display:block;margin-bottom:4px">Nombre de la categoría *</label>
+            <label style="font-size:13px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">Nombre de la categoría *</label>
             <input id="lpCatNombre" type="text" placeholder="Ej: Cartulina Escolar" required
               style="${estiloInput()};font-size:17px;padding:14px 14px;font-weight:600" />
           </div>
@@ -346,39 +346,39 @@ export async function renderLabProductos(container, db) {
             ${campoLabel('Marca (opcional)', '<input id="lpCatMarca" type="text" placeholder="Ej: Muresco" style="' + estiloInput() + '" />')}
           </div>
 
-          <details id="lpCatDetalles" style="background:#f8f9fa;border:1px solid var(--border);border-radius:10px">
-            <summary style="padding:11px 14px;cursor:pointer;font-size:13px;color:#495057;font-weight:600;list-style:none;display:flex;align-items:center;gap:8px">
-              <span class="material-icons" style="font-size:16px;color:#9ca3af">tune</span>
+          <details id="lpCatDetalles" style="background:var(--surface-2);border:1px solid var(--border);border-radius:10px">
+            <summary style="padding:11px 14px;cursor:pointer;font-size:13px;color:var(--text-muted);font-weight:600;list-style:none;display:flex;align-items:center;gap:8px">
+              <span class="material-icons" style="font-size:16px;color:var(--text-muted)">tune</span>
               Más detalles (opcional)
             </summary>
             <div style="padding:0 14px 14px;display:flex;flex-direction:column;gap:10px">
               ${campoLabel('Categoría / sub-rubro', '<input id="lpCatCategoria" type="text" placeholder="Ej: Papelería" style="' + estiloInput() + '" />')}
               ${campoLabel('Descripción', '<textarea id="lpCatDescripcion" rows="2" placeholder="Texto libre" style="' + estiloInput() + ';resize:vertical;font-family:inherit"></textarea>')}
               <div>
-                <label style="font-size:13px;font-weight:600;color:#495057;display:block;margin-bottom:4px">Código de barras (auto)</label>
+                <label style="font-size:13px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">Código de barras (auto)</label>
                 <div style="display:flex;gap:6px">
                   <input id="lpCatCodigo" type="text" style="${estiloInput()};flex:1;font-family:'Courier New',monospace" />
                   <button type="button" id="lpCatCodigoReGen" title="Regenerar"
-                    style="background:white;border:1.5px solid var(--border);border-radius:8px;padding:0 14px;cursor:pointer;font-size:13px;font-weight:600;font-family:inherit">↻</button>
+                    style="background:var(--surface);border:1.5px solid var(--border);border-radius:8px;padding:0 14px;cursor:pointer;font-size:13px;font-weight:600;font-family:inherit">↻</button>
                 </div>
                 <p style="margin:5px 0 0;font-size:11px;color:var(--text-muted)">EAN-8 (8 dígitos). Editable si querés escanear uno real.</p>
               </div>
             </div>
           </details>
 
-          <details style="background:#faf5ff;border:1px solid #ddd6fe;border-radius:10px">
-            <summary style="padding:11px 14px;cursor:pointer;font-size:13px;color:#5b21b6;font-weight:700;list-style:none;display:flex;align-items:center;gap:8px">
+          <details style="background:var(--tint-purple-bg);border:1px solid var(--border);border-radius:10px">
+            <summary style="padding:11px 14px;cursor:pointer;font-size:13px;color:var(--tint-purple-fg);font-weight:700;list-style:none;display:flex;align-items:center;gap:8px">
               <span class="material-icons" style="font-size:16px">local_offer</span>
               Descuentos (opcional)
-              <span style="margin-left:auto;font-weight:500;font-size:11px;color:#7c3aed">aplican a toda la categoría</span>
+              <span style="margin-left:auto;font-weight:500;font-size:11px;color:var(--tint-purple-fg)">aplican a toda la categoría</span>
             </summary>
             <div style="padding:0 14px 14px;display:flex;flex-direction:column;gap:8px">
-              <button type="button" id="lpCatAddDisc" style="background:white;border:1px dashed #ddd6fe;color:#5b21b6;border-radius:8px;padding:8px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit">+ Agregar descuento</button>
+              <button type="button" id="lpCatAddDisc" style="background:var(--surface);border:1px dashed var(--border);color:var(--tint-purple-fg);border-radius:8px;padding:8px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit">+ Agregar descuento</button>
               <div id="lpCatDescuentos" style="display:flex;flex-direction:column;gap:8px"></div>
             </div>
           </details>
 
-          <div id="lpCatError" style="display:none;color:#dc3545;font-size:13px;padding:8px 12px;background:#fff0f0;border-radius:6px"></div>
+          <div id="lpCatError" style="display:none;color:var(--tint-red-fg);font-size:13px;padding:8px 12px;background:var(--tint-red-bg);border-radius:6px"></div>
 
           <div style="display:flex;gap:10px;margin-top:4px">
             <button type="button" data-close="cat" style="${estiloBtnSec()}">Cancelar</button>
@@ -390,99 +390,99 @@ export async function renderLabProductos(container, db) {
 
     <!-- Modal: Variante -->
     <div id="lpVarModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1000;align-items:flex-start;justify-content:center;padding:24px 16px;overflow-y:auto">
-      <div style="background:white;border-radius:16px;padding:24px;width:100%;max-width:720px;box-shadow:0 20px 60px rgba(0,0,0,0.3);margin:auto">
+      <div style="background:var(--surface);border-radius:16px;padding:24px;width:100%;max-width:720px;box-shadow:0 20px 60px rgba(0,0,0,0.3);margin:auto">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
           <h3 id="lpVarTitulo" style="margin:0;font-size:20px;font-weight:700">Nueva variante</h3>
           <button data-close="var" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:28px;line-height:1;padding:0">&times;</button>
         </div>
         <p id="lpVarBreadcrumb" style="margin:0 0 14px;font-size:12px;color:var(--text-muted)"></p>
 
-        <div id="lpVarLegacyHint" style="display:none;align-items:flex-start;gap:8px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:12px;color:#92400e;line-height:1.4"></div>
+        <div id="lpVarLegacyHint" style="display:none;align-items:flex-start;gap:8px;background:var(--tint-yellow-bg);border:1px solid var(--border);border-radius:8px;padding:9px 12px;margin-bottom:12px;font-size:12px;color:var(--tint-orange-fg);line-height:1.4"></div>
 
         <form id="lpVarForm" style="display:flex;flex-direction:column;gap:14px">
           <input type="hidden" id="lpVarId" />
           <input type="hidden" id="lpVarParentId" />
 
           <div>
-            <label style="font-size:13px;font-weight:600;color:#495057;display:block;margin-bottom:4px">Nombre de la variante *</label>
+            <label style="font-size:13px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">Nombre de la variante *</label>
             <input id="lpVarNombre" type="text" placeholder="Ej: Roja 50x70 180gr" required
               style="${estiloInput()};font-size:16px;padding:12px 14px;font-weight:600" />
-            <button type="button" id="lpVarNombreSugerido" style="display:none;margin-top:6px;background:#f0fdf4;border:1px dashed #86efac;color:#166534;border-radius:8px;padding:7px 11px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;align-items:center;gap:6px;width:100%;text-align:left">
+            <button type="button" id="lpVarNombreSugerido" style="display:none;margin-top:6px;background:var(--tint-green-bg);border:1px dashed var(--border);color:var(--tint-green-fg);border-radius:8px;padding:7px 11px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;align-items:center;gap:6px;width:100%;text-align:left">
               <span class="material-icons" style="font-size:15px">auto_awesome</span>
               <span>Usar <strong id="lpVarNombreSugeridoTxt"></strong></span>
             </button>
           </div>
 
           <!-- 1) Características -->
-          <div style="background:#fdf4ff;border:1px solid #f5d0fe;border-radius:10px;padding:12px">
+          <div style="background:var(--tint-purple-bg);border:1px solid var(--border);border-radius:10px;padding:12px">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-              <div style="font-size:12px;font-weight:800;color:#86198f;letter-spacing:0.4px;text-transform:uppercase;display:flex;align-items:center;gap:6px">
+              <div style="font-size:12px;font-weight:800;color:var(--tint-purple-fg);letter-spacing:0.4px;text-transform:uppercase;display:flex;align-items:center;gap:6px">
                 <span class="material-icons" style="font-size:16px">style</span> Características
               </div>
-              <button type="button" id="lpVarAddAttr" style="background:white;border:1px solid #f5d0fe;color:#86198f;border-radius:6px;padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:4px">
+              <button type="button" id="lpVarAddAttr" style="background:var(--surface);border:1px solid var(--border);color:var(--tint-purple-fg);border-radius:6px;padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:4px">
                 <span class="material-icons" style="font-size:14px">add</span> Agregar
               </button>
             </div>
             <div id="lpVarAttrs" style="display:flex;flex-direction:column;gap:8px"></div>
-            <p id="lpVarAttrsEmpty" style="margin:8px 0 0;font-size:11.5px;color:#9333ea;font-style:italic">
+            <p id="lpVarAttrsEmpty" style="margin:8px 0 0;font-size:11.5px;color:var(--tint-purple-fg);font-style:italic">
               Agregá Color, Tamaño, Gramaje, etc. para describir esta variante. Es opcional.
             </p>
           </div>
 
           <!-- 2) Precio -->
-          <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;padding:12px">
-            <div style="font-size:12px;font-weight:800;color:#0369a1;letter-spacing:0.4px;text-transform:uppercase;margin-bottom:8px;display:flex;align-items:center;gap:6px">
+          <div style="background:var(--tint-blue-bg);border:1px solid #bae6fd;border-radius:10px;padding:12px">
+            <div style="font-size:12px;font-weight:800;color:var(--tint-blue-fg);letter-spacing:0.4px;text-transform:uppercase;margin-bottom:8px;display:flex;align-items:center;gap:6px">
               <span class="material-icons" style="font-size:16px">payments</span> Precio
             </div>
             <div style="display:grid;grid-template-columns:1fr 90px 1fr auto;gap:8px;align-items:end">
               <div>
-                <label style="font-size:11px;font-weight:600;color:#0369a1;display:block;margin-bottom:3px">Costo</label>
+                <label style="font-size:11px;font-weight:600;color:var(--tint-blue-fg);display:block;margin-bottom:3px">Costo</label>
                 <input id="lpVarPrecioCosto" type="number" step="0.01" min="0" placeholder="0.00" style="${estiloInput()};padding:9px 11px" />
               </div>
               <div>
-                <label style="font-size:11px;font-weight:600;color:#7b3fa6;display:block;margin-bottom:3px">% Margen</label>
-                <input id="lpVarPrecioMargen" type="number" step="1" min="0" placeholder="80" style="${estiloInput()};padding:9px 11px;color:#7b3fa6;font-weight:700" />
+                <label style="font-size:11px;font-weight:600;color:var(--primary);display:block;margin-bottom:3px">% Margen</label>
+                <input id="lpVarPrecioMargen" type="number" step="1" min="0" placeholder="80" style="${estiloInput()};padding:9px 11px;color:var(--primary);font-weight:700" />
               </div>
               <div>
-                <label style="font-size:11px;font-weight:600;color:#0369a1;display:block;margin-bottom:3px">Venta *</label>
-                <input id="lpVarPrecioVenta" type="number" step="0.01" min="0" placeholder="0.00" style="${estiloInput()};padding:9px 11px;font-weight:700;color:#0369a1" />
+                <label style="font-size:11px;font-weight:600;color:var(--tint-blue-fg);display:block;margin-bottom:3px">Venta *</label>
+                <input id="lpVarPrecioVenta" type="number" step="0.01" min="0" placeholder="0.00" style="${estiloInput()};padding:9px 11px;font-weight:700;color:var(--tint-blue-fg)" />
               </div>
               <button type="button" id="lpVarPrecioRedondeo" title="Redondear venta al centenar"
-                style="height:38px;background:white;border:1.5px solid #bae6fd;color:#0369a1;border-radius:8px;padding:0 10px;cursor:pointer;font-family:inherit;font-size:12.5px;font-weight:700;display:flex;align-items:center;gap:3px">↗ 100</button>
+                style="height:38px;background:var(--surface);border:1.5px solid #bae6fd;color:var(--tint-blue-fg);border-radius:8px;padding:0 10px;cursor:pointer;font-family:inherit;font-size:12.5px;font-weight:700;display:flex;align-items:center;gap:3px">↗ 100</button>
             </div>
           </div>
 
           <!-- 3) Cómo se vende (presentaciones) -->
-          <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px">
+          <div style="background:var(--tint-yellow-bg);border:1px solid var(--border);border-radius:10px;padding:12px">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-              <div style="font-size:12px;font-weight:800;color:#92400e;letter-spacing:0.4px;text-transform:uppercase;display:flex;align-items:center;gap:6px">
+              <div style="font-size:12px;font-weight:800;color:var(--tint-orange-fg);letter-spacing:0.4px;text-transform:uppercase;display:flex;align-items:center;gap:6px">
                 <span class="material-icons" style="font-size:16px">storefront</span> Cómo se vende
               </div>
-              <button type="button" id="lpVarAddPres" style="background:white;border:1px solid #fde68a;color:#92400e;border-radius:6px;padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:4px">
+              <button type="button" id="lpVarAddPres" style="background:var(--surface);border:1px solid var(--border);color:var(--tint-orange-fg);border-radius:6px;padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:4px">
                 <span class="material-icons" style="font-size:14px">add</span> Otra forma
               </button>
             </div>
-            <p style="margin:0 0 8px;font-size:11.5px;color:#a16207">
+            <p style="margin:0 0 8px;font-size:11.5px;color:var(--tint-yellow-fg)">
               Cada forma lleva su propio stock y precio. Ej: <strong>rollo</strong> + <strong>por metro</strong>.
             </p>
             <div id="lpVarPresentaciones" style="display:flex;flex-direction:column;gap:10px"></div>
           </div>
 
           <!-- 4) Avanzado -->
-          <details style="background:#f8f9fa;border:1px solid var(--border);border-radius:10px">
-            <summary style="padding:11px 14px;cursor:pointer;font-size:13px;color:#495057;font-weight:600;list-style:none;display:flex;align-items:center;gap:8px">
-              <span class="material-icons" style="font-size:16px;color:#9ca3af">tune</span>
+          <details style="background:var(--surface-2);border:1px solid var(--border);border-radius:10px">
+            <summary style="padding:11px 14px;cursor:pointer;font-size:13px;color:var(--text-muted);font-weight:600;list-style:none;display:flex;align-items:center;gap:8px">
+              <span class="material-icons" style="font-size:16px;color:var(--text-muted)">tune</span>
               Avanzado · descuentos · SKU
             </summary>
             <div style="padding:0 14px 14px;display:flex;flex-direction:column;gap:10px">
               <div>
-                <label style="font-size:13px;font-weight:600;color:#495057;display:block;margin-bottom:4px">SKU sufijo (opcional)</label>
+                <label style="font-size:13px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">SKU sufijo (opcional)</label>
                 <input id="lpVarSku" type="text" placeholder="Ej: ROJ-50 (interno)" style="${estiloInput()}" />
               </div>
-              <div style="background:#faf5ff;border:1px solid #ddd6fe;border-radius:8px;padding:10px 12px">
-                <label style="font-size:12.5px;font-weight:700;color:#5b21b6;display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
+              <div style="background:var(--tint-purple-bg);border:1px solid var(--border);border-radius:8px;padding:10px 12px">
+                <label style="font-size:12.5px;font-weight:700;color:var(--tint-purple-fg);display:flex;align-items:center;justify-content:space-between;margin-bottom:6px">
                   <span style="display:flex;align-items:center;gap:6px"><span class="material-icons" style="font-size:14px">local_offer</span> Descuentos solo de esta variante</span>
-                  <button type="button" id="lpVarAddDisc" style="background:white;border:1px solid #ddd6fe;color:#5b21b6;border-radius:6px;padding:3px 8px;font-size:11.5px;font-weight:600;cursor:pointer;font-family:inherit">+ Agregar</button>
+                  <button type="button" id="lpVarAddDisc" style="background:var(--surface);border:1px solid var(--border);color:var(--tint-purple-fg);border-radius:6px;padding:3px 8px;font-size:11.5px;font-weight:600;cursor:pointer;font-family:inherit">+ Agregar</button>
                 </label>
                 <p style="margin:0 0 6px;font-size:11px;color:var(--text-muted)">
                   Si hay descuento más específico (en una presentación) gana ese; si no, sube hacia la categoría.
@@ -492,7 +492,7 @@ export async function renderLabProductos(container, db) {
             </div>
           </details>
 
-          <div id="lpVarError" style="display:none;color:#dc3545;font-size:13px;padding:8px 12px;background:#fff0f0;border-radius:6px"></div>
+          <div id="lpVarError" style="display:none;color:var(--tint-red-fg);font-size:13px;padding:8px 12px;background:var(--tint-red-bg);border-radius:6px"></div>
 
           <div style="display:flex;gap:10px;margin-top:4px">
             <button type="button" data-close="var" style="${estiloBtnSec()}">Cancelar</button>
@@ -504,10 +504,10 @@ export async function renderLabProductos(container, db) {
 
     <!-- Modal: Modo rápido (lote) -->
     <div id="lpLoteModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:1000;align-items:flex-start;justify-content:center;padding:24px 16px;overflow-y:auto">
-      <div style="background:white;border-radius:16px;padding:24px;width:100%;max-width:600px;box-shadow:0 20px 60px rgba(0,0,0,0.3);margin:auto">
+      <div style="background:var(--surface);border-radius:16px;padding:24px;width:100%;max-width:600px;box-shadow:0 20px 60px rgba(0,0,0,0.3);margin:auto">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
           <h3 style="margin:0;font-size:20px;font-weight:800;display:flex;align-items:center;gap:8px">
-            <span class="material-icons" style="color:#16a34a">bolt</span> Crear varias rápido
+            <span class="material-icons" style="color:var(--tint-green-fg)">bolt</span> Crear varias rápido
           </h3>
           <button data-close="lote" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:28px;line-height:1;padding:0">&times;</button>
         </div>
@@ -516,34 +516,34 @@ export async function renderLabProductos(container, db) {
         <form id="lpLoteForm" style="display:flex;flex-direction:column;gap:14px">
           <!-- 1) Característica que cambia -->
           <div id="lpLoteCharSection">
-            <label style="font-size:12px;font-weight:800;color:#86198f;letter-spacing:0.4px;text-transform:uppercase;display:flex;align-items:center;gap:8px;margin-bottom:6px">
+            <label style="font-size:12px;font-weight:800;color:var(--tint-purple-fg);letter-spacing:0.4px;text-transform:uppercase;display:flex;align-items:center;gap:8px;margin-bottom:6px">
               <span>¿En qué se diferencian?</span>
-              <span id="lpLoteCharOptional" style="display:none;background:#f0fdf4;color:#15803d;border:1px solid #86efac;border-radius:6px;padding:1px 7px;font-size:9.5px;font-weight:600;letter-spacing:0.3px">solo 1 variante · opcional</span>
+              <span id="lpLoteCharOptional" style="display:none;background:var(--tint-green-bg);color:var(--tint-green-fg);border:1px solid var(--border);border-radius:6px;padding:1px 7px;font-size:9.5px;font-weight:600;letter-spacing:0.3px">solo 1 variante · opcional</span>
             </label>
             <div id="lpLoteCharChips" style="display:flex;gap:6px;flex-wrap:wrap"></div>
             <input id="lpLoteCharCustom" type="text" placeholder="Nombre del tipo (Ej: Talle, Sabor, Modelo)"
               style="${estiloInput()};margin-top:8px;font-size:13px;padding:8px 11px;display:none" />
-            <p id="lpLoteCharCustomHint" style="display:none;margin:5px 2px 0;font-size:11.5px;color:#86198f;font-style:italic">
+            <p id="lpLoteCharCustomHint" style="display:none;margin:5px 2px 0;font-size:11.5px;color:var(--tint-purple-fg);font-style:italic">
               ¿Qué tipo de cosa cambia entre las variantes? (no el valor)
             </p>
           </div>
 
           <!-- 2) Valores (uno por línea o coma) -->
           <div>
-            <label style="font-size:12px;font-weight:800;color:#86198f;letter-spacing:0.4px;text-transform:uppercase;display:block;margin-bottom:4px">Valores</label>
+            <label style="font-size:12px;font-weight:800;color:var(--tint-purple-fg);letter-spacing:0.4px;text-transform:uppercase;display:block;margin-bottom:4px">Valores</label>
             <textarea id="lpLoteValores" rows="3" placeholder="Azul, Amarillo, Naranja&#10;(uno por línea o separados por coma)"
               style="${estiloInput()};font-size:14px;padding:10px 12px;resize:vertical;font-family:inherit"></textarea>
             <p id="lpLoteCount" style="margin:5px 0 0;font-size:11.5px;color:var(--text-muted)">0 variantes</p>
           </div>
 
           <!-- 3) Cómo se venden (chips) -->
-          <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px">
-            <label style="font-size:12px;font-weight:800;color:#92400e;letter-spacing:0.4px;text-transform:uppercase;display:block;margin-bottom:8px">¿Cómo se venden?</label>
+          <div style="background:var(--tint-yellow-bg);border:1px solid var(--border);border-radius:10px;padding:12px">
+            <label style="font-size:12px;font-weight:800;color:var(--tint-orange-fg);letter-spacing:0.4px;text-transform:uppercase;display:block;margin-bottom:8px">¿Cómo se venden?</label>
             <div id="lpLoteTipoChips" style="display:flex;gap:6px;flex-wrap:wrap"></div>
 
             <!-- Cuando es pack/caja/rollo: pide "trae" -->
             <div id="lpLoteEquivWrap" style="display:none;margin-top:10px">
-              <label id="lpLoteEquivLabel" style="font-size:11px;font-weight:700;color:#92400e;display:block;margin-bottom:3px">Cada uno trae</label>
+              <label id="lpLoteEquivLabel" style="font-size:11px;font-weight:700;color:var(--tint-orange-fg);display:block;margin-bottom:3px">Cada uno trae</label>
               <div style="display:grid;grid-template-columns:1fr 80px;gap:6px">
                 <input id="lpLoteEquiv" type="number" step="any" min="0" placeholder="ej: 15" style="${estiloInput()};padding:9px 11px" />
                 <input id="lpLoteEquivUnidad" type="text" placeholder="m / un" style="${estiloInput()};padding:9px 11px" />
@@ -554,56 +554,56 @@ export async function renderLabProductos(container, db) {
             <div style="margin-top:10px">
               <div style="display:grid;grid-template-columns:1fr 80px 1fr auto;gap:6px;align-items:end">
                 <div>
-                  <label style="font-size:11px;font-weight:700;color:#92400e;display:block;margin-bottom:3px">Costo (opcional)</label>
+                  <label style="font-size:11px;font-weight:700;color:var(--tint-orange-fg);display:block;margin-bottom:3px">Costo (opcional)</label>
                   <input id="lpLoteCosto" type="number" step="0.01" min="0" placeholder="0.00" style="${estiloInput()};padding:9px 11px" />
                 </div>
                 <div>
-                  <label style="font-size:11px;font-weight:700;color:#7b3fa6;display:block;margin-bottom:3px">% Margen</label>
-                  <input id="lpLoteMargen" type="number" step="1" min="0" placeholder="80" style="${estiloInput()};padding:9px 11px;color:#7b3fa6;font-weight:700" />
+                  <label style="font-size:11px;font-weight:700;color:var(--primary);display:block;margin-bottom:3px">% Margen</label>
+                  <input id="lpLoteMargen" type="number" step="1" min="0" placeholder="80" style="${estiloInput()};padding:9px 11px;color:var(--primary);font-weight:700" />
                 </div>
                 <div>
-                  <label id="lpLotePrecioLabel" style="font-size:11px;font-weight:700;color:#92400e;display:block;margin-bottom:3px">Precio venta</label>
+                  <label id="lpLotePrecioLabel" style="font-size:11px;font-weight:700;color:var(--tint-orange-fg);display:block;margin-bottom:3px">Precio venta</label>
                   <input id="lpLotePrecio" type="number" step="0.01" min="0" placeholder="0.00" style="${estiloInput()};padding:9px 11px;font-weight:700" />
                 </div>
                 <button type="button" id="lpLotePrecioRedondeo" title="Redondear al centenar"
-                  style="height:38px;background:white;border:1.5px solid #fde68a;color:#a16207;border-radius:8px;padding:0 10px;cursor:pointer;font-family:inherit;font-size:12.5px;font-weight:700;display:flex;align-items:center">↗ 100</button>
+                  style="height:38px;background:var(--surface);border:1.5px solid var(--border);color:var(--tint-yellow-fg);border-radius:8px;padding:0 10px;cursor:pointer;font-family:inherit;font-size:12.5px;font-weight:700;display:flex;align-items:center">↗ 100</button>
               </div>
-              <p style="margin:5px 2px 0;font-size:11px;color:#a16207;font-style:italic">Cargá costo + margen → la venta se calcula sola. O pone la venta directo.</p>
+              <p style="margin:5px 2px 0;font-size:11px;color:var(--tint-yellow-fg);font-style:italic">Cargá costo + margen → la venta se calcula sola. O pone la venta directo.</p>
             </div>
 
             <!-- Stock (común a todas, con override individual cuando hay >=2 valores) -->
             <div style="margin-top:10px">
-              <label style="font-size:11px;font-weight:700;color:#92400e;display:block;margin-bottom:3px">Stock por defecto (opcional)</label>
+              <label style="font-size:11px;font-weight:700;color:var(--tint-orange-fg);display:block;margin-bottom:3px">Stock por defecto (opcional)</label>
               <input id="lpLoteStock" type="number" step="any" min="0" placeholder="0" style="${estiloInput()};padding:9px 11px" />
-              <p style="margin:4px 2px 0;font-size:11px;color:#a16207;font-style:italic">Se aplica a todas. Si querés cargar uno distinto a alguna, usá la lista de abajo.</p>
+              <p style="margin:4px 2px 0;font-size:11px;color:var(--tint-yellow-fg);font-style:italic">Se aplica a todas. Si querés cargar uno distinto a alguna, usá la lista de abajo.</p>
             </div>
             <!-- Override individual: una fila por variante -->
-            <div id="lpLoteStockIndivWrap" style="display:none;margin-top:8px;background:white;border:1px dashed #fde68a;border-radius:8px;padding:8px 10px">
-              <div style="font-size:11px;font-weight:700;color:#92400e;letter-spacing:0.3px;text-transform:uppercase;margin-bottom:6px">Stock individual</div>
+            <div id="lpLoteStockIndivWrap" style="display:none;margin-top:8px;background:var(--surface);border:1px dashed var(--border);border-radius:8px;padding:8px 10px">
+              <div style="font-size:11px;font-weight:700;color:var(--tint-orange-fg);letter-spacing:0.3px;text-transform:uppercase;margin-bottom:6px">Stock individual</div>
               <div id="lpLoteStockIndivLista" style="display:flex;flex-direction:column;gap:4px;max-height:160px;overflow-y:auto"></div>
             </div>
 
             <!-- Pack/Caja/Rollo: checkbox para auto-crear la complementaria -->
-            <div id="lpLoteAutoMetroWrap" style="display:none;margin-top:12px;background:white;border:1px solid #fde68a;border-radius:8px;padding:10px">
+            <div id="lpLoteAutoMetroWrap" style="display:none;margin-top:12px;background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px">
               <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer">
                 <input id="lpLoteAutoMetro" type="checkbox" checked style="margin-top:3px" />
-                <div style="flex:1;font-size:12.5px;color:#78350f">
+                <div style="flex:1;font-size:12.5px;color:var(--tint-orange-fg)">
                   <strong id="lpLoteAutoMetroTitle" style="display:block;margin-bottom:2px">Vender también suelto</strong>
-                  <span id="lpLoteAutoMetroHint" style="font-size:11.5px;color:#a16207"></span>
+                  <span id="lpLoteAutoMetroHint" style="font-size:11.5px;color:var(--tint-yellow-fg)"></span>
                 </div>
               </label>
-              <div id="lpLoteAutoPrecioWrap" style="margin-top:9px;padding-top:9px;border-top:1px dashed #fde68a">
-                <label id="lpLoteAutoPrecioLabel" style="font-size:11px;font-weight:700;color:#92400e;display:block;margin-bottom:3px">Precio por unidad (vacío = auto)</label>
+              <div id="lpLoteAutoPrecioWrap" style="margin-top:9px;padding-top:9px;border-top:1px dashed var(--border)">
+                <label id="lpLoteAutoPrecioLabel" style="font-size:11px;font-weight:700;color:var(--tint-orange-fg);display:block;margin-bottom:3px">Precio por unidad (vacío = auto)</label>
                 <div style="display:grid;grid-template-columns:1fr auto;gap:6px;align-items:center">
                   <input id="lpLoteAutoPrecio" type="number" step="0.01" min="0" placeholder="auto: $—" style="${estiloInput()};padding:8px 10px;font-size:13px" />
                   <button type="button" id="lpLoteAutoPrecioRedondeo" title="Redondear al centenar"
-                    style="height:36px;background:white;border:1.5px solid #fde68a;color:#a16207;border-radius:8px;padding:0 10px;cursor:pointer;font-family:inherit;font-size:12px;font-weight:700">↗ 100</button>
+                    style="height:36px;background:var(--surface);border:1.5px solid var(--border);color:var(--tint-yellow-fg);border-radius:8px;padding:0 10px;cursor:pointer;font-family:inherit;font-size:12px;font-weight:700">↗ 100</button>
                 </div>
               </div>
             </div>
           </div>
 
-          <div id="lpLoteError" style="display:none;color:#dc3545;font-size:13px;padding:8px 12px;background:#fff0f0;border-radius:6px"></div>
+          <div id="lpLoteError" style="display:none;color:var(--tint-red-fg);font-size:13px;padding:8px 12px;background:var(--tint-red-bg);border-radius:6px"></div>
 
           <div style="display:flex;gap:10px;margin-top:4px">
             <button type="button" data-close="lote" style="${estiloBtnSec()}">Cancelar</button>
@@ -638,14 +638,14 @@ async function renderListaCategorias(db) {
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button id="lpBtnCargarSeed" title="Cargar productos de ejemplo de librería" style="
-          background:white;color:#5b21b6;border:1.5px solid #ddd6fe;border-radius:8px;
+          background:var(--surface);color:var(--tint-purple-fg);border:1.5px solid var(--border);border-radius:8px;
           padding:9px 14px;font-size:13px;font-weight:600;cursor:pointer;
           display:flex;align-items:center;gap:5px;font-family:inherit
         ">
           <span class="material-icons" style="font-size:16px">science</span> Cargar ejemplos
         </button>
         <button id="lpBtnBorrarSeed" title="Borrar solo los productos marcados _seed" style="
-          background:white;color:#dc3545;border:1.5px solid #fca5a5;border-radius:8px;
+          background:var(--surface);color:var(--tint-red-fg);border:1.5px solid var(--border);border-radius:8px;
           padding:9px 14px;font-size:13px;font-weight:600;cursor:pointer;
           display:flex;align-items:center;gap:5px;font-family:inherit
         ">
@@ -685,7 +685,7 @@ async function renderListaCategorias(db) {
     pintarListaCategorias(_state.productos);
   } catch (err) {
     document.getElementById('lpListaCats').innerHTML =
-      `<div style="color:#dc3545;padding:16px">Error: ${escapeHtml(err.message)}</div>`;
+      `<div style="color:var(--tint-red-fg);padding:16px">Error: ${escapeHtml(err.message)}</div>`;
   }
 
   document.getElementById('lpBtnNuevaCat').addEventListener('click', () => abrirModalCategoria(null, db));
@@ -733,7 +733,7 @@ function pintarListaCategorias(productos) {
   if (!cont) return;
   if (!productos.length) {
     cont.innerHTML = `
-      <div style="text-align:center;padding:48px 20px;color:var(--text-muted);background:white;border-radius:14px;border:2px dashed var(--border)">
+      <div style="text-align:center;padding:48px 20px;color:var(--text-muted);background:var(--surface);border-radius:14px;border:2px dashed var(--border)">
         <span class="material-icons" style="font-size:48px;display:block;margin-bottom:12px;opacity:0.4">category</span>
         <p style="margin:0;font-size:16px;font-weight:600;color:var(--text)">Todavía no hay categorías.</p>
         <p style="margin:6px 0 0;font-size:13px">Tocá <strong>"Nueva categoría"</strong> para empezar. O cargá los ejemplos para ver cómo funciona.</p>
@@ -742,16 +742,16 @@ function pintarListaCategorias(productos) {
   }
 
   cont.innerHTML = productos.map(p => `
-    <div style="background:white;border-radius:12px;padding:14px 18px;box-shadow:0 1px 6px rgba(0,0,0,0.06);border:1px solid var(--border);display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+    <div style="background:var(--surface);border-radius:12px;padding:14px 18px;box-shadow:0 1px 6px rgba(0,0,0,0.06);border:1px solid var(--border);display:flex;align-items:center;gap:14px;flex-wrap:wrap">
       <div style="width:48px;height:48px;border-radius:12px;background:linear-gradient(135deg,var(--primary),#a855f7);display:flex;align-items:center;justify-content:center;flex-shrink:0">
         <span class="material-icons" style="color:white;font-size:24px">category</span>
       </div>
       <div style="flex:1;min-width:200px">
         <div style="font-size:16px;font-weight:700">${escapeHtml(p.nombre || '—')}</div>
         <div style="font-size:12px;color:var(--text-muted);margin-top:3px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-          ${p.rubro ? `<span style="background:#eef4ff;color:#1877f2;border:1px solid #c7d9fc;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700;letter-spacing:.3px">${escapeHtml(p.rubro)}</span>` : ''}
+          ${p.rubro ? `<span style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);border:1px solid var(--border);border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700;letter-spacing:.3px">${escapeHtml(p.rubro)}</span>` : ''}
           ${p.marca ? `<span>${escapeHtml(p.marca)}</span>` : ''}
-          <span data-cat-count="${p._id}" style="background:#f3e8ff;color:#7c3aed;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700">…</span>
+          <span data-cat-count="${p._id}" style="background:var(--tint-purple-bg);color:var(--tint-purple-fg);border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700">…</span>
         </div>
       </div>
       <div style="display:flex;gap:8px;flex-shrink:0;flex-wrap:wrap">
@@ -759,15 +759,15 @@ function pintarListaCategorias(productos) {
           <span class="material-icons" style="font-size:16px">arrow_forward</span> Abrir
         </button>
         <button data-action="stock" data-id="${p._id}" title="Ver / editar stock"
-          style="padding:8px 12px;background:#ecfdf5;border:1px solid #a7f3d0;color:#047857;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:5px">
+          style="padding:8px 12px;background:var(--tint-green-bg);border:1px solid var(--border);color:var(--tint-green-fg);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:5px">
           <span class="material-icons" style="font-size:16px">inventory_2</span>
         </button>
         <button data-action="editar" data-id="${p._id}" title="Editar categoría"
-          style="padding:8px 12px;background:#f8f9fa;border:1px solid var(--border);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">
+          style="padding:8px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">
           <span class="material-icons" style="font-size:16px">edit</span>
         </button>
         <button data-action="borrar" data-id="${p._id}" title="Eliminar"
-          style="padding:8px 12px;background:#fff0f0;border:1px solid #fca5a5;color:#dc3545;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">
+          style="padding:8px 12px;background:var(--tint-red-bg);border:1px solid var(--border);color:var(--tint-red-fg);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">
           <span class="material-icons" style="font-size:16px">delete_outline</span>
         </button>
       </div>
@@ -916,27 +916,27 @@ async function abrirCategoria(db, producto) {
       </button>
     </div>
 
-    <div style="background:white;border-radius:14px;padding:18px 22px;box-shadow:0 1px 8px rgba(0,0,0,0.06);border:1px solid var(--border);margin-bottom:14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+    <div style="background:var(--surface);border-radius:14px;padding:18px 22px;box-shadow:0 1px 8px rgba(0,0,0,0.06);border:1px solid var(--border);margin-bottom:14px;display:flex;align-items:center;gap:14px;flex-wrap:wrap">
       <div style="width:52px;height:52px;border-radius:13px;background:linear-gradient(135deg,var(--primary),#a855f7);display:flex;align-items:center;justify-content:center;flex-shrink:0">
         <span class="material-icons" style="color:white;font-size:26px">category</span>
       </div>
       <div style="flex:1;min-width:200px">
         <div style="font-size:18px;font-weight:800">${escapeHtml(producto.nombre)}</div>
         <div style="font-size:12px;color:var(--text-muted);margin-top:3px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-          ${producto.rubro ? `<span style="background:#eef4ff;color:#1877f2;border:1px solid #c7d9fc;border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700;letter-spacing:.3px">${escapeHtml(producto.rubro)}</span>` : ''}
+          ${producto.rubro ? `<span style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);border:1px solid var(--border);border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700;letter-spacing:.3px">${escapeHtml(producto.rubro)}</span>` : ''}
           <span>${[producto.categoria, producto.marca].filter(Boolean).map(escapeHtml).join(' · ') || 'Sin categoría / marca'}</span>
         </div>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button id="lpBtnEditarCat" title="Editar categoría"
-          style="padding:9px 12px;background:#f8f9fa;border:1px solid var(--border);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:5px">
+          style="padding:9px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:5px">
           <span class="material-icons" style="font-size:16px">edit</span>
         </button>
         <button id="lpBtnStock" title="Stock en tiempo real"
-          style="padding:9px 14px;background:#ecfdf5;border:1px solid #a7f3d0;color:#047857;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:5px">
+          style="padding:9px 14px;background:var(--tint-green-bg);border:1px solid var(--border);color:var(--tint-green-fg);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:5px">
           <span class="material-icons" style="font-size:16px">inventory_2</span> Stock
         </button>
-        <button id="lpBtnLote" title="Crear varias parecidas en un solo paso" style="background:#dcfce7;color:#15803d;border:1.5px solid #86efac;border-radius:8px;padding:10px 14px;font-size:13.5px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:6px;font-family:inherit">
+        <button id="lpBtnLote" title="Crear varias parecidas en un solo paso" style="background:var(--tint-green-bg);color:var(--tint-green-fg);border:1.5px solid var(--border);border-radius:8px;padding:10px 14px;font-size:13.5px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:6px;font-family:inherit">
           <span class="material-icons" style="font-size:18px">bolt</span> + Varios
         </button>
         <button id="lpBtnNuevaVar" style="background:var(--primary);color:white;border:none;border-radius:8px;padding:10px 18px;font-size:14px;font-weight:700;cursor:pointer;display:flex;align-items:center;gap:6px;font-family:inherit">
@@ -945,7 +945,7 @@ async function abrirCategoria(db, producto) {
       </div>
     </div>
 
-    <div id="lpLegacyBanner" style="display:none;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:12px 14px;margin-bottom:12px;font-size:13px;color:#92400e;line-height:1.5"></div>
+    <div id="lpLegacyBanner" style="display:none;background:var(--tint-yellow-bg);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:12px;font-size:13px;color:var(--tint-orange-fg);line-height:1.5"></div>
 
     <div style="margin-bottom:10px;position:relative">
       <span class="material-icons" style="position:absolute;left:12px;top:50%;transform:translateY(-50%);color:var(--text-muted);font-size:20px">search</span>
@@ -990,7 +990,7 @@ async function cargarVariantes(db, productId) {
     _state.descuentos = descuentos;
     pintarVariantes();
   } catch (err) {
-    cont.innerHTML = `<div style="color:#dc3545;padding:16px">Error: ${escapeHtml(err.message)}</div>`;
+    cont.innerHTML = `<div style="color:var(--tint-red-fg);padding:16px">Error: ${escapeHtml(err.message)}</div>`;
   }
 }
 
@@ -1015,7 +1015,7 @@ function pintarVariantes(filtro = '') {
 
   if (!_state.nodes.length) {
     cont.innerHTML = `
-      <div style="text-align:center;padding:54px 20px;color:var(--text-muted);background:white;border-radius:14px;border:2px dashed var(--border)">
+      <div style="text-align:center;padding:54px 20px;color:var(--text-muted);background:var(--surface);border-radius:14px;border:2px dashed var(--border)">
         <span class="material-icons" style="font-size:54px;display:block;margin-bottom:12px;opacity:0.4">style</span>
         <p style="margin:0;font-size:16px;font-weight:600;color:var(--text)">Esta categoría está vacía.</p>
         <p style="margin:6px 0 0;font-size:13px">Tocá <strong>"Nueva variante"</strong> para crear el primer color, tamaño o medida.</p>
@@ -1068,14 +1068,14 @@ function cardVariante(n) {
     if (desc) {
       const { precioFinal, etiqueta } = aplicarDescuento(n.precio.venta, desc, 1);
       precioBadge = `
-        <span style="background:#dbeafe;color:#94a3b8;padding:2px 7px;border-radius:9px;font-size:11px;font-weight:600;text-decoration:line-through">${fmtMoney(n.precio.venta)}</span>
-        <span style="background:#dcfce7;color:#166534;padding:2px 9px;border-radius:9px;font-size:12px;font-weight:700">${fmtMoney(precioFinal)}</span>
-        <span title="${escapeHtml(desc.etiqueta || '')}" style="background:#faf5ff;color:#7c3aed;padding:2px 8px;border-radius:9px;font-size:10px;font-weight:700">${etiqueta}</span>`;
+        <span style="background:var(--tint-blue-bg);color:var(--text-muted);padding:2px 7px;border-radius:9px;font-size:11px;font-weight:600;text-decoration:line-through">${fmtMoney(n.precio.venta)}</span>
+        <span style="background:var(--tint-green-bg);color:var(--tint-green-fg);padding:2px 9px;border-radius:9px;font-size:12px;font-weight:700">${fmtMoney(precioFinal)}</span>
+        <span title="${escapeHtml(desc.etiqueta || '')}" style="background:var(--tint-purple-bg);color:var(--tint-purple-fg);padding:2px 8px;border-radius:9px;font-size:10px;font-weight:700">${etiqueta}</span>`;
     } else {
-      precioBadge = `<span style="background:#dbeafe;color:#1e40af;padding:3px 10px;border-radius:9px;font-size:12px;font-weight:700">${fmtMoney(n.precio.venta)}</span>`;
+      precioBadge = `<span style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);padding:3px 10px;border-radius:9px;font-size:12px;font-weight:700">${fmtMoney(n.precio.venta)}</span>`;
     }
   } else if (!tieneHijos) {
-    precioBadge = `<span title="Falta precio" style="background:#fef2f2;color:#b91c1c;padding:3px 10px;border-radius:9px;font-size:11px;font-weight:600">sin precio</span>`;
+    precioBadge = `<span title="Falta precio" style="background:var(--tint-red-bg);color:var(--tint-red-fg);padding:3px 10px;border-radius:9px;font-size:11px;font-weight:600">sin precio</span>`;
   }
 
   // Presentaciones — chips por tipo (solo identificación, sin stock para no
@@ -1084,7 +1084,7 @@ function cardVariante(n) {
   const presChips = presList.map(p => {
     const tipo = TIPOS_PRESENTACION.find(t => t.value === p.tipo);
     const lbl = p.label || tipo?.label || p.tipo || '';
-    return `<span style="background:#fffbeb;color:#92400e;border:1px solid #fde68a;padding:2px 9px;border-radius:9px;font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:3px">
+    return `<span style="background:var(--tint-yellow-bg);color:var(--tint-orange-fg);border:1px solid var(--border);padding:2px 9px;border-radius:9px;font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:3px">
       <span class="material-icons" style="font-size:12px">${tipo?.icon || 'package_2'}</span>${escapeHtml(lbl)}
     </span>`;
   }).join(' ');
@@ -1104,7 +1104,7 @@ function cardVariante(n) {
       if (p.stock_modo === 'vinculado' && p.vinculada_a) {
         const fuente = presList.find(x => x.id === p.vinculada_a);
         const fuenteLbl = fuente?.label || fuente?.tipo || '';
-        return `<div style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:#7c3aed;line-height:1.5">
+        return `<div style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--tint-purple-fg);line-height:1.5">
           <span class="material-icons" style="font-size:11px">link</span>
           <span><strong>${escapeHtml(lbl)}</strong>: corte de ${escapeHtml(fuenteLbl)}</span>
         </div>`;
@@ -1121,17 +1121,17 @@ function cardVariante(n) {
       if (equiv > 0 && (stkN > 0 || suelN > 0)) {
         const totalN = stkN * equiv + suelN;
         const um2 = um || 'un';
-        total = `<div style="font-size:11px;color:#16a34a;font-weight:700;padding-left:14px;margin-top:1px">= ${totalN}${um2} total</div>`;
+        total = `<div style="font-size:11px;color:var(--tint-green-fg);font-weight:700;padding-left:14px;margin-top:1px">= ${totalN}${um2} total</div>`;
       }
 
       let sueltos = '';
       if (p.tipo === 'rollo' && suelN > 0) {
-        sueltos = `<div style="font-size:10.5px;color:#475569;padding-left:14px">+ ${suelN}${um || 'm'} sueltos</div>`;
+        sueltos = `<div style="font-size:10.5px;color:var(--text-muted);padding-left:14px">+ ${suelN}${um || 'm'} sueltos</div>`;
       }
 
       return `<div>
-        <div style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:#0f172a;line-height:1.4">
-          ${stockTxt}<span style="color:#475569">${escapeHtml(lbl)}</span>
+        <div style="display:flex;align-items:center;gap:5px;font-size:11.5px;color:var(--text-strong);line-height:1.4">
+          ${stockTxt}<span style="color:var(--text-muted)">${escapeHtml(lbl)}</span>
         </div>
         ${sueltos}
         ${total}
@@ -1139,8 +1139,8 @@ function cardVariante(n) {
     }).join('');
 
     stockPanel = `
-      <div style="background:#f8fafc;border:1px solid var(--border);border-radius:9px;padding:7px 10px;min-width:130px;max-width:200px;flex-shrink:0">
-        <div style="font-size:9.5px;font-weight:800;letter-spacing:0.5px;color:#64748b;text-transform:uppercase;margin-bottom:4px">Stock</div>
+      <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:9px;padding:7px 10px;min-width:130px;max-width:200px;flex-shrink:0">
+        <div style="font-size:9.5px;font-weight:800;letter-spacing:0.5px;color:var(--text-muted);text-transform:uppercase;margin-bottom:4px">Stock</div>
         <div style="display:flex;flex-direction:column;gap:3px">${lineas}</div>
       </div>`;
   }
@@ -1151,15 +1151,15 @@ function cardVariante(n) {
   const iconColor = colorHex && esColorOscuro(colorHex) ? 'white' : '#5b21b6';
 
   return `
-    <div style="background:white;border-radius:12px;padding:14px 16px;box-shadow:0 1px 6px rgba(0,0,0,0.06);border:1px solid var(--border);display:flex;align-items:center;gap:14px;flex-wrap:wrap">
+    <div style="background:var(--surface);border-radius:12px;padding:14px 16px;box-shadow:0 1px 6px rgba(0,0,0,0.06);border:1px solid var(--border);display:flex;align-items:center;gap:14px;flex-wrap:wrap">
       <div style="width:46px;height:46px;border-radius:11px;${avatarStyle};display:flex;align-items:center;justify-content:center;flex-shrink:0">
         <span class="material-icons" style="color:${iconColor};font-size:22px">style</span>
       </div>
       <div style="flex:1;min-width:200px">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
           <div style="font-size:15px;font-weight:700">${escapeHtml(n.nombre || '—')}</div>
-          ${isLegacy ? '<span style="background:#fffbeb;border:1px solid #fde68a;color:#92400e;padding:1px 7px;border-radius:8px;font-size:10px;font-weight:700;letter-spacing:0.3px">LEGACY</span>' : ''}
-          ${tieneHijos ? '<span style="background:#f3e8ff;color:#7c3aed;padding:1px 7px;border-radius:8px;font-size:10px;font-weight:700">CON HIJOS</span>' : ''}
+          ${isLegacy ? '<span style="background:var(--tint-yellow-bg);border:1px solid var(--border);color:var(--tint-orange-fg);padding:1px 7px;border-radius:8px;font-size:10px;font-weight:700;letter-spacing:0.3px">LEGACY</span>' : ''}
+          ${tieneHijos ? '<span style="background:var(--tint-purple-bg);color:var(--tint-purple-fg);padding:1px 7px;border-radius:8px;font-size:10px;font-weight:700">CON HIJOS</span>' : ''}
         </div>
         ${atrTxt ? `<div style="font-size:12px;color:var(--text-muted);margin-top:3px">${escapeHtml(atrTxt)}</div>` : ''}
         <div style="margin-top:8px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
@@ -1170,12 +1170,12 @@ function cardVariante(n) {
       ${stockPanel}
       <div style="display:flex;gap:6px;flex-shrink:0">
         <button data-vaction="editar" data-id="${n._id}" title="Editar"
-          style="padding:8px 12px;background:#f8f9fa;border:1px solid var(--border);border-radius:8px;cursor:pointer;font-family:inherit">
-          <span class="material-icons" style="font-size:18px;color:#475569">edit</span>
+          style="padding:8px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;cursor:pointer;font-family:inherit">
+          <span class="material-icons" style="font-size:18px;color:var(--text-muted)">edit</span>
         </button>
         <button data-vaction="borrar" data-id="${n._id}" title="Eliminar"
-          style="padding:8px 12px;background:#fff0f0;border:1px solid #fca5a5;border-radius:8px;cursor:pointer;font-family:inherit">
-          <span class="material-icons" style="font-size:18px;color:#dc3545">delete_outline</span>
+          style="padding:8px 12px;background:var(--tint-red-bg);border:1px solid var(--border);border-radius:8px;cursor:pointer;font-family:inherit">
+          <span class="material-icons" style="font-size:18px;color:var(--tint-red-fg)">delete_outline</span>
         </button>
       </div>
     </div>
@@ -1216,7 +1216,7 @@ function abrirModalVariante(nodoExistente, db) {
   if (nodoExistente && (nodoExistente.parent_id || (nodoExistente.depth || 0) > 0)) {
     legacyHint.style.display = 'flex';
     legacyHint.innerHTML = `
-      <span class="material-icons" style="font-size:16px;color:#92400e">warning</span>
+      <span class="material-icons" style="font-size:16px;color:var(--tint-orange-fg)">warning</span>
       <div>Esta variante usa la <strong>estructura antigua</strong> (anidada). Podés editarla, pero no se puede mover a la nueva estructura plana sin recrearla.</div>
     `;
   } else {
@@ -1498,8 +1498,8 @@ function pintarLoteCharChips() {
   cont.innerHTML = opciones.map(t => {
     const sel = t.value === _lote.charKey || (t.value === '_otro' && _lote.charKey === '_otro');
     return `<button type="button" data-lote-char="${t.value}" style="
-      background:${sel ? '#a855f7' : 'white'};border:1.5px solid ${sel ? '#9333ea' : '#e9d5ff'};
-      color:${sel ? 'white' : '#86198f'};border-radius:8px;padding:7px 11px;font-size:12.5px;
+      background:${sel ? '#a855f7' : 'var(--surface)'};border:1.5px solid ${sel ? '#9333ea' : 'var(--border)'};
+      color:${sel ? 'white' : 'var(--tint-purple-fg)'};border-radius:8px;padding:7px 11px;font-size:12.5px;
       font-weight:${sel ? 800 : 600};cursor:pointer;font-family:inherit;
       display:inline-flex;align-items:center;gap:5px">
       <span class="material-icons" style="font-size:15px">${t.icon}</span>${escapeHtml(t.label)}
@@ -1537,8 +1537,8 @@ function pintarLoteTipoChips() {
   cont.innerHTML = TIPOS_PRESENTACION.map(t => {
     const sel = t.value === _lote.tipoPres;
     return `<button type="button" data-lote-tipo="${t.value}" title="${escapeHtml(t.hint)}" style="
-      background:${sel ? '#fbbf24' : 'white'};border:1.5px solid ${sel ? '#f59e0b' : '#fde68a'};
-      color:${sel ? '#78350f' : '#a16207'};border-radius:8px;padding:7px 10px;font-size:12px;
+      background:${sel ? '#fbbf24' : 'var(--surface)'};border:1.5px solid ${sel ? '#f59e0b' : 'var(--border)'};
+      color:${sel ? '#7a5c11' : 'var(--tint-yellow-fg)'};border-radius:8px;padding:7px 10px;font-size:12px;
       font-weight:${sel ? 800 : 600};cursor:pointer;font-family:inherit;
       display:inline-flex;align-items:center;gap:4px">
       <span class="material-icons" style="font-size:14px">${t.icon}</span>${escapeHtml(t.label)}
@@ -1671,7 +1671,7 @@ function loteRepintarStockIndividual(vals) {
 
   lista.innerHTML = vals.map(v => `
     <div data-stock-row data-stock-key="${escapeHtml(v)}" style="display:grid;grid-template-columns:1fr 90px;gap:6px;align-items:center">
-      <span style="font-size:12.5px;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(v)}">${escapeHtml(v)}</span>
+      <span style="font-size:12.5px;color:var(--text-strong);white-space:nowrap;overflow:hidden;text-overflow:ellipsis" title="${escapeHtml(v)}">${escapeHtml(v)}</span>
       <input type="number" step="any" min="0" placeholder="${escapeHtml(placeholderGlobal)}" value="${escapeHtml(previos[v] || '')}" style="${inp}" />
     </div>
   `).join('');
@@ -1923,13 +1923,13 @@ function filaAtributoVariante(key = '', defMadre = null, valor = null) {
   wrap.dataset.attrTipo = tipo;
   wrap.dataset.attrLabel = label;
   wrap.dataset.attrUnidadDefault = defMadre?.unidad || '';
-  wrap.style.cssText = 'background:white;border:1px solid #f5d0fe;border-radius:8px;padding:8px 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap';
+  wrap.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:8px 10px;display:flex;align-items:center;gap:8px;flex-wrap:wrap';
 
   const tipoDef = TIPOS_ATRIBUTO.find(t => t.value === tipo);
   const labelHtml = `
     <div style="display:flex;align-items:center;gap:5px;min-width:90px;flex-shrink:0">
-      <span class="material-icons" style="font-size:16px;color:#86198f">${tipoDef?.icon || 'label'}</span>
-      <strong style="font-size:13px;color:#86198f">${escapeHtml(label || tipo)}</strong>
+      <span class="material-icons" style="font-size:16px;color:var(--tint-purple-fg)">${tipoDef?.icon || 'label'}</span>
+      <strong style="font-size:13px;color:var(--tint-purple-fg)">${escapeHtml(label || tipo)}</strong>
     </div>`;
 
   const inp = `${estiloInput()};padding:7px 10px;font-size:13px`;
@@ -1976,7 +1976,7 @@ function filaAtributoVariante(key = '', defMadre = null, valor = null) {
     ${labelHtml}
     ${valorHtml}
     <button type="button" data-attr-remove title="Quitar característica"
-      style="background:#fff0f0;border:1px solid #fca5a5;color:#dc3545;border-radius:6px;width:30px;height:30px;cursor:pointer;flex-shrink:0;font-size:14px">×</button>
+      style="background:var(--tint-red-bg);border:1px solid var(--border);color:var(--tint-red-fg);border-radius:6px;width:30px;height:30px;cursor:pointer;flex-shrink:0;font-size:14px">×</button>
   `;
   wrap.querySelector('[data-attr-remove]').onclick = (e) => {
     e.stopPropagation();
@@ -2116,7 +2116,7 @@ function mostrarPanelAddAttr(producto) {
   document.querySelector('#lpVarAttrPopover')?.remove();
   const pop = document.createElement('div');
   pop.id = 'lpVarAttrPopover';
-  pop.style.cssText = 'position:fixed;z-index:1100;background:white;border:1.5px solid var(--border);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,0.15);padding:10px;width:300px;display:flex;flex-direction:column;gap:6px';
+  pop.style.cssText = 'position:fixed;z-index:1100;background:var(--surface);border:1.5px solid var(--border);border-radius:12px;box-shadow:0 12px 32px rgba(0,0,0,0.15);padding:10px;width:300px;display:flex;flex-direction:column;gap:6px';
 
   const btnAdd = document.getElementById('lpVarAddAttr');
   const r = btnAdd.getBoundingClientRect();
@@ -2132,9 +2132,9 @@ function mostrarPanelAddAttr(producto) {
   const opcion = (label, hint, icon, onClick) => {
     const b = document.createElement('button');
     b.type = 'button';
-    b.style.cssText = 'background:#f8f9fa;border:1px solid var(--border);border-radius:8px;padding:9px 10px;cursor:pointer;font-family:inherit;text-align:left;display:flex;align-items:center;gap:9px;color:var(--text)';
+    b.style.cssText = 'background:var(--surface-2);border:1px solid var(--border);border-radius:8px;padding:9px 10px;cursor:pointer;font-family:inherit;text-align:left;display:flex;align-items:center;gap:9px;color:var(--text)';
     b.innerHTML = `
-      <span class="material-icons" style="font-size:20px;color:#7c3aed">${icon}</span>
+      <span class="material-icons" style="font-size:20px;color:var(--tint-purple-fg)">${icon}</span>
       <div style="flex:1;min-width:0">
         <div style="font-size:13px;font-weight:700">${escapeHtml(label)}</div>
         ${hint ? `<div style="font-size:11px;color:var(--text-muted)">${escapeHtml(hint)}</div>` : ''}
@@ -2145,7 +2145,7 @@ function mostrarPanelAddAttr(producto) {
 
   if (sugeridasMadre.length) {
     const lbl = document.createElement('div');
-    lbl.style.cssText = 'font-size:10.5px;font-weight:800;color:#9333ea;letter-spacing:0.5px;text-transform:uppercase;margin:2px 4px 0';
+    lbl.style.cssText = 'font-size:10.5px;font-weight:800;color:var(--tint-purple-fg);letter-spacing:0.5px;text-transform:uppercase;margin:2px 4px 0';
     lbl.textContent = 'Ya usadas en esta categoría';
     pop.appendChild(lbl);
     sugeridasMadre.forEach(d => {
@@ -2189,7 +2189,7 @@ function mostrarPanelAddAttr(producto) {
   // Texto custom
   const customBtn = document.createElement('button');
   customBtn.type = 'button';
-  customBtn.style.cssText = 'background:white;border:1px dashed var(--border);border-radius:8px;padding:8px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;color:var(--primary)';
+  customBtn.style.cssText = 'background:var(--surface);border:1px dashed var(--border);border-radius:8px;padding:8px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit;color:var(--primary)';
   customBtn.textContent = '+ Característica con nombre propio';
   customBtn.onclick = async (e) => {
     e.stopPropagation();
@@ -2232,7 +2232,7 @@ function filaPresentacion(p = {}) {
   const wrap = document.createElement('div');
   wrap.dataset.presRow = '1';
   wrap.dataset.presId = p.id || nuevoIdLocal();
-  wrap.style.cssText = 'background:white;border:1px solid #fde68a;border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:8px';
+  wrap.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;display:flex;flex-direction:column;gap:8px';
 
   const tipoActual = p.tipo || 'unidad';
   const inp = `${estiloInput()};padding:7px 10px;font-size:13px`;
@@ -2242,7 +2242,7 @@ function filaPresentacion(p = {}) {
     const sel = t.value === tipoActual;
     return `
       <button type="button" data-pf-tipo="${t.value}" title="${escapeHtml(t.hint)}"
-        style="background:${sel ? '#fbbf24' : 'white'};border:1.5px solid ${sel ? '#f59e0b' : '#fde68a'};color:${sel ? '#78350f' : '#a16207'};border-radius:8px;padding:5px 8px;font-size:11.5px;font-weight:${sel ? 800 : 600};cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:3px">
+        style="background:${sel ? '#fbbf24' : 'var(--surface)'};border:1.5px solid ${sel ? '#f59e0b' : 'var(--border)'};color:${sel ? '#7a5c11' : 'var(--tint-yellow-fg)'};border-radius:8px;padding:5px 8px;font-size:11.5px;font-weight:${sel ? 800 : 600};cursor:pointer;font-family:inherit;display:inline-flex;align-items:center;gap:3px">
         <span class="material-icons" style="font-size:14px">${t.icon}</span>${escapeHtml(t.label)}
       </button>`;
   }).join('');
@@ -2253,82 +2253,82 @@ function filaPresentacion(p = {}) {
       <div style="display:flex;gap:4px;flex-wrap:wrap" data-pf-chips>${tipoChips}</div>
       <input data-pf="tipo" type="hidden" value="${escapeHtml(tipoActual)}" />
       <button type="button" data-pres-remove title="Quitar"
-        style="margin-left:auto;background:#fff0f0;border:1px solid #fca5a5;color:#dc3545;border-radius:6px;width:30px;height:30px;cursor:pointer;font-size:14px;flex-shrink:0">×</button>
+        style="margin-left:auto;background:var(--tint-red-bg);border:1px solid var(--border);color:var(--tint-red-fg);border-radius:6px;width:30px;height:30px;cursor:pointer;font-size:14px;flex-shrink:0">×</button>
     </div>
 
     <div style="display:grid;grid-template-columns:1fr 110px 1fr 100px;gap:8px;align-items:end" data-pf-grid>
       <div>
-        <label style="font-size:10.5px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:3px">Etiqueta</label>
+        <label style="font-size:10.5px;font-weight:700;color:var(--tint-orange-fg);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:3px">Etiqueta</label>
         <input data-pf="label" type="text" placeholder="ej: Pack x10" value="${escapeHtml(p.label || '')}" style="${inp}" />
       </div>
       <div data-pf-equiv-wrap>
-        <label style="font-size:10.5px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:3px" data-pf-equiv-label>Contiene</label>
+        <label style="font-size:10.5px;font-weight:700;color:var(--tint-orange-fg);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:3px" data-pf-equiv-label>Contiene</label>
         <input data-pf="equivalencia_base" type="number" step="any" min="0" placeholder="ej: 10" value="${p.equivalencia_base ?? ''}" style="${inp}" />
       </div>
       <div>
-        <label style="font-size:10.5px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:3px">Stock</label>
+        <label style="font-size:10.5px;font-weight:700;color:var(--tint-orange-fg);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:3px">Stock</label>
         <input data-pf="stock" type="number" step="any" min="0" placeholder="0" value="${p.stock ?? ''}" style="${inp}" />
       </div>
       <div>
-        <label style="font-size:10.5px;font-weight:700;color:#0369a1;text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:3px">Precio</label>
+        <label style="font-size:10.5px;font-weight:700;color:var(--tint-blue-fg);text-transform:uppercase;letter-spacing:0.4px;display:block;margin-bottom:3px">Precio</label>
         <input data-pf="precio_venta" type="number" step="0.01" min="0" placeholder="usa precio var." value="${p.precio_venta ?? ''}" style="${inp};font-weight:700" />
       </div>
     </div>
 
     <!-- Solo si rollo: línea de sueltos -->
-    <div data-pf-sueltos style="display:none;background:#fefce8;border-radius:6px;padding:8px 10px;font-size:12px">
+    <div data-pf-sueltos style="display:none;background:var(--tint-yellow-bg);border-radius:6px;padding:8px 10px;font-size:12px">
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;align-items:end">
         <div>
-          <label style="font-size:10.5px;font-weight:700;color:#a16207;display:block;margin-bottom:3px">Sueltos del rollo abierto</label>
+          <label style="font-size:10.5px;font-weight:700;color:var(--tint-yellow-fg);display:block;margin-bottom:3px">Sueltos del rollo abierto</label>
           <input data-pf="stock_sueltos" type="number" step="any" min="0" placeholder="0" value="${p.stock_sueltos ?? ''}" style="${inp}" />
         </div>
         <div>
-          <label style="font-size:10.5px;font-weight:700;color:#a16207;display:block;margin-bottom:3px">Mín. sueltos</label>
+          <label style="font-size:10.5px;font-weight:700;color:var(--tint-yellow-fg);display:block;margin-bottom:3px">Mín. sueltos</label>
           <input data-pf="stock_minimo_sueltos" type="number" step="any" min="0" placeholder="0" value="${p.stock_minimo_sueltos ?? ''}" style="${inp}" />
         </div>
       </div>
     </div>
 
     <!-- Avanzado -->
-    <details style="background:#fffbeb;border:1px dashed #fde68a;border-radius:6px">
-      <summary style="cursor:pointer;font-size:11.5px;color:#a16207;padding:7px 10px;font-weight:700;list-style:none;display:flex;align-items:center;gap:5px">
+    <details style="background:var(--tint-yellow-bg);border:1px dashed var(--border);border-radius:6px">
+      <summary style="cursor:pointer;font-size:11.5px;color:var(--tint-yellow-fg);padding:7px 10px;font-weight:700;list-style:none;display:flex;align-items:center;gap:5px">
         <span class="material-icons" style="font-size:14px">tune</span> Avanzado · código · vinculación · mínimo
       </summary>
       <div style="padding:0 10px 10px;display:flex;flex-direction:column;gap:8px">
         <div style="display:grid;grid-template-columns:1fr 100px;gap:8px;align-items:end">
           <div>
-            <label style="font-size:10.5px;font-weight:700;color:#a16207;display:block;margin-bottom:3px">Código de barras</label>
+            <label style="font-size:10.5px;font-weight:700;color:var(--tint-yellow-fg);display:block;margin-bottom:3px">Código de barras</label>
             <div style="display:flex;gap:4px">
               <input data-pf="codigo_barras" type="text" value="${escapeHtml(p.codigo_barras || generarCodigoBarras())}" style="${inp};flex:1;font-family:'Courier New',monospace" />
-              <button type="button" data-pf-regen title="Regenerar" style="background:white;border:1px solid #fde68a;color:#a16207;border-radius:6px;padding:0 8px;cursor:pointer;font-size:13px">↻</button>
+              <button type="button" data-pf-regen title="Regenerar" style="background:var(--surface);border:1px solid var(--border);color:var(--tint-yellow-fg);border-radius:6px;padding:0 8px;cursor:pointer;font-size:13px">↻</button>
             </div>
           </div>
           <div>
-            <label style="font-size:10.5px;font-weight:700;color:#a16207;display:block;margin-bottom:3px">Stock mín.</label>
+            <label style="font-size:10.5px;font-weight:700;color:var(--tint-yellow-fg);display:block;margin-bottom:3px">Stock mín.</label>
             <input data-pf="stock_minimo" type="number" step="any" min="0" placeholder="0" value="${p.stock_minimo ?? ''}" style="${inp}" />
           </div>
         </div>
         <div style="display:grid;grid-template-columns:1fr 100px 1fr;gap:8px;align-items:end">
           <div>
-            <label style="font-size:10.5px;font-weight:700;color:#a16207;display:block;margin-bottom:3px">Unidad de medida</label>
+            <label style="font-size:10.5px;font-weight:700;color:var(--tint-yellow-fg);display:block;margin-bottom:3px">Unidad de medida</label>
             <input data-pf="unidad_medida" type="text" placeholder="un / m / kg" value="${escapeHtml(p.unidad_medida || '')}" style="${inp}" />
           </div>
           <div>
-            <label style="font-size:10.5px;font-weight:700;color:#a16207;display:block;margin-bottom:3px">SKU sufijo</label>
+            <label style="font-size:10.5px;font-weight:700;color:var(--tint-yellow-fg);display:block;margin-bottom:3px">SKU sufijo</label>
             <input data-pf="sku_sufijo" type="text" placeholder="opcional" value="${escapeHtml(p.sku_sufijo || '')}" style="${inp}" />
           </div>
           <div>
-            <label style="font-size:10.5px;font-weight:700;color:#a16207;display:block;margin-bottom:3px">Costo (opcional)</label>
+            <label style="font-size:10.5px;font-weight:700;color:var(--tint-yellow-fg);display:block;margin-bottom:3px">Costo (opcional)</label>
             <input data-pf="precio_costo" type="number" step="0.01" min="0" placeholder="usa el de variante" value="${p.precio_costo ?? ''}" style="${inp}" />
           </div>
         </div>
         <div>
-          <label style="font-size:10.5px;font-weight:700;color:#a16207;display:block;margin-bottom:3px">Vincular a otra (corte a medida)</label>
+          <label style="font-size:10.5px;font-weight:700;color:var(--tint-yellow-fg);display:block;margin-bottom:3px">Vincular a otra (corte a medida)</label>
           <select data-pf="vinculada_a" style="${inp}">
             <option value="">— Independiente —</option>
           </select>
           <input data-pf="stock_modo" type="hidden" value="${escapeHtml(p.stock_modo || 'independiente')}" />
-          <p data-pf-vinculada-hint style="margin:4px 0 0;font-size:10.5px;color:#a16207;font-style:italic"></p>
+          <p data-pf-vinculada-hint style="margin:4px 0 0;font-size:10.5px;color:var(--tint-yellow-fg);font-style:italic"></p>
         </div>
       </div>
     </details>
@@ -2360,8 +2360,8 @@ function filaPresentacion(p = {}) {
       // Repintar chips (para reflejar selección)
       wrap.querySelectorAll('[data-pf-tipo]').forEach(x => {
         const sel = x.dataset.pfTipo === v;
-        x.style.background = sel ? '#fbbf24' : 'white';
-        x.style.borderColor = sel ? '#f59e0b' : '#fde68a';
+        x.style.background = sel ? '#fbbf24' : 'var(--surface)';
+        x.style.borderColor = sel ? '#f59e0b' : 'var(--border)';
         x.style.color       = sel ? '#78350f' : '#a16207';
         x.style.fontWeight  = sel ? 800 : 600;
       });
@@ -2634,13 +2634,13 @@ function filaDescuento(d = {}) {
   const wrap = document.createElement('div');
   wrap.dataset.discRow = '1';
   wrap.dataset.discId  = d._id || '';
-  wrap.style.cssText = 'background:white;border:1px solid #ddd6fe;border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:7px';
+  wrap.style.cssText = 'background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:10px;display:flex;flex-direction:column;gap:7px';
   const tipoOpts = TIPOS_DESCUENTO.map(t =>
     `<option value="${t.value}" ${t.value === (d.tipo || 'porcentaje') ? 'selected' : ''}>${t.label}</option>`
   ).join('');
   const inp = `${estiloInput()};padding:6px 9px;font-size:13px`;
   const lblD = (txt, hint = '') => `
-    <div style="font-size:10px;font-weight:700;letter-spacing:0.5px;color:#5b21b6;text-transform:uppercase;margin-bottom:2px"${hint ? ` title="${escapeHtml(hint)}"` : ''}>
+    <div style="font-size:10px;font-weight:700;letter-spacing:0.5px;color:var(--tint-purple-fg);text-transform:uppercase;margin-bottom:2px"${hint ? ` title="${escapeHtml(hint)}"` : ''}>
       ${escapeHtml(txt)}${hint ? ' <span style="opacity:0.5;text-transform:none">ⓘ</span>' : ''}
     </div>`;
   const tipoActual = d.tipo || 'porcentaje';
@@ -2659,14 +2659,14 @@ function filaDescuento(d = {}) {
       </div>
       <div>
         ${lblD('Valor', 'Monto o porcentaje según tipo.')}
-        <input data-df="valor" type="number" step="any" min="0" placeholder="ej: 10" value="${d.valor ?? ''}" style="${inp};font-weight:700;color:#5b21b6" />
+        <input data-df="valor" type="number" step="any" min="0" placeholder="ej: 10" value="${d.valor ?? ''}" style="${inp};font-weight:700;color:var(--tint-purple-fg)" />
       </div>
       <div>
         ${lblD('Prioridad', 'Mayor prioridad gana si hay varios activos.')}
         <input data-df="prioridad" type="number" step="1" placeholder="0" value="${d.prioridad ?? 0}" style="${inp}" />
       </div>
       <button type="button" data-df-remove title="Eliminar"
-        style="background:#fff0f0;border:1px solid #fca5a5;color:#dc3545;border-radius:6px;padding:0;cursor:pointer;font-size:16px;height:30px">×</button>
+        style="background:var(--tint-red-bg);border:1px solid var(--border);color:var(--tint-red-fg);border-radius:6px;padding:0;cursor:pointer;font-size:16px;height:30px">×</button>
     </div>
 
     <div data-df-cant style="display:${showCant ? 'block' : 'none'}">
@@ -2679,7 +2679,7 @@ function filaDescuento(d = {}) {
       <div>${lblD('Hasta', 'Vacío = sin límite.')}<input data-df="hasta" type="date" value="${escapeHtml(d.hasta || '')}" style="${inp}" /></div>
     </div>
 
-    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#5b21b6;cursor:pointer;margin-top:2px">
+    <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--tint-purple-fg);cursor:pointer;margin-top:2px">
       <input data-df="activo" type="checkbox" ${d.activo === false ? '' : 'checked'} /> Activo
     </label>
   `;
@@ -2828,14 +2828,14 @@ async function abrirModalStock(db, producto) {
   overlay.innerHTML = `
     <div class="modal" style="max-width:980px;width:100%;max-height:88vh;display:flex;flex-direction:column">
       <div class="modal-header" style="display:flex;align-items:center;gap:14px">
-        <span class="material-icons" style="color:#047857;font-size:28px">inventory_2</span>
+        <span class="material-icons" style="color:var(--tint-green-fg);font-size:28px">inventory_2</span>
         <div style="flex:1">
           <h3 style="margin:0;font-size:17px;font-weight:700">Stock — ${escapeHtml(producto.nombre)}</h3>
           <p style="margin:2px 0 0;font-size:12px;color:var(--text-muted)">
             Cambios sincronizados en tiempo real con el POS. Cada ajuste queda registrado.
           </p>
         </div>
-        <button id="lpStockClose" type="button" style="background:transparent;border:none;cursor:pointer;font-size:24px;color:#64748b;line-height:1">×</button>
+        <button id="lpStockClose" type="button" style="background:transparent;border:none;cursor:pointer;font-size:24px;color:var(--text-muted);line-height:1">×</button>
       </div>
       <div id="lpStockBody" style="overflow-y:auto;padding:16px 20px;flex:1">
         <div style="display:flex;align-items:center;justify-content:center;padding:60px 20px;color:var(--text-muted)">
@@ -2843,7 +2843,7 @@ async function abrirModalStock(db, producto) {
           Cargando stock...
         </div>
       </div>
-      <div style="border-top:1px solid var(--border);padding:12px 20px;display:flex;justify-content:space-between;align-items:center;background:#f8fafc;gap:10px;flex-wrap:wrap">
+      <div style="border-top:1px solid var(--border);padding:12px 20px;display:flex;justify-content:space-between;align-items:center;background:var(--surface-2);gap:10px;flex-wrap:wrap">
         <div style="display:flex;align-items:center;gap:8px;font-size:12px;color:var(--text-muted)">
           <span id="lpStockSyncDot" style="width:8px;height:8px;border-radius:50%;background:#16a34a;display:inline-block"></span>
           <span id="lpStockSyncTxt">Conectado · auto-actualizando</span>
@@ -2900,7 +2900,7 @@ async function abrirModalStock(db, producto) {
     if (!hojas.length) {
       body.innerHTML = `
         <div style="text-align:center;padding:40px 20px;color:var(--text-muted)">
-          <span class="material-icons" style="font-size:48px;color:#cbd5e1;display:block;margin-bottom:8px">inventory_2</span>
+          <span class="material-icons" style="font-size:48px;color:var(--text-muted);display:block;margin-bottom:8px">inventory_2</span>
           Esta categoría todavía no tiene variantes cargadas.
         </div>`;
       return;
@@ -2933,17 +2933,17 @@ async function abrirModalStock(db, producto) {
       ? presentaciones.map(p => filaPresStock(nodo._id, p)).join('')
       : `<div style="padding:14px 16px;color:var(--text-muted);font-size:13px;font-style:italic">Sin formas de venta cargadas. Agregá una con el botón de la derecha.</div>`;
     return `
-      <div style="background:white;border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:12px">
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:12px">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;gap:10px;flex-wrap:wrap">
           <div style="display:flex;align-items:center;gap:8px;flex:1;min-width:200px">
-            <span class="material-icons" style="color:#7c3aed;font-size:18px">style</span>
+            <span class="material-icons" style="color:var(--tint-purple-fg);font-size:18px">style</span>
             <strong style="font-size:14px">${escapeHtml(nodo.nombre || '—')}</strong>
             ${(nodo.atributos && Object.keys(nodo.atributos).length)
               ? `<span style="font-size:11px;color:var(--text-muted)">${escapeHtml(_resumenAtributos(nodo.atributos))}</span>`
               : ''}
           </div>
           <button type="button" data-stock-add data-node-id="${nodo._id}"
-            style="background:#ecfdf5;border:1px solid #a7f3d0;color:#047857;border-radius:6px;padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:4px">
+            style="background:var(--tint-green-bg);border:1px solid var(--border);color:var(--tint-green-fg);border-radius:6px;padding:5px 10px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit;display:flex;align-items:center;gap:4px">
             <span class="material-icons" style="font-size:14px">add</span> Forma de venta
           </button>
         </div>
@@ -2957,7 +2957,7 @@ async function abrirModalStock(db, producto) {
     const bordRow = stockBajo ? '#fecaca' : '#e5e7eb';
     const um = p.unidad_medida || '';
     const vinculadaInfo = (p.stock_modo === 'vinculado' && p.vinculada_a)
-      ? `<div style="font-size:10px;color:#7c3aed;margin-top:2px;display:flex;align-items:center;gap:3px"><span class="material-icons" style="font-size:11px">link</span> Vinculada — su stock viene de la fuente</div>`
+      ? `<div style="font-size:10px;color:var(--tint-purple-fg);margin-top:2px;display:flex;align-items:center;gap:3px"><span class="material-icons" style="font-size:11px">link</span> Vinculada — su stock viene de la fuente</div>`
       : '';
     return `
       <div data-pres-row data-node-id="${nodeId}" data-pres-id="${escapeHtml(p.id || '')}"
@@ -2978,7 +2978,7 @@ async function abrirModalStock(db, producto) {
         </button>
         <button type="button" data-stock-remove data-node-id="${nodeId}" data-pres-id="${escapeHtml(p.id || '')}"
           title="Eliminar"
-          style="background:#fff0f0;border:1px solid #fca5a5;color:#dc3545;border-radius:6px;width:36px;height:36px;cursor:pointer;display:flex;align-items:center;justify-content:center">
+          style="background:var(--tint-red-bg);border:1px solid var(--border);color:var(--tint-red-fg);border-radius:6px;width:36px;height:36px;cursor:pointer;display:flex;align-items:center;justify-content:center">
           <span class="material-icons" style="font-size:18px">delete_outline</span>
         </button>
       </div>`;
@@ -2991,7 +2991,7 @@ async function abrirModalStock(db, producto) {
         ${label}
         <input data-stock-input data-field="${field}" type="number" ${allowDecimal ? 'step="0.01"' : 'step="1"'} value="${v}"
           ${disabled ? 'disabled title="Stock vinculado"' : ''}
-          style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;text-align:right;font-family:'Consolas','Menlo',monospace;${disabled ? 'background:#f1f5f9;color:#94a3b8' : 'background:white'}" />
+          style="padding:6px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;text-align:right;font-family:'Consolas','Menlo',monospace;${disabled ? 'background:var(--surface-2);color:var(--text-muted)' : 'background:var(--surface)'}" />
       </label>`;
   }
 
@@ -3064,7 +3064,7 @@ async function guardarPresStock(db, producto, nodeId, presId, usuario, snapshot)
       } catch (e) { /* no bloquear */ }
     }
 
-    btn.innerHTML = '<span class="material-icons" style="font-size:18px;color:#16a34a">check</span>';
+    btn.innerHTML = '<span class="material-icons" style="font-size:18px;color:var(--tint-green-fg)">check</span>';
     setTimeout(() => { btn.innerHTML = ogHtml; btn.disabled = false; }, 700);
     invalidateCacheByPrefix('mp:');
   } catch (err) {

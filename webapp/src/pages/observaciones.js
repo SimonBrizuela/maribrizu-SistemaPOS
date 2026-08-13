@@ -5,14 +5,51 @@
  */
 
 import {
-  collection, addDoc, doc, updateDoc,
+  collection, addDoc, doc, updateDoc, getDocs,
   query, orderBy, onSnapshot,
 } from 'firebase/firestore';
 
 import { getSession } from '../auth.js';
+import { confirmDialog, alertDialog, escHtml } from '../components/dialogs.js';
 
 const COL = 'observaciones';
 let _unsub = null;
+
+// Última firma usada desde la web (por navegador). Si el turno se detecta solo
+// esto no se usa; sirve cuando no hay ninguna PC reportando.
+const LS_FIRMA = 'obs:firma';
+
+/**
+ * Quién está atendiendo ahora, según el heartbeat que cada POS escribe en
+ * `pcs/{pc_id}` cada 30 s.
+ *
+ * En la web siempre se entra con el usuario Administrador, así que firmar con
+ * el usuario de la sesión hacía que TODAS las notas quedaran a nombre de
+ * "Administrador". El turno real lo sabe el POS: lo leemos de ahí.
+ *
+ * Se toma la PC vista más recientemente (dentro de los últimos 10 minutos).
+ * Devuelve '' si no hay ninguna reportando.
+ */
+async function cajeroDeTurno(db) {
+  try {
+    const snap = await getDocs(collection(db, 'pcs'));
+    const LIMITE_MS = 10 * 60 * 1000;
+    const ahora = Date.now();
+    let mejor = null;
+    snap.forEach(d => {
+      const data = d.data() || {};
+      const nombre = String(data.turno_actual || data.cajero_actual || '').trim();
+      if (!nombre) return;
+      const visto = Date.parse(String(data.last_seen || '')) || 0;
+      if (!visto || ahora - visto > LIMITE_MS) return;
+      if (!mejor || visto > mejor.visto) mejor = { nombre, visto };
+    });
+    return mejor ? mejor.nombre : '';
+  } catch (err) {
+    console.warn('[obs] no se pudo leer el turno activo', err);
+    return '';
+  }
+}
 
 export async function renderObservaciones(container, db) {
   // Stop previous listener si se re-renderiza
@@ -70,6 +107,14 @@ export async function renderObservaciones(container, db) {
           <h3 style="margin:0 0 12px;font-size:18px">Nueva observación</h3>
           <textarea id="obsTextarea" placeholder="Ej: falta tijera escolar, llegó pedido del proveedor…"
             style="width:100%;box-sizing:border-box;min-height:140px;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-family:inherit;font-size:14px;resize:vertical;background:var(--card-bg)"></textarea>
+
+          <label style="display:block;margin-top:12px;font-size:11px;font-weight:700;letter-spacing:0.4px;color:var(--text-muted);text-transform:uppercase">
+            Firmada por
+          </label>
+          <input id="obsAutor" type="text" placeholder="Nombre del cajero"
+            style="width:100%;box-sizing:border-box;margin-top:5px;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-family:inherit;font-size:14px;background:var(--card-bg)" />
+          <p id="obsAutorHint" style="margin:5px 0 0;font-size:11.5px;color:var(--text-muted)"></p>
+
           <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:14px">
             <button id="obsCancelar" style="background:transparent;border:1px solid var(--border);color:var(--text);padding:9px 16px;border-radius:8px;cursor:pointer;font-family:inherit">Cancelar</button>
             <button id="obsGuardar" style="background:var(--primary);border:none;color:white;padding:9px 18px;border-radius:8px;cursor:pointer;font-family:inherit;font-weight:600">Guardar</button>
@@ -128,13 +173,13 @@ export async function renderObservaciones(container, db) {
       // si es de tipo 'sale' pero quedó huérfana (obs vieja antes del fix) avisamos.
       let saleRef = '';
       if (o.sale_id) {
-        saleRef = `<div style="color:#b45309;font-size:12px;margin-top:6px">Venta #${o.sale_id}</div>`;
+        saleRef = `<div style="color:var(--tint-orange-fg);font-size:12px;margin-top:6px">Venta #${o.sale_id}</div>`;
       } else if (ctx === 'sale') {
-        saleRef = `<div style="color:#94a3b8;font-size:11px;margin-top:6px;font-style:italic">Sin venta vinculada (obs antigua)</div>`;
+        saleRef = `<div style="color:var(--text-muted);font-size:11px;margin-top:6px;font-style:italic">Sin venta vinculada (obs antigua)</div>`;
       }
 
       const delBtn = isAdmin
-        ? `<button class="obs-del" data-id="${o.id}" style="background:transparent;color:#dc2626;border:1px solid #fecaca;padding:3px 10px;border-radius:6px;font-size:12px;cursor:pointer;font-family:inherit">Eliminar</button>`
+        ? `<button class="obs-del" data-id="${o.id}" style="background:transparent;color:var(--tint-red-fg);border:1px solid var(--border);padding:3px 10px;border-radius:6px;font-size:12px;cursor:pointer;font-family:inherit">Eliminar</button>`
         : '';
       return `
         <div style="background:var(--card-bg);border:1px solid ${border};border-left:4px solid ${border};border-radius:10px;padding:12px 14px">
@@ -159,11 +204,11 @@ export async function renderObservaciones(container, db) {
   };
 
   const softDelete = async (id) => {
-    if (!confirm('¿Eliminar esta observación?')) return;
+    if (!await confirmDialog({ title: 'Eliminar observación', message: '¿Eliminar esta observación?', confirmText: 'Eliminar', danger: true })) return;
     try {
       await updateDoc(doc(db, COL, id), { deleted: true });
     } catch (e) {
-      alert('No se pudo eliminar: ' + e.message);
+      alertDialog({ title: 'Error', message: 'No se pudo eliminar: ' + escHtml(e.message), type: 'error' });
     }
   };
 
@@ -175,7 +220,7 @@ export async function renderObservaciones(container, db) {
   }, (err) => {
     console.error('Observaciones listener:', err);
     document.getElementById('obsLista').innerHTML =
-      `<div style="text-align:center;padding:30px;color:#dc2626">Error cargando observaciones.</div>`;
+      `<div style="text-align:center;padding:30px;color:var(--tint-red-fg)">Error cargando observaciones.</div>`;
   });
 
   // Eventos
@@ -184,10 +229,27 @@ export async function renderObservaciones(container, db) {
 
   const modal = document.getElementById('obsModal');
   const ta    = document.getElementById('obsTextarea');
-  document.getElementById('btnNuevaObs').addEventListener('click', () => {
+  const autorInput = document.getElementById('obsAutor');
+  const autorHint  = document.getElementById('obsAutorHint');
+
+  document.getElementById('btnNuevaObs').addEventListener('click', async () => {
     ta.value = '';
     modal.style.display = 'flex';
     setTimeout(() => ta.focus(), 30);
+
+    // Precargar con el turno activo del POS. Mientras se resuelve dejamos lo
+    // último que se usó desde este navegador, para no mostrar el campo vacío.
+    let ultima = '';
+    try { ultima = localStorage.getItem(LS_FIRMA) || ''; } catch (_) {}
+    autorInput.value = ultima;
+    autorHint.textContent = 'Buscando quién está de turno...';
+
+    const turno = await cajeroDeTurno(db);
+    // Si el usuario ya empezó a escribir su nombre, no se lo pisamos.
+    if (turno && autorInput.value === ultima) autorInput.value = turno;
+    autorHint.textContent = turno
+      ? `Detectado del POS: ${turno}. Cambialo si lo anota otra persona.`
+      : 'Ninguna PC está reportando turno ahora. Escribí quién lo anota.';
   });
   document.getElementById('obsCancelar').addEventListener('click', () => {
     modal.style.display = 'none';
@@ -195,6 +257,9 @@ export async function renderObservaciones(container, db) {
   document.getElementById('obsGuardar').addEventListener('click', async () => {
     const text = ta.value.trim();
     if (!text) { ta.focus(); return; }
+    // Firma: lo que quedó en el campo (turno detectado o corregido a mano).
+    // Sólo cae al usuario de la sesión si el campo quedó vacío.
+    const autor = autorInput.value.trim() || myName;
     try {
       const now = new Date().toLocaleString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' });
       await addDoc(collection(db, COL), {
@@ -203,14 +268,15 @@ export async function renderObservaciones(container, db) {
         sale_id: null,
         sale_item_id: null,
         created_by_id: null,
-        created_by_name: myName,
+        created_by_name: autor,
         pc_id: 'web',
         created_at: now,
         deleted: false,
       });
+      try { localStorage.setItem(LS_FIRMA, autor); } catch (_) {}
       modal.style.display = 'none';
     } catch (e) {
-      alert('No se pudo guardar: ' + e.message);
+      alertDialog({ title: 'Error', message: 'No se pudo guardar: ' + escHtml(e.message), type: 'error' });
     }
   });
 }

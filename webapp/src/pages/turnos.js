@@ -30,13 +30,33 @@ function normalizarCajero(raw) {
 }
 
 export async function renderTurnos(container, db) {
-  // Si hay cache caliente, no mostramos spinner (carga visualmente instantánea)
-  const hayCache = peekCache(CACHE_KEY_VENTAS, CACHE_TTL_MS) && peekCache(CACHE_KEY_NUMMAP, CACHE_TTL_MS);
-  if (!hayCache) {
-    container.innerHTML = `<div style="text-align:center;padding:60px;color:var(--text-muted)">
-      <div class="spinner"></div><p>Cargando datos de turnos...</p>
-    </div>`;
-  }
+  // Shell vacío al toque: filtros + tabla con headers reales.
+  container.innerHTML = `
+    <div class="filter-bar">
+      <input type="date" disabled />
+      <input type="date" disabled />
+      <select disabled><option>Todos los cajeros</option></select>
+    </div>
+    <div class="table-card">
+      <div class="table-card-header"><h3>Turnos / Cajeros</h3></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Cajero / Turno</th>
+            <th style="text-align:center"># Ventas</th>
+            <th>Total</th>
+            <th>Efectivo</th>
+            <th>Transferencia</th>
+            <th>Ticket Promedio</th>
+            <th>% del Total</th>
+          </tr></thead>
+          <tbody>
+            ${Array(6).fill('<tr><td colspan="7" style="padding:6px 12px"><div class="skel" style="height:28px;border-radius:6px"></div></td></tr>').join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
 
   // Cargar ventas (últimas 1000) + mapa de numeración, con cache 60s en memoria
   const [ventas, saleNumMap] = await Promise.all([
@@ -178,8 +198,8 @@ export async function renderTurnos(container, db) {
         <div class="label" style="font-weight:700;font-size:14px;margin-top:6px">${c.nombre}</div>
         <div class="value" style="font-size:20px">$${fmt(c.total)}</div>
         <small style="color:var(--text-muted)">${c.ventas.length} ventas</small>
-        <small style="color:#198754;display:block">💵 $${fmt(c.efectivo)}</small>
-        <small style="color:#0d6efd;display:block">🏦 $${fmt(c.transferencia)}</small>
+        <small style="color:var(--tint-green-fg);display:block">💵 $${fmt(c.efectivo)}</small>
+        <small style="color:var(--tint-blue-fg);display:block">🏦 $${fmt(c.transferencia)}</small>
       </div>
     `).join('') || `<p style="color:var(--text-muted);padding:20px">Sin ventas en el período seleccionado.</p>`;
 
@@ -207,12 +227,12 @@ export async function renderTurnos(container, db) {
           <td><b style="font-size:14px">👤 ${c.nombre}</b></td>
           <td style="text-align:center"><span class="badge badge-gray">${c.ventas.length}</span></td>
           <td><b style="color:var(--success)">$${fmt(c.total)}</b></td>
-          <td><span style="color:#198754">💵 $${fmt(c.efectivo)}</span></td>
-          <td><span style="color:#0d6efd">🏦 $${fmt(c.transferencia)}</span></td>
+          <td><span style="color:var(--tint-green-fg)">💵 $${fmt(c.efectivo)}</span></td>
+          <td><span style="color:var(--tint-blue-fg)">🏦 $${fmt(c.transferencia)}</span></td>
           <td>$${fmt(promedio)}</td>
           <td>
             <div style="display:flex;align-items:center;gap:6px">
-              <div style="flex:1;background:#e9ecef;border-radius:4px;height:8px;min-width:60px">
+              <div style="flex:1;background:var(--surface-2);border-radius:4px;height:8px;min-width:60px">
                 <div style="width:${pct}%;background:var(--primary);border-radius:4px;height:8px"></div>
               </div>
               <span style="font-size:12px;color:var(--text-muted)">${pct}%</span>

@@ -3,9 +3,10 @@ import { openSaleModal } from '../components/modal.js';
 import { getCached } from '../cache.js';
 import { getFechaInicioDate, isVentaVarios2, isItemVarios2, fechaDMYtoYMD } from '../config.js';
 import { getSaleNumberMap, displayNumForVenta } from '../sale_numbers.js';
+import { cssVar, getTheme } from '../theme.js';
 
 // ──────────────────────────────────────────────────────────────────────────────
-// CARGA DINÁMICA DE CHART.JS (vía CDN, una sola vez)
+// CARGA DINÁMICA DE CHART.JS (local /vendor, una sola vez)
 // ──────────────────────────────────────────────────────────────────────────────
 let _chartLoader = null;
 function loadChartJs() {
@@ -13,7 +14,7 @@ function loadChartJs() {
   if (_chartLoader) return _chartLoader;
   _chartLoader = new Promise((resolve, reject) => {
     const s = document.createElement('script');
-    s.src = 'https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js';
+    s.src = `${import.meta.env.BASE_URL}vendor/chart.umd.min.js`;
     s.async = true;
     s.onload = () => resolve(window.Chart);
     s.onerror = () => reject(new Error('No se pudo cargar Chart.js'));
@@ -58,6 +59,12 @@ const PALETTE = [
 export async function renderDashboard(container, db) {
   destroyAllCharts();
 
+  // Pintar la UI vacía AL TOQUE (sincronico, sin awaits): KPIs con labels y
+  // canvases listos. Después de cargar la data, las piezas individuales se
+  // parchean en el shell con stagger — los datos parecen "llegar" uno por uno
+  // en lugar de aparecer todos a la vez.
+  container.innerHTML = renderDashboardShell();
+
   const hoyStr = todayAR();
   const hoy = new Date(hoyStr + 'T00:00:00-03:00');
   const ayer = new Date(hoy); ayer.setDate(ayer.getDate() - 1);
@@ -84,7 +91,8 @@ export async function renderDashboard(container, db) {
     // ~3 items × 85 ventas × 60 días ≈ 15k. Cap a 8000 para limitar transferencia,
     // sólo guardamos los campos que el dashboard usa para que entre en localStorage.
     getCached('dashboard:items_full', async () => {
-      const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('fecha', 'desc'), limit(8000)));
+      // orderBy por fecha_dt (Timestamp): el string `fecha` + limit recortaba el mes nuevo.
+      const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('fecha_dt', 'desc'), limit(8000)));
       return snap.docs.map(d => {
         const it = d.data();
         // Sólo los campos que el dashboard realmente usa (reduce el tamaño en localStorage)
@@ -104,11 +112,11 @@ export async function renderDashboard(container, db) {
     // Catálogo completo
     getCached('catalogo:all', async () => {
       const snap = await getDocs(collection(db, 'catalogo'));
-      return snap.docs.map(d => ({ doc_id: d.id, ...d.data() }));
+      return snap.docs.map(d => ({ ...d.data(), doc_id: d.id }));
     }, { ttl: 10 * 60 * 1000, memOnly: true }),
     // Historial diario (para legacy bar chart si chart.js falla)
     getCached('dashboard:historial', async () => {
-      const snap = await getDocs(query(collection(db, 'historial_diario'), orderBy('fecha', 'desc'), limit(30)));
+      const snap = await getDocs(query(collection(db, 'historial_diario'), orderBy('fecha_dt', 'desc'), limit(30)));
       return snap.docs.map(d => d.data());
     }, { ttl: 3 * 60 * 1000 }),
     getSaleNumberMap(db),
@@ -183,9 +191,42 @@ export async function renderDashboard(container, db) {
   const forecastMes = Math.round(ritmoDiarioMes * diasMesTotal);
   const deltaForecast = totalMesAnt > 0 ? ((forecastMes - totalMesAnt) / totalMesAnt) * 100 : null;
 
-  // Stock
-  const stockCritico = catalogo.filter(p => (p.stock || 0) > 0 && (p.stock || 0) <= 3).length;
-  const stockAgotado = catalogo.filter(p => (p.stock || 0) === 0).length;
+  // ── Stock efectivo / vínculos ─────────────────────────────────────────────
+  // Un producto vinculado a otro de stock (ej: "Impresión" → "Hojas Pampa") no
+  // lleva stock propio: su disponibilidad sale del producto fuente. Para las
+  // sugerencias de compra se excluyen (lo que se repone es la fuente), pero su
+  // stock se muestra/cuenta real (el del vinculado).
+  function _dashLinks(p) {
+    if (Array.isArray(p.vinculaciones) && p.vinculaciones.length) {
+      return p.vinculaciones
+        .filter(v => v && v.doc_id && Number(v.cantidad) > 0)
+        .map(v => ({ doc_id: String(v.doc_id), cantidad: Number(v.cantidad) }));
+    }
+    if (p.vinculado_a && Number(p.vinculado_cantidad) > 0) {
+      return [{ doc_id: String(p.vinculado_a), cantidad: Number(p.vinculado_cantidad) }];
+    }
+    return [];
+  }
+  function _esVinculado(p) { return _dashLinks(p).length > 0; }
+  function _stkEf(p) {
+    const links = _dashLinks(p);
+    if (!links.length) return Number(p.stock || 0);
+    let min = Infinity;
+    for (const l of links) {
+      const t = catalogo.find(x => x.doc_id === l.doc_id);
+      if (!t) continue;
+      const base = (t.es_conjunto === true || t.es_conjunto === 1)
+        ? Number(t.conjunto_total || 0) : Number(t.stock);
+      if (base === -1) continue;
+      const cap = Math.floor((Number(base) || 0) / l.cantidad);
+      if (cap < min) min = cap;
+    }
+    return min === Infinity ? Infinity : Math.max(0, min);
+  }
+
+  // Stock (cuenta efectiva; los vinculados reflejan la disponibilidad de su fuente)
+  const stockCritico = catalogo.filter(p => { const s = _stkEf(p); return s > 0 && s <= 3; }).length;
+  const stockAgotado = catalogo.filter(p => _stkEf(p) === 0).length;
 
   // ── Ganancia / margen estimado (mes actual) ──
   const itemsMes = items.filter(i => fechaDMYtoYMD(i.fecha) >= isoDate(inicioMes));
@@ -379,10 +420,10 @@ export async function renderDashboard(container, db) {
     const k = (p.nombre || '').toUpperCase().trim();
     const v30 = ventasPorProducto30[k]?.unidades || 0;
     const velocidadDia = v30 / 30;
-    const stock = Number(p.stock || 0);
+    const stock = _stkEf(p);
     const dias = velocidadDia > 0 ? stock / velocidadDia : Infinity;
-    return { nombre: p.nombre, stock, velocidadDia: round2(velocidadDia), dias: Math.round(dias), v30, rubro: p.rubro || p.categoria || '—' };
-  }).filter(p => p.velocidadDia > 0 && p.dias <= 30 && p.stock > 0)
+    return { nombre: p.nombre, stock, velocidadDia: round2(velocidadDia), dias: Math.round(dias), v30, rubro: p.rubro || p.categoria || '—', _vinc: _esVinculado(p) };
+  }).filter(p => !p._vinc && p.velocidadDia > 0 && p.dias <= 30 && p.stock > 0)
     .sort((a, b) => a.dias - b.dias)
     .slice(0, 10);
 
@@ -398,7 +439,9 @@ export async function renderDashboard(container, db) {
   });
   const sinRotacion = catalogo.map(p => {
     const k = (p.nombre || '').toUpperCase().trim();
-    const stock = Number(p.stock || 0);
+    // Vinculados quedan fuera: su stock vive en la fuente, no es capital propio.
+    if (_esVinculado(p)) return null;
+    const stock = _stkEf(p);
     if (!k || stock <= 0) return null;
     const ultima = ultimaVentaPorProducto[k];
     let dias;
@@ -439,7 +482,11 @@ export async function renderDashboard(container, db) {
   catalogo.forEach(p => {
     const nombreKey = (p.nombre || '').toUpperCase().trim();
     if (!nombreKey) return;
-    const stock = Number(p.stock || 0);
+    // Producto vinculado: sin stock propio. Se excluye de las sugerencias
+    // basadas en stock (reabastecer / lentos / promocionar); lo que se repone es
+    // su producto fuente. Sigue contando para "estrellas" (rendimiento de venta).
+    const _vinc = _esVinculado(p);
+    const stock = _stkEf(p);
     const costo = Number(p.costo || 0);
     const precio = Number(p.precio_venta || p.precio || 0);
     const v = ventasPorProducto30[nombreKey] || { unidades: 0, ingreso: 0 };
@@ -448,7 +495,7 @@ export async function renderDashboard(container, db) {
     const diasRest = velocidadDia > 0 ? stock / velocidadDia : Infinity;
 
     // Reabastecer: vendió ≥3 últimos 30d y le quedan ≤14 días, o stock <=3 con cualquier venta
-    if (v.unidades >= 3 && diasRest <= 14) {
+    if (!_vinc && v.unidades >= 3 && diasRest <= 14) {
       reabastecer.push({
         nombre: p.nombre,
         rubro: p.rubro || p.categoria || '—',
@@ -460,7 +507,7 @@ export async function renderDashboard(container, db) {
         sugerirComprar: Math.max(Math.ceil(velocidadDia * 30) - stock, 0),
         urgencia: diasRest <= 5 ? 'alta' : diasRest <= 10 ? 'media' : 'baja',
       });
-    } else if (stock > 0 && stock <= 3 && v.unidades >= 1) {
+    } else if (!_vinc && stock > 0 && stock <= 3 && v.unidades >= 1) {
       reabastecer.push({
         nombre: p.nombre,
         rubro: p.rubro || p.categoria || '—',
@@ -487,7 +534,7 @@ export async function renderDashboard(container, db) {
     }
 
     // Lentos: stock >= 8 y vendió <=1 en 30 días
-    if (stock >= 8 && v.unidades <= 1) {
+    if (!_vinc && stock >= 8 && v.unidades <= 1) {
       lentos.push({
         nombre: p.nombre,
         rubro: p.rubro || p.categoria || '—',
@@ -499,7 +546,7 @@ export async function renderDashboard(container, db) {
     }
 
     // Promocionar: margen alto, rotación media-baja
-    if (margenPctP !== null && margenPctP >= 35 && v.unidades >= 1 && v.unidades <= 6 && stock >= 4) {
+    if (!_vinc && margenPctP !== null && margenPctP >= 35 && v.unidades >= 1 && v.unidades <= 6 && stock >= 4) {
       promocionar.push({
         nombre: p.nombre,
         rubro: p.rubro || p.categoria || '—',
@@ -527,108 +574,42 @@ export async function renderDashboard(container, db) {
   const mejorCategoriaIngreso = categoriasOrden[0]?.[1].ingreso || 0;
 
   // ──────────────────────────────────────────────────────────────────────────
-  // RENDER HTML
+  // PATCH PROGRESIVO: en vez de reemplazar el innerHTML entero (que destruiría
+  // el shell ya visible), parcheamos cada sección individual con un pequeño
+  // delay escalonado para que el usuario vea los datos "llegar" uno por uno.
   // ──────────────────────────────────────────────────────────────────────────
-  container.innerHTML = `
-    <!-- KPIs principales -->
-    <div class="dash-kpis">
-      ${kpiCard('Ventas Hoy', '$' + fmt(totalHoy), `${ventasHoy.length} ventas`, 'today', 'kpi-blue', deltaHoyVsAyer, 'vs misma hora ayer')}
-      ${kpiCard('Efectivo Hoy', '$' + fmt(efectivoHoy), pctTexto(efectivoHoy, totalHoy) + ' del día', 'payments', 'kpi-green')}
-      ${kpiCard('Transferencia Hoy', '$' + fmt(transferHoy), pctTexto(transferHoy, totalHoy) + ' del día', 'swap_horiz', 'kpi-purple')}
-      ${kpiCard('Esta Semana', '$' + fmt(totalSemana), `${ventasSemana.length} ventas`, 'date_range', 'kpi-cyan')}
-      ${kpiCard('Mes en Curso', '$' + fmt(totalMes), `${ventasMes.length} ventas`, 'calendar_month', 'kpi-orange', deltaMes, 'vs mes anterior')}
-      ${kpiCard('Forecast Mes', '$' + fmt(forecastMes), `proyección día ${diasMesTotal}`, 'insights', 'kpi-purple', deltaForecast, 'vs mes ant.')}
-      ${kpiCard('Ticket Promedio', '$' + fmt(ticketProm), 'mes en curso', 'receipt_long', 'kpi-teal', deltaTicket, 'vs mes ant.')}
-      ${kpiCard('Ganancia Bruta', '$' + fmt(gananciaBrutaMes), `${margenPct.toFixed(1)}% margen`, 'trending_up', 'kpi-success')}
-      ${kpiCard('Stock Crítico', String(stockCritico), `${stockAgotado} agotados · ${catalogo.length} prods`, 'warning', 'kpi-red')}
-    </div>
 
-    <!-- Resumen visual del negocio -->
-    <div class="insight-bar">
-      <div class="insight-item"><span class="insight-icon" style="background:${COLORS.cyan}"><span class="material-icons">schedule</span></span>
-        <div><div class="insight-label">Mejor hora</div><div class="insight-val">${mejorHora >= 0 ? formatHora(mejorHora) : '—'}</div></div>
-      </div>
-      <div class="insight-item"><span class="insight-icon" style="background:${COLORS.orange}"><span class="material-icons">event</span></span>
-        <div><div class="insight-label">Mejor día</div><div class="insight-val">${mejorDia >= 0 ? diaSemanaLabels[mejorDia] : '—'}</div></div>
-      </div>
-      <div class="insight-item"><span class="insight-icon" style="background:${COLORS.purple}"><span class="material-icons">category</span></span>
-        <div><div class="insight-label">Top categoría</div><div class="insight-val" title="${escapeHtml(mejorCategoria)}">${escapeHtml(mejorCategoria.length > 18 ? mejorCategoria.slice(0, 17) + '…' : mejorCategoria)}</div></div>
-      </div>
-      <div class="insight-item"><span class="insight-icon" style="background:${COLORS.green}"><span class="material-icons">payments</span></span>
-        <div><div class="insight-label">% con costo conocido</div><div class="insight-val">${pctConCosto.toFixed(0)}%</div></div>
-      </div>
-      <div class="insight-item"><span class="insight-icon" style="background:${COLORS.red}"><span class="material-icons">inventory_2</span></span>
-        <div><div class="insight-label">A reabastecer</div><div class="insight-val">${reabastecer.length}</div></div>
-      </div>
-      <div class="insight-item"><span class="insight-icon" style="background:${COLORS.greenLight}"><span class="material-icons">star</span></span>
-        <div><div class="insight-label">Estrellas activas</div><div class="insight-val">${Math.min(estrellas.length, 99)}</div></div>
-      </div>
-    </div>
+  // Todos los valores se actualizan juntos: shell visible → wait → data aparece
+  // de una con un fade-in sutil. Sin stagger.
+  patchKPIs(container, [
+    ['ventas-hoy',        { value: '$' + fmt(totalHoy),         sub: `${ventasHoy.length} ventas`,                      delta: deltaHoyVsAyer, deltaLabel: 'vs misma hora ayer' }],
+    ['efectivo-hoy',      { value: '$' + fmt(efectivoHoy),      sub: pctTexto(efectivoHoy, totalHoy) + ' del día' }],
+    ['transferencia-hoy', { value: '$' + fmt(transferHoy),      sub: pctTexto(transferHoy, totalHoy) + ' del día' }],
+    ['esta-semana',       { value: '$' + fmt(totalSemana),      sub: `${ventasSemana.length} ventas` }],
+    ['mes-en-curso',      { value: '$' + fmt(totalMes),         sub: `${ventasMes.length} ventas`,                       delta: deltaMes,       deltaLabel: 'vs mes anterior' }],
+    ['forecast-mes',      { value: '$' + fmt(forecastMes),      sub: `proyección día ${diasMesTotal}`,                   delta: deltaForecast,  deltaLabel: 'vs mes ant.' }],
+    ['ticket-promedio',   { value: '$' + fmt(ticketProm),       sub: 'mes en curso',                                     delta: deltaTicket,    deltaLabel: 'vs mes ant.' }],
+    ['ganancia-bruta',    { value: '$' + fmt(gananciaBrutaMes), sub: `${margenPct.toFixed(1)}% margen` }],
+    ['stock-critico',     { value: String(stockCritico),        sub: `${stockAgotado} agotados · ${catalogo.length} prods` }],
+  ], 0, 0);
 
-    <!-- Charts row 1: tendencia y métodos de pago -->
-    <div class="dash-charts dash-charts-2-1">
-      <div class="chart-card">
-        <div class="chart-card-header">
-          <h3>📈 Tendencia · Últimos 30 días</h3>
-          <span class="chart-sub">Ingresos diarios (línea) y nº de transacciones (barras)</span>
-        </div>
-        <div class="chart-canvas-wrap" style="height:300px"><canvas id="chTendencia"></canvas></div>
-      </div>
-      <div class="chart-card">
-        <div class="chart-card-header"><h3>💳 Método de Pago · Mes</h3></div>
-        <div class="chart-canvas-wrap" style="height:300px"><canvas id="chPago"></canvas></div>
-      </div>
-    </div>
+  // Insights aparecen junto con los KPIs (todos a la vez)
+  patchInsights(container, [
+    ['mejor-hora',    { value: mejorHora >= 0 ? formatHora(mejorHora) : '—' }],
+    ['mejor-dia',     { value: mejorDia >= 0 ? diaSemanaLabels[mejorDia] : '—' }],
+    ['top-categoria', {
+       value: escapeHtml(mejorCategoria.length > 18 ? mejorCategoria.slice(0, 17) + '…' : mejorCategoria),
+       isHtml: true,
+       title: mejorCategoria,
+    }],
+    ['pct-costo',     { value: `${pctConCosto.toFixed(0)}%` }],
+    ['reabastecer',   { value: String(reabastecer.length) }],
+    ['estrellas',     { value: String(Math.min(estrellas.length, 99)) }],
+  ], 0, 0);
 
-    <!-- Charts row 2: hora del día + día de la semana -->
-    <div class="dash-charts dash-charts-2">
-      <div class="chart-card">
-        <div class="chart-card-header"><h3>🕐 Ventas por Hora · Mes</h3><span class="chart-sub">Cuándo se vende más</span></div>
-        <div class="chart-canvas-wrap" style="height:260px"><canvas id="chHora"></canvas></div>
-      </div>
-      <div class="chart-card">
-        <div class="chart-card-header"><h3>📅 Por Día de la Semana · Mes</h3></div>
-        <div class="chart-canvas-wrap" style="height:260px"><canvas id="chDia"></canvas></div>
-      </div>
-    </div>
-
-    <!-- Charts row 3: top productos + categorías -->
-    <div class="dash-charts dash-charts-2">
-      <div class="chart-card">
-        <div class="chart-card-header"><h3>🏆 Top 10 Productos por Ingresos · Mes</h3></div>
-        <div class="chart-canvas-wrap" style="height:340px"><canvas id="chTopProd"></canvas></div>
-      </div>
-      <div class="chart-card">
-        <div class="chart-card-header"><h3>📚 Ventas por Categoría · Mes</h3></div>
-        <div class="chart-canvas-wrap" style="height:340px"><canvas id="chCategoria"></canvas></div>
-      </div>
-    </div>
-
-    <!-- Charts row 4: comparativa mes vs mes + top cajeros -->
-    <div class="dash-charts dash-charts-2-1">
-      <div class="chart-card">
-        <div class="chart-card-header"><h3>📊 Mes Actual vs Mes Anterior</h3><span class="chart-sub">Comparación día por día</span></div>
-        <div class="chart-canvas-wrap" style="height:300px"><canvas id="chMesVsMes"></canvas></div>
-      </div>
-      <div class="chart-card">
-        <div class="chart-card-header"><h3>👤 Top Cajeros · Mes</h3></div>
-        <div class="chart-canvas-wrap" style="height:300px"><canvas id="chCajeros"></canvas></div>
-      </div>
-    </div>
-
-    <!-- Charts row 5: ganancia y composición -->
-    <div class="dash-charts dash-charts-2">
-      <div class="chart-card">
-        <div class="chart-card-header"><h3>💰 Ingresos · Costo · Ganancia (mes)</h3></div>
-        <div class="chart-canvas-wrap" style="height:280px"><canvas id="chGanancia"></canvas></div>
-      </div>
-      <div class="chart-card">
-        <div class="chart-card-header"><h3>📦 Stock por Estado</h3></div>
-        <div class="chart-canvas-wrap" style="height:280px"><canvas id="chStock"></canvas></div>
-      </div>
-    </div>
-
-    <!-- Heatmap semanal hora × día -->
+  // 3) Heatmap, cobertura, recomendaciones, últimas ventas — secciones grandes,
+  // cada una llega con su propio delay para que se sienta el orden de carga.
+  patchSection(container, 'heatmap', `
     <div class="chart-card" style="margin-bottom:18px">
       <div class="chart-card-header">
         <h3>🔥 Mapa de Calor · Hora × Día (mes)</h3>
@@ -636,40 +617,29 @@ export async function renderDashboard(container, db) {
       </div>
       ${renderHeatmap(heatmapData, heatmapMax, heatHoraMin, heatHoraMax, diaSemanaLabels)}
     </div>
+  `, 0);
 
-    <!-- Charts row 6: margen por categoría + cobertura de stock -->
-    <div class="dash-charts dash-charts-2">
-      <div class="chart-card">
-        <div class="chart-card-header">
-          <h3>💹 Margen por Categoría · Mes</h3>
-          <span class="chart-sub">% sobre ingresos con costo cargado</span>
-        </div>
-        <div class="chart-canvas-wrap" style="height:340px"><canvas id="chMargenCat"></canvas></div>
+  patchSection(container, 'cobertura', `
+    <div class="chart-card">
+      <div class="chart-card-header">
+        <h3>⏳ Cobertura de Stock · Top 10 más urgentes</h3>
+        <span class="chart-sub">Días que duraría el stock al ritmo actual</span>
       </div>
-      <div class="chart-card">
-        <div class="chart-card-header">
-          <h3>⏳ Cobertura de Stock · Top 10 más urgentes</h3>
-          <span class="chart-sub">Días que duraría el stock al ritmo actual</span>
-        </div>
-        ${renderCobertura(coberturaUrgente)}
-      </div>
+      ${renderCobertura(coberturaUrgente)}
     </div>
+  `, 0);
 
-    <!-- RECOMENDACIONES INTELIGENTES -->
+  patchSection(container, 'reco', `
     <div class="reco-section">
       <h2 class="reco-title">🤖 Recomendaciones Inteligentes</h2>
       <p class="reco-subtitle">Basadas en tus ventas de los últimos 30 días, costos cargados y stock actual.</p>
-
       <div class="reco-grid">
         ${recoBlock({
-          title: 'Reabastecer ya',
-          icon: 'shopping_cart',
-          color: COLORS.red,
+          title: 'Reabastecer ya', icon: 'shopping_cart', color: COLORS.red,
           subtitle: `${reabastecer.length} productos por agotarse`,
           empty: 'Tu stock está saludable, no urge comprar nada.',
           items: reabastecer.slice(0, 8).map(r => ({
-            nombre: r.nombre,
-            rubro: r.rubro,
+            nombre: r.nombre, rubro: r.rubro,
             badge: r.urgencia === 'alta' ? '🔴 URGENTE' : r.urgencia === 'media' ? '🟠 Pronto' : '🟡 Próx.',
             badgeClass: r.urgencia === 'alta' ? 'b-red' : r.urgencia === 'media' ? 'b-orange' : 'b-yellow',
             line1: `Stock: <b>${r.stock}</b> · Vendiste ${r.vendidos30d} (≈ ${r.velocidadDia}/día)`,
@@ -677,16 +647,12 @@ export async function renderDashboard(container, db) {
             ingresos: r.ingreso30d,
           })),
         })}
-
         ${recoBlock({
-          title: 'Productos estrella',
-          icon: 'star',
-          color: COLORS.orange,
-          subtitle: `Top ingresos · cuídalos`,
+          title: 'Productos estrella', icon: 'star', color: COLORS.orange,
+          subtitle: 'Top ingresos · cuídalos',
           empty: 'Aún no hay datos suficientes para detectar estrellas.',
           items: estrellas.slice(0, 8).map(e => ({
-            nombre: e.nombre,
-            rubro: e.rubro,
+            nombre: e.nombre, rubro: e.rubro,
             badge: e.margen !== null ? `${e.margen.toFixed(0)}% margen` : 'sin costo',
             badgeClass: e.margen !== null && e.margen >= 30 ? 'b-green' : 'b-blue',
             line1: `Vendiste <b>${e.vendidos30d}</b> en 30 días · Stock ${e.stock}`,
@@ -696,50 +662,36 @@ export async function renderDashboard(container, db) {
             ingresos: e.ingreso30d,
           })),
         })}
-
         ${recoBlock({
-          title: 'Lentos · capital parado',
-          icon: 'inventory_2',
-          color: COLORS.gray,
+          title: 'Lentos · capital parado', icon: 'inventory_2', color: COLORS.gray,
           subtitle: 'Mucho stock, poca venta',
           empty: 'No tenés productos que estén girando lento.',
           items: lentos.slice(0, 8).map(l => ({
-            nombre: l.nombre,
-            rubro: l.rubro,
-            badge: `Stock ${l.stock}`,
-            badgeClass: 'b-gray',
+            nombre: l.nombre, rubro: l.rubro,
+            badge: `Stock ${l.stock}`, badgeClass: 'b-gray',
             line1: `Vendiste solo <b>${l.vendidos30d}</b> en 30 días`,
             line2: `≈ <b>$${fmt(l.capitalParado)}</b> de capital inmovilizado`,
             ingresos: null,
           })),
         })}
-
         ${recoBlock({
-          title: 'Para promocionar',
-          icon: 'local_offer',
-          color: COLORS.greenLight,
+          title: 'Para promocionar', icon: 'local_offer', color: COLORS.greenLight,
           subtitle: 'Buen margen pero rotación media',
           empty: 'No hay candidatos claros para promociones.',
           items: promocionar.slice(0, 8).map(p => ({
-            nombre: p.nombre,
-            rubro: p.rubro,
-            badge: `${p.margen.toFixed(0)}% margen`,
-            badgeClass: 'b-green',
+            nombre: p.nombre, rubro: p.rubro,
+            badge: `${p.margen.toFixed(0)}% margen`, badgeClass: 'b-green',
             line1: `Stock <b>${p.stock}</b> · Vendiste ${p.vendidos30d}/mes`,
             line2: `Precio $${fmt(p.precio)} · una promo lo movería`,
             ingresos: null,
           })),
         })}
-
         ${recoBlock({
-          title: 'Sin rotación',
-          icon: 'hourglass_empty',
-          color: COLORS.purple,
+          title: 'Sin rotación', icon: 'hourglass_empty', color: COLORS.purple,
           subtitle: 'Stock parado >30 días',
           empty: 'Todo tu stock con stock>0 tuvo movimiento reciente.',
           items: sinRotacion.map(s => ({
-            nombre: s.nombre,
-            rubro: s.rubro,
+            nombre: s.nombre, rubro: s.rubro,
             badge: s.dias >= 999 ? 'Nunca' : `${s.dias}d`,
             badgeClass: s.dias >= 90 || s.dias >= 999 ? 'b-red' : s.dias >= 60 ? 'b-orange' : 'b-yellow',
             line1: `Stock <b>${s.stock}</b> · Última venta ${s.ultima ? s.ultima : '—'}`,
@@ -749,8 +701,10 @@ export async function renderDashboard(container, db) {
         })}
       </div>
     </div>
+  `, 0);
 
-    <!-- Últimas ventas -->
+  const recentVentas = ventas.slice(0, 10);
+  patchSection(container, 'recent', `
     <div class="table-card">
       <div class="table-card-header"><h3>🧾 Últimas Ventas</h3></div>
       <div class="table-wrap">
@@ -759,7 +713,7 @@ export async function renderDashboard(container, db) {
             <th>#</th><th>Fecha</th><th>Hora</th><th>Total</th><th>Tipo Pago</th><th>Cajero</th>
           </tr></thead>
           <tbody>
-            ${ventas.slice(0, 10).map((v, i) => {
+            ${recentVentas.map((v, i) => {
               const dt = parseArDate(v.created_at);
               const esEfectivo = v.payment_type === 'cash';
               const tieneDescuento = (v.discount || 0) > 0;
@@ -776,14 +730,13 @@ export async function renderDashboard(container, db) {
         </table>
       </div>
     </div>
-  `;
-
-  // Click en filas
-  const recentVentas = ventas.slice(0, 10);
-  document.querySelectorAll('#pageContent .clickable-row').forEach(row => {
-    row.addEventListener('click', () => {
-      const idx = parseInt(row.dataset.idx);
-      openSaleModal(recentVentas[idx], db);
+  `, 0, (newEl) => {
+    // Click handlers se atan cuando la tabla está montada
+    newEl.querySelectorAll('.clickable-row').forEach(row => {
+      row.addEventListener('click', () => {
+        const idx = parseInt(row.dataset.idx);
+        openSaleModal(recentVentas[idx], db);
+      });
     });
   });
 
@@ -844,7 +797,7 @@ export async function renderDashboard(container, db) {
           position: 'left',
           beginAtZero: true,
           ticks: { callback: v => '$' + abbr(v) },
-          grid: { color: 'rgba(0,0,0,0.05)' },
+          grid: { color: cssVar('--chart-grid', 'rgba(0,0,0,0.05)') },
         },
         y1: {
           position: 'right',
@@ -865,7 +818,7 @@ export async function renderDashboard(container, db) {
       datasets: [{
         data: [Math.round(efMes), Math.round(trMes)],
         backgroundColor: [COLORS.green, COLORS.primary],
-        borderColor: '#fff',
+        borderColor: cssVar('--chart-arc-border', '#fff'),
         borderWidth: 3,
       }],
     },
@@ -895,7 +848,7 @@ export async function renderDashboard(container, db) {
       ...commonOpts(),
       scales: {
         x: { grid: { display: false }, ticks: { autoSkip: false, maxRotation: 0, font: { size: 9 } } },
-        y: { beginAtZero: true, ticks: { callback: v => '$' + abbr(v) }, grid: { color: 'rgba(0,0,0,0.05)' } },
+        y: { beginAtZero: true, ticks: { callback: v => '$' + abbr(v) }, grid: { color: cssVar('--chart-grid', 'rgba(0,0,0,0.05)') } },
       },
       plugins: { ...commonPlugins(), legend: { display: false }, tooltip: tooltipMoney(['Ingresos']) },
     },
@@ -917,7 +870,7 @@ export async function renderDashboard(container, db) {
       ...commonOpts(),
       scales: {
         x: { grid: { display: false } },
-        y: { beginAtZero: true, ticks: { callback: v => '$' + abbr(v) }, grid: { color: 'rgba(0,0,0,0.05)' } },
+        y: { beginAtZero: true, ticks: { callback: v => '$' + abbr(v) }, grid: { color: cssVar('--chart-grid', 'rgba(0,0,0,0.05)') } },
       },
       plugins: { ...commonPlugins(), legend: { display: false }, tooltip: tooltipMoney(['Ingresos']) },
     },
@@ -939,7 +892,7 @@ export async function renderDashboard(container, db) {
       ...commonOpts(),
       indexAxis: 'y',
       scales: {
-        x: { beginAtZero: true, ticks: { callback: v => '$' + abbr(v) }, grid: { color: 'rgba(0,0,0,0.05)' } },
+        x: { beginAtZero: true, ticks: { callback: v => '$' + abbr(v) }, grid: { color: cssVar('--chart-grid', 'rgba(0,0,0,0.05)') } },
         y: { grid: { display: false } },
       },
       plugins: {
@@ -960,7 +913,7 @@ export async function renderDashboard(container, db) {
       datasets: [{
         data: categoriasOrden.map(([_, v]) => Math.round(v.ingreso)),
         backgroundColor: categoriasOrden.map((_, i) => PALETTE[i % PALETTE.length]),
-        borderColor: '#fff', borderWidth: 2,
+        borderColor: cssVar('--chart-arc-border', '#fff'), borderWidth: 2,
       }],
     },
     options: {
@@ -1009,8 +962,8 @@ export async function renderDashboard(container, db) {
     options: {
       ...commonOpts(),
       scales: {
-        x: { grid: { display: false }, title: { display: true, text: 'Día del mes', color: '#999', font: { size: 10 } } },
-        y: { beginAtZero: true, ticks: { callback: v => '$' + abbr(v) }, grid: { color: 'rgba(0,0,0,0.05)' } },
+        x: { grid: { display: false }, title: { display: true, text: 'Día del mes', color: cssVar('--chart-text', '#999'), font: { size: 10 } } },
+        y: { beginAtZero: true, ticks: { callback: v => '$' + abbr(v) }, grid: { color: cssVar('--chart-grid', 'rgba(0,0,0,0.05)') } },
       },
       plugins: { ...commonPlugins(), tooltip: tooltipMoney(['Mes anterior', 'Mes actual']) },
     },
@@ -1032,7 +985,7 @@ export async function renderDashboard(container, db) {
       ...commonOpts(),
       indexAxis: 'y',
       scales: {
-        x: { beginAtZero: true, ticks: { callback: v => '$' + abbr(v) }, grid: { color: 'rgba(0,0,0,0.05)' } },
+        x: { beginAtZero: true, ticks: { callback: v => '$' + abbr(v) }, grid: { color: cssVar('--chart-grid', 'rgba(0,0,0,0.05)') } },
         y: { grid: { display: false } },
       },
       plugins: {
@@ -1061,7 +1014,7 @@ export async function renderDashboard(container, db) {
       ...commonOpts(),
       scales: {
         x: { grid: { display: false } },
-        y: { beginAtZero: true, ticks: { callback: v => '$' + abbr(v) }, grid: { color: 'rgba(0,0,0,0.05)' } },
+        y: { beginAtZero: true, ticks: { callback: v => '$' + abbr(v) }, grid: { color: cssVar('--chart-grid', 'rgba(0,0,0,0.05)') } },
       },
       plugins: { ...commonPlugins(), legend: { display: false }, tooltip: tooltipMoney(['$']) },
     },
@@ -1089,7 +1042,7 @@ export async function renderDashboard(container, db) {
         ...commonOpts(),
         indexAxis: 'y',
         scales: {
-          x: { beginAtZero: true, ticks: { callback: v => v + '%' }, grid: { color: 'rgba(0,0,0,0.05)' } },
+          x: { beginAtZero: true, ticks: { callback: v => v + '%' }, grid: { color: cssVar('--chart-grid', 'rgba(0,0,0,0.05)') } },
           y: { grid: { display: false } },
         },
         plugins: {
@@ -1109,7 +1062,7 @@ export async function renderDashboard(container, db) {
       datasets: [{
         data: [stockOk, stockCritico, stockAgotado],
         backgroundColor: [COLORS.green, COLORS.orange, COLORS.red],
-        borderColor: '#fff', borderWidth: 3,
+        borderColor: cssVar('--chart-arc-border', '#fff'), borderWidth: 3,
       }],
     },
     options: {
@@ -1138,13 +1091,17 @@ export async function renderDashboard(container, db) {
 function renderHeatmap(data, max, hMin, hMax, diaLabels) {
   const horas = [];
   for (let h = hMin; h <= hMax; h++) horas.push(h);
+  const dark = getTheme() === 'dark';
+  // Gradiente theme-aware: claro = lila→primary; oscuro = surface→violeta brillante.
+  const c0 = dark ? [38, 43, 52] : [243, 232, 247];
+  const c1 = dark ? [139, 92, 246] : [123, 63, 166];
+  const empty = dark ? '#20242c' : '#f3f4f6';
   const cellColor = (val) => {
-    if (val <= 0) return '#f3f4f6';
+    if (val <= 0) return empty;
     const t = Math.min(1, val / max);
-    // gradiente entre lila claro y primary
-    const r = Math.round(243 + (123 - 243) * t);
-    const g = Math.round(232 + (63 - 232) * t);
-    const b = Math.round(247 + (166 - 247) * t);
+    const r = Math.round(c0[0] + (c1[0] - c0[0]) * t);
+    const g = Math.round(c0[1] + (c1[1] - c0[1]) * t);
+    const b = Math.round(c0[2] + (c1[2] - c0[2]) * t);
     return `rgb(${r},${g},${b})`;
   };
   let html = `<div class="heatmap-wrap"><div class="heatmap-grid" style="grid-template-columns: 50px repeat(${horas.length}, minmax(20px, 1fr));">`;
@@ -1251,6 +1208,9 @@ function recoBlock({ title, icon, color, subtitle, empty, items }) {
 function mkChart(canvasId, config) {
   const el = document.getElementById(canvasId);
   if (!el || !window.Chart) return null;
+  // Texto de ejes/leyenda adaptado al tema (Chart hornea color en el canvas).
+  window.Chart.defaults.color = cssVar('--chart-text', '#65676b');
+  window.Chart.defaults.borderColor = cssVar('--chart-grid', 'rgba(0,0,0,0.05)');
   const ch = new window.Chart(el.getContext('2d'), config);
   _chartRefs.set(canvasId, ch);
   // Forzar re-medición tras el layout del browser:
@@ -1268,14 +1228,14 @@ function commonPlugins() {
   return {
     legend: { position: 'top', align: 'end', labels: { padding: 10, boxWidth: 12, font: { size: 11 } } },
     tooltip: {
-      backgroundColor: 'rgba(28,30,33,0.95)', titleColor: '#fff', bodyColor: '#fff',
+      backgroundColor: cssVar('--chart-tooltip-bg', 'rgba(28,30,33,0.95)'), titleColor: cssVar('--chart-tooltip-fg', '#fff'), bodyColor: cssVar('--chart-tooltip-fg', '#fff'),
       titleFont: { weight: '600' }, padding: 10, cornerRadius: 8, displayColors: true, boxPadding: 4,
     },
   };
 }
 function tooltipMoney(labels) {
   return {
-    backgroundColor: 'rgba(28,30,33,0.95)', titleColor: '#fff', bodyColor: '#fff',
+    backgroundColor: cssVar('--chart-tooltip-bg', 'rgba(28,30,33,0.95)'), titleColor: cssVar('--chart-tooltip-fg', '#fff'), bodyColor: cssVar('--chart-tooltip-fg', '#fff'),
     padding: 10, cornerRadius: 8,
     callbacks: { label: ctx => `${ctx.dataset.label || ''}: ${labels.includes(ctx.dataset.label) ? '$' + fmt(ctx.parsed.y ?? ctx.parsed.x ?? ctx.parsed) : ctx.parsed.y ?? ctx.parsed}` },
   };
@@ -1323,4 +1283,205 @@ function totalDiasDesde(desde, hasta) {
 }
 function lastDayOfMonth(d) {
   return new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// PATCH PROGRESIVO:
+//   - KPIs e insights: actualizamos los valores DENTRO de la card existente
+//     (no la reemplazamos). El usuario ve la card en su lugar y el "—" se
+//     transforma en el dato real con una animación sutil.
+//   - Secciones grandes (heatmap, cobertura, reco, recent): reemplazamos el
+//     placeholder por la sección final con fade-in.
+// ──────────────────────────────────────────────────────────────────────────────
+function _firstElement(html) {
+  const tpl = document.createElement('template');
+  tpl.innerHTML = html.trim();
+  return tpl.content.firstElementChild;
+}
+
+/** Anima el reemplazo de contenido en un elemento (texto u HTML) con un
+ *  fade-in suave. Limpia color placeholder. */
+function _setValue(el, content, isHtml = false) {
+  if (!el) return;
+  el.style.color = '';
+  if (isHtml) el.innerHTML = content;
+  else el.textContent = content;
+  el.classList.remove('val-fill');
+  // forzar reflow para reiniciar la animación
+  void el.offsetWidth;
+  el.classList.add('val-fill');
+}
+
+/** Patch KPI in-place: actualiza valor, subtítulo y delta dentro de la card
+ *  que ya está en el DOM (data-kpi-id).
+ * @param {HTMLElement} container
+ * @param {Array<[string, {value, sub, delta, deltaLabel}]>} pairs
+ * @param {number} startMs
+ * @param {number} stepMs
+ */
+function patchKPIs(container, pairs, startMs = 0, stepMs = 100) {
+  pairs.forEach(([id, data], i) => {
+    setTimeout(() => {
+      const card = container.querySelector(`[data-kpi-id="${id}"]`);
+      if (!card || !card.parentNode) return;
+      _setValue(card.querySelector('.kpi-value'), data.value);
+      _setValue(card.querySelector('.kpi-sub'),   data.sub || '');
+      // Delta: agregar si tiene valor numérico, sacar si no
+      let deltaEl = card.querySelector('.kpi-delta');
+      if (typeof data.delta === 'number' && isFinite(data.delta)) {
+        if (!deltaEl) {
+          deltaEl = document.createElement('div');
+          card.querySelector('.kpi-body').appendChild(deltaEl);
+        }
+        const pos = data.delta >= 0;
+        deltaEl.className = `kpi-delta ${pos ? 'kpi-delta-up' : 'kpi-delta-down'}`;
+        _setValue(deltaEl, `${pos ? '▲' : '▼'} ${Math.abs(data.delta).toFixed(1)}% <span style="opacity:.7">${data.deltaLabel || ''}</span>`, true);
+      } else if (deltaEl) {
+        deltaEl.remove();
+      }
+    }, startMs + i * stepMs);
+  });
+}
+
+/** Patch insight in-place: actualiza el .insight-val dentro del item. */
+function patchInsights(container, pairs, startMs = 0, stepMs = 80) {
+  pairs.forEach(([id, data], i) => {
+    setTimeout(() => {
+      const item = container.querySelector(`[data-insight-id="${id}"]`);
+      if (!item || !item.parentNode) return;
+      const valEl = item.querySelector('.insight-val');
+      if (valEl) {
+        if (data.title) valEl.setAttribute('title', data.title);
+        _setValue(valEl, data.value, data.isHtml);
+      }
+    }, startMs + i * stepMs);
+  });
+}
+
+/** Reemplaza una sección grande del shell (heatmap, cobertura, reco, recent)
+ *  con su contenido final. Usa animación fade-in (.dash-filled). */
+function patchSection(container, name, html, delayMs, onMounted) {
+  setTimeout(() => {
+    const old = container.querySelector(`[data-shell="${name}"]`);
+    if (!old || !old.parentNode) return;
+    const newEl = _firstElement(html);
+    if (!newEl) return;
+    newEl.setAttribute('data-shell', name);
+    newEl.classList.add('dash-filled');
+    old.replaceWith(newEl);
+    if (onMounted) try { onMounted(newEl); } catch (_) {}
+  }, delayMs);
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// SHELL VACÍO: paint sincrónico al toque, antes de awaitear datos.
+// Devuelve la misma estructura que el render final pero con valores en "—"
+// y canvases vacíos. Cuando renderDashboard termina, sobrescribe con los
+// valores reales — la estructura ya está visible para el usuario.
+// ──────────────────────────────────────────────────────────────────────────────
+function kpiCardShell(id, label, icon, themeClass) {
+  return `
+    <div class="kpi-card ${themeClass || ''}" data-kpi-id="${id}">
+      <div class="kpi-icon"><span class="material-icons">${icon}</span></div>
+      <div class="kpi-body">
+        <div class="kpi-label">${label}</div>
+        <div class="kpi-value" style="color:var(--text-muted)">—</div>
+        <div class="kpi-sub" style="color:var(--text-muted)">&nbsp;</div>
+      </div>
+    </div>`;
+}
+function insightShell(id, icon, color, label) {
+  return `
+    <div class="insight-item" data-insight-id="${id}">
+      <span class="insight-icon" style="background:${color}"><span class="material-icons">${icon}</span></span>
+      <div><div class="insight-label">${label}</div><div class="insight-val" style="color:var(--text-muted)">—</div></div>
+    </div>`;
+}
+function chartCardShell(title, sub, canvasId, height) {
+  return `
+    <div class="chart-card">
+      <div class="chart-card-header">
+        <h3>${title}</h3>
+        ${sub ? `<span class="chart-sub">${sub}</span>` : ''}
+      </div>
+      <div class="chart-canvas-wrap" style="height:${height}px"><canvas id="${canvasId}"></canvas></div>
+    </div>`;
+}
+
+function renderDashboardShell() {
+  return `
+    <div class="dash-kpis">
+      ${kpiCardShell('ventas-hoy',       'Ventas Hoy',         'today',           'kpi-blue')}
+      ${kpiCardShell('efectivo-hoy',     'Efectivo Hoy',       'payments',        'kpi-green')}
+      ${kpiCardShell('transferencia-hoy','Transferencia Hoy',  'swap_horiz',      'kpi-purple')}
+      ${kpiCardShell('esta-semana',      'Esta Semana',        'date_range',      'kpi-cyan')}
+      ${kpiCardShell('mes-en-curso',     'Mes en Curso',       'calendar_month',  'kpi-orange')}
+      ${kpiCardShell('forecast-mes',     'Forecast Mes',       'insights',        'kpi-purple')}
+      ${kpiCardShell('ticket-promedio',  'Ticket Promedio',    'receipt_long',    'kpi-teal')}
+      ${kpiCardShell('ganancia-bruta',   'Ganancia Bruta',     'trending_up',     'kpi-success')}
+      ${kpiCardShell('stock-critico',    'Stock Crítico',      'warning',         'kpi-red')}
+    </div>
+
+    <div class="insight-bar">
+      ${insightShell('mejor-hora',     'schedule',    '#29abca', 'Mejor hora')}
+      ${insightShell('mejor-dia',      'event',       '#f39c12', 'Mejor día')}
+      ${insightShell('top-categoria',  'category',    '#6a1b9a', 'Top categoría')}
+      ${insightShell('pct-costo',      'payments',    '#2e7d32', '% con costo conocido')}
+      ${insightShell('reabastecer',    'inventory_2', '#e63946', 'A reabastecer')}
+      ${insightShell('estrellas',      'star',        '#8ec63f', 'Estrellas activas')}
+    </div>
+
+    <div class="dash-charts dash-charts-2-1">
+      ${chartCardShell('📈 Tendencia · Últimos 30 días', 'Ingresos diarios (línea) y nº de transacciones (barras)', 'chTendencia', 300)}
+      ${chartCardShell('💳 Método de Pago · Mes', '', 'chPago', 300)}
+    </div>
+    <div class="dash-charts dash-charts-2">
+      ${chartCardShell('🕐 Ventas por Hora · Mes', 'Cuándo se vende más', 'chHora', 260)}
+      ${chartCardShell('📅 Por Día de la Semana · Mes', '', 'chDia', 260)}
+    </div>
+    <div class="dash-charts dash-charts-2">
+      ${chartCardShell('🏆 Top 10 Productos por Ingresos · Mes', '', 'chTopProd', 340)}
+      ${chartCardShell('📚 Ventas por Categoría · Mes', '', 'chCategoria', 340)}
+    </div>
+    <div class="dash-charts dash-charts-2-1">
+      ${chartCardShell('📊 Mes Actual vs Mes Anterior', 'Comparación día por día', 'chMesVsMes', 300)}
+      ${chartCardShell('👤 Top Cajeros · Mes', '', 'chCajeros', 300)}
+    </div>
+    <div class="dash-charts dash-charts-2">
+      ${chartCardShell('💰 Ingresos · Costo · Ganancia (mes)', '', 'chGanancia', 280)}
+      ${chartCardShell('📦 Stock por Estado', '', 'chStock', 280)}
+    </div>
+
+    <div class="chart-card" style="margin-bottom:18px" data-shell="heatmap">
+      <div class="chart-card-header">
+        <h3>🔥 Mapa de Calor · Hora × Día (mes)</h3>
+        <span class="chart-sub">Cuándo se concentra la actividad</span>
+      </div>
+      <div style="padding:24px"><div class="skel" style="height:240px;border-radius:8px"></div></div>
+    </div>
+
+    <div class="dash-charts dash-charts-2">
+      ${chartCardShell('💹 Margen por Categoría · Mes', '% sobre ingresos con costo cargado', 'chMargenCat', 340)}
+      <div class="chart-card" data-shell="cobertura">
+        <div class="chart-card-header">
+          <h3>⏳ Cobertura de Stock · Top 10 más urgentes</h3>
+          <span class="chart-sub">Días que duraría el stock al ritmo actual</span>
+        </div>
+        <div style="padding:24px"><div class="skel" style="height:260px;border-radius:8px"></div></div>
+      </div>
+    </div>
+
+    <div class="reco-section" data-shell="reco">
+      <h2 class="reco-title">🤖 Recomendaciones Inteligentes</h2>
+      <p class="reco-subtitle">Basadas en tus ventas de los últimos 30 días, costos cargados y stock actual.</p>
+      <div class="reco-grid">
+        <div class="skel-card-wrap"><div class="skel skel-line lg" style="width:60%"></div><div class="skel skel-line sm" style="width:40%;margin-top:6px"></div><div class="skel" style="height:140px;margin-top:14px;border-radius:8px"></div></div>
+        <div class="skel-card-wrap"><div class="skel skel-line lg" style="width:60%"></div><div class="skel skel-line sm" style="width:40%;margin-top:6px"></div><div class="skel" style="height:140px;margin-top:14px;border-radius:8px"></div></div>
+        <div class="skel-card-wrap"><div class="skel skel-line lg" style="width:60%"></div><div class="skel skel-line sm" style="width:40%;margin-top:6px"></div><div class="skel" style="height:140px;margin-top:14px;border-radius:8px"></div></div>
+        <div class="skel-card-wrap"><div class="skel skel-line lg" style="width:60%"></div><div class="skel skel-line sm" style="width:40%;margin-top:6px"></div><div class="skel" style="height:140px;margin-top:14px;border-radius:8px"></div></div>
+      </div>
+    </div>
+
+    <div data-shell="recent"></div>
+  `;
 }

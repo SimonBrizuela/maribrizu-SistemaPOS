@@ -8,6 +8,7 @@
 
 import { collection, addDoc, getDocs, query, orderBy, limit } from 'firebase/firestore';
 import { getCached, invalidateCache } from '../cache.js';
+import { alertDialog } from '../components/dialogs.js';
 
 async function loadCatalogo(db) {
   return getCached('catalogo:all', async () => {
@@ -50,6 +51,23 @@ async function loadEmisorConfig(db) {
 
 // ── Render principal ──────────────────────────────────────────────────────────
 export async function renderFacturas(container, db) {
+  // Shell vacío al toque: tabs + formulario con skeleton.
+  container.innerHTML = `
+    <div style="display:flex;gap:6px;margin-bottom:14px;border-bottom:2px solid var(--border);padding-bottom:0">
+      <button class="skel" style="height:38px;width:140px;border-radius:8px 8px 0 0" disabled></button>
+      <button class="skel" style="height:38px;width:120px;border-radius:8px 8px 0 0" disabled></button>
+      <button class="skel" style="height:38px;width:110px;border-radius:8px 8px 0 0" disabled></button>
+      <button class="skel" style="height:38px;width:120px;border-radius:8px 8px 0 0" disabled></button>
+    </div>
+    <div class="skel-stats" style="grid-template-columns:repeat(auto-fill,minmax(180px,1fr))">
+      ${Array(4).fill('<div class="skel skel-card"></div>').join('')}
+    </div>
+    <div class="skel-card-wrap">
+      <div class="skel skel-line lg" style="width:240px;margin-bottom:14px"></div>
+      ${Array(6).fill('<div class="skel skel-row"></div>').join('')}
+    </div>
+  `;
+
   const emisor = await loadEmisorConfig(db);
 
   container.innerHTML = `
@@ -81,10 +99,10 @@ export async function renderFacturas(container, db) {
         <div class="fact-resumen-header">
           <div class="fact-section-title" style="margin:0">Resumen de facturación</div>
           <div style="display:flex;gap:8px;align-items:center;">
-            <label style="font-size:13px;color:#6c757d;">Desde</label>
-            <input type="date" id="resumenDesde" style="padding:4px 8px;border:1px solid #dee2e6;border-radius:6px;font-size:13px;" />
-            <label style="font-size:13px;color:#6c757d;">Hasta</label>
-            <input type="date" id="resumenHasta" style="padding:4px 8px;border:1px solid #dee2e6;border-radius:6px;font-size:13px;" />
+            <label style="font-size:13px;color:var(--text-muted);">Desde</label>
+            <input type="date" id="resumenDesde" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;" />
+            <label style="font-size:13px;color:var(--text-muted);">Hasta</label>
+            <input type="date" id="resumenHasta" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;font-size:13px;" />
             <button id="resumenBuscar" style="padding:5px 14px;background:#0d6efd;color:white;border:none;border-radius:6px;font-size:13px;cursor:pointer;">Actualizar</button>
           </div>
         </div>
@@ -825,7 +843,7 @@ function buildConfigForm(emisor) {
         </div>
       `).join('')}
       <div class="fact-row">
-        <label style="color:#dc3545;font-weight:600">Las credenciales AFIP (certificado y clave) se configuran
+        <label style="color:var(--tint-red-fg);font-weight:600">Las credenciales AFIP (certificado y clave) se configuran
         como variables de entorno en el panel de Netlify — nunca se guardan aquí.</label>
       </div>
       <button class="fact-btn-afip" id="btnSaveConfig">
@@ -833,9 +851,9 @@ function buildConfigForm(emisor) {
       </button>
       <div id="cfgStatus" class="fact-status hidden"></div>
     </div>
-    <div class="fact-card" style="background:#fff8e1;border-color:#ffe082">
-      <div class="fact-card-title" style="color:#b45309">Variables de entorno Netlify (configurar en el panel)</div>
-      <ul style="font-size:13px;line-height:2;margin:0;padding-left:18px;color:#555">
+    <div class="fact-card" style="background:var(--tint-yellow-bg);border-color:var(--border)">
+      <div class="fact-card-title" style="color:var(--tint-orange-fg)">Variables de entorno Netlify (configurar en el panel)</div>
+      <ul style="font-size:13px;line-height:2;margin:0;padding-left:18px;color:var(--text-muted)">
         <li><b>AFIP_CUIT</b> — CUIT del emisor sin guiones</li>
         <li><b>AFIP_CERT_PEM</b> — Contenido del .crt (reemplazar saltos de línea por \\n)</li>
         <li><b>AFIP_KEY_PEM</b> — Contenido del .key (reemplazar saltos de línea por \\n)</li>
@@ -925,8 +943,8 @@ function printFactura(data) {
   <title>${nomComp} ${ptoStr}-${nroStr}</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; font-family: Arial, sans-serif; font-size: 11px; }
-    body { background: #f0f0f0; }
-    .page { width: 210mm; min-height: 297mm; background: white; margin: 0 auto;
+    body { background:var(--surface-2); }
+    .page { width: 210mm; min-height: 297mm; background:var(--surface); margin: 0 auto;
             padding: 12mm 12mm 20mm; position: relative; }
     /* Header 3 col */
     .hdr { display: grid; grid-template-columns: 1fr 32mm 1fr;
@@ -949,16 +967,16 @@ function printFactura(data) {
     /* Receptor */
     .receptor { border: 1px solid #000; border-top: none; }
     .rec-row { display: grid; grid-template-columns: 1fr 1fr; padding: 4px 8px;
-               border-bottom: 0.5px solid #ccc; }
+               border-bottom: 0.5px solid var(--border); }
     .rec-row:last-child { border-bottom: none; }
     /* Forma de pago */
     .pago-bar { border: 0.5px solid #000; border-top: none;
-                padding: 3px 8px; background: #fafafa; }
+                padding: 3px 8px; background:var(--surface-2); }
     /* Items */
     .items-tbl { width: 100%; border-collapse: collapse; margin-top: 8px; }
-    .items-tbl th { background: #f0f0f0; border-top: 1px solid #000; border-bottom: 1px solid #000;
+    .items-tbl th { background:var(--surface-2); border-top: 1px solid #000; border-bottom: 1px solid #000;
                     padding: 4px 6px; text-align: center; font-size: 8px; }
-    .items-tbl td { padding: 3px 6px; border-bottom: 0.3px solid #ddd; font-size: 8.5px; }
+    .items-tbl td { padding: 3px 6px; border-bottom: 0.3px solid var(--border); font-size: 8.5px; }
     .items-tbl td.right { text-align: right; }
     .items-tbl td.center { text-align: center; }
     /* Totales */
@@ -966,21 +984,21 @@ function printFactura(data) {
     .total-box { border: 1px solid #000; padding: 6px 12px; display: flex;
                  gap: 20px; align-items: center; font-size: 12px; font-weight: bold; }
     /* Transparencia */
-    .transp { border: 0.5px solid #aaa; background: #fafafa; padding: 4px 8px;
+    .transp { border: 0.5px solid #aaa; background:var(--surface-2); padding: 4px 8px;
               margin-top: 6px; font-size: 7.5px; }
     /* Footer */
     .footer { display: grid; grid-template-columns: 24mm 36mm 1fr;
               border: 1px solid #000; margin-top: 10px; }
     .footer-col { padding: 6px 8px; }
-    .footer-sep { border-left: 0.5px solid #ccc; border-right: 0.5px solid #ccc; }
+    .footer-sep { border-left: 0.5px solid var(--border); border-right: 0.5px solid var(--border); }
     .afip-logo { font-size: 18px; font-weight: bold; color: #1a3a6b; text-align: center; }
-    .afip-auth { font-size: 7px; text-align: center; color: #333; margin-top: 2px; }
+    .afip-auth { font-size: 7px; text-align: center; color:var(--text-strong); margin-top: 2px; }
     .cae-num { font-weight: bold; font-size: 9px; margin-bottom: 3px; }
     .cae-vto { font-size: 8px; margin-bottom: 6px; }
-    .cae-disc { font-size: 6.5px; color: #555; line-height: 1.4; }
-    .no-cae { color: #999; font-style: italic; font-size: 9px; }
+    .cae-disc { font-size: 6.5px; color:var(--text-muted); line-height: 1.4; }
+    .no-cae { color:var(--text-muted); font-style: italic; font-size: 9px; }
     @media print {
-      body { background: white; }
+      body { background:var(--surface); }
       .page { padding: 8mm 8mm 12mm; box-shadow: none; }
       .no-print { display: none; }
     }
@@ -1120,7 +1138,7 @@ function printFactura(data) {
 
   const win = window.open('', '_blank');
   if (!win) {
-    alert('Bloqueaste las ventanas emergentes. Habilitala para este sitio para imprimir.');
+    alertDialog({ title: 'Popups bloqueados', message: 'Bloqueaste las ventanas emergentes. Habilitalas para este sitio para imprimir.', type: 'warning' });
     return;
   }
   win.document.write(html);
@@ -1206,7 +1224,7 @@ async function loadResumen(db, container) {
     });
 
     if (!filtered.length) {
-      el.innerHTML = `<div style="padding:32px;text-align:center;color:#6c757d;">
+      el.innerHTML = `<div style="padding:32px;text-align:center;color:var(--text-muted);">
         No hay facturas en el período seleccionado.
       </div>`;
       // Bind botón de nuevo
@@ -1274,12 +1292,12 @@ async function loadResumen(db, container) {
     el.innerHTML = `
       <div class="res-summary-bar">
         <span>Total periodo: <strong>${fmt(totalGeneral)}</strong></span>
-        <span style="color:#6c757d;font-size:12px;">${filtered.length} comprobante${filtered.length !== 1 ? 's' : ''} · ${desde === hasta ? desde : desde + ' → ' + hasta}</span>
+        <span style="color:var(--text-muted);font-size:12px;">${filtered.length} comprobante${filtered.length !== 1 ? 's' : ''} · ${desde === hasta ? desde : desde + ' → ' + hasta}</span>
       </div>
       <div class="res-cards">${cards}</div>
     `;
   } catch (e) {
-    el.innerHTML = `<div style="padding:20px;color:#dc3545;">Error cargando datos: ${e.message}</div>`;
+    el.innerHTML = `<div style="padding:20px;color:var(--tint-red-fg);">Error cargando datos: ${e.message}</div>`;
   }
 
   // Bind botón actualizar

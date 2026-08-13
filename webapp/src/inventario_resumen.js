@@ -48,6 +48,31 @@ function _fechaDMY(str) {
 }
 
 /**
+ * Convierte el resumen al shape que se guarda en Firestore.
+ *
+ * `por_producto` y `por_dia` van SERIALIZADOS como string, no como mapas.
+ * Firestore indexa automáticamente cada subcampo de un mapa y tiene un tope de
+ * 40.000 entradas de índice por documento: con ~5.000 productos × 3 métricas
+ * (u7/u30/u90) daban 39.830 entradas y el `setDoc` empezó a fallar con
+ * "too many index entries". El resumen quedó congelado desde el 14/07/2026 sin
+ * que nadie se enterara, salvo por un warning en consola.
+ *
+ * Serializados son UN campo cada uno (2 entradas de índice en total) y el doc
+ * pesa ~360 KB, muy por debajo del límite de 1 MiB. El store los deserializa al
+ * leer (ver la spec de `inventario_resumen` en store.js), así que las páginas
+ * los siguen usando como `resumen.por_producto` sin cambios.
+ */
+export function aPayloadFirestore(resumen) {
+  return {
+    ventana_dias:      resumen.ventana_dias,
+    totales:           resumen.totales,
+    por_producto_json: JSON.stringify(resumen.por_producto || {}),
+    por_dia_json:      JSON.stringify(resumen.por_dia || {}),
+    generado_at:       serverTimestamp(),
+  };
+}
+
+/**
  * ¿El resumen está ausente o vencido? Usado para decidir si vale la pena
  * regenerarlo. Tolerante: si no hay generado_at, se considera vencido.
  */
@@ -143,8 +168,8 @@ export async function recomputarResumenInventario(db, { force = false } = {}) {
     if ((!docs || !docs.length) && actual && actual.por_producto) return actual;
 
     const computed = computarResumen(docs);
-    const payload = { ...computed, generado_at: serverTimestamp() };
-    await setDoc(doc(db, 'inventario_resumen', 'current'), payload, { merge: false });
+    await setDoc(doc(db, 'inventario_resumen', 'current'),
+                 aPayloadFirestore(computed), { merge: false });
     _ultimoRecompute = Date.now();
     // El listener del store repoblará `inv:resumen` con el doc escrito (incluye
     // el serverTimestamp resuelto). Devolvemos una copia con timestamp local

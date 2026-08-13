@@ -214,9 +214,13 @@ function packSizeDe(p, variedad) {
 
 // ── Stock real (réplica de la convención de notifications.js) ─────────────────
 // Total en unidades sueltas de una variedad: packs × contenido + restante suelto.
+// Sin contenido propio ni global, un pack vale 1 unidad (nunca 0: con 0 los
+// packs enteros desaparecían del total).
 function stockVariedadUnits(c, globalCont) {
   const u = Number(c.unidades) || 0, r = Number(c.restante) || 0;
-  const cc = (Number(c.contenido) > 0) ? Number(c.contenido) : Number(globalCont) || 0;
+  const propio = Number(c.contenido) || 0;
+  const gl = Number(globalCont) || 0;
+  const cc = propio > 0 ? propio : (gl > 0 ? gl : 1);
   return u * cc + r;
 }
 // Etiqueta del envase de un conjunto (rollo/pack/caja/...), en singular o plural.
@@ -284,8 +288,10 @@ function buildRows(alertas, comprasCfg) {
       let packsRango = Number(a.sugerencia) || 0;
       if (!(packsRango > 0)) {
         const min = Number(a.stock_min) || 0;
+        // `a.stock` viene en packs equivalentes y puede ser fraccionario
+        // (0,9 packs = 90 de 100) → se pide el envase entero.
         const stk = Math.max(0, Number(a.stock) || 0);
-        packsRango = Math.max(0, Math.max(min * 2, min + 1) - stk);
+        packsRango = Math.ceil(Math.max(0, Math.max(min * 2, min + 1) - stk));
       }
       let packsRitmo = 0;
       if (velDia > 0 && packSize > 0) {

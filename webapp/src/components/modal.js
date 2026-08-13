@@ -142,51 +142,51 @@ export async function openSaleModal(venta, db) {
       const nombreItem = item.producto || item.product_name || '-';
       const categoriaItem = item.categoria || item.category || (esVarios ? 'Varios' : 'Sin categoría');
       return `
-        <div style="margin-bottom:12px;border:1px solid ${esVarios ? '#a78bfa' : (tieneDesc ? '#fed7aa' : '#e2e8f0')};border-radius:10px;overflow:hidden;background:${esVarios ? '#faf5ff' : (tieneDesc ? '#fffbf5' : 'white')}">
+        <div style="margin-bottom:12px;border:1px solid ${esVarios ? 'var(--tint-purple-fg)' : (tieneDesc ? 'var(--tint-orange-fg)' : 'var(--border)')};border-radius:10px;overflow:hidden;background:${esVarios ? 'var(--tint-purple-bg)' : (tieneDesc ? 'var(--tint-yellow-bg)' : 'var(--surface)')}">
           <!-- Encabezado del item -->
           <div style="padding:12px 14px;display:flex;justify-content:space-between;align-items:flex-start">
             <div>
-              <div style="font-weight:700;color:#1e293b;font-size:14px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
+              <div style="font-weight:700;color:var(--text-strong);font-size:14px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
                 ${esVarios ? `<span style="background:#7c3aed;color:#fff;font-size:9px;font-weight:800;padding:2px 7px;border-radius:5px;letter-spacing:.5px">VARIOS</span>` : ''}
                 <span>${nombreItem}</span>
               </div>
               <div style="margin-top:4px;display:flex;align-items:center;gap:6px;flex-wrap:wrap">
-                <span class="badge ${esVarios ? '' : 'badge-gray'}" style="font-size:11px;${esVarios ? 'background:#ede9fe;color:#6d28d9' : ''}">${categoriaItem}</span>
-                <span style="color:#64748b;font-size:12px">× ${cantidad} unidad${cantidad > 1 ? 'es' : ''}</span>
-                ${tieneDesc ? `<span style="background:#fef3c7;color:#d97706;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px">🏷️ ${descLabel}</span>` : ''}
+                <span class="badge ${esVarios ? '' : 'badge-gray'}" style="font-size:11px;${esVarios ? 'background:var(--tint-purple-bg);color:var(--tint-purple-fg)' : ''}">${categoriaItem}</span>
+                <span style="color:var(--text-muted);font-size:12px">× ${cantidad} unidad${cantidad > 1 ? 'es' : ''}</span>
+                ${tieneDesc ? `<span style="background:var(--tint-yellow-bg);color:var(--tint-orange-fg);font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px">🏷️ ${descLabel}</span>` : ''}
               </div>
             </div>
             <div style="text-align:right;min-width:90px">
-              <div style="font-size:16px;font-weight:700;color:#1e293b">$${fmt(item.subtotal)}</div>
+              <div style="font-size:16px;font-weight:700;color:var(--text-strong)">$${fmt(item.subtotal)}</div>
             </div>
           </div>
 
           <!-- Desglose de precio -->
-          <div style="background:${tieneDesc ? '#fff7ed' : '#f8fafc'};border-top:1px solid ${tieneDesc ? '#fed7aa' : '#e2e8f0'};padding:8px 14px">
-            <div style="display:flex;justify-content:space-between;color:#64748b;font-size:12px;margin-bottom:3px">
+          <div style="background:${tieneDesc ? 'var(--tint-orange-bg)' : 'var(--surface-2)'};border-top:1px solid ${tieneDesc ? 'var(--tint-orange-fg)' : 'var(--border)'};padding:8px 14px">
+            <div style="display:flex;justify-content:space-between;color:var(--text-muted);font-size:12px;margin-bottom:3px">
               <span>Precio unitario${tieneDesc ? ' (original)' : ''}</span>
-              <span>${tieneDesc ? `<span style="text-decoration:line-through;color:#94a3b8">$${fmt(precioOrig)}</span>` : `$${fmt(precioUnit)}`}</span>
+              <span>${tieneDesc ? `<span style="text-decoration:line-through;color:var(--text-muted)">$${fmt(precioOrig)}</span>` : `$${fmt(precioUnit)}`}</span>
             </div>
             ${tieneDesc ? `
-            <div style="display:flex;justify-content:space-between;color:#64748b;font-size:12px;margin-bottom:3px">
+            <div style="display:flex;justify-content:space-between;color:var(--text-muted);font-size:12px;margin-bottom:3px">
               <span>Precio con descuento</span>
-              <span style="color:#198754;font-weight:600">$${fmt(precioUnit)}</span>
+              <span style="color:var(--tint-green-fg);font-weight:600">$${fmt(precioUnit)}</span>
             </div>
             <div style="display:flex;justify-content:space-between;font-size:12px;margin-bottom:3px">
-              <span style="color:#d97706;font-weight:600">🏷️ ${descDesc}</span>
-              <span style="color:#dc3545;font-weight:700">-$${fmt(descMonto)}</span>
+              <span style="color:var(--tint-orange-fg);font-weight:600">🏷️ ${descDesc}</span>
+              <span style="color:var(--tint-red-fg);font-weight:700">-$${fmt(descMonto)}</span>
             </div>` : ''}
-            <div style="display:flex;justify-content:space-between;font-size:12px;border-top:1px dashed #e2e8f0;margin-top:4px;padding-top:4px">
-              <span style="color:#475569;font-weight:600">Subtotal (${cantidad} u.)</span>
-              <span style="font-weight:700;color:#1e293b">$${fmt(item.subtotal)}</span>
+            <div style="display:flex;justify-content:space-between;font-size:12px;border-top:1px dashed var(--border);margin-top:4px;padding-top:4px">
+              <span style="color:var(--text-muted);font-weight:600">Subtotal (${cantidad} u.)</span>
+              <span style="font-weight:700;color:var(--text-strong)">$${fmt(item.subtotal)}</span>
             </div>
           </div>
         </div>
       `;
     }).join('') + (totalDescuentos > 0 ? `
-      <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;margin-top:4px">
-        <span style="color:#dc3545;font-weight:600;font-size:13px">🏷️ Total descuentos aplicados</span>
-        <span style="color:#dc3545;font-weight:700;font-size:15px">-$${fmt(totalDescuentos)}</span>
+      <div style="background:var(--tint-red-bg);border:1px solid var(--border);border-radius:8px;padding:10px 14px;display:flex;justify-content:space-between;align-items:center;margin-top:4px">
+        <span style="color:var(--tint-red-fg);font-weight:600;font-size:13px">🏷️ Total descuentos aplicados</span>
+        <span style="color:var(--tint-red-fg);font-weight:700;font-size:15px">-$${fmt(totalDescuentos)}</span>
       </div>
     ` : '');
   });
@@ -267,13 +267,13 @@ function renderObservaciones(obs) {
       hour: '2-digit', minute: '2-digit', hour12: false,
     }) : '';
     return `
-      <div style="margin-bottom:10px;border:1px solid ${esVarios ? '#a78bfa' : '#cbd5e1'};border-left:4px solid ${esVarios ? '#7c3aed' : '#475569'};border-radius:8px;background:${esVarios ? '#faf5ff' : '#f8fafc'};padding:10px 14px">
+      <div style="margin-bottom:10px;border:1px solid ${esVarios ? 'var(--tint-purple-fg)' : 'var(--border)'};border-left:4px solid ${esVarios ? 'var(--primary)' : 'var(--text-muted)'};border-radius:8px;background:${esVarios ? 'var(--tint-purple-bg)' : 'var(--surface-2)'};padding:10px 14px">
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:6px">
-          ${tag ? `<span style="background:${esVarios ? '#7c3aed' : '#475569'};color:#fff;font-size:9px;font-weight:800;padding:2px 7px;border-radius:5px;letter-spacing:.5px">${tag}</span>` : ''}
-          ${titulo && titulo !== tag ? `<span style="font-weight:700;color:#1e293b;font-size:13px">${titulo}</span>` : ''}
-          <span style="color:#94a3b8;font-size:11px;margin-left:auto">${autor}${fecha ? ' · ' + fecha : ''}</span>
+          ${tag ? `<span style="background:${esVarios ? 'var(--primary)' : 'var(--text-muted)'};color:#fff;font-size:9px;font-weight:800;padding:2px 7px;border-radius:5px;letter-spacing:.5px">${tag}</span>` : ''}
+          ${titulo && titulo !== tag ? `<span style="font-weight:700;color:var(--text-strong);font-size:13px">${titulo}</span>` : ''}
+          <span style="color:var(--text-muted);font-size:11px;margin-left:auto">${autor}${fecha ? ' · ' + fecha : ''}</span>
         </div>
-        <div style="color:#334155;font-size:13px;line-height:1.45;white-space:pre-wrap">${cuerpo}</div>
+        <div style="color:var(--text);font-size:13px;line-height:1.45;white-space:pre-wrap">${cuerpo}</div>
       </div>
     `;
   }).join('');

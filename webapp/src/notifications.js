@@ -21,6 +21,7 @@
 import { collection, getDocs, doc, onSnapshot, query, orderBy, limit, setDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
 import { getCached } from './cache.js';
 import { fechaDMYtoYMD } from './config.js';
+import { alertaPorBulto, bultoDe, textoBultos } from './bulto.js';
 
 // ── Estado interno ───────────────────────────────────────────────────────────
 let _db = null;
@@ -130,26 +131,48 @@ export function restaurarTodos() {
 }
 
 // ── Helpers de catálogo ──────────────────────────────────────────────────────
+// Unidades que trae un pack/rollo de esta variedad: el propio si lo tiene, si
+// no el global del producto. Sin ninguno de los dos vale 1 (el pack ES la
+// unidad), nunca 0: con 0 los packs enteros desaparecían del total y el
+// producto figuraba sin stock teniéndolo.
+function _contenidoVariedad(c, globalCont) {
+  const propio = Number(c && c.contenido) || 0;
+  if (propio > 0) return propio;
+  const gl = Number(globalCont) || 0;
+  return gl > 0 ? gl : 1;
+}
+
 function _stockTotalVariedad(c, globalCont) {
   const u  = Number(c.unidades) || 0;
   const r  = Number(c.restante) || 0;
-  const cc = (Number(c.contenido) > 0) ? Number(c.contenido) : Number(globalCont) || 0;
-  return u * cc + r;
+  return u * _contenidoVariedad(c, globalCont) + r;
 }
 
-function _unidadProducto(p) {
-  if (!p) return { sg: 'unidad', pl: 'unidades' };
-  const esConjunto = (p.es_conjunto === true || p.es_conjunto === 1);
-  if (!esConjunto) return { sg: 'unidad', pl: 'unidades' };
-  const um = (p.conjunto_unidad_medida || '').toLowerCase();
-  if (um === 'metros' || um === 'metro') return { sg: 'metro', pl: 'metros' };
-  const tipo = (p.conjunto_tipo || '').toLowerCase();
-  if (tipo === 'rollo') return { sg: 'rollo', pl: 'rollos' };
-  if (tipo === 'pack')  return { sg: 'pack',  pl: 'packs' };
-  if (tipo === 'caja')  return { sg: 'caja',  pl: 'cajas' };
-  if (tipo === 'bobina') return { sg: 'bobina', pl: 'bobinas' };
-  if (tipo === 'bolsa') return { sg: 'bolsa', pl: 'bolsas' };
-  return { sg: 'unidad', pl: 'unidades' };
+// Unidad de medida del contenido — lo que se cuenta suelto (metros, unidades…).
+const _UM_NOMBRES = {
+  metros: ['metro', 'metros'], metro: ['metro', 'metros'],
+  cm: ['cm', 'cm'], m2: ['m²', 'm²'],
+  gramos: ['gramo', 'gramos'], kilos: ['kilo', 'kilos'], litros: ['litro', 'litros'],
+};
+function _umProducto(p) {
+  const um = ((p && p.conjunto_unidad_medida) || '').toLowerCase();
+  const par = _UM_NOMBRES[um] || ['unidad', 'unidades'];
+  return { sg: par[0], pl: par[1] };
+}
+
+// Envase del conjunto (rollo / pack / caja / …). Tipo "unidad" o sin tipo
+// reconocido: el envase ES la unidad de medida.
+const _ENVASE_NOMBRES = {
+  rollo: ['rollo', 'rollos'], pack: ['pack', 'packs'], caja: ['caja', 'cajas'],
+  bobina: ['bobina', 'bobinas'], bolsa: ['bolsa', 'bolsas'],
+  plancha: ['plancha', 'planchas'], cartulina: ['cartulina', 'cartulinas'],
+  papel: ['hoja', 'hojas'], carton: ['cartón', 'cartones'],
+  goma_eva: ['plancha', 'planchas'], cinta: ['rollo', 'rollos'], tela: ['rollo', 'rollos'],
+};
+function _envaseProducto(p) {
+  if (!p || !(p.es_conjunto === true || p.es_conjunto === 1)) return _umProducto(p);
+  const par = _ENVASE_NOMBRES[(p.conjunto_tipo || '').toLowerCase()];
+  return par ? { sg: par[0], pl: par[1] } : _umProducto(p);
 }
 
 function _stockEfectivo(p) {
@@ -195,9 +218,13 @@ function _alertasProducto(p) {
 
   // 1) Alerta por variedad. Dos fuentes:
   //    a. Con stock_min explícito: dispara toast + notif del navegador.
-  //       Se compara `unidades` (contador de packs/rollos) contra `stock_min`,
-  //       NO el total en unidades sueltas — así "1 pack mínimo" funciona sin
-  //       importar cuántas unidades trae cada pack.
+  //       Se compara el STOCK REAL de la variedad (packs enteros + unidades
+  //       sueltas del pack abierto), expresado en la misma unidad en la que se
+  //       escribe el mínimo: en packs/rollos cuando el pack trae más de una
+  //       unidad — así "1 pack mínimo" sigue funcionando sin importar el
+  //       contenido — y en unidades cuando el pack ES la unidad.
+  //       NUNCA se mira sólo el contador de packs: una variedad con 0 packs y
+  //       15 sueltos tiene 15, no está agotada.
   //    b. Sin stock_min, pero el TOTAL EN UNIDADES SUELTAS (unidades*contenido
   //       + restante) es 0 o ≤ 2: auto-detección de variantes bajas. Se marcan
   //       con `auto: true` y NO disparan toast individual — solo aparecen en
@@ -209,34 +236,60 @@ function _alertasProducto(p) {
     const globalCont = Number(p.conjunto_contenido || 0);
     for (const c of variedades) {
       const sMinVar = Number(c.stock_min) || 0;
-      const cantidadVar = Number(c.unidades) || 0;
       const sMaxVar = Number(c.stock_max) || 0;
-      const u = _unidadProducto(p);
+      const uEnvase = _envaseProducto(p);
+      const uMedida = _umProducto(p);
+      const contVar = _contenidoVariedad(c, globalCont);
       const totalUnitsVar = _stockTotalVariedad(c, globalCont);
+      // Unidad de los umbrales: la elegida a mano en el editor
+      // (`stock_min_um`) o, si no se eligió, packs cuando el pack trae más de
+      // una unidad y unidades cuando el pack ES la unidad.
+      const umVar = (c.stock_min_um === 'pack' || c.stock_min_um === 'unidad')
+        ? c.stock_min_um
+        : (contVar > 1 ? 'pack' : 'unidad');
+      const enPacks = umVar === 'pack' && contVar > 1;
+      // Stock comparable contra el mínimo. En packs: packs equivalentes
+      // (90 unidades de un pack de 100 = 0,9 packs, sigue por debajo de
+      // "1 pack mínimo"). En unidades: el total real tal cual.
+      const stockComparable = enPacks
+        ? Math.round((totalUnitsVar / contVar) * 10000) / 10000
+        : totalUnitsVar;
 
       let dispara = false;
       let auto = false;
       let stockMinUsado = sMinVar;
-      let stockMostrar = cantidadVar;
-      let unidadSingPlural = cantidadVar === 1 ? u.sg : u.pl;
+      let stockMostrar = stockComparable;
+      let unidadSingPlural = enPacks
+        ? (stockComparable === 1 ? uEnvase.sg : uEnvase.pl)
+        : (stockComparable === 1 ? uMedida.sg : uMedida.pl);
       let critico = false;
+      // Cuando el aviso se expresa en packs, mostrar también las unidades
+      // reales: "0,9 packs (90 unidades)" en vez de un "sin stock" falso.
+      let equiv = (enPacks && totalUnitsVar > 0)
+        ? `${_fmt(totalUnitsVar)} ${totalUnitsVar === 1 ? uMedida.sg : uMedida.pl}`
+        : null;
 
-      if (sMinVar > 0 && cantidadVar <= sMinVar) {
-        // Alerta configurada: comparar packs vs stock_min configurado
+      if (sMinVar > 0 && stockComparable <= sMinVar) {
+        // Alerta configurada: stock real (packs + sueltos) vs stock_min
         dispara = true;
-        critico = cantidadVar === 0;
+        // "Sin stock" sólo si no queda NADA real, ni una unidad suelta.
+        critico = totalUnitsVar <= 0;
       } else if (sMinVar <= 0 && totalUnitsVar <= VARIEDAD_AUTO_UMBRAL) {
         // Alerta auto: comparar total real en unidades sueltas
         dispara = true;
         auto = true;
         stockMinUsado = VARIEDAD_AUTO_UMBRAL;
         stockMostrar = totalUnitsVar;
-        unidadSingPlural = totalUnitsVar === 1 ? u.sg : u.pl;
+        unidadSingPlural = totalUnitsVar === 1 ? uMedida.sg : uMedida.pl;
+        equiv = null;
         critico = totalUnitsVar === 0;
       }
       if (!dispara) continue;
 
-      const sugerencia = sMaxVar > stockMinUsado ? Math.max(0, sMaxVar - cantidadVar) : null;
+      // Se compra de a envases enteros → el faltante se redondea para arriba.
+      const sugerencia = sMaxVar > stockMinUsado
+        ? Math.max(0, Math.ceil(sMaxVar - stockMostrar))
+        : null;
       out.push({
         key: p.doc_id + '|' + (auto ? 'varauto:' : 'var:') + (c.color || ''),
         doc_id: p.doc_id,
@@ -251,6 +304,7 @@ function _alertasProducto(p) {
         stock_min: stockMinUsado,
         stock_max: sMaxVar || null,
         unidad_label: unidadSingPlural,
+        stock_equiv: equiv,
         sugerencia,
         critico,
         auto,
@@ -266,6 +320,13 @@ function _alertasProducto(p) {
     if (stock <= stockMin) {
       const stockMax = Number(p.stock_max) || 0;
       const sugerencia = stockMax > stockMin ? Math.max(0, stockMax - stock) : null;
+      // Producto configurado para avisar por caja/pack/rollo: los umbrales
+      // siguen viviendo en unidades, pero el aviso se expresa en envases
+      // ("Quedan 2 cajas + 3 u · mín 3 cajas").
+      const bulto = alertaPorBulto(p);
+      // Sin configurar nada: si se puede deducir el envase (conjunto o nombre),
+      // el aviso igual muestra a cuántas cajas equivale lo que queda.
+      const bultoAuto = bulto ? null : bultoDe(p);
       out.push({
         key: p.doc_id,
         doc_id: p.doc_id,
@@ -280,6 +341,15 @@ function _alertasProducto(p) {
         stock_max: stockMax || null,
         sugerencia,
         critico: stock === 0,
+        bulto: bulto || bultoAuto || null,
+        stock_texto: bulto ? textoBultos(stock, bulto) : null,
+        min_texto:   bulto ? textoBultos(stockMin, bulto, { exacto: true }) : null,
+        max_texto:   bulto && stockMax > 0 ? textoBultos(stockMax, bulto, { exacto: true }) : null,
+        sugerencia_texto: bulto && sugerencia > 0 ? textoBultos(sugerencia, bulto) : null,
+        // Equivalencia informativa cuando el aviso va en unidades: "1 caja + 6 u".
+        // Sólo si llega a un envase entero: "menos de 1 caja" no agrega nada a
+        // las unidades que ya se muestran.
+        stock_equiv: (bultoAuto && stock >= bultoAuto.contenido) ? textoBultos(stock, bultoAuto) : null,
         producto: p,
       });
     }
@@ -687,7 +757,7 @@ function _mostrarNotifNavegador(alertas) {
       const titulo = (a.urgente ? 'Reponer urgente · ' : a.critico ? 'Sin stock · ' : 'Stock bajo · ') + a.nombre;
       const cobertura = _coberturaTexto(a);
       const n = new Notification(titulo, {
-        body: `Quedan ${_fmt(a.stock)}${unidad} (mínimo ${_fmt(a.stock_min)}).` + (cobertura ? ` ${cobertura}.` : '') + ' Tocá para reponer.',
+        body: `Quedan ${a.stock_texto || (_fmt(a.stock) + unidad)}${a.stock_equiv ? ` = ${a.stock_equiv}` : ''} (mínimo ${a.min_texto || _fmt(a.stock_min)}).` + (cobertura ? ` ${cobertura}.` : '') + ' Tocá para reponer.',
         icon: '/libreria-liceo-512.png',
         tag: 'stock-' + a.key,
         requireInteraction: !!a.urgente,
@@ -802,9 +872,10 @@ function _mostrarToast(a) {
       </div>
       <div style="font-size:14px;font-weight:700;line-height:1.3;word-wrap:break-word">${_escape(a.nombre)}</div>
       <div style="font-size:12px;color:var(--text-muted);margin-top:3px">
-        Quedan <b style="color:${acentoTxt}">${_fmt(a.stock)}${a.unidad_label ? ' ' + a.unidad_label : ''}</b>
-        <span style="color:var(--text-muted)">/ mín ${_fmt(a.stock_min)}</span>
-        ${a.sugerencia ? ` · <span style="color:var(--primary)">pedir ~${_fmt(a.sugerencia)}</span>` : ''}
+        Quedan <b style="color:${acentoTxt}">${_escape(a.stock_texto || (_fmt(a.stock) + (a.unidad_label ? ' ' + a.unidad_label : '')))}</b>
+        ${a.stock_equiv ? `<span style="color:var(--text-muted)">(${_escape(a.stock_equiv)})</span>` : ''}
+        <span style="color:var(--text-muted)">/ mín ${_escape(a.min_texto || _fmt(a.stock_min))}</span>
+        ${a.sugerencia ? ` · <span style="color:var(--primary)">pedir ~${_escape(a.sugerencia_texto || _fmt(a.sugerencia))}</span>` : ''}
       </div>
       ${cobertura ? `<div style="font-size:11.5px;font-weight:600;color:${urgente ? 'var(--tint-red-fg)' : 'var(--primary)'};margin-top:3px;display:flex;align-items:center;gap:4px">
         <span class="material-icons" style="font-size:14px">trending_up</span>${_escape(cobertura)}

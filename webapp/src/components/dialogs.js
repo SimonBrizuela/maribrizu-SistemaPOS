@@ -16,6 +16,10 @@ function _esc(s) {
   ));
 }
 
+// Escapa HTML para interpolar valores dinámicos (nombres, mensajes de error)
+// dentro de los `message` de los diálogos, que se renderizan como HTML.
+export function escHtml(s) { return _esc(s); }
+
 function _icon(type) {
   // type: 'confirm' | 'danger' | 'info' | 'success' | 'warning' | 'error'
   return ({
@@ -56,7 +60,7 @@ function _buildOverlay({ title, bodyHtml, footerHtml, type = 'confirm', maxWidth
       <div class="modal-body" style="padding:4px 24px 20px;font-size:14px;color:var(--text);line-height:1.55">
         ${bodyHtml}
       </div>
-      <div class="app-dialog-footer" style="display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid var(--border);background:#f8fafc">
+      <div class="app-dialog-footer" style="display:flex;justify-content:flex-end;gap:8px;padding:14px 20px;border-top:1px solid var(--border);background:var(--surface-2)">
         ${footerHtml}
       </div>
     </div>
@@ -70,7 +74,7 @@ function _btnPrimary(label, accent) {
 }
 
 function _btnSecondary(label) {
-  return `<button class="ad-cancel" style="padding:10px 20px;border-radius:8px;border:1px solid var(--border);background:#fff;cursor:pointer;font-size:13px;font-weight:600;color:#475569;min-width:96px">${_esc(label)}</button>`;
+  return `<button class="ad-cancel" style="padding:10px 20px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:13px;font-weight:600;color:var(--text-muted);min-width:96px">${_esc(label)}</button>`;
 }
 
 export function confirmDialog({

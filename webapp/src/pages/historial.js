@@ -1,10 +1,52 @@
-import { collection, getDocs, query, orderBy, where } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, where, limit } from 'firebase/firestore';
 import { openSaleModal } from '../components/modal.js';
 import { getCached } from '../cache.js';
 import { getFechaInicio, fechaDMYtoYMD, isItemVarios2 } from '../config.js';
 import { getSaleNumberMap, displayNumForItem } from '../sale_numbers.js';
 
 export async function renderHistorial(container, db) {
+  // Shell vacío al toque: tablas con headers reales visibles.
+  const _skelRows = (n) => Array(n).fill(`
+    <tr><td colspan="6" style="padding:6px 12px"><div class="skel" style="height:28px;border-radius:6px"></div></td></tr>
+  `).join('');
+  container.innerHTML = `
+    <div class="table-card" style="margin-bottom:24px">
+      <div class="table-card-header">
+        <h3>Resumen por Día</h3>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>Fecha</th>
+            <th style="text-align:center"># Ventas</th>
+            <th style="text-align:right">Total</th>
+            <th style="text-align:right">Efectivo</th>
+            <th style="text-align:right">Transferencia</th>
+            <th style="text-align:right">Ticket Promedio</th>
+          </tr></thead>
+          <tbody>${_skelRows(4)}</tbody>
+        </table>
+      </div>
+    </div>
+    <div class="table-card">
+      <div class="table-card-header">
+        <h3>Detalle de Productos Vendidos por Día</h3>
+        <div class="filter-bar" style="margin:0">
+          <input type="date" disabled />
+          <input type="text" placeholder="Producto..." style="width:160px" disabled />
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr>
+            <th>#</th><th>Hora</th><th>Producto</th><th>Cant.</th><th>Precio</th><th>Total</th>
+          </tr></thead>
+          <tbody>${_skelRows(8)}</tbody>
+        </table>
+      </div>
+    </div>
+  `;
+
   const fechaInicioStr = await getFechaInicio(db);
 
   // Fuente única: `ventas_por_dia`. Resumen y Detalle se derivan de ese mismo dataset
@@ -82,8 +124,8 @@ export async function renderHistorial(container, db) {
     </td>
     <td style="text-align:center"><b>${h.num_ventas || 0}</b></td>
     <td style="text-align:right"><b style="color:var(--success);font-size:14px">$${fmt(h.total)}</b></td>
-    <td class="hist-col-efectivo" style="text-align:right;color:#2e7d32">$${fmt(h.efectivo)}</td>
-    <td class="hist-col-transferencia" style="text-align:right;color:#1565c0">$${fmt(h.transferencia)}</td>
+    <td class="hist-col-efectivo" style="text-align:right;color:var(--tint-green-fg)">$${fmt(h.efectivo)}</td>
+    <td class="hist-col-transferencia" style="text-align:right;color:var(--tint-blue-fg)">$${fmt(h.transferencia)}</td>
     <td class="hist-col-ticket" style="text-align:right;color:var(--text-muted)">$${fmt(h.ticket_promedio)}</td>
   </tr>`).join('');
 

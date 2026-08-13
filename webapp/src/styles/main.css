@@ -34,6 +34,7 @@
   --shadow: 0 2px 12px rgba(0,0,0,0.08);
   --radius: 12px;
   --sidebar-w: 240px;
+  --sidebar-rail-w: 64px;
 
   /* ── Tokens semánticos (theming) — valores LIGHT = originales ── */
   color-scheme: light;
@@ -145,6 +146,9 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); opacity: 1
 .sidebar {
   width: var(--sidebar-w);
   background: var(--sidebar-bg);
+  /* Luz sutil arriba: da profundidad sin ensuciar el negro del resto */
+  background-image: linear-gradient(180deg, rgba(255,255,255,0.035), rgba(255,255,255,0) 200px);
+  border-right: 1px solid rgba(255,255,255,0.06);
   color: #fff;
   display: flex;
   flex-direction: column;
@@ -158,11 +162,13 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); opacity: 1
 }
 
 .sidebar-header {
+  position: relative;
   display: flex;
   align-items: center;
-  gap: 10px;
-  padding: 24px 20px;
-  border-bottom: 1px solid rgba(255,255,255,0.08);
+  justify-content: center;
+  padding: 18px 16px 16px;
+  border-bottom: 1px solid rgba(255,255,255,0.07);
+  flex-shrink: 0;
 }
 
 .sidebar-header h1 { font-size: 18px; font-weight: 700; white-space: nowrap; letter-spacing: 0.5px; color: #fff; }
@@ -171,7 +177,7 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); opacity: 1
 .sidebar-logo-img {
   display: block;
   width: 100%;
-  max-width: 130px;
+  max-width: 112px;
   height: auto;
   margin: 0 auto;
   user-select: none;
@@ -179,53 +185,105 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); opacity: 1
 }
 
 .nav-links {
-  list-style: none; padding: 8px 0; flex: 1;
+  list-style: none; padding: 10px 0 12px; flex: 1;
   overflow-y: auto; overflow-x: hidden;
-  scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.15) transparent;
-  display: flex; flex-direction: column; gap: 2px;
+  scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.14) transparent;
+  display: flex; flex-direction: column; gap: 0;
+  /* Desvanecido en los extremos: lo que queda fuera de vista se corta prolijo */
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 10px, #000 calc(100% - 16px), transparent 100%);
+          mask-image: linear-gradient(to bottom, transparent 0, #000 10px, #000 calc(100% - 16px), transparent 100%);
 }
+.nav-links::-webkit-scrollbar { width: 6px; }
+.nav-links::-webkit-scrollbar-track { background: transparent; }
+.nav-links::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.12); border-radius: 3px; }
+.nav-links::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.24); }
 
 /* ── Grupos colapsables ── */
-.nav-group { margin: 2px 8px; }
+.nav-group { padding: 0 10px; }
+.nav-group + .nav-group { margin-top: 10px; }
 
 .nav-group-header {
-  width: 100%; display: flex; align-items: center; gap: 10px;
-  padding: 9px 12px; border: none; border-radius: 8px;
-  background: transparent; cursor: pointer; color: rgba(255,255,255,0.55);
-  font-size: 12px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: 0.6px; transition: all 0.2s; font-family: inherit;
+  width: 100%; display: flex; align-items: center; gap: 8px;
+  padding: 7px 8px 6px; border: none; border-radius: 6px;
+  background: transparent; cursor: pointer; color: rgba(255,255,255,0.36);
+  font-size: 11px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.09em; transition: color 0.15s; font-family: inherit;
   text-align: left;
 }
-.nav-group-header:hover { background: rgba(255,255,255,0.06); color: rgba(255,255,255,0.85); }
-.nav-group-header .material-icons { font-size: 18px !important; flex-shrink: 0; }
+.nav-group-header:hover { color: rgba(255,255,255,0.72); }
+.nav-group-header:hover .nav-group-arrow { opacity: 0.8; }
 .nav-group-label { flex: 1; }
 
-.nav-group-arrow {
-  font-size: 16px !important; transition: transform 0.25s ease;
-  opacity: 0.5;
+/* La sección que contiene la página actual se destaca; si además está
+   colapsada, un punto avisa que la activa está adentro. */
+.nav-group:has(.nav-link.active) > .nav-group-header { color: rgba(255,255,255,0.70); }
+.nav-group:has(.nav-group-items:not(.open) .nav-link.active) > .nav-group-header .nav-group-label::after {
+  content: ''; display: inline-block; vertical-align: middle;
+  width: 5px; height: 5px; border-radius: 50%; margin-left: 7px;
+  background: var(--sidebar-active);
 }
-.nav-group-arrow.rotated { transform: rotate(180deg); opacity: 1; }
+
+/* Badge agregado del grupo: mientras está cerrado suma los avisos de adentro,
+   así una sección colapsada no esconde 99 notificaciones. */
+.nav-group-badge {
+  background: var(--brand-red); color: #fff;
+  font-size: 9px; font-weight: 700; line-height: 1;
+  padding: 3px 5px; border-radius: 999px; min-width: 16px;
+  display: inline-flex; align-items: center; justify-content: center;
+  margin-right: 4px; flex-shrink: 0;
+  font-variant-numeric: tabular-nums; letter-spacing: 0;
+}
+.nav-group-badge.dot { padding: 0; min-width: 0; width: 6px; height: 6px; }
+
+/* ── Accesos rápidos (fijados con clic derecho) ── */
+.nav-pinned { padding: 0 10px; margin-bottom: 10px; }
+.nav-pinned-header { cursor: default; }
+.nav-pinned-header:hover { color: rgba(255,255,255,0.36); }
+.nav-pinned-hint { font-size: 13px !important; opacity: 0.28; }
+.nav-pinned-items { max-height: none; opacity: 1; }
+.nav-link-pin .material-icons { opacity: 0.6; }
+/* Acceso rápido fijo (Fiados): no se quita con clic derecho, así que se
+   distingue del resto con el icono a full y un acento violeta al costado. */
+.nav-link-pin-fijo { box-shadow: inset 2px 0 0 var(--brand-purple); }
+.nav-link-pin-fijo .material-icons { opacity: 0.95; }
+
+/* Icono de sección: sólo se usa en modo rail, donde reemplaza al título */
+.nav-group-icon { display: none; font-size: 19px !important; flex-shrink: 0; }
+
+.nav-group-arrow {
+  font-size: 15px !important; transition: transform 0.25s ease, opacity 0.15s;
+  opacity: 0.35;
+}
+.nav-group-arrow.rotated { transform: rotate(180deg); }
 
 .nav-group-items {
   overflow: hidden; max-height: 0;
   transition: max-height 0.3s ease, opacity 0.2s ease;
-  opacity: 0; padding: 0 0 0 8px;
+  opacity: 0;
+  /* Riel guía: ata visualmente los ítems a su sección */
+  margin: 0 0 0 7px; padding: 0 0 0 9px;
+  border-left: 1px solid rgba(255,255,255,0.07);
 }
-.nav-group-items.open { max-height: 400px; opacity: 1; }
+.nav-group-items.open { max-height: 520px; opacity: 1; padding-top: 2px; padding-bottom: 4px; }
 
 .nav-link {
   display: flex; align-items: center; gap: 10px;
-  padding: 8px 12px; border-radius: 7px;
-  color: rgba(255,255,255,0.65); text-decoration: none;
-  font-weight: 500; font-size: 13px; transition: all 0.15s;
-  margin: 1px 0;
+  padding: 7px 10px; border-radius: 8px;
+  color: rgba(255,255,255,0.62); text-decoration: none;
+  font-weight: 500; font-size: 13px; line-height: 1.3;
+  transition: background 0.15s, color 0.15s;
+  margin: 1px 0; min-height: 32px;
+  white-space: nowrap; overflow: hidden;
 }
-.nav-link:hover { background: rgba(255,255,255,0.07); color: #fff; }
+.nav-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.nav-link:hover { background: rgba(255,255,255,0.06); color: #fff; }
+.nav-link:hover .material-icons { opacity: 0.95; }
 .nav-link.active {
   background: var(--sidebar-active); color: #fff;
   font-weight: 600;
+  box-shadow: 0 2px 10px rgba(0,0,0,0.30);
 }
-.nav-link .material-icons { font-size: 17px !important; opacity: 0.8; flex-shrink: 0; }
+.nav-link .material-icons { font-size: 18px !important; opacity: 0.5; flex-shrink: 0; transition: opacity 0.15s; }
 .nav-link.active .material-icons { opacity: 1; }
 
 .nav-badge {
@@ -235,62 +293,93 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); opacity: 1
   font-size: 10px;
   font-weight: 700;
   line-height: 1;
-  padding: 3px 7px;
+  padding: 3px 6px;
   border-radius: 999px;
   min-width: 18px;
   text-align: center;
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex-shrink: 0;
+  font-variant-numeric: tabular-nums;
 }
+/* Sobre el ítem activo el rojo pelea con el violeta: se vuelve un chip neutro */
+.nav-link.active .nav-badge { background: rgba(255,255,255,0.22); }
 
 /* Chip "Nuevo" para funciones recién estrenadas (se apaga al entrar por 1ª vez) */
 .nav-nuevo {
   margin-left: auto;
-  background: var(--success);
-  color: #fff;
+  background: rgba(142,198,63,0.18);
+  color: var(--brand-green);
   font-size: 9px;
   font-weight: 700;
   line-height: 1;
-  padding: 3px 7px;
+  padding: 3px 6px;
   border-radius: 999px;
   text-transform: uppercase;
   letter-spacing: .4px;
   display: inline-flex;
   align-items: center;
+  flex-shrink: 0;
 }
 
 /* Aviso "HOY" en el ítem Calendario cuando hoy es feriado/fecha o tiene nota */
 .nav-badge-pulse { animation: navBadgePulse 1.8s ease-in-out infinite; }
 @keyframes navBadgePulse {
-  0%, 100% { box-shadow: 0 0 0 0 rgba(230,57,70,0.55); }
-  50%      { box-shadow: 0 0 0 5px rgba(230,57,70,0); }
+  0%, 100% { box-shadow: 0 0 0 0 rgba(230,57,70,0.50); }
+  50%      { box-shadow: 0 0 0 4px rgba(230,57,70,0); }
 }
 .nav-link.alerta-hoy {
-  background: rgba(230,57,70,0.16);
-  color: #fff;
-  box-shadow: inset 3px 0 0 var(--brand-red);
+  background: rgba(230,57,70,0.10);
+  color: rgba(255,255,255,0.92);
+  box-shadow: inset 2px 0 0 var(--brand-red);
 }
+.nav-link.alerta-hoy:hover { background: rgba(230,57,70,0.16); }
 .nav-link.alerta-hoy .material-icons { color: var(--brand-red); opacity: 1; }
 
 .sidebar-footer {
-  padding: 16px 20px;
-  border-top: 1px solid rgba(255,255,255,0.08);
+  padding: 10px 12px 12px;
+  border-top: 1px solid rgba(255,255,255,0.07);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 4px;
   font-size: 12px;
   color: rgba(255,255,255,0.5);
+  flex-shrink: 0;
 }
 
+.sidebar-status {
+  display: flex; align-items: center; gap: 7px;
+  flex: 1; min-width: 0;
+  padding-left: 6px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.sidebar-status #statusText { overflow: hidden; text-overflow: ellipsis; }
+
+/* Acciones del footer (tema / logout / autostart) — inyectadas desde main.js */
+.sidebar-foot-btn {
+  background: none; border: none; cursor: pointer;
+  color: rgba(255,255,255,0.45);
+  width: 30px; height: 30px; border-radius: 8px;
+  display: flex; align-items: center; justify-content: center;
+  padding: 0; flex-shrink: 0; font-family: inherit;
+  transition: background 0.15s, color 0.15s, transform 0.1s;
+}
+.sidebar-foot-btn .material-icons { font-size: 17px !important; }
+.sidebar-foot-btn:hover { background: rgba(255,255,255,0.09); color: #fff; }
+.sidebar-foot-btn:active { transform: scale(0.92); }
+#logoutBtn:hover { background: rgba(230,57,70,0.16); color: #ff8a8a; }
+#autostartBtn.on { color: rgba(142,198,63,0.95); }
+
 .status-dot {
-  width: 8px; height: 8px;
+  width: 7px; height: 7px;
   border-radius: 50%;
   background: #888;
-  transition: background 0.3s;
+  flex-shrink: 0;
+  transition: background 0.3s, box-shadow 0.3s;
 }
-.status-dot.online { background: #4caf50; }
-.status-dot.offline { background: #f44336; }
+.status-dot.online { background: #4caf50; box-shadow: 0 0 0 3px rgba(76,175,80,0.14); }
+.status-dot.offline { background: #f44336; box-shadow: 0 0 0 3px rgba(244,67,54,0.14); }
 
 /* ── MAIN ── */
 .main-content {
@@ -299,13 +388,19 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); opacity: 1
   display: flex;
   flex-direction: column;
   min-height: 100vh;
-  transition: margin-left 0.3s ease;
+  /* Sin transición en margin-left a propósito: animarlo obliga a relayoutear
+     toda la página en cada frame y en el Catálogo (cientos de filas) eso se
+     siente como lag. El cambio de ancho es instantáneo y el sidebar hace un
+     fade corto para que no resulte brusco. */
 }
 
-/* ── Colapsar sidebar (desktop) ── el sidebar entra/sale con slide y el
-   contenido aprovecha todo el ancho. El estado se recuerda en localStorage. */
+/* ── Modo rail (desktop) ──
+   Colapsar NO esconde el menú: lo reduce a una columna de iconos. Se conserva
+   la navegación completa y el contenido gana ~175px de ancho. El estado se
+   recuerda en localStorage. Redefiniendo --sidebar-w dentro de #app, el ancho
+   del sidebar y el margen del contenido se mueven juntos sin reglas extra. */
 #sidebarCollapseBtn {
-  display: none; /* sólo desktop (regla en @media min-width:769px) */
+  display: none; /* el rail siempre tiene su propio botón; este queda de reserva */
   background: var(--surface-2); border: 1px solid var(--border); cursor: pointer; color: var(--text);
   width: 38px; height: 38px; border-radius: 9px; align-items: center; justify-content: center;
   transition: background 0.15s, transform 0.1s, border-color 0.15s; flex-shrink: 0;
@@ -313,31 +408,146 @@ input::placeholder, textarea::placeholder { color: var(--text-muted); opacity: 1
 #sidebarCollapseBtn .material-icons { font-size: 22px; }
 #sidebarCollapseBtn:hover { background: var(--surface); border-color: var(--brand-orange); color: var(--brand-orange); }
 #sidebarCollapseBtn:active { transform: scale(0.93); }
+
 @media (min-width: 769px) {
-  /* En desktop el botón del topbar reaparece SOLO cuando el menú está oculto,
-     para volver a mostrarlo (ocultarlo se hace desde el botón del sidebar). */
-  #app.sidebar-collapsed #sidebarCollapseBtn { display: flex; }
-  #app.sidebar-collapsed .sidebar { transform: translateX(-100%); }
-  #app.sidebar-collapsed .main-content { margin-left: 0; }
-  /* Slide suave al colapsar/expandir */
+  #app.sidebar-collapsed { --sidebar-w: var(--sidebar-rail-w); }
   .sidebar { transition: transform 0.22s ease; }
-  .main-content { transition: margin-left 0.22s ease; }
+
+  /* El ancho cambia de una: lo que se anima es sólo la opacidad del contenido
+     del sidebar (compositor puro, no toca el layout de la página). */
+  .sidebar-swap .nav-links,
+  .sidebar-swap .sidebar-header,
+  .sidebar-swap .sidebar-footer { animation: sidebarSwap 0.16s ease-out; }
+  @keyframes sidebarSwap { from { opacity: 0.2; } to { opacity: 1; } }
+  @media (prefers-reduced-motion: reduce) {
+    .sidebar-swap .nav-links,
+    .sidebar-swap .sidebar-header,
+    .sidebar-swap .sidebar-footer { animation: none; }
+  }
+
+  /* Header: el logo deja lugar al botón, que pasa a estar centrado */
+  #app.sidebar-collapsed .sidebar-header { padding: 12px 0; justify-content: center; }
+  #app.sidebar-collapsed .sidebar-logo-img { display: none; }
+  #app.sidebar-collapsed #sidebarCollapseInner { position: static; }
+
+  /* Volcar los 21 ítems en la tira es ilegible. En rail la sección se colapsa a
+     UN icono y sus páginas viven en un panel lateral que se abre al pasar el
+     mouse. Quedan ~7 iconos en total en vez de 21. */
+  #app.sidebar-collapsed .nav-group-items { display: none; }
+  #app.sidebar-collapsed .nav-group-icon { display: block; }
+  #app.sidebar-collapsed .nav-group-label,
+  #app.sidebar-collapsed .nav-group-arrow { display: none; }
+  #app.sidebar-collapsed .nav-group-header {
+    position: relative;
+    width: 40px; height: 38px; margin: 3px auto;
+    padding: 0; justify-content: center; border-radius: 8px;
+    color: rgba(255,255,255,0.5);
+  }
+  #app.sidebar-collapsed .nav-group-header:hover,
+  #app.sidebar-collapsed .nav-group-header.flyout-open {
+    background: rgba(255,255,255,0.09); color: #fff;
+  }
+  /* Sección que contiene la página actual: se marca como si fuera el activo */
+  #app.sidebar-collapsed .nav-group:has(.nav-link.active) > .nav-group-header {
+    background: var(--sidebar-active); color: #fff;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.30);
+  }
+  #app.sidebar-collapsed .nav-group + .nav-group { margin-top: 0; }
+  #app.sidebar-collapsed .nav-group,
+  #app.sidebar-collapsed .nav-pinned { padding: 0 8px; }
+  #app.sidebar-collapsed .nav-pinned { margin-bottom: 6px; padding-bottom: 6px; }
+  #app.sidebar-collapsed .nav-links.has-pinned .nav-pinned { border-bottom: 1px solid rgba(255,255,255,0.07); }
+  #app.sidebar-collapsed .nav-pinned-header { display: none; }
+  #app.sidebar-collapsed .nav-pinned-items { display: block; max-height: none; opacity: 1; margin: 0; padding: 0; border-left: none; }
+
+  /* El badge del grupo pasa a punto sobre la esquina del icono */
+  #app.sidebar-collapsed .nav-group-badge {
+    position: absolute; top: 3px; right: 3px;
+    margin: 0; padding: 0; min-width: 0;
+    width: 8px; height: 8px; font-size: 0;
+    border: 2px solid var(--sidebar-bg);
+    box-sizing: content-box;
+  }
+
+  /* Ítems: cuadrados centrados, sin texto. El aviso se reduce a un punto. */
+  #app.sidebar-collapsed .nav-link {
+    position: relative;
+    justify-content: center;
+    width: 40px; height: 38px; min-height: 0;
+    padding: 0; gap: 0; margin: 3px auto;
+  }
+  #app.sidebar-collapsed .nav-label { display: none; }
+  #app.sidebar-collapsed .nav-link .material-icons { font-size: 19px !important; }
+  #app.sidebar-collapsed .nav-badge,
+  #app.sidebar-collapsed .nav-nuevo {
+    position: absolute; top: 3px; right: 3px;
+    margin: 0; padding: 0; min-width: 0;
+    width: 8px; height: 8px; font-size: 0;
+    border: 2px solid var(--sidebar-bg);
+    box-sizing: content-box;
+  }
+  #app.sidebar-collapsed .nav-nuevo { background: var(--brand-green); }
+  #app.sidebar-collapsed .nav-link.alerta-hoy { box-shadow: inset 2px 0 0 var(--brand-red); }
+
+  /* Footer: acciones apiladas, sin texto de estado */
+  #app.sidebar-collapsed .sidebar-footer { flex-direction: column; gap: 2px; padding: 8px 4px 10px; }
+  #app.sidebar-collapsed .sidebar-status { flex: 0 0 auto; justify-content: center; padding: 0 0 4px; }
+  #app.sidebar-collapsed .sidebar-status #statusText { display: none; }
 }
 
-/* Botón colapsar dentro del sidebar (arriba del logo) — solo desktop */
-.sidebar-collapse-row { display: none; }
-@media (min-width: 769px) {
-  .sidebar-collapse-row { display: flex; justify-content: flex-end; padding: 10px 12px 0; }
+/* Tooltip del rail — va en <body> porque el sidebar tiene overflow:hidden y
+   cualquier tooltip interno quedaría recortado. */
+.rail-tooltip {
+  position: fixed; z-index: 300; pointer-events: none;
+  background: #24262e; color: #fff;
+  border: 1px solid rgba(255,255,255,0.10);
+  padding: 6px 10px; border-radius: 8px;
+  font-size: 12px; font-weight: 500; white-space: nowrap;
+  box-shadow: 0 8px 24px rgba(0,0,0,0.45);
+  opacity: 0; transform: translateY(-50%) translateX(-4px);
+  transition: opacity 0.12s ease, transform 0.12s ease;
 }
+.rail-tooltip.show { opacity: 1; transform: translateY(-50%) translateX(0); }
+
+/* Panel lateral del rail: las páginas de una sección, sin ocupar la tira */
+.rail-flyout {
+  position: fixed; z-index: 300;
+  min-width: 196px; max-width: 250px;
+  background: #17181d;
+  border: 1px solid rgba(255,255,255,0.10);
+  border-radius: 12px;
+  box-shadow: 0 18px 44px rgba(0,0,0,0.55);
+  padding: 8px;
+  opacity: 0; transform: translateX(-6px);
+  transition: opacity 0.13s ease, transform 0.13s ease;
+  pointer-events: none;
+  max-height: calc(100vh - 24px); overflow-y: auto;
+  scrollbar-width: thin; scrollbar-color: rgba(255,255,255,0.14) transparent;
+}
+.rail-flyout.show { opacity: 1; transform: translateX(0); pointer-events: auto; }
+.rail-flyout-title {
+  font-size: 10px; font-weight: 700; text-transform: uppercase;
+  letter-spacing: 0.09em; color: rgba(255,255,255,0.36);
+  padding: 3px 10px 8px;
+}
+.rail-flyout .nav-link { margin: 1px 0; }
+
+/* Botón colapsar dentro del sidebar (esquina del header) — solo desktop.
+   Va absoluto para no robarle una fila entera al logo. */
 #sidebarCollapseInner {
-  background: rgba(255,255,255,0.10); border: 1px solid rgba(255,255,255,0.18); color: #fff;
-  width: 34px; height: 34px; border-radius: 8px; cursor: pointer; flex-shrink: 0;
-  display: flex; align-items: center; justify-content: center;
-  transition: background 0.15s, transform 0.1s;
+  display: none;
+  position: absolute; top: 8px; right: 8px;
+  background: transparent; border: none; color: rgba(255,255,255,0.35);
+  width: 30px; height: 30px; border-radius: 8px; cursor: pointer; flex-shrink: 0;
+  align-items: center; justify-content: center; padding: 0;
+  transition: background 0.15s, color 0.15s, transform 0.1s;
 }
-#sidebarCollapseInner .material-icons { font-size: 20px; }
-#sidebarCollapseInner:hover { background: rgba(255,255,255,0.20); }
-#sidebarCollapseInner:active { transform: scale(0.93); }
+#sidebarCollapseInner .material-icons { font-size: 19px; }
+#sidebarCollapseInner:hover { background: rgba(255,255,255,0.09); color: #fff; }
+#sidebarCollapseInner:active { transform: scale(0.92); }
+@media (min-width: 769px) {
+  #sidebarCollapseInner { display: flex; }
+}
 
 /* ── TOPBAR ── */
 .topbar {
@@ -1007,14 +1217,15 @@ div:has(> .tab-btn)::-webkit-scrollbar { display: none; }
 @media (max-width: 1280px) and (min-width: 769px) {
   :root { --sidebar-w: 200px; }
 
-  .sidebar-header { padding: 18px 14px; }
+  .sidebar-header { padding: 16px 14px 14px; }
   .sidebar-header h1 { font-size: 15px; }
+  .sidebar-logo-img { max-width: 96px; }
   .logo-icon { font-size: 22px !important; }
 
-  .nav-link { padding: 8px 12px; gap: 10px; font-size: 13px; }
-  .nav-link .material-icons { font-size: 18px !important; }
+  .nav-link { padding: 7px 10px; gap: 9px; font-size: 13px; }
+  .nav-link .material-icons { font-size: 17px !important; }
 
-  .sidebar-footer { padding: 12px 14px; font-size: 11px; }
+  .sidebar-footer { padding: 8px 10px 10px; font-size: 11px; }
 
   .topbar { padding: 12px 18px; }
   .topbar h2 { font-size: 15px; }
@@ -1071,10 +1282,12 @@ div:has(> .tab-btn)::-webkit-scrollbar { display: none; }
   :root { --sidebar-w: 180px; }
 
   .sidebar-header h1 { font-size: 13px; }
+  .sidebar-logo-img { max-width: 86px; }
   .logo-icon { font-size: 20px !important; }
 
-  .nav-link { padding: 7px 10px; font-size: 12px; gap: 8px; }
-  .nav-link .material-icons { font-size: 17px !important; }
+  .nav-group { padding: 0 8px; }
+  .nav-link { padding: 6px 9px; font-size: 12px; gap: 8px; min-height: 30px; }
+  .nav-link .material-icons { font-size: 16px !important; }
 
   .page-content { padding: 12px; }
 

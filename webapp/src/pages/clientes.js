@@ -7,6 +7,7 @@ import {
   collection, getDocs, addDoc, doc, updateDoc, deleteDoc, query, orderBy
 } from 'firebase/firestore';
 import { getCached, invalidateCacheByPrefix } from '../cache.js';
+import { confirmDialog, alertDialog, escHtml } from '../components/dialogs.js';
 
 const COL = 'clientes_facturacion';
 const CACHE_KEY = 'clientes:lista';
@@ -52,7 +53,7 @@ export async function renderClientes(container, db) {
         z-index:1000;align-items:center;justify-content:center;padding:16px
       ">
         <div style="
-          background:white;border-radius:16px;padding:24px;width:100%;
+          background:var(--surface);border-radius:16px;padding:24px;width:100%;
           max-width:500px;max-height:90vh;overflow-y:auto;
           box-shadow:0 20px 60px rgba(0,0,0,0.3)
         ">
@@ -66,7 +67,7 @@ export async function renderClientes(container, db) {
 
             <!-- CUIT con lookup AFIP -->
             <div>
-              <label style="font-size:13px;font-weight:600;color:#495057;display:block;margin-bottom:6px">
+              <label style="font-size:13px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:6px">
                 CUIT
                 <span id="afipEstado" style="margin-left:8px;font-size:11px;font-weight:500"></span>
               </label>
@@ -89,7 +90,7 @@ export async function renderClientes(container, db) {
 
             <!-- Nombre -->
             <div>
-              <label style="font-size:13px;font-weight:600;color:#495057;display:block;margin-bottom:4px">
+              <label style="font-size:13px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">
                 Nombre / Razón Social *
               </label>
               <input id="cNombre" type="text" placeholder="Ej: Distribuidora López"
@@ -98,11 +99,11 @@ export async function renderClientes(container, db) {
 
             <!-- Condición IVA -->
             <div>
-              <label style="font-size:13px;font-weight:600;color:#495057;display:block;margin-bottom:4px">
+              <label style="font-size:13px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">
                 Condición IVA
               </label>
               <select id="cCondIVA"
-                style="width:100%;box-sizing:border-box;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:white">
+                style="width:100%;box-sizing:border-box;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit;background:var(--surface)">
                 <option>Consumidor Final</option>
                 <option>Responsable Inscripto</option>
                 <option>Monotributista</option>
@@ -112,7 +113,7 @@ export async function renderClientes(container, db) {
 
             <!-- Domicilio -->
             <div>
-              <label style="font-size:13px;font-weight:600;color:#495057;display:block;margin-bottom:4px">
+              <label style="font-size:13px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">
                 Domicilio
               </label>
               <input id="cDomicilio" type="text" placeholder="Calle 123"
@@ -121,19 +122,19 @@ export async function renderClientes(container, db) {
 
             <!-- Localidad -->
             <div>
-              <label style="font-size:13px;font-weight:600;color:#495057;display:block;margin-bottom:4px">
+              <label style="font-size:13px;font-weight:600;color:var(--text-muted);display:block;margin-bottom:4px">
                 Localidad
               </label>
               <input id="cLocalidad" type="text"
                 style="width:100%;box-sizing:border-box;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;font-family:inherit">
             </div>
 
-            <div id="clienteError" style="display:none;color:#dc3545;font-size:13px;padding:8px 12px;background:#fff0f0;border-radius:6px"></div>
+            <div id="clienteError" style="display:none;color:var(--tint-red-fg);font-size:13px;padding:8px 12px;background:var(--tint-red-bg);border-radius:6px"></div>
 
             <div style="display:flex;gap:10px;margin-top:4px">
               <button type="button" id="btnCancelarClienteModal" style="
                 flex:1;padding:12px;border:1.5px solid var(--border);border-radius:8px;
-                background:white;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit
+                background:var(--surface);font-size:14px;font-weight:600;cursor:pointer;font-family:inherit
               ">Cancelar</button>
               <button type="submit" id="btnGuardarCliente" style="
                 flex:2;padding:12px;background:var(--primary);color:white;border:none;
@@ -166,7 +167,7 @@ async function cargarClientes(db) {
     window._clientesTodos.forEach(c => { window._clientesData[c._docId] = c; });
     renderLista(window._clientesTodos);
   } catch (e) {
-    lista.innerHTML = `<div style="color:#dc3545;padding:20px">Error cargando clientes: ${e.message}</div>`;
+    lista.innerHTML = `<div style="color:var(--tint-red-fg);padding:20px">Error cargando clientes: ${e.message}</div>`;
   }
 }
 
@@ -176,7 +177,7 @@ function renderLista(clientes) {
 
   if (!clientes.length) {
     lista.innerHTML = `
-      <div style="text-align:center;padding:48px 20px;color:var(--text-muted);background:white;border-radius:12px;border:2px dashed var(--border)">
+      <div style="text-align:center;padding:48px 20px;color:var(--text-muted);background:var(--surface);border-radius:12px;border:2px dashed var(--border)">
         <span class="material-icons" style="font-size:48px;display:block;margin-bottom:12px;opacity:0.4">person_search</span>
         <p style="margin:0;font-size:15px">No se encontraron clientes</p>
       </div>`;
@@ -185,15 +186,15 @@ function renderLista(clientes) {
 
   lista.innerHTML = clientes.map(c => {
     const estadoBadge = c.estado_afip === 'INACTIVO'
-      ? `<span style="background:#fff3cd;color:#856404;padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600">INACTIVO en AFIP</span>`
+      ? `<span style="background:var(--tint-yellow-bg);color:var(--tint-yellow-fg);padding:2px 8px;border-radius:10px;font-size:11px;font-weight:600">INACTIVO en AFIP</span>`
       : '';
     const cuitBadge = c.cuit
-      ? `<span style="background:#e7f3ff;color:#0d6efd;padding:2px 10px;border-radius:12px;font-size:12px;font-weight:600">CUIT ${fmt11(c.cuit)}</span>`
-      : `<span style="background:#f8f9fa;color:var(--text-muted);padding:2px 10px;border-radius:12px;font-size:12px;border:1px solid var(--border)">Sin CUIT</span>`;
-    const condBadge = `<span style="background:#f8f9fa;color:#495057;padding:2px 10px;border-radius:12px;font-size:12px;border:1px solid var(--border)">${c.condicion_iva || 'Consumidor Final'}</span>`;
+      ? `<span style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);padding:2px 10px;border-radius:12px;font-size:12px;font-weight:600">CUIT ${fmt11(c.cuit)}</span>`
+      : `<span style="background:var(--surface-2);color:var(--text-muted);padding:2px 10px;border-radius:12px;font-size:12px;border:1px solid var(--border)">Sin CUIT</span>`;
+    const condBadge = `<span style="background:var(--surface-2);color:var(--text-muted);padding:2px 10px;border-radius:12px;font-size:12px;border:1px solid var(--border)">${c.condicion_iva || 'Consumidor Final'}</span>`;
     return `
       <div style="
-        background:white;border-radius:12px;padding:16px 18px;
+        background:var(--surface);border-radius:12px;padding:16px 18px;
         box-shadow:0 1px 6px rgba(0,0,0,0.06);border:1px solid var(--border);
         display:flex;align-items:center;gap:14px;flex-wrap:wrap
       ">
@@ -212,12 +213,12 @@ function renderLista(clientes) {
         </div>
         <div style="display:flex;gap:8px;flex-shrink:0">
           <button data-docid="${c._docId}" data-action="editar" style="
-            padding:7px 14px;background:#f8f9fa;border:1px solid var(--border);
+            padding:7px 14px;background:var(--surface-2);border:1px solid var(--border);
             border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit
           ">Editar</button>
           <button data-docid="${c._docId}" data-nombre="${c.nombre}" data-action="eliminar" style="
-            padding:7px 14px;background:#fff0f0;border:1px solid #fca5a5;
-            color:#dc3545;border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit
+            padding:7px 14px;background:var(--tint-red-bg);border:1px solid var(--border);
+            color:var(--tint-red-fg);border-radius:8px;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit
           ">Eliminar</button>
         </div>
       </div>
@@ -400,13 +401,13 @@ function setupClientesEvents(db) {
     }
     if (action === 'eliminar') {
       const nombre = btn.dataset.nombre || 'este cliente';
-      if (!confirm(`¿Eliminar "${nombre}"?`)) return;
+      if (!await confirmDialog({ title: 'Eliminar cliente', message: `¿Eliminar <b>"${escHtml(nombre)}"</b>?`, confirmText: 'Eliminar', danger: true })) return;
       try {
         await updateDoc(doc(db, COL, docId), { activo: false });
         invalidateCacheByPrefix('clientes:');
         await cargarClientes(db);
       } catch (err) {
-        alert(`Error: ${err.message}`);
+        alertDialog({ title: 'Error', message: escHtml(err.message), type: 'error' });
       }
     }
   });

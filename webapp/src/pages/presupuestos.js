@@ -12,6 +12,7 @@ import {
 } from 'firebase/firestore';
 
 import { getSession } from '../auth.js';
+import { confirmDialog, alertDialog } from '../components/dialogs.js';
 
 const COL = 'presupuestos';
 let _unsub = null;
@@ -23,10 +24,10 @@ const ESTADO_LABEL = {
   anulado:    'Anulado',
 };
 const ESTADO_COLOR = {
-  pendiente:  { bg: '#fff8ee', fg: '#c1521f' },
-  vencido:    { bg: '#f0f0f0', fg: '#65676b' },
-  convertido: { bg: '#e8f6ec', fg: '#2e7d32' },
-  anulado:    { bg: '#fff0f0', fg: '#c0392b' },
+  pendiente:  { bg: 'var(--tint-orange-bg)', fg: 'var(--tint-orange-fg)' },
+  vencido:    { bg: 'var(--surface-2)', fg: 'var(--text-muted)' },
+  convertido: { bg: 'var(--tint-green-bg)', fg: 'var(--tint-green-fg)' },
+  anulado:    { bg: 'var(--tint-red-bg)', fg: 'var(--tint-red-fg)' },
 };
 
 function fmtMoney(v) {
@@ -118,21 +119,21 @@ export async function renderPresupuestos(container, db) {
       .pres-search:focus { outline:none; border-color:var(--primary); }
 
       .pres-chips { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:12px; }
-      .pres-chip { padding:7px 16px; border-radius:18px; font-size:12px; font-weight:600; cursor:pointer; border:1px solid var(--border); background:#f0f2f5; color:var(--text); user-select:none; transition:all .15s; }
-      .pres-chip:hover { background:#e4e6eb; }
+      .pres-chip { padding:7px 16px; border-radius:18px; font-size:12px; font-weight:600; cursor:pointer; border:1px solid var(--border); background:var(--bg); color:var(--text); user-select:none; transition:all .15s; }
+      .pres-chip:hover { background:var(--border); }
       .pres-chip.active { background:var(--primary); color:white; border-color:var(--primary); font-weight:700; }
       .pres-chip-count { background:rgba(255,255,255,.25); padding:1px 7px; border-radius:10px; margin-left:6px; font-size:10px; }
       .pres-chip:not(.active) .pres-chip-count { background:rgba(0,0,0,0.08); color:var(--text-muted); }
 
       .pres-stats { color:var(--text-muted); font-size:12px; margin-bottom:8px; }
 
-      .pres-table-wrap { background:white; border:1px solid var(--border); border-radius:10px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.04); }
+      .pres-table-wrap { background:var(--surface); border:1px solid var(--border); border-radius:10px; overflow:hidden; box-shadow:0 1px 3px rgba(0,0,0,0.04); }
       .pres-table { width:100%; border-collapse:collapse; font-size:13px; }
-      .pres-table thead tr { background:#fafafa; border-bottom:1px solid var(--border); }
+      .pres-table thead tr { background:var(--surface-2); border-bottom:1px solid var(--border); }
       .pres-table th { padding:10px 12px; text-align:left; font-weight:600; color:var(--text-muted); font-size:11px; text-transform:uppercase; letter-spacing:.3px; }
       .pres-table th.num, .pres-table td.num { text-align:right; }
       .pres-table tbody tr { border-bottom:1px solid var(--border); cursor:pointer; transition:background .1s; }
-      .pres-table tbody tr:hover { background:#faf6ff; }
+      .pres-table tbody tr:hover { background:var(--tint-purple-bg); }
       .pres-table tbody tr:last-child { border-bottom:none; }
       .pres-table td { padding:10px 12px; }
       .pres-num { font-weight:700; color:var(--primary); }
@@ -140,15 +141,15 @@ export async function renderPresupuestos(container, db) {
       .pres-estado { display:inline-block; padding:3px 9px; border-radius:11px; font-size:11px; font-weight:700; text-transform:uppercase; letter-spacing:.3px; }
 
       .pres-row-action { background:none; border:none; cursor:pointer; padding:4px 8px; color:var(--primary); border-radius:5px; font-size:12px; font-family:inherit; font-weight:600; }
-      .pres-row-action:hover { background:#faf6ff; }
+      .pres-row-action:hover { background:var(--tint-purple-bg); }
 
       /* Modal detalle */
       .pres-modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,0.5); display:flex; align-items:center; justify-content:center; z-index:1000; padding:20px; }
-      .pres-modal { background:white; border-radius:14px; max-width:780px; width:100%; max-height:90vh; overflow-y:auto; box-shadow:0 20px 60px rgba(0,0,0,0.3); }
+      .pres-modal { background:var(--surface); border-radius:14px; max-width:780px; width:100%; max-height:90vh; overflow-y:auto; box-shadow:0 20px 60px rgba(0,0,0,0.3); }
       .pres-modal-header { padding:18px 22px; border-bottom:1px solid var(--border); display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; }
       .pres-modal-title { font-size:20px; font-weight:700; color:var(--primary); margin:0; }
       .pres-modal-close { background:none; border:none; font-size:22px; cursor:pointer; color:var(--text-muted); padding:4px 10px; border-radius:6px; }
-      .pres-modal-close:hover { background:#f0f2f5; color:var(--text); }
+      .pres-modal-close:hover { background:var(--bg); color:var(--text); }
       .pres-modal-body { padding:18px 22px; }
 
       .pres-meta { display:grid; grid-template-columns:repeat(auto-fit, minmax(150px, 1fr)); gap:10px 18px; margin-bottom:14px; }
@@ -156,7 +157,7 @@ export async function renderPresupuestos(container, db) {
       .pres-meta-item span { display:block; color:var(--text-muted); font-size:10px; text-transform:uppercase; letter-spacing:.4px; margin-bottom:1px; }
       .pres-meta-item b { font-size:13px; color:var(--text); }
 
-      .pres-cliente-box { background:#faf6ff; border-left:3px solid var(--primary); padding:10px 14px; border-radius:6px; margin-bottom:14px; }
+      .pres-cliente-box { background:var(--tint-purple-bg); border-left:3px solid var(--primary); padding:10px 14px; border-radius:6px; margin-bottom:14px; }
       .pres-cliente-box h4 { margin:0 0 4px; font-size:11px; color:var(--primary); text-transform:uppercase; letter-spacing:.4px; }
       .pres-cliente-box .name { font-size:14px; font-weight:700; color:var(--text); }
       .pres-cliente-box .extra { font-size:12px; color:var(--text-muted); margin-top:2px; }
@@ -165,8 +166,8 @@ export async function renderPresupuestos(container, db) {
       .pres-items-table thead { background:var(--primary); color:white; }
       .pres-items-table th { padding:7px 10px; text-align:left; font-weight:600; font-size:11px; }
       .pres-items-table th.num, .pres-items-table td.num { text-align:right; }
-      .pres-items-table td { padding:7px 10px; border-bottom:1px solid #f0f0f0; }
-      .pres-items-table tbody tr:nth-child(even) { background:#faf6ff; }
+      .pres-items-table td { padding:7px 10px; border-bottom:1px solid var(--border); }
+      .pres-items-table tbody tr:nth-child(even) { background:var(--tint-purple-bg); }
 
       .pres-totales { text-align:right; font-size:14px; }
       .pres-totales .total-final { font-size:18px; font-weight:700; color:var(--primary); margin-top:4px; }
@@ -175,11 +176,11 @@ export async function renderPresupuestos(container, db) {
       .pres-btn { padding:9px 18px; border-radius:7px; font-size:13px; font-weight:600; cursor:pointer; border:none; font-family:inherit; }
       .pres-btn-primary { background:var(--primary); color:white; }
       .pres-btn-primary:hover { background:#6a1b9a; }
-      .pres-btn-secondary { background:#f0f2f5; color:var(--text); border:1px solid var(--border); }
-      .pres-btn-secondary:hover { background:#e4e6eb; }
-      .pres-btn-danger { background:#fff0f0; color:#c0392b; border:1px solid #f5c6cb; }
-      .pres-btn-danger:hover { background:#ffd9d9; }
-      .pres-btn-danger-outline { background:white; color:#c0392b; border:1px solid #c0392b; }
+      .pres-btn-secondary { background:var(--bg); color:var(--text); border:1px solid var(--border); }
+      .pres-btn-secondary:hover { background:var(--border); }
+      .pres-btn-danger { background:var(--tint-red-bg); color:var(--tint-red-fg); border:1px solid #f5c6cb; }
+      .pres-btn-danger:hover { background:var(--tint-red-bg); }
+      .pres-btn-danger-outline { background:var(--surface); color:var(--tint-red-fg); border:1px solid #c0392b; }
       .pres-btn-danger-outline:hover { background:#c0392b; color:white; }
 
       @media (max-width:768px) {
@@ -362,13 +363,13 @@ function openModal(pres) {
         <div class="pres-totales">
           ${pres.descuento && Number(pres.descuento) > 0
             ? `<div>Subtotal: ${fmtMoney(pres.subtotal)}</div>
-               <div style="color:#c1521f">Descuento: -${fmtMoney(pres.descuento)}</div>`
+               <div style="color:var(--tint-orange-fg)">Descuento: -${fmtMoney(pres.descuento)}</div>`
             : ''}
           <div class="total-final">TOTAL: ${fmtMoney(pres.total)}</div>
         </div>
 
         ${pres.notas ? `
-          <div style="margin-top:14px;padding:10px 12px;background:#fffbe6;border-left:3px solid #f0c674;border-radius:4px;font-size:12px;color:#7a5c11">
+          <div style="margin-top:14px;padding:10px 12px;background:var(--tint-yellow-bg);border-left:3px solid #f0c674;border-radius:4px;font-size:12px;color:var(--tint-yellow-fg)">
             <b>Notas:</b> ${escHtml(pres.notas)}
           </div>
         ` : ''}
@@ -397,7 +398,7 @@ function openModal(pres) {
   const btnAnular = document.getElementById('presBtnAnular');
   if (btnAnular) {
     btnAnular.addEventListener('click', async () => {
-      if (!confirm(`¿Anular el presupuesto ${fmtNum(pres.numero)}?\n\nEsta acción no se puede deshacer.`)) return;
+      if (!await confirmDialog({ title: 'Anular presupuesto', message: `¿Anular el presupuesto <b>${fmtNum(pres.numero)}</b>?<br><br><span style="color:var(--text-muted)">Esta acción no se puede deshacer.</span>`, confirmText: 'Anular', danger: true })) return;
       try {
         const { doc: dref, updateDoc: u } = await import('firebase/firestore');
         const { db } = await import('../firebase.js');
@@ -407,7 +408,7 @@ function openModal(pres) {
         });
         close();
       } catch (err) {
-        alert('Error anulando: ' + err.message);
+        alertDialog({ title: 'Error', message: 'No se pudo anular: ' + escHtml(err.message), type: 'error' });
       }
     });
   }
@@ -415,7 +416,7 @@ function openModal(pres) {
   const btnDelete = document.getElementById('presBtnDelete');
   if (btnDelete) {
     btnDelete.addEventListener('click', async () => {
-      if (!confirm(`¿Eliminar el presupuesto ${fmtNum(pres.numero)} del listado?\n\nSe quita de la web y del POS. La numeración no se reutiliza.`)) return;
+      if (!await confirmDialog({ title: 'Eliminar presupuesto', message: `¿Eliminar el presupuesto <b>${fmtNum(pres.numero)}</b> del listado?<br><br><span style="color:var(--text-muted)">Se quita de la web y del POS. La numeración no se reutiliza.</span>`, confirmText: 'Eliminar', danger: true })) return;
       try {
         const { doc: dref, updateDoc: u } = await import('firebase/firestore');
         const { db } = await import('../firebase.js');
@@ -425,7 +426,7 @@ function openModal(pres) {
         });
         close();
       } catch (err) {
-        alert('Error eliminando: ' + err.message);
+        alertDialog({ title: 'Error', message: 'No se pudo eliminar: ' + escHtml(err.message), type: 'error' });
       }
     });
   }
@@ -459,20 +460,20 @@ function openPrintView(pres) {
 <style>
   @page { size: A4; margin: 14mm; }
   * { box-sizing: border-box; }
-  body { font-family: 'Helvetica', 'Arial', sans-serif; color: #1c1e21; margin: 0; line-height: 1.4; position: relative; }
+  body { font-family: 'Helvetica', 'Arial', sans-serif; color:var(--text); margin: 0; line-height: 1.4; position: relative; }
   body::before {
     content: "PRESUPUESTO";
     position: fixed; top: 50%; left: 50%;
     transform: translate(-50%, -50%) rotate(-35deg);
-    font-size: 110px; font-weight: 900; color: #7b3fa6;
+    font-size: 110px; font-weight: 900; color:var(--primary);
     opacity: 0.05; pointer-events: none; z-index: 0;
     white-space: nowrap;
   }
   .content { position: relative; z-index: 1; }
   .header { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; margin-bottom: 12px; }
   .h-left { flex: 1; }
-  .brand { font-size: 22px; font-weight: bold; color: #7b3fa6; margin: 0 0 2px; }
-  .tag { font-style: italic; color: #65676b; font-size: 10px; margin-bottom: 6px; }
+  .brand { font-size: 22px; font-weight: bold; color:var(--primary); margin: 0 0 2px; }
+  .tag { font-style: italic; color:var(--text-muted); font-size: 10px; margin-bottom: 6px; }
   .data-line { font-size: 10px; margin: 1px 0; }
   .nro-box { background: #7b3fa6; color: white; border-radius: 6px; padding: 8px 14px; text-align: center; min-width: 160px; }
   .nro-box .lbl { font-size: 10px; font-weight: 700; letter-spacing: .5px; }
@@ -485,29 +486,29 @@ function openPrintView(pres) {
   }
   .validez .vlbl { font-size: 10px; font-weight: 700; }
   .validez .vbig { font-size: 14px; font-weight: 900; }
-  .cliente { background: #faf6ff; border-left: 3px solid #7b3fa6; padding: 10px 14px; border-radius: 4px; margin-bottom: 14px; }
-  .cliente h4 { margin: 0 0 3px; font-size: 10px; color: #7b3fa6; text-transform: uppercase; letter-spacing: .5px; }
+  .cliente { background:var(--tint-purple-bg); border-left: 3px solid #7b3fa6; padding: 10px 14px; border-radius: 4px; margin-bottom: 14px; }
+  .cliente h4 { margin: 0 0 3px; font-size: 10px; color:var(--primary); text-transform: uppercase; letter-spacing: .5px; }
   .cliente .name { font-size: 13px; font-weight: 700; }
-  .cliente .extra { font-size: 10px; color: #65676b; margin-top: 2px; }
+  .cliente .extra { font-size: 10px; color:var(--text-muted); margin-top: 2px; }
   table.items { width: 100%; border-collapse: collapse; font-size: 10px; }
   table.items thead { background: #7b3fa6; color: white; }
   table.items th { padding: 7px 8px; font-weight: 700; }
   table.items th.c, table.items td.c { text-align: center; }
   table.items th.r, table.items td.r { text-align: right; }
-  table.items td { padding: 6px 8px; border-bottom: 0.5px solid #e4e6eb; }
-  table.items tbody tr:nth-child(even) td { background: #faf6ff; }
+  table.items td { padding: 6px 8px; border-bottom: 0.5px solid var(--border); }
+  table.items tbody tr:nth-child(even) td { background:var(--tint-purple-bg); }
   .totales { margin-top: 8px; display: flex; justify-content: flex-end; }
   .totales-box { width: 220px; }
   .tot-row { display: flex; justify-content: space-between; padding: 5px 10px; font-size: 11px; }
-  .tot-row.muted { color: #65676b; }
+  .tot-row.muted { color:var(--text-muted); }
   .tot-row.final { background: #7b3fa6; color: white; font-size: 14px; font-weight: 700; padding: 9px 12px; border-radius: 4px; margin-top: 3px; }
-  .conditions { margin-top: 18px; font-size: 9px; color: #65676b; }
-  .conditions h5 { font-size: 10px; color: #7b3fa6; margin: 0 0 4px; text-transform: uppercase; letter-spacing: .4px; }
-  .footer { position: fixed; bottom: 5mm; left: 14mm; right: 14mm; font-size: 8px; color: #65676b; border-top: 1px solid #e4e6eb; padding-top: 4px; display:flex; justify-content:space-between; }
-  .firma-box { margin-top: 24px; text-align: center; font-size: 9px; color: #65676b; }
+  .conditions { margin-top: 18px; font-size: 9px; color:var(--text-muted); }
+  .conditions h5 { font-size: 10px; color:var(--primary); margin: 0 0 4px; text-transform: uppercase; letter-spacing: .4px; }
+  .footer { position: fixed; bottom: 5mm; left: 14mm; right: 14mm; font-size: 8px; color:var(--text-muted); border-top: 1px solid var(--border); padding-top: 4px; display:flex; justify-content:space-between; }
+  .firma-box { margin-top: 24px; text-align: center; font-size: 9px; color:var(--text-muted); }
   .firma-box .line { border-top: 0.6px solid #1c1e21; width: 180px; margin: 0 auto 3px; }
   @media print { body { -webkit-print-color-adjust: exact; print-color-adjust: exact; } .no-print { display: none; } }
-  .no-print { padding: 14px; text-align: center; background: #fafafa; border-bottom: 1px solid #e4e6eb; }
+  .no-print { padding: 14px; text-align: center; background:var(--surface-2); border-bottom: 1px solid var(--border); }
   .btn-print { background: #7b3fa6; color: white; padding: 10px 22px; font-weight: 700; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; }
 </style>
 </head>
@@ -589,7 +590,7 @@ function openPrintView(pres) {
 
   const w = window.open('', '_blank');
   if (!w) {
-    alert('No se pudo abrir la ventana de impresión. Habilitá los popups para este sitio.');
+    alertDialog({ title: 'Popups bloqueados', message: 'No se pudo abrir la ventana de impresión. Habilitá los popups para este sitio.', type: 'warning' });
     return;
   }
   w.document.open();

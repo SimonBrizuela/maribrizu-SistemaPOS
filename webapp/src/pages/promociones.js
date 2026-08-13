@@ -3,6 +3,7 @@ import {
   doc, query, orderBy, serverTimestamp, Timestamp
 } from 'firebase/firestore';
 import { getCached, peekCache, invalidateCacheByPrefix } from '../cache.js';
+import { confirmDialog, alertDialog, escHtml } from '../components/dialogs.js';
 
 const TIPOS_PROMO = {
   percentage: { label: 'Descuento %',           icon: 'percent' },
@@ -17,6 +18,22 @@ function fmt(n) {
 }
 
 export async function renderPromociones(container, db) {
+  // Shell vacío al toque: header con título real + grilla de placeholders.
+  container.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;flex-wrap:wrap;gap:10px">
+      <h3 style="margin:0">
+        <span class="material-icons" style="vertical-align:middle;margin-right:6px;color:var(--tint-blue-fg)">local_offer</span>
+        Promociones
+      </h3>
+      <button class="btn-primary" disabled style="opacity:0.6">
+        <span class="material-icons" style="font-size:18px">add</span> Nueva Promoción
+      </button>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px">
+      ${Array(6).fill('<div class="skel skel-card" style="height:200px"></div>').join('')}
+    </div>
+  `;
+
   // ── Cargar datos (cache 60s promos, 2 min catálogo) ───────────────────────
   const [promosCacheadas, catalogoMap] = await Promise.all([
     getCached('promos:lista', async () => {
@@ -135,58 +152,58 @@ export async function renderPromociones(container, db) {
   container.innerHTML = `
   <style>
     .promo-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:10px; }
-    .promo-header h3 { margin:0; font-size:1.2rem; color:#1a1a2e; }
+    .promo-header h3 { margin:0; font-size:1.2rem; color:var(--text-strong); }
     .btn-primary { background:#4361ee; color:#fff; border:none; border-radius:8px; padding:9px 18px; font-size:14px; font-weight:600; cursor:pointer; display:flex; align-items:center; gap:6px; }
     .btn-primary:hover { background:#3a56d4; }
     .btn-sm { padding:5px 10px; font-size:12px; border-radius:6px; border:none; cursor:pointer; font-weight:600; display:inline-flex; align-items:center; gap:4px; }
-    .btn-edit { background:#fff3cd; color:#856404; }
-    .btn-edit:hover { background:#ffe69c; }
-    .btn-delete { background:#f8d7da; color:#842029; }
-    .btn-delete:hover { background:#f1aeb5; }
-    .btn-toggle-on  { background:#d1e7dd; color:#0f5132; }
+    .btn-edit { background:var(--tint-yellow-bg); color:var(--tint-yellow-fg); }
+    .btn-edit:hover { background:var(--tint-yellow-bg); }
+    .btn-delete { background:var(--tint-red-bg); color:var(--tint-red-fg); }
+    .btn-delete:hover { background:var(--tint-red-bg); }
+    .btn-toggle-on  { background:var(--tint-green-bg); color:var(--tint-green-fg); }
     .btn-toggle-on:hover  { background:#a3cfbb; }
-    .btn-toggle-off { background:#e9ecef; color:#6c757d; }
-    .btn-toggle-off:hover { background:#dee2e6; }
+    .btn-toggle-off { background:var(--surface-2); color:var(--text-muted); }
+    .btn-toggle-off:hover { background:var(--border); }
     .promo-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap:16px; }
-    .promo-card { background:#fff; border-radius:12px; border:1px solid #e0e4ef; padding:18px; box-shadow:0 2px 8px rgba(0,0,0,.05); }
+    .promo-card { background:var(--surface); border-radius:12px; border:1px solid var(--border); padding:18px; box-shadow:0 2px 8px rgba(0,0,0,.05); }
     .promo-card.inactive { opacity:.6; border-style:dashed; }
     .promo-card-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px; }
-    .promo-name { font-size:1rem; font-weight:700; color:#1a1a2e; margin:0 0 4px; }
-    .promo-type-badge { background:#eef2ff; color:#4361ee; border-radius:6px; padding:2px 8px; font-size:11px; font-weight:700; display:inline-flex; align-items:center; gap:3px; white-space:nowrap; }
+    .promo-name { font-size:1rem; font-weight:700; color:var(--text-strong); margin:0 0 4px; }
+    .promo-type-badge { background:var(--tint-blue-bg); color:var(--tint-blue-fg); border-radius:6px; padding:2px 8px; font-size:11px; font-weight:700; display:inline-flex; align-items:center; gap:3px; white-space:nowrap; }
     .promo-type-badge .material-icons { font-size:13px !important; }
-    .promo-desc { font-size:12px; color:#6c757d; margin-bottom:10px; }
-    .promo-detail { font-size:13px; color:#495057; margin-bottom:6px; display:flex; align-items:center; gap:6px; }
-    .promo-detail .material-icons { font-size:15px !important; color:#4361ee; }
+    .promo-desc { font-size:12px; color:var(--text-muted); margin-bottom:10px; }
+    .promo-detail { font-size:13px; color:var(--text-muted); margin-bottom:6px; display:flex; align-items:center; gap:6px; }
+    .promo-detail .material-icons { font-size:15px !important; color:var(--tint-blue-fg); }
     .promo-products { display:flex; flex-wrap:wrap; gap:4px; margin-top:8px; }
-    .promo-product-tag { background:#f0f4ff; color:#4361ee; border-radius:4px; padding:2px 6px; font-size:11px; max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .promo-product-tag { background:var(--tint-blue-bg); color:var(--tint-blue-fg); border-radius:4px; padding:2px 6px; font-size:11px; max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .promo-actions { display:flex; gap:6px; margin-top:14px; flex-wrap:wrap; }
-    .empty-state { text-align:center; padding:60px 20px; color:#6c757d; }
+    .empty-state { text-align:center; padding:60px 20px; color:var(--text-muted); }
     .empty-state .material-icons { font-size:48px; display:block; margin-bottom:12px; color:#adb5bd; }
 
     /* Modal */
     .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:9999; display:flex; align-items:center; justify-content:center; padding:16px; }
-    .modal-box { background:#fff; border-radius:14px; padding:28px; width:100%; max-width:560px; max-height:90vh; overflow-y:auto; box-shadow:0 8px 32px rgba(0,0,0,.18); }
-    .modal-title { font-size:1.1rem; font-weight:700; color:#1a1a2e; margin:0 0 20px; }
+    .modal-box { background:var(--surface); border-radius:14px; padding:28px; width:100%; max-width:560px; max-height:90vh; overflow-y:auto; box-shadow:0 8px 32px rgba(0,0,0,.18); }
+    .modal-title { font-size:1.1rem; font-weight:700; color:var(--text-strong); margin:0 0 20px; }
     .form-group { margin-bottom:14px; }
-    .form-group label { display:block; font-size:13px; font-weight:600; color:#495057; margin-bottom:5px; }
+    .form-group label { display:block; font-size:13px; font-weight:600; color:var(--text-muted); margin-bottom:5px; }
     .form-group input, .form-group select, .form-group textarea {
-      width:100%; padding:8px 12px; border:1.5px solid #dee2e6; border-radius:8px;
+      width:100%; padding:8px 12px; border:1.5px solid var(--border); border-radius:8px;
       font-size:14px; box-sizing:border-box; font-family:inherit; outline:none; transition:border .2s;
     }
     .form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color:#4361ee; }
     .form-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-    .form-hint { font-size:11px; color:#6c757d; margin-top:3px; }
+    .form-hint { font-size:11px; color:var(--text-muted); margin-top:3px; }
     .product-search-box { position:relative; }
-    .product-search-results { position:absolute; top:100%; left:0; right:0; background:#fff; border:1.5px solid #dee2e6; border-radius:8px; max-height:200px; overflow-y:auto; z-index:100; box-shadow:0 4px 16px rgba(0,0,0,.1); display:none; }
+    .product-search-results { position:absolute; top:100%; left:0; right:0; background:var(--surface); border:1.5px solid var(--border); border-radius:8px; max-height:200px; overflow-y:auto; z-index:100; box-shadow:0 4px 16px rgba(0,0,0,.1); display:none; }
     .product-search-results.visible { display:block; }
-    .product-result-item { padding:8px 12px; cursor:pointer; font-size:13px; border-bottom:1px solid #f0f0f0; }
-    .product-result-item:hover { background:#f0f4ff; }
+    .product-result-item { padding:8px 12px; cursor:pointer; font-size:13px; border-bottom:1px solid var(--border); }
+    .product-result-item:hover { background:var(--tint-blue-bg); }
     .selected-products-list { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; min-height:24px; }
-    .selected-product-tag { background:#eef2ff; color:#4361ee; border-radius:6px; padding:3px 8px; font-size:12px; display:inline-flex; align-items:center; gap:4px; }
-    .selected-product-tag button { background:none; border:none; cursor:pointer; color:#4361ee; padding:0; line-height:1; font-size:14px; }
+    .selected-product-tag { background:var(--tint-blue-bg); color:var(--tint-blue-fg); border-radius:6px; padding:3px 8px; font-size:12px; display:inline-flex; align-items:center; gap:4px; }
+    .selected-product-tag button { background:none; border:none; cursor:pointer; color:var(--tint-blue-fg); padding:0; line-height:1; font-size:14px; }
     .modal-footer { display:flex; justify-content:flex-end; gap:10px; margin-top:20px; padding-top:16px; border-top:1px solid #e9ecef; }
-    .btn-cancel { background:#f8f9fa; border:1px solid #dee2e6; border-radius:8px; padding:8px 18px; font-size:14px; cursor:pointer; font-weight:600; color:#495057; }
-    .btn-cancel:hover { background:#e9ecef; }
+    .btn-cancel { background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:8px 18px; font-size:14px; cursor:pointer; font-weight:600; color:var(--text-muted); }
+    .btn-cancel:hover { background:var(--surface-2); }
     .btn-save { background:#4361ee; color:#fff; border:none; border-radius:8px; padding:9px 22px; font-size:14px; font-weight:700; cursor:pointer; }
     .btn-save:hover { background:#3a56d4; }
     .field-hide { display:none; }
@@ -197,7 +214,7 @@ export async function renderPromociones(container, db) {
   </style>
 
   <div class="promo-header">
-    <h3><span class="material-icons" style="vertical-align:middle;margin-right:6px;color:#4361ee">local_offer</span>Promociones</h3>
+    <h3><span class="material-icons" style="vertical-align:middle;margin-right:6px;color:var(--tint-blue-fg)">local_offer</span>Promociones</h3>
     <button class="btn-primary" id="btnNuevaPromo">
       <span class="material-icons" style="font-size:18px">add</span> Nueva Promoción
     </button>
@@ -242,7 +259,7 @@ export async function renderPromociones(container, db) {
           });
         }
         if (!parts.length) return '';
-        return ` <small style="color:#7c3aed;font-weight:700">[${parts.join('/')}]</small>`;
+        return ` <small style="color:var(--tint-purple-fg);font-weight:700">[${parts.join('/')}]</small>`;
       };
       const productosNombres = productosIds.map(id => (catalogoMap[id]?.nombre || id) + modoSuffix(id));
       const variantesNombres = variantesArr.map(v => {
@@ -281,7 +298,7 @@ export async function renderPromociones(container, db) {
               <span class="material-icons">${tipo.icon}</span>${tipo.label}
             </span>
           </div>
-          <span style="font-size:11px;padding:3px 8px;border-radius:20px;font-weight:700;${activo ? 'background:#d1e7dd;color:#0f5132' : 'background:#e9ecef;color:#6c757d'}">
+          <span style="font-size:11px;padding:3px 8px;border-radius:20px;font-weight:700;${activo ? 'background:var(--tint-green-bg);color:var(--tint-green-fg)' : 'background:var(--surface-2);color:var(--text-muted)'}">
             ${activo ? 'Activa' : 'Inactiva'}
           </span>
         </div>
@@ -290,7 +307,7 @@ export async function renderPromociones(container, db) {
         ${cantMinHtml}
         ${cantMaxHtml}
         ${itemsNombres.length > 0 ? `
-          <div style="font-size:12px;color:#6c757d;margin-top:8px;margin-bottom:4px;font-weight:600">
+          <div style="font-size:12px;color:var(--text-muted);margin-top:8px;margin-bottom:4px;font-weight:600">
             Productos (${productosNombres.length})${variantesNombres.length ? ` · Variantes (${variantesNombres.length})` : ''}:
           </div>
           <div class="promo-products">
@@ -335,7 +352,7 @@ export async function renderPromociones(container, db) {
       promo.activo = newActivo;
       renderGrid();
     } else if (action === 'delete') {
-      if (!confirm(`¿Eliminar la promoción "${promo.nombre}"?\nEsta acción no se puede deshacer.`)) return;
+      if (!await confirmDialog({ title: 'Eliminar promoción', message: `¿Eliminar la promoción <b>"${escHtml(promo.nombre)}"</b>?<br><span style="color:var(--text-muted)">Esta acción no se puede deshacer.</span>`, confirmText: 'Eliminar', danger: true })) return;
       await deleteDoc(doc(db, 'promociones', id));
       invalidateCacheByPrefix('promociones');
       invalidateCacheByPrefix('promos:');
@@ -483,18 +500,18 @@ export async function renderPromociones(container, db) {
         const nombre = labelForKey(key);
         const disponibles = modosForKey(key);
         const activos = modosPorItem[key] || {};
-        const bg = esVariante ? 'background:#f3e8ff;color:#7c3aed' : '';
+        const bg = esVariante ? 'background:var(--tint-purple-bg);color:var(--tint-purple-fg)' : '';
         const icon = esVariante
           ? '<span class="material-icons" style="font-size:13px;vertical-align:middle">palette</span> '
           : '';
         // Solo mostramos los toggles si el item ofrece más de un modo.
         const togglesHtml = (disponibles.length > 1) ? `
-          <span style="display:inline-flex;gap:4px;margin-left:6px;padding-left:6px;border-left:1px solid #d9d9e0;align-items:center">
+          <span style="display:inline-flex;gap:4px;margin-left:6px;padding-left:6px;border-left:1px solid var(--border);align-items:center">
             ${disponibles.map(m => {
               const on = !!activos[m];
               const minVal = on ? (activos[m].min || 0) : 0;
               const stylesOn  = 'background:#4361ee;color:#fff;border-color:#4361ee';
-              const stylesOff = 'background:#fff;color:#6c757d;border-color:#d9d9e0';
+              const stylesOff = 'background:var(--surface);color:var(--text-muted);border-color:var(--border)';
               // Input solo visible si el modo está ON
               const inputHtml = on
                 ? `<input type="number" min="0" step="1" data-modo-min="${key}|${m}" value="${minVal || ''}" placeholder="min"
@@ -575,9 +592,9 @@ export async function renderPromociones(container, db) {
       if (matches.length === 0) { resultsDiv.classList.remove('visible'); return; }
       resultsDiv.innerHTML = matches.map(it => {
         const tag = it.kind === 'variante'
-          ? `<span style="background:#f3e8ff;color:#7c3aed;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;margin-right:6px">VAR</span>`
-          : `<span style="background:#eef2ff;color:#4361ee;border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;margin-right:6px">PROD</span>`;
-        const sub = it.subtitulo ? ` <small style="color:#aaa">${it.subtitulo}</small>` : '';
+          ? `<span style="background:var(--tint-purple-bg);color:var(--tint-purple-fg);border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;margin-right:6px">VAR</span>`
+          : `<span style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;margin-right:6px">PROD</span>`;
+        const sub = it.subtitulo ? ` <small style="color:var(--text-muted)">${it.subtitulo}</small>` : '';
         return `<div class="product-result-item" data-key="${it.key}">${tag}${it.nombre}${sub}</div>`;
       }).join('');
       resultsDiv.classList.add('visible');
@@ -665,13 +682,13 @@ export async function renderPromociones(container, db) {
       const cantMaxRaw= modal.querySelector('#mCantMax').value;
       const cantMax   = (cantMaxRaw === '' || cantMaxRaw == null) ? 0 : (parseInt(cantMaxRaw) || 0);
 
-      if (!nombre) { alert('El nombre es obligatorio'); return; }
-      if (selectedItems.length === 0) { alert('Debés seleccionar al menos un producto o variante'); return; }
+      if (!nombre) { alertDialog({ title: 'Falta el nombre', message: 'El nombre es obligatorio.', type: 'warning' }); return; }
+      if (selectedItems.length === 0) { alertDialog({ title: 'Sin productos', message: 'Debés seleccionar al menos un producto o variante.', type: 'warning' }); return; }
       if ((tipo === 'percentage' || tipo === 'fixed' || tipo === 'bundle') && valor <= 0) {
-        alert('Ingresá un valor mayor a 0'); return;
+        alertDialog({ title: 'Valor inválido', message: 'Ingresá un valor mayor a 0.', type: 'warning' }); return;
       }
       if (tipo === 'nxm' && cantReq <= cantPaga) {
-        alert('La cantidad que lleva (N) debe ser mayor que la que paga (M)'); return;
+        alertDialog({ title: 'Cantidades inválidas', message: 'La cantidad que lleva (N) debe ser mayor que la que paga (M).', type: 'warning' }); return;
       }
 
       // Divido selectedItems en productos (parent) y variantes específicas
@@ -735,7 +752,7 @@ export async function renderPromociones(container, db) {
         modal.remove();
         renderGrid();
       } catch (err) {
-        alert('Error guardando: ' + err.message);
+        alertDialog({ title: 'Error', message: 'No se pudo guardar: ' + escHtml(err.message), type: 'error' });
       }
     });
   }

@@ -42,16 +42,26 @@ jobs:
             Write-Error "Falta el secret POS_BOOTSTRAP_SECRET. Sin el, las PCs no pueden sincronizar."
             exit 1
           }
-          $url = if ($env:POS_PROVISION_URL) { $env:POS_PROVISION_URL } else { "https://posmr87.netlify.app/api/provision" }
+          # El valor guardado en GitHub puede arrastrar BOM o saltos de linea si
+          # se pego desde un archivo generado con Out-File. El endpoint compara
+          # byte a byte, asi que un BOM invisible devuelve 401 y deja a toda la
+          # flota sin credenciales (paso en la v3.0.54).
+          $sucios = [char[]]@([char]0xFEFF, [char]0x200B, ' ', "`t", "`r", "`n")
+          $secret = $env:POS_BOOTSTRAP_SECRET.Trim($sucios)
+          if (-not $secret) {
+            Write-Error "POS_BOOTSTRAP_SECRET quedo vacio despues de limpiarlo."
+            exit 1
+          }
+          $url = ($(if ($env:POS_PROVISION_URL) { $env:POS_PROVISION_URL } else { "https://posmr87.netlify.app/api/provision" })).Trim($sucios)
           $json = @{
             url        = $url
-            secret     = $env:POS_BOOTSTRAP_SECRET
+            secret     = $secret
             project_id = "mari-d7c71"
           } | ConvertTo-Json -Compress
           # WriteAllText con UTF8Encoding($false) evita el BOM que mete Out-File
           # en PowerShell 5.1 y que rompe el json.load del lado de Python.
           [IO.File]::WriteAllText("$PWD\provision.json", $json, (New-Object Text.UTF8Encoding($false)))
-          Write-Host "provision.json escrito ($($json.Length) bytes) apuntando a $url"
+          Write-Host "provision.json escrito ($($json.Length) bytes) apuntando a $url - secreto de $($secret.Length) caracteres"
 
       - name: Patch APP_VERSION
         shell: pwsh
