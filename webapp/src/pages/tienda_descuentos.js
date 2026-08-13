@@ -404,6 +404,14 @@ function abrirEditor(d = null) {
     };
     try {
       const id = d?._id || `${Date.now()}`;
+      // Si se le cambió el alcance —de un rubro a otro, o de rubro a artículo—
+      // primero hay que devolverle el precio al alcance VIEJO. Sin esto, los
+      // productos que ya no entran en el descuento se quedaban rebajados para
+      // siempre: pasó en producción con Perfumería cuando el descuento se mudó
+      // a Juguetería.
+      const cambioDeAlcance = d && (d.alcance !== datos.alcance || d.objetivo !== datos.objetivo);
+      if (cambioDeAlcance) await aplicarEnLaTienda({ ...d, activo: false });
+
       await setDoc(doc(_db, 'tienda_descuentos', id), datos, { merge: true });
       await aplicarEnLaTienda({ ...datos, _id: id });
       cerrar();
