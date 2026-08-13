@@ -416,7 +416,8 @@ function abrirEditor(p) {
       </header>
 
       <div class="cuerpo">
-        <div id="edAviso"></div>
+        <div id="edBanner"></div>
+        <div class="tienda-columnas">
 
         <div class="tienda-bloque">
           <h4>En la tienda</h4>
@@ -424,10 +425,6 @@ function abrirEditor(p) {
             <button class="tienda-opcion" data-valor="auto">Según el rubro</button>
             <button class="tienda-opcion" data-valor="si">Publicar siempre</button>
             <button class="tienda-opcion" data-valor="no">No publicar</button>
-          </div>
-          <div class="tienda-pista">
-            "Según el rubro" sigue lo que esté habilitado en la configuración de la
-            tienda. Las otras dos mandan sobre eso, para este producto solo.
           </div>
           <label style="display:flex;align-items:center;gap:9px;margin-top:12px;cursor:pointer;font-size:13.5px">
             <input type="checkbox" id="edDestacado" ${p.destacado ? 'checked' : ''}
@@ -443,9 +440,6 @@ function abrirEditor(p) {
             <input type="text" id="edNombre" maxlength="90"
                    value="${escHtml(String(p.datos.tienda_nombre || ''))}"
                    placeholder="${escHtml(nombreBonito(p.nombreCatalogo))}">
-            <div class="tienda-pista">
-              Vacío usa el del catálogo, prolijado: <b>${escHtml(nombreBonito(p.nombreCatalogo))}</b>
-            </div>
           </div>
           <div class="tienda-campo">
             <label>Descripción</label>
@@ -454,13 +448,10 @@ function abrirEditor(p) {
           </div>
           <div class="tienda-campo">
             <label>Aviso antes de comprar</label>
-            <input type="text" id="edAviso" maxlength="160"
+            <input type="text" id="edAvisoTexto" maxlength="160"
               value="${escHtml(String(p.datos.tienda_aviso || ''))}"
               placeholder="Sin cambio ni devolución · Se corta a pedido">
-            <div class="tienda-pista">
-              Sale resaltado arriba del botón de agregar. Si lo dejás vacío se usa
-              el aviso del rubro (botón <b>Avisos</b> arriba).
-            </div>
+            <div class="tienda-pista">Vacío usa el aviso del rubro.</div>
           </div>
         </div>
 
@@ -468,10 +459,11 @@ function abrirEditor(p) {
           <h4>Fotos</h4>
           <div class="tienda-fotos" id="edFotos"></div>
           <div class="tienda-pista" id="edFotosPista">
-            La primera es la que se ve en el listado. Se achican a 900 px y se
-            pasan a WebP antes de subir. Las fotos se guardan al instante.
+            La primera es la que se ve en el listado. Se guardan al instante.
           </div>
           <input type="file" id="edArchivo" accept="image/*" multiple hidden>
+        </div>
+
         </div>
 
         <div class="tienda-bloque">
@@ -569,7 +561,7 @@ function abrirEditor(p) {
       tienda_publicar: interruptor === 'si' ? true : interruptor === 'no' ? false : undefined,
     };
     const motivo = motivoDeNoPublicar(simulado, _rubrosHabilitados);
-    $('#edAviso').innerHTML = motivo
+    $('#edBanner').innerHTML = motivo
       ? `<div class="tienda-aviso freno">
            <span class="material-icons">visibility_off</span>
            <div>No está en la tienda: <b>${escHtml(motivo)}</b>.
@@ -814,7 +806,7 @@ function abrirEditor(p) {
         tienda_destacado: $('#edDestacado').checked ? true : undefined,
         tienda_nombre: nombre || undefined,
         tienda_descripcion: descripcion || undefined,
-        tienda_aviso: ($('#edAviso').value || '').trim() || undefined,
+        tienda_aviso: ($('#edAvisoTexto').value || '').trim() || undefined,
         tienda_unidad: unidad || undefined,
         tienda_ofrecer_pack: pack === 'si' ? true : pack === 'no' ? false : undefined,
         tienda_pack_nombre: packNombre || undefined,

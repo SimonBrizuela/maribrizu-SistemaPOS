@@ -99,9 +99,77 @@
   display: flex; align-items: center; justify-content: center; padding: 16px;
 }
 .tienda-editor {
-  background: var(--surface); border-radius: 14px; width: 100%; max-width: 720px;
-  max-height: 92vh; display: flex; flex-direction: column;
+  background: var(--surface); border-radius: 14px; width: 100%; max-width: 960px;
+  max-height: 92vh;
+  /* dvh mide la pantalla real del teléfono, con la barra del navegador adentro.
+     Con vh solo, el pie con "Guardar cambios" quedaba tapado por esa barra. */
+  max-height: 92dvh;
+  display: flex; flex-direction: column;
   box-shadow: 0 8px 32px rgba(0,0,0,.22);
+}
+
+/* En el teléfono ocupa la pantalla entera, como una hoja que sube desde abajo:
+   un recuadro flotante de 92% deja bordes muertos y achica el área util donde
+   justamente hay menos lugar. */
+@media (max-width: 560px) {
+  .tienda-overlay { padding: 0; align-items: flex-end; }
+  .tienda-editor {
+    max-width: none; max-height: 100dvh; height: 100dvh;
+    border-radius: 0;
+  }
+  .tienda-editor header,
+  .tienda-editor .cuerpo,
+  .tienda-editor footer { padding-left: 16px; padding-right: 16px; }
+
+  /* Nada puede ser mas ancho que la pantalla. En flex y en grid los hijos no
+     bajan de su contenido salvo que se les diga: sin estos `min-width: 0` los
+     tres botones de "En la tienda" estiraban el modal y se cortaban el nombre
+     del producto, los campos y hasta "Guardar cambios". */
+  .tienda-editor,
+  .tienda-editor .cuerpo,
+  .tienda-columnas,
+  .tienda-bloque,
+  .tienda-campo,
+  .tienda-dos { min-width: 0; max-width: 100%; }
+  /* Red de contencion: si algun hijo insiste en ser mas ancho que la pantalla,
+     se recorta el desborde en vez de empujar el modal y cortar los botones. */
+  .tienda-editor { overflow-x: hidden; }
+  .tienda-editor .cuerpo { overflow-x: hidden; }
+  .tienda-editor header h3,
+  .tienda-editor header p { overflow-wrap: anywhere; }
+  .tienda-opcion { min-width: 0; flex: 1 1 30%; padding: 9px 6px; font-size: 12.5px; }
+
+  /* El pie no se va de la pantalla: los dos botones a lo ancho y a mano. */
+  .tienda-editor footer { flex-wrap: wrap; }
+  .tienda-editor footer .pc-btn,
+  .tienda-editor footer .btn-primary { flex: 1; justify-content: center; }
+  /* El estado pasa a su propio renglon: apretado contra los botones no se lee. */
+  .tienda-editor footer > span { flex: 1 0 100%; margin: 0 0 4px; }
+}
+
+/* Pantallas bajas (una notebook chica, el teléfono acostado): el cuerpo se
+   queda con lo que sobre y el pie siempre visible. */
+@media (max-height: 560px) {
+  .tienda-editor { max-height: 100dvh; height: 100dvh; border-radius: 0; }
+  .tienda-editor header { padding-top: 12px; padding-bottom: 12px; }
+  .tienda-editor footer { padding-top: 10px; padding-bottom: 10px; }
+}
+
+/* Dos columnas cuando hay lugar. Lo que se escribe a la izquierda y lo que se
+   decide y se ve a la derecha; antes era una sola columna angosta que obligaba
+   a scrollear hasta el botón de guardar. */
+@media (min-width: 860px) {
+  .tienda-columnas {
+    display: grid;
+    grid-template-columns: 1.15fr 1fr;
+    gap: 0 28px;
+    align-items: start;
+  }
+  /* "Cómo se ve" (los textos) a la izquierda, ocupando las dos filas: es el
+     bloque alto. "En la tienda" y "Fotos" se apilan a la derecha. */
+  .tienda-columnas > .tienda-bloque:nth-child(2) { grid-column: 1; grid-row: 1 / span 2; }
+  .tienda-columnas > .tienda-bloque:nth-child(1) { grid-column: 2; grid-row: 1; }
+  .tienda-columnas > .tienda-bloque:nth-child(3) { grid-column: 2; grid-row: 2; }
 }
 .tienda-editor header {
   display: flex; align-items: flex-start; gap: 12px;
@@ -109,7 +177,13 @@
 }
 .tienda-editor header h3 { margin: 0; font-size: 16px; font-weight: 700; }
 .tienda-editor header p { margin: 3px 0 0; font-size: 12.5px; color: var(--text-muted); }
-.tienda-editor .cuerpo { padding: 18px 22px; overflow-y: auto; }
+.tienda-editor .cuerpo {
+  padding: 18px 22px; overflow-y: auto;
+  /* Que el cuerpo sea lo unico que scrollea: sin esto, en flex el
+     hijo no baja de su contenido y empuja el pie fuera de la vista. */
+  min-height: 0; flex: 1;
+  overscroll-behavior: contain;
+}
 
 /* El enlace al producto del catálogo general: la publicación es una vidriera
    de algo que vive en otro lado, y desde acá se llega a ese otro lado. */
@@ -128,8 +202,8 @@
 
 .tienda-bloque { margin-bottom: 20px; }
 .tienda-bloque > h4 {
-  margin: 0 0 10px; font-size: 12px; font-weight: 700; text-transform: uppercase;
-  letter-spacing: .5px; color: var(--text-muted);
+  margin: 0 0 10px; font-size: 11px; font-weight: 700; letter-spacing: .8px;
+  text-transform: uppercase; color: var(--text-muted); opacity: .75;
 }
 .tienda-campo { margin-bottom: 12px; }
 .tienda-campo label { display: block; font-size: 12.5px; font-weight: 600; color: var(--text-muted); margin-bottom: 4px; }
