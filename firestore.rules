@@ -167,6 +167,15 @@ service cloud.firestore {
       allow read, write: if authorized();
     }
 
+    // ── BORRADORES DE LA TIENDA ───────────────────────────────────────────
+    // Fichas armadas de productos que todavía NO salen a la vidriera (su rubro
+    // está apagado). La tienda pública no lee esta colección: solo el panel,
+    // para decidir qué prender. Las escribe el script por Admin SDK.
+    match /tienda_borradores/{productoId} {
+      allow read:  if authorized();
+      allow write: if isAdmin();
+    }
+
     // ── HISTORIAL DE MOVIMIENTOS DE STOCK ─────────────────────────────────
     // Es el respaldo para reconstruir por qué un stock no cierra: cada entrada
     // y salida con quién, cuándo y de cuánto a cuánto. Se puede leer y agregar,

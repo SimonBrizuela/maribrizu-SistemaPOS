@@ -1922,6 +1922,7 @@ class FirebaseSync:
                 now_str = now_dt.strftime('%Y-%m-%dT%H:%M:%S')
                 batch = self.db.batch()
                 updated = 0
+                tienda = []          # (firebase_id, stock que quedó) para la web
 
                 for it in items:
                     pid = it.get('product_id')
@@ -1967,6 +1968,11 @@ class FirebaseSync:
                         if firebase_id:
                             cat_ref = self.db.collection('catalogo').document(firebase_id)
                             batch.set(cat_ref, payload_conj, merge=True)
+                            # En un conjunto lo que se vende son las unidades
+                            # sueltas, no los packs cerrados: la tienda mira
+                            # `conjunto_total`, igual que el sync.
+                            tienda.append((firebase_id,
+                                           float(row.get('conjunto_total') or 0)))
                         updated += 1
                         continue
 
@@ -1995,6 +2001,10 @@ class FirebaseSync:
                         }, merge=True)
 
                     updated += 1
+                    # Lo que la tienda tiene que saber de este producto: el
+                    # stock que quedó en la PC después de la venta.
+                    if firebase_id:
+                        tienda.append((firebase_id, float(row.get('stock') or 0)))
 
                 if updated == 0:
                     return
@@ -2013,6 +2023,7 @@ class FirebaseSync:
                     pass
 
                 logger.info(f"Firebase: stock decrementado atómicamente para {updated} producto(s) tras venta.")
+                self._avisar_a_la_tienda(tienda)
             except Exception as e:
                 logger.error(f"Firebase: Error actualizando stock post-venta: {e}")
 
@@ -2020,6 +2031,49 @@ class FirebaseSync:
         # El historial de movimientos viaja por su cuenta: lo que no suba ahora
         # queda pendiente en SQLite y se reintenta, sin frenar la venta.
         self.push_stock_movimientos(db_manager)
+
+    # Productos que NO están en la tienda. Se recuerdan para no volver a
+    # intentar escribirles en cada venta del día.
+    _fuera_de_la_tienda = set()
+
+    def _avisar_a_la_tienda(self, cambios: list) -> None:
+        """Deja el espejo de la tienda al día en el momento de la venta.
+
+        Hasta ahora la web se enteraba cuando corría `scripts/sync_tienda.py`,
+        cada 15 minutos y solo si la PC del local estaba prendida: en el medio
+        ofrecía lo que ya no había. Acá se hace lo mismo que hace el sync, pero
+        al instante:
+
+          · queda stock  → se actualiza el número en `tienda_productos`
+          · llegó a cero → se borra el doc, que es la misma baja que hace el
+            sync. Así la vidriera no necesita ningún cambio: lo que no está,
+            no se muestra.
+
+        Es best-effort y va después del commit del stock: si falla, la venta ya
+        está firme y el sync de los 15 minutos lo arregla igual.
+        """
+        if not self.enabled or not cambios:
+            return
+        col = self.db.collection('tienda_productos')
+        bajas = 0
+        tocados = 0
+        for firebase_id, stock in cambios:
+            if firebase_id in self._fuera_de_la_tienda:
+                continue
+            try:
+                if stock > 0:
+                    # update() falla si el producto no está publicado, que es
+                    # justo lo que queremos: no inventar fichas a medias.
+                    col.document(firebase_id).update({'stock': int(stock)})
+                    tocados += 1
+                else:
+                    col.document(firebase_id).delete()
+                    bajas += 1
+            except Exception:
+                # No publicado (o borrado en el medio): anotarlo y seguir.
+                self._fuera_de_la_tienda.add(firebase_id)
+        if tocados or bajas:
+            logger.info(f"Tienda: {tocados} con stock nuevo, {bajas} dados de baja.")
 
     def push_stock_movimientos(self, db_manager, en_hilo: bool = True) -> None:
         """Sube a `stock_movimientos` las filas que todavía no viajaron.
