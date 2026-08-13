@@ -533,6 +533,13 @@ class DatabaseManager:
                 )
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_clientes_activo ON clientes_facturacion(activo)")
+            # Última vez que se facturó a este cliente: la lista de selección los
+            # ordena por esto, porque repetirle la factura al mismo cliente es lo
+            # que más pasa y buscarlo de nuevo entre treinta es tiempo perdido.
+            try:
+                cursor.execute("ALTER TABLE clientes_facturacion ADD COLUMN ultimo_uso TEXT")
+            except Exception:
+                pass
 
             # Migración: convertir firebase_id='' a NULL en clientes/productos/observations.
             # SQLite UNIQUE permite múltiples NULL pero solo un ''. Si dejamos '' como
