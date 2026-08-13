@@ -220,3 +220,8 @@ minimos_anteriores.json
 
 # Salida de la tarea programada del sync de la tienda
 logs/
+
+# Semillas del balance: son la contabilidad real del local (aperturas, ingresos
+# y compras mes a mes) escritas dentro de un .js. El repo es publico.
+webapp/src/pages/balance_dias_seed.js
+webapp/src/pages/balance_seed.js

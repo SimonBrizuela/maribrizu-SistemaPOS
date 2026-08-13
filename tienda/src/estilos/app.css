@@ -2982,3 +2982,21 @@
   font-size: var(--t-xs);
   color: var(--text-2);
 }
+
+/* Aviso del local sobre un producto: "no se acepta devolución", "se corta a
+   pedido". Va pegado al botón de agregar, que es donde el cliente decide, y con
+   el amarillo de advertencia — ni rojo de error ni gris de letra chica. */
+.aviso-producto {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 0 0 var(--e-3);
+  padding: 10px 12px;
+  border: 1px solid var(--aviso-borde, #E9C46A);
+  border-radius: var(--r-md);
+  background: var(--aviso-fondo, #FDF6E3);
+  color: var(--aviso-texto, #7A5B00);
+  font-size: var(--t-sm);
+  line-height: 1.45;
+}
+.aviso-producto svg { flex: none; margin-top: 2px; }

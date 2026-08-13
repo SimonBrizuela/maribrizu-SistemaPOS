@@ -1,4 +1,4 @@
-import { cargarConfig, traerProducto, traerProductos } from '../datos.js';
+import { cargarConfig, cargarAvisos, avisoDe, traerProducto, traerProductos } from '../datos.js';
 import { grilla, pie, vacio } from '../componentes.js';
 import { pesos, esc, nombreBonito, colorDeVariedad } from '../formato.js';
 import { icono } from '../iconos.js';
@@ -118,7 +118,10 @@ function listaDeVariedades(variedades) {
 
 export async function producto({ montar, params }) {
   const cfg = await cargarConfig();
-  const p = await traerProducto(params.id);
+  const [p, avisos] = await Promise.all([
+    traerProducto(params.id),
+    cargarAvisos(),
+  ]);
 
   if (!p) {
     montar(`
@@ -227,6 +230,17 @@ export async function producto({ montar, params }) {
                 </div>
                 <span class="cantidad__tope" data-tope></span>
               </div>`}
+            ${(() => {
+              // Justo arriba del botón: es el momento en que decide. Enterarse
+              // de que no hay devolución después de pagar es el reclamo que
+              // esto viene a evitar.
+              const aviso = avisoDe(p, avisos);
+              return aviso ? `
+                <p class="aviso-producto">
+                  ${icono('atencion', { tam: 16 })}
+                  <span>${esc(aviso)}</span>
+                </p>` : '';
+            })()}
             <button class="boton boton--primario boton--grande boton--bloque" data-agregar>
               ${icono('carrito', { tam: 20 })} <span data-etiqueta-agregar>Agregar al pedido</span>
             </button>

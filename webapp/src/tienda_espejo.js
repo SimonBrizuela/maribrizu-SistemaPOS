@@ -225,6 +225,10 @@ export function documentoEspejo(datos) {
   return {
     nombre,
     descripcion: String(datos?.tienda_descripcion ?? '').trim(),
+    // Aviso propio del producto: lo que el cliente tiene que saber ANTES de
+    // comprarlo ("no se acepta devolución", "se corta a pedido"). Si está
+    // vacío, la tienda cae al aviso del subrubro y después al del rubro.
+    aviso: String(datos?.tienda_aviso ?? '').trim() || null,
     precio: m.precio,
     precio_anterior: null,
     precio_pack: m.precio_pack,

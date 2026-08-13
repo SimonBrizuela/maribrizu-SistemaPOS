@@ -369,6 +369,10 @@ def armar_documento(doc_id, datos):
     return {
         'nombre': nombre,
         'descripcion': str(datos.get('tienda_descripcion') or '').strip(),
+        # Aviso propio del producto. Gemelo de `aviso` en documentoEspejo() de
+        # webapp/src/tienda_espejo.js: si uno cambia sin el otro, el sync le
+        # pisa al panel lo que acaba de guardar.
+        'aviso': str(datos.get('tienda_aviso') or '').strip() or None,
         # Precio de UNA unidad: un metro de cinta, un boligrafo suelto.
         'precio': m['precio'],
         'precio_anterior': None,

@@ -17,7 +17,7 @@
  * vez que se abre esta pantalla. Como cada cambio se espeja al instante, lo que
  * se ve acá es lo que hay publicado.
  */
-import { collection, doc, getDocs, orderBy, query } from 'firebase/firestore';
+import { collection, doc, getDoc, setDoc, getDocs, orderBy, query } from 'firebase/firestore';
 import { getCached } from '../cache.js';
 import { leerDocRapido } from '../config.js';
 import { alertDialog, escHtml } from '../components/dialogs.js';
@@ -245,6 +245,94 @@ async function guardar(p, cambios) {
   return resultado;
 }
 
+/* ── Avisos que ve el cliente ──────────────────────────────────────────────── */
+
+/**
+ * Los avisos son lo que el local necesita que el cliente lea ANTES de comprar:
+ * "mercería no tiene cambio ni devolución", "las telas se cortan a pedido".
+ *
+ * Se cargan por rubro entero, que es como se piensan en el mostrador, y quedan
+ * en un solo documento (`tienda_config/avisos`) que la tienda lee de una. Un
+ * producto puede tener el suyo propio desde su editor, y ese le gana al del
+ * rubro: lo específico manda.
+ */
+async function abrirAvisos(db, rubros) {
+  const ref = doc(db, 'tienda_config', 'avisos');
+  let guardados = { rubros: {}, subrubros: {} };
+  try {
+    const snap = await getDoc(ref);
+    if (snap.exists()) {
+      const d = snap.data() || {};
+      guardados = {
+        rubros: d.rubros && typeof d.rubros === 'object' ? d.rubros : {},
+        subrubros: d.subrubros && typeof d.subrubros === 'object' ? d.subrubros : {},
+      };
+    }
+  } catch (e) {
+    console.warn('avisos: no se pudieron leer', e?.message || e);
+  }
+
+  document.querySelector('.avisos-overlay')?.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay avisos-overlay';
+  overlay.innerHTML = `
+    <div class="modal" style="max-width:640px;width:100%">
+      <div class="modal-header">
+        <h3 style="margin:0;font-size:16px">Avisos para el cliente</h3>
+        <button class="avisos-cerrar" style="background:none;border:none;cursor:pointer;color:var(--text-muted)">
+          <span class="material-icons">close</span>
+        </button>
+      </div>
+      <div style="padding:0 20px 8px;color:var(--text-muted);font-size:12.5px;line-height:1.5">
+        Lo que escribas acá aparece en la ficha de cada producto del rubro, arriba
+        del botón de agregar, y en el pedido. Dejalo vacío para no mostrar nada.
+      </div>
+      <div style="padding:8px 20px 20px;max-height:56vh;overflow:auto;display:flex;flex-direction:column;gap:12px">
+        ${rubros.map(r => `
+          <label style="display:block">
+            <span style="font-size:12px;font-weight:700;color:var(--text-muted);
+                         text-transform:uppercase;letter-spacing:.4px">${escHtml(nombreBonito(r))}</span>
+            <input type="text" data-aviso-rubro="${escHtml(r)}" maxlength="160"
+                   value="${escHtml(guardados.rubros?.[r] || '')}"
+                   placeholder="Sin aviso"
+                   style="width:100%;margin-top:4px;padding:9px 11px;border:1.5px solid var(--border);
+                          border-radius:8px;font-size:13px;box-sizing:border-box">
+          </label>`).join('')}
+      </div>
+      <div style="padding:12px 20px;border-top:1px solid var(--border);display:flex;
+                  justify-content:flex-end;gap:8px;background:var(--surface-2)">
+        <button class="pc-btn avisos-cancelar">Cancelar</button>
+        <button class="btn-primary avisos-guardar">Guardar avisos</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const cerrar = () => overlay.remove();
+  overlay.querySelector('.avisos-cerrar').addEventListener('click', cerrar);
+  overlay.querySelector('.avisos-cancelar').addEventListener('click', cerrar);
+  overlay.addEventListener('click', ev => { if (ev.target === overlay) cerrar(); });
+
+  overlay.querySelector('.avisos-guardar').addEventListener('click', async ev => {
+    const boton = ev.currentTarget;
+    boton.disabled = true;
+    boton.textContent = 'Guardando…';
+    const nuevos = {};
+    overlay.querySelectorAll('[data-aviso-rubro]').forEach(inp => {
+      const texto = inp.value.trim();
+      if (texto) nuevos[inp.dataset.avisoRubro] = texto;
+    });
+    try {
+      await setDoc(ref, { rubros: nuevos, subrubros: guardados.subrubros || {} }, { merge: true });
+      cerrar();
+      avisar(`${Object.keys(nuevos).length} rubro(s) con aviso`);
+    } catch (e) {
+      boton.disabled = false;
+      boton.textContent = 'Guardar avisos';
+      alertDialog({ title: 'No se pudo guardar', message: escHtml(e?.message || String(e)), type: 'error' });
+    }
+  });
+}
+
 /* ── Editor ───────────────────────────────────────────────────────────────── */
 
 function abrirEditor(p) {
@@ -328,6 +416,16 @@ function abrirEditor(p) {
             <label>Descripción</label>
             <textarea id="edDescripcion" maxlength="600"
               placeholder="Para qué sirve, qué medida tiene, qué trae. Se lee abajo del precio.">${escHtml(String(p.datos.tienda_descripcion || ''))}</textarea>
+          </div>
+          <div class="tienda-campo">
+            <label>Aviso antes de comprar</label>
+            <input type="text" id="edAviso" maxlength="160"
+              value="${escHtml(String(p.datos.tienda_aviso || ''))}"
+              placeholder="Sin cambio ni devolución · Se corta a pedido">
+            <div class="tienda-pista">
+              Sale resaltado arriba del botón de agregar. Si lo dejás vacío se usa
+              el aviso del rubro (botón <b>Avisos</b> arriba).
+            </div>
           </div>
         </div>
 
@@ -681,6 +779,7 @@ function abrirEditor(p) {
         tienda_destacado: $('#edDestacado').checked ? true : undefined,
         tienda_nombre: nombre || undefined,
         tienda_descripcion: descripcion || undefined,
+        tienda_aviso: ($('#edAviso').value || '').trim() || undefined,
         tienda_unidad: unidad || undefined,
         tienda_ofrecer_pack: pack === 'si' ? true : pack === 'no' ? false : undefined,
         tienda_pack_nombre: packNombre || undefined,
@@ -740,6 +839,10 @@ export async function renderTiendaCatalogo(container, db) {
       <select id="tiendaRubro" style="min-width:150px"><option value="">Todos los rubros</option></select>
       <input type="text" id="tiendaBuscar" placeholder="Nombre, marca o código…"
              style="flex:1;min-width:200px;max-width:320px">
+      <button class="pc-btn" id="tiendaAvisos" title="Avisos que ve el cliente antes de comprar">
+        <span class="material-icons" style="font-size:16px;vertical-align:-3px">campaign</span>
+        Avisos
+      </button>
       <span id="tiendaAviso" style="font-size:12.5px;color:var(--tint-green-fg);font-weight:600;
                                     opacity:0;transition:opacity .2s"></span>
     </div>
@@ -795,6 +898,10 @@ export async function renderTiendaCatalogo(container, db) {
     _rubro = selector.value;
     _mostrando = POR_TANDA;
     pintarLista();
+  });
+
+  document.getElementById('tiendaAvisos').addEventListener('click', () => {
+    abrirAvisos(db, rubros);
   });
 
   const buscador = document.getElementById('tiendaBuscar');

@@ -92,6 +92,51 @@ const CONFIG_POR_DEFECTO = {
  * la tienda arranca con valores por defecto en vez de quedarse en blanco. Es lo
  * que permite levantar el sitio antes de cargar nada en el panel.
  */
+/**
+ * Los avisos que el local quiere que el cliente lea antes de comprar:
+ * "mercería no acepta devoluciones", "las telas se cortan a pedido".
+ *
+ * Se cargan por rubro y por subrubro desde un solo documento. El aviso del
+ * producto viaja en el producto mismo (campo `aviso`).
+ */
+export async function cargarAvisos() {
+  return cacheado('avisos', async () => {
+    try {
+      const snap = await getDoc(doc(db, 'tienda_config', 'avisos'));
+      if (!snap.exists()) return { rubros: {}, subrubros: {} };
+      const d = snap.data() || {};
+      return {
+        rubros: d.rubros && typeof d.rubros === 'object' ? d.rubros : {},
+        subrubros: d.subrubros && typeof d.subrubros === 'object' ? d.subrubros : {},
+      };
+    } catch (err) {
+      console.error('[datos] no se pudieron leer los avisos:', err);
+      return { rubros: {}, subrubros: {} };
+    }
+  });
+}
+
+/** La clave con la que se guarda el aviso de un subrubro dentro de un rubro. */
+export function claveSubrubro(rubro, sub) {
+  return `${String(rubro || '').trim().toUpperCase()}|${String(sub || '').trim().toUpperCase()}`;
+}
+
+/**
+ * Qué aviso le corresponde a un producto. Gana el más específico: lo que se
+ * cargó en el producto, después el de su subrubro y por último el del rubro.
+ * Así "Mercería no acepta devoluciones" cubre todo el rubro sin impedir que un
+ * artículo puntual diga otra cosa.
+ */
+export function avisoDe(producto, avisos) {
+  if (!producto) return null;
+  if (producto.aviso) return producto.aviso;
+  if (!avisos) return null;
+  const porSub = avisos.subrubros?.[claveSubrubro(producto.rubro, producto.sub_rubro)];
+  if (porSub) return String(porSub);
+  const porRubro = avisos.rubros?.[String(producto.rubro || '').trim().toUpperCase()];
+  return porRubro ? String(porRubro) : null;
+}
+
 export async function cargarConfig() {
   return cacheado('config', async () => {
     try {
@@ -155,6 +200,7 @@ function armarProducto(snap) {
     // Precio de UNA unidad: un metro de cinta, un boligrafo suelto.
     precio: Number(d.precio) || 0,
     precio_anterior: d.precio_anterior ? Number(d.precio_anterior) : null,
+    aviso: d.aviso ? String(d.aviso) : null,
     // 'metro' para lo que se corta del rollo, 'unidad' para el resto.
     unidad: d.unidad === 'metro' ? 'metro' : 'unidad',
     // De a cuanto se vende. Lo decide el panel por producto; sin configurar
