@@ -1,0 +1,140 @@
+/* ───────────────────────────────────────────────────────────────────────
+   Skeleton loaders + fade-in para contenido cargado.
+   Aplicado globalmente: cuando una página todavía no tiene datos, se
+   pintan skeletons con shimmer. Cuando llega el contenido real, se
+   anima un fade-in sutil.
+   ─────────────────────────────────────────────────────────────────── */
+
+/* Shimmer vía transform en un pseudo-elemento (compositado): sigue fluido
+   aunque el hilo principal esté bloqueado deserializando datos. Con
+   background-position (main thread) el shimmer se congelaba durante la carga. */
+@keyframes pos-shimmer {
+  0%   { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.skel {
+  background-color: var(--skel-base, #d8dde4);
+  border-radius: 8px;
+  display: block;
+  position: relative;
+  overflow: hidden;
+}
+.skel::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--skel-shine, rgba(255, 255, 255, 0.65)) 50%,
+    transparent 100%
+  );
+  transform: translateX(-100%);
+  animation: pos-shimmer 1.6s ease-in-out infinite;
+  will-change: transform;
+}
+
+/* Variantes de tamaño */
+.skel-line     { height: 14px; }
+.skel-line.lg  { height: 22px; }
+.skel-line.sm  { height: 10px; }
+.skel-row      { height: 48px; border-radius: 8px; margin-bottom: 8px; }
+.skel-card     { height: 110px; border-radius: 14px; }
+.skel-chart    { height: 300px; border-radius: 14px; }
+.skel-thumb    { width: 56px; height: 56px; border-radius: 10px; }
+
+/* Layout helpers para armar pantallas skeleton */
+.skel-stats {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 16px;
+  margin-bottom: 24px;
+}
+.skel-charts-2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+.skel-charts-2-1 {
+  display: grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+@media (max-width: 900px) {
+  .skel-charts-2, .skel-charts-2-1 { grid-template-columns: 1fr; }
+}
+
+.skel-card-wrap {
+  background: var(--card-bg, #fff);
+  border-radius: 14px;
+  padding: 18px;
+  border: 1px solid var(--border, #e4e6eb);
+}
+.skel-card-wrap .skel + .skel { margin-top: 10px; }
+
+/* Card de KPI: replica el shape real (stat-card / kpi-card) */
+.skel-kpi {
+  background: var(--card-bg, #fff);
+  border: 1px solid var(--border, #e4e6eb);
+  border-radius: 14px;
+  padding: 16px;
+  height: 100px;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+}
+.skel-kpi .skel { background-color: var(--skel-base, #d8dde4); }
+
+/* Filtro / barra de búsqueda */
+.skel-filter-bar {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+.skel-filter-bar .skel {
+  height: 38px;
+  border-radius: 8px;
+}
+
+/* Fade-in simple cuando el contenido real reemplaza al shell.
+   Sin stagger — todo aparece junto, con un fade sutil. */
+@keyframes pos-fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.page-content > * {
+  animation: pos-fade-in 0.24s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .skel::after { animation: none; }
+  .page-content > * { animation: none; }
+}
+
+/* Fade-in para secciones grandes que reemplazan placeholders (heatmap,
+   cobertura, recomendaciones, últimas ventas). Subtle: solo opacity. */
+@keyframes pos-dash-fill {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.dash-filled {
+  animation: pos-dash-fill 0.25s ease-out;
+}
+
+/* Fade-in cuando un valor se actualiza in-place (KPIs, insights, stats).
+   El "—" se transforma en el número real con una transición sutil. */
+@keyframes pos-val-fill {
+  from { opacity: 0; }
+  to   { opacity: 1; }
+}
+.val-fill {
+  animation: pos-val-fill 0.25s ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dash-filled, .val-fill { animation: none; }
+}
