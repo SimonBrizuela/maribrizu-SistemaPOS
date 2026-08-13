@@ -19,7 +19,7 @@ import { collection, deleteDoc, doc, getDocs, orderBy, query } from 'firebase/fi
 import { getCached } from '../cache.js';
 import { leerDocRapido } from '../config.js';
 import { confirmDialog, escHtml } from '../components/dialogs.js';
-import { guardarYEspejar, nombreBonito, subirFoto } from '../tienda_espejo.js';
+import { guardarYEspejar, motivoDeNoPublicar, nombreBonito, subirFoto } from '../tienda_espejo.js';
 import '../styles/tienda.css';
 
 let _db = null;
@@ -38,9 +38,9 @@ export async function renderTiendaFotos(container, db) {
       <div style="min-width:260px;flex:1">
         <h2 style="margin:0">Fotos pedidas</h2>
         <p class="tienda-pista" style="margin:6px 0 0">
-          Lo que se marcó desde la tienda. El tilde aparece en cada producto
-          apenas se entra, sin ningún link especial. Cargá la foto acá mismo:
-          al subirla, el producto sale de la lista y la tienda se actualiza.
+          Todo lo que está en la vidriera sin foto entra solo a esta lista, más
+          lo que se haya marcado desde la tienda. Cargá la foto acá mismo: al
+          subirla, el producto sale de la lista y la tienda se actualiza.
         </p>
       </div>
       <div style="display:flex;gap:8px;align-items:center">
@@ -103,6 +103,30 @@ async function cargar() {
       };
     }).sort((a, b) => (b.cuando?.getTime() || 0) - (a.cuando?.getTime() || 0));
 
+    // Los que YA están en la vidriera sin foto entran solos a la lista. Antes
+    // dependían de que alguien los marcara desde la tienda: mientras tanto se
+    // veían igual, con el cuadrito gris, para cualquiera que entrara a comprar.
+    // No se pisan los pedidos a mano — esos ya están arriba con su fecha.
+    const yaEstan = new Set(_lista.map(x => x.id));
+    const automaticos = [];
+    for (const [id, producto] of _catalogo) {
+      if (yaEstan.has(id)) continue;
+      if (imagenesDe(producto).length) continue;
+      if (motivoDeNoPublicar(producto, _habilitados, _subExcluidos)) continue;
+      automaticos.push({
+        id,
+        nombre: producto.nombre || '(sin nombre)',
+        rubro: producto.rubro || '',
+        teniaFoto: false,
+        cuando: null,
+        fotos: [],
+        enCatalogo: true,
+        automatico: true,
+      });
+    }
+    automaticos.sort((a, b) => String(a.nombre).localeCompare(String(b.nombre), 'es'));
+    _lista = _lista.concat(automaticos);
+
     pintar();
   } catch (err) {
     console.error('[fotos] no se pudo leer la lista:', err);
@@ -163,6 +187,9 @@ function pintar() {
       <div class="tienda-dato">
         <b>${_lista.length - sinFoto}</b><span>con foto a reemplazar</span>
       </div>
+      <div class="tienda-dato">
+        <b>${_lista.filter(f => f.automatico).length}</b><span>en la vidriera sin foto</span>
+      </div>
     </div>
 
     <table class="tienda-tabla" id="fotosTabla">
@@ -208,7 +235,9 @@ function filaHtml(f) {
             + 'Ya no está en el catálogo</div>'}
       </td>
       <td>${escHtml(nombreBonito(f.rubro))}</td>
-      <td style="color:var(--text-muted)">${f.cuando ? fecha(f.cuando) : '—'}</td>
+      <td style="color:var(--text-muted)">${f.cuando
+        ? fecha(f.cuando)
+        : '<span class="tienda-etiqueta sinfoto">En la vidriera</span>'}</td>
       <td data-no-imprimir>
         <div style="display:flex;gap:6px;align-items:center;justify-content:flex-end">
           <span class="tienda-pista" data-estado="${escHtml(f.id)}" style="margin:0"></span>
