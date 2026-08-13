@@ -4561,3 +4561,26 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
   .cc-plan { text-align: left; }
   .cc-btn-primary { justify-content: center; }
 }
+
+/* Botón principal de las páginas. Lo usaban seis pantallas —Promociones,
+   Fiados, Presupuestos, Centro de Compras, Catálogo de la Tienda y
+   Descuentos— pero la clase no estaba definida en ningún lado: los botones
+   salían con el estilo del navegador, grises y chicos, en medio de un panel
+   que por lo demás está terminado. Es el mismo estilo que `.ct-btn-primary`,
+   con nombre genérico porque no pertenece a ninguna pantalla en particular. */
+.btn-primary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 8px 16px;
+  background: var(--primary);
+  color: #fff;
+  border: none;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 13px;
+  font-weight: 700;
+  font-family: inherit;
+}
+.btn-primary:hover { background: var(--primary-dark); }
+.btn-primary:disabled { opacity: .6; cursor: not-allowed; }
