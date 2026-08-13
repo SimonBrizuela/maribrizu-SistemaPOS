@@ -47,12 +47,60 @@ def conectar():
     return firestore.client()
 
 
+VERSION_MINIMA = (3, 0, 60)
+
+
+def _version(txt):
+    try:
+        return tuple(int(x) for x in str(txt or '').split('.')[:3])
+    except ValueError:
+        return (0, 0, 0)
+
+
+def pcs_desactualizadas(db):
+    """PCs que todavía no tienen la versión que arregla el -1.
+
+    Liberar los productos a 0 con una PC vieja adelante no sirve de nada: la
+    primera venta los vuelve a dejar en -1 y congelados. El chequeo mira las
+    que dieron señales de vida en la última semana.
+    """
+    limite = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=7)
+    viejas = []
+    for d in db.collection('pcs').stream():
+        x = d.to_dict() or {}
+        visto = str(x.get('last_seen') or '')
+        try:
+            visto_dt = datetime.datetime.fromisoformat(visto)
+            if visto_dt.tzinfo is None:
+                visto_dt = visto_dt.replace(tzinfo=datetime.timezone.utc)
+            if visto_dt < limite:
+                continue          # apagada hace rato: no va a vender hoy
+        except ValueError:
+            pass
+        if _version(x.get('app_version')) < VERSION_MINIMA:
+            viejas.append((d.id, x.get('hostname') or '', x.get('app_version') or '?'))
+    return viejas
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--aplicar', action='store_true', help='escribir los cambios')
+    ap.add_argument('--forzar', action='store_true',
+                    help='aplicar aunque haya PCs sin actualizar')
     args = ap.parse_args()
 
     db = conectar()
+
+    viejas = pcs_desactualizadas(db)
+    if viejas:
+        print(f'\nPCs sin la version {".".join(str(v) for v in VERSION_MINIMA)}:')
+        for pc_id, host, ver in viejas:
+            print(f'  {host or pc_id:<24} {ver}')
+        print('\nEn esas PCs el arreglo del -1 todavia no corre: la primera venta')
+        print('vuelve a congelar los productos que libere este script.')
+        if args.aplicar and not args.forzar:
+            print('\nNo escribo nada. Espera a que actualicen, o repeti con --forzar.')
+            return
 
     print('Leyendo catálogo...')
     servicios, gondola = [], []
