@@ -134,3 +134,52 @@ class TestCarritoQueCambia:
                           'valor': 10, 'filas': None})
         assert c.total() == 0
         assert c.con_descuento() == []
+
+
+class TestRedondeo:
+    """El total tiene que terminar en un número que se pueda pagar.
+
+    Las monedas chicas ya no circulan: un vuelto de $40 no existe. El redondeo
+    siempre va para abajo — el cliente paga menos, nunca más.
+    """
+
+    def test_baja_el_total_al_siguiente_cien(self):
+        from pos_system.ui.descuento_dialog import redondear_hacia_abajo
+        # Total 9.440, sin descuento previo, redondeando a 100
+        monto, ajuste = redondear_hacia_abajo(9440.0, 0.0, 100, tope=9440.0)
+        assert (monto, ajuste) == (40.0, 40.0)
+        assert 9440.0 - monto == 9400.0
+
+    def test_se_suma_al_descuento_que_ya_habia(self):
+        from pos_system.ui.descuento_dialog import redondear_hacia_abajo
+        # 10% sobre 9.440 = 944 → quedan 8.496 → redondeo a 100 baja a 8.400
+        monto, ajuste = redondear_hacia_abajo(9440.0, 944.0, 100, tope=9440.0)
+        assert monto == 1040.0
+        assert ajuste == 96.0
+        assert 9440.0 - monto == 8400.0
+
+    def test_un_total_ya_redondo_no_se_toca(self):
+        from pos_system.ui.descuento_dialog import redondear_hacia_abajo
+        monto, ajuste = redondear_hacia_abajo(9400.0, 0.0, 100, tope=9400.0)
+        assert (monto, ajuste) == (0.0, 0.0)
+
+    def test_paso_de_quinientos(self):
+        from pos_system.ui.descuento_dialog import redondear_hacia_abajo
+        monto, ajuste = redondear_hacia_abajo(9440.0, 0.0, 500, tope=9440.0)
+        assert 9440.0 - monto == 9000.0
+        assert ajuste == 440.0
+
+    def test_no_puede_descontar_mas_que_los_renglones_elegidos(self):
+        from pos_system.ui.descuento_dialog import redondear_hacia_abajo
+        # El descuento aplica a un solo renglón de $50 dentro de un total de 9.440
+        monto, _ajuste = redondear_hacia_abajo(9440.0, 0.0, 500, tope=50.0)
+        assert monto == 50.0     # se corta en el tope, no inventa plata
+
+    def test_sin_paso_no_hace_nada(self):
+        from pos_system.ui.descuento_dialog import redondear_hacia_abajo
+        assert redondear_hacia_abajo(9440.0, 100.0, 0, tope=9440.0) == (100.0, 0.0)
+
+    def test_con_centavos_igual_cierra(self):
+        from pos_system.ui.descuento_dialog import redondear_hacia_abajo
+        monto, _ = redondear_hacia_abajo(9440.55, 0.0, 50, tope=9440.55)
+        assert round(9440.55 - monto, 2) == 9400.0

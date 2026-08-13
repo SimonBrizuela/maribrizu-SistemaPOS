@@ -22,9 +22,36 @@ from PyQt5.QtGui import QFont
 # otro nombre: la idea es ahorrar tipeo, no encorsetar.
 SUGERENCIAS = ['Jubilados', 'Docente', 'Cliente de la casa', 'Mayorista', 'Efectivo']
 
+# A cuánto se puede redondear el total. Las monedas chicas ya no circulan: un
+# vuelto de $40 no existe, así que el total tiene que terminar en un número que
+# se pueda pagar de verdad.
+PASOS_REDONDEO = (50, 100, 500)
+
 
 def _money(n):
     return f'{float(n or 0):,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.')
+
+
+def redondear_hacia_abajo(total, monto, paso, tope):
+    """Cuánto hay que agregarle al descuento para que el total quede redondo.
+
+    Redondea SIEMPRE para abajo: el cliente paga menos, nunca más. El ajuste no
+    puede pasarse del `tope` (lo que suman los renglones elegidos), porque un
+    descuento no puede superar a lo que descuenta.
+
+    Devuelve (monto_final, ajuste).
+    """
+    paso = float(paso or 0)
+    if paso <= 0:
+        return monto, 0.0
+    queda = round(float(total) - float(monto), 2)
+    if queda <= 0:
+        return monto, 0.0
+    sobrante = round(queda - (int(queda / paso) * paso), 2)
+    if sobrante <= 0:
+        return monto, 0.0            # ya era redondo, no hay nada que hacer
+    ajuste = min(sobrante, max(0.0, float(tope) - float(monto)))
+    return round(float(monto) + ajuste, 2), round(ajuste, 2)
 
 
 class DescuentoDialog(QDialog):
@@ -48,6 +75,10 @@ class DescuentoDialog(QDialog):
     def _init_ui(self):
         from pos_system.ui.theme import COLORS as T
         self._T = T
+        # Los toggles emiten señal apenas se marcan, y el primero se marca antes
+        # de que existan los widgets del paso 3. Hasta que la ventana esté
+        # armada, recalcular no tiene sentido y explota.
+        self._armado = False
         self.setWindowTitle('Descuento')
         self.setModal(True)
         self.setMinimumWidth(560)
@@ -113,6 +144,46 @@ class DescuentoDialog(QDialog):
         self.valor_input.textChanged.connect(self._recalcular)
         fila.addWidget(self.valor_input)
         v.addLayout(fila)
+
+        # Redondeo: las monedas chicas ya no existen, un vuelto de $40 no se
+        # puede dar. Baja el total al múltiplo de abajo agrandando el descuento.
+        redondeo = QHBoxLayout()
+        redondeo.setSpacing(6)
+        self.redondear_btn = QPushButton('Redondear el total')
+        self.redondear_btn.setCheckable(True)
+        self.redondear_btn.setCursor(Qt.PointingHandCursor)
+        self.redondear_btn.setMinimumHeight(38)
+        self.redondear_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
+        self.redondear_btn.setStyleSheet(f'''
+            QPushButton {{
+                background: {T['surface']}; color: {T['text_muted']};
+                border: 1.5px solid {T['border']}; border-radius: 8px;
+                padding: 0 14px;
+            }}
+            QPushButton:hover {{ background: {T['surface_alt']}; color: {T['text']}; }}
+            QPushButton:checked {{
+                background: {T['accent']}; color: white; border-color: {T['accent']};
+            }}
+        ''')
+        self.redondear_btn.toggled.connect(self._cambiar_redondeo)
+        redondeo.addWidget(self.redondear_btn)
+
+        self.grupo_paso = QButtonGroup(self)
+        self.pasos_btns = []
+        for n, paso in enumerate(PASOS_REDONDEO):
+            b = self._opcion(f'${paso}', primero=(n == 0),
+                             ultimo=(n == len(PASOS_REDONDEO) - 1))
+            b.setMinimumHeight(38)
+            b.setFont(QFont('Segoe UI', 10, QFont.Bold))
+            b.setProperty('paso', paso)
+            b.setEnabled(False)
+            self.grupo_paso.addButton(b)
+            b.toggled.connect(self._recalcular)
+            self.pasos_btns.append(b)
+            redondeo.addWidget(b)
+        self.pasos_btns[1].setChecked(True)     # $100 por defecto
+        redondeo.addStretch()
+        v.addLayout(redondeo)
 
         # 3 · A qué
         v.addWidget(self._paso('3', 'Sobre qué se aplica'))
@@ -212,6 +283,7 @@ class DescuentoDialog(QDialog):
         botones.addWidget(self.aplicar_btn, 2)
 
         v.addLayout(botones)
+        self._armado = True
         self.nombre_input.setFocus()
 
     def _opcion(self, texto, primero=False, ultimo=False):
@@ -291,6 +363,13 @@ class DescuentoDialog(QDialog):
                     it.setCheckState(Qt.Checked)
 
     # ── Cálculo ─────────────────────────────────────────────────────────────
+    def _cambiar_redondeo(self, activo):
+        for b in self.pasos_btns:
+            b.setEnabled(activo)
+        self.redondear_btn.setText('Redondeando el total' if activo
+                                   else 'Redondear el total')
+        self._recalcular()
+
     def _cambiar_alcance(self):
         self.lista.setVisible(self.rb_elegidos.isChecked())
         self.adjustSize()
@@ -310,6 +389,14 @@ class DescuentoDialog(QDialog):
         except ValueError:
             return 0.0
 
+    def _paso_redondeo(self):
+        if not self.redondear_btn.isChecked():
+            return 0
+        for b in self.pasos_btns:
+            if b.isChecked():
+                return int(b.property('paso'))
+        return 0
+
     def calcular(self):
         """Devuelve (monto_total, base, filas). El monto nunca supera la base:
         un descuento no puede dejar el ticket en negativo."""
@@ -317,15 +404,26 @@ class DescuentoDialog(QDialog):
         base = sum(float(self.cart[i].get('subtotal') or 0)
                    for i in filas if i < len(self.cart))
         valor = self._valor()
-        if not valor or base <= 0:
-            return 0.0, base, filas
-        if self.rb_pct.isChecked():
-            monto = base * min(valor, 100.0) / 100.0
+        monto = 0.0
+        if valor and base > 0:
+            if self.rb_pct.isChecked():
+                monto = base * min(valor, 100.0) / 100.0
+            else:
+                monto = min(valor, base)
+        monto = round(monto, 2)
+
+        paso = self._paso_redondeo()
+        if paso and base > 0:
+            total_carrito = sum(float(it.get('subtotal') or 0) for it in self.cart)
+            monto, self._ajuste_redondeo = redondear_hacia_abajo(
+                total_carrito, monto, paso, base)
         else:
-            monto = min(valor, base)
-        return round(monto, 2), base, filas
+            self._ajuste_redondeo = 0.0
+        return monto, base, filas
 
     def _recalcular(self):
+        if not getattr(self, '_armado', False):
+            return
         T = self._T
         monto, base, filas = self.calcular()
         total_carrito = sum(float(it.get('subtotal') or 0) for it in self.cart)
@@ -337,18 +435,26 @@ class DescuentoDialog(QDialog):
             self.aplicar_btn.setEnabled(False)
             return
         if monto <= 0:
+            aviso = ('El total ya termina redondo, no hay nada que ajustar.'
+                     if self._paso_redondeo() else 'Ingresá cuánto descontar.')
             self.resumen.setText(
-                f"<span style='color:{T['text_muted']}'>Ingresá cuánto descontar.</span>")
+                f"<span style='color:{T['text_muted']}'>{aviso}</span>")
             self.aplicar_btn.setEnabled(False)
             return
 
         detalle = ('todo el carrito' if self.rb_todo.isChecked()
                    else f'{len(filas)} producto{"s" if len(filas) != 1 else ""}')
         pct_real = (monto / base * 100) if base else 0
+        ajuste = getattr(self, '_ajuste_redondeo', 0.0)
+        linea_redondeo = (
+            f"<span style='color:{T['text_muted']}'>Redondeo: −${_money(ajuste)}"
+            f"</span><br>" if ajuste > 0 else ''
+        )
         self.resumen.setText(
             f"Sobre {detalle}: <b>${_money(base)}</b><br>"
             f"<span style='color:{T['danger']}'>Descuento: −${_money(monto)}"
             f" ({pct_real:.1f}%)</span><br>"
+            f"{linea_redondeo}"
             f"<b style='font-size:15px'>Total a cobrar: ${_money(queda)}</b>"
         )
         self.aplicar_btn.setEnabled(True)
@@ -356,6 +462,10 @@ class DescuentoDialog(QDialog):
     # ── Salida ──────────────────────────────────────────────────────────────
     def _aplicar(self):
         nombre = (self.nombre_input.text() or '').strip()
+        # Bajar los $40 que no se pueden pagar no necesita bautismo: si el único
+        # descuento es el redondeo, se llama así solo.
+        if not nombre and self._paso_redondeo() and not self._valor():
+            nombre = 'Redondeo'
         if not nombre:
             QMessageBox.warning(self, 'Falta el nombre',
                                 'Poné un nombre al descuento: es lo que va a figurar '
@@ -365,12 +475,21 @@ class DescuentoDialog(QDialog):
         monto, _base, filas = self.calcular()
         if monto <= 0 or not filas:
             return
-        self.resultado = {
-            'nombre': nombre,
-            'tipo':   'porcentaje' if self.rb_pct.isChecked() else 'monto',
-            'valor':  self._valor(),
-            'filas':  None if self.rb_todo.isChecked() else filas,
-        }
+        if getattr(self, '_ajuste_redondeo', 0.0) > 0:
+            # Con redondeo el descuento sale como monto fijo ya resuelto: el
+            # porcentaje solo no vuelve a dar el mismo número redondo.
+            self.resultado = {
+                'nombre': nombre, 'tipo': 'monto', 'valor': monto,
+                'filas': None if self.rb_todo.isChecked() else filas,
+                'redondeado': True,
+            }
+        else:
+            self.resultado = {
+                'nombre': nombre,
+                'tipo':   'porcentaje' if self.rb_pct.isChecked() else 'monto',
+                'valor':  self._valor(),
+                'filas':  None if self.rb_todo.isChecked() else filas,
+            }
         self.accept()
 
     def _quitar(self):
