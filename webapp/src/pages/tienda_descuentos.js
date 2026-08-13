@@ -16,7 +16,7 @@
  * cargado y aplicado en el momento; el sync lo reafirma en cada corrida.
  */
 import {
-  collection, doc, getDocs, getDoc, setDoc, deleteDoc, updateDoc, query, orderBy,
+  collection, doc, getDocs, getDoc, setDoc, deleteDoc, updateDoc, query, orderBy, where, writeBatch,
 } from 'firebase/firestore';
 import { getCached } from '../cache.js';
 import { alertDialog, confirmDialog, escHtml } from '../components/dialogs.js';
@@ -292,22 +292,57 @@ function abrirEditor(d = null) {
 /**
  * Baja el precio en `tienda_productos` ahora mismo, sin esperar al sync.
  *
- * Siempre parte del precio de lista del catálogo, no del que ya está en la
- * tienda: si se calculara sobre el rebajado, apagar y prender el descuento
- * dejaría el precio cada vez más abajo.
+ * Trabaja SOBRE EL ESPEJO y no sobre el catálogo. Dos razones, las dos costaron
+ * precios mal puestos:
+ *
+ *   · El precio de la vidriera no siempre es `precio_venta`. En un producto que
+ *     se vende suelto (un metro de cinta, un bolígrafo de una caja) la tienda
+ *     muestra el precio por unidad, que se calcula aparte.
+ *   · El catálogo del panel viene de una cache de diez minutos. Si un rubro se
+ *     corrigió recién, los productos que todavía tienen el valor viejo no
+ *     matchean y quedan sin descuento, que es justo lo que pasó al probarlo.
+ *
+ * El precio de lista es `precio_anterior` si ya hay un descuento puesto, y si
+ * no el `precio` actual. Por eso aplicar dos veces da el mismo número en vez de
+ * ir rebajando sobre lo rebajado.
  */
-async function aplicarEnLaTienda(d) {
-  const productos = alcanzados(d);
+async function aplicarEnLaTienda(d, avance = null) {
   const apagado = d.activo === false;
-  let tocados = 0;
+  const obj = String(d.objetivo || '').trim().toUpperCase();
+  if (!obj) return 0;
 
-  for (const p of productos) {
-    const ref = doc(_db, 'tienda_productos', String(p.doc_id));
-    const lista = Number(p.precio_venta) || 0;
-    if (lista <= 0) continue;
-    try {
+  // Se le pregunta al espejo qué productos caen bajo el descuento, en vez de
+  // deducirlo de una copia del catálogo que puede estar vieja.
+  const col = collection(_db, 'tienda_productos');
+  let docs = [];
+  if (d.alcance === 'producto') {
+    const uno = await getDoc(doc(_db, 'tienda_productos', obj));
+    if (uno.exists()) docs = [uno];
+  } else {
+    const rubro = obj.split('|')[0];
+    const snap = await getDocs(query(col, where('rubro', '==', rubro)));
+    docs = snap.docs;
+    if (d.alcance === 'subrubro') {
+      const sub = obj.split('|')[1] || '';
+      docs = docs.filter(x => String((x.data() || {}).sub_rubro || '')
+        .trim().toUpperCase() === sub);
+    }
+  }
+
+  // En lote y no de a uno: un rubro grande son cientos de productos, y con un
+  // request por producto el boton se quedaba mudo varios segundos y parecia que
+  // no habia pasado nada. Firestore admite 400 operaciones por lote.
+  const TOPE = 400;
+  let tocados = 0;
+  for (let i = 0; i < docs.length; i += TOPE) {
+    const lote = writeBatch(_db);
+    let enLote = 0;
+    for (const x of docs.slice(i, i + TOPE)) {
+      const datos = x.data() || {};
+      const lista = Number(datos.precio_anterior) || Number(datos.precio) || 0;
+      if (lista <= 0) continue;
       const nuevo = apagado ? lista : precioConDescuento(lista, d);
-      await updateDoc(ref, apagado || nuevo >= lista
+      lote.update(doc(_db, 'tienda_productos', x.id), apagado || nuevo >= lista
         ? { precio: lista, precio_anterior: null, descuento: null }
         : {
             precio: nuevo,
@@ -317,12 +352,24 @@ async function aplicarEnLaTienda(d) {
               porcentaje: Math.round((1 - nuevo / lista) * 100),
             },
           });
-      tocados += 1;
-    } catch {
-      // No está publicado: no hay nada que rebajar en la vidriera.
+      enLote += 1;
     }
+    if (!enLote) continue;
+    await lote.commit();
+    tocados += enLote;
+    if (typeof avance === 'function') avance(tocados, docs.length);
   }
   return tocados;
+}
+
+/** Confirmación breve arriba de la lista: apretar y no ver nada da desconfianza. */
+function avisar(texto) {
+  const caja = document.getElementById('descAviso');
+  if (!caja) return;
+  caja.textContent = texto;
+  caja.style.opacity = '1';
+  clearTimeout(avisar._t);
+  avisar._t = setTimeout(() => { caja.style.opacity = '0'; }, 2600);
 }
 
 /* ── Carga ────────────────────────────────────────────────────────────────── */
@@ -356,6 +403,8 @@ export async function renderTiendaDescuentos(container, db) {
           Solo para la web. Las Promociones del POS siguen siendo del mostrador.
         </div>
       </div>
+      <span id="descAviso" style="font-size:12.5px;color:var(--tint-green-fg);font-weight:600;
+                                  opacity:0;transition:opacity .2s;margin-left:auto"></span>
       <button class="btn-primary" id="descNuevo">
         <span class="material-icons" style="font-size:18px">add</span> Nuevo descuento
       </button>
@@ -385,11 +434,26 @@ export async function renderTiendaDescuentos(container, db) {
     if (boton.dataset.accion === 'editar') { abrirEditor(d); return; }
 
     if (boton.dataset.accion === 'alternar') {
-      boton.disabled = true;
       const activo = d.activo === false;
-      await updateDoc(doc(_db, 'tienda_descuentos', d._id), { activo });
-      await aplicarEnLaTienda({ ...d, activo });
-      await recargar();
+      // La tarjeta cambia primero y los precios se acomodan atrás. Esperar a
+      // que terminen de escribirse cientos de productos para recien mostrar
+      // que se apago se siente como que el boton no anduvo.
+      d.activo = activo;
+      pintar();
+      const btn = document.querySelector(`[data-accion="alternar"][data-id="${d._id}"]`);
+      if (btn) { btn.disabled = true; btn.textContent = 'Aplicando…'; }
+      try {
+        await updateDoc(doc(_db, 'tienda_descuentos', d._id), { activo });
+        const n = await aplicarEnLaTienda({ ...d, activo }, (hechos, total) => {
+          if (btn) btn.textContent = `Aplicando… ${hechos}/${total}`;
+        });
+        await recargar();
+        avisar(`${activo ? 'Activado' : 'Apagado'} · ${n} producto${n === 1 ? '' : 's'}`);
+      } catch (e) {
+        d.activo = !activo;
+        pintar();
+        alertDialog({ title: 'No se pudo cambiar', message: escHtml(e?.message || String(e)), type: 'error' });
+      }
       return;
     }
 
