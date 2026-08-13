@@ -12,7 +12,7 @@ así el detalle cierra con el total al centavo.
 """
 from PyQt5.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel, QPushButton, QLineEdit,
-    QListWidget, QListWidgetItem, QFrame, QButtonGroup, QRadioButton,
+    QListWidget, QListWidgetItem, QFrame, QButtonGroup,
     QMessageBox, QWidget
 )
 from PyQt5.QtCore import Qt
@@ -91,57 +91,55 @@ class DescuentoDialog(QDialog):
         # 2 · Cuánto
         v.addWidget(self._paso('2', 'Cuánto'))
         fila = QHBoxLayout()
-        fila.setSpacing(8)
+        fila.setSpacing(0)
 
         self.grupo_tipo = QButtonGroup(self)
-        self.rb_pct = QRadioButton('Porcentaje')
-        self.rb_monto = QRadioButton('Monto fijo')
+        self.rb_pct = self._opcion('%  Porcentaje', primero=True)
+        self.rb_monto = self._opcion('$  Monto fijo', ultimo=True)
         self.rb_pct.setChecked(True)
-        for rb in (self.rb_pct, self.rb_monto):
-            rb.setFont(QFont('Segoe UI', 10))
-            rb.setCursor(Qt.PointingHandCursor)
-            rb.setStyleSheet(f"QRadioButton {{ color:{T['text']}; }}")
-            self.grupo_tipo.addButton(rb)
-            rb.toggled.connect(self._recalcular)
-            fila.addWidget(rb)
+        for b in (self.rb_pct, self.rb_monto):
+            self.grupo_tipo.addButton(b)
+            b.toggled.connect(self._recalcular)
+            fila.addWidget(b)
 
+        fila.addSpacing(12)
         self.valor_input = QLineEdit()
         self.valor_input.setPlaceholderText('10')
-        self.valor_input.setMinimumHeight(38)
-        self.valor_input.setFixedWidth(120)
-        self.valor_input.setFont(QFont('Segoe UI', 13, QFont.Bold))
+        self.valor_input.setMinimumHeight(44)
+        self.valor_input.setFixedWidth(130)
+        self.valor_input.setFont(QFont('Segoe UI', 15, QFont.Bold))
         self.valor_input.setAlignment(Qt.AlignCenter)
         self.valor_input.setStyleSheet(self._estilo_input())
         self.valor_input.textChanged.connect(self._recalcular)
-        fila.addStretch()
         fila.addWidget(self.valor_input)
         v.addLayout(fila)
 
         # 3 · A qué
         v.addWidget(self._paso('3', 'Sobre qué se aplica'))
         alcance = QHBoxLayout()
-        alcance.setSpacing(8)
-        self.rb_todo = QRadioButton('Todo el carrito')
-        self.rb_elegidos = QRadioButton('Solo los productos que elija')
+        alcance.setSpacing(0)
+        self.rb_todo = self._opcion('Todo el carrito', primero=True)
+        self.rb_elegidos = self._opcion('Solo los que elija', ultimo=True)
         self.rb_todo.setChecked(True)
         self.grupo_alcance = QButtonGroup(self)
-        for rb in (self.rb_todo, self.rb_elegidos):
-            rb.setFont(QFont('Segoe UI', 10))
-            rb.setCursor(Qt.PointingHandCursor)
-            rb.setStyleSheet(f"QRadioButton {{ color:{T['text']}; }}")
-            self.grupo_alcance.addButton(rb)
-            rb.toggled.connect(self._cambiar_alcance)
-            alcance.addWidget(rb)
-        alcance.addStretch()
+        for b in (self.rb_todo, self.rb_elegidos):
+            self.grupo_alcance.addButton(b)
+            b.toggled.connect(self._cambiar_alcance)
+            alcance.addWidget(b)
         v.addLayout(alcance)
 
         self.lista = QListWidget()
         self.lista.setFixedHeight(150)
         self.lista.setFont(QFont('Segoe UI', 10))
         self.lista.setStyleSheet(
-            f"QListWidget {{ background:{T['surface']}; border:1px solid {T['border']};"
+            f"QListWidget {{ background:{T['surface']}; border:1.5px solid {T['border']};"
             f" border-radius:8px; color:{T['text']}; outline:none; }}"
-            f"QListWidget::item {{ padding:7px 8px; border-bottom:1px solid {T['border']}; }}"
+            f"QListWidget::item {{ padding:9px 8px; border-bottom:1px solid {T['border_soft']}; }}"
+            f"QListWidget::item:selected {{ background:{T['accent_soft']}; color:{T['text']}; }}"
+            f"QListWidget::indicator {{ width:20px; height:20px; border-radius:4px;"
+            f" border:2px solid {T['border']}; background:{T['surface']}; }}"
+            f"QListWidget::indicator:checked {{ background:{T['accent']};"
+            f" border-color:{T['accent']}; }}"
         )
         for i, it in enumerate(self.cart):
             nombre = it.get('product_name') or '—'
@@ -215,6 +213,39 @@ class DescuentoDialog(QDialog):
 
         v.addLayout(botones)
         self.nombre_input.setFocus()
+
+    def _opcion(self, texto, primero=False, ultimo=False):
+        """Botón de un par excluyente, tipo interruptor.
+
+        Con QRadioButton no se veía qué estaba elegido: el estilo global del POS
+        le come el puntito y quedaban dos cuadraditos vacíos iguales. Acá la
+        opción activa se pinta entera con el color de acento y no hay forma de
+        confundirse.
+        """
+        T = self._T
+        b = QPushButton(texto)
+        b.setCheckable(True)
+        b.setCursor(Qt.PointingHandCursor)
+        b.setMinimumHeight(44)
+        b.setFont(QFont('Segoe UI', 11, QFont.Bold))
+        izq = '8px' if primero else '0'
+        der = '8px' if ultimo else '0'
+        b.setStyleSheet(f'''
+            QPushButton {{
+                background: {T['surface']};
+                color: {T['text_muted']};
+                border: 1.5px solid {T['border']};
+                border-top-left-radius: {izq}; border-bottom-left-radius: {izq};
+                border-top-right-radius: {der}; border-bottom-right-radius: {der};
+                padding: 0 18px;
+            }}
+            QPushButton:hover {{ background: {T['surface_alt']}; color: {T['text']}; }}
+            QPushButton:checked {{
+                background: {T['accent']}; color: white;
+                border-color: {T['accent']};
+            }}
+        ''')
+        return b
 
     def _paso(self, numero, texto):
         T = self._T

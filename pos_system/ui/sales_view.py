@@ -1570,7 +1570,6 @@ class SalesView(QWidget):
             ('F3', 'Cliente',     self._open_cliente_dialog),
             ('F4', 'Promo',       self._open_promos_dialog),
             ('F5', 'Cajero',      self._cambiar_cajero),
-            ('F6', 'Descuento',   self._open_descuento_dialog),
             ('F7', 'Caja',        self._goto_caja),
             ('F8', 'Sincronizar', self._trigger_sync),
         ]
@@ -1578,6 +1577,28 @@ class SalesView(QWidget):
             b = self._make_action_button(key, lbl, fn)
             grid.addWidget(b, i // 2, i % 2)
         v.addLayout(grid)
+
+        # Descuento aparte y a lo ancho: toca la plata que se cobra, no es una
+        # navegación más. Perdido entre los otros seis nadie lo encontraba.
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet(f"background:{_T['border']}; max-height:1px; border:none;")
+        v.addSpacing(2)
+        v.addWidget(sep)
+        v.addSpacing(2)
+
+        self._desc_btn = QPushButton('F6   Descuento')
+        self._desc_btn.setMinimumHeight(46)
+        self._desc_btn.setCursor(Qt.PointingHandCursor)
+        self._desc_btn.setStyleSheet(
+            f"QPushButton {{ text-align:left; padding:4px 10px;"
+            f" background:{_T['accent_soft']}; color:{_T['accent']};"
+            f" border:1.5px solid {_T['accent']}; border-radius:6px;"
+            f" font-size:12px; font-weight:800; }}"
+            f"QPushButton:hover {{ background:{_T['accent']}; color:#ffffff; }}"
+        )
+        self._desc_btn.clicked.connect(self._open_descuento_dialog)
+        v.addWidget(self._desc_btn)
         return card
 
     def _make_action_button(self, key, label, fn):
@@ -4467,6 +4488,7 @@ class SalesView(QWidget):
         if not self.cart:
             self.descuento_manual = None
         desc_manual = self._descuento_total()
+        self._actualizar_boton_descuento(desc_manual)
         total = round(total - desc_manual, 2)
 
         # Total con ahorro si aplica — ajustar fuente según longitud del monto
@@ -4978,6 +5000,34 @@ class SalesView(QWidget):
     def _descuento_total(self):
         return round(sum(self._descuento_montos().values()), 2)
 
+    def _actualizar_boton_descuento(self, monto=None):
+        """El botón muestra el descuento puesto: sin esto no queda ningún rastro
+        a la vista de que el ticket sale más barato y por qué."""
+        btn = getattr(self, '_desc_btn', None)
+        if btn is None:
+            return
+        from pos_system.ui.theme import COLORS as _T
+        monto = self._descuento_total() if monto is None else monto
+        nombre = (self.descuento_manual or {}).get('nombre') or ''
+        if monto > 0 and nombre:
+            btn.setText(f'F6   {nombre[:16]}   −${monto:,.2f}')
+            btn.setStyleSheet(
+                f"QPushButton {{ text-align:left; padding:4px 10px;"
+                f" background:{_T['accent']}; color:#ffffff;"
+                f" border:1.5px solid {_T['accent']}; border-radius:6px;"
+                f" font-size:12px; font-weight:800; }}"
+                f"QPushButton:hover {{ background:{_T['accent_hover']}; }}"
+            )
+        else:
+            btn.setText('F6   Descuento')
+            btn.setStyleSheet(
+                f"QPushButton {{ text-align:left; padding:4px 10px;"
+                f" background:{_T['accent_soft']}; color:{_T['accent']};"
+                f" border:1.5px solid {_T['accent']}; border-radius:6px;"
+                f" font-size:12px; font-weight:800; }}"
+                f"QPushButton:hover {{ background:{_T['accent']}; color:#ffffff; }}"
+            )
+
     def _cart_con_descuento(self):
         """Copia del carrito con el descuento ya aplicado a cada renglón.
 
@@ -5028,6 +5078,7 @@ class SalesView(QWidget):
             # El descuento no sobrevive al carrito que lo motivó.
             self.descuento_manual = None
         desc_manual = self._descuento_total()
+        self._actualizar_boton_descuento(desc_manual)
         total = round(sum(item['subtotal'] for item in self.cart) - desc_manual, 2)
         total_items = sum(float(item['quantity']) for item in self.cart)
         items_str = _fmt_qty(total_items)

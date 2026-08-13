@@ -40,41 +40,66 @@ class _FilaClienteDelegate(QStyledItemDelegate):
         return QSize(option.rect.width(), self.ALTO)
 
     def paint(self, painter, option, index):
+        from PyQt5.QtGui import QFontMetrics
         painter.save()
+        painter.setRenderHint(painter.Antialiasing, True)
         rect = option.rect
         seleccionado = bool(option.state & QStyle.State_Selected)
         hover = bool(option.state & QStyle.State_MouseOver)
 
+        # El elegido se pinta entero con el color de acento. Con un tinte suave
+        # no se distinguía cuál estaba marcado, que es lo único que importa
+        # saber antes de apretar "Usar este cliente".
         if seleccionado:
-            painter.fillRect(rect, QColor(_TINTE))
-            painter.setPen(QPen(QColor(_ACENTO), 2))
-            painter.drawLine(rect.left(), rect.top() + 1, rect.left(), rect.bottom() - 1)
+            painter.fillRect(rect, QColor(_ACENTO))
         elif hover:
             painter.fillRect(rect, QColor('#faf8f4'))
-
-        painter.setPen(QPen(QColor(_BORDE), 1))
-        painter.drawLine(rect.left() + 12, rect.bottom(), rect.right() - 12, rect.bottom())
+            painter.setPen(QPen(QColor(_BORDE), 1))
+            painter.drawLine(rect.left() + 12, rect.bottom(),
+                             rect.right() - 12, rect.bottom())
+        else:
+            painter.setPen(QPen(QColor(_BORDE), 1))
+            painter.drawLine(rect.left() + 12, rect.bottom(),
+                             rect.right() - 12, rect.bottom())
 
         nombre = index.data(Qt.DisplayRole) or ''
         detalle = index.data(Qt.UserRole + 1) or ''
         condicion = index.data(Qt.UserRole + 2) or ''
 
-        x = rect.left() + 14
-        painter.setPen(QColor(_TEXTO))
-        f = QFont('Segoe UI', 10, QFont.Bold)
-        painter.setFont(f)
-        painter.drawText(x, rect.top() + 8, rect.width() - 150, 18,
-                         Qt.AlignLeft | Qt.AlignVCenter, nombre)
+        col_nombre  = QColor('white') if seleccionado else QColor(_TEXTO)
+        col_detalle = QColor(255, 255, 255, 205) if seleccionado else QColor(_TEXTO_SUAVE)
 
-        painter.setPen(QColor(_TEXTO_SUAVE))
-        painter.setFont(QFont('Segoe UI', 8))
-        painter.drawText(x, rect.top() + 26, rect.width() - 150, 16,
-                         Qt.AlignLeft | Qt.AlignVCenter, detalle)
+        # El check ocupa lugar propio: sin esto el nombre largo se le montaba
+        # encima a la condición de IVA.
+        x = rect.left() + (34 if seleccionado else 14)
+        ancho_cond = 132 if condicion else 12
+        ancho_texto = max(60, rect.width() - (x - rect.left()) - ancho_cond - 12)
+
+        if seleccionado:
+            painter.setPen(QPen(QColor('white'), 2))
+            painter.setFont(QFont('Segoe UI', 12, QFont.Bold))
+            painter.drawText(rect.left() + 10, rect.top(), 20, rect.height(),
+                             Qt.AlignCenter, '✓')
+
+        f_nombre = QFont('Segoe UI', 10, QFont.Bold)
+        painter.setFont(f_nombre)
+        painter.setPen(col_nombre)
+        nombre_corto = QFontMetrics(f_nombre).elidedText(nombre, Qt.ElideRight, ancho_texto)
+        painter.drawText(x, rect.top() + 8, ancho_texto, 18,
+                         Qt.AlignLeft | Qt.AlignVCenter, nombre_corto)
+
+        f_det = QFont('Segoe UI', 8)
+        painter.setFont(f_det)
+        painter.setPen(col_detalle)
+        det_corto = QFontMetrics(f_det).elidedText(detalle, Qt.ElideRight, ancho_texto)
+        painter.drawText(x, rect.top() + 26, ancho_texto, 16,
+                         Qt.AlignLeft | Qt.AlignVCenter, det_corto)
 
         if condicion:
-            painter.setPen(QColor(_TEXTO_SUAVE))
+            painter.setPen(col_detalle)
             painter.setFont(QFont('Segoe UI', 8))
-            painter.drawText(rect.right() - 150, rect.top(), 138, rect.height(),
+            painter.drawText(rect.right() - ancho_cond, rect.top(),
+                             ancho_cond - 12, rect.height(),
                              Qt.AlignRight | Qt.AlignVCenter, condicion)
         painter.restore()
 
