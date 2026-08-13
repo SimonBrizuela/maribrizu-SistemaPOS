@@ -599,7 +599,13 @@ class PDFGenerator:
             if disc_amount > 0 and orig_price > 0 and orig_price != unit_price:
                 row['precio_original'] = f'{orig_price:,.2f}'
                 row['descuento_monto'] = f'{disc_amount:,.2f}' if disc_amount > 0 else ''
-                if disc_type == 'percentage':
+                if disc_type == 'manual':
+                    # Descuento con nombre ("Jubilados", "Docente"): el nombre
+                    # es el dato que importa, no el porcentaje.
+                    row['descuento_texto'] = (
+                        str(it.get('descuento_nombre') or 'DESCUENTO').upper()[:18]
+                    )
+                elif disc_type == 'percentage':
                     try:
                         row['descuento_texto'] = f'{int(float(disc_value or 0))}% OFF'
                     except (TypeError, ValueError):

@@ -986,6 +986,12 @@ class SalesView(QWidget):
         )
         self.current_user = current_user or {}
         self.cart = []
+        # Descuento con nombre sobre el carrito (F6). Vive como una capa aparte
+        # de los precios de cada línea: las promos y los precios editados a mano
+        # siguen su camino, y el descuento se aplica encima al cobrar. Formato:
+        #   {'nombre': str, 'tipo': 'porcentaje'|'monto', 'valor': float,
+        #    'filas': [i, ...] | None}   ── None = todo el carrito
+        self.descuento_manual = None
         # ── Modo Fiado ──
         # Con el modo activo, "Cobrar" pasa a ser "Cargar al fiado": el carrito
         # se anota a nombre de un cliente y descuenta stock (la mercadería se la
@@ -1525,6 +1531,7 @@ class SalesView(QWidget):
         QShortcut(QKeySequence("F3"), self, self._open_cliente_dialog)
         QShortcut(QKeySequence("F4"), self, self._open_promos_dialog)
         QShortcut(QKeySequence("F5"), self, self._cambiar_cajero)
+        QShortcut(QKeySequence("F6"), self, self._open_descuento_dialog)
         QShortcut(QKeySequence("F7"), self, self._goto_caja)
         QShortcut(QKeySequence("F8"), self, self._trigger_sync)
 
@@ -1563,6 +1570,7 @@ class SalesView(QWidget):
             ('F3', 'Cliente',     self._open_cliente_dialog),
             ('F4', 'Promo',       self._open_promos_dialog),
             ('F5', 'Cajero',      self._cambiar_cajero),
+            ('F6', 'Descuento',   self._open_descuento_dialog),
             ('F7', 'Caja',        self._goto_caja),
             ('F8', 'Sincronizar', self._trigger_sync),
         ]
@@ -1930,6 +1938,7 @@ class SalesView(QWidget):
         # Vaciar carrito (sin pedir confirmación: la venta quedó guardada).
         # update_cart_display limpia self._cart_cajero al quedar vacío.
         self.cart = []
+        self.descuento_manual = None
         self.update_cart_display()
         try:
             self.reset_category_filter()
@@ -2425,6 +2434,7 @@ class SalesView(QWidget):
         ).start()
 
         self.cart = []
+        self.descuento_manual = None
         self.update_cart_display()
         try:
             self.reset_category_filter()
@@ -4453,6 +4463,12 @@ class SalesView(QWidget):
 
             total += item['subtotal']
 
+        # El descuento con nombre se resta acá, sobre el bruto de las líneas.
+        if not self.cart:
+            self.descuento_manual = None
+        desc_manual = self._descuento_total()
+        total = round(total - desc_manual, 2)
+
         # Total con ahorro si aplica — ajustar fuente según longitud del monto
         total_str = f'${total:,.2f}'
         font_size = 24 if len(total_str) <= 10 else (20 if len(total_str) <= 13 else 17)
@@ -4463,7 +4479,17 @@ class SalesView(QWidget):
             for item in self.cart
             if item.get('promo_id') or item.get('discount_type')
         )
-        if total_discount > 0:
+        if desc_manual > 0:
+            # El descuento con nombre va aparte y con su nombre: es el que hay
+            # que poder explicarle al cliente y al dueño.
+            _nom_desc = (self.descuento_manual or {}).get('nombre') or 'Descuento'
+            self.total_amount_label.setText(
+                f'<span style="font-size:12px;color:#a01616;font-weight:normal;">'
+                f'{_nom_desc}: −${desc_manual:,.2f}</span><br>'
+                f'<b style="color:#3d7a3a;font-size:{font_size}px;">{total_str}</b>'
+            )
+            self.total_amount_label.setTextFormat(Qt.RichText)
+        elif total_discount > 0:
             self.total_amount_label.setText(
                 f'<span style="font-size:12px;color:#3d7a3a;font-weight:normal;">'
                 f'Ahorro: ${total_discount:,.2f}</span><br>'
@@ -4877,6 +4903,113 @@ class SalesView(QWidget):
 
         self._refresh_cart_totals(row)
 
+    # ── Descuento con nombre (F6) ───────────────────────────────────────────
+    def _open_descuento_dialog(self):
+        """Descuento con nombre sobre el carrito: 'Jubilados', 'Docente'.
+
+        Antes esto se hacía editando el precio a mano y el motivo se perdía. El
+        nombre viaja hasta el ticket, la factura y los reportes.
+        """
+        if not self.cart:
+            QMessageBox.information(self, 'Carrito vacío',
+                                    'Agregá productos antes de poner un descuento.')
+            return
+        from pos_system.ui.descuento_dialog import DescuentoDialog
+        dlg = DescuentoDialog(self, cart=self.cart, actual=self.descuento_manual)
+        if dlg.exec_() != QDialog.Accepted or not dlg.resultado:
+            return
+        if dlg.resultado.get('quitar'):
+            self.descuento_manual = None
+        else:
+            self.descuento_manual = dlg.resultado
+        self.update_cart_display()
+
+    def _descuento_filas_validas(self):
+        """Índices del carrito alcanzados por el descuento, ya saneados.
+
+        El carrito se puede editar después de aplicarlo: si se sacó un producto,
+        su índice ya no existe y no puede arrastrar el cálculo.
+        """
+        d = self.descuento_manual
+        if not d or not self.cart:
+            return []
+        filas = d.get('filas')
+        if filas is None:
+            return list(range(len(self.cart)))
+        return [i for i in filas if 0 <= i < len(self.cart)]
+
+    def _descuento_montos(self):
+        """Cuánto descuenta cada renglón: {fila: monto}.
+
+        El monto fijo se reparte proporcional al peso de cada renglón y el
+        redondeo sobrante se le carga al último, así la suma de las líneas da
+        exactamente el descuento y el ticket cierra al centavo.
+        """
+        d = self.descuento_manual
+        filas = self._descuento_filas_validas()
+        if not d or not filas:
+            return {}
+
+        base = sum(float(self.cart[i].get('subtotal') or 0) for i in filas)
+        if base <= 0:
+            return {}
+
+        valor = float(d.get('valor') or 0)
+        if valor <= 0:
+            return {}
+
+        if d.get('tipo') == 'porcentaje':
+            pct = min(valor, 100.0) / 100.0
+            return {i: round(float(self.cart[i].get('subtotal') or 0) * pct, 2)
+                    for i in filas}
+
+        total = min(valor, base)
+        montos = {}
+        acumulado = 0.0
+        for n, i in enumerate(filas):
+            if n == len(filas) - 1:
+                montos[i] = round(total - acumulado, 2)
+            else:
+                parte = round(total * float(self.cart[i].get('subtotal') or 0) / base, 2)
+                montos[i] = parte
+                acumulado += parte
+        return montos
+
+    def _descuento_total(self):
+        return round(sum(self._descuento_montos().values()), 2)
+
+    def _cart_con_descuento(self):
+        """Copia del carrito con el descuento ya aplicado a cada renglón.
+
+        Es lo que se manda a cobrar: las líneas de la venta, el ticket y la
+        factura tienen que mostrar el precio que realmente se cobró, no el de
+        lista con una resta suelta al final.
+        """
+        montos = self._descuento_montos()
+        if not montos:
+            return list(self.cart)
+        nombre = (self.descuento_manual or {}).get('nombre') or 'Descuento'
+        salida = []
+        for i, it in enumerate(self.cart):
+            monto = montos.get(i, 0)
+            if monto <= 0:
+                salida.append(it)
+                continue
+            linea = dict(it)
+            sub_previo = float(it.get('subtotal') or 0)
+            qty = float(it.get('quantity') or 1) or 1
+            nuevo_sub = max(0.0, round(sub_previo - monto, 2))
+            if not linea.get('original_price'):
+                linea['original_price'] = float(it.get('unit_price') or 0)
+            linea['subtotal'] = nuevo_sub
+            linea['unit_price'] = round(nuevo_sub / qty, 4)
+            linea['discount_amount'] = round(float(it.get('discount_amount') or 0) + monto, 2)
+            linea['discount_type'] = 'manual'
+            linea['discount_value'] = float((self.descuento_manual or {}).get('valor') or 0)
+            linea['descuento_nombre'] = nombre
+            salida.append(linea)
+        return salida
+
     def _refresh_cart_totals(self, row=None):
         """Light update: sólo subtotal de la fila y total global.
         NO reconstruye la tabla — preserva el spinbox con foco y texto intacto
@@ -4891,7 +5024,11 @@ class SalesView(QWidget):
                 if sub_it:
                     sub_it.setText(f'${_fmt_money(item["subtotal"])}')
         # Total y contador
-        total = sum(item['subtotal'] for item in self.cart)
+        if not self.cart:
+            # El descuento no sobrevive al carrito que lo motivó.
+            self.descuento_manual = None
+        desc_manual = self._descuento_total()
+        total = round(sum(item['subtotal'] for item in self.cart) - desc_manual, 2)
         total_items = sum(float(item['quantity']) for item in self.cart)
         items_str = _fmt_qty(total_items)
         self.items_count_lbl.setText(f'{items_str} item{"s" if total_items != 1 else ""}')
@@ -4904,7 +5041,17 @@ class SalesView(QWidget):
             for item in self.cart
             if item.get('promo_id') or item.get('discount_type')
         )
-        if total_discount > 0:
+        if desc_manual > 0:
+            # El descuento con nombre va aparte y con su nombre: es el que hay
+            # que poder explicarle al cliente y al dueño.
+            _nom_desc = (self.descuento_manual or {}).get('nombre') or 'Descuento'
+            self.total_amount_label.setText(
+                f'<span style="font-size:12px;color:#a01616;font-weight:normal;">'
+                f'{_nom_desc}: −${desc_manual:,.2f}</span><br>'
+                f'<b style="color:#3d7a3a;font-size:{font_size}px;">{total_str}</b>'
+            )
+            self.total_amount_label.setTextFormat(Qt.RichText)
+        elif total_discount > 0:
             self.total_amount_label.setText(
                 f'<span style="font-size:12px;color:#3d7a3a;font-weight:normal;">'
                 f'Ahorro: ${total_discount:,.2f}</span><br>'
@@ -5358,6 +5505,7 @@ class SalesView(QWidget):
             )
             if reply == QMessageBox.Yes:
                 self.cart = []
+                self.descuento_manual = None
                 self.update_cart_display()
 
     def complete_sale(self):
@@ -5382,10 +5530,16 @@ class SalesView(QWidget):
                                 'Debe abrir la caja antes de realizar ventas.\n\nVaya a la seccion de Caja.')
             return
 
-        total = sum(item['subtotal'] for item in self.cart)
+        # El descuento con nombre se aplica sobre las líneas antes de cobrar: la
+        # venta, el ticket y la factura tienen que mostrar el precio que se
+        # cobró de verdad, no el de lista con una resta suelta al final.
+        cart_cobro = self._cart_con_descuento()
+        desc_manual_monto = self._descuento_total()
+        desc_manual_nombre = (self.descuento_manual or {}).get('nombre') or ''
+        total = sum(item['subtotal'] for item in cart_cobro)
 
         # Abrir dialogo de pago
-        dialog = PaymentDialog(self, total=total, cart=self.cart)
+        dialog = PaymentDialog(self, total=total, cart=cart_cobro)
         if dialog.exec_() != QDialog.Accepted:
             return
 
@@ -5405,6 +5559,12 @@ class SalesView(QWidget):
             or self.current_user.get('username', '')
         )
 
+        # El nombre del descuento va en la nota de la factura: ARCA recibe solo
+        # totales, así que es la única forma de que quede escrito el por qué.
+        if desc_manual_nombre and desc_manual_monto > 0:
+            detalle_desc = f'Descuento {desc_manual_nombre}: -${desc_manual_monto:,.2f}'
+            nota_factura = f'{nota_factura} · {detalle_desc}'.strip(' ·') if nota_factura else detalle_desc
+
         sale_data = {
             'total_amount':    total,
             'payment_type':    payment_type,
@@ -5412,9 +5572,11 @@ class SalesView(QWidget):
             'cash_received':   cash_received,
             'change_given':    change_given,
             'transfer_amount': transfer_amount,
-            'items':           self.cart,
+            'items':           cart_cobro,
             'user_id':         self.current_user.get('id'),
             'turno_nombre':    turno_nombre,
+            'discount':        desc_manual_monto,
+            'descuento_nombre': desc_manual_nombre,
         }
 
         try:
@@ -5548,6 +5710,7 @@ class SalesView(QWidget):
                             )
 
                 self.cart = []
+                self.descuento_manual = None
                 self.update_cart_display()
                 self.reset_category_filter()
 
@@ -5832,6 +5995,7 @@ class SalesView(QWidget):
                 self.open_pdf(fac_dlg.pdf_path)
 
             self.cart = []
+            self.descuento_manual = None
             self.update_cart_display()
             self.reset_category_filter()
 
