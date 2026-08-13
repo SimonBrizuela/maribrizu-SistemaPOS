@@ -24,6 +24,7 @@ import '../styles/tienda.css';
 
 let _db = null;
 let _lista = [];
+let _esperando = [];
 let _catalogo = new Map();      // doc_id -> datos del catálogo
 let _habilitados = [];
 let _subExcluidos = {};
@@ -112,7 +113,9 @@ async function cargar() {
     for (const [id, producto] of _catalogo) {
       if (yaEstan.has(id)) continue;
       if (imagenesDe(producto).length) continue;
-      if (motivoDeNoPublicar(producto, _habilitados, _subExcluidos)) continue;
+      // Los frenados JUSTO por la foto: todo lo demás está en orden y salen a la
+      // vidriera en cuanto se les cargue una.
+      if (motivoDeNoPublicar(producto, _habilitados, _subExcluidos) !== 'sin foto') continue;
       automaticos.push({
         id,
         nombre: producto.nombre || '(sin nombre)',
@@ -125,7 +128,10 @@ async function cargar() {
       });
     }
     automaticos.sort((a, b) => String(a.nombre).localeCompare(String(b.nombre), 'es'));
-    _lista = _lista.concat(automaticos);
+    // Separadas a propósito: una es la lista que armó el personal a mano y la
+    // otra la que arma el sistema. Mezcladas, lo pedido puntualmente se perdía
+    // entre doscientos renglones automáticos.
+    _esperando = automaticos;
 
     pintar();
   } catch (err) {
@@ -165,34 +171,23 @@ function pintar() {
   const cuerpo = document.getElementById('fotosCuerpo');
   if (!cuerpo) return;
 
-  if (!_lista.length) {
+  if (!_lista.length && !_esperando.length) {
     cuerpo.innerHTML = `
       <div class="empty-state">
         <span class="material-icons">photo_camera</span>
-        <p>Todavía no hay productos marcados.</p>
+        <p>No hay nada esperando foto. Todo lo que tiene stock ya está en la vidriera.</p>
       </div>`;
     return;
   }
 
   const sinFoto = _lista.filter(f => !f.fotos.length).length;
 
-  cuerpo.innerHTML = `
-    <div class="tienda-resumen">
-      <div class="tienda-dato">
-        <b>${_lista.length}</b><span>en la lista</span>
-      </div>
-      <div class="tienda-dato${sinFoto ? ' alerta' : ''}">
-        <b>${sinFoto}</b><span>sin ninguna foto</span>
-      </div>
-      <div class="tienda-dato">
-        <b>${_lista.length - sinFoto}</b><span>con foto a reemplazar</span>
-      </div>
-      <div class="tienda-dato">
-        <b>${_lista.filter(f => f.automatico).length}</b><span>en la vidriera sin foto</span>
-      </div>
-    </div>
-
-    <table class="tienda-tabla" id="fotosTabla">
+  const tabla = (titulo, bajada, filas, id) => !filas.length ? '' : `
+    <h3 style="margin:22px 0 8px;font-size:15px">${escHtml(titulo)}
+      <span style="color:var(--text-muted);font-weight:400">· ${filas.length}</span>
+    </h3>
+    <p class="tienda-pista" style="margin:0 0 10px">${escHtml(bajada)}</p>
+    <table class="tienda-tabla" id="${id}">
       <thead>
         <tr>
           <th style="width:54px">Foto</th>
@@ -202,10 +197,30 @@ function pintar() {
           <th style="width:210px" data-no-imprimir></th>
         </tr>
       </thead>
-      <tbody>
-        ${_lista.map(f => filaHtml(f)).join('')}
-      </tbody>
+      <tbody>${filas.map(f => filaHtml(f)).join('')}</tbody>
     </table>`;
+
+  cuerpo.innerHTML = `
+    <div class="tienda-resumen">
+      <div class="tienda-dato">
+        <b>${_lista.length}</b><span>pedidas a mano</span>
+      </div>
+      <div class="tienda-dato${_esperando.length ? ' alerta' : ''}">
+        <b>${_esperando.length}</b><span>esperando foto para salir</span>
+      </div>
+      <div class="tienda-dato">
+        <b>${_lista.length - sinFoto}</b><span>con foto a reemplazar</span>
+      </div>
+    </div>
+
+    ${tabla('Pedidas a mano',
+            'Lo que se marcó desde la tienda, con su fecha.',
+            _lista, 'fotosTabla')}
+
+    ${tabla('Esperando foto para salir a la vidriera',
+            'Tienen stock y todo lo demás en orden: se publican solos apenas se '
+            + 'les carga una foto. Hasta entonces no se muestran en la tienda.',
+            _esperando, 'fotosTablaEsperando')}`;
 
   cuerpo.querySelectorAll('[data-sacar]').forEach(b => {
     b.addEventListener('click', () => sacar(b.dataset.sacar));
@@ -282,7 +297,8 @@ async function alElegirArchivo(ev) {
   const archivos = [...(input.files || [])];
   if (!id || !archivos.length || _subiendo) return;
 
-  const f = _lista.find(x => x.id === id);
+  // Puede venir de cualquiera de las dos tablas.
+  const f = _lista.find(x => x.id === id) || _esperando.find(x => x.id === id);
   if (!f) return;
 
   _subiendo = true;
@@ -332,7 +348,8 @@ async function alElegirArchivo(ev) {
 /* ── Sacar de la lista ────────────────────────────────────────────────────── */
 
 async function sacar(id) {
-  const f = _lista.find(x => x.id === id);
+  // Puede venir de cualquiera de las dos tablas.
+  const f = _lista.find(x => x.id === id) || _esperando.find(x => x.id === id);
   const ok = await confirmDialog({
     title: 'Sacar de la lista',
     message: `"${f?.nombre || id}" deja de figurar como pendiente de foto.`,

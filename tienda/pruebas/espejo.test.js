@@ -160,9 +160,29 @@ describe('rubros y subrubros, panel contra sync', () => {
     }
   });
 
+  it('sin foto no sale a la vidriera: espera en la cola de fotos', () => {
+    const base = { nombre: 'Cuaderno', estado: 'activo', precio_venta: 100,
+                   stock: 5, rubro: 'LIBRERIA' };
+
+    // Un producto con el cuadrito gris al lado de otros con foto se lee como
+    // catalogo a medio armar. Queda pendiente hasta que se le cargue una.
+    expect(motivoDeNoPublicar(base, ['LIBRERIA'], {})).toBe('sin foto');
+    expect(motivoDeNoPublicar({ ...base, tienda_imagenes: ['https://x/f.webp'] },
+                              ['LIBRERIA'], {})).toBe(null);
+    // La foto suelta del catalogo del POS tambien cuenta.
+    expect(motivoDeNoPublicar({ ...base, imagen_url: 'https://x/vieja.jpg' },
+                              ['LIBRERIA'], {})).toBe(null);
+    // Falta de stock manda sobre falta de foto: sin mercaderia no hay nada que
+    // fotografiar.
+    expect(motivoDeNoPublicar({ ...base, stock: 0 }, ['LIBRERIA'], {}))
+      .toBe('sin stock');
+  });
+
   it('un subrubro excluido no sale, y el rubro apagado gana sobre todo', () => {
+    // Con foto: sin ella la regla corta antes y este caso no probaria nada.
     const base = { nombre: 'Abrochadora', estado: 'activo', precio_venta: 100,
-                   stock: 5, rubro: 'LIBRERIA', sub_rubro: 'Abrochadora' };
+                   stock: 5, rubro: 'LIBRERIA', sub_rubro: 'Abrochadora',
+                   tienda_imagenes: ['https://x/foto.webp'] };
 
     expect(motivoDeNoPublicar(base, ['LIBRERIA'], {})).toBe(null);
     expect(motivoDeNoPublicar(base, ['LIBRERIA'], { LIBRERIA: ['ABROCHADORA'] }))

@@ -288,6 +288,14 @@ export function claveDeRubro(texto) {
  * El interruptor por producto sigue ganándole a las dos: es lo más específico
  * que puede decir alguien, y por eso se evalúa antes.
  */
+/** Las fotos del producto, con el mismo criterio que usa el espejo. */
+function imagenesDe(datos) {
+  const propias = datos?.tienda_imagenes;
+  if (Array.isArray(propias) && propias.length) return propias.filter(Boolean);
+  const suelta = datos?.imagen_url || datos?.imagen;
+  return suelta ? [suelta] : [];
+}
+
 export function motivoDeNoPublicar(datos, rubrosHabilitados = null,
                                    subrubrosExcluidos = null) {
   if (datos?.tienda_publicar === false) return 'excluido a mano';
@@ -315,7 +323,13 @@ export function motivoDeNoPublicar(datos, rubrosHabilitados = null,
   }
 
   if (!rubrosHabilitados) return null;
-  return rubrosHabilitados.includes(rubro) ? null : 'el rubro no está habilitado';
+  if (!rubrosHabilitados.includes(rubro)) return 'el rubro no está habilitado';
+
+  // La foto es lo ÚLTIMO que se mira, a propósito: así "sin foto" significa
+  // "sale a la vidriera apenas le saquen una", y no se mezcla con lo que igual
+  // no saldría por el rubro apagado o por el precio. Gemelo de se_publica()
+  // en scripts/sync_tienda.py.
+  return imagenesDe(datos).length ? null : 'sin foto';
 }
 
 export function estaPublicable(datos, rubrosHabilitados = null,

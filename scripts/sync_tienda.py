@@ -295,6 +295,15 @@ def variedades_de(datos):
     return salida
 
 
+def imagenes_de(datos):
+    """Las fotos del producto, con el mismo criterio que usa el espejo."""
+    propias = datos.get('tienda_imagenes')
+    if isinstance(propias, list) and propias:
+        return [str(x) for x in propias if x]
+    suelta = datos.get('imagen_url') or datos.get('imagen')
+    return [str(suelta)] if suelta else []
+
+
 def se_publica(datos, rubros_habilitados, subrubros_excluidos=None):
     """Reglas de curado. El interruptor por producto gana sobre el rubro.
 
@@ -348,6 +357,12 @@ def se_publica(datos, rubros_habilitados, subrubros_excluidos=None):
     sub = str(datos.get('sub_rubro') or '').strip().upper()
     if sub and sub in (subrubros_excluidos or {}).get(rubro, set()):
         return False, 'subrubro excluido'
+
+    # La foto es lo ULTIMO que se mira, a proposito: asi "sin foto" significa
+    # "sale a la vidriera apenas le saquen una", y no se mezcla con lo que igual
+    # no saldria por el rubro apagado o por el precio.
+    if not imagenes_de(datos):
+        return False, 'sin foto'
 
     return True, 'rubro habilitado'
 
