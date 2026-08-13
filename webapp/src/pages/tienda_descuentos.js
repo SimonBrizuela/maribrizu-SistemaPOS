@@ -21,10 +21,14 @@ import {
 import { getCached } from '../cache.js';
 import { alertDialog, confirmDialog, escHtml } from '../components/dialogs.js';
 import { nombreBonito } from '../tienda_espejo.js';
+// `.pc-btn` y las tarjetas de la seccion Tienda viven acá. Sin este import los
+// botones salen con el estilo crudo del navegador.
+import '../styles/tienda.css';
 
 let _db = null;
 let _descuentos = [];
 let _catalogo = [];
+let _publicadosPorDescuento = new Map();
 
 const pesos = n => `$${Number(n || 0).toLocaleString('es-AR')}`;
 
@@ -42,7 +46,14 @@ function precioConDescuento(lista, d) {
   return Math.max(1, Math.round(nuevo));
 }
 
-/** Los productos del catálogo sobre los que cae un descuento. */
+/**
+ * Los productos del catálogo sobre los que cae un descuento.
+ *
+ * Ojo: el catálogo tiene mucho más de lo que sale a la web (sin stock, sin
+ * foto, rubro apagado). Para lo que se muestra en pantalla interesa cuántos
+ * están PUBLICADOS — ver `publicados()` —, porque son los únicos donde el
+ * cliente va a ver el precio bajar.
+ */
 function alcanzados(d) {
   const obj = String(d.objetivo || '').trim().toUpperCase();
   if (!obj) return [];
@@ -58,7 +69,7 @@ function alcanzados(d) {
 /* ── Pintado ──────────────────────────────────────────────────────────────── */
 
 function tarjeta(d) {
-  const n = alcanzados(d).length;
+  const n = _publicadosPorDescuento.get(d._id);
   const signo = d.tipo === 'monto' ? '' : '%';
   const valor = d.tipo === 'monto' ? pesos(d.valor) : `${d.valor}${signo}`;
   const donde = d.alcance === 'producto'
@@ -81,7 +92,9 @@ function tarjeta(d) {
       </div>
       <div style="font-size:12.5px;color:var(--text-muted)">
         <span class="material-icons" style="font-size:14px;vertical-align:-2px">inventory_2</span>
-        ${n} producto${n === 1 ? '' : 's'} alcanzado${n === 1 ? '' : 's'}
+        ${n === undefined
+          ? 'contando…'
+          : `${n} producto${n === 1 ? '' : 's'} en la tienda con este precio`}
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap">
         <button class="pc-btn" data-accion="alternar" data-id="${escHtml(d._id)}">
@@ -374,11 +387,38 @@ function avisar(texto) {
 
 /* ── Carga ────────────────────────────────────────────────────────────────── */
 
+/**
+ * Cuántos productos PUBLICADOS toca cada descuento.
+ *
+ * Se cuenta contra `tienda_productos` y no contra el catálogo: el catálogo
+ * tiene 9.700 productos y en la tienda hay 2.500, así que decir "63 alcanzados"
+ * cuando en la vidriera se ven 10 es mentirle a quien decide el precio.
+ */
+async function contarPublicados() {
+  _publicadosPorDescuento = new Map();
+  const snap = await getDocs(collection(_db, 'tienda_productos'));
+  const publicados = snap.docs.map(x => ({ doc_id: x.id, ...(x.data() || {}) }));
+  for (const d of _descuentos) {
+    const obj = String(d.objetivo || '').trim().toUpperCase();
+    _publicadosPorDescuento.set(d._id, publicados.filter(p => {
+      const rubro = String(p.rubro || '').trim().toUpperCase();
+      const sub = String(p.sub_rubro || '').trim().toUpperCase();
+      if (d.alcance === 'rubro') return rubro === obj;
+      if (d.alcance === 'subrubro') return `${rubro}|${sub}` === obj;
+      return String(p.doc_id).toUpperCase() === obj;
+    }).length);
+  }
+}
+
 async function recargar() {
   const snap = await getDocs(query(collection(_db, 'tienda_descuentos')));
   _descuentos = snap.docs.map(x => ({ _id: x.id, ...x.data() }))
     .sort((a, b) => String(a.nombre).localeCompare(String(b.nombre), 'es'));
   pintar();
+  if (_descuentos.length) {
+    await contarPublicados();
+    pintar();
+  }
 }
 
 export async function renderTiendaDescuentos(container, db) {

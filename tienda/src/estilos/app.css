@@ -3009,3 +3009,31 @@
   font-weight: 700;
   letter-spacing: .2px;
 }
+
+/* Oferta en la ficha del producto. El precio nuevo ya se ve grande abajo; acá
+   va el de antes tachado y el porcentaje, que es lo que deja claro que es una
+   rebaja de verdad y no un precio raro. */
+.ficha-oferta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-bottom: 2px;
+}
+.ficha-oferta__chapa {
+  padding: 2px 9px;
+  border-radius: var(--r-full);
+  background: var(--liceo-rojo, #E63946);
+  color: #fff;
+  font-size: var(--t-xs);
+  font-weight: 700;
+}
+.ficha-oferta__antes {
+  color: var(--text-3);
+  text-decoration: line-through;
+  font-size: var(--t-base);
+}
+.ficha-oferta__nombre {
+  color: var(--text-2);
+  font-size: var(--t-xs);
+}

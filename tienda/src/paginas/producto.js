@@ -190,6 +190,12 @@ export async function producto({ montar, params }) {
           </div>
 
           <div class="ficha-precio">
+            ${p.descuento && p.precio_anterior > p.precio ? `
+              <div class="ficha-oferta">
+                <span class="ficha-oferta__chapa">−${p.descuento.porcentaje}%</span>
+                <span class="ficha-oferta__antes cifra">${pesos(p.precio_anterior)}</span>
+                <span class="ficha-oferta__nombre">${esc(p.descuento.nombre)}</span>
+              </div>` : ''}
             <div class="ficha-producto__precio cifra" data-precio>${pesos(p.precio)}${
               porMetro ? '<small style="font-size:var(--t-base);font-weight:600;color:var(--text-2)"> el metro</small>' : ''
             }</div>
