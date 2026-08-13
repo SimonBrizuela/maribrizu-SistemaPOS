@@ -384,7 +384,17 @@ class DatabaseManager:
                     FOREIGN KEY (product_id) REFERENCES products(id)
                 )
             """)
-            
+
+            # Historial de movimientos de stock: una fila por cada vez que una
+            # unidad entra o sale, con el antes y el después. Es el respaldo para
+            # cuando un stock no cierra contra la góndola. La definición vive en
+            # stock_ledger para que el módulo pueda crearla solo si hace falta.
+            try:
+                from pos_system.utils.stock_ledger import asegurar_tabla
+                asegurar_tabla(cursor)
+            except Exception as e:
+                logger.warning(f"No se pudo crear stock_movimientos: {e}")
+
             # Tabla de configuración
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS config (

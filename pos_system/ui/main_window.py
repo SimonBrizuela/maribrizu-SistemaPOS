@@ -1443,6 +1443,14 @@ class MainWindow(QMainWindow):
                 if not fb or not fb.enabled:
                     return
 
+                # Historial de movimientos de stock: se pone al día en cada
+                # pasada, aunque no haya ventas pendientes. Una venta puede haber
+                # subido bien y su movimiento no, y ahí es donde se recupera.
+                try:
+                    fb.push_stock_movimientos(self.db, en_hilo=False)
+                except Exception as _me2:
+                    logger.debug(f"retry_pending movimientos de stock: {_me2}")
+
                 cutoff = (now_ar() - timedelta(days=30)).strftime('%Y-%m-%d %H:%M:%S')
                 rows = self.db.execute_query(
                     "SELECT id FROM sales "

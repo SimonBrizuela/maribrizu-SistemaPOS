@@ -9,6 +9,7 @@ from pos_system.database.db_manager import DatabaseManager
 from pos_system.models.conjunto import (
     contenido_de, repartir_total, total_conjunto, total_variedad,
 )
+from pos_system.utils import stock_ledger
 
 logger = logging.getLogger(__name__)
 
@@ -118,6 +119,8 @@ class Sale:
                     cursor, item, item_idx, now_iso,
                     mp_para_sync_remoto, vincs_para_sync_remoto,
                     usuario=turno_nombre,
+                    motivo='venta',
+                    referencia=f'Venta #{sale_id}',
                 )
 
             # 3. Actualizar caja registradora
@@ -192,7 +195,9 @@ class Sale:
                                now_iso: str,
                                mp_acumulador: List[Dict],
                                vincs_acumulador: List[Dict],
-                               usuario: str = '') -> None:
+                               usuario: str = '',
+                               motivo: str = 'venta',
+                               referencia: str = '') -> None:
         """Aplica a SQLite el descuento de stock de UNA línea de carrito.
 
         Cubre los tres tipos de producto del sistema:
@@ -208,6 +213,10 @@ class Sale:
 
         Con `quantity` negativa el mismo motor DEVUELVE stock (ver
         reponer_stock_items).
+
+        `motivo` y `referencia` viajan al historial de movimientos: qué originó
+        la salida (venta, fiado, anulación) y contra qué documento, para poder
+        reconstruir después de dónde salió cada unidad.
         """
         # La línea ya descontó stock antes de llegar acá: es un producto que se
         # cargó a un fiado (la mercadería salió del local ese día) y ahora se
@@ -230,6 +239,19 @@ class Sale:
             # efectiva (si es vinculada al rollo/pack, descuenta de la fuente).
             target_pres_id = self._deduct_mp_stock_local(cursor, item, now_iso)
             if target_pres_id:
+                # El stock de un producto madre vive en las presentaciones del
+                # nodo, no en products.stock: el movimiento queda sin antes/después
+                # de góndola y con la presentación en el detalle.
+                stock_ledger.registrar(
+                    cursor,
+                    motivo=motivo,
+                    cantidad=-float(item.get('quantity') or 0),
+                    firebase_id=str(item.get('mp_product_id') or ''),
+                    producto_nombre=item.get('product_name') or '',
+                    referencia=referencia,
+                    detalle=f'Producto madre · presentación {target_pres_id}',
+                    usuario=usuario,
+                )
                 mp_acumulador.append({
                     'node_id':         item.get('mp_node_id'),
                     'presentation_id': target_pres_id,
@@ -298,6 +320,7 @@ class Sale:
                 sum_u = sum(float(c.get('unidades') or 0) for c in colores if isinstance(c, dict))
                 sum_r = sum(float(c.get('restante') or 0) for c in colores if isinstance(c, dict))
                 sum_total = total_conjunto(colores, contenido)
+                nuevo_total = sum_total
                 cursor.execute(
                     """UPDATE products
                        SET conjunto_unidades = ?,
@@ -313,6 +336,7 @@ class Sale:
             else:
                 # Legacy / sin colores: usar after_u / after_r directos
                 after_total = after_u * contenido + after_r
+                nuevo_total = after_total
                 consumido_base = max(0.0, total_antes - after_total)
                 cursor.execute(
                     """UPDATE products
@@ -329,16 +353,52 @@ class Sale:
             # sin este dato no hay forma de devolver la fracción si después se
             # anula (ej: un producto fiado que el cliente trae de vuelta).
             item['conjunto_consumido_base'] = round(consumido_base, 4)
+
+            # El conjunto se guarda con un SET absoluto, así que el movimiento
+            # es la diferencia entre los dos totales — negativa si salió, y
+            # positiva sola cuando esto es un reverso.
+            previo = stock_ledger.snapshot(cursor, item['product_id'])
+            stock_ledger.registrar(
+                cursor,
+                motivo=motivo,
+                cantidad=nuevo_total - total_antes,
+                producto_id=item['product_id'],
+                firebase_id=previo.get('firebase_id') or '',
+                producto_nombre=item.get('product_name') or previo.get('nombre') or '',
+                stock_antes=total_antes,
+                stock_despues=nuevo_total,
+                referencia=referencia,
+                detalle=f'Variedad {color}' if color else '',
+                usuario=usuario,
+            )
         else:
             # Descontar stock — se permite vender aunque no haya stock
             # suficiente. EXCEPTO si el producto está vinculado: en ese
             # caso el stock real vive en los productos fuente (se descuentan
             # más abajo) y NO se toca el propio para que no quede negativo.
             if not vincs_prod:
+                previo = stock_ledger.snapshot(cursor, item['product_id'])
                 cursor.execute(
                     "UPDATE products SET stock = stock - ?, updated_at = ? WHERE id = ? AND stock != -1",
                     (item['quantity'], now_iso, item['product_id'])
                 )
+                # stock = -1 significa servicio/ilimitado: no se descontó nada,
+                # así que tampoco hay movimiento que anotar.
+                antes = previo.get('stock')
+                if antes is not None and antes != -1:
+                    cant = float(item['quantity'] or 0)
+                    stock_ledger.registrar(
+                        cursor,
+                        motivo=motivo,
+                        cantidad=-cant,
+                        producto_id=item['product_id'],
+                        firebase_id=previo.get('firebase_id') or '',
+                        producto_nombre=item.get('product_name') or previo.get('nombre') or '',
+                        stock_antes=antes,
+                        stock_despues=antes - cant,
+                        referencia=referencia,
+                        usuario=usuario,
+                    )
             # stock = -1 significa servicio/ilimitado, no se descuenta
 
         # ── Vínculos consumibles (catalogo-level) ────────────────────
@@ -352,7 +412,9 @@ class Sale:
             cursor, item, item_idx, now_iso, vincs_acumulador, vincs_prod
         )
 
-    def descontar_stock_items(self, items: List[Dict], usuario: str = '') -> None:
+    def descontar_stock_items(self, items: List[Dict], usuario: str = '',
+                              motivo: str = 'fiado',
+                              referencia: str = '') -> None:
         """Descuenta stock de una lista de líneas SIN generar una venta.
 
         Dos casos de uso:
@@ -381,7 +443,7 @@ class Sale:
                 self._aplicar_stock_de_item(
                     cursor, item, idx, now_iso,
                     mp_para_sync_remoto, vincs_para_sync_remoto,
-                    usuario=usuario,
+                    usuario=usuario, motivo=motivo, referencia=referencia,
                 )
 
         self._propagar_stock_a_firebase(
@@ -389,7 +451,9 @@ class Sale:
             contexto='descontar_stock_items',
         )
 
-    def reponer_stock_items(self, items: List[Dict], usuario: str = '') -> None:
+    def reponer_stock_items(self, items: List[Dict], usuario: str = '',
+                            motivo: str = 'fiado_quitado',
+                            referencia: str = '') -> None:
         """Devuelve al stock lo que `descontar_stock_items` sacó.
 
         Caso de uso: un producto cargado a un fiado que se quita de la cuenta
@@ -429,7 +493,7 @@ class Sale:
                 self._aplicar_stock_de_item(
                     cursor, reverso, idx, now_iso,
                     mp_para_sync_remoto, vincs_para_sync_remoto,
-                    usuario=usuario,
+                    usuario=usuario, motivo=motivo, referencia=referencia,
                 )
                 repuestos.append(reverso)
 
@@ -515,6 +579,15 @@ class Sale:
                 args=(None, vincs_para_sync),
                 daemon=True,
             ).start()
+        # El historial de movimientos sube siempre, haya o no items que empujar:
+        # una vinculación o un conjunto mueven stock sin pasar por `items`.
+        try:
+            from pos_system.utils.firebase_sync import get_firebase_sync
+            fb = get_firebase_sync()
+            if fb and getattr(fb, 'enabled', False):
+                fb.push_stock_movimientos(self.db)
+        except Exception as e:
+            logger.debug(f"{contexto or 'stock'}: historial de movimientos pendiente: {e}")
         if not items:
             return
         try:
@@ -744,7 +817,7 @@ class Sale:
 
             target_row = cursor.execute(
                 "SELECT id, stock, es_conjunto, conjunto_total, "
-                "       conjunto_contenido, conjunto_colores "
+                "       conjunto_contenido, conjunto_colores, name "
                 "FROM products WHERE firebase_id = ?",
                 (target_fid,)
             ).fetchone()
@@ -755,7 +828,8 @@ class Sale:
                 )
                 continue
 
-            t_local_id, t_stock, t_es_conj, t_total, t_contenido, t_colores = target_row
+            (t_local_id, t_stock, t_es_conj, t_total,
+             t_contenido, t_colores, t_nombre) = target_row
             t_stock      = float(t_stock or 0)
             t_es_conj    = bool(t_es_conj)
             t_total      = float(t_total or 0)
@@ -798,6 +872,17 @@ class Sale:
                     'delta':           delta,
                     'contexto':        item.get('product_name') or '',
                 })
+                stock_ledger.registrar(
+                    cursor,
+                    motivo='vinculacion',
+                    cantidad=nuevo_total - t_total,
+                    producto_id=t_local_id,
+                    firebase_id=target_fid,
+                    producto_nombre=t_nombre or '',
+                    stock_antes=t_total,
+                    stock_despues=nuevo_total,
+                    detalle=f"Consumido por {item.get('product_name') or ''}".strip(),
+                )
             else:
                 nuevo_stock = max(0.0, t_stock - delta)
                 cursor.execute(
@@ -812,6 +897,17 @@ class Sale:
                     'delta':           delta,
                     'contexto':        item.get('product_name') or '',
                 })
+                stock_ledger.registrar(
+                    cursor,
+                    motivo='vinculacion',
+                    cantidad=nuevo_stock - t_stock,
+                    producto_id=t_local_id,
+                    firebase_id=target_fid,
+                    producto_nombre=t_nombre or '',
+                    stock_antes=t_stock,
+                    stock_despues=nuevo_stock,
+                    detalle=f"Consumido por {item.get('product_name') or ''}".strip(),
+                )
 
     def _sync_vincs_to_firebase(self, sale_id: int,
                                 vincs_to_sync: List[Dict]) -> None:

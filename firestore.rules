@@ -166,6 +166,18 @@ service cloud.firestore {
     match /inventario_resumen/{docId} {
       allow read, write: if authorized();
     }
+
+    // ── HISTORIAL DE MOVIMIENTOS DE STOCK ─────────────────────────────────
+    // Es el respaldo para reconstruir por qué un stock no cierra: cada entrada
+    // y salida con quién, cuándo y de cuánto a cuánto. Se puede leer y agregar,
+    // pero NO editar ni borrar — un historial que se puede retocar no sirve
+    // como respaldo de nada. El POS escribe por Admin SDK y no pasa por acá.
+    match /stock_movimientos/{movId} {
+      allow read:   if authorized();
+      allow create: if authorized();
+      allow update: if false;
+      allow delete: if isAdmin();
+    }
     match /rubros/{rubroId} {
       allow read, write: if authorized();
     }

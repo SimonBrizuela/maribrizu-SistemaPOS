@@ -2007,6 +2007,59 @@ class FirebaseSync:
                 logger.error(f"Firebase: Error actualizando stock post-venta: {e}")
 
         self._run(_do)
+        # El historial de movimientos viaja por su cuenta: lo que no suba ahora
+        # queda pendiente en SQLite y se reintenta, sin frenar la venta.
+        self.push_stock_movimientos(db_manager)
+
+    def push_stock_movimientos(self, db_manager, en_hilo: bool = True) -> None:
+        """Sube a `stock_movimientos` las filas que todavía no viajaron.
+
+        El doc es `{pc_id}_{id_local}` con set(), así que re-subir el mismo
+        movimiento lo pisa en vez de duplicarlo. Recién después de que el batch
+        commitea se marca `fb_synced = 1`: si se corta la luz en el medio, la
+        fila se reintenta y a lo sumo se reescribe igual.
+        """
+        if not self.enabled or db_manager is None:
+            return
+
+        def _do():
+            try:
+                from pos_system.utils import stock_ledger
+                filas = stock_ledger.pendientes(db_manager)
+                if not filas:
+                    return
+                pc_id = _get_pc_id()
+                col = self.db.collection('stock_movimientos')
+                batch = self.db.batch()
+                subidos = []
+                for f in filas:
+                    doc_id = f"{pc_id}_{int(f['id'])}"
+                    batch.set(col.document(doc_id), {
+                        'ts':              self._parse_dt(f.get('ts')),
+                        'origen':          f.get('origen') or 'pos',
+                        'pc_id':           f.get('pc_id') or pc_id,
+                        'usuario':         f.get('usuario') or '',
+                        'producto_id':     f.get('producto_id'),
+                        'firebase_id':     f.get('firebase_id') or '',
+                        'producto_nombre': f.get('producto_nombre') or '',
+                        'motivo':          f.get('motivo') or '',
+                        'cantidad':        float(f.get('cantidad') or 0),
+                        'stock_antes':     f.get('stock_antes'),
+                        'stock_despues':   f.get('stock_despues'),
+                        'referencia':      f.get('referencia') or '',
+                        'detalle':         f.get('detalle') or '',
+                    })
+                    subidos.append(int(f['id']))
+                batch.commit()
+                stock_ledger.marcar_subidos(db_manager, subidos)
+                logger.info(f"Firebase: {len(subidos)} movimiento(s) de stock registrados.")
+            except Exception as e:
+                logger.warning(f"Firebase: no se pudieron subir los movimientos de stock: {e}")
+
+        if en_hilo:
+            self._run(_do)
+        else:
+            _do()
 
     def sync_vinculaciones_after_sale(self, sale_id: int,
                                       vincs_to_sync: list,

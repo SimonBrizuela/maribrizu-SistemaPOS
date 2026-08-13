@@ -1,6 +1,21 @@
 {
   "indexes": [
     {
+      "//": "Historial de un producto: sus movimientos del mas nuevo al mas viejo. Sin este indice la consulta falla y la ficha se queda sin historial, que es justo para lo que se abre.",
+      "collectionGroup": "stock_movimientos",
+      "queryScope": "COLLECTION",
+      "fields": [
+        {
+          "fieldPath": "firebase_id",
+          "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "ts",
+          "order": "DESCENDING"
+        }
+      ]
+    },
+    {
       "//": "Catálogo filtrado por rubro y ordenado. Sin este índice la tienda cae a traer 300 productos y ordenarlos en el navegador, que anda pero es lento y no pagina.",
       "collectionGroup": "tienda_productos",
       "queryScope": "COLLECTION",

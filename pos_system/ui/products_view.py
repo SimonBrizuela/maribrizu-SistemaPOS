@@ -31,6 +31,18 @@ class ProductsView(QWidget):
                 return widget
             widget = widget.parent()
         return None
+
+    def _usuario_para_historial(self) -> str:
+        """Quién está tocando el stock, para que quede firmado el movimiento.
+
+        Preferimos el turno (la persona real en el mostrador) sobre el usuario
+        del login, que casi siempre es 'admin' y no dice nada.
+        """
+        mw = self.get_main_window()
+        datos = getattr(mw, 'current_user', None) or {}
+        return str(datos.get('turno_nombre')
+                   or datos.get('full_name')
+                   or datos.get('username') or '')
         
     def init_ui(self):
         layout = QVBoxLayout(self)
@@ -689,6 +701,30 @@ class ProductsView(QWidget):
                     "INSERT INTO stock_adjustments (product_id, quantity_change, reason) VALUES (?, ?, ?)",
                     (product_id, quantity_change, reason)
                 )
+
+                # Y en el historial de movimientos, que es el que se puede mirar
+                # después desde el panel para saber quién tocó qué.
+                try:
+                    from pos_system.utils import stock_ledger
+                    from pos_system.utils.firebase_sync import get_firebase_sync
+                    stock_ledger.registrar_suelto(
+                        self.db,
+                        motivo='reposicion' if quantity_change > 0 else 'edicion_manual',
+                        cantidad=quantity_change,
+                        producto_id=product_id,
+                        firebase_id=str(product.get('firebase_id') or ''),
+                        producto_nombre=product_name,
+                        stock_antes=product['stock'],
+                        stock_despues=new_stock,
+                        detalle=reason,
+                        usuario=self._usuario_para_historial(),
+                    )
+                    fb = get_firebase_sync()
+                    if fb and getattr(fb, 'enabled', False):
+                        fb.push_stock_movimientos(self.db)
+                except Exception as _le:
+                    import logging as _lg
+                    _lg.getLogger(__name__).warning(f"Historial de stock: {_le}")
 
                 QMessageBox.information(self, 'Éxito',
                     f'Stock actualizado: {product["stock"]} → {new_stock} unidades')
