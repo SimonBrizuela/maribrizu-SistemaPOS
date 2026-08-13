@@ -19,6 +19,12 @@ on:
     - cron: '17 */6 * * *'
   workflow_dispatch:        # y a mano desde la pestaña Actions cuando haga falta
 
+# El sync no toca el repositorio: solo lee el codigo y escribe en Firestore. Sin
+# permisos de escritura, un paso comprometido (una dependencia con sorpresa) no
+# puede empujar commits ni publicar releases con el token de la corrida.
+permissions:
+  contents: read
+
 # Que no se pisen dos corridas si una se demora.
 concurrency:
   group: sync-tienda
@@ -51,13 +57,28 @@ jobs:
             echo "Settings -> Secrets and variables -> Actions -> New repository secret"
             exit 1
           fi
-          # La clave vive solo en el runner, que se destruye al terminar.
+          # La clave vive solo en el runner, que se destruye al terminar. No se
+          # imprime nada de ella, ni siquiera el mail de la cuenta de servicio:
+          # el log de un repositorio publico lo lee cualquiera.
+          umask 077
           printf '%s' "$FIREBASE_KEY_JSON" > firebase_key.json
-          python -c "import json;d=json.load(open('firebase_key.json'));print('cuenta:', d['client_email'])"
+          python -c "import json; json.load(open('firebase_key.json'))" \
+            && echo "credencial cargada"
 
       - name: Sincronizar
-        run: python scripts/sync_tienda.py
+        # El sync imprime los mas vendidos con nombre y cantidad, y los rubros
+        # con cuanto rota cada uno. En un repositorio publico ese log lo lee
+        # cualquiera: es informacion del negocio. Se guarda entero para poder
+        # revisarlo si falla, pero al log solo sale el resumen final.
+        run: |
+          set -o pipefail
+          python scripts/sync_tienda.py > corrida.log 2>&1 || {
+            echo "El sync fallo. Ultimas lineas del error:"
+            tail -n 20 corrida.log >&2
+            exit 1
+          }
+          tail -n 2 corrida.log
 
       - name: Borrar la credencial
         if: always()
-        run: rm -f firebase_key.json
+        run: rm -f firebase_key.json corrida.log
