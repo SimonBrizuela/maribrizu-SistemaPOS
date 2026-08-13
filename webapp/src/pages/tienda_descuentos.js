@@ -396,8 +396,16 @@ function avisar(texto) {
  */
 async function contarPublicados() {
   _publicadosPorDescuento = new Map();
-  const snap = await getDocs(collection(_db, 'tienda_productos'));
-  const publicados = snap.docs.map(x => ({ doc_id: x.id, ...(x.data() || {}) }));
+  // Cacheado: son 2.500 lecturas de Firestore y solo se usan para un contador.
+  // Sin esto, cada vez que se abre la pantalla se pagan de nuevo.
+  const publicados = await getCached('tienda:publicados_rubros', async () => {
+    const snap = await getDocs(collection(_db, 'tienda_productos'));
+    return snap.docs.map(x => ({
+      doc_id: x.id,
+      rubro: (x.data() || {}).rubro || '',
+      sub_rubro: (x.data() || {}).sub_rubro || '',
+    }));
+  }, { ttl: 5 * 60 * 1000, memOnly: true });
   for (const d of _descuentos) {
     const obj = String(d.objetivo || '').trim().toUpperCase();
     _publicadosPorDescuento.set(d._id, publicados.filter(p => {

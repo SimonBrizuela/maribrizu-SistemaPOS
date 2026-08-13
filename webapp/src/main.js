@@ -998,6 +998,13 @@ function initApp(session) {
       // venta ajena tira todo eso.
       if (currentPage === 'tienda_catalogo') return;
 
+      // Descuentos de la Tienda: lo mismo. Al abrirla llegan los snapshots de
+      // ventas, ventas_por_dia e historial uno detrás de otro, y cada uno
+      // disparaba un render nuevo: la lista titilaba tres veces antes de
+      // quedarse quieta, y los dos primeros renders terminaban descartados.
+      // La página se refresca sola cuando se toca un descuento.
+      if (currentPage === 'tienda_descuentos') return;
+
       // Si el usuario está interactuando, diferimos el refresh para no
       // pisar lo que está haciendo (buscar, editar, llenar un form).
       if (userBusy()) {
