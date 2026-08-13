@@ -22,35 +22,36 @@ from PyQt5.QtGui import QFont
 # otro nombre: la idea es ahorrar tipeo, no encorsetar.
 SUGERENCIAS = ['Jubilados', 'Docente', 'Cliente de la casa', 'Mayorista', 'Efectivo']
 
-# A cuánto se puede redondear el total. Las monedas chicas ya no circulan: un
-# vuelto de $40 no existe, así que el total tiene que terminar en un número que
-# se pueda pagar de verdad.
-PASOS_REDONDEO = (50, 100, 500)
-
-
 def _money(n):
     return f'{float(n or 0):,.2f}'.replace(',', 'X').replace('.', ',').replace('X', '.')
 
 
-def redondear_hacia_abajo(total, monto, paso, tope):
-    """Cuánto hay que agregarle al descuento para que el total quede redondo.
+def redondear_centena(total, monto, tope):
+    """Lleva el total a la centena, agrandando el descuento lo justo.
 
-    Redondea SIEMPRE para abajo: el cliente paga menos, nunca más. El ajuste no
-    puede pasarse del `tope` (lo que suman los renglones elegidos), porque un
-    descuento no puede superar a lo que descuenta.
+    Misma regla que el ±100 del catálogo web (`redondearCentena` en
+    catalogo.js): centena, y si el monto es tan chico que eso daría cero, cae a
+    la decena. Acá va siempre PARA ABAJO — es un descuento, no puede terminar
+    cobrando más que la suma de los productos.
+
+    El ajuste tampoco puede pasarse del `tope` (lo que suman los renglones
+    elegidos): un descuento no puede superar a lo que descuenta.
 
     Devuelve (monto_final, ajuste).
     """
-    paso = float(paso or 0)
-    if paso <= 0:
-        return monto, 0.0
     queda = round(float(total) - float(monto), 2)
     if queda <= 0:
         return monto, 0.0
-    sobrante = round(queda - (int(queda / paso) * paso), 2)
-    if sobrante <= 0:
-        return monto, 0.0            # ya era redondo, no hay nada que hacer
-    ajuste = min(sobrante, max(0.0, float(tope) - float(monto)))
+
+    objetivo = int(queda / 100) * 100
+    if objetivo <= 0:                       # totales chicos: a la decena
+        objetivo = int(queda / 10) * 10
+    if objetivo <= 0 or objetivo >= queda:
+        return monto, 0.0                   # ya está redondo
+
+    ajuste = min(round(queda - objetivo, 2), max(0.0, float(tope) - float(monto)))
+    if ajuste <= 0:
+        return monto, 0.0
     return round(float(monto) + ajuste, 2), round(ajuste, 2)
 
 
@@ -149,7 +150,7 @@ class DescuentoDialog(QDialog):
         # puede dar. Baja el total al múltiplo de abajo agrandando el descuento.
         redondeo = QHBoxLayout()
         redondeo.setSpacing(6)
-        self.redondear_btn = QPushButton('Redondear el total')
+        self.redondear_btn = QPushButton('±100   Redondear el total')
         self.redondear_btn.setCheckable(True)
         self.redondear_btn.setCursor(Qt.PointingHandCursor)
         self.redondear_btn.setMinimumHeight(38)
@@ -168,20 +169,10 @@ class DescuentoDialog(QDialog):
         self.redondear_btn.toggled.connect(self._cambiar_redondeo)
         redondeo.addWidget(self.redondear_btn)
 
-        self.grupo_paso = QButtonGroup(self)
-        self.pasos_btns = []
-        for n, paso in enumerate(PASOS_REDONDEO):
-            b = self._opcion(f'${paso}', primero=(n == 0),
-                             ultimo=(n == len(PASOS_REDONDEO) - 1))
-            b.setMinimumHeight(38)
-            b.setFont(QFont('Segoe UI', 10, QFont.Bold))
-            b.setProperty('paso', paso)
-            b.setEnabled(False)
-            self.grupo_paso.addButton(b)
-            b.toggled.connect(self._recalcular)
-            self.pasos_btns.append(b)
-            redondeo.addWidget(b)
-        self.pasos_btns[1].setChecked(True)     # $100 por defecto
+        self.redondeo_lbl = QLabel('deja el total en una centena redonda')
+        self.redondeo_lbl.setFont(QFont('Segoe UI', 9))
+        self.redondeo_lbl.setStyleSheet(f"color:{T['text_muted']};")
+        redondeo.addWidget(self.redondeo_lbl)
         redondeo.addStretch()
         v.addLayout(redondeo)
 
@@ -364,10 +355,8 @@ class DescuentoDialog(QDialog):
 
     # ── Cálculo ─────────────────────────────────────────────────────────────
     def _cambiar_redondeo(self, activo):
-        for b in self.pasos_btns:
-            b.setEnabled(activo)
-        self.redondear_btn.setText('Redondeando el total' if activo
-                                   else 'Redondear el total')
+        self.redondear_btn.setText('±100   Redondeando el total' if activo
+                                   else '±100   Redondear el total')
         self._recalcular()
 
     def _cambiar_alcance(self):
@@ -389,13 +378,8 @@ class DescuentoDialog(QDialog):
         except ValueError:
             return 0.0
 
-    def _paso_redondeo(self):
-        if not self.redondear_btn.isChecked():
-            return 0
-        for b in self.pasos_btns:
-            if b.isChecked():
-                return int(b.property('paso'))
-        return 0
+    def _redondea(self):
+        return bool(self.redondear_btn.isChecked())
 
     def calcular(self):
         """Devuelve (monto_total, base, filas). El monto nunca supera la base:
@@ -412,11 +396,10 @@ class DescuentoDialog(QDialog):
                 monto = min(valor, base)
         monto = round(monto, 2)
 
-        paso = self._paso_redondeo()
-        if paso and base > 0:
+        if self._redondea() and base > 0:
             total_carrito = sum(float(it.get('subtotal') or 0) for it in self.cart)
-            monto, self._ajuste_redondeo = redondear_hacia_abajo(
-                total_carrito, monto, paso, base)
+            monto, self._ajuste_redondeo = redondear_centena(
+                total_carrito, monto, base)
         else:
             self._ajuste_redondeo = 0.0
         return monto, base, filas
@@ -435,8 +418,8 @@ class DescuentoDialog(QDialog):
             self.aplicar_btn.setEnabled(False)
             return
         if monto <= 0:
-            aviso = ('El total ya termina redondo, no hay nada que ajustar.'
-                     if self._paso_redondeo() else 'Ingresá cuánto descontar.')
+            aviso = ('El total ya termina en una centena redonda.'
+                     if self._redondea() else 'Ingresá cuánto descontar.')
             self.resumen.setText(
                 f"<span style='color:{T['text_muted']}'>{aviso}</span>")
             self.aplicar_btn.setEnabled(False)
@@ -464,7 +447,7 @@ class DescuentoDialog(QDialog):
         nombre = (self.nombre_input.text() or '').strip()
         # Bajar los $40 que no se pueden pagar no necesita bautismo: si el único
         # descuento es el redondeo, se llama así solo.
-        if not nombre and self._paso_redondeo() and not self._valor():
+        if not nombre and self._redondea() and not self._valor():
             nombre = 'Redondeo'
         if not nombre:
             QMessageBox.warning(self, 'Falta el nombre',
