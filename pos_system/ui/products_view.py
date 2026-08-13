@@ -10,7 +10,7 @@ from pos_system.utils.firebase_sync import now_ar
 import os
 
 from pos_system.models.product import Product
-from pos_system.utils.stock_links import has_links, effective_stock, build_target_index, shown_stock
+from pos_system.utils.stock_links import has_links, effective_stock, build_target_index, shown_stock, es_ilimitado
 from pos_system.utils.image_handler import ImageHandler
 from pos_system.ui.components import PriceInput
 

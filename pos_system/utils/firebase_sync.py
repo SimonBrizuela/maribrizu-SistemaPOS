@@ -345,6 +345,9 @@ class FirebaseSync:
                     raw_smax = d.get('stock_max')
                     stock_min = int(raw_smin) if raw_smin not in (None, '', False) else None
                     stock_max = int(raw_smax) if raw_smax not in (None, '', False) else None
+                    # Servicio sin control de stock: sale de la bandera y de
+                    # ningún otro lado (ver delta_sync_products_startup).
+                    stock_ilim = 1 if d.get('stock_ilimitado') is True else 0
 
                     # Producto Conjunto
                     def _to_float(v):
@@ -510,7 +513,8 @@ class FirebaseSync:
                             "SELECT id, name, price, cost, stock, barcode, category, rubro, stock_min, stock_max, "
                             "es_conjunto, conjunto_tipo, conjunto_unidad_medida, conjunto_unidades, "
                             "conjunto_contenido, conjunto_restante, conjunto_precio_unidad, conjunto_total, "
-                            "conjunto_colores, vinculaciones, vinculado_a, vinculado_cantidad, vinculado_nombre "
+                            "conjunto_colores, vinculaciones, vinculado_a, vinculado_cantidad, vinculado_nombre, "
+                            "COALESCE(stock_ilimitado, 0) AS stock_ilimitado "
                             "FROM products WHERE firebase_id = ?", (doc_id,)
                         ) or []
                     except Exception:
@@ -527,18 +531,18 @@ class FirebaseSync:
                                 """INSERT OR IGNORE INTO products
                                    (name, category, price, cost, stock, barcode,
                                     discount_value, firebase_id, rubro,
-                                    stock_min, stock_max,
+                                    stock_min, stock_max, stock_ilimitado,
                                     es_conjunto, conjunto_tipo, conjunto_unidad_medida,
                                     conjunto_unidades, conjunto_contenido, conjunto_restante,
                                     conjunto_precio_unidad, conjunto_total, conjunto_colores,
                                     vinculaciones, vinculado_a, vinculado_cantidad, vinculado_nombre,
                                     created_at, updated_at)
-                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                                            ?, ?, ?, ?, ?, ?, ?, ?, ?,
                                            ?, ?, ?, ?,
                                            CURRENT_TIMESTAMP, ?)""",
                                 (nombre, categ, precio, costo, stock, barcode,
-                                 desc, doc_id, rubro, stock_min, stock_max,
+                                 desc, doc_id, rubro, stock_min, stock_max, stock_ilim,
                                  es_conjunto, conjunto_tipo, conjunto_unidad_medida,
                                  conjunto_unidades, conjunto_contenido, conjunto_restante,
                                  conjunto_precio_unidad, conjunto_total, conjunto_colores,
@@ -571,6 +575,7 @@ class FirebaseSync:
                             (r.get('rubro') or '')    != (rubro or '') or
                             r.get('stock_min')        != stock_min or
                             r.get('stock_max')        != stock_max or
+                            int(r.get('stock_ilimitado') or 0) != stock_ilim or
                             int(r.get('es_conjunto') or 0) != es_conjunto or
                             (r.get('conjunto_tipo') or None)          != conjunto_tipo or
                             (r.get('conjunto_unidad_medida') or None) != conjunto_unidad_medida or
@@ -597,7 +602,7 @@ class FirebaseSync:
                                 """UPDATE products
                                    SET name=?, category=?, price=?, cost=?, stock=?,
                                        barcode=?, discount_value=?, rubro=?,
-                                       stock_min=?, stock_max=?,
+                                       stock_min=?, stock_max=?, stock_ilimitado=?,
                                        es_conjunto=?, conjunto_tipo=?, conjunto_unidad_medida=?,
                                        conjunto_unidades=?, conjunto_contenido=?, conjunto_restante=?,
                                        conjunto_precio_unidad=?, conjunto_total=?, conjunto_colores=?,
@@ -605,7 +610,7 @@ class FirebaseSync:
                                        updated_at=?
                                    WHERE id=?""",
                                 (nombre, categ, precio, costo, stock,
-                                 barcode, desc, rubro, stock_min, stock_max,
+                                 barcode, desc, rubro, stock_min, stock_max, stock_ilim,
                                  es_conjunto, conjunto_tipo, conjunto_unidad_medida,
                                  conjunto_unidades, conjunto_contenido, conjunto_restante,
                                  conjunto_precio_unidad, conjunto_total, conjunto_colores,
@@ -1928,7 +1933,7 @@ class FirebaseSync:
                         rows = db_manager.execute_query(
                             "SELECT id, firebase_id, stock, es_conjunto, "
                             "       conjunto_unidades, conjunto_restante, conjunto_total, "
-                            "       conjunto_colores "
+                            "       conjunto_colores, COALESCE(stock_ilimitado, 0) AS stock_ilimitado "
                             "FROM products WHERE id = ?",
                             (int(pid),)
                         )
@@ -1965,8 +1970,13 @@ class FirebaseSync:
                         updated += 1
                         continue
 
-                    # Servicio/ilimitado: no tocar el stock en Firebase
-                    if int(row.get('stock') or 0) == -1:
+                    # Servicio/ilimitado: no tocar el stock en Firebase.
+                    # Se decide por la bandera y NO por el número. Antes esto
+                    # miraba `stock == -1` DESPUÉS de que la venta ya había
+                    # descontado, así que un producto que pasaba de 0 a -1 se
+                    # leía como servicio y su descuento nunca subía: la nube
+                    # quedaba con más unidades que la góndola, para siempre.
+                    if int(row.get('stock_ilimitado') or 0) == 1:
                         continue
 
                     # Inventario (doc_id = id numérico local) — decremento atómico
@@ -2333,6 +2343,11 @@ class FirebaseSync:
                     raw_smax = d.get('stock_max')
                     stock_min = int(raw_smin) if raw_smin not in (None, '', False) else None
                     stock_max = int(raw_smax) if raw_smax not in (None, '', False) else None
+                    # Servicio sin control de stock: sale de la bandera del
+                    # catálogo y de ningún otro lado. Deducirlo de `stock == -1`
+                    # es lo que hacía que un producto vendido en cero quedara
+                    # marcado como servicio y dejara de descontar para siempre.
+                    stock_ilim = 1 if d.get('stock_ilimitado') is True else 0
 
                     # Vínculos consumibles (read-only desde POS; gestionados en webapp)
                     _vincs_raw = d.get('vinculaciones')
@@ -2380,14 +2395,15 @@ class FirebaseSync:
                                 """INSERT OR IGNORE INTO products
                                    (name, category, price, cost, stock, barcode,
                                     discount_value, firebase_id, rubro,
-                                    stock_min, stock_max,
+                                    stock_min, stock_max, stock_ilimitado,
                                     vinculaciones, vinculado_a, vinculado_cantidad, vinculado_nombre,
                                     created_at, updated_at)
-                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                                            ?, ?, ?, ?,
                                            CURRENT_TIMESTAMP, ?)""",
                                 (nombre, categ, precio, costo, stock, barcode,
                                  desc, firebase_id, rubro, stock_min, stock_max,
+                                 stock_ilim,
                                  vinculaciones, vinculado_a, vinculado_cantidad, vinculado_nombre,
                                  fb_ts)
                             )
@@ -2410,12 +2426,13 @@ class FirebaseSync:
                                     """UPDATE products
                                        SET name=?, category=?, price=?, cost=?, stock=?,
                                            barcode=?, discount_value=?, rubro=?,
-                                           stock_min=?, stock_max=?,
+                                           stock_min=?, stock_max=?, stock_ilimitado=?,
                                            vinculaciones=?, vinculado_a=?, vinculado_cantidad=?, vinculado_nombre=?,
                                            updated_at=?
                                        WHERE id=?""",
                                     (nombre, categ, precio, costo, stock,
                                      barcode, desc, rubro, stock_min, stock_max,
+                                     stock_ilim,
                                      vinculaciones, vinculado_a, vinculado_cantidad, vinculado_nombre,
                                      fb_ts, local_id)
                                 )

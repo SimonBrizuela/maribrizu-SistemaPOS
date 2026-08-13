@@ -98,15 +98,16 @@ class TestRegistroDeVentas:
         movs = movimientos(db)
         assert [(m['stock_antes'], m['stock_despues']) for m in movs] == [(5, 4), (4, 1)]
 
-    def test_un_servicio_ilimitado_no_genera_movimiento(self, db, caja):
-        # stock = -1 es la bandera de servicio: no se descuenta nada, así que
+    def test_un_servicio_marcado_no_genera_movimiento(self, db, caja):
+        # Un servicio no lleva control de stock: no se descuenta nada, así que
         # tampoco hay movimiento que anotar.
         pid = Product(db).create({'name': 'FOTOCOPIA', 'price': 100.0, 'stock': 0})
-        db.execute_update("UPDATE products SET stock = -1 WHERE id = ?", (pid,))
+        db.execute_update("UPDATE products SET stock_ilimitado = 1 WHERE id = ?", (pid,))
 
         _vender(db, pid, 'FOTOCOPIA', 3)
 
         assert movimientos(db) == []
+        assert db.execute_query("SELECT stock FROM products WHERE id = ?", (pid,))[0]['stock'] == 0
 
     def test_vender_sin_stock_lo_deja_registrado_en_negativo(self, db, caja):
         # El POS permite vender sin stock. El movimiento tiene que quedar igual:
@@ -117,6 +118,42 @@ class TestRegistroDeVentas:
         m = movimientos(db)[0]
         assert m['stock_antes'] == 1
         assert m['stock_despues'] == -2
+
+
+class TestElMenosUnoYaNoEsUnaBandera:
+    """Un producto en cero que se vende llega a -1 solo.
+
+    Mientras -1 significaba "servicio", ese producto quedaba congelado: el POS
+    dejaba de descontarlo y el descuento tampoco subía a la nube. Las ventas se
+    volvían invisibles y, al reponerlo a mano, el sistema arrancaba con más
+    unidades de las que había en la góndola.
+    """
+
+    def test_vender_estando_en_cero_sigue_descontando(self, db, caja):
+        pid = Product(db).create({'name': 'PINCEL', 'price': 100.0, 'stock': 0})
+        _vender(db, pid, 'PINCEL', 1)
+
+        stock = db.execute_query("SELECT stock FROM products WHERE id = ?", (pid,))[0]['stock']
+        assert stock == -1
+
+    def test_el_producto_que_toco_menos_uno_no_queda_congelado(self, db, caja):
+        pid = Product(db).create({'name': 'COMPAS', 'price': 100.0, 'stock': 0})
+        _vender(db, pid, 'COMPAS', 1)     # 0 → -1
+        _vender(db, pid, 'COMPAS', 1)     # -1 → -2: antes se quedaba en -1
+
+        stock = db.execute_query("SELECT stock FROM products WHERE id = ?", (pid,))[0]['stock']
+        assert stock == -2
+        assert [m['stock_despues'] for m in movimientos(db)] == [-1, -2]
+
+    def test_las_ventas_de_un_producto_en_menos_uno_quedan_registradas(self, db, caja):
+        pid = Product(db).create({'name': 'FLAUTA', 'price': 100.0, 'stock': 0})
+        db.execute_update("UPDATE products SET stock = -1 WHERE id = ?", (pid,))
+
+        _vender(db, pid, 'FLAUTA', 2)
+
+        movs = movimientos(db)
+        assert len(movs) == 1
+        assert (movs[0]['stock_antes'], movs[0]['stock_despues']) == (-1, -3)
 
 
 class TestFiadoYReposicion:

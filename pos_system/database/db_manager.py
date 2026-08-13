@@ -161,6 +161,16 @@ class DatabaseManager:
                 cursor.execute("ALTER TABLE products ADD COLUMN stock_max INTEGER DEFAULT NULL")
             except Exception:
                 pass
+            # Servicio sin control de stock (fotocopia, anillado, plastificado).
+            # Antes esto se marcaba poniendo stock = -1, pero a -1 llega solo
+            # cualquier producto que se venda estando en cero, y a partir de ahí
+            # el sistema lo trataba como servicio: dejaba de descontar para
+            # siempre y las ventas se volvían invisibles. La bandera separa las
+            # dos cosas: -1 vuelve a ser un número y nada más.
+            try:
+                cursor.execute("ALTER TABLE products ADD COLUMN stock_ilimitado INTEGER DEFAULT 0")
+            except Exception:
+                pass
             # Producto Conjunto (rollo/pack/caja/etc con stock fraccionado)
             for col_def in [
                 "ALTER TABLE products ADD COLUMN es_conjunto INTEGER DEFAULT 0",

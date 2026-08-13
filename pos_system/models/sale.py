@@ -378,14 +378,16 @@ class Sale:
             # más abajo) y NO se toca el propio para que no quede negativo.
             if not vincs_prod:
                 previo = stock_ledger.snapshot(cursor, item['product_id'])
-                cursor.execute(
-                    "UPDATE products SET stock = stock - ?, updated_at = ? WHERE id = ? AND stock != -1",
-                    (item['quantity'], now_iso, item['product_id'])
-                )
-                # stock = -1 significa servicio/ilimitado: no se descontó nada,
-                # así que tampoco hay movimiento que anotar.
+                # Un servicio no lleva control de stock. Lo dice su bandera, NO
+                # el número: cualquier producto vendido estando en cero llega a
+                # -1 solo, y antes eso lo convertía en servicio para siempre.
+                if not previo.get('ilimitado'):
+                    cursor.execute(
+                        "UPDATE products SET stock = stock - ?, updated_at = ? WHERE id = ?",
+                        (item['quantity'], now_iso, item['product_id'])
+                    )
                 antes = previo.get('stock')
-                if antes is not None and antes != -1:
+                if antes is not None and not previo.get('ilimitado'):
                     cant = float(item['quantity'] or 0)
                     stock_ledger.registrar(
                         cursor,
@@ -817,7 +819,8 @@ class Sale:
 
             target_row = cursor.execute(
                 "SELECT id, stock, es_conjunto, conjunto_total, "
-                "       conjunto_contenido, conjunto_colores, name "
+                "       conjunto_contenido, conjunto_colores, name, "
+                "       COALESCE(stock_ilimitado, 0) "
                 "FROM products WHERE firebase_id = ?",
                 (target_fid,)
             ).fetchone()
@@ -829,14 +832,14 @@ class Sale:
                 continue
 
             (t_local_id, t_stock, t_es_conj, t_total,
-             t_contenido, t_colores, t_nombre) = target_row
+             t_contenido, t_colores, t_nombre, t_ilimitado) = target_row
             t_stock      = float(t_stock or 0)
             t_es_conj    = bool(t_es_conj)
             t_total      = float(t_total or 0)
             t_contenido  = float(t_contenido or 0)
 
-            # Servicio/ilimitado: no descontar.
-            if t_stock == -1:
+            # Servicio/ilimitado: no descontar. Por la bandera, no por el número.
+            if int(t_ilimitado or 0) == 1:
                 continue
 
             # Target con variedades: descuento ambiguo, skip con warning.

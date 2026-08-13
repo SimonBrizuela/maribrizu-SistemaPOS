@@ -22,7 +22,7 @@ from pos_system.models.sale import Sale
 from pos_system.models.cash_register import CashRegister
 from pos_system.models.promotion import Promotion
 from pos_system.utils.pdf_generator import PDFGenerator
-from pos_system.utils.stock_links import has_links, effective_stock, build_target_index, shown_stock
+from pos_system.utils.stock_links import has_links, effective_stock, build_target_index, shown_stock, es_ilimitado
 from pos_system.ui.conjunto_dialog import ConjuntoDialog, UNIDADES as _CONJ_UNIDADES, TIPOS as _CONJ_TIPOS, parse_colores as _conj_parse_colores
 from pos_system.models.presupuesto import Presupuesto
 from pos_system.models.pending_cart import PendingCart
@@ -4069,8 +4069,9 @@ class SalesView(QWidget):
             stock = effective_stock(product, self.db)
         else:
             stock = product['stock']
-        # Stock -1 = servicio/ilimitado (sin control de stock)
-        is_unlimited = (stock is None or stock == -1)
+        # Servicio sin control de stock: lo dice la bandera del producto. El -1
+        # se sigue aceptando por las bases que todavía no migraron.
+        is_unlimited = (stock is None or es_ilimitado(product) or stock == -1)
 
         for item in self.cart:
             if item['product_id'] == product['id']:

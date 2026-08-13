@@ -103,7 +103,8 @@ def build_target_index(products, db_manager):
     placeholders = ','.join('?' * len(fids))
     try:
         rows = db_manager.execute_query(
-            "SELECT firebase_id, stock, es_conjunto, conjunto_total FROM products "
+            "SELECT firebase_id, stock, es_conjunto, conjunto_total, "
+            "COALESCE(stock_ilimitado, 0) AS stock_ilimitado FROM products "
             "WHERE firebase_id IN (%s)" % placeholders,
             tuple(fids)
         )
@@ -118,15 +119,30 @@ def build_target_index(products, db_manager):
     return out
 
 
+def es_ilimitado(product) -> bool:
+    """Si el producto es un servicio sin control de stock.
+
+    Lo dice su bandera `stock_ilimitado`, NO el número. Antes esto se deducía de
+    `stock == -1`, pero a -1 llega solo cualquier producto que se venda estando
+    en cero: media góndola terminó marcada como servicio y dejó de descontar.
+    """
+    try:
+        return bool(int(product.get('stock_ilimitado') or 0))
+    except (TypeError, ValueError, AttributeError):
+        return False
+
+
 def shown_stock(product, db_manager=None, targets_index=None):
     """Stock a MOSTRAR para un producto plano (no conjunto/mp). Nunca devuelve un
     número negativo. Reglas:
       - vinculado          → disponibilidad efectiva del/los producto(s) fuente
-      - stock == -1        → servicio/ilimitado          → ('∞', inf)
+      - marcado servicio   → ('∞', inf)
       - stock < 0 (sobrevendido, sin reponer) → físicamente 0 → ('0', 0)
       - resto              → (str(n), n)
     Devuelve (texto, num) donde `num` sirve para decidir color/umbral
     (inf = servicio, no dispara alarma de stock bajo)."""
+    if es_ilimitado(product):
+        return ('∞', float('inf'))
     if has_links(product):
         v = effective_stock(product, db_manager, targets_index=targets_index)
     else:
@@ -135,7 +151,7 @@ def shown_stock(product, db_manager=None, targets_index=None):
         except (TypeError, ValueError):
             v = 0.0
     if v == -1:
-        return ('∞', float('inf'))   # ∞ servicio / ilimitado
+        return ('∞', float('inf'))   # ∞ legacy: base sin migrar todavía
     v = max(0.0, v)
     txt = str(int(v)) if v == int(v) else ('%g' % v)
     return (txt, v)

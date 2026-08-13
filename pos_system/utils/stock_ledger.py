@@ -138,11 +138,19 @@ def snapshot(cursor, producto_id) -> dict:
     """
     try:
         row = cursor.execute(
-            "SELECT stock, firebase_id, name, conjunto_total "
+            "SELECT stock, firebase_id, name, conjunto_total, "
+            "       COALESCE(stock_ilimitado, 0) "
             "FROM products WHERE id = ?", (producto_id,)
         ).fetchone()
     except Exception:
-        return {}
+        # Base todavía sin la columna de servicio (PC recién actualizada).
+        try:
+            row = cursor.execute(
+                "SELECT stock, firebase_id, name, conjunto_total, 0 "
+                "FROM products WHERE id = ?", (producto_id,)
+            ).fetchone()
+        except Exception:
+            return {}
     if not row:
         return {}
     try:
@@ -151,6 +159,7 @@ def snapshot(cursor, producto_id) -> dict:
             'firebase_id':    str(row[1] or ''),
             'nombre':         str(row[2] or ''),
             'conjunto_total': _num(row[3]),
+            'ilimitado':      bool(row[4]),
         }
     except (TypeError, ValueError, IndexError):
         return {}
