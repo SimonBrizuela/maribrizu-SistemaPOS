@@ -3,6 +3,11 @@ pos_database.db
 pos_database_backup_*.db
 backups/
 
+# Volcados de Firestore: son datos comerciales del local (precios, costos,
+# clientes, ventas) y este repositorio es público.
+backup_*.json
+firestore_backup_*.json
+
 # Claves y credenciales (nunca subir)
 firebase_key.json
 provision.json
