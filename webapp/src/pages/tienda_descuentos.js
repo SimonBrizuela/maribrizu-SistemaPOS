@@ -180,8 +180,9 @@ function abrirEditor(d = null) {
         <label id="dCajaObjetivo">
           <span class="desc-lbl" id="dLblObjetivo">Rubro</span>
           <select id="dObjetivo" class="desc-input"></select>
-          <input type="text" id="dBuscarProd" class="desc-input" style="display:none;margin-top:6px"
-                 placeholder="Buscar el artículo por nombre o código…">
+          <input type="text" id="dBuscarProd" class="desc-input" style="display:none"
+                 placeholder="Buscar por nombre o código…" autocomplete="off">
+          <div id="dResultados" class="desc-resultados" style="display:none"></div>
         </label>
 
         <div id="dPreview" style="padding:11px 13px;border-radius:8px;background:var(--surface-2);
@@ -203,12 +204,21 @@ function abrirEditor(d = null) {
 
   const selObjetivo = $('#dObjetivo');
   const buscador = $('#dBuscarProd');
+  const resultados = $('#dResultados');
+
+  resultados.addEventListener('click', ev => {
+    const fila = ev.target.closest('[data-prod]');
+    if (fila) elegirProducto(fila.dataset.prod);
+  });
 
   function llenarObjetivo() {
     const alcance = $('#dAlcance').value;
+    const esProducto = alcance === 'producto';
     $('#dLblObjetivo').textContent =
       alcance === 'rubro' ? 'Rubro' : alcance === 'subrubro' ? 'Subrubro' : 'Artículo';
-    buscador.style.display = alcance === 'producto' ? '' : 'none';
+    buscador.style.display = esProducto ? '' : 'none';
+    resultados.style.display = esProducto ? '' : 'none';
+    selObjetivo.style.display = esProducto ? 'none' : '';
 
     if (alcance === 'rubro') {
       selObjetivo.innerHTML = rubros.map(r =>
@@ -220,22 +230,54 @@ function abrirEditor(d = null) {
           escHtml(`${nombreBonito(r)} · ${nombreBonito(s)}`)}</option>`;
       }).join('');
     } else {
-      pintarProductos('');
+      // Al editar uno que ya apunta a un artículo, queda elegido de entrada:
+      // si no, abrir para cambiar el porcentaje borraba el artículo.
+      if (d?.alcance === 'producto' && d.objetivo && !selObjetivo.value) {
+        const p = _catalogo.find(x => String(x.doc_id).toUpperCase() === d.objetivo);
+        if (p) {
+          selObjetivo.innerHTML = `<option value="${escHtml(p.doc_id)}" selected></option>`;
+          selObjetivo.value = p.doc_id;
+          buscador.value = nombreBonito(p.nombre);
+        }
+      }
+      pintarProductos(buscador.value || '');
     }
     previsualizar();
   }
 
+  // El artículo no se elige de un <select>: con doscientas opciones el navegador
+  // abre la lista hacia arriba, tapando el formulario, y no hay forma de darle
+  // estilo. Se dibujan filas propias, con su scroll, debajo del buscador.
   function pintarProductos(q) {
     const texto = q.trim().toLowerCase();
     const lista = _catalogo
       .filter(p => !texto
         || String(p.nombre || '').toLowerCase().includes(texto)
         || String(p.doc_id || '').toLowerCase().includes(texto))
-      .slice(0, 200);
-    selObjetivo.innerHTML = lista.map(p =>
-      `<option value="${escHtml(p.doc_id)}" ${d?.objetivo === String(p.doc_id).toUpperCase() ? 'selected' : ''}>${
-        escHtml(nombreBonito(p.nombre))} · ${pesos(p.precio_venta)}</option>`).join('')
-      || '<option value="">No hay artículos con ese nombre</option>';
+      .slice(0, 60);
+
+    if (!lista.length) {
+      resultados.innerHTML = `<div class="desc-vacio">Ningún artículo se llama así.</div>`;
+      return;
+    }
+    resultados.innerHTML = lista.map(p => {
+      const elegido = selObjetivo.value === String(p.doc_id);
+      return `
+        <button type="button" class="desc-fila${elegido ? ' desc-fila--elegida' : ''}"
+                data-prod="${escHtml(p.doc_id)}">
+          <span class="desc-fila__nombre">${escHtml(nombreBonito(p.nombre))}</span>
+          <span class="desc-fila__meta">${escHtml(p.doc_id)} · ${pesos(p.precio_venta)}</span>
+        </button>`;
+    }).join('');
+  }
+
+  function elegirProducto(docId) {
+    // El <select> sigue siendo el que guarda el valor: así el resto del
+    // formulario (vista previa y guardado) no se entera del cambio.
+    selObjetivo.innerHTML = `<option value="${escHtml(docId)}" selected></option>`;
+    selObjetivo.value = docId;
+    pintarProductos(buscador.value);
+    previsualizar();
   }
 
   function previsualizar() {
@@ -248,8 +290,12 @@ function abrirEditor(d = null) {
     const productos = alcanzados(borrador);
     const caja = $('#dPreview');
     if (!borrador.valor || !productos.length) {
-      caja.innerHTML = `<span style="color:var(--text-muted)">
-        ${!borrador.valor ? 'Poné cuánto descontar.' : 'Ese alcance no tiene productos publicables.'}</span>`;
+      const falta = !borrador.valor
+        ? 'Poné cuánto descontar.'
+        : (borrador.alcance === 'producto' && !borrador.objetivo)
+          ? 'Elegí un artículo de la lista.'
+          : 'Ese alcance no tiene productos publicables.';
+      caja.innerHTML = `<span style="color:var(--text-muted)">${falta}</span>`;
       return;
     }
     const ejemplo = productos.find(p => Number(p.precio_venta) > 0);
@@ -265,7 +311,7 @@ function abrirEditor(d = null) {
   selObjetivo.addEventListener('change', previsualizar);
   $('#dTipo').addEventListener('change', previsualizar);
   $('#dValor').addEventListener('input', previsualizar);
-  buscador.addEventListener('input', () => { pintarProductos(buscador.value); previsualizar(); });
+  buscador.addEventListener('input', () => pintarProductos(buscador.value));
   llenarObjetivo();
 
   $('.desc-guardar').addEventListener('click', async ev => {
@@ -439,6 +485,23 @@ export async function renderTiendaDescuentos(container, db) {
       .desc-input { width:100%; padding:9px 11px; border:1.5px solid var(--border);
                     border-radius:8px; font-size:13.5px; box-sizing:border-box;
                     background:var(--surface); color:var(--text) }
+      /* Lista de artículos: crece hacia ABAJO y con su propio scroll. Un
+         <select> con doscientas opciones se abre para arriba y tapa todo. */
+      .desc-resultados { margin-top:6px; max-height:210px; overflow-y:auto;
+                         border:1.5px solid var(--border); border-radius:8px;
+                         background:var(--surface) }
+      .desc-fila { display:flex; flex-direction:column; gap:2px; width:100%;
+                   padding:8px 11px; border:0; border-bottom:1px solid var(--border);
+                   background:transparent; color:var(--text); font-family:inherit;
+                   text-align:left; cursor:pointer }
+      .desc-fila:last-child { border-bottom:0 }
+      .desc-fila:hover { background:var(--surface-2) }
+      .desc-fila--elegida { background:var(--primary); color:#fff }
+      .desc-fila--elegida .desc-fila__meta { color:rgba(255,255,255,.85) }
+      .desc-fila__nombre { font-size:13px; font-weight:600 }
+      .desc-fila__meta { font-size:11.5px; color:var(--text-muted) }
+      .desc-vacio { padding:14px; text-align:center; font-size:12.5px;
+                    color:var(--text-muted) }
     </style>
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;
                 flex-wrap:wrap;gap:10px">
