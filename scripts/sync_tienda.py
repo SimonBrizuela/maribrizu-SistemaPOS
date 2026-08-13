@@ -443,6 +443,7 @@ def leer_descuentos(db):
             'valor': valor,
             'alcance': str(x.get('alcance') or 'rubro'),
             'objetivo': str(x.get('objetivo') or '').strip().upper(),
+            'redondear': x.get('redondear') is True,
         })
     # El mas especifico manda: si hay uno del rubro y otro del articulo, gana el
     # del articulo. Mismo criterio que los avisos.
@@ -466,6 +467,23 @@ def descuento_para(doc_id, doc, descuentos):
     return elegido
 
 
+def redondear_centena(v):
+    """A la centena mas cercana, con caida a decena si el monto es chico.
+
+    Gemelo de `redondearCentena` en webapp/src/pages/catalogo.js y de la copia
+    del panel de descuentos. Es la regla con la que se manejan los precios del
+    local: un 20% que deja 6.327 desentona al lado del resto.
+    """
+    n = float(v or 0)
+    if n <= 0:
+        return 0.0
+    r100 = math.floor(n / 100 + 0.5) * 100
+    if r100 > 0:
+        return float(r100)
+    r10 = math.floor(n / 10 + 0.5) * 10
+    return float(r10) if r10 > 0 else float(math.floor(n + 0.5))
+
+
 def aplicar_descuento(doc_id, doc, descuentos):
     """Deja el precio con descuento en el documento del espejo.
 
@@ -485,6 +503,14 @@ def aplicar_descuento(doc_id, doc, descuentos):
         nuevo = lista * (1 - min(d['valor'], 90.0) / 100.0)
     else:
         nuevo = lista - d['valor']
+    if d.get('redondear'):
+        # Redondear a la centena mas cercana puede EMPUJAR el precio para
+        # arriba: 59 se va a 100. En un producto barato eso anulaba el
+        # descuento entero (el precio "rebajado" quedaba arriba del de lista).
+        # Se redondea solo si el resultado sigue siendo mas barato.
+        r = redondear_centena(nuevo)
+        if 0 < r < lista:
+            nuevo = r
     # Nunca por debajo de un peso: un precio en cero se lee como error, no como
     # oferta, y deja pasar pedidos que no se pueden cobrar.
     #

@@ -34,13 +34,35 @@ const pesos = n => `$${Number(n || 0).toLocaleString('es-AR')}`;
 
 /* ── Cuenta: el gemelo de aplicar_descuento() en sync_tienda.py ────────────── */
 
+/**
+ * A la centena más cercana, con caída a decena cuando el monto es chico.
+ * Misma regla que el ±100 del catálogo (`redondearCentena` en catalogo.js):
+ * los precios de la tienda se manejan así, y un 20% que deja $6.327 desentona
+ * al lado del resto.
+ */
+function redondearCentena(v) {
+  const n = Number(v) || 0;
+  if (n <= 0) return 0;
+  const r100 = Math.round(n / 100) * 100;
+  if (r100 > 0) return r100;
+  const r10 = Math.round(n / 10) * 10;
+  return r10 > 0 ? r10 : Math.round(n);
+}
+
 function precioConDescuento(lista, d) {
   const base = Number(lista) || 0;
   if (base <= 0) return base;
   const valor = Number(d.valor) || 0;
-  const nuevo = d.tipo === 'monto'
+  let nuevo = d.tipo === 'monto'
     ? base - valor
     : base * (1 - Math.min(valor, 90) / 100);
+  if (d.redondear) {
+    // Redondear a la centena puede empujar el precio para arriba (59 -> 100) y
+    // en un producto barato eso anula el descuento entero. Solo se aplica si
+    // el resultado sigue siendo mas barato que el precio de lista.
+    const r = redondearCentena(nuevo);
+    if (r > 0 && r < base) nuevo = r;
+  }
   // Nunca por debajo de un peso: un precio en cero se lee como error, no como
   // oferta, y deja pasar pedidos que no se pueden cobrar.
   return Math.max(1, Math.round(nuevo));
@@ -180,9 +202,18 @@ function abrirEditor(d = null) {
         <label id="dCajaObjetivo">
           <span class="desc-lbl" id="dLblObjetivo">Rubro</span>
           <select id="dObjetivo" class="desc-input"></select>
-          <input type="text" id="dBuscarProd" class="desc-input" style="display:none"
-                 placeholder="Buscar por nombre o código…" autocomplete="off">
-          <div id="dResultados" class="desc-resultados" style="display:none"></div>
+          <input type="text" id="dBuscarProd" class="desc-input"
+                 placeholder="Buscar…" autocomplete="off">
+          <div id="dResultados" class="desc-resultados"></div>
+        </label>
+
+        <label style="display:flex;align-items:center;gap:9px;cursor:pointer">
+          <input type="checkbox" id="dRedondear" ${d?.redondear ? 'checked' : ''}
+                 style="width:17px;height:17px;accent-color:var(--primary);cursor:pointer">
+          <span style="font-size:13px">
+            Redondear el precio final a la centena
+            <span style="color:var(--text-muted)"> · $6.327 queda $6.300</span>
+          </span>
         </label>
 
         <div id="dPreview" style="padding:11px 13px;border-radius:8px;background:var(--surface-2);
@@ -211,71 +242,102 @@ function abrirEditor(d = null) {
     if (fila) elegirProducto(fila.dataset.prod);
   });
 
-  function llenarObjetivo() {
-    const alcance = $('#dAlcance').value;
-    const esProducto = alcance === 'producto';
-    $('#dLblObjetivo').textContent =
-      alcance === 'rubro' ? 'Rubro' : alcance === 'subrubro' ? 'Subrubro' : 'Artículo';
-    buscador.style.display = esProducto ? '' : 'none';
-    resultados.style.display = esProducto ? '' : 'none';
-    selObjetivo.style.display = esProducto ? 'none' : '';
+  /**
+   * Las opciones del alcance elegido, ya filtradas por lo que se escribió.
+   *
+   * Los tres casos se buscan igual —rubro, subrubro y artículo— porque en los
+   * tres la lista es larga: 12 rubros, 226 subrubros solo en Librería y 9.700
+   * artículos. Cada fila lleva el nombre arriba y, abajo, cuántos productos
+   * abarca: es el dato que hace falta para decidir si el descuento va ahí.
+   */
+  function opcionesDe(alcance, texto) {
+    const q = texto.trim().toLowerCase();
+    const entra = t => !q || String(t).toLowerCase().includes(q);
 
     if (alcance === 'rubro') {
-      selObjetivo.innerHTML = rubros.map(r =>
-        `<option value="${escHtml(r)}" ${d?.objetivo === r ? 'selected' : ''}>${escHtml(nombreBonito(r))}</option>`).join('');
-    } else if (alcance === 'subrubro') {
-      selObjetivo.innerHTML = subrubros.map(k => {
-        const [r, s] = k.split('|');
-        return `<option value="${escHtml(k)}" ${d?.objetivo === k ? 'selected' : ''}>${
-          escHtml(`${nombreBonito(r)} · ${nombreBonito(s)}`)}</option>`;
-      }).join('');
-    } else {
-      // Al editar uno que ya apunta a un artículo, queda elegido de entrada:
-      // si no, abrir para cambiar el porcentaje borraba el artículo.
-      if (d?.alcance === 'producto' && d.objetivo && !selObjetivo.value) {
-        const p = _catalogo.find(x => String(x.doc_id).toUpperCase() === d.objetivo);
-        if (p) {
-          selObjetivo.innerHTML = `<option value="${escHtml(p.doc_id)}" selected></option>`;
-          selObjetivo.value = p.doc_id;
-          buscador.value = nombreBonito(p.nombre);
-        }
-      }
-      pintarProductos(buscador.value || '');
+      return rubros.filter(r => entra(nombreBonito(r))).map(r => ({
+        valor: r,
+        titulo: nombreBonito(r),
+        detalle: `${_catalogo.filter(p => String(p.rubro || '').trim().toUpperCase() === r).length} productos`,
+      }));
     }
+    if (alcance === 'subrubro') {
+      return subrubros
+        .filter(k => entra(k.split('|').map(nombreBonito).join(' ')))
+        .map(k => {
+          const [r, sub] = k.split('|');
+          return {
+            valor: k,
+            titulo: nombreBonito(sub),
+            detalle: `${nombreBonito(r)} · ${_catalogo.filter(p =>
+              `${String(p.rubro || '').trim().toUpperCase()}|${String(p.sub_rubro || '').trim().toUpperCase()}` === k
+            ).length} productos`,
+          };
+        })
+        .slice(0, 80);
+    }
+    return _catalogo
+      .filter(p => !q
+        || String(p.nombre || '').toLowerCase().includes(q)
+        || String(p.doc_id || '').toLowerCase().includes(q))
+      .slice(0, 60)
+      .map(p => ({
+        valor: p.doc_id,
+        titulo: nombreBonito(p.nombre),
+        detalle: `${p.doc_id} · ${pesos(p.precio_venta)}`,
+      }));
+  }
+
+  function pintarProductos(texto) {
+    const alcance = $('#dAlcance').value;
+    const lista = opcionesDe(alcance, texto || '');
+
+    if (!lista.length) {
+      resultados.innerHTML = '<div class="desc-vacio">No hay nada con ese nombre.</div>';
+      return;
+    }
+    // Sin nada elegido todavía, se marca el primero: así la vista previa
+    // muestra un número desde el arranque en vez de un cartel pidiendo elegir.
+    if (!selObjetivo.value || !lista.some(o => o.valor === selObjetivo.value)) {
+      selObjetivo.innerHTML = `<option value="${escHtml(lista[0].valor)}" selected></option>`;
+      selObjetivo.value = lista[0].valor;
+    }
+    resultados.innerHTML = lista.map(o => `
+      <button type="button" class="desc-fila${selObjetivo.value === o.valor ? ' desc-fila--elegida' : ''}"
+              data-prod="${escHtml(o.valor)}">
+        <span class="desc-fila__nombre">${escHtml(o.titulo)}</span>
+        <span class="desc-fila__meta">${escHtml(o.detalle)}</span>
+      </button>`).join('');
+  }
+
+  function llenarObjetivo() {
+    const alcance = $('#dAlcance').value;
+    $('#dLblObjetivo').textContent =
+      alcance === 'rubro' ? 'Rubro' : alcance === 'subrubro' ? 'Subrubro' : 'Artículo';
+    buscador.placeholder = alcance === 'rubro' ? 'Buscar rubro…'
+      : alcance === 'subrubro' ? 'Buscar subrubro…' : 'Buscar por nombre o código…';
+
+    // El <select> queda como el que guarda el valor, escondido: así el guardado
+    // y la vista previa no se enteran de que la lista cambió de forma.
+    selObjetivo.style.display = 'none';
+
+    // Al editar, el que ya estaba elegido queda marcado y escrito arriba.
+    if (d && d.alcance === alcance && d.objetivo && !selObjetivo.value) {
+      selObjetivo.innerHTML = `<option value="${escHtml(d.objetivo)}" selected></option>`;
+      selObjetivo.value = d.objetivo;
+      const yaEsta = opcionesDe(alcance, '').find(o => o.valor === d.objetivo);
+      if (yaEsta) buscador.value = yaEsta.titulo;
+    }
+
+    pintarProductos(buscador.value || '');
     previsualizar();
   }
 
-  // El artículo no se elige de un <select>: con doscientas opciones el navegador
-  // abre la lista hacia arriba, tapando el formulario, y no hay forma de darle
-  // estilo. Se dibujan filas propias, con su scroll, debajo del buscador.
-  function pintarProductos(q) {
-    const texto = q.trim().toLowerCase();
-    const lista = _catalogo
-      .filter(p => !texto
-        || String(p.nombre || '').toLowerCase().includes(texto)
-        || String(p.doc_id || '').toLowerCase().includes(texto))
-      .slice(0, 60);
-
-    if (!lista.length) {
-      resultados.innerHTML = `<div class="desc-vacio">Ningún artículo se llama así.</div>`;
-      return;
-    }
-    resultados.innerHTML = lista.map(p => {
-      const elegido = selObjetivo.value === String(p.doc_id);
-      return `
-        <button type="button" class="desc-fila${elegido ? ' desc-fila--elegida' : ''}"
-                data-prod="${escHtml(p.doc_id)}">
-          <span class="desc-fila__nombre">${escHtml(nombreBonito(p.nombre))}</span>
-          <span class="desc-fila__meta">${escHtml(p.doc_id)} · ${pesos(p.precio_venta)}</span>
-        </button>`;
-    }).join('');
-  }
-
-  function elegirProducto(docId) {
-    // El <select> sigue siendo el que guarda el valor: así el resto del
-    // formulario (vista previa y guardado) no se entera del cambio.
-    selObjetivo.innerHTML = `<option value="${escHtml(docId)}" selected></option>`;
-    selObjetivo.value = docId;
+  function elegirProducto(valor) {
+    // El <select> escondido sigue siendo el que guarda el valor: así el resto
+    // del formulario (vista previa y guardado) no se entera del cambio.
+    selObjetivo.innerHTML = `<option value="${escHtml(valor)}" selected></option>`;
+    selObjetivo.value = valor;
     pintarProductos(buscador.value);
     previsualizar();
   }
@@ -286,6 +348,7 @@ function abrirEditor(d = null) {
       valor: Number($('#dValor').value) || 0,
       alcance: $('#dAlcance').value,
       objetivo: selObjetivo.value,
+      redondear: $('#dRedondear').checked,
     };
     const productos = alcanzados(borrador);
     const caja = $('#dPreview');
@@ -307,10 +370,16 @@ function abrirEditor(d = null) {
         <s>${pesos(antes)}</s> a <b style="color:var(--tint-green-fg)">${pesos(despues)}</b>.` : ''}`;
   }
 
-  $('#dAlcance').addEventListener('change', llenarObjetivo);
+  $('#dAlcance').addEventListener('change', () => {
+    // Lo tipeado para buscar un rubro no sirve para buscar un artículo.
+    buscador.value = '';
+    selObjetivo.innerHTML = '';
+    llenarObjetivo();
+  });
   selObjetivo.addEventListener('change', previsualizar);
   $('#dTipo').addEventListener('change', previsualizar);
   $('#dValor').addEventListener('input', previsualizar);
+  $('#dRedondear').addEventListener('change', previsualizar);
   buscador.addEventListener('input', () => pintarProductos(buscador.value));
   llenarObjetivo();
 
@@ -330,6 +399,7 @@ function abrirEditor(d = null) {
       valor,
       alcance: $('#dAlcance').value,
       objetivo: String(objetivo).toUpperCase(),
+      redondear: $('#dRedondear').checked,
       activo: d ? d.activo !== false : true,
     };
     try {
