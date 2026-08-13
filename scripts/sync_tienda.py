@@ -430,6 +430,60 @@ def clave_de_orden(doc):
     )
 
 
+# Cada cuanto se vuelve a contar lo vendido. El ranking mueve el orden de la
+# vidriera, no los precios ni el stock: que sea de esta manana alcanza y sobra.
+HORAS_DE_RANKING = 12
+
+
+def leer_ventas_cacheado(db, dias=120, horas=HORAS_DE_RANKING):
+    """El ranking de ventas, releido solo cuando ya esta viejo.
+
+    Contar cuatro meses de renglones son ~26.000 lecturas de Firestore, y hasta
+    ahora eso pasaba en CADA corrida del sync. Corriendo cada 15 minutos son 2,5
+    millones de lecturas por dia contra un limite gratuito de 50.000: la parte
+    mas cara del sistema, y para reordenar una vidriera que casi no cambia.
+
+    El resultado queda en `tienda_config/ranking`. Si tiene menos de `horas`,
+    se reusa; si no, se recalcula y se guarda.
+    """
+    ref = db.collection('tienda_config').document('ranking')
+    try:
+        doc = ref.get()
+        if doc.exists:
+            datos = doc.to_dict() or {}
+            calculado = datos.get('calculado_at')
+            if isinstance(calculado, datetime):
+                edad = datetime.now(timezone.utc) - calculado.astimezone(timezone.utc)
+                if edad < timedelta(hours=horas):
+                    unidades = {k: float(v) for k, v in (datos.get('unidades') or {}).items()}
+                    importe = {k: float(v) for k, v in (datos.get('importe') or {}).items()}
+                    if unidades:
+                        print(f'  ranking de ventas: reusado, {edad.total_seconds()/3600:.1f} h de antiguedad '
+                              f'({len(unidades)} productos, 0 lecturas)')
+                        return unidades, importe
+    except Exception as e:
+        print(f'  ranking de ventas: no se pudo reusar ({e}), se recalcula')
+
+    unidades, importe = leer_ventas(db, dias)
+
+    # Firestore no acepta puntos en las claves de un mapa.
+    def limpiar(d):
+        return {k.replace('.', '_'): round(v, 2) for k, v in d.items() if v}
+
+    try:
+        ref.set({
+            'calculado_at': datetime.now(timezone.utc),
+            'dias': dias,
+            'unidades': limpiar(unidades),
+            'importe': limpiar(importe),
+        })
+    except Exception as e:
+        # Si no entra (limite de 1 MB por doc), se sigue sin cache: el sync
+        # tiene que publicar igual.
+        print(f'  ranking de ventas: no se pudo guardar el cache ({e})')
+    return unidades, importe
+
+
 def leer_ventas(db, dias=120):
     """
     Cuanto se vendio de cada producto, para ordenar la tienda por eso.
@@ -520,7 +574,7 @@ def main():
 
     # ── Que se vende, para ordenar la tienda por eso ──────────────────────
     print('\nLeyendo ventas de los ultimos 4 meses...')
-    unidades, importe = leer_ventas(db)
+    unidades, importe = leer_ventas_cacheado(db)
     print(f'  {len(unidades)} productos con movimiento')
 
     for doc_id, doc in publicables.items():

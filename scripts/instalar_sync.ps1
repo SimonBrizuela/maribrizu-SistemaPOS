@@ -9,17 +9,26 @@
 
         powershell -ExecutionPolicy Bypass -File scripts\instalar_sync.ps1 -Quitar
 
-    Por que cada 15 minutos y no cada 5: el sync reescribe los ~2.400
-    documentos publicados en cada corrida. A 15 minutos son unas 230 mil
-    escrituras por mes, holgado dentro del plan gratuito de Firestore; a 5
-    minutos serian 690 mil y ya se paga. Quince minutos de desfasaje en el
-    stock de una libreria no se nota: el checkout revalida contra la base
-    antes de confirmar, asi que un pedido nunca sale con el precio viejo.
+    Por que cada 6 horas y no cada 15 minutos:
+
+    Desde v3.0.60 el POS le avisa a la tienda en la misma venta que descuenta
+    (baja el stock o da de baja el producto si llego a cero), asi que el sync
+    ya no persigue el stock. Su trabajo es publicar altas, fotos y precios, y
+    eso no cambia cada quince minutos.
+
+    Y cada corrida cuesta: lee el catalogo entero, unas 9.700 lecturas de
+    Firestore. Cada 15 minutos son 930 mil por dia contra un limite gratuito
+    de 50.000 — del orden de 60 dolares por mes solo por refrescar una
+    vidriera que casi no cambia. Cada 6 horas son 39 mil por dia y entra
+    holgado en el plan gratuito.
+
+    El ranking de ventas (otras 26.000 lecturas) ya no se recalcula en cada
+    corrida: queda cacheado 12 horas en tienda_config/ranking.
 #>
 
 param(
     [switch]$Quitar,
-    [int]$CadaMinutos = 15
+    [int]$CadaMinutos = 360
 )
 
 $ErrorActionPreference = 'Stop'

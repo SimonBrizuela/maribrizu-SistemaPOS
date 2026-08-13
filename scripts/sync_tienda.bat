@@ -4,7 +4,7 @@ setlocal
 rem ============================================================================
 rem  Sincroniza el catalogo del POS con la tienda online.
 rem
-rem  Corre cada 15 minutos desde el Programador de tareas de Windows en la PC
+rem  Corre cada 6 horas desde el Programador de tareas de Windows en la PC
 rem  del local. Para instalarlo:
 rem
 rem      powershell -ExecutionPolicy Bypass -File scripts\instalar_sync.ps1
