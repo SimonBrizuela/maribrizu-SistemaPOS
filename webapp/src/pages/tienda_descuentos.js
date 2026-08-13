@@ -567,6 +567,10 @@ export async function renderTiendaDescuentos(container, db) {
       .desc-fila:last-child { border-bottom:0 }
       .desc-fila:hover { background:var(--surface-2) }
       .desc-fila--elegida { background:var(--primary); color:#fff }
+      /* El hover del elegido va DESPUES y con mas peso: un hover con clase
+         pesa mas que la clase sola, asi que al pasar el mouse le pisaba el
+         violeta y quedaba texto blanco sobre gris claro, ilegible. */
+      .desc-fila--elegida:hover { background:var(--primary-dark); color:#fff }
       .desc-fila--elegida .desc-fila__meta { color:rgba(255,255,255,.85) }
       .desc-fila__nombre { font-size:13px; font-weight:600 }
       .desc-fila__meta { font-size:11.5px; color:var(--text-muted) }
