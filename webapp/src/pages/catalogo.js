@@ -1,16 +1,20 @@
 ﻿import {
-  collection, getDocs, doc, setDoc, updateDoc, getDoc,
+  collection, getDocs, doc, setDoc, updateDoc, getDoc, getDocFromCache,
   query, orderBy, writeBatch, deleteDoc, limit, serverTimestamp,
   onSnapshot
 } from 'firebase/firestore';
 import { getCached, invalidateCache, invalidateCacheByPrefix, peekCacheValue } from '../cache.js';
 import { ensureCollections, onStoreChange } from '../store.js';
 import { initCatalogoHistory, fieldLabel } from '../catalogo_history.js';
+import { registrarMovimiento, movimientosDe, MOTIVOS } from '../stock_ledger.js';
 import {
   recomputarResumenInventario, resumenEstaVencido, computarResumen,
   sugerirCantidad, valorizarStock, validarInventario,
 } from '../inventario_resumen.js';
 import { alertDialog, promptDialog } from '../components/dialogs.js';
+import {
+  TIPOS_BULTO, bultoDe, labelTipo, aUnidades, aBultos, textoBultos, alertaPorBulto,
+} from '../bulto.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function fmt(n) {
@@ -86,6 +90,17 @@ const _PSEUDO_PRODUCTO_RE = /^(\*+|sin nombre|varios(\s*\d+)?)$/i;
 function esPseudoProducto(p) {
   const n = (p && p.nombre || '').trim();
   return n === '' || _PSEUDO_PRODUCTO_RE.test(n);
+}
+
+// Unidades por pack/rollo de una variedad: el contenido propio si lo tiene, si
+// no el global del producto. Sin ninguno de los dos vale 1 (el pack ES la
+// unidad), nunca 0: con 0 los packs enteros desaparecían del total y el
+// producto figuraba sin stock teniéndolo.
+function _contVariedad(c, globalCont) {
+  const propio = Number(c && c.contenido) || 0;
+  if (propio > 0) return propio;
+  const gl = Number(globalCont) || 0;
+  return gl > 0 ? gl : 1;
 }
 
 function slugify(str) {
@@ -932,11 +947,29 @@ export async function renderCatalogo(container, db) {
   const RUBROS = [...RUBROS_DEFAULT];
 
   async function cargarRubros() {
-    try {
-      const snap = await getDoc(doc(db, 'config', 'rubros'));
+    // Cache-first, igual que los docs de control_config: un getDoc al server
+    // queda encolado detrás de los listeners grandes (se midió 102s para este
+    // documento en un arranque en frío). El de IndexedDB responde en ~50ms y
+    // la revalidación va por detrás.
+    const ref = doc(db, 'config', 'rubros');
+    const aplicar = (snap) => {
       if (snap.exists() && snap.data().lista) {
         RUBROS.length = 0;
         snap.data().lista.forEach(r => RUBROS.push(r));
+        return true;
+      }
+      return false;
+    };
+    try {
+      try {
+        aplicar(await getDocFromCache(ref));
+        getDoc(ref)
+          .then(fresh => {
+            if (aplicar(fresh) && document.body.contains(container)) reRenderRubroBar();
+          })
+          .catch(() => {});
+      } catch (_) {
+        aplicar(await getDoc(ref));
       }
     } catch(e) {}
   }
@@ -1618,7 +1651,7 @@ export async function renderCatalogo(container, db) {
       let _stockDesglose = null;
       if (esConj && _variedadesGrid.length > 0) {
         _stockDesglose = _variedadesGrid.map(c => {
-          const cont = (Number(c.contenido) > 0) ? Number(c.contenido) : cContenido;
+          const cont = _contVariedad(c, cContenido);
           const u = Number(c.unidades) || 0;
           const r = Number(c.restante) || 0;
           return { color: c.color, u, r, cont, total: u * cont + r };
@@ -2460,36 +2493,75 @@ export async function renderCatalogo(container, db) {
             </div>
           </div>
 
-          <!-- Stock + Alertas (oculto cuando "Producto Conjunto" está activado) -->
+          <!-- Stock + Alertas.
+               Con "Producto Conjunto" activo el campo STOCK se oculta (se calcula
+               del desglose), pero MÍN/MÁX siguen visibles: se comparan contra el
+               total disponible en la unidad de medida del conjunto. -->
           <div id="ed_stock_bloque" style="display:flex;flex-direction:column;gap:8px">
             <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:12px;align-items:end">
               <div>
                 <label style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:0.5px;display:block;margin-bottom:6px">STOCK</label>
                 <input id="ed_stock" type="number" step="1" min="-1" value="${prod.stock ?? 0}" style="width:100%;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit" />
               </div>
-              <div>
-                <label style="font-size:11px;font-weight:700;color:var(--tint-orange-fg);letter-spacing:0.5px;display:block;margin-bottom:6px">STOCK MÍN. (avisar)</label>
-                <input id="ed_stock_min" type="number" step="any" min="0" placeholder="Sin alerta"
-                       value="${prod.stock_min ?? ''}"
-                       style="width:100%;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit;background:var(--surface-2)" />
-              </div>
-              <div>
-                <label style="font-size:11px;font-weight:700;color:var(--tint-orange-fg);letter-spacing:0.5px;display:block;margin-bottom:6px">STOCK MÁX. (ideal)</label>
-                <input id="ed_stock_max" type="number" step="any" min="0" placeholder="Sin tope"
-                       value="${prod.stock_max ?? ''}"
-                       style="width:100%;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit;background:var(--surface-2)" />
-              </div>
             </div>
-            <div style="color:var(--text-muted);font-size:12px">
+            <!-- Placeholder donde vive el bloque MÍN/MÁX cuando el Conjunto está OFF -->
+            <div id="ed_stock_alertas_home"></div>
+            <div id="ed_stock_hint" style="color:var(--text-muted);font-size:12px">
               <span style="background:var(--bg);border-radius:6px;padding:8px 12px;display:block">
                 💡 <b>STOCK -1</b> = servicio/ilimitado &nbsp;|&nbsp; <b>0</b> = agotado &nbsp;|&nbsp; <b>&gt;0</b> = disponible. Dejá MÍN/MÁX vacío para desactivar alerta.
               </span>
             </div>
           </div>
 
-          <!-- Aviso cuando "Producto Conjunto" está activo: el stock se calcula -->
-          <div id="ed_stock_conjunto_aviso" style="display:none;background:var(--tint-purple-bg);border:1.5px solid var(--border);border-radius:10px;padding:10px 14px;color:var(--tint-purple-fg);font-size:12.5px;line-height:1.4">
-            <b>Stock automático:</b> al estar activado <b>Producto Conjunto</b>, el stock se calcula a partir del desglose de abajo (cajas/rollos × contenido + sueltos). No hace falta cargar el campo STOCK clásico.
+          <!-- Alertas de reposición. Se mueve adentro del cuadro Conjunto (abajo
+               de todo) cuando "Producto Conjunto" está activo, para no obligar a
+               scrollear hasta arriba. -->
+          <div id="ed_stock_alertas" style="display:flex;flex-direction:column;gap:8px">
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:12px;align-items:end">
+              <div>
+                <label id="lbl_ed_stock_min" style="font-size:11px;font-weight:700;color:var(--tint-orange-fg);letter-spacing:0.5px;display:block;margin-bottom:6px">STOCK MÍN. (avisar)</label>
+                <input id="ed_stock_min" type="number" step="any" min="0" placeholder="Sin alerta"
+                       value="${prod.stock_min ?? ''}"
+                       style="width:100%;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit;background:var(--surface-2)" />
+              </div>
+              <div>
+                <label id="lbl_ed_stock_max" style="font-size:11px;font-weight:700;color:var(--tint-orange-fg);letter-spacing:0.5px;display:block;margin-bottom:6px">STOCK MÁX. (ideal)</label>
+                <input id="ed_stock_max" type="number" step="any" min="0" placeholder="Sin tope"
+                       value="${prod.stock_max ?? ''}"
+                       style="width:100%;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit;background:var(--surface-2)" />
+              </div>
+            </div>
+            <!-- Avisar por caja/pack/rollo en vez de por unidad suelta. Los
+                 umbrales se siguen guardando en unidades; acá sólo se elige la
+                 unidad con la que se escriben y se muestran. -->
+            <div id="ed_bulto_box" style="background:var(--surface);border:1.5px dashed var(--border);border-radius:10px;padding:10px 12px;display:flex;flex-wrap:wrap;gap:12px;align-items:flex-end">
+              <div>
+                <label style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:0.5px;display:block;margin-bottom:6px">AVISAR EN</label>
+                <select id="ed_alerta_um" style="padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit;background:var(--surface-2)">
+                  <option value="unidad">Unidades sueltas</option>
+                  <option value="bulto">Cajas / packs / rollos</option>
+                </select>
+              </div>
+              <div id="ed_bulto_cfg" style="display:none;align-items:flex-end;gap:8px">
+                <div>
+                  <label style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:0.5px;display:block;margin-bottom:6px">TIPO</label>
+                  <select id="ed_bulto_tipo" style="padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit;background:var(--surface-2)"></select>
+                </div>
+                <div>
+                  <label style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:0.5px;display:block;margin-bottom:6px">UNIDADES POR <span id="ed_bulto_tipo_lbl">CAJA</span></label>
+                  <input id="ed_bulto_contenido" type="number" min="2" step="1" placeholder="Ej: 12"
+                         style="width:110px;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit;background:var(--surface-2)" />
+                </div>
+              </div>
+              <div id="ed_bulto_hint" style="flex:1 1 100%;font-size:12px;color:var(--text-muted);line-height:1.4"></div>
+            </div>
+            <div id="ed_stock_hint_conj" style="display:none;color:var(--tint-purple-fg);font-size:12px">
+              <span style="background:var(--surface);border-radius:6px;padding:8px 12px;display:block;line-height:1.4">
+                <b>Stock automático:</b> se calcula del desglose de arriba (cajas × contenido + sueltos), por eso no hay campo STOCK.
+                Los umbrales se comparan contra ese <b>total disponible</b> en <b id="ed_stock_alerta_um">unidades</b>, no contra las cajas enteras. Dejá MÍN/MÁX vacío para desactivar la alerta.
+                <span id="ed_stock_hint_var" style="display:none;color:var(--tint-orange-fg)"><br/>Este producto tiene variedades: el aviso normal se configura por fila. Vaciá estos campos si querés dejar solo el mínimo por variedad.</span>
+              </span>
+            </div>
           </div>
 
           <!-- Aviso cuando el producto está VINCULADO a otro de stock: no lleva
@@ -2609,6 +2681,13 @@ export async function renderCatalogo(container, db) {
                 </button>
                 <span id="ed_colores_empty" style="display:none"></span>
               </div>
+
+              <!-- Anchor: acá se inserta el bloque STOCK MÍN./MÁX. cuando el conjunto está activo -->
+              <div id="ed_stock_alertas_anchor" style="grid-column:1/-1;border-top:1px dashed var(--border);padding-top:12px">
+                <div id="ed_stock_alertas_nota" style="display:none;font-size:12px;color:var(--text-muted);line-height:1.4">
+                  <b style="color:var(--tint-orange-fg)">Stock mínimo por variedad:</b> con variedades cargadas, el aviso se configura en cada fila (<b>Stock mín</b> / <b>máx</b>), no a nivel producto. Se compara contra el stock real de la variedad, packs enteros <b>+</b> sueltos. Si el pack trae más de una unidad, el botón naranja de la fila elige si el umbral se lee en packs o en unidades.
+                </div>
+              </div>
             </div>
           </div>
 
@@ -2707,9 +2786,127 @@ export async function renderCatalogo(container, db) {
     const conjRes     = overlay.querySelector('#ed_conj_resumen');
     const conjResTop  = overlay.querySelector('#ed_conj_resumen_top');
     const stockBloque = overlay.querySelector('#ed_stock_bloque');
-    const stockAviso  = overlay.querySelector('#ed_stock_conjunto_aviso');
+    const stockHint   = overlay.querySelector('#ed_stock_hint');
+    const stockHintC  = overlay.querySelector('#ed_stock_hint_conj');
+    const stockAlertaUM = overlay.querySelector('#ed_stock_alerta_um');
+    const lblStockMin = overlay.querySelector('#lbl_ed_stock_min');
+    const lblStockMax = overlay.querySelector('#lbl_ed_stock_max');
+    const alertasBlock  = overlay.querySelector('#ed_stock_alertas');
+    const alertasHome   = overlay.querySelector('#ed_stock_alertas_home');
+    const alertasAnchor = overlay.querySelector('#ed_stock_alertas_anchor');
+    const alertasNota   = overlay.querySelector('#ed_stock_alertas_nota');
+    const hintVarAlerta = overlay.querySelector('#ed_stock_hint_var');
+    const inStockMin    = overlay.querySelector('#ed_stock_min');
+    const inStockMax    = overlay.querySelector('#ed_stock_max');
     const stockVincAviso = overlay.querySelector('#ed_stock_vinculo_aviso');
     const stockVincValor = overlay.querySelector('#ed_stock_vinculo_valor');
+
+    // ── Avisar por caja / pack / rollo ───────────────────────────────────────
+    // Los umbrales viajan siempre en unidades (el POS y el resto de la webapp
+    // los leen así); acá sólo se elige con qué unidad se escriben y se muestran.
+    const selAlertaUM   = overlay.querySelector('#ed_alerta_um');
+    const bultoCfg      = overlay.querySelector('#ed_bulto_cfg');
+    const selBultoTipo  = overlay.querySelector('#ed_bulto_tipo');
+    const inBultoCont   = overlay.querySelector('#ed_bulto_contenido');
+    const lblBultoTipo  = overlay.querySelector('#ed_bulto_tipo_lbl');
+    const bultoHint     = overlay.querySelector('#ed_bulto_hint');
+
+    selBultoTipo.innerHTML = Object.entries(TIPOS_BULTO)
+      .map(([k, v]) => `<option value="${k}">${v.sg.charAt(0).toUpperCase() + v.sg.slice(1)}</option>`).join('');
+
+    // Bulto sugerido al abrir: lo guardado, el contenedor del conjunto, o lo que
+    // se pueda deducir del nombre ("CAJA X 12", "X 24 UN", "DOCENA").
+    const _bultoInicial = bultoDe(prod);
+    let _bultoDetectado = _bultoInicial;
+    if (_bultoInicial) {
+      selBultoTipo.value = TIPOS_BULTO[_bultoInicial.tipo] ? _bultoInicial.tipo : 'caja';
+      inBultoCont.value  = _bultoInicial.contenido;
+    }
+    selAlertaUM.value = (prod.stock_alerta_um === 'bulto' && _bultoInicial) ? 'bulto' : 'unidad';
+
+    // Bulto según lo que hay en pantalla ahora mismo (conjunto activo manda:
+    // su contenido es la fuente de verdad y se sincroniza solo).
+    function _bultoActual() {
+      if (cbConj.checked) {
+        const cont = parseFloat((conjC?.value || '').trim());
+        if (cont > 1) {
+          const tipoConj = conjTipo?.value || '';
+          const virtual = bultoDe({ es_conjunto: true, conjunto_contenido: cont, conjunto_tipo: tipoConj });
+          if (virtual) return virtual;
+        }
+        return null;
+      }
+      const cont = parseFloat((inBultoCont.value || '').trim());
+      if (!(cont > 1)) return null;
+      const tipo = selBultoTipo.value || 'caja';
+      return { tipo, contenido: cont, fuente: 'manual', ...labelTipo(tipo) };
+    }
+
+    function _refrescarBulto() {
+      const porBulto = selAlertaUM.value === 'bulto';
+      const esConj   = cbConj.checked;
+      const b        = _bultoActual();
+      // Con Conjunto activo el contenido ya se carga arriba: no se duplica el campo.
+      bultoCfg.style.display = (porBulto && !esConj) ? 'flex' : 'none';
+      if (b) lblBultoTipo.textContent = b.sg.toUpperCase();
+
+      if (!porBulto) {
+        bultoHint.innerHTML = _bultoDetectado && !esConj
+          ? `Detectado: <b>1 ${_bultoDetectado.sg} = ${_bultoDetectado.contenido} u</b>. Cambiá a "Cajas / packs" para escribir el mínimo en ${_bultoDetectado.pl}.`
+          : 'Los umbrales de arriba están en unidades sueltas.';
+        bultoHint.style.color = 'var(--text-muted)';
+        return;
+      }
+      if (!b) {
+        bultoHint.innerHTML = esConj
+          ? 'Cargá el <b>contenido</b> del conjunto arriba (unidades por envase) para poder avisar por envase.'
+          : 'Indicá cuántas unidades trae la caja para poder avisar por caja.';
+        bultoHint.style.color = 'var(--tint-orange-fg)';
+        return;
+      }
+      const min = parseFloat((inStockMin.value || '').replace(',', '.'));
+      const max = parseFloat((inStockMax.value || '').replace(',', '.'));
+      const partes = [`1 ${b.sg} = <b>${b.contenido}</b> u.`];
+      if (min > 0) partes.push(`Avisa cuando queden <b>${min} ${min === 1 ? b.sg : b.pl}</b> (${aUnidades(min, b)} u).`);
+      if (max > 0) partes.push(`Ideal <b>${max} ${max === 1 ? b.sg : b.pl}</b> (${aUnidades(max, b)} u).`);
+      bultoHint.innerHTML = partes.join(' ');
+      bultoHint.style.color = 'var(--tint-green-fg)';
+    }
+
+    // Al cambiar de unidad se convierten los valores ya escritos, para que el
+    // usuario no tenga que recalcular de cabeza.
+    let _umPrevio = selAlertaUM.value;
+    selAlertaUM.addEventListener('change', () => {
+      const b = _bultoActual();
+      const nuevo = selAlertaUM.value;
+      if (b && nuevo !== _umPrevio) {
+        const conv = (el) => {
+          const v = parseFloat((el.value || '').replace(',', '.'));
+          if (!(v > 0)) return;
+          const r = nuevo === 'bulto' ? aBultos(v, b) : aUnidades(v, b);
+          el.value = Math.round(r * 100) / 100;
+        };
+        conv(inStockMin);
+        conv(inStockMax);
+      }
+      _umPrevio = nuevo;
+      _refrescarBulto();
+    });
+    [inBultoCont, selBultoTipo].forEach(el => el.addEventListener('input', () => {
+      _bultoDetectado = _bultoActual() || _bultoDetectado;
+      _refrescarBulto();
+    }));
+    [inStockMin, inStockMax].forEach(el => el.addEventListener('input', _refrescarBulto));
+
+    // Los umbrales están guardados en unidades: si el producto avisa por bulto,
+    // se muestran convertidos a cajas/packs al abrir el editor.
+    if (selAlertaUM.value === 'bulto' && _bultoInicial) {
+      [inStockMin, inStockMax].forEach(el => {
+        const v = parseFloat((el.value || '').replace(',', '.'));
+        if (v > 0) el.value = Math.round(aBultos(v, _bultoInicial) * 100) / 100;
+      });
+    }
+    _refrescarBulto();
 
     // Margen del 15% al detalle aplicado al precio por unidad sugerido.
     // Ej: caja $8000 con 12 unidades → ($8000 / 12) × 1.15 = $766,67 por unidad.
@@ -2775,6 +2972,8 @@ export async function renderCatalogo(container, db) {
       lblTitC.textContent  = `${um.toUpperCase()} POR ${sg}`;
       lblTitR.innerHTML    = `${um.toUpperCase()} ${sueltos} EN ${sg} ${abierto} <span style="color:var(--text-muted);font-weight:500">(opcional)</span>`;
       lblTitPU.innerHTML   = `PRECIO POR ${umSg.toUpperCase()} <span style="color:var(--text-muted);font-weight:500">(auto)</span>`;
+      // Los umbrales de alerta se expresan en la misma unidad de medida.
+      if (typeof _aplicarEtiquetasAlertaStock === 'function') _aplicarEtiquetasAlertaStock(cbConj.checked);
       _aplicarVisibilidadFraccion();
       const u = parseFloat(conjU.value) || 0;
       const c = parseFloat(conjC.value) || 0;
@@ -2943,15 +3142,64 @@ export async function renderCatalogo(container, db) {
       if (wrapPrecioUnidad) wrapPrecioUnidad.style.display = disabled ? 'none' : '';
     }
 
+    // Etiquetas de STOCK MÍN./MÁX.: en un conjunto los umbrales se comparan
+    // contra el total disponible (unidades/metros/…), así que aclaramos la
+    // unidad en el label y en el hint para que no se confunda con "cajas".
+    function _aplicarEtiquetasAlertaStock(on) {
+      const um = on ? (conjUM.value || 'unidades') : '';
+      const suf = on
+        ? ` <span style="color:var(--tint-purple-fg);font-weight:600;text-transform:none;letter-spacing:0">en ${um}</span>`
+        : '';
+      if (lblStockMin) lblStockMin.innerHTML = 'STOCK MÍN. (avisar)' + suf;
+      if (lblStockMax) lblStockMax.innerHTML = 'STOCK MÁX. (ideal)' + suf;
+      if (stockAlertaUM && on) stockAlertaUM.textContent = um;
+    }
+
+    // ¿Hay filas de variedad cargadas? Se consulta desde funciones que corren
+    // antes de que `coloresList` esté inicializado (TDZ), de ahí el try/catch.
+    function _hayVariedadesUI() {
+      try {
+        return coloresList.querySelectorAll('[data-color-row]').length > 0;
+      } catch (_e) {
+        return false;
+      }
+    }
+
+    // Ubicación y visibilidad del bloque STOCK MÍN./MÁX. del producto:
+    //   · Conjunto OFF        → junto al campo STOCK (su "home"), arriba.
+    //   · Conjunto ON         → al final del cuadro Conjunto, para no scrollear.
+    //   · Con variedades      → se oculta: el aviso va por fila. Si el producto
+    //                           ya tenía un umbral global cargado se deja visible
+    //                           (no escondemos un valor que sigue alertando).
+    //   · Vinculado sin conj. → oculto, el stock sale del producto fuente.
+    function _aplicarUbicacionAlertas(on, tieneVinc) {
+      if (!alertasBlock) return;
+      const conVariedades = on && _hayVariedadesUI();
+      const tieneUmbral = !!((inStockMin && inStockMin.value.trim()) || (inStockMax && inStockMax.value.trim()));
+      const ocultarPorVariedad = conVariedades && !tieneUmbral;
+      const destino = on ? alertasAnchor : alertasHome;
+      if (destino && alertasBlock.parentElement !== destino) destino.appendChild(alertasBlock);
+      alertasBlock.style.display = ((!on && tieneVinc) || ocultarPorVariedad) ? 'none' : 'flex';
+      if (alertasAnchor)  alertasAnchor.style.display  = on ? 'block' : 'none';
+      if (alertasNota)    alertasNota.style.display    = ocultarPorVariedad ? 'block' : 'none';
+      if (hintVarAlerta)  hintVarAlerta.style.display  = (conVariedades && tieneUmbral) ? 'inline' : 'none';
+    }
+
     function _aplicarVisibilidadConjunto() {
       const on = cbConj.checked;
       // Producto vinculado a otro de stock: tampoco lleva stock propio.
       const tieneVinc = (typeof _getProdVincs === 'function') && _getProdVincs().length > 0;
       conjBox.style.display    = on ? 'grid'  : 'none';
       if (conjResTop)  conjResTop.style.display  = on ? 'block' : 'none';
-      // El bloque de STOCK propio se oculta si es conjunto O si está vinculado.
-      if (stockBloque) stockBloque.style.display = (on || tieneVinc) ? 'none'  : 'flex';
-      if (stockAviso)  stockAviso.style.display  = on ? 'block' : 'none';
+      // Conjunto: el STOCK se calcula del desglose, así que ese bloque se oculta
+      // y MÍN./MÁX. se mudan al final del cuadro Conjunto (alertan sobre el total
+      // disponible). Vinculado y NO conjunto: el stock sale del producto fuente
+      // → se oculta todo, incluidas las alertas.
+      if (stockBloque) stockBloque.style.display = (on || tieneVinc) ? 'none' : 'flex';
+      _aplicarUbicacionAlertas(on, tieneVinc);
+      if (stockHint)   stockHint.style.display   = on ? 'none'  : '';
+      if (stockHintC)  stockHintC.style.display  = on ? 'block' : 'none';
+      _aplicarEtiquetasAlertaStock(on);
       // Aviso de vínculo: solo cuando hay vínculo y NO es conjunto.
       if (stockVincAviso) stockVincAviso.style.display = (!on && tieneVinc) ? 'block' : 'none';
       // Vinculado a producto: visible siempre. En conjuntos sin variedades
@@ -2959,14 +3207,24 @@ export async function renderCatalogo(container, db) {
       // per-variedad (el watcher lo decide).
       _aplicarUbicacionPrecio(on);
       _aplicarEstadoPrecioGlobal();
+      _refrescarBulto();
     }
     cbConj.addEventListener('change', () => {
       _aplicarVisibilidadConjunto();
       if (cbConj.checked) _refrescarConjunto();
     });
+    // Si el producto tiene variedades y el usuario vacía el umbral global, el
+    // bloque desaparece (queda solo el mínimo por fila). Se evalúa al salir del
+    // campo para no ocultarlo mientras se está tipeando.
+    [inStockMin, inStockMax].forEach(inp => {
+      if (!inp) return;
+      inp.addEventListener('change', () => _aplicarVisibilidadConjunto());
+    });
     // Estado inicial (cuando el producto ya viene marcado como conjunto)
     _aplicarVisibilidadConjunto();
     [conjTipo, conjUM, conjU, conjC, conjR].forEach(el => el.addEventListener('input', _refrescarConjunto));
+    // El contenido del envase es el que manda para avisar por envase.
+    [conjTipo, conjC].forEach(el => el.addEventListener('input', _refrescarBulto));
     // Cuando cambia la unidad de medida, reaplicar el layout de las variedades
     // (con/sin "Restante") y refrescar el agregado.
     conjUM.addEventListener('change', () => {
@@ -3181,7 +3439,7 @@ export async function renderCatalogo(container, db) {
       });
     }
 
-    function _addColorRow(nombre = '', unidades = '', restante = '', precio = '', contenido = '', precioPack = '', costo = '', margen = '', codigo = '', stockMin = '', stockMax = '', vinculaciones = []) {
+    function _addColorRow(nombre = '', unidades = '', restante = '', precio = '', contenido = '', precioPack = '', costo = '', margen = '', codigo = '', stockMin = '', stockMax = '', vinculaciones = [], stockMinUm = '') {
       const row = document.createElement('div');
       row.dataset.colorRow = '1';
       // Preservamos el código existente (si lo trae) sin UI: el campo se sacó
@@ -3224,8 +3482,18 @@ export async function renderCatalogo(container, db) {
         <input class="ed_color_stock_min" type="number" min="0" step="any" placeholder="—" title="Stock mínimo de esta variedad. Avisa cuando el total baja. Vacío = hereda del global." value="${stockMin !== '' && stockMin != null ? stockMin : ''}" style="width:56px;padding:4px 6px;border:1.5px solid var(--border);border-radius:6px;font-size:11px;box-sizing:border-box;font-family:inherit;background:var(--surface-2);color:var(--tint-orange-fg);font-weight:600" />
         <span style="font-weight:700;letter-spacing:0.3px">máx</span>
         <input class="ed_color_stock_max" type="number" min="0" step="any" placeholder="—" title="Stock máximo de esta variedad (ideal). Vacío = sin tope." value="${stockMax !== '' && stockMax != null ? stockMax : ''}" style="width:56px;padding:4px 6px;border:1.5px solid var(--border);border-radius:6px;font-size:11px;box-sizing:border-box;font-family:inherit;background:var(--surface-2);color:var(--tint-orange-fg);font-weight:600" />
+        <button type="button" class="ed_color_stock_um" data-um="${stockMinUm === 'unidad' || stockMinUm === 'pack' ? stockMinUm : ''}" style="display:none;align-items:center;gap:3px;padding:3px 8px;border-radius:6px;border:1.5px solid var(--tint-orange-fg);background:var(--tint-orange-bg);color:var(--tint-orange-fg);font-size:10.5px;font-weight:700;cursor:pointer;font-family:inherit;white-space:nowrap">
+          <span class="material-icons" style="font-size:12px">swap_horiz</span><span class="ed_color_stock_um_txt">packs</span>
+        </button>
       `;
       row.appendChild(alertaLinea);
+
+      // Alterna la unidad en la que se leen los mín/máx de esta variedad.
+      alertaLinea.querySelector('.ed_color_stock_um').addEventListener('click', (ev) => {
+        const btn = ev.currentTarget;
+        btn.dataset.um = _umEfectivaFila(row) === 'pack' ? 'unidad' : 'pack';
+        _refrescarUmAlertas();
+      });
 
       // Sub-fila: VINCULAR A OTROS PRODUCTOS de stock (lista N elementos).
       // Cuando se vende esta variedad, el watcher de webapp descuenta unidades
@@ -3488,6 +3756,14 @@ export async function renderCatalogo(container, db) {
         if (codigoRaw)    out.codigo       = codigoRaw;
         if (sMin !== null && sMin > 0) out.stock_min = sMin;
         if (sMax !== null && sMax > 0) out.stock_max = sMax;
+        // Unidad de esos umbrales: sólo se persiste cuando hay ambigüedad real
+        // (pack de más de una unidad) y hay algún umbral cargado. Sin este
+        // campo, el motor de alertas deduce packs si el pack trae más de 1.
+        const umElegida = r.querySelector('.ed_color_stock_um')?.dataset.um || '';
+        if ((umElegida === 'pack' || umElegida === 'unidad')
+            && ((sMin !== null && sMin > 0) || (sMax !== null && sMax > 0))) {
+          out.stock_min_um = umElegida;
+        }
         // Productos vinculados (consumibles): cuando se vende esta variedad,
         // el watcher descuenta unidades de CADA producto fuente. Guardamos un
         // array `vinculaciones[]` y replicamos el primer entry en los campos
@@ -3667,6 +3943,45 @@ export async function renderCatalogo(container, db) {
       }
     });
 
+    // ── Unidad de los umbrales por variedad (packs vs unidades) ──────────────
+    // Unidades que trae un pack de esta fila: su contenido propio, o el global.
+    // Sin ninguno de los dos, el pack ES la unidad (1).
+    function _contenidoFila(row) {
+      const propio = parseFloat(row.querySelector('.ed_color_contenido')?.value) || 0;
+      if (propio > 0) return propio;
+      const gl = parseFloat(conjC?.value) || 0;
+      return gl > 0 ? gl : 1;
+    }
+    // Unidad en la que se leen mín/máx: la elegida a mano en la fila o, si no
+    // se eligió, la deducida (pack de más de 1 unidad → packs).
+    function _umEfectivaFila(row) {
+      const elegida = row.querySelector('.ed_color_stock_um')?.dataset.um || '';
+      if (elegida === 'pack' || elegida === 'unidad') return elegida;
+      return _contenidoFila(row) > 1 ? 'pack' : 'unidad';
+    }
+    // Etiqueta y visibilidad del botón: sólo aparece cuando hay ambigüedad
+    // real (pack de más de una unidad); con pack de 1, packs = unidades.
+    function _refrescarUmAlertas() {
+      const [plTipo] = NOMBRES_TIPO[conjTipo?.value] || NOMBRES_TIPO.otro;
+      const packLabel = plTipo.toLowerCase();
+      const unidadLabel = (conjUM?.value || 'unidades').toLowerCase();
+      coloresList.querySelectorAll('[data-color-row]').forEach(row => {
+        const btn = row.querySelector('.ed_color_stock_um');
+        if (!btn) return;
+        if (_contenidoFila(row) <= 1) {
+          btn.style.display = 'none';
+          btn.dataset.um = '';
+          return;
+        }
+        btn.style.display = 'inline-flex';
+        const um = _umEfectivaFila(row);
+        btn.querySelector('.ed_color_stock_um_txt').textContent = um === 'pack' ? packLabel : unidadLabel;
+        btn.title = um === 'pack'
+          ? `Los mín/máx de esta fila se leen en ${packLabel} enteros. Click para pasarlos a ${unidadLabel}.`
+          : `Los mín/máx de esta fila se leen en ${unidadLabel} totales (packs + sueltos). Click para pasarlos a ${packLabel}.`;
+      });
+    }
+
     function _refreshColoresState() {
       const colores = _getColoresFromUI();
       const filasTotales = coloresList.children.length;
@@ -3712,7 +4027,16 @@ export async function renderCatalogo(container, db) {
       }
       // Aviso en vivo de nombres de variedad repetidos (banner + filas en rojo).
       _marcarVariedadesDuplicadas();
+      // Botón packs/unidades de los umbrales por variedad.
+      _refrescarUmAlertas();
+      // Con variedades el umbral se configura por fila: sacamos el global.
+      const _vinc = (typeof _getProdVincs === 'function') && _getProdVincs().length > 0;
+      _aplicarUbicacionAlertas(cbConj.checked, _vinc);
     }
+
+    // Cambiar el tipo de envase, la unidad de medida o el contenido global
+    // reetiqueta (o hace irrelevante) el botón packs/unidades de cada fila.
+    [conjTipo, conjUM, conjC].forEach(el => el && el.addEventListener('input', _refrescarUmAlertas));
 
     btnAddColor.addEventListener('click', () => {
       // Si hay un filtro activo lo limpiamos para que la fila nueva (vacía) no
@@ -3842,7 +4166,8 @@ export async function renderCatalogo(container, db) {
         c && c.codigo ? c.codigo : '',
         c && c.stock_min != null ? c.stock_min : '',
         c && c.stock_max != null ? c.stock_max : '',
-        vincs
+        vincs,
+        c && c.stock_min_um ? c.stock_min_um : ''
       );
     });
     _refreshColoresState();
@@ -4060,8 +4385,17 @@ export async function renderCatalogo(container, db) {
       let nuevoStock      = Math.max(0, parseInt(overlay.querySelector('#ed_stock').value) || 0);
       const rawSMin       = overlay.querySelector('#ed_stock_min').value.trim();
       const rawSMax       = overlay.querySelector('#ed_stock_max').value.trim();
-      const nuevoStockMin = rawSMin === '' ? null : Math.max(0, parseFloat(rawSMin.replace(',', '.')) || 0);
-      const nuevoStockMax = rawSMax === '' ? null : Math.max(0, parseFloat(rawSMax.replace(',', '.')) || 0);
+      let nuevoStockMin   = rawSMin === '' ? null : Math.max(0, parseFloat(rawSMin.replace(',', '.')) || 0);
+      let nuevoStockMax   = rawSMax === '' ? null : Math.max(0, parseFloat(rawSMax.replace(',', '.')) || 0);
+
+      // Umbrales escritos en cajas/packs → se guardan en unidades para que el
+      // POS y el resto de la webapp los sigan leyendo igual que siempre.
+      const _bultoGuardar = _bultoActual();
+      const _avisaPorBulto = selAlertaUM.value === 'bulto' && !!_bultoGuardar;
+      if (_avisaPorBulto) {
+        if (nuevoStockMin !== null) nuevoStockMin = aUnidades(nuevoStockMin, _bultoGuardar);
+        if (nuevoStockMax !== null) nuevoStockMax = aUnidades(nuevoStockMax, _bultoGuardar);
+      }
 
       if (!nuevoNombre) { alertDialog({ title: 'Falta el nombre', message: 'El nombre no puede estar vacío.', type: 'warning' }); btn.disabled = false; btn.innerHTML = _btnLabel; return; }
       if (barraRaw && !nuevoBarra) { alertDialog({ title: 'Código inválido', message: 'El código de barras solo puede tener letras, números, guiones y guiones bajos (mínimo 3 caracteres).', type: 'warning' }); btn.disabled = false; btn.innerHTML = _btnLabel; return; }
@@ -4222,6 +4556,11 @@ export async function renderCatalogo(container, db) {
         stock:                nuevoStock,
         stock_min:            nuevoStockMin,
         stock_max:            nuevoStockMax,
+        stock_alerta_um:      _avisaPorBulto ? 'bulto' : null,
+        // Sólo para productos no-conjunto: en los conjuntos el envase ya vive en
+        // conjunto_tipo/conjunto_contenido y duplicarlo se desincronizaría.
+        bulto_tipo:           (_avisaPorBulto && !esConjunto) ? _bultoGuardar.tipo : null,
+        bulto_contenido:      (_avisaPorBulto && !esConjunto) ? _bultoGuardar.contenido : null,
         estado:               nuevoCosto === 0 ? 'sin_precio' : 'activo',
         ...conjuntoFields,
         ...vinculadoFields,
@@ -4518,12 +4857,21 @@ export async function renderCatalogo(container, db) {
       const total = variedades.reduce((acc, c) => {
         const u  = Number(c.unidades) || 0;
         const r  = Number(c.restante) || 0;
-        const cc = (Number(c.contenido) > 0) ? Number(c.contenido) : globalCont;
-        return acc + (u * cc + r);
+        return acc + (u * _contVariedad(c, globalCont) + r);
       }, 0);
       return Math.max(0, Math.round(total));
     }
     return Math.max(0, Math.round(Number(p.conjunto_total || 0)));
+  }
+
+  // Servicio sin control de stock (fotocopia, anillado, plastificado).
+  // Lo dice la bandera `stock_ilimitado`, NO el número: a -1 llega solo
+  // cualquier producto que se venda estando en cero, y mientras eso significaba
+  // "servicio" el sistema dejaba de descontarlo para siempre. El -1 se sigue
+  // leyendo acá sólo para los productos que todavía no migraron.
+  function _esIlimitado(p) {
+    if (!p) return false;
+    return p.stock_ilimitado === true || Number(p.stock) === -1;
   }
 
   // Stock "base" de un target (lo que físicamente hay): conjunto → total de
@@ -4532,8 +4880,8 @@ export async function renderCatalogo(container, db) {
   function _stockBaseDe(t) {
     if (!t) return 0;
     if (t.es_conjunto === true || t.es_conjunto === 1) return _stockConjuntoFisico(t);
-    const s = Number(t.stock);
-    return (s === -1) ? -1 : Math.max(0, s || 0);
+    if (_esIlimitado(t)) return -1;
+    return Math.max(0, Number(t.stock) || 0);
   }
 
   // Stock efectivo de un producto vinculado: cuántas unidades de ESTE se pueden
@@ -4561,9 +4909,8 @@ export async function renderCatalogo(container, db) {
       const eff = _stockEfectivoLink(p);
       return eff === -1 ? Infinity : Math.max(0, eff);
     }
-    const s = Number(p && p.stock);
-    if (s === -1) return Infinity;      // servicio/ilimitado
-    return Math.max(0, s || 0);         // sobrevendido/negativo → 0
+    if (_esIlimitado(p)) return Infinity;   // servicio sin control de stock
+    return Math.max(0, Number(p && p.stock) || 0);   // sobrevendido/negativo → 0
   }
 
   // Igual que _stockDisplay pero con el texto listo para mostrar ('∞' = servicio).
@@ -4590,9 +4937,9 @@ export async function renderCatalogo(container, db) {
     if (!variedades.length) return [];
     const globalCont = Number(p.conjunto_contenido || 0);
     return variedades.map(c => {
+      const cc = _contVariedad(c, globalCont);
       const u  = Number(c.unidades) || 0;
       const r  = Number(c.restante) || 0;
-      const cc = (Number(c.contenido) > 0) ? Number(c.contenido) : globalCont;
       return { color: c.color || '-', u, r, cont: cc, total: u * cc + r };
     });
   }
@@ -4646,7 +4993,16 @@ export async function renderCatalogo(container, db) {
       return                 { ...extra, label: `OK · ${dias}d`,             key: 'ok',       cls: 'badge-green',  color: '#2e7d32', dias, velocidad: velocidadDiaria, pct };
     }
     if (stockMin > 0) {
-      if (stock <= stockMin)       return { ...extra, label: `Rellenar (${stock}/${stockMin})`, key: 'critico', cls: 'badge-red',    color: '#c62828', dias: null, velocidad: 0, pct: 10 };
+      // Con aviso por caja/pack, el badge también habla en envases:
+      // "Rellenar (1,5 / 3 cajas)" en vez de "Rellenar (18/36)".
+      // Configurado por envase → el badge habla en envases. Sin configurar,
+      // si el envase se puede deducir, se agrega la equivalencia entre paréntesis.
+      const bAlerta = alertaPorBulto(p);
+      const bAuto   = bAlerta ? null : bultoDe(p);
+      const _lblRellenar = bAlerta
+        ? `Rellenar (${textoBultos(stock, bAlerta, { exacto: true })} / ${textoBultos(stockMin, bAlerta, { exacto: true })})`
+        : `Rellenar (${stock}/${stockMin})${bAuto && stock >= bAuto.contenido ? ` · ${textoBultos(stock, bAuto)}` : ''}`;
+      if (stock <= stockMin)       return { ...extra, label: _lblRellenar, key: 'critico', cls: 'badge-red',    color: '#c62828', dias: null, velocidad: 0, pct: 10 };
       if (stock <= stockMin * 1.5) return { ...extra, label: 'Rellenar pronto',                 key: 'bajo',    cls: 'badge-orange', color: '#f57c00', dias: null, velocidad: 0, pct: 40 };
       return                              { ...extra, label: 'OK',                              key: 'ok',      cls: 'badge-green',  color: '#2e7d32', dias: null, velocidad: 0, pct: 100 };
     }
@@ -5568,6 +5924,11 @@ export async function renderCatalogo(container, db) {
           } catch (_) {}
           const idx = (allProductos || []).findIndex(x => (x.doc_id || x.id) === _docId);
           if (idx !== -1) allProductos[idx].stock = a.cont;
+          await registrarMovimiento(db, {
+            docId: _docId, nombre: a.p.nombre || '',
+            motivo: 'conteo', antes: a.sis, despues: a.cont,
+            detalle: 'Conteo físico',
+          });
           ok += 1;
         } catch (e) { console.warn('conteo: error en', _docId, e.message); }
       }
@@ -5832,7 +6193,10 @@ export async function renderCatalogo(container, db) {
       if (a.stock <= 0) partes.push(`<b style="color:#c62828">Sin stock</b> y sin ventas en 90 días. Revisá si conviene seguir teniéndolo o pedí lo mínimo.`);
       else              partes.push(`Sin ventas en 90 días — tenés <b>${a.stock} ${u.pl}</b>, probablemente no haga falta reponer.`);
       const stockMin = Number(p.stock_min) || 0;
-      if (stockMin > 0 && a.stock <= stockMin) partes.push(`Está por debajo del mínimo configurado (<b>${stockMin}</b>).`);
+      if (stockMin > 0 && a.stock <= stockMin) {
+        const bAlerta = alertaPorBulto(p);
+        partes.push(`Está por debajo del mínimo configurado (<b>${bAlerta ? textoBultos(stockMin, bAlerta, { exacto: true }) : stockMin}</b>).`);
+      }
     }
     return partes.join(' ');
   }
@@ -6444,6 +6808,11 @@ export async function renderCatalogo(container, db) {
         hist.recordUpdate(_docId, { stock: (p.stock ?? null) }, { stock: nuevoStock }, {
           label: `Stock de ${p.nombre || p.name || _docId}`,
         });
+        registrarMovimiento(db, {
+          docId: _docId, nombre: p.nombre || p.name || '',
+          motivo: 'reposicion', antes: stockBase, despues: nuevoStock,
+          detalle: 'Reposición desde el panel',
+        });
         cerrar();
         const tc = document.getElementById('tabContent');
         if (tc) renderTabInventario(tc);
@@ -6671,6 +7040,9 @@ export async function renderCatalogo(container, db) {
         <td><span class="badge ${e.cls}">${e.label}</span></td>
         <td style="text-align:right;color:var(--tint-green-fg);font-weight:600">$${fmt(p.precio_venta || p.precio || 0)}</td>
         <td>
+          <button class="inv-btn-mov" data-id="${p.doc_id}" style="background:none;border:none;cursor:pointer;color:var(--text-muted);padding:4px" title="Ver movimientos de stock">
+            <span class="material-icons" style="font-size:16px">history</span>
+          </button>
           <button class="inv-btn-edit" data-id="${p.doc_id}" style="background:none;border:none;cursor:pointer;color:var(--tint-blue-fg);padding:4px" title="Editar producto">
             <span class="material-icons" style="font-size:16px">edit</span>
           </button>
@@ -6684,9 +7056,106 @@ export async function renderCatalogo(container, db) {
         if (p) abrirEditorCompleto(p);
       });
     });
+    tbody.querySelectorAll('.inv-btn-mov').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const p = allProductos.find(x => x.doc_id === btn.dataset.id);
+        if (p) abrirMovimientosStock(p);
+      });
+    });
     tbody.querySelectorAll('.inv-stock-val').forEach(cell => {
       cell.addEventListener('click', () => editarStockInv(cell.dataset.id));
     });
+  }
+
+  // ── Movimientos de stock de un producto ────────────────────────────────
+  // La pregunta que contesta esta ventana es "¿por qué el sistema dice 12 si en
+  // el mostrador hay 10?". Muestra cada entrada y salida con el antes, el
+  // después, quién y desde dónde, del movimiento más nuevo al más viejo.
+  async function abrirMovimientosStock(p) {
+    const docId = p.doc_id || p.id;
+    document.querySelector('.stkmov-overlay')?.remove();
+    const overlay = document.createElement('div');
+    overlay.className = 'modal-overlay stkmov-overlay';
+    overlay.innerHTML = `
+      <div class="modal" style="max-width:720px;width:100%">
+        <div class="modal-header">
+          <h3 style="margin:0;font-size:16px">Movimientos de stock</h3>
+          <button class="stkmov-cerrar" style="background:none;border:none;cursor:pointer;color:var(--text-muted)">
+            <span class="material-icons">close</span>
+          </button>
+        </div>
+        <div style="padding:0 20px 8px">
+          <div style="font-weight:700;font-size:14px">${_escHtml(p.nombre || '')}</div>
+          <div style="font-size:12px;color:var(--text-muted)">
+            Código ${_escHtml(String(docId))} · stock hoy: <b>${Number(p.stock) || 0}</b>
+          </div>
+        </div>
+        <div class="stkmov-cuerpo" style="padding:8px 20px 20px;max-height:60vh;overflow:auto">
+          <div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px">Buscando movimientos…</div>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    const cerrar = () => overlay.remove();
+    overlay.querySelector('.stkmov-cerrar').addEventListener('click', cerrar);
+    overlay.addEventListener('click', e => { if (e.target === overlay) cerrar(); });
+
+    const cuerpo = overlay.querySelector('.stkmov-cuerpo');
+    const movs = await movimientosDe(db, docId, 80);
+
+    if (!movs.length) {
+      cuerpo.innerHTML = `
+        <div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px;line-height:1.6">
+          Todavía no hay movimientos registrados de este producto.<br>
+          El historial arranca desde que se instaló esta versión: lo anterior no quedó guardado.
+        </div>`;
+      return;
+    }
+
+    const fmtFecha = ts => {
+      const d = ts?.toDate ? ts.toDate() : (ts ? new Date(ts) : null);
+      if (!d || isNaN(d)) return '—';
+      return d.toLocaleString('es-AR', {
+        day: '2-digit', month: '2-digit', year: '2-digit',
+        hour: '2-digit', minute: '2-digit',
+      });
+    };
+
+    cuerpo.innerHTML = `
+      <table class="data-table" style="width:100%;font-size:12px">
+        <thead>
+          <tr>
+            <th style="text-align:left">Cuándo</th>
+            <th style="text-align:left">Motivo</th>
+            <th style="text-align:right">Cantidad</th>
+            <th style="text-align:right">Quedó</th>
+            <th style="text-align:left">Quién</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${movs.map(m => {
+            const cant = Number(m.cantidad) || 0;
+            const color = cant < 0 ? 'var(--tint-red-fg)' : 'var(--tint-green-fg)';
+            const detalle = [m.referencia, m.detalle].filter(Boolean).join(' · ');
+            const paso = (m.stock_antes != null && m.stock_despues != null)
+              ? `${m.stock_antes} → <b>${m.stock_despues}</b>` : '—';
+            return `<tr>
+              <td style="white-space:nowrap;color:var(--text-muted)">${fmtFecha(m.ts)}</td>
+              <td>
+                ${_escHtml(MOTIVOS[m.motivo] || m.motivo || '—')}
+                ${detalle ? `<br><span style="font-size:10px;color:var(--text-muted)">${_escHtml(detalle)}</span>` : ''}
+              </td>
+              <td style="text-align:right;font-weight:700;color:${color};white-space:nowrap">
+                ${cant > 0 ? '+' : ''}${cant}
+              </td>
+              <td style="text-align:right;white-space:nowrap">${paso}</td>
+              <td style="color:var(--text-muted)">
+                ${_escHtml(m.usuario || '—')}
+                <br><span style="font-size:10px">${m.origen === 'webapp' ? 'panel' : _escHtml(m.pc_id || 'POS')}</span>
+              </td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>`;
   }
 
   async function editarStockInv(docId) {
@@ -6708,6 +7177,12 @@ export async function renderCatalogo(container, db) {
       p.stock = valor;
       if (_stockPrev !== valor) hist.recordUpdate(docId, { stock: _stockPrev }, { stock: valor }, {
         label: `Stock de ${p.nombre || p.name || docId}`,
+      });
+      registrarMovimiento(db, {
+        docId, nombre: p.nombre || p.name || '',
+        motivo: valor > (_stockPrev || 0) ? 'reposicion' : 'edicion_manual',
+        antes: _stockPrev, despues: valor,
+        detalle: 'Editado desde el panel',
       });
       renderTabInventario(document.getElementById('tabContent'));
       renderStats();
@@ -7398,6 +7873,10 @@ export async function renderCatalogo(container, db) {
     const _detShown = _stockShown(p);
     const _detNum = _detShown.num;   // Infinity = servicio; nunca negativo
     const _detTxt = _detShown.text;
+    // Caja/pack/rollo del producto (cargado, del conjunto, o deducido del nombre)
+    // para poder escribir y mostrar los umbrales por envase en vez de por unidad.
+    const _detBulto   = bultoDe(p);
+    const _detBultoOn = p.stock_alerta_um === 'bulto' && !!_detBulto;
 
     const panel = document.createElement('div');
     panel.className = 'detalle-panel';
@@ -7451,18 +7930,29 @@ export async function renderCatalogo(container, db) {
           <div style="display:flex;flex-direction:column;gap:4px">
             <label style="font-size:11px;font-weight:600;color:var(--text-muted)">STOCK MÍNIMO (avisar)</label>
             <input id="det_stock_min" type="number" min="0" step="any" placeholder="Sin alerta"
-                   value="${p.stock_min ?? ''}"
+                   value="${_detBultoOn && _detBulto ? (Math.round(aBultos(Number(p.stock_min) || 0, _detBulto) * 100) / 100) || '' : (p.stock_min ?? '')}"
                    style="width:130px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-weight:700;color:var(--tint-orange-fg);background:var(--surface)" />
           </div>
           <div style="display:flex;flex-direction:column;gap:4px">
             <label style="font-size:11px;font-weight:600;color:var(--text-muted)">STOCK MÁXIMO (ideal)</label>
             <input id="det_stock_max" type="number" min="0" step="any" placeholder="Sin tope"
-                   value="${p.stock_max ?? ''}"
+                   value="${_detBultoOn && _detBulto ? (Math.round(aBultos(Number(p.stock_max) || 0, _detBulto) * 100) / 100) || '' : (p.stock_max ?? '')}"
                    style="width:130px;padding:8px 12px;border:1px solid var(--border);border-radius:8px;font-size:14px;font-weight:700;color:var(--tint-orange-fg);background:var(--surface)" />
+          </div>
+          <div style="display:flex;flex-direction:column;gap:4px">
+            <label style="font-size:11px;font-weight:600;color:var(--text-muted)">EN</label>
+            <select id="det_alerta_um" style="padding:8px 10px;border:1px solid var(--border);border-radius:8px;font-size:13px;font-family:inherit;background:var(--surface)">
+              <option value="unidad">Unidades</option>
+              <option value="bulto"${_detBultoOn ? ' selected' : ''}${_detBulto ? '' : ' disabled'}>${_detBulto ? _escHtml(_detBulto.pl.charAt(0).toUpperCase() + _detBulto.pl.slice(1)) : 'Cajas'}</option>
+            </select>
           </div>
           <button id="det_guardar_stock_alert" style="padding:8px 16px;background:#f59e0b;color:#fff;border:none;border-radius:8px;cursor:pointer;font-weight:600;font-size:13px">Guardar alertas</button>
         </div>
-        <div id="det_stock_alert_msg" style="margin-top:8px;font-size:12px;color:var(--text-muted)">Dejá vacío para desactivar el aviso. El POS usa estos valores para avisarte cuando un producto baja del mínimo.</div>
+        <div id="det_stock_alert_msg" style="margin-top:8px;font-size:12px;color:var(--text-muted)">${
+          _detBulto
+            ? `1 ${_escHtml(_detBulto.sg)} = <b>${_detBulto.contenido}</b> u${_detBulto.fuente === 'nombre' ? ' (detectado del nombre)' : _detBulto.fuente === 'conjunto' ? ' (del envase del conjunto)' : ''}. Eligiendo "${_escHtml(_detBulto.pl)}" el aviso sale por ${_escHtml(_detBulto.sg)}.`
+            : 'Dejá vacío para desactivar el aviso. El POS usa estos valores para avisarte cuando un producto baja del mínimo.'
+        }</div>
       </div>
 
       <!-- Edición de precio por margen -->
@@ -7536,11 +8026,18 @@ export async function renderCatalogo(container, db) {
       const msg = document.getElementById('det_stock_alert_msg');
       const rawMin = document.getElementById('det_stock_min').value.trim();
       const rawMax = document.getElementById('det_stock_max').value.trim();
-      const sMin = rawMin === '' ? null : Math.max(0, parseFloat(rawMin.replace(',', '.')) || 0);
-      const sMax = rawMax === '' ? null : Math.max(0, parseFloat(rawMax.replace(',', '.')) || 0);
+      let sMin = rawMin === '' ? null : Math.max(0, parseFloat(rawMin.replace(',', '.')) || 0);
+      let sMax = rawMax === '' ? null : Math.max(0, parseFloat(rawMax.replace(',', '.')) || 0);
       if (sMin !== null && sMax !== null && sMax > 0 && sMax < sMin) {
         msg.innerHTML = `<span style="color:var(--tint-red-fg)">El máximo no puede ser menor al mínimo.</span>`;
         return;
+      }
+      // Umbrales escritos en cajas/packs → se guardan en unidades.
+      const porBulto = document.getElementById('det_alerta_um').value === 'bulto' && !!_detBulto;
+      const enBultos = { min: sMin, max: sMax };
+      if (porBulto) {
+        if (sMin !== null) sMin = aUnidades(sMin, _detBulto);
+        if (sMax !== null) sMax = aUnidades(sMax, _detBulto);
       }
       btn.disabled = true; btn.textContent = 'Guardando...';
       const _alertBefore = { stock_min: (p.stock_min ?? null), stock_max: (p.stock_max ?? null) };
@@ -7548,22 +8045,34 @@ export async function renderCatalogo(container, db) {
         await updateDoc(doc(db, 'catalogo', p.doc_id), {
           stock_min: sMin,
           stock_max: sMax,
+          stock_alerta_um: porBulto ? 'bulto' : null,
+          // El envase deducido del nombre se fija al elegirlo, para que el aviso
+          // no cambie si después se edita el nombre del producto.
+          ...(porBulto && _detBulto.fuente !== 'conjunto'
+            ? { bulto_tipo: _detBulto.tipo, bulto_contenido: _detBulto.contenido }
+            : {}),
           ultima_actualizacion: serverTimestamp()
         });
         invalidateCacheByPrefix('catalogo');
         _touchCatalogoMeta(db).catch(() => {});
         const idx = allProductos.findIndex(x => x.doc_id === p.doc_id);
-        if (idx !== -1) {
-          allProductos[idx].stock_min = sMin;
-          allProductos[idx].stock_max = sMax;
-        }
-        p.stock_min = sMin;
-        p.stock_max = sMax;
+        const _patch = {
+          stock_min: sMin, stock_max: sMax,
+          stock_alerta_um: porBulto ? 'bulto' : null,
+          ...(porBulto && _detBulto.fuente !== 'conjunto'
+            ? { bulto_tipo: _detBulto.tipo, bulto_contenido: _detBulto.contenido }
+            : {}),
+        };
+        if (idx !== -1) Object.assign(allProductos[idx], _patch);
+        Object.assign(p, _patch);
         if (_alertBefore.stock_min !== sMin || _alertBefore.stock_max !== sMax)
           hist.recordUpdate(p.doc_id, _alertBefore, { stock_min: sMin, stock_max: sMax }, {
             label: `Alertas de stock de ${p.nombre || p.name || p.doc_id}`,
           });
-        msg.innerHTML = `<span style="color:var(--tint-green-fg)">Alertas guardadas ${sMin !== null ? `· mín ${sMin}` : ''} ${sMax !== null ? `· máx ${sMax}` : ''}</span>`;
+        const _um = porBulto
+          ? (v) => `${v} ${v === 1 ? _detBulto.sg : _detBulto.pl}`
+          : (v) => `${v}`;
+        msg.innerHTML = `<span style="color:var(--tint-green-fg)">Alertas guardadas ${enBultos.min !== null ? `· mín ${_um(enBultos.min)}` : ''} ${enBultos.max !== null ? `· máx ${_um(enBultos.max)}` : ''}</span>`;
       } catch(e) {
         msg.innerHTML = `<span style="color:var(--tint-red-fg)">Error: ${e.message}</span>`;
       }
@@ -8854,9 +9363,22 @@ export async function renderCatalogo(container, db) {
   }
 
   // ── Init ──
-  await cargarRubros();
+  // La lista de rubros NO bloquea el pintado. Es un getDoc de UN documento,
+  // pero en el arranque en frío queda encolado detrás de los listeners grandes
+  // del store (catalogo 10k docs + ventas_por_dia 22k): medido, la página
+  // tardaba ~58s en aparecer y mientras tanto se veía vacía.
+  // Pintamos ya con los rubros por defecto y, cuando llega la lista real, se
+  // repinta sólo la barra (reRenderRubroBar borra y rehace sus botones, así
+  // que es idempotente).
   renderShell();
   reRenderRubroBar();
+  const _tRubros = performance.now();
+  cargarRubros()
+    .then(() => {
+      console.log(`[page] catalogo: rubros listos en ${(performance.now() - _tRubros).toFixed(0)}ms`);
+      if (document.body.contains(container)) reRenderRubroBar();
+    })
+    .catch(() => {});
   document.getElementById('btnHistorial')?.addEventListener('click', () => hist.openPanel());
   hist.attachKeyboard();
   _actualizarBadgeHistorial();
@@ -8906,7 +9428,7 @@ export async function renderCatalogo(container, db) {
               (el.style && el.style.position === 'fixed' && el.style.inset === '0px')) el.remove();
         });
         volver.remove();
-        if (typeof window.navigateToPage === 'function') window.navigateToPage('centro_compras');
+        if (typeof window.navigateToPage === 'function') window.navigateToPage(destino);
       });
       container.appendChild(volver);
     }
