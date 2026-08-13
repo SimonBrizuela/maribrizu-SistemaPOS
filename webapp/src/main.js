@@ -69,6 +69,7 @@ const pages = {
   centro_compras:  { title: 'Centro de Compras',        loader: () => import('./pages/centro_compras.js'),   render: 'renderCentroCompras',   cacheKey: null,                      needs: ['catalogo', 'ventas_por_dia'] },
   pedidos_tienda:  { title: 'Pedidos de la Tienda',     loader: () => import('./pages/pedidos_tienda.js'),   render: 'renderPedidosTienda',   cacheKey: null,                      needs: [] },
   tienda_catalogo: { title: 'Catálogo de la Tienda',    loader: () => import('./pages/tienda_catalogo.js'),  render: 'renderTiendaCatalogo',  cacheKey: null,                      needs: ['catalogo'] },
+  tienda_descuentos: { title: 'Descuentos de la Tienda', loader: () => import('./pages/tienda_descuentos.js'), render: 'renderTiendaDescuentos', cacheKey: null, needs: ['catalogo'] },
   tienda_ajustes:  { title: 'Configuración de la Tienda', loader: () => import('./pages/tienda_ajustes.js'), render: 'renderTiendaAjustes',   cacheKey: null,                      needs: ['catalogo'] },
   tienda_fotos:    { title: 'Fotos Pedidas',           loader: () => import('./pages/tienda_fotos.js'),     render: 'renderTiendaFotos',     cacheKey: null,                      needs: [] },
 };

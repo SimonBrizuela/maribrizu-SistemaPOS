@@ -412,6 +412,108 @@ def armar_documento(doc_id, datos):
     }
 
 
+def leer_descuentos(db):
+    """Los descuentos vigentes de la tienda, del mas general al mas puntual.
+
+    Viven en `tienda_descuentos` y son de la WEB: las promociones del POS son
+    del mostrador y no se mezclan. Cada uno dice sobre que cae (un rubro entero,
+    un subrubro o un articulo) y cuanto saca.
+    """
+    ahora = datetime.now(timezone.utc)
+    vigentes = []
+    for d in db.collection('tienda_descuentos').stream():
+        x = d.to_dict() or {}
+        if x.get('activo') is False:
+            continue
+        desde, hasta = x.get('desde'), x.get('hasta')
+        if isinstance(desde, datetime) and ahora < desde:
+            continue
+        if isinstance(hasta, datetime) and ahora > hasta:
+            continue
+        try:
+            valor = float(x.get('valor') or 0)
+        except (TypeError, ValueError):
+            continue
+        if valor <= 0:
+            continue
+        vigentes.append({
+            'id': d.id,
+            'nombre': str(x.get('nombre') or 'Descuento'),
+            'tipo': 'monto' if str(x.get('tipo')) == 'monto' else 'porcentaje',
+            'valor': valor,
+            'alcance': str(x.get('alcance') or 'rubro'),
+            'objetivo': str(x.get('objetivo') or '').strip().upper(),
+        })
+    # El mas especifico manda: si hay uno del rubro y otro del articulo, gana el
+    # del articulo. Mismo criterio que los avisos.
+    orden = {'rubro': 0, 'subrubro': 1, 'producto': 2}
+    vigentes.sort(key=lambda x: orden.get(x['alcance'], 0))
+    return vigentes
+
+
+def descuento_para(doc_id, doc, descuentos):
+    """Cual de los descuentos le toca a este producto, si le toca alguno."""
+    rubro = str(doc.get('rubro') or '').strip().upper()
+    sub = str(doc.get('sub_rubro') or '').strip().upper()
+    elegido = None
+    for d in descuentos:
+        if d['alcance'] == 'rubro' and d['objetivo'] == rubro:
+            elegido = d
+        elif d['alcance'] == 'subrubro' and d['objetivo'] == f'{rubro}|{sub}':
+            elegido = d
+        elif d['alcance'] == 'producto' and d['objetivo'] == str(doc_id).upper():
+            elegido = d
+    return elegido
+
+
+def aplicar_descuento(doc_id, doc, descuentos):
+    """Deja el precio con descuento en el documento del espejo.
+
+    `precio` pasa a ser lo que paga el cliente y `precio_anterior` guarda el de
+    lista, que es lo que la vidriera tacha. La cuenta SIEMPRE parte del precio de
+    lista: si se recalculara sobre el precio ya rebajado, cada corrida del sync
+    descontaria de nuevo sobre lo descontado y el precio se derrumbaria solo.
+    """
+    d = descuento_para(doc_id, doc, descuentos)
+    lista = float(doc.get('precio') or 0)
+    if not d or lista <= 0:
+        doc['precio_anterior'] = None
+        doc['descuento'] = None
+        return doc
+
+    if d['tipo'] == 'porcentaje':
+        nuevo = lista * (1 - min(d['valor'], 90.0) / 100.0)
+    else:
+        nuevo = lista - d['valor']
+    # Nunca por debajo de un peso: un precio en cero se lee como error, no como
+    # oferta, y deja pasar pedidos que no se pueden cobrar.
+    #
+    # floor(x + 0.5) y no round(): round() de Python redondea al par (2,5 -> 2)
+    # y Math.round() de JavaScript siempre para arriba (2,5 -> 3). El panel
+    # aplica el descuento al instante con la version JS y el sync lo reafirma
+    # con esta: si no redondean igual, el precio se mueve un peso solo, en cada
+    # corrida, para siempre.
+    nuevo = max(1.0, math.floor(nuevo + 0.5))
+    if nuevo >= lista:
+        doc['precio_anterior'] = None
+        doc['descuento'] = None
+        return doc
+
+    doc['precio'] = nuevo
+    doc['precio_anterior'] = lista
+    doc['descuento'] = {
+        'id': d['id'],
+        'nombre': d['nombre'],
+        'porcentaje': int(round((1 - nuevo / lista) * 100)),
+    }
+    # El pack sigue la misma rebaja: si no, llevarse el rollo entero saldria mas
+    # caro por unidad que comprar suelto y el cliente lo nota.
+    if doc.get('precio_pack'):
+        doc['precio_pack'] = max(1.0, math.floor(
+            float(doc['precio_pack']) * nuevo / lista + 0.5))
+    return doc
+
+
 def clave_de_orden(doc):
     """
     Orden del catalogo: primero lo destacado, despues lo que hay en stock,
@@ -562,12 +664,20 @@ def main():
     descartes = {}
     total = 0
 
+    descuentos = leer_descuentos(db)
+    if descuentos:
+        print(f'Descuentos vigentes: {len(descuentos)}')
+        for d in descuentos:
+            signo = '%' if d['tipo'] == 'porcentaje' else '$'
+            print(f"  {d['nombre']}: {d['valor']:g}{signo} en {d['alcance']} {d['objetivo']}")
+
     for doc in db.collection('catalogo').stream():
         total += 1
         datos = doc.to_dict() or {}
         ok, motivo = se_publica(datos, rubros_habilitados, subrubros_excluidos)
         if ok:
-            publicables[doc.id] = armar_documento(doc.id, datos)
+            publicables[doc.id] = aplicar_descuento(
+                doc.id, armar_documento(doc.id, datos), descuentos)
         else:
             descartes[motivo] = descartes.get(motivo, 0) + 1
 

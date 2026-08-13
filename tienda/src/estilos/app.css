@@ -3000,3 +3000,12 @@
   line-height: 1.45;
 }
 .aviso-producto svg { flex: none; margin-top: 2px; }
+
+/* Chapita de oferta. Va en el mismo lugar que "Más pedido" pero en rojo de
+   marca: el porcentaje es lo que hace frenar el ojo en una grilla. */
+.ficha--oferta {
+  background: var(--liceo-rojo, #E63946);
+  color: #fff;
+  font-weight: 700;
+  letter-spacing: .2px;
+}

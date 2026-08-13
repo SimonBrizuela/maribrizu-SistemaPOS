@@ -167,6 +167,15 @@ service cloud.firestore {
       allow read, write: if authorized();
     }
 
+    // ── DESCUENTOS DE LA TIENDA ───────────────────────────────────────────
+    // Los define el panel y los aplica el sync. La tienda publica NO los lee:
+    // el precio ya rebajado viaja adentro de cada producto, asi que nadie tiene
+    // que recalcular nada del lado del cliente.
+    match /tienda_descuentos/{descuentoId} {
+      allow read:  if authorized();
+      allow write: if authorized();
+    }
+
     // ── BORRADORES DE LA TIENDA ───────────────────────────────────────────
     // Fichas armadas de productos que todavía NO salen a la vidriera (su rubro
     // está apagado). La tienda pública no lee esta colección: solo el panel,

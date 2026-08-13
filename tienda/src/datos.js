@@ -201,6 +201,10 @@ function armarProducto(snap) {
     precio: Number(d.precio) || 0,
     precio_anterior: d.precio_anterior ? Number(d.precio_anterior) : null,
     aviso: d.aviso ? String(d.aviso) : null,
+    descuento: d.descuento && Number(d.descuento.porcentaje) > 0
+      ? { nombre: String(d.descuento.nombre || 'Oferta'),
+          porcentaje: Number(d.descuento.porcentaje) }
+      : null,
     // 'metro' para lo que se corta del rollo, 'unidad' para el resto.
     unidad: d.unidad === 'metro' ? 'metro' : 'unidad',
     // De a cuanto se vende. Lo decide el panel por producto; sin configurar

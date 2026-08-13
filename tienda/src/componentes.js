@@ -49,9 +49,13 @@ export function cardProducto(p, indice = 0, { conRubro = true } = {}) {
        }</div>`
     : '';
 
+  // El descuento le gana a "Más pedido": es el dato que hace frenar el ojo.
+  const pctOferta = p.descuento?.porcentaje > 0 ? p.descuento.porcentaje : null;
   const cinta = agotado
     ? '<span class="card-producto__cinta ficha">Sin stock</span>'
-    : (p.destacado && foto ? '<span class="card-producto__cinta ficha ficha--rubro">Más pedido</span>' : '');
+    : pctOferta
+      ? `<span class="card-producto__cinta ficha ficha--oferta">−${pctOferta}%</span>`
+      : (p.destacado && foto ? '<span class="card-producto__cinta ficha ficha--rubro">Más pedido</span>' : '');
 
   // Con variedades el signo lleva a elegir, no agrega a ciegas: sumar "un
   // boligrafo" cuando hay cinco colores obliga a corregirlo despues.

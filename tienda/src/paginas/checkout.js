@@ -10,7 +10,7 @@
  * cliente lo armo y llego aca el local pudo vender, reponer o cambiar precios, y
  * confirmar con los datos viejos genera un pedido que no se puede cumplir.
  */
-import { cargarConfig } from '../datos.js';
+import { cargarConfig, cargarAvisos, avisoDe } from '../datos.js';
 import { pie, vacio } from '../componentes.js';
 import { pesos, esc, distancia, lineasDeHorario } from '../formato.js';
 import { icono } from '../iconos.js';
@@ -28,6 +28,7 @@ import { montarMapa } from '../mapa.js';
 
 export async function checkout({ montar }) {
   const cfg = await cargarConfig();
+  const avisos = await cargarAvisos();
   document.title = 'Confirmar tu pedido · Librería Liceo';
 
   if (carrito.estaVacio()) {
@@ -326,9 +327,25 @@ function pintarFormulario({ montar, cfg, cambios }) {
                <span>${distancia(cotizacion.km)} hasta tu dirección.</span></p>`
           : '');
 
+    // Los avisos de lo que hay en el carrito, sin repetir: si tres artículos de
+    // mercería dicen lo mismo, se lee una sola vez. Acá es donde confirma, así
+    // que es el último lugar donde puede enterarse a tiempo.
+    const avisosDelPedido = [...new Set(
+      renglones.map(r => avisoDe(r, avisos)).filter(Boolean)
+    )];
+
     cajaResumen.innerHTML = `
       <div class="checkout__caja">
         <h2 class="checkout__caja-titulo">Tu pedido</h2>
+
+        ${avisosDelPedido.length ? `
+          <div class="checkout__avisos">
+            ${avisosDelPedido.map(a => `
+              <p class="aviso-producto">
+                ${icono('atencion', { tam: 16 })}
+                <span>${esc(a)}</span>
+              </p>`).join('')}
+          </div>` : ''}
 
         <ul class="resumen-items">
           ${renglones.map(r => `

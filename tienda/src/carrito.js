@@ -85,6 +85,8 @@ function leerDelDisco() {
           pack_contenido: Number(r.pack_contenido) || null,
           foto: r.foto || null,
           rubro: String(r.rubro || ''),
+          sub_rubro: String(r.sub_rubro || ''),
+          aviso: r.aviso ? String(r.aviso) : null,
           stock: Number(r.stock) || 0,
         };
       });
@@ -209,6 +211,11 @@ export function agregar(producto, { variedad = null, cantidad = null, esPack = f
     pack_contenido: esPack ? contenido : null,
     foto: producto.imagenes?.[0] || null,
     rubro: producto.rubro || '',
+    // Se guardan para poder mostrar el aviso del local en el checkout sin
+    // volver a leer el producto: ahi es donde el cliente confirma y donde
+    // "no hay devolucion" tiene que estar a la vista.
+    sub_rubro: producto.sub_rubro || '',
+    aviso: producto.aviso || null,
     stock,
   });
   guardar();
