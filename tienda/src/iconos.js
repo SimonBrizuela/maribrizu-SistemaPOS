@@ -83,9 +83,17 @@ export function fichasMarca() {
   return '<span class="marca-fichas"><i></i><i></i><i></i><i></i><i></i></span>';
 }
 
-/** Franja de cinco colores que cierra los bloques oscuros. */
-export function franjaMarca() {
-  return '<div class="franja-marca"><i></i><i></i><i></i><i></i><i></i></div>';
+/**
+ * Franja de cinco colores que cierra los bloques oscuros.
+ *
+ * Con `entra` los colores crecen desde la izquierda uno atrás del otro, para
+ * cerrar la entrada de la portada. Va solo ahí: la del pie y la de los cortes
+ * de sección aparecen cuando la persona ya está leyendo otra cosa, y animarlas
+ * sería movimiento por el movimiento mismo.
+ */
+export function franjaMarca({ entra = false } = {}) {
+  const clase = entra ? 'franja-marca franja-marca--entra' : 'franja-marca';
+  return `<div class="${clase}"><i></i><i></i><i></i><i></i><i></i></div>`;
 }
 
 /**

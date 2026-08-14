@@ -107,10 +107,7 @@
    La imagen ya viene sobre fondo negro, el mismo del bloque, asi que no lleva
    marco ni recuadro: se funde con la seccion y se lee como parte de la pagina y
    no como una foto pegada encima. */
-.portada__imagen {
-  display: none;
-  animation: portada-entra var(--m-lento) var(--curva) backwards;
-}
+.portada__imagen { display: none; }
 /* La imagen viene recortada, con el fondo transparente, asi que apoya
    directamente sobre el negro de la seccion y no hay rectangulo que disimular.
    La version anterior era opaca y necesitaba una mascara que le desvaneciera los
@@ -120,9 +117,6 @@
   display: block;
   width: 100%;
   height: auto;
-}
-@keyframes portada-entra {
-  from { opacity: 0; transform: translateY(16px) scale(.98); }
 }
 
 /* Aparece cuando hay dos columnas. Abajo de eso la portada es titulo, bajada y
@@ -209,12 +203,27 @@
   }
 }
 
-/* Con el teclado del sistema en "menos movimiento", la foto se queda quieta
-   igual: no anima nada. Se deja anotado porque la portada de escritorio sí
-   entra con una animación. */
-@media (prefers-reduced-motion: reduce) {
-  .portada__imagen { animation: none; }
-}
+/* ── La entrada de la portada ────────────────────────────────────────────────
+   Las piezas de la primera pantalla entran una atrás de la otra en el orden en
+   que se leen: el lugar, el título, la bajada, los botones, la imagen, las
+   fichas de rubro y la franja de color que cierra el bloque. El orden se lo
+   pone cada elemento con --entra-orden desde paginas/inicio.js; la mecánica
+   vive en design/components.css junto a la clase .entra.
+
+   Se hace con retrasos de CSS y no con un observador en JS porque la portada se
+   pinta antes de que exista un solo producto: cuando el JS termina de cargar el
+   catálogo, esto ya pasó.
+
+   Cada pieza anima donde le toca: la ilustración de escritorio y la foto de
+   fondo del celular nunca están las dos a la vista, y la que no corresponde
+   está en display:none, que ya deja su animación sin correr.
+
+   La foto de fondo del celular entra sin moverse, y primera: es el piso de la
+   pantalla, y correrlo mientras el título todavía está entrando se siente como
+   que la página se acomoda mal.
+
+   Con "menos movimiento" prendido no hace falta apagar nada acá: tokens.css
+   deja --m-entrada y --entra-paso en cero y las piezas aparecen todas juntas. */
 
 /* ── Tiras por rubro ─────────────────────────────────────────────────────────
    La portada mostraba una sola grilla de diez productos consecutivos del

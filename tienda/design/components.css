@@ -1200,6 +1200,62 @@ textarea.campo__control { min-height: 96px; resize: vertical; line-height: var(-
 .franja-marca i:nth-child(3) { background: var(--liceo-naranja); }
 .franja-marca i:nth-child(4) { background: var(--liceo-cyan); }
 .franja-marca i:nth-child(5) { background: var(--liceo-rojo); }
+
+/* ── Entrada de la primera pantalla ──────────────────────────────────────────
+   La vidriera se arma sola al abrir: cada pieza entra un paso después de la
+   anterior, en el mismo orden en el que se lee. No es decoración —es lo que
+   convierte una pantalla que aparece de golpe en una que se presenta— y por eso
+   dura lo que dura una mirada y no vuelve a pasar.
+
+   El orden lo pone quien la usa con --entra-orden; así una misma clase sirve
+   para el título, para las fichas de rubro y para lo que venga, sin una regla
+   nueva por elemento.
+
+   Se anima opacity y transform nada más: son las dos propiedades que el
+   navegador resuelve sin volver a calcular el layout, que es lo que hace que
+   esto no se sienta a los tirones en un celular de gama baja. */
+.entra {
+  animation: entra var(--m-entrada) var(--curva) backwards;
+  animation-delay: calc(var(--entra-orden, 0) * var(--entra-paso));
+}
+@keyframes entra {
+  from { opacity: 0; transform: translateY(12px); }
+}
+
+/* Para una imagen: además de subir, arranca apenas más chica. En un bloque de
+   texto ese escalado se lee como que las letras cambian de tamaño; en una foto
+   se lee como que se acerca. */
+.entra--pieza { animation-name: entra-pieza; }
+@keyframes entra-pieza {
+  from { opacity: 0; transform: translateY(16px) scale(.98); }
+}
+
+/* Para lo que está de fondo: solo aparece. Moverlo sería mover el piso de la
+   pantalla mientras el texto de encima todavía está entrando. */
+.entra--fondo { animation-name: entra-fondo; animation-duration: calc(var(--m-entrada) * 1.6); }
+@keyframes entra-fondo {
+  from { opacity: 0; }
+}
+
+/* La franja de cinco colores cerrando la portada: cada color crece desde la
+   izquierda, uno atrás del otro. Es el logo armándose, y como es lo último de
+   la secuencia deja la vista abajo, que es hacia donde sigue la página.
+
+   Solo la de la portada: la del pie y la de los cortes de sección quedan
+   quietas, porque llegan cuando la persona ya está leyendo otra cosa. */
+.franja-marca--entra i {
+  transform-origin: left center;
+  animation: franja-entra var(--m-entrada) var(--curva) backwards;
+}
+.franja-marca--entra i:nth-child(1) { animation-delay: calc(var(--entra-paso) * 4); }
+.franja-marca--entra i:nth-child(2) { animation-delay: calc(var(--entra-paso) * 4.6); }
+.franja-marca--entra i:nth-child(3) { animation-delay: calc(var(--entra-paso) * 5.2); }
+.franja-marca--entra i:nth-child(4) { animation-delay: calc(var(--entra-paso) * 5.8); }
+.franja-marca--entra i:nth-child(5) { animation-delay: calc(var(--entra-paso) * 6.4); }
+@keyframes franja-entra {
+  from { transform: scaleX(0); }
+}
+
 .cabecera__fila {
   display: flex;
   align-items: center;

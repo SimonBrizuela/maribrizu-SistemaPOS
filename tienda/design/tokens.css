@@ -176,6 +176,14 @@
   --curva:    cubic-bezier(.22, 1, .36, 1);
   --curva-in: cubic-bezier(.4, 0, 1, 1);
 
+  /* Entrada de la primera pantalla. Es más lenta que el resto de las
+     transiciones a propósito: no es un cambio de estado que hay que acusar
+     rápido, es la tienda apareciendo. El paso es lo que separa una pieza de la
+     siguiente; con 70 ms el conjunto se lee como una secuencia y termina antes
+     de que a nadie se le ocurra tocar nada. */
+  --m-entrada:  420ms;
+  --entra-paso: 70ms;
+
   /* ── Capas ────────────────────────────────────────────────────────────── */
   --z-nav:    100;
   --z-drawer: 200;
@@ -295,6 +303,11 @@
     --m-normal: 1ms;
     --m-lento:  1ms;
     --m-salida: 1ms;
+    /* La entrada escalonada se apaga entera, duración y paso. Acortar solo la
+       duración dejaría el contenido esperando su turno igual: con `backwards`
+       el retraso es tiempo en blanco, que es justo lo que molesta. */
+    --m-entrada:  1ms;
+    --entra-paso: 0ms;
   }
   *, *::before, *::after {
     animation-duration: 1ms !important;

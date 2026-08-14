@@ -1,0 +1,213 @@
+<!-- @dsCard group="Base" name="Entrada de la portada" subtitle="Cómo se arma la primera pantalla al abrir, en escritorio y en celular" -->
+
+<section class="pv-seccion">
+  <h2 class="pv-titulo">La vidriera al abrir</h2>
+
+  <div class="pv-fila" style="margin-bottom:var(--e-4)">
+    <span style="font-size:var(--t-sm);color:var(--text-2)">
+      La secuencia entera dura menos de tres cuartos de segundo. Arranca sola al cargar.
+    </span>
+  </div>
+
+  <div class="pv-columna" style="gap:var(--e-6)">
+
+    <!-- ── Escritorio ────────────────────────────────────────────────────── -->
+    <div>
+      <p style="font-size:var(--t-xs);font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);margin-bottom:var(--e-3)">
+        Escritorio
+      </p>
+
+      <div class="pv-marco" data-escena>
+        <div class="marco-oscuro marco-oscuro--vivo">
+          <div class="resplandores" aria-hidden="true">
+            <span class="resplandor resplandor--1"></span>
+            <span class="resplandor resplandor--2"></span>
+            <span class="resplandor resplandor--3"></span>
+            <span class="resplandor resplandor--4"></span>
+          </div>
+
+          <div class="contenedor" style="padding-block:var(--e-7);display:grid;grid-template-columns:minmax(0,5fr) minmax(0,6fr);gap:var(--e-7);align-items:center">
+            <div>
+              <p class="apagado entra" style="--entra-orden:0;font-size:var(--t-sm);font-weight:600;letter-spacing:.12em;text-transform:uppercase;margin-bottom:var(--e-4)">
+                Córdoba · Parque Liceo
+              </p>
+              <h1 class="entra" style="--entra-orden:1;font-size:var(--t-hero);font-weight:700;letter-spacing:-.035em;max-width:15ch;margin-bottom:var(--e-4)">
+                Todo para el cole, la casa y el regalo
+              </h1>
+              <p class="apagado entra" style="--entra-orden:2;font-size:var(--t-md);line-height:var(--alto-suelto);max-width:48ch;margin-bottom:var(--e-6)">
+                Somos la librería de la esquina, con el catálogo entero en tu celular.
+                Te lo llevamos a tu casa o lo pasás a buscar cuando te queda cómodo.
+              </p>
+              <div class="pv-fila entra" style="--entra-orden:3">
+                <a class="boton boton--primario boton--grande" href="#">Ver el catálogo</a>
+                <a class="boton boton--grande" href="#" style="background:transparent;border-color:var(--ink-borde);color:var(--ink-texto)">Cómo llegar</a>
+              </div>
+            </div>
+
+            <!-- En la tienda acá va /portada.webp. En la previsualización va una
+                 placa del mismo tamaño: lo que se está mirando es cuándo entra y
+                 desde dónde, no la ilustración. -->
+            <div class="entra entra--pieza" style="--entra-orden:2" aria-hidden="true">
+              <div style="aspect-ratio:3/2;border-radius:var(--r-lg);background:
+                   radial-gradient(circle at 24% 30%, color-mix(in srgb, var(--liceo-violeta) 70%, transparent), transparent 58%),
+                   radial-gradient(circle at 72% 26%, color-mix(in srgb, var(--liceo-cyan) 60%, transparent), transparent 56%),
+                   radial-gradient(circle at 62% 76%, color-mix(in srgb, var(--liceo-naranja) 55%, transparent), transparent 54%),
+                   radial-gradient(circle at 28% 78%, color-mix(in srgb, var(--liceo-verde) 50%, transparent), transparent 52%)">
+              </div>
+            </div>
+          </div>
+
+          <div class="contenedor" style="padding-bottom:var(--e-7)">
+            <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:var(--e-3)">
+              <a class="entra" style="--entra-orden:4" href="#" data-rubro="LIBRERÍA">
+                <span style="display:block;padding:var(--e-4);border-radius:var(--r-md);background:var(--rubro);color:var(--rubro-tinta)">
+                  <span style="display:block;font-family:var(--font-titulo);font-weight:700;font-size:var(--t-md)">Librería</span>
+                  <span style="display:block;font-size:var(--t-xs);opacity:.75">1.024 disponibles</span>
+                </span>
+              </a>
+              <a class="entra" style="--entra-orden:5" href="#" data-rubro="PAPELERA">
+                <span style="display:block;padding:var(--e-4);border-radius:var(--r-md);background:var(--rubro);color:var(--rubro-tinta)">
+                  <span style="display:block;font-family:var(--font-titulo);font-weight:700;font-size:var(--t-md)">Papelera</span>
+                  <span style="display:block;font-size:var(--t-xs);opacity:.75">380 disponibles</span>
+                </span>
+              </a>
+              <a class="entra" style="--entra-orden:6" href="#" data-rubro="MERCERÍA">
+                <span style="display:block;padding:var(--e-4);border-radius:var(--r-md);background:var(--rubro);color:var(--rubro-tinta)">
+                  <span style="display:block;font-family:var(--font-titulo);font-weight:700;font-size:var(--t-md)">Mercería</span>
+                  <span style="display:block;font-size:var(--t-xs);opacity:.75">2.100 disponibles</span>
+                </span>
+              </a>
+              <a class="entra" style="--entra-orden:7" href="#" data-rubro="JUGUETERÍA">
+                <span style="display:block;padding:var(--e-4);border-radius:var(--r-md);background:var(--rubro);color:var(--rubro-tinta)">
+                  <span style="display:block;font-family:var(--font-titulo);font-weight:700;font-size:var(--t-md)">Juguetería</span>
+                  <span style="display:block;font-size:var(--t-xs);opacity:.75">460 disponibles</span>
+                </span>
+              </a>
+            </div>
+          </div>
+
+          <div class="franja-marca franja-marca--entra"><i></i><i></i><i></i><i></i><i></i></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- ── Celular ───────────────────────────────────────────────────────── -->
+    <div>
+      <p style="font-size:var(--t-xs);font-weight:600;letter-spacing:.1em;text-transform:uppercase;color:var(--text-3);margin-bottom:var(--e-3)">
+        Celular
+      </p>
+
+      <div class="pv-telefono" data-escena>
+        <div class="marco-oscuro marco-oscuro--vivo" style="position:relative;overflow:hidden;isolation:isolate">
+
+          <!-- La foto de fondo desenfocada. Solo aparece: no se mueve. -->
+          <div class="entra entra--fondo" style="position:absolute;inset:-12%;z-index:-1" aria-hidden="true">
+            <div style="width:100%;height:100%;filter:blur(6px) saturate(1.2);background:
+                 radial-gradient(circle at 30% 24%, var(--liceo-violeta), transparent 46%),
+                 radial-gradient(circle at 76% 34%, var(--liceo-cyan), transparent 44%),
+                 radial-gradient(circle at 60% 78%, var(--liceo-naranja), transparent 42%),
+                 var(--ink-superficie)"></div>
+            <div style="position:absolute;inset:0;background:linear-gradient(to bottom,
+                 var(--ink-superficie) 0%,
+                 color-mix(in srgb, var(--ink-superficie) 62%, transparent) 18%,
+                 color-mix(in srgb, var(--ink-superficie) 62%, transparent) 52%,
+                 color-mix(in srgb, var(--ink-superficie) 34%, transparent) 78%,
+                 var(--ink-superficie) 100%)"></div>
+          </div>
+
+          <div style="padding:var(--e-6) var(--e-4)">
+            <p class="entra" style="--entra-orden:0;color:var(--ink-texto);font-size:var(--t-sm);font-weight:600;letter-spacing:.12em;text-transform:uppercase;margin-bottom:var(--e-4);text-shadow:0 1px 14px color-mix(in srgb, var(--ink-superficie) 80%, transparent)">
+              Córdoba · Parque Liceo
+            </p>
+            <h1 class="entra" style="--entra-orden:1;font-size:var(--t-2xl);font-weight:700;letter-spacing:-.035em;margin-bottom:var(--e-4);text-shadow:0 2px 18px color-mix(in srgb, var(--ink-superficie) 70%, transparent)">
+              Todo para el cole, la casa y el regalo
+            </h1>
+            <p class="entra" style="--entra-orden:2;color:var(--ink-texto);font-size:var(--t-md);line-height:var(--alto-suelto);margin-bottom:var(--e-5);text-shadow:0 1px 14px color-mix(in srgb, var(--ink-superficie) 80%, transparent)">
+              Somos la librería de la esquina, con el catálogo entero en tu celular.
+            </p>
+            <div class="entra" style="--entra-orden:3;display:flex;flex-direction:column;gap:var(--e-3)">
+              <a class="boton boton--primario boton--grande" href="#">Ver el catálogo</a>
+              <a class="boton boton--grande" href="#" style="background:transparent;border-color:var(--ink-borde);color:var(--ink-texto)">Cómo llegar</a>
+            </div>
+          </div>
+
+          <div style="padding:0 var(--e-4) var(--e-6);display:grid;grid-template-columns:1fr 1fr;gap:var(--e-3)">
+            <a class="entra" style="--entra-orden:4" href="#" data-rubro="LIBRERÍA">
+              <span style="display:block;padding:var(--e-3);border-radius:var(--r-md);background:var(--rubro);color:var(--rubro-tinta)">
+                <span style="display:block;font-family:var(--font-titulo);font-weight:700;font-size:var(--t-sm)">Librería</span>
+                <span style="display:block;font-size:var(--t-xs);opacity:.75">1.024</span>
+              </span>
+            </a>
+            <a class="entra" style="--entra-orden:5" href="#" data-rubro="PAPELERA">
+              <span style="display:block;padding:var(--e-3);border-radius:var(--r-md);background:var(--rubro);color:var(--rubro-tinta)">
+                <span style="display:block;font-family:var(--font-titulo);font-weight:700;font-size:var(--t-sm)">Papelera</span>
+                <span style="display:block;font-size:var(--t-xs);opacity:.75">380</span>
+              </span>
+            </a>
+            <a class="entra" style="--entra-orden:6" href="#" data-rubro="MERCERÍA">
+              <span style="display:block;padding:var(--e-3);border-radius:var(--r-md);background:var(--rubro);color:var(--rubro-tinta)">
+                <span style="display:block;font-family:var(--font-titulo);font-weight:700;font-size:var(--t-sm)">Mercería</span>
+                <span style="display:block;font-size:var(--t-xs);opacity:.75">2.100</span>
+              </span>
+            </a>
+            <a class="entra" style="--entra-orden:7" href="#" data-rubro="JUGUETERÍA">
+              <span style="display:block;padding:var(--e-3);border-radius:var(--r-md);background:var(--rubro);color:var(--rubro-tinta)">
+                <span style="display:block;font-family:var(--font-titulo);font-weight:700;font-size:var(--t-sm)">Juguetería</span>
+                <span style="display:block;font-size:var(--t-xs);opacity:.75">460</span>
+              </span>
+            </a>
+          </div>
+
+          <div class="franja-marca franja-marca--entra"><i></i><i></i><i></i><i></i><i></i></div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <p class="pv-nota">
+    <strong>El orden es el de lectura, no el del código.</strong> Entra primero el lugar,
+    después el título, la bajada y los botones; la ilustración acompaña al título en vez
+    de esperar su turno, porque en escritorio ocupa media pantalla y llegar última la
+    dejaría apareciendo sobre una portada ya quieta. Las fichas de rubro cierran, y la
+    franja de cinco colores se arma de izquierda a derecha: es el logo desarmado, y
+    termina abajo, que es hacia donde sigue la página.<br><br>
+    <strong>Cada pieza tarda 420 ms y sale 70 ms después de la anterior</strong>
+    (<code>--m-entrada</code> y <code>--entra-paso</code> en tokens.css). El total queda
+    en poco más de medio segundo: alcanza para leerse como una secuencia y termina antes
+    de que a nadie se le ocurra tocar un botón.<br><br>
+    En el celular la foto de fondo solo aparece, sin moverse. Correrla mientras el título
+    todavía está entrando se siente como que la página se acomoda mal, y además es el
+    único elemento que ocupa la pantalla entera.<br><br>
+    <strong>Con "menos movimiento" prendido en el sistema no hay entrada:</strong>
+    tokens.css deja la duración y el paso en cero y la portada aparece completa de una.
+    No se usa <code>opacity</code> sin animación de respaldo en ningún lado, así que si
+    algo fallara la primera pantalla se ve igual.
+  </p>
+</section>
+
+<script>
+  // Botón para volver a verla. Lo agrega el script y no el HTML: si el panel no
+  // corriera JavaScript, en vez de un botón muerto no hay botón, y la animación
+  // se ve igual al cargar.
+  (function () {
+    const escenas = document.querySelectorAll('[data-escena]');
+    if (!escenas.length) return;
+
+    const boton = document.createElement('button');
+    boton.className = 'boton';
+    boton.type = 'button';
+    boton.textContent = 'Ver de nuevo';
+
+    const fila = document.querySelector('.pv-seccion .pv-fila');
+    if (fila) fila.prepend(boton);
+
+    // Reemplazar el nodo por una copia es lo que reinicia la animación: quitar y
+    // volver a poner la clase en el mismo elemento no la vuelve a disparar.
+    boton.addEventListener('click', () => {
+      document.querySelectorAll('[data-escena]').forEach(escena => {
+        escena.replaceWith(escena.cloneNode(true));
+      });
+    });
+  })();
+</script>

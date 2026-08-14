@@ -27,7 +27,7 @@ const CABEZA_DE_TIRA = 30;
  */
 function ilustracion() {
   return `
-    <div class="portada__imagen" aria-hidden="true">
+    <div class="portada__imagen entra entra--pieza" style="--entra-orden:2" aria-hidden="true">
       <img src="/portada.webp" alt="" width="1200" height="800"
            fetchpriority="high" decoding="async">
     </div>`;
@@ -56,7 +56,7 @@ function ilustracion() {
  */
 function ilustracionMovil() {
   return `
-    <div class="portada__fondo" aria-hidden="true">
+    <div class="portada__fondo entra entra--fondo" aria-hidden="true">
       <img src="/portada-movil.webp"
            srcset="/portada-movil.webp 480w, /portada-movil@2x.webp 960w"
            sizes="100vw" alt="" width="480" height="596"
@@ -92,13 +92,13 @@ export async function inicio({ montar }) {
       <div class="contenedor portada__hero" style="padding-block:var(--e-7)">
         <div class="portada__cuerpo">
           <div>
-            <p class="portada__lugar">Córdoba · Parque Liceo</p>
-            <h1 class="portada__titulo">Todo para el cole, la casa y el regalo</h1>
-            <p class="portada__bajada">
+            <p class="portada__lugar entra" style="--entra-orden:0">Córdoba · Parque Liceo</p>
+            <h1 class="portada__titulo entra" style="--entra-orden:1">Todo para el cole, la casa y el regalo</h1>
+            <p class="portada__bajada entra" style="--entra-orden:2">
               Somos la librería de la esquina, con el catálogo entero en tu celular.
               Te lo llevamos a tu casa o lo pasás a buscar cuando te queda cómodo.
             </p>
-            <div class="portada__acciones">
+            <div class="portada__acciones entra" style="--entra-orden:3">
               <a class="boton boton--primario boton--grande" href="/catalogo">
                 Ver el catálogo ${icono('derecha', { tam: 18, grosor: 2.5 })}
               </a>
@@ -119,7 +119,7 @@ export async function inicio({ montar }) {
         </div>
       </div>
 
-      ${franjaMarca()}
+      ${franjaMarca({ entra: true })}
     </section>
 
     <div class="contenedor seccion" data-tiras>
@@ -158,8 +158,14 @@ export async function inicio({ montar }) {
 
   const cajaRubros = document.querySelector('[data-rubros]');
   if (cajaRubros) {
-    cajaRubros.innerHTML = rubros.map(r => `
-      <a class="rubro-ficha" data-rubro="${esc(r.clave)}" href="/catalogo/${encodeURIComponent(r.clave)}">
+    // Las fichas entran escalonadas igual que el texto de arriba, pero el
+    // reloj les arranca acá, cuando se insertan, y no cuando se pintó la
+    // portada: llegan después de consultar los rubros y encadenarlas al
+    // retraso original las dejaría apareciendo de a una con la consulta ya
+    // resuelta.
+    cajaRubros.innerHTML = rubros.map((r, i) => `
+      <a class="rubro-ficha entra" style="--entra-orden:${i}"
+         data-rubro="${esc(r.clave)}" href="/catalogo/${encodeURIComponent(r.clave)}">
         <span class="rubro-ficha__icono">${icono(iconoDeRubro(r.clave), { tam: 20 })}</span>
         <span class="rubro-ficha__texto">
           <span class="rubro-ficha__nombre">${esc(r.nombre)}</span>
