@@ -52,6 +52,35 @@ export function formatearCantidad(cantidad, unidad) {
 }
 
 /**
+ * Arriba de este porcentaje el ahorro no se muestra.
+ *
+ * Una resma de 500 hojas a $7.800 contra la hoja suelta a $50 da "Ahorrás
+ * 69%", y es cierto: la hoja de a una se cobra como se cobra en el mostrador.
+ * Pero dicho asi suena a que lo suelto esta caro, no a que el pack conviene.
+ * De ahi para arriba se muestra el precio del pack y listo.
+ */
+const TOPE_AHORRO_PACK = 50;
+
+/**
+ * Cuanto se ahorra llevando el pack en vez de lo mismo suelto.
+ *
+ * Una sola cuenta para la ficha, el carrito y el checkout: si en la ficha dice
+ * 12%, en el resumen del pedido no puede decir otra cosa. Devuelve null cuando
+ * no hay ahorro que mostrar (no conviene, o conviene tanto que no se dice).
+ *
+ * @returns {{ pesos: number, porcentaje: number } | null}
+ */
+export function ahorroDePack({ precioSuelto, precioPack, contenido, cantidad = 1 }) {
+  const suelto = Number(precioSuelto) * Number(contenido) * Number(cantidad);
+  const pack = Number(precioPack) * Number(cantidad);
+  if (!(suelto > 0) || !(pack > 0)) return null;
+  const pesos = suelto - pack;
+  const porcentaje = Math.round((pesos / suelto) * 100);
+  if (pesos <= 0 || porcentaje <= 0 || porcentaje > TOPE_AHORRO_PACK) return null;
+  return { pesos, porcentaje };
+}
+
+/**
  * Como se describe un renglon de pack: "Rollo de 50 m", "Caja de 12",
  * "Pack de 50".
  *

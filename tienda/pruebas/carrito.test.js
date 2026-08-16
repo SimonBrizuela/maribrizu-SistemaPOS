@@ -214,3 +214,48 @@ describe('revalidar contra la base', () => {
     expect(await carrito.revalidar()).toEqual([]);
   });
 });
+
+describe('ahorro por llevar el pack', () => {
+  it('es la diferencia contra lo mismo suelto, en pesos y en porcentaje', () => {
+    // 10 cartulinas a 600 son 6.000; la bolsa sale 5.600.
+    expect(carrito.ahorroDePack({ precioSuelto: 600, precioPack: 5600, contenido: 10 }))
+      .toEqual({ pesos: 400, porcentaje: 7 });
+  });
+
+  it('se multiplica por la cantidad de packs', () => {
+    expect(carrito.ahorroDePack({ precioSuelto: 600, precioPack: 5600, contenido: 10, cantidad: 3 }))
+      .toEqual({ pesos: 1200, porcentaje: 7 });
+  });
+
+  it('no inventa ahorro cuando el pack no conviene', () => {
+    expect(carrito.ahorroDePack({ precioSuelto: 500, precioPack: 5000, contenido: 10 })).toBeNull();
+    expect(carrito.ahorroDePack({ precioSuelto: 500, precioPack: 6000, contenido: 10 })).toBeNull();
+  });
+
+  it('se calla cuando el ahorro es tan grande que suena a que lo suelto esta caro', () => {
+    // La resma: 500 hojas a 50 son 25.000, y la resma sale 7.800 (69%).
+    expect(carrito.ahorroDePack({ precioSuelto: 50, precioPack: 7800, contenido: 500 })).toBeNull();
+    // Justo en el tope todavia se muestra.
+    expect(carrito.ahorroDePack({ precioSuelto: 100, precioPack: 5000, contenido: 100 }))
+      .toEqual({ pesos: 5000, porcentaje: 50 });
+  });
+
+  it('sin precio suelto guardado no hay contra que comparar', () => {
+    expect(carrito.ahorroDePack({ precioSuelto: null, precioPack: 5600, contenido: 10 })).toBeNull();
+    expect(carrito.ahorroDePack({ precioSuelto: 0, precioPack: 5600, contenido: 10 })).toBeNull();
+  });
+
+  it('el renglon del pack guarda el precio suelto para poder mostrar el ahorro', () => {
+    carrito.agregar(CARTULINA, { esPack: true, variedad: 'Celeste' });
+    const [r] = carrito.items();
+    expect(r.precio_suelto).toBe(600);
+    expect(r.variedad).toBe('Celeste');
+    expect(carrito.describirPack(r)).toBe('Pack de 10');
+  });
+
+  it('el rollo se describe en metros y con su nombre', () => {
+    carrito.agregar(CINTA, { esPack: true });
+    const [r] = carrito.items();
+    expect(carrito.describirPack(r)).toBe('Rollo de 25 m');
+  });
+});

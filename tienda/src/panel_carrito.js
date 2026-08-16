@@ -171,16 +171,15 @@ function renglon(r) {
 
   // Mismo cálculo que en la ficha del producto: contra el precio de a uno.
   // En pesos y no solo en porcentaje: "12%" obliga a hacer la cuenta.
-  const sueltoTotal = r.es_pack && r.precio_suelto > 0
-    ? r.precio_suelto * r.pack_contenido * r.cantidad
-    : 0;
-  const ahorro = sueltoTotal - r.precio * r.cantidad;
-  const porcentaje = sueltoTotal > 0 ? Math.round((ahorro / sueltoTotal) * 100) : 0;
+  const ahorro = r.es_pack ? carrito.ahorroDePack({
+    precioSuelto: r.precio_suelto, precioPack: r.precio,
+    contenido: r.pack_contenido, cantidad: r.cantidad,
+  }) : null;
 
   const notas = [
     r.es_pack ? esc(carrito.describirPack(r)) : '',
-    ahorro > 0
-      ? `<span class="renglon__ahorro">Ahorrás ${esc(pesos(ahorro))} (${porcentaje}%)</span>`
+    ahorro
+      ? `<span class="renglon__ahorro">Ahorrás ${esc(pesos(ahorro.pesos))} (${ahorro.porcentaje}%)</span>`
       : '',
     esc(unitario),
   ].filter(Boolean);
@@ -253,8 +252,11 @@ function pintar(renglones) {
   // cada renglón no dice nada del pedido entero, y es lo que convence de
   // seguir comprando así.
   const ahorroTotal = renglones
-    .filter(r => r.es_pack && r.precio_suelto > 0)
-    .reduce((acc, r) => acc + (r.precio_suelto * r.pack_contenido - r.precio) * r.cantidad, 0);
+    .filter(r => r.es_pack)
+    .reduce((acc, r) => acc + (carrito.ahorroDePack({
+      precioSuelto: r.precio_suelto, precioPack: r.precio,
+      contenido: r.pack_contenido, cantidad: r.cantidad,
+    })?.pesos || 0), 0);
 
   panel.innerHTML = cabecera + `
     <div class="panel__cuerpo">${renglones.map(renglon).join('')}</div>

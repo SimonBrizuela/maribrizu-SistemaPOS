@@ -256,10 +256,11 @@ export async function producto({ montar, params }) {
                   <span class="opcion-pack__titulo">Llevar ${esc(nombreDelPack(p))
                   } · ${p.pack_contenido}${porMetro ? ' m' : ' u'}</span>
                   <span class="opcion-pack__ahorro">${(() => {
-                    const suelto = p.precio * p.pack_contenido;
-                    const ahorro = Math.round((1 - p.precio_pack / suelto) * 100);
-                    return ahorro > 0
-                      ? `Ahorrás ${ahorro}% contra comprar de a ${porMetro ? 'un metro' : 'uno'}`
+                    const ahorro = carrito.ahorroDePack({
+                      precioSuelto: p.precio, precioPack: p.precio_pack, contenido: p.pack_contenido,
+                    });
+                    return ahorro
+                      ? `Ahorrás ${ahorro.porcentaje}% contra comprar de a ${porMetro ? 'un metro' : 'uno'}`
                       : 'Precio por cantidad';
                   })()}</span>
                 </span>

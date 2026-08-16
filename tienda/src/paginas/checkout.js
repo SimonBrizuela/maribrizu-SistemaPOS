@@ -314,9 +314,11 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
             ? '<strong style="color:var(--alerta)">Fuera de radio</strong>'
             : '<strong style="color:var(--text-2)">A confirmar</strong>';
 
-    const ahorroTotal = renglones
-      .filter(r => r.es_pack && r.precio_suelto > 0)
-      .reduce((acc, r) => acc + (r.precio_suelto * r.pack_contenido - r.precio) * r.cantidad, 0);
+    const ahorroDe = r => (r.es_pack ? carrito.ahorroDePack({
+      precioSuelto: r.precio_suelto, precioPack: r.precio,
+      contenido: r.pack_contenido, cantidad: r.cantidad,
+    }) : null);
+    const ahorroTotal = renglones.reduce((acc, r) => acc + (ahorroDe(r)?.pesos || 0), 0);
 
     const nota = modo === 'delivery' && cotizacion.estado === 'a_confirmar'
       ? `<p class="checkout__nota-envio">
@@ -357,15 +359,11 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
             // de a uno. Se muestra lo que saldría suelto tachado debajo del
             // precio, y el ahorro en pesos: es donde confirma, y "la plata se
             // explica" quiere decir que pueda rastrear cada número.
-            const sueltoTotal = r.es_pack && r.precio_suelto > 0
-              ? r.precio_suelto * r.pack_contenido * r.cantidad
-              : 0;
-            const ahorro = sueltoTotal - r.precio * r.cantidad;
-            const porcentaje = sueltoTotal > 0 ? Math.round((ahorro / sueltoTotal) * 100) : 0;
+            const ahorro = ahorroDe(r);
             const nombreConVariedad = r.variedad ? `${r.nombre} (${r.variedad})` : r.nombre;
             const detalle = r.es_pack
-              ? esc(carrito.describirPack(r)) + (ahorro > 0
-                  ? ` · <span class="resumen-item__ahorro">Ahorrás ${esc(pesos(ahorro))} (${porcentaje}%)</span>`
+              ? esc(carrito.describirPack(r)) + (ahorro
+                  ? ` · <span class="resumen-item__ahorro">Ahorrás ${esc(pesos(ahorro.pesos))} (${ahorro.porcentaje}%)</span>`
                   : '')
               : '';
             return `
@@ -378,7 +376,7 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
               </span>
               <span class="resumen-item__precio cifra">
                 ${pesos(r.precio * r.cantidad)}
-                ${ahorro > 0 ? `<s class="resumen-item__antes">${pesos(sueltoTotal)}</s>` : ''}
+                ${ahorro ? `<s class="resumen-item__antes">${pesos(r.precio * r.cantidad + ahorro.pesos)}</s>` : ''}
               </span>
             </li>`;
           }).join('')}
