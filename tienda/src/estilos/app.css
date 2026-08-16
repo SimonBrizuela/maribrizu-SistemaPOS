@@ -41,11 +41,20 @@
 
 /* Deja lugar a lo que flota abajo —la navegación en el celular y la barra del
    pedido en todos lados— para que no tapen el último producto. El alto de la
-   barra lo publica el JS cuando aparece; sin pedido no reserva nada. */
-.principal { padding-bottom: var(--alto-barra-pedido, 0px); }
+   barra lo publica el JS cuando aparece; sin pedido no reserva nada.
+
+   El hueco se reserva adentro del pie y no en `.principal`: el pie es lo último
+   de cada pantalla y es negro, así que lo que asoma detrás de la barra es más
+   pie, y no una franja clara entre el pie y la navegación. Si alguna pantalla
+   no termina en pie, el hueco lo pone `.principal` como antes. */
+.principal footer.marco-oscuro,
+.principal:not(:has(footer.marco-oscuro)) {
+  padding-bottom: var(--alto-barra-pedido, 0px);
+}
 
 @media (max-width: 767px) {
-  .principal {
+  .principal footer.marco-oscuro,
+  .principal:not(:has(footer.marco-oscuro)) {
     padding-bottom: calc(var(--alto-nav-inferior) + var(--alto-barra-pedido, 0px)
                          + env(safe-area-inset-bottom, 0px));
   }
