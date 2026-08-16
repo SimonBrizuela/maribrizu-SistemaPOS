@@ -419,7 +419,12 @@ export async function producto({ montar, params }) {
   pintarCantidad();
 
   document.querySelector('[data-pack]')?.addEventListener('click', () => {
-    carrito.agregar(p, { esPack: true });
+    if (hayVariedades && !elegida) {
+      avisar('Elegí primero el color o modelo', { tipo: 'error' });
+      document.querySelector('[data-variedad]:not([disabled])')?.focus();
+      return;
+    }
+    carrito.agregar(p, { esPack: true, variedad: elegida });
   });
 
   botonAgregar?.addEventListener('click', () => {

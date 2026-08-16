@@ -51,6 +51,25 @@ export function formatearCantidad(cantidad, unidad) {
   return String(Math.round(cantidad));
 }
 
+/**
+ * Como se describe un renglon de pack: "Rollo de 50 m", "Caja de 12",
+ * "Pack de 50".
+ *
+ * Usa el nombre que le pusieron en el panel (o el tipo que trae el POS), igual
+ * que la ficha del producto: si ahi dice "rollo", en el carrito no puede decir
+ * "pack". El contenido va en metros cuando lo suelto se vende por metro.
+ */
+export function describirPack(r) {
+  const contenido = Number(r?.pack_contenido) || 0;
+  let nombre = String(r?.pack_nombre || 'pack').toLowerCase().trim()
+    .replace(/^(el|la|los|las)\s+/, '');
+  nombre = nombre.charAt(0).toUpperCase() + nombre.slice(1);
+  if (!contenido) return nombre;
+  // "Caja de 12" ya escrito en el panel: no se repite el contenido.
+  if (/\bde\s+\d/.test(nombre)) return nombre;
+  return `${nombre} de ${contenido}${r?.pack_unidad === 'metro' ? ' m' : ''}`;
+}
+
 const suscriptores = new Set();
 
 /** @typedef {{id:string, variedad:string|null, nombre:string, precio:number,
@@ -83,6 +102,9 @@ function leerDelDisco() {
           minimo,
           es_pack: r.es_pack === true,
           pack_contenido: Number(r.pack_contenido) || null,
+          pack_nombre: r.pack_nombre ? String(r.pack_nombre) : null,
+          pack_unidad: r.pack_unidad === 'metro' ? 'metro' : 'unidad',
+          precio_suelto: Number(r.precio_suelto) || null,
           foto: r.foto || null,
           rubro: String(r.rubro || ''),
           sub_rubro: String(r.sub_rubro || ''),
@@ -177,6 +199,10 @@ export function agregar(producto, { variedad = null, cantidad = null, esPack = f
     ? Number(producto.precio_pack || 0)
     : (variante && variante.precio ? Number(variante.precio) : producto.precio);
 
+  // Precio de a uno del mismo producto: es contra lo que se compara el pack
+  // para mostrar cuánto se ahorra, misma cuenta que en la ficha.
+  const precioSuelto = esPack ? Number(producto.precio || 0) : null;
+
   const stockUnidades = variante ? Number(variante.stock ?? 0) : producto.stock;
   const contenido = Number(producto.pack_contenido) || 1;
   const stock = esPack ? Math.floor(stockUnidades / contenido) : stockUnidades;
@@ -187,6 +213,7 @@ export function agregar(producto, { variedad = null, cantidad = null, esPack = f
   if (existente) {
     existente.cantidad = redondear(Math.min(tope, existente.cantidad + cuanto));
     existente.precio = precio;
+    existente.precio_suelto = precioSuelto;
     existente.stock = stock;
     existente.minimo = minimo;
     existente.paso = paso;
@@ -209,6 +236,9 @@ export function agregar(producto, { variedad = null, cantidad = null, esPack = f
     minimo,
     es_pack: esPack,
     pack_contenido: esPack ? contenido : null,
+    pack_nombre: esPack ? (producto.pack_nombre || producto.pack_tipo || null) : null,
+    pack_unidad: producto.unidad === 'metro' ? 'metro' : 'unidad',
+    precio_suelto: precioSuelto,
     foto: producto.imagenes?.[0] || null,
     rubro: producto.rubro || '',
     // Se guardan para poder mostrar el aviso del local en el checkout sin
@@ -339,6 +369,11 @@ export async function revalidar() {
       r.precio = precio;
     }
 
+    if (r.es_pack) {
+      r.precio_suelto = Number(producto.precio || 0);
+      r.pack_nombre = producto.pack_nombre || producto.pack_tipo || null;
+      r.pack_unidad = producto.unidad === 'metro' ? 'metro' : 'unidad';
+    }
     r.stock = stock;
     r.nombre = producto.nombre;
     vivos.push(r);

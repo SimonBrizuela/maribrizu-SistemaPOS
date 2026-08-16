@@ -1967,7 +1967,17 @@
   font-size: var(--t-xs);
   color: var(--text-2);
 }
-.resumen-item__precio { font-weight: var(--peso-semi); white-space: nowrap; }
+.resumen-item__ahorro { color: var(--exito); font-weight: var(--peso-semi); }
+.resumen-item__precio { font-weight: var(--peso-semi); white-space: nowrap; text-align: right; }
+/* Lo que saldría de a uno, tachado debajo del precio del pack: el mismo
+   lenguaje que la oferta en la ficha del producto. */
+.resumen-item__antes {
+  display: block;
+  font-size: var(--t-xs);
+  font-weight: var(--peso-normal, 400);
+  color: var(--text-3);
+  text-decoration: line-through;
+}
 
 .checkout__nota-envio {
   display: flex;

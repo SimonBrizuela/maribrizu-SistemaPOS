@@ -24,6 +24,7 @@ import { pesos, esc, distancia, cuando, haceCuanto, lineasDeHorario } from '../f
 import { icono, franjaMarca } from '../iconos.js';
 import { montarMapa } from '../mapa.js';
 import { seguirPedido, pasosDe, indiceDeEstado } from '../pedidos.js';
+import { describirPack } from '../carrito.js';
 import { avisar } from '../avisos.js';
 
 // Viven fuera de la funcion a proposito: al navegar a otra pantalla el nodo se
@@ -402,7 +403,7 @@ function detalleDelPedido(p, modo) {
 
         const notas = [
           i.variedad || '',
-          i.es_pack ? `Pack de ${i.pack_contenido}` : '',
+          i.es_pack ? describirPack(i) : '',
           // El precio de a uno solo cuando hay mas de uno: con una unidad
           // repetiria el numero de la derecha.
           Number(i.cantidad) !== 1

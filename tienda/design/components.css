@@ -879,6 +879,7 @@ textarea.campo__control { min-height: 96px; resize: vertical; line-height: var(-
   overflow: hidden;
 }
 .renglon__variedad { font-size: var(--t-xs); color: var(--text-2); }
+.renglon__ahorro { color: var(--exito); font-weight: var(--peso-semi); }
 
 .renglon__precio {
   font-family: var(--font-titulo);
@@ -957,6 +958,21 @@ textarea.campo__control { min-height: 96px; resize: vertical; line-height: var(-
   font-weight: var(--peso-bold);
 }
 .totales__gratis { color: var(--exito); font-weight: var(--peso-bold); }
+
+/* El ahorro por pack va como renglón del ticket, debajo del total: es el
+   "ahorraste $X" de cualquier comprobante. Va en verde porque es la única
+   buena noticia de la cuenta, y sin caja: adentro de la del resumen sería una
+   card dentro de otra. */
+.totales__ahorro {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: var(--e-3);
+  font-size: var(--t-sm);
+  font-weight: var(--peso-semi);
+  color: var(--exito);
+}
+.totales__ahorro strong { color: inherit; font-weight: var(--peso-bold); }
 
 /* ── Progreso de estados del pedido ─────────────────────────────────────── */
 

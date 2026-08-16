@@ -164,13 +164,29 @@ function renglon(r) {
     ? `${pesos(r.precio)} ${r.unidad === 'metro' ? 'el metro' : 'c/u'}`
     : '';
 
+  // El color o modelo va pegado al nombre, entre paréntesis: es lo que
+  // distingue dos renglones del mismo producto y tiene que leerse de un
+  // vistazo, no perderse en el detalle de abajo.
+  const nombre = r.variedad ? `${r.nombre} (${r.variedad})` : r.nombre;
+
+  // Mismo cálculo que en la ficha del producto: contra el precio de a uno.
+  // En pesos y no solo en porcentaje: "12%" obliga a hacer la cuenta.
+  const sueltoTotal = r.es_pack && r.precio_suelto > 0
+    ? r.precio_suelto * r.pack_contenido * r.cantidad
+    : 0;
+  const ahorro = sueltoTotal - r.precio * r.cantidad;
+  const porcentaje = sueltoTotal > 0 ? Math.round((ahorro / sueltoTotal) * 100) : 0;
+
   const notas = [
-    r.es_pack ? `Pack cerrado · ${r.pack_contenido} unidades` : (r.variedad || ''),
-    unitario,
+    r.es_pack ? esc(carrito.describirPack(r)) : '',
+    ahorro > 0
+      ? `<span class="renglon__ahorro">Ahorrás ${esc(pesos(ahorro))} (${porcentaje}%)</span>`
+      : '',
+    esc(unitario),
   ].filter(Boolean);
 
   const detalle = notas.length
-    ? `<div class="renglon__variedad">${notas.map(esc).join(' · ')}</div>`
+    ? `<div class="renglon__variedad">${notas.join(' · ')}</div>`
     : '';
 
   return `
@@ -178,7 +194,7 @@ function renglon(r) {
       <div class="renglon__foto">${foto}</div>
       <div class="renglon__datos">
         <div class="renglon__cabecera">
-          <div class="renglon__nombre">${esc(r.nombre)}</div>
+          <div class="renglon__nombre">${esc(nombre)}</div>
           <span class="renglon__precio cifra">${pesos(r.precio * r.cantidad)}</span>
         </div>
         ${detalle}
@@ -233,6 +249,13 @@ function pintar(renglones) {
   const cuantos = carrito.unidades();
   const total = carrito.subtotal();
 
+  // Lo que ya se ahorró llevando en pack, sumado en pesos: el porcentaje de
+  // cada renglón no dice nada del pedido entero, y es lo que convence de
+  // seguir comprando así.
+  const ahorroTotal = renglones
+    .filter(r => r.es_pack && r.precio_suelto > 0)
+    .reduce((acc, r) => acc + (r.precio_suelto * r.pack_contenido - r.precio) * r.cantidad, 0);
+
   panel.innerHTML = cabecera + `
     <div class="panel__cuerpo">${renglones.map(renglon).join('')}</div>
     <div class="panel__pie">
@@ -241,6 +264,11 @@ function pintar(renglones) {
           <span>Productos (${cuantos})</span>
           <strong class="cifra">${pesos(total)}</strong>
         </div>
+        ${ahorroTotal > 0 ? `
+        <div class="totales__ahorro">
+          <span>Ahorrás llevando en pack</span>
+          <strong class="cifra">${pesos(ahorroTotal)}</strong>
+        </div>` : ''}
         <div class="totales__fila" style="font-size:var(--t-xs)">
           <span>El envío se calcula en el paso siguiente</span>
         </div>
