@@ -6,6 +6,7 @@ import * as carrito from '../carrito.js';
 import { avisar } from '../avisos.js';
 import { montarCinta } from '../cinta.js';
 import { fijarAmbito } from '../sugerencias.js';
+import { fijarTitulo, fijarProducto } from '../seo.js';
 
 /**
  * Como se nombra el pack entero.
@@ -124,6 +125,13 @@ export async function producto({ montar, params }) {
   ]);
 
   if (!p) {
+    fijarTitulo('No encontramos este producto · Librería Liceo');
+    // Un producto que ya no está no tiene que quedar en Google apuntando acá.
+    document.head.querySelector('meta[name="robots"]')?.remove();
+    const robots = document.createElement('meta');
+    robots.name = 'robots';
+    robots.content = 'noindex';
+    document.head.appendChild(robots);
     montar(`
       <div class="contenedor">
         ${vacio({
@@ -136,7 +144,8 @@ export async function producto({ montar, params }) {
     return;
   }
 
-  document.title = `${p.nombre} · Librería Liceo`;
+  fijarTitulo(`${p.nombre} · Librería Liceo`);
+  fijarProducto(p);
   // Quien esta mirando un abrojo probablemente busque otra cosa de merceria.
   fijarAmbito(p.rubro);
 

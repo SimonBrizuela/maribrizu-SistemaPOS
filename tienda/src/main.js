@@ -12,6 +12,7 @@ import { iniciarBarraPedido, refrescarBarraPedido } from './barra_pedido.js';
 import { iniciarCuenta } from './cuenta.js';
 import { estadoDelLocal, textoDeCerrado } from './horarios.js';
 import { aplicarModoDesdeURL, engancharTildes, iniciarBarraFotos } from './fotos.js';
+import { fijarPantalla } from './seo.js';
 
 import { inicio } from './paginas/inicio.js';
 import { catalogo } from './paginas/catalogo.js';
@@ -80,6 +81,7 @@ async function dibujar() {
   if (!vista) {
     const cfg = await cargarConfig();
     document.title = 'No encontramos esta página · Librería Liceo';
+    fijarPantalla({ privada: true });
     montar(`
       <div class="contenedor">
         ${vacio({
@@ -94,6 +96,14 @@ async function dibujar() {
   }
 
   if (camino === '/') document.title = 'Librería Liceo · Librería, mercería y regalería en Córdoba';
+
+  // Lo que se le dice a Google de esta pantalla. Las de una sola persona
+  // (pedido, checkout, cuenta) no se indexan nunca; las demás, salvo que la
+  // tienda esté corriendo en un host de prueba.
+  fijarPantalla({
+    privada: ['/checkout', '/pedido', '/seguimiento', '/cuenta']
+      .some(r => camino === r || camino.startsWith(`${r}/`)),
+  });
 
   // El buscador sabe dónde está parada la persona: en /catalogo/PAPELERA
   // sugiere dentro de Papelera y lo dice, con la salida a todo el catálogo a un

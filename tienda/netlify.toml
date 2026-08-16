@@ -23,6 +23,20 @@
   [headers.values]
     Cache-Control = "public, max-age=31536000, immutable"
 
+# El sitemap y el robots.txt los arman dos funciones (leen el catálogo
+# publicado, así siempre están al día). Van antes del comodín de abajo, que si
+# no se los queda y devuelve el index.html de la tienda como si fuera un
+# sitemap.
+[[redirects]]
+  from = "/sitemap.xml"
+  to = "/.netlify/functions/sitemap"
+  status = 200
+
+[[redirects]]
+  from = "/robots.txt"
+  to = "/.netlify/functions/robots"
+  status = 200
+
 # Rutas de verdad, sin almohadilla: /p/:id y /pedido/:id las resuelve el router
 # del navegador, pero al entrar directo o al recargar el pedido llega al
 # servidor y hay que devolverle el index igual.

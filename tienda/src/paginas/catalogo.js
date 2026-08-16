@@ -4,6 +4,7 @@ import { grilla, grillaCargando, pie, vacio } from '../componentes.js';
 import { esc, nombreBonito } from '../formato.js';
 import { icono } from '../iconos.js';
 import { ir } from '../router.js';
+import { fijarTitulo } from '../seo.js';
 
 export async function catalogo({ montar, params, query }) {
   const rubro = params.rubro ? decodeURIComponent(params.rubro) : null;
@@ -19,6 +20,13 @@ export async function catalogo({ montar, params, query }) {
   const titulo = texto
     ? `Resultados para «${texto}»`
     : (sub ? nombreBonito(sub) : (rubro ? nombreBonito(rubro) : 'Todo el catálogo'));
+
+  // Cada rubro con su título: "Mercería · Librería Liceo" es lo que Google
+  // muestra y por lo que se busca; "Librería Liceo" a secas en 2.300 páginas
+  // no distingue una de otra.
+  fijarTitulo(texto || sub || rubro
+    ? `${titulo} · Librería Liceo`
+    : 'Catálogo · Librería Liceo');
 
   const fichas = [
     `<button class="ficha-filtro ficha-filtro--sin-punto" style="--rubro:var(--ink)"
