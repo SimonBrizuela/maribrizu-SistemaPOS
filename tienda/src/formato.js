@@ -206,17 +206,20 @@ export function clases(...xs) {
  * nombre en texto en vez de un circulito de color equivocado.
  */
 const COLORES = {
-  negro: '#1A1A1A', blanco: '#F5F5F5', gris: '#9AA0A6', plateado: '#C0C0C0',
+  negro: '#1A1A1A', negra: '#1A1A1A',
+  blanco: '#F5F5F5', blanca: '#F5F5F5',
+  gris: '#9AA0A6', plateado: '#C0C0C0', plateada: '#C0C0C0',
   plata: '#C0C0C0', cobre: '#B87333',
-  rojo: '#D32F2F', bordo: '#7B1E1E', borravino: '#6E1B32',
+  rojo: '#D32F2F', roja: '#D32F2F', bordo: '#7B1E1E', borravino: '#6E1B32',
   rosa: '#E91E8C', fucsia: '#D81B7A', magenta: '#C2185B', coral: '#F06A5A',
   salmon: '#F4978E',
-  naranja: '#F57C00', amarillo: '#F9C400', dorado: '#C9A227',
+  naranja: '#F57C00', amarillo: '#F9C400', amarilla: '#F9C400',
+  dorado: '#C9A227', dorada: '#C9A227',
   mostaza: '#D6A400', ocre: '#C77B30',
   verde: '#2E7D32', 'verde agua': '#4DB6AC', turquesa: '#26A69A',
   oliva: '#6B7C32',
   azul: '#1565C0', celeste: '#42A5F5', marino: '#152C5B',
-  violeta: '#7B3FA6', lila: '#B388D9', morado: '#6A1B9A',
+  violeta: '#7B3FA6', lila: '#B388D9', morado: '#6A1B9A', morada: '#6A1B9A',
   marron: '#6D4C41', beige: '#D7C4A3', crema: '#EFE3C8',
   transparente: null, natural: '#E8DCC8', surtido: null,
 
@@ -224,7 +227,8 @@ const COLORES = {
   // la cinta de raso —51 colores— mostraba doce cápsulas con el nombre escrito
   // entremedio de las muestras y la grilla perdía el ritmo.
   manteca: '#F5EBD0', tiza: '#F7F5F0', hueso: '#EDE6D8', marfil: '#F3EAD3',
-  habano: '#C9AE86', camel: '#C19A6B', arena: '#D9C9A8', tostado: '#B98B54',
+  habano: '#C9AE86', camel: '#C19A6B', arena: '#D9C9A8',
+  tostado: '#B98B54', tostada: '#B98B54',
   canela: '#B06E38', chocolate: '#4E342E', cafe: '#5D4037', nuez: '#7A5230',
   vison: '#8C7B6E', grafito: '#4A4A4A', plomo: '#7A7D80', perla: '#E6E2DC',
   rubi: '#B0203C', cereza: '#C21E3A', ladrillo: '#B34A3A', terracota: '#C1633F',
