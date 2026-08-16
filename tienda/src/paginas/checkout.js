@@ -53,7 +53,7 @@ export async function checkout({ montar }) {
     return;
   }
 
-  pintarFormulario({ montar, cfg, cambios });
+  pintarFormulario({ montar, cfg, cambios, avisos });
 }
 
 /* ── Pantallas de salida ──────────────────────────────────────────────────── */
@@ -88,7 +88,7 @@ function pantallaSinStock(cfg) {
 
 /* ── Formulario ───────────────────────────────────────────────────────────── */
 
-function pintarFormulario({ montar, cfg, cambios }) {
+function pintarFormulario({ montar, cfg, cambios, avisos }) {
   const entrega = cfg.entrega || {};
 
   // Lo que ya sabemos de esta persona: de su cuenta si entró, y si no, de lo
@@ -314,6 +314,10 @@ function pintarFormulario({ montar, cfg, cambios }) {
             ? '<strong style="color:var(--alerta)">Fuera de radio</strong>'
             : '<strong style="color:var(--text-2)">A confirmar</strong>';
 
+    const ahorroTotal = renglones
+      .filter(r => r.es_pack && r.precio_suelto > 0)
+      .reduce((acc, r) => acc + (r.precio_suelto * r.pack_contenido - r.precio) * r.cantidad, 0);
+
     const nota = modo === 'delivery' && cotizacion.estado === 'a_confirmar'
       ? `<p class="checkout__nota-envio">
            ${icono('atencion', { tam: 15 })}
@@ -348,17 +352,36 @@ function pintarFormulario({ montar, cfg, cambios }) {
           </div>` : ''}
 
         <ul class="resumen-items">
-          ${renglones.map(r => `
+          ${renglones.map(r => {
+            // Mismo cálculo que en la ficha y en el panel: contra el precio
+            // de a uno. Se muestra lo que saldría suelto tachado debajo del
+            // precio, y el ahorro en pesos: es donde confirma, y "la plata se
+            // explica" quiere decir que pueda rastrear cada número.
+            const sueltoTotal = r.es_pack && r.precio_suelto > 0
+              ? r.precio_suelto * r.pack_contenido * r.cantidad
+              : 0;
+            const ahorro = sueltoTotal - r.precio * r.cantidad;
+            const porcentaje = sueltoTotal > 0 ? Math.round((ahorro / sueltoTotal) * 100) : 0;
+            const nombreConVariedad = r.variedad ? `${r.nombre} (${r.variedad})` : r.nombre;
+            const detalle = r.es_pack
+              ? esc(carrito.describirPack(r)) + (ahorro > 0
+                  ? ` · <span class="resumen-item__ahorro">Ahorrás ${esc(pesos(ahorro))} (${porcentaje}%)</span>`
+                  : '')
+              : '';
+            return `
             <li class="resumen-item">
               <span class="resumen-item__cantidad cifra">${
                 esc(carrito.formatearCantidad(r.cantidad, r.unidad))}</span>
               <span class="resumen-item__nombre">
-                ${esc(r.nombre)}
-                ${r.variedad ? `<em>${esc(r.variedad)}</em>` : ''}
-                ${r.es_pack ? `<em>Pack de ${r.pack_contenido}</em>` : ''}
+                ${esc(nombreConVariedad)}
+                ${detalle ? `<em>${detalle}</em>` : ''}
               </span>
-              <span class="resumen-item__precio cifra">${pesos(r.precio * r.cantidad)}</span>
-            </li>`).join('')}
+              <span class="resumen-item__precio cifra">
+                ${pesos(r.precio * r.cantidad)}
+                ${ahorro > 0 ? `<s class="resumen-item__antes">${pesos(sueltoTotal)}</s>` : ''}
+              </span>
+            </li>`;
+          }).join('')}
         </ul>
 
         <div class="totales">
@@ -374,6 +397,11 @@ function pintarFormulario({ montar, cfg, cambios }) {
             <span>Total</span>
             <strong class="cifra">${pesos(subtotal + envio)}</strong>
           </div>
+          ${ahorroTotal > 0 ? `
+          <div class="totales__ahorro">
+            <span>Ahorrás llevando en pack</span>
+            <strong class="cifra">${pesos(ahorroTotal)}</strong>
+          </div>` : ''}
         </div>
 
         ${nota}
@@ -634,6 +662,8 @@ function pintarFormulario({ montar, cfg, cambios }) {
           unidad: r.unidad,
           es_pack: r.es_pack,
           pack_contenido: r.pack_contenido,
+          pack_nombre: r.pack_nombre || null,
+          pack_unidad: r.pack_unidad || 'unidad',
           cantidad: r.cantidad,
           precio: r.precio,
           subtotal: Math.round(r.precio * r.cantidad),
