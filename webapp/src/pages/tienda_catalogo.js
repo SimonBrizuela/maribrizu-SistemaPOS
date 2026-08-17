@@ -27,7 +27,7 @@ import {
 } from '../tienda_espejo.js';
 import {
   ponerDePortada, moverFoto, quitarFoto, desvincularFoto, vincularFoto,
-  fotoDeVariedad, limpiarAjustes, fotosHuerfanas,
+  fotoDeVariedad, limpiarAjustes, fotosHuerfanas, variedadesDeFoto,
 } from '../tienda_galeria.js';
 import '../styles/tienda.css';
 
@@ -651,11 +651,36 @@ function abrirEditor(p) {
   // La galería se guarda al instante (cada foto es una subida que ya pasó);
   // lo demás del editor espera a "Guardar cambios". Las operaciones sobre la
   // lista viven en tienda_galeria.js, que es lo que se prueba.
+  // Con variedades, cada foto lleva arriba una franja que dice de qué colores
+  // es ("Rojo, Verde") o invita a vincularla. Tocarla abre la lista para
+  // tildar: es el mismo dato que el cuadrito de cada variedad, visto desde la
+  // foto en vez de desde el color.
+  const ordenColores = colores.map(c => c.clave);
+  function nombreDeClave(clave) {
+    const c = colores.find(x => x.clave === clave);
+    const ajuste = ajustes[clave] || {};
+    return String(ajuste.nombre || '').trim() || nombreBonito(c?.original || clave);
+  }
+  function franjaColores(url, i) {
+    if (!colores.length) return '';
+    const claves = variedadesDeFoto(ajustes, url, ordenColores);
+    const nombres = claves.map(nombreDeClave);
+    const texto = !nombres.length ? 'Vincular a un color'
+      : nombres.length <= 2 ? nombres.join(', ')
+      : `${nombres.slice(0, 2).join(', ')} +${nombres.length - 2}`;
+    return `<button class="tienda-foto-colores ${claves.length ? 'con' : ''}"
+                    data-foto="colores" data-i="${i}"
+                    title="${escHtml(nombres.length ? `Es la foto de: ${nombres.join(', ')}` : 'Decir de qué color es esta foto')}">
+              ${escHtml(texto)}
+            </button>`;
+  }
+
   function pintarFotos() {
     const ultima = imagenes.length - 1;
     $('#edFotos').innerHTML = imagenes.map((url, i) => `
-      <div class="tienda-foto-item ${i === 0 ? 'es-portada' : ''}">
+      <div class="tienda-foto-item ${i === 0 ? 'es-portada' : ''} ${colores.length ? 'con-colores' : ''}">
         <img src="${escHtml(url)}" alt="" loading="lazy" data-foto="ver" data-i="${i}">
+        ${franjaColores(url, i)}
         ${i === 0 ? '<span class="principal">PORTADA</span>' : ''}
         <div class="tienda-foto-acciones">
           ${i > 0 ? `<button data-foto="portada" data-i="${i}" title="Usar de portada">
@@ -699,6 +724,7 @@ function abrirEditor(p) {
 
     if (accion === 'ver') { verFotoGrande(imagenes[i]); return; }
     if (accion === 'agregar') { $('#edArchivo').click(); return; }
+    if (accion === 'colores') { abrirColoresDeFoto(imagenes[i]); return; }
 
     // Dos clicks seguidos mientras se guarda el primero mandarían dos listas
     // distintas y ganaría la que llegue última, no la última que se pidió.
@@ -932,6 +958,99 @@ function abrirEditor(p) {
     document.body.appendChild(capa);
   }
 
+  /* ── De qué colores es una foto ──
+     Lo mismo que el cuadrito de cada variedad, pero al revés: se parte de la
+     foto y se tildan los colores que la llevan. Una foto puede ser la de
+     varios colores (la caja surtida es la de todos), y tildar un color que ya
+     tenía otra foto se la reemplaza. Se guarda con "Guardar cambios". */
+  function cerrarColoresDeFoto() {
+    const previo = document.querySelector('.tienda-overlay[data-colores-foto]');
+    if (!previo) return;
+    if (previo._alTeclado) document.removeEventListener('keydown', previo._alTeclado);
+    previo.remove();
+  }
+
+  function abrirColoresDeFoto(url) {
+    cerrarColoresDeFoto();
+    if (!colores.length || !url) return;
+
+    const capa = document.createElement('div');
+    capa.className = 'tienda-overlay';
+    capa.setAttribute('data-colores-foto', '');
+    capa.innerHTML = `
+      <div class="tienda-editor" style="max-width:520px" role="dialog" aria-modal="true">
+        <header>
+          <div style="min-width:0;flex:1">
+            <h3>¿De qué color es esta foto?</h3>
+            <p>Tildá los colores que se ven en ella. Al elegir ese color en la
+               ficha, se muestra esta foto.</p>
+          </div>
+          <button class="pc-btn" data-accion="cerrar" style="padding:6px 10px">
+            <span class="material-icons">close</span>
+          </button>
+        </header>
+        <div class="cuerpo">
+          <div style="display:flex;gap:16px;align-items:flex-start">
+            <div class="tienda-foto-item" style="flex:none">
+              <img src="${escHtml(url)}" alt="" data-accion="ver">
+            </div>
+            <div style="flex:1;min-width:0" data-lista></div>
+          </div>
+        </div>
+        <footer>
+          <button class="pc-btn" data-accion="cerrar"
+                  style="padding:9px 20px;margin-left:auto;background:#4361ee;color:#fff;border-color:#4361ee">
+            Listo
+          </button>
+        </footer>
+      </div>`;
+
+    function pintarLista() {
+      capa.querySelector('[data-lista]').innerHTML = colores.map(c => {
+        const foto = fotoDeVariedad(ajustes, c.clave);
+        const tildado = foto === url;
+        const otra = foto && !tildado;
+        return `
+          <button class="tienda-color-tilde" data-accion="tildar" data-clave="${escHtml(c.clave)}"
+                  aria-pressed="${tildado}">
+            <span class="material-icons">${tildado ? 'check_box' : 'check_box_outline_blank'}</span>
+            <span style="min-width:0;flex:1">
+              <span class="original">${escHtml(nombreDeClave(c.clave))}</span>
+              <span class="datos">${c.stock > 0 ? `${c.stock} en stock` : 'sin stock'}${
+                otra ? ' · hoy tiene otra foto, se reemplaza' : ''}</span>
+            </span>
+            ${otra ? `<img src="${escHtml(foto)}" alt="" class="tienda-color-otra">` : ''}
+          </button>`;
+      }).join('');
+    }
+
+    let bajoPropio = false;
+    capa.addEventListener('mousedown', ev => { bajoPropio = ev.target === capa; });
+    capa.addEventListener('click', ev => {
+      const boton = ev.target.closest('[data-accion]');
+      const accion = boton?.dataset.accion;
+      if (!accion) {
+        if (ev.target === capa && bajoPropio) cerrarColoresDeFoto();
+        return;
+      }
+      if (accion === 'cerrar') { cerrarColoresDeFoto(); return; }
+      if (accion === 'ver') { verFotoGrande(url); return; }
+      if (accion === 'tildar') {
+        const clave = boton.dataset.clave;
+        const tildado = fotoDeVariedad(ajustes, clave) === url;
+        ajustes = vincularFoto(ajustes, clave, tildado ? null : url);
+        pintarLista();
+        pintarFotos();
+        pintarVariedades();
+      }
+    });
+
+    capa._alTeclado = ev => { if (ev.key === 'Escape') cerrarColoresDeFoto(); };
+    document.addEventListener('keydown', capa._alTeclado);
+    document.body.appendChild(capa);
+    pintarLista();
+  }
+
   $('#edArchivoVariedad').addEventListener('change', async ev => {
     const [archivo] = Array.from(ev.target.files || []);
     ev.target.value = '';
@@ -960,11 +1079,14 @@ function abrirEditor(p) {
     if (!campo) return;
     const clave = campo.closest('[data-clave]').dataset.clave;
     ajustes[clave] = { ...(ajustes[clave] || {}), nombre: campo.value.trim() };
+    // La franja de la foto muestra el nombre público: que acompañe.
+    if (fotoDeVariedad(ajustes, clave)) pintarFotos();
   });
 
   /* ── Cerrar y guardar ── */
   const cerrar = () => {
     cerrarFotoDeVariedad();
+    cerrarColoresDeFoto();
     overlay.remove();
     document.removeEventListener('keydown', alTeclado);
     // Lo subido para una variedad que al final no se guardó (se cerró sin
@@ -975,8 +1097,8 @@ function abrirEditor(p) {
   };
   const alTeclado = ev => {
     if (ev.key !== 'Escape') return;
-    // Con el selector de foto abierto, Escape cierra ese y no el editor.
-    if (document.querySelector('.tienda-overlay[data-foto-variedad]')) return;
+    // Con un selector abierto encima, Escape cierra ese y no el editor.
+    if (document.querySelector('.tienda-overlay[data-foto-variedad], .tienda-overlay[data-colores-foto]')) return;
     cerrar();
   };
   document.addEventListener('keydown', alTeclado);

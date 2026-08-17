@@ -259,6 +259,36 @@
 }
 .tienda-foto-item.es-nueva .tienda-foto-acciones { top: 20px; }
 
+/* De qué colores es la foto: franja arriba del tile, tocable. Gris cuando no
+   está vinculada, azul con los nombres cuando sí. Los botones bajan. */
+.tienda-foto-colores {
+  position: absolute; left: 0; right: 0; top: 0; border: none; cursor: pointer;
+  background: rgba(0,0,0,.62); color: #fff; font-size: 9.5px; font-weight: 700;
+  padding: 2px 4px; letter-spacing: .2px; font-family: inherit;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: center;
+}
+.tienda-foto-colores:not(.con) { color: rgba(255,255,255,.78); font-weight: 600; }
+.tienda-foto-colores.con { background: #4361ee; }
+.tienda-foto-colores:hover { filter: brightness(1.15); }
+.tienda-foto-item.con-colores .tienda-foto-acciones { top: 20px; }
+
+/* La lista de colores para tildar, desde una foto */
+.tienda-color-tilde {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 8px 6px;
+  border: none; border-bottom: 1px solid var(--border); background: none; cursor: pointer;
+  text-align: left; font-family: inherit; color: var(--text);
+}
+.tienda-color-tilde:last-child { border-bottom: none; }
+.tienda-color-tilde:hover { background: var(--bg); }
+.tienda-color-tilde .material-icons { font-size: 20px !important; color: var(--text-muted); flex: none; }
+.tienda-color-tilde[aria-pressed="true"] .material-icons { color: #4361ee; }
+.tienda-color-tilde .original { display: block; font-size: 13px; font-weight: 600; }
+.tienda-color-tilde .datos { display: block; font-size: 11.5px; color: var(--text-muted); }
+.tienda-color-otra {
+  width: 30px; height: 30px; border-radius: 6px; object-fit: cover; flex: none;
+  border: 1px solid var(--border); opacity: .8;
+}
+
 /* Elegir una foto para una variedad: el mismo tile, pero es un botón entero */
 .tienda-foto-elegible { cursor: pointer; font-family: inherit; }
 .tienda-foto-elegible img { cursor: pointer; }

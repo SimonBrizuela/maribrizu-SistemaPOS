@@ -83,6 +83,14 @@ export function fotoDeVariedad(ajustes, clave) {
   return url || null;
 }
 
+/** Las claves de las variedades que tienen puesta esta foto, en el orden dado. */
+export function variedadesDeFoto(ajustes, url, orden = null) {
+  const buscada = String(url ?? '').trim();
+  if (!buscada) return [];
+  const claves = Array.isArray(orden) ? orden : Object.keys(mapa(ajustes));
+  return claves.filter(clave => fotoDeVariedad(ajustes, clave) === buscada);
+}
+
 /** Le pone (o le saca, con null) la foto a una variedad. */
 export function vincularFoto(ajustes, clave, url) {
   const nuevos = {};

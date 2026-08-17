@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   ponerDePortada, moverFoto, quitarFoto, desvincularFoto, vincularFoto,
-  fotoDeVariedad, limpiarAjustes, fotosHuerfanas, fotosQuitadas,
+  fotoDeVariedad, limpiarAjustes, fotosHuerfanas, fotosQuitadas, variedadesDeFoto,
 } from '../../webapp/src/tienda_galeria.js';
 
 const A = 'https://x/a.webp';
@@ -108,6 +108,15 @@ describe('la foto de una variedad', () => {
     expect(vincularFoto(con, 'rojo', null).rojo).toEqual({ publicar: true });
     expect(vincularFoto(con, 'rojo', '   ').rojo).toEqual({ publicar: true });
     expect(fotoDeVariedad(vincularFoto(con, 'rojo', null), 'rojo')).toBeNull();
+  });
+
+  it('desde la foto se ve qué colores la tienen puesta, en el orden del catálogo', () => {
+    const ajustes = { rojo: { imagen: A }, azul: { imagen: B }, verde: { imagen: A }, negro: {} };
+    expect(variedadesDeFoto(ajustes, A, ['negro', 'verde', 'rojo', 'azul'])).toEqual(['verde', 'rojo']);
+    expect(variedadesDeFoto(ajustes, B)).toEqual(['azul']);
+    expect(variedadesDeFoto(ajustes, C)).toEqual([]);
+    expect(variedadesDeFoto(ajustes, '')).toEqual([]);
+    expect(variedadesDeFoto(null, A)).toEqual([]);
   });
 
   it('sin ajuste, sin foto', () => {
