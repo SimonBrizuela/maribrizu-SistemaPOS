@@ -51,6 +51,28 @@ describe('agregar', () => {
     expect(carrito.cantidadDe('c2', 'Dorada')).toBe(3);
   });
 
+  it('el renglón lleva la foto del color elegido, o la portada si no tiene', () => {
+    const lapiz = {
+      id: 'l1', nombre: 'Lápiz', precio: 500, unidad: 'unidad', stock: 20, rubro: 'LIBRERIA',
+      imagenes: ['portada.webp', 'detalle.webp'],
+      variedades: [
+        { nombre: 'Rojo', stock: 10, precio: null, imagen: 'rojo.webp' },
+        { nombre: 'Azul', stock: 10, precio: null, imagen: null },
+      ],
+    };
+    carrito.agregar(lapiz, { variedad: 'Rojo' });
+    carrito.agregar(lapiz, { variedad: 'Azul' });
+    carrito.agregar(lapiz, { variedad: 'Rojo', esPack: false });
+    const [rojo, azul] = carrito.items();
+    expect(rojo.foto).toBe('rojo.webp');
+    expect(azul.foto).toBe('portada.webp');
+    // Sin fotos de ningún tipo, null y no undefined: el pedido lo guarda tal cual.
+    carrito.vaciar();
+    carrito.agregar({ ...lapiz, imagenes: [], variedades: [{ nombre: 'Rojo', stock: 3 }] },
+                    { variedad: 'Rojo' });
+    expect(carrito.items()[0].foto).toBeNull();
+  });
+
   it('cobra el precio de la variedad cuando lo tiene', () => {
     carrito.agregar(CARTULINA, { variedad: 'Dorada' });
     carrito.agregar(CARTULINA, { variedad: 'Celeste' });

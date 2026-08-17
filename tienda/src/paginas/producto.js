@@ -7,6 +7,7 @@ import { avisar } from '../avisos.js';
 import { montarCinta } from '../cinta.js';
 import { fijarAmbito } from '../sugerencias.js';
 import { fijarTitulo, fijarProducto } from '../seo.js';
+import { htmlGaleria, montarGaleria } from '../galeria.js';
 
 /**
  * Como se nombra el pack entero.
@@ -162,11 +163,9 @@ export async function producto({ montar, params }) {
   // un color hace que el cliente agregue el equivocado sin darse cuenta.
   let elegida = null;
 
-  const foto = p.imagenes?.[0];
-  const medios = foto
-    ? `<img src="${esc(foto)}" alt="${esc(p.nombre)}" width="800" height="800">`
-    : `<div class="card-producto__placa"><span style="font-size:6rem">${
-         esc((p.nombre || '?').charAt(0).toUpperCase())}</span></div>`;
+  // La foto grande, las miniaturas y el cambio de foto al elegir un color
+  // viven en galeria.js.
+  const medios = htmlGaleria(p);
 
   const listaVariedades = hayVariedades ? listaDeVariedades(variedades) : '';
 
@@ -189,7 +188,7 @@ export async function producto({ montar, params }) {
       </nav>
 
       <div class="ficha-producto">
-        <div class="ficha-producto__foto">${medios}</div>
+        <div class="ficha-producto__foto galeria" data-galeria>${medios}</div>
 
         <div class="ficha-producto__datos">
           <div>
@@ -300,6 +299,9 @@ export async function producto({ montar, params }) {
     ${pie(cfg)}
   `);
 
+  /* ── Galería ─────────────────────────────────────────────────────────────── */
+  const galeria = montarGaleria(document.querySelector('[data-galeria]'), p);
+
   /* ── Variedades ─────────────────────────────────────────────────────────── */
   const botonAgregar = document.querySelector('[data-agregar]');
   const cajaPrecio = document.querySelector('[data-precio]');
@@ -325,6 +327,9 @@ export async function producto({ montar, params }) {
       if (cajaElegida) {
         cajaElegida.textContent = elegida ? `· ${elegida}` : resumen;
       }
+
+      // El rojo se ve rojo: si la variedad tiene su foto, pasa a ser la grande.
+      galeria.alElegirVariedad(elegida);
 
       cajaPrecio.textContent = pesos(precioActual());
       // El contador se rehace con el stock y el precio de esta variedad: si de

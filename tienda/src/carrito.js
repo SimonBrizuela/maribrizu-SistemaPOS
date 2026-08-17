@@ -268,7 +268,11 @@ export function agregar(producto, { variedad = null, cantidad = null, esPack = f
     pack_nombre: esPack ? (producto.pack_nombre || producto.pack_tipo || null) : null,
     pack_unidad: producto.unidad === 'metro' ? 'metro' : 'unidad',
     precio_suelto: precioSuelto,
-    foto: producto.imagenes?.[0] || null,
+    // La foto del color que se lleva, si la tiene; si no, la portada. Es la
+    // que se ve en el carrito, en el checkout y en el pedido que imprime el
+    // local: con la portada sola, tres cartulinas de colores distintos son
+    // tres renglones con la misma foto.
+    foto: (variante && variante.imagen) || producto.imagenes?.[0] || null,
     rubro: producto.rubro || '',
     // Se guardan para poder mostrar el aviso del local en el checkout sin
     // volver a leer el producto: ahi es donde el cliente confirma y donde

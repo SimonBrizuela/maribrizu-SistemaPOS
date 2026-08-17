@@ -117,11 +117,14 @@ export function fijarProducto(p) {
     meta('twitter:image', foto);
   }
 
+  // Todas las fotos, la portada primera: Google toma la primera para el
+  // resultado y usa el resto en la ficha enriquecida.
+  const fotos = (p.imagenes || []).filter(Boolean);
   const datos = {
     '@context': 'https://schema.org',
     '@type': 'Product',
     name: p.nombre,
-    ...(foto ? { image: [foto] } : {}),
+    ...(fotos.length ? { image: fotos } : {}),
     ...(p.marca ? { brand: { '@type': 'Brand', name: p.marca } } : {}),
     ...(p.categoria || p.rubro ? { category: nombreBonito(p.categoria || p.rubro) } : {}),
     sku: p.id,
