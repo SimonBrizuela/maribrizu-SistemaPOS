@@ -440,11 +440,11 @@ mismo que estar en falso.
 | `tienda_destacado` | aparece en la portada |
 | `tienda_nombre` | nombre público, en vez del del POS prolijado |
 | `tienda_descripcion` | el texto abajo del precio |
-| `tienda_imagenes` | las fotos, la primera es la principal |
+| `tienda_imagenes` | la galería: la primera es la **portada** (card del listado y foto que abre la ficha), las demás salen como miniaturas debajo. Se ordenan y se elige la portada desde el editor |
 | `tienda_unidad` | `metro` o `unidad`, cuando el POS lo dedujo mal |
 | `tienda_ofrecer_pack` | si se ofrece el rollo o la caja entera |
 | `tienda_pack_nombre` | cómo se llama ese pack de cara al cliente |
-| `tienda_variedades` | por color: si se publica y con qué nombre. La clave es el nombre del catálogo normalizado, porque el visible cambia |
+| `tienda_variedades` | por color: si se publica, con qué nombre y con qué foto (`imagen`: una de la galería o una subida solo para ese color; la ficha la muestra al elegirlo y va al carrito en vez de la portada). La clave es el nombre del catálogo normalizado, porque el visible cambia |
 
 El precio y el stock **no** están en esta lista a propósito: salen del catálogo
 y solo de ahí, que es con lo que se cobra en el mostrador.
