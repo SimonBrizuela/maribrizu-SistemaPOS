@@ -16,11 +16,14 @@
  * cargado y aplicado en el momento; el sync lo reafirma en cada corrida.
  */
 import {
-  collection, doc, getDocs, getDoc, setDoc, deleteDoc, updateDoc, query, orderBy, where, writeBatch,
+  collection, doc, getDocs, getDoc, query, orderBy, where,
 } from 'firebase/firestore';
 import { getCached } from '../cache.js';
 import { alertDialog, confirmDialog, escHtml } from '../components/dialogs.js';
-import { nombreBonito, leerDocEspejoRest, consultarEspejoRest } from '../tienda_espejo.js';
+import {
+  nombreBonito, leerDocEspejoRest, consultarEspejoRest,
+  actualizarDoc, borrarDoc, escribirLote,
+} from '../tienda_espejo.js';
 // `.pc-btn` y las tarjetas de la seccion Tienda viven acá. Sin este import los
 // botones salen con el estilo crudo del navegador.
 import '../styles/tienda.css';
@@ -412,7 +415,7 @@ function abrirEditor(d = null) {
       const cambioDeAlcance = d && (d.alcance !== datos.alcance || d.objetivo !== datos.objetivo);
       if (cambioDeAlcance) await aplicarEnLaTienda({ ...d, activo: false });
 
-      await setDoc(doc(_db, 'tienda_descuentos', id), datos, { merge: true });
+      await actualizarDoc(_db, 'tienda_descuentos', id, datos, { crearSiFalta: true });
       await aplicarEnLaTienda({ ...datos, _id: id });
       cerrar();
       // La lista se actualiza con lo que se acaba de guardar, sin releer la
@@ -467,28 +470,29 @@ async function aplicarEnLaTienda(d, avance = null) {
   const TOPE = 400;
   let tocados = 0;
   for (let i = 0; i < docs.length; i += TOPE) {
-    const lote = writeBatch(_db);
-    let enLote = 0;
+    const lote = [];
     for (const x of docs.slice(i, i + TOPE)) {
       const datos = x.datos || {};
       const lista = Number(datos.precio_anterior) || Number(datos.precio) || 0;
       if (lista <= 0) continue;
       const nuevo = apagado ? lista : precioConDescuento(lista, d);
-      lote.update(doc(_db, 'tienda_productos', x.id), apagado || nuevo >= lista
-        ? { precio: lista, precio_anterior: null, descuento: null }
-        : {
-            precio: nuevo,
-            precio_anterior: lista,
-            descuento: {
-              id: d._id, nombre: d.nombre,
-              porcentaje: Math.round((1 - nuevo / lista) * 100),
+      lote.push({
+        tipo: 'actualizar', col: 'tienda_productos', id: x.id,
+        datos: apagado || nuevo >= lista
+          ? { precio: lista, precio_anterior: null, descuento: null }
+          : {
+              precio: nuevo,
+              precio_anterior: lista,
+              descuento: {
+                id: d._id, nombre: d.nombre,
+                porcentaje: Math.round((1 - nuevo / lista) * 100),
+              },
             },
-          });
-      enLote += 1;
+      });
     }
-    if (!enLote) continue;
-    await lote.commit();
-    tocados += enLote;
+    if (!lote.length) continue;
+    await escribirLote(_db, lote);
+    tocados += lote.length;
     if (typeof avance === 'function') avance(tocados, docs.length);
   }
   return tocados;
@@ -655,7 +659,7 @@ export async function renderTiendaDescuentos(container, db) {
       const btn = document.querySelector(`[data-accion="alternar"][data-id="${d._id}"]`);
       if (btn) { btn.disabled = true; btn.textContent = 'Aplicando…'; }
       try {
-        await updateDoc(doc(_db, 'tienda_descuentos', d._id), { activo });
+        await actualizarDoc(_db, 'tienda_descuentos', d._id, { activo });
         const n = await aplicarEnLaTienda({ ...d, activo }, (hechos, total) => {
           if (btn) btn.textContent = `Aplicando… ${hechos}/${total}`;
         });
@@ -680,7 +684,7 @@ export async function renderTiendaDescuentos(container, db) {
       // Primero se devuelven los precios y después se borra: al revés, queda un
       // rubro entero rebajado y sin nada que explique por qué.
       await aplicarEnLaTienda({ ...d, activo: false });
-      await deleteDoc(doc(_db, 'tienda_descuentos', d._id));
+      await borrarDoc(_db, 'tienda_descuentos', d._id);
       _descuentos = _descuentos.filter(x => x._id !== d._id);
       _publicadosPorDescuento.delete(d._id);
       pintar();

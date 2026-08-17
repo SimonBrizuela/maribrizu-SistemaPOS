@@ -9,11 +9,31 @@
  * los cambios y cómo se traducen los valores tipados de la REST. La red se
  * reemplaza por un `fetch` de mentira.
  */
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
+
+// La sesión y el SDK se reemplazan por espías: lo que se prueba es qué se
+// manda por REST y cuándo se cae al SDK, no Firebase.
+const getIdToken = vi.fn(async () => 'TOKEN');
+vi.mock('../../webapp/src/auth.js', () => ({ auth: { currentUser: { getIdToken } } }));
+
+const lote = { update: vi.fn(), set: vi.fn(), delete: vi.fn(), commit: vi.fn(async () => {}) };
+// El módulo del panel resuelve `firebase/firestore` desde webapp/node_modules,
+// no desde el de la tienda: el espía tiene que apuntar a ese archivo.
+vi.mock('../../webapp/node_modules/firebase/firestore/dist/index.mjs', () => ({
+  doc: (_db, col, id) => ({ col, id }),
+  getDoc: vi.fn(), getDocFromCache: vi.fn(), collection: vi.fn(), query: vi.fn(),
+  orderBy: vi.fn(), limit: vi.fn(), getDocs: vi.fn(),
+  writeBatch: () => lote,
+  serverTimestamp: () => ({ _methodName: 'serverTimestamp' }),
+  deleteField: () => ({ _methodName: 'deleteField' }),
+}));
+
 import {
   aplicarCambios, decodificarValor, decodificarCampos, codificarValor,
-  leerDocEspejoRest, consultarEspejoRest,
+  leerDocEspejoRest, consultarEspejoRest, armarEscrituras, escribirLote,
 } from '../../webapp/src/tienda_espejo.js';
+
+const BASE = 'projects/mari-d7c71/databases/(default)/documents';
 
 describe('aplicar los cambios sobre el producto en memoria', () => {
   it('pisa, agrega y borra (undefined = borrar el campo), sin tocar el original', () => {
@@ -126,5 +146,118 @@ describe('leer el espejo por REST', () => {
     expect(await consultarEspejoRest({ donde: { rubro: 'NADA' } })).toEqual([]);
     globalThis.fetch = vi.fn(() => RESPUESTA(403, {}));
     expect(await consultarEspejoRest({})).toBeNull();
+  });
+});
+
+describe('codificar valores anidados para escribir', () => {
+  it('listas, mapas, fechas y nulos', () => {
+    expect(codificarValor(['a', 2, null])).toEqual({ arrayValue: { values: [
+      { stringValue: 'a' }, { integerValue: '2' }, { nullValue: null }] } });
+    expect(codificarValor({ rojo: { publicar: true, nombre: null, imagen: 'r' } })).toEqual({
+      mapValue: { fields: { rojo: { mapValue: { fields: {
+        publicar: { booleanValue: true }, nombre: { nullValue: null }, imagen: { stringValue: 'r' },
+      } } } } } });
+    expect(codificarValor(new Date('2026-08-17T12:00:00Z'))).toEqual({ timestampValue: '2026-08-17T12:00:00.000Z' });
+    expect(codificarValor(NaN)).toEqual({ nullValue: null });
+    // Un `undefined` adentro de un mapa se salta, no se manda como null.
+    expect(codificarValor({ a: undefined, b: 1 })).toEqual({ mapValue: { fields: { b: { integerValue: '1' } } } });
+  });
+
+  it('un centinela del SDK no viaja por REST: avisa en vez de mandar basura', () => {
+    expect(() => codificarValor({ _methodName: 'serverTimestamp' })).toThrow(/serverTimestamp/);
+  });
+});
+
+describe('cómo se arma el commit', () => {
+  it('actualizar: máscara con todos los campos, sin valor los que se borran, y exige que exista', () => {
+    const [w] = armarEscrituras([{ tipo: 'actualizar', col: 'catalogo', id: 'p1',
+      datos: { tienda_nombre: 'X', tienda_destacado: undefined } }]);
+    expect(w).toEqual({
+      update: { name: `${BASE}/catalogo/p1`, fields: { tienda_nombre: { stringValue: 'X' } } },
+      updateMask: { fieldPaths: ['tienda_nombre', 'tienda_destacado'] },
+      currentDocument: { exists: true },
+    });
+  });
+
+  it('actualizar con crearSiFalta no lleva la precondición (como setDoc con merge)', () => {
+    const [w] = armarEscrituras([{ tipo: 'actualizar', col: 'tienda_descuentos', id: 'd1',
+      datos: { activo: false }, crearSiFalta: true }]);
+    expect(w.currentDocument).toBeUndefined();
+    expect(w.updateMask).toEqual({ fieldPaths: ['activo'] });
+  });
+
+  it('reemplazar: sin máscara (pisa el documento) y la marca de tiempo va como transformación', () => {
+    const [w] = armarEscrituras([{ tipo: 'reemplazar', col: 'tienda_productos', id: 'p1',
+      datos: { nombre: 'A', actualizado: { _methodName: 'serverTimestamp' } }, marcaTiempo: 'actualizado' }]);
+    expect(w).toEqual({
+      update: { name: `${BASE}/tienda_productos/p1`, fields: { nombre: { stringValue: 'A' } } },
+      updateTransforms: [{ fieldPath: 'actualizado', setToServerValue: 'REQUEST_TIME' }],
+    });
+  });
+
+  it('borrar', () => {
+    expect(armarEscrituras([{ tipo: 'borrar', col: 'tienda_fotos_pedidas', id: 'x' }]))
+      .toEqual([{ delete: `${BASE}/tienda_fotos_pedidas/x` }]);
+  });
+
+  it('un campo con caracteres raros va entre acentos graves en la máscara', () => {
+    const [w] = armarEscrituras([{ tipo: 'actualizar', col: 'c', id: 'i', datos: { 'con espacio': 1 } }]);
+    expect(w.updateMask.fieldPaths).toEqual(['`con espacio`']);
+  });
+});
+
+describe('escribir: REST primero, SDK si la REST no está', () => {
+  const RESPUESTA = (status, cuerpo = {}) => Promise.resolve({
+    ok: status >= 200 && status < 300, status, json: () => Promise.resolve(cuerpo),
+  });
+  const original = globalThis.fetch;
+  beforeEach(() => {
+    lote.commit.mockClear(); lote.update.mockClear(); lote.set.mockClear(); lote.delete.mockClear();
+  });
+  afterEach(() => { globalThis.fetch = original; });
+
+  it('con la REST andando, manda el commit con el token y no toca el SDK', async () => {
+    let pedido = null;
+    globalThis.fetch = vi.fn((url, opciones) => { pedido = { url: String(url), opciones }; return RESPUESTA(200); });
+    await escribirLote({}, [{ tipo: 'borrar', col: 'tienda_productos', id: 'p1' }]);
+    expect(pedido.url).toContain('/documents:commit');
+    expect(pedido.opciones.headers.Authorization).toBe('Bearer TOKEN');
+    expect(JSON.parse(pedido.opciones.body).writes).toHaveLength(1);
+    expect(lote.commit).not.toHaveBeenCalled();
+  });
+
+  it('si el servidor rechaza (permiso, precondición), tira con el mensaje y no reintenta por el SDK', async () => {
+    globalThis.fetch = vi.fn(() => RESPUESTA(403, { error: { message: 'Missing or insufficient permissions.' } }));
+    await expect(escribirLote({}, [{ tipo: 'borrar', col: 'c', id: 'i' }]))
+      .rejects.toThrow('Missing or insufficient permissions.');
+    expect(lote.commit).not.toHaveBeenCalled();
+  });
+
+  it('si la REST no responde o el servidor está caído, cae al SDK con las mismas escrituras', async () => {
+    globalThis.fetch = vi.fn(() => Promise.reject(new Error('sin red')));
+    await escribirLote({}, [
+      { tipo: 'actualizar', col: 'catalogo', id: 'p1', datos: { tienda_nombre: 'X', tienda_destacado: undefined } },
+      { tipo: 'reemplazar', col: 'tienda_productos', id: 'p1', datos: { nombre: 'A' }, marcaTiempo: 'actualizado' },
+      { tipo: 'borrar', col: 'tienda_fotos_pedidas', id: 'p1' },
+    ]);
+    expect(lote.update).toHaveBeenCalledWith({ col: 'catalogo', id: 'p1' },
+      { tienda_nombre: 'X', tienda_destacado: { _methodName: 'deleteField' } });
+    expect(lote.set).toHaveBeenCalledWith({ col: 'tienda_productos', id: 'p1' },
+      { nombre: 'A', actualizado: { _methodName: 'serverTimestamp' } });
+    expect(lote.delete).toHaveBeenCalledWith({ col: 'tienda_fotos_pedidas', id: 'p1' });
+    expect(lote.commit).toHaveBeenCalledTimes(1);
+
+    lote.commit.mockClear();
+    globalThis.fetch = vi.fn(() => RESPUESTA(503));
+    await escribirLote({}, [{ tipo: 'borrar', col: 'c', id: 'i' }]);
+    expect(lote.commit).toHaveBeenCalledTimes(1);
+  });
+
+  it('sin sesión (sin token) va directo por el SDK', async () => {
+    getIdToken.mockResolvedValueOnce(null);
+    globalThis.fetch = vi.fn();
+    await escribirLote({}, [{ tipo: 'borrar', col: 'c', id: 'i' }]);
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+    expect(lote.commit).toHaveBeenCalledTimes(1);
   });
 });

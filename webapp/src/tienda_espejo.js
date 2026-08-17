@@ -27,7 +27,7 @@
  *     viven en el mismo documento del catálogo. El sync los respeta.
  */
 import {
-  doc, getDoc, getDocFromCache, setDoc, updateDoc, deleteDoc, collection, writeBatch,
+  doc, getDoc, getDocFromCache, collection, writeBatch,
   query, orderBy, limit, getDocs, serverTimestamp, deleteField,
 } from 'firebase/firestore';
 
@@ -366,12 +366,20 @@ export function estaPublicable(datos, rubrosHabilitados = null,
  *   · El espejo (`tienda_productos`) es de lectura pública: se lee por la API
  *     REST, que no pasa por la cola del SDK. Si la REST falla se cae al SDK,
  *     que anda, solo que puede tardar.
- * Las escrituras siguen por el SDK: van por otro canal y no sufren la cola.
+ *   · Las escrituras también van por REST, con el token de la sesión (las
+ *     reglas las evalúan igual que al SDK). El canal del SDK se cae y se
+ *     reconecta mientras baja los listeners grandes, y una escritura que
+ *     espera ese canal se queda en "Guardando…" un rato largo. Si la REST no
+ *     responde o el servidor está caído, se cae al SDK; si el servidor
+ *     RECHAZA (permiso, precondición), se avisa y no se reintenta por el SDK,
+ *     que iba a fallar igual.
  */
 
 const PROYECTO = 'mari-d7c71';
-const REST = `https://firestore.googleapis.com/v1/projects/${PROYECTO}/databases/(default)/documents`;
+const BASE = `projects/${PROYECTO}/databases/(default)/documents`;
+const REST = `https://firestore.googleapis.com/v1/${BASE}`;
 const ESPERA_REST_MS = 8000;
+const ESPERA_ESCRITURA_MS = 15000;
 
 /** Aplica `cambios` (undefined = borrar) sobre una copia de `datos`. */
 export function aplicarCambios(datos, cambios) {
@@ -408,24 +416,21 @@ export async function guardarYEspejar(db, docId, cambios, rubrosHabilitados = nu
 
   // Se limpia en vez de guardar `undefined`: un campo borrado vuelve al
   // comportamiento automático, y eso es distinto de tenerlo en falso.
-  const aGuardar = {};
-  for (const [clave, valor] of Object.entries(cambios)) {
-    aGuardar[clave] = valor === undefined ? deleteField() : valor;
-  }
-  if (Object.keys(aGuardar).length) await updateDoc(referencia, aGuardar);
+  if (Object.keys(cambios || {}).length) await actualizarDoc(db, 'catalogo', docId, cambios);
   const t1 = performance.now();
 
   let actuales;
   if (datos && typeof datos === 'object') {
     actuales = aplicarCambios(datos, cambios);
   } else {
-    // El cache local ya tiene la escritura de recién (el SDK la aplica antes de
-    // mandarla), así que esto no espera nada.
+    // Del cache local (lo tiene el listener del catálogo) y solo de última del
+    // servidor. La escritura fue por REST, así que el cache todavía no la
+    // tiene: los cambios se aplican encima igual que arriba.
     let snap = null;
     try { snap = await getDocFromCache(referencia); } catch (_) { /* no estaba */ }
     if (!snap) snap = await getDoc(referencia);
     if (!snap.exists()) return { publicado: false, motivo: 'el producto ya no existe' };
-    actuales = snap.data();
+    actuales = aplicarCambios(snap.data(), cambios);
   }
 
   const resultado = await espejar(db, docId, actuales, rubrosHabilitados, subrubrosExcluidos);
@@ -438,10 +443,9 @@ export async function guardarYEspejar(db, docId, cambios, rubrosHabilitados = nu
 export async function espejar(db, docId, datos, rubrosHabilitados = null,
                               subrubrosExcluidos = null) {
   const motivo = motivoDeNoPublicar(datos, rubrosHabilitados, subrubrosExcluidos);
-  const referencia = doc(db, 'tienda_productos', docId);
 
   if (motivo) {
-    await deleteDoc(referencia).catch(() => {});
+    await borrarDoc(db, 'tienda_productos', docId).catch(() => {});
     return { publicado: false, motivo };
   }
 
@@ -460,7 +464,7 @@ export async function espejar(db, docId, datos, rubrosHabilitados = null,
     documento.orden_rubro = 999999;
   }
 
-  await setDoc(referencia, documento);
+  await reemplazarDoc(db, 'tienda_productos', docId, documento, { marcaTiempo: 'actualizado' });
   return { publicado: true, motivo: null };
 }
 
@@ -561,9 +565,9 @@ export async function consultarEspejoRest({
   }
 }
 
-function conEspera(url, opciones = {}) {
+function conEspera(url, opciones = {}, espera = ESPERA_REST_MS) {
   const control = new AbortController();
-  const reloj = setTimeout(() => control.abort(), ESPERA_REST_MS);
+  const reloj = setTimeout(() => control.abort(), espera);
   return fetch(url, { ...opciones, signal: control.signal }).finally(() => clearTimeout(reloj));
 }
 
@@ -589,12 +593,32 @@ export function decodificarValor(v) {
   return null;
 }
 
-/** El camino inverso, para los filtros: solo lo que se compara por igualdad. */
+/** El camino inverso: un valor de JS en la forma tipada de la REST. */
 export function codificarValor(valor) {
   if (valor === null || valor === undefined) return { nullValue: null };
   if (typeof valor === 'boolean') return { booleanValue: valor };
   if (typeof valor === 'number') {
+    if (!Number.isFinite(valor)) return { nullValue: null };
     return Number.isInteger(valor) ? { integerValue: String(valor) } : { doubleValue: valor };
+  }
+  if (typeof valor === 'string') return { stringValue: valor };
+  if (valor instanceof Date) return { timestampValue: valor.toISOString() };
+  // Un centinela del SDK (serverTimestamp(), deleteField()) no se puede mandar
+  // por REST tal cual: quien escribe tiene que usar `marcaTiempo` / undefined.
+  if (typeof valor?._methodName === 'string') {
+    throw new Error(`No se puede mandar ${valor._methodName}() por REST`);
+  }
+  // Timestamp del SDK de Firestore.
+  if (typeof valor?.toDate === 'function') return { timestampValue: valor.toDate().toISOString() };
+  if (Array.isArray(valor)) {
+    return { arrayValue: { values: valor.filter(v => v !== undefined).map(codificarValor) } };
+  }
+  if (typeof valor === 'object') {
+    const fields = {};
+    for (const [k, v] of Object.entries(valor)) {
+      if (v !== undefined) fields[k] = codificarValor(v);
+    }
+    return { mapValue: { fields } };
   }
   return { stringValue: String(valor) };
 }
@@ -621,31 +645,31 @@ export async function espejarLote(db, productos, rubrosHabilitados, alProgreso =
   let orden = await proximoOrden(db);
   let publicados = 0;
   let sacados = 0;
-  let lote = writeBatch(db);
-  let pendientes = 0;
+  let lote = [];
 
   for (const [i, { id, datos }] of productos.entries()) {
-    const referencia = doc(db, 'tienda_productos', id);
-
     if (motivoDeNoPublicar(datos, rubrosHabilitados, subrubrosExcluidos)) {
-      lote.delete(referencia);
+      lote.push({ tipo: 'borrar', col: 'tienda_productos', id });
       sacados++;
     } else {
       // `orden` real lo recalcula el sync sobre el catálogo completo; acá se
       // numera correlativo al final para no dejar huecos en el paginado.
-      lote.set(referencia, { ...documentoEspejo(datos), orden: orden++, orden_rubro: 999999 });
+      lote.push({
+        tipo: 'reemplazar', col: 'tienda_productos', id,
+        datos: { ...documentoEspejo(datos), orden: orden++, orden_rubro: 999999 },
+        marcaTiempo: 'actualizado',
+      });
       publicados++;
     }
 
-    if (++pendientes >= 450) {
-      await lote.commit();
-      lote = writeBatch(db);
-      pendientes = 0;
+    if (lote.length >= 450) {
+      await escribirLote(db, lote);
+      lote = [];
       alProgreso?.(i + 1, productos.length);
     }
   }
 
-  if (pendientes) await lote.commit();
+  if (lote.length) await escribirLote(db, lote);
   alProgreso?.(productos.length, productos.length);
   return { publicados, sacados };
 }
@@ -695,8 +719,145 @@ export async function recomputarRubros(db, productos, rubrosHabilitados,
     }))
     .sort((a, b) => b.cantidad - a.cantidad);
 
-  await setDoc(doc(db, 'tienda_config', 'rubros'), { lista, actualizado: serverTimestamp() });
+  await reemplazarDoc(db, 'tienda_config', 'rubros', { lista }, { marcaTiempo: 'actualizado' });
   return lista;
+}
+
+/* ── Escrituras ──────────────────────────────────────────────────────────
+ * Cuatro operaciones, todas primero por REST y con vuelta al SDK:
+ *   actualizarDoc   campos sueltos (undefined = borrar el campo)
+ *   reemplazarDoc   el documento entero, con marca de tiempo del servidor
+ *   borrarDoc
+ *   escribirLote    varias de las anteriores en un solo commit (≤ 500)
+ */
+
+/**
+ * @param {object} cambios  {campo: valor}; `undefined` borra el campo
+ * @param {{crearSiFalta?: boolean}} [opciones]  por defecto falla si el
+ *        documento no existe (como updateDoc); con crearSiFalta lo crea (como
+ *        setDoc con merge)
+ */
+export async function actualizarDoc(db, col, id, cambios, { crearSiFalta = false } = {}) {
+  await escribirLote(db, [{ tipo: 'actualizar', col, id, datos: cambios, crearSiFalta }]);
+}
+
+/** @param {{marcaTiempo?: string|null}} [opciones]  campo que lleva la hora del servidor */
+export async function reemplazarDoc(db, col, id, datos, { marcaTiempo = null } = {}) {
+  await escribirLote(db, [{ tipo: 'reemplazar', col, id, datos, marcaTiempo }]);
+}
+
+export async function borrarDoc(db, col, id) {
+  await escribirLote(db, [{ tipo: 'borrar', col, id }]);
+}
+
+/**
+ * @param {Array<{tipo: 'actualizar'|'reemplazar'|'borrar', col: string, id: string,
+ *                datos?: object, marcaTiempo?: string|null, crearSiFalta?: boolean}>} escrituras
+ */
+export async function escribirLote(db, escrituras) {
+  if (!escrituras?.length) return;
+  const hecho = await commitRest(armarEscrituras(escrituras));
+  if (hecho) return;
+  await escribirLoteSdk(db, escrituras);
+}
+
+/** Las escrituras en la forma que espera `documents:commit`. Puro, para probar. */
+export function armarEscrituras(escrituras) {
+  return escrituras.map(e => {
+    const name = `${BASE}/${e.col}/${e.id}`;
+    if (e.tipo === 'borrar') return { delete: name };
+
+    if (e.tipo === 'actualizar') {
+      const fields = {};
+      const fieldPaths = [];
+      for (const [clave, valor] of Object.entries(e.datos || {})) {
+        fieldPaths.push(rutaDeCampo(clave));
+        // En la máscara pero sin valor: eso es borrar el campo.
+        if (valor !== undefined) fields[clave] = codificarValor(valor);
+      }
+      const w = { update: { name, fields }, updateMask: { fieldPaths } };
+      if (!e.crearSiFalta) w.currentDocument = { exists: true };
+      return w;
+    }
+
+    // reemplazar
+    const { [e.marcaTiempo]: _ignorada, ...resto } = e.datos || {};
+    const fields = {};
+    for (const [clave, valor] of Object.entries(e.marcaTiempo ? resto : (e.datos || {}))) {
+      if (valor !== undefined) fields[clave] = codificarValor(valor);
+    }
+    const w = { update: { name, fields } };
+    if (e.marcaTiempo) {
+      w.updateTransforms = [{ fieldPath: e.marcaTiempo, setToServerValue: 'REQUEST_TIME' }];
+    }
+    return w;
+  });
+}
+
+// Los nombres de campo con caracteres raros van entre acentos graves en la
+// máscara. Los nuestros son `tienda_*`, pero mejor no depender de eso.
+function rutaDeCampo(clave) {
+  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(clave) ? clave : '`' + String(clave).replace(/`/g, '\\`') + '`';
+}
+
+/**
+ * Manda el commit. `true` si se hizo; `false` si hay que caer al SDK (sin
+ * sesión, sin red, timeout, servidor caído). Si el servidor rechazó la
+ * escritura, tira con el mensaje: eso el SDK tampoco lo iba a poder hacer.
+ */
+async function commitRest(writes) {
+  const token = await tokenDeSesion();
+  if (!token) return false;
+
+  let r;
+  try {
+    r = await conEspera(`${REST}:commit`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ writes }),
+    }, ESPERA_ESCRITURA_MS);
+  } catch (err) {
+    console.warn('[tienda] escritura por REST no respondió, se usa el SDK:', err?.message || err);
+    return false;
+  }
+  if (r.ok) return true;
+  if (r.status >= 500) {
+    console.warn(`[tienda] escritura por REST devolvió ${r.status}, se usa el SDK`);
+    return false;
+  }
+  const cuerpo = await r.json().catch(() => ({}));
+  throw new Error(cuerpo?.error?.message || `Firestore respondió ${r.status}`);
+}
+
+async function tokenDeSesion() {
+  try {
+    const { auth } = await import('./auth.js');
+    return await auth?.currentUser?.getIdToken() || null;
+  } catch (_) {
+    return null;
+  }
+}
+
+/** El mismo lote por el SDK, para cuando la REST no está. */
+async function escribirLoteSdk(db, escrituras) {
+  const lote = writeBatch(db);
+  for (const e of escrituras) {
+    const referencia = doc(db, e.col, e.id);
+    if (e.tipo === 'borrar') { lote.delete(referencia); continue; }
+    if (e.tipo === 'actualizar') {
+      const datos = {};
+      for (const [clave, valor] of Object.entries(e.datos || {})) {
+        datos[clave] = valor === undefined ? deleteField() : valor;
+      }
+      if (e.crearSiFalta) lote.set(referencia, datos, { merge: true });
+      else lote.update(referencia, datos);
+      continue;
+    }
+    const datos = { ...(e.datos || {}) };
+    if (e.marcaTiempo) datos[e.marcaTiempo] = serverTimestamp();
+    lote.set(referencia, datos);
+  }
+  await lote.commit();
 }
 
 async function proximoOrden(db) {

@@ -17,12 +17,12 @@
  * Los valores por defecto son los mismos que tiene la tienda en
  * `tienda/src/datos.js`: si el documento no existe, la tienda igual funciona.
  */
-import { collection, doc, getDocs, orderBy, query, setDoc } from 'firebase/firestore';
+import { collection, doc, getDocs, orderBy, query } from 'firebase/firestore';
 import { getCached, invalidateCache } from '../cache.js';
 import { leerDocRapido } from '../config.js';
 import { alertDialog, confirmDialog, escHtml } from '../components/dialogs.js';
 import { espejarLote, recomputarRubros, motivoDeNoPublicar, nombreBonito,
-         claveDeRubro } from '../tienda_espejo.js';
+         claveDeRubro, actualizarDoc, reemplazarDoc } from '../tienda_espejo.js';
 import { textoDeHorarios } from '../../../tienda/src/horarios.js';
 import '../styles/tienda.css';
 
@@ -805,10 +805,12 @@ async function guardarTodo(container) {
       barrio: _config.barrio,
     };
 
-    await setDoc(doc(_db, 'tienda_config', 'settings'), ajustes, { merge: true });
+    // Por REST (con vuelta al SDK): el canal del SDK se cae mientras baja los
+    // listeners grandes y "Guardar" se quedaba colgado esperándolo.
+    await actualizarDoc(_db, 'tienda_config', 'settings', ajustes, { crearSiFalta: true });
 
     if (cambioPublicacion) {
-      await setDoc(doc(_db, 'tienda_config', 'publicacion'), {
+      await reemplazarDoc(_db, 'tienda_config', 'publicacion', {
         rubros: elegidos,
         subrubros_excluidos: excluidos,
       });

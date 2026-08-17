@@ -18,12 +18,13 @@
  * producto de esta lista. Si algo falla en el medio, el producto sigue
  * pendiente: es preferible que aparezca de más y no que se pierda.
  */
-import { collection, deleteDoc, doc, getDocs, orderBy, query } from 'firebase/firestore';
+import { collection, doc, getDocs, orderBy, query } from 'firebase/firestore';
 import { getCached } from '../cache.js';
 import { leerDocRapido } from '../config.js';
 import { confirmDialog, escHtml, verFotoGrande } from '../components/dialogs.js';
 import {
   guardarYEspejar, imagenesDe, motivoDeNoPublicar, nombreBonito, subirFoto, borrarFoto,
+  borrarDoc,
 } from '../tienda_espejo.js';
 import {
   ponerDePortada, moverFoto, desvincularFoto, limpiarAjustes, fotosQuitadas,
@@ -497,7 +498,7 @@ function abrirPanelFotos(id, f, archivosIniciales) {
       //    recién ahora: si el guardado hubiera fallado, tenía que seguir acá.
       //    Sin fotos (las sacó todas) sigue pendiente, con lo que quedó.
       if (imagenes.length) {
-        await deleteDoc(doc(_db, 'tienda_fotos_pedidas', id)).catch(() => {});
+        await borrarDoc(_db, 'tienda_fotos_pedidas', id).catch(() => {});
         _lista = _lista.filter(x => x.id !== id);
         _esperando = _esperando.filter(x => x.id !== id);
       }
@@ -583,7 +584,7 @@ async function sacar(id) {
   if (!ok) return;
 
   try {
-    await deleteDoc(doc(_db, 'tienda_fotos_pedidas', id));
+    await borrarDoc(_db, 'tienda_fotos_pedidas', id);
     _lista = _lista.filter(x => x.id !== id);
     pintarLista();
   } catch (err) {

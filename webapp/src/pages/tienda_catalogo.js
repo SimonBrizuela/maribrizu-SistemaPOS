@@ -17,13 +17,13 @@
  * vez que se abre esta pantalla. Como cada cambio se espeja al instante, lo que
  * se ve acá es lo que hay publicado.
  */
-import { collection, doc, setDoc, getDocs, orderBy, query } from 'firebase/firestore';
+import { collection, doc, getDocs, orderBy, query } from 'firebase/firestore';
 import { getCached } from '../cache.js';
 import { leerDocRapido } from '../config.js';
 import { alertDialog, escHtml, verFotoGrande } from '../components/dialogs.js';
 import {
   guardarYEspejar, motivoDeNoPublicar, medidasDe, nombreBonito, normalizar,
-  subirFoto, borrarFoto,
+  subirFoto, borrarFoto, actualizarDoc,
 } from '../tienda_espejo.js';
 import {
   ponerDePortada, moverFoto, quitarFoto, desvincularFoto, vincularFoto,
@@ -371,7 +371,11 @@ async function abrirAvisos(db, rubros) {
       if (texto) nuevos[inp.dataset.avisoRubro] = texto;
     });
     try {
-      await setDoc(ref, { rubros: nuevos, subrubros: guardados.subrubros || {} }, { merge: true });
+      // Los dos mapas se reemplazan enteros: así un aviso que se borró del
+      // campo se va de verdad (con merge profundo quedaba la clave vieja).
+      await actualizarDoc(db, 'tienda_config', 'avisos',
+                          { rubros: nuevos, subrubros: guardados.subrubros || {} },
+                          { crearSiFalta: true });
       cerrar();
       avisar(`${Object.keys(nuevos).length} rubro(s) con aviso`);
     } catch (e) {
