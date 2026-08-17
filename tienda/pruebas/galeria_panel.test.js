@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   ponerDePortada, moverFoto, quitarFoto, desvincularFoto, vincularFoto,
-  fotoDeVariedad, limpiarAjustes, fotosHuerfanas,
+  fotoDeVariedad, limpiarAjustes, fotosHuerfanas, fotosQuitadas,
 } from '../../webapp/src/tienda_galeria.js';
 
 const A = 'https://x/a.webp';
@@ -154,6 +154,16 @@ describe('lo que se guarda en tienda_variedades', () => {
     expect(d.imagenes).toEqual([A, B]);
     expect(d.variedades.map(v => [v.nombre, v.imagen]))
       .toEqual([['Rojo', ROJO], ['Azul', null]]);
+  });
+});
+
+describe('qué se borra al guardar la galería desde Fotos Pedidas', () => {
+  it('lo que estaba y ya no está; lo nuevo sin subir no cuenta', () => {
+    // El panel mezcla urls guardadas con claves locales de lo recién elegido.
+    expect(fotosQuitadas([A, B, C], ['nueva:0', A, C])).toEqual([B]);
+    expect(fotosQuitadas([A, B], [B, A])).toEqual([]);
+    expect(fotosQuitadas([], ['nueva:0'])).toEqual([]);
+    expect(fotosQuitadas([A, A, B], [])).toEqual([A, B]);
   });
 });
 

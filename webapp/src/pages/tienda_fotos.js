@@ -10,16 +10,24 @@
  * del espejo `tienda_productos`, así que alcanza para ir a buscar la foto que
  * tiene hoy y para guardarle la nueva.
  *
- * Subir una foto hace tres cosas en orden: la sube a Storage ya achicada, la
- * guarda en el producto (que reescribe el espejo público en el momento) y recién
- * ahí saca al producto de esta lista. Si algo falla en el medio, el producto
- * sigue pendiente: es preferible que aparezca de más y no que se pierda.
+ * "Cargar" o "Cambiar" abren el panel de fotos del producto: las que ya tiene
+ * y las que se acaban de elegir, juntas, para decidir cuál es la portada, en
+ * qué orden van, cuáles se sacan y agregar más. Nada se sube ni se toca hasta
+ * "Guardar": recién ahí se suben las nuevas ya achicadas, se guarda la lista en
+ * el producto (que reescribe el espejo público en el momento) y se saca al
+ * producto de esta lista. Si algo falla en el medio, el producto sigue
+ * pendiente: es preferible que aparezca de más y no que se pierda.
  */
 import { collection, deleteDoc, doc, getDocs, orderBy, query } from 'firebase/firestore';
 import { getCached } from '../cache.js';
 import { leerDocRapido } from '../config.js';
 import { confirmDialog, escHtml, verFotoGrande } from '../components/dialogs.js';
-import { guardarYEspejar, imagenesDe, motivoDeNoPublicar, nombreBonito, subirFoto } from '../tienda_espejo.js';
+import {
+  guardarYEspejar, imagenesDe, motivoDeNoPublicar, nombreBonito, subirFoto, borrarFoto,
+} from '../tienda_espejo.js';
+import {
+  ponerDePortada, moverFoto, desvincularFoto, limpiarAjustes, fotosQuitadas,
+} from '../tienda_galeria.js';
 import '../styles/tienda.css';
 
 let _db = null;
@@ -28,7 +36,8 @@ let _esperando = [];
 let _catalogo = new Map();      // doc_id -> datos del catálogo
 let _habilitados = [];
 let _subExcluidos = {};
-let _subiendo = false;          // una foto por vez: el input es uno solo
+let _subiendo = false;          // un guardado por vez: el input es uno solo
+let _panel = null;              // el panel de fotos abierto, si hay uno
 
 export async function renderTiendaFotos(container, db) {
   _db = db;
@@ -133,7 +142,7 @@ async function cargar() {
     // entre doscientos renglones automáticos.
     _esperando = automaticos;
 
-    pintar();
+    pintarLista();
   } catch (err) {
     console.error('[fotos] no se pudo leer la lista:', err);
     cuerpo.innerHTML = `
@@ -158,7 +167,7 @@ async function traerPedidas() {
 
 /* ── Pintado ──────────────────────────────────────────────────────────────── */
 
-function pintar() {
+function pintarLista() {
   const cuerpo = document.getElementById('fotosCuerpo');
   if (!cuerpo) return;
 
@@ -273,6 +282,19 @@ function estado(id, texto, error = false) {
 
 function pedirArchivo(id) {
   if (_subiendo) return;
+  const f = _lista.find(x => x.id === id) || _esperando.find(x => x.id === id);
+  if (!f) return;
+
+  // Con fotos ya cargadas, "Cambiar" abre el panel de una: lo primero que hace
+  // falta ver es lo que hay, para decidir si se reemplaza, se suma o se
+  // reordena. Sin fotos, "Cargar" va derecho al selector de archivos y el
+  // panel se abre con lo elegido: pedir un click más a los doscientos que
+  // esperan foto no tiene sentido.
+  if (f.fotos.length) { abrirPanelFotos(id, f, []); return; }
+  elegirArchivos(id);
+}
+
+function elegirArchivos(id) {
   const input = document.getElementById('fotosArchivo');
   if (!input) return;
   // El id del producto viaja en el propio input: el `change` llega después, y
@@ -285,150 +307,266 @@ function pedirArchivo(id) {
 async function alElegirArchivo(ev) {
   const input = ev.target;
   const id = input.dataset.para;
-  const archivos = [...(input.files || [])];
+  const archivos = [...(input.files || [])].filter(a => a.type?.startsWith('image/'));
   input.value = '';
   if (!id || !archivos.length || _subiendo) return;
+
+  // Si el panel de este producto ya está abierto, lo elegido se suma ahí.
+  if (_panel && _panel.id === id) { _panel.agregar(archivos); return; }
 
   // Puede venir de cualquiera de las dos tablas.
   const f = _lista.find(x => x.id === id) || _esperando.find(x => x.id === id);
   if (!f) return;
 
-  abrirPreviewCarga(id, f, archivos);
+  abrirPanelFotos(id, f, archivos);
 }
 
-/* ── Preview antes de guardar ─────────────────────────────────────────────── */
-// Se sube directo a Storage sin mostrar nada: si la foto sale movida o es la
-// que no era, ya quedó pegada en el producto y hay que entrar a corregirla a
-// mano. Antes de subir se ve grande cómo va a quedar, con la salida de
-// "elegí otra" a mano por si la primera no convenció.
+/* ── El panel de fotos del producto ──────────────────────────────────────── */
+// Antes se subía directo a Storage sin mostrar nada: si la foto salía movida o
+// era la que no era, ya quedaba pegada en el producto. Ahora se ve todo junto
+// —lo que tiene y lo que se acaba de elegir— y no se sube nada hasta Guardar.
+//
+// Cada foto es una clave en una lista: la url si ya está guardada, o
+// `nueva:N` si es un archivo recién elegido. Así la portada y el orden se
+// resuelven con las mismas funciones que usa el editor del catálogo
+// (tienda_galeria.js) y lo que se prueba es lo mismo.
 
-function cerrarPreviewCarga() {
-  const previo = document.querySelector('.tienda-overlay[data-preview-carga]');
-  if (!previo) return;
-  (previo._urls || []).forEach(u => URL.revokeObjectURL(u));
-  if (previo._alTeclado) document.removeEventListener('keydown', previo._alTeclado);
-  previo.remove();
+function cerrarPanelFotos() {
+  const previo = document.querySelector('.tienda-overlay[data-panel-fotos]');
+  if (previo) {
+    (previo._urls || []).forEach(u => URL.revokeObjectURL(u));
+    if (previo._alTeclado) document.removeEventListener('keydown', previo._alTeclado);
+    previo.remove();
+  }
+  _panel = null;
 }
 
-function abrirPreviewCarga(id, f, archivos) {
-  cerrarPreviewCarga();
+function abrirPanelFotos(id, f, archivosIniciales) {
+  cerrarPanelFotos();
 
-  const urls = archivos.map(a => URL.createObjectURL(a));
+  const nuevas = new Map();          // 'nueva:N' -> { archivo, url (blob) }
+  let contador = 0;
+  let claves = f.fotos.slice();      // el orden actual; la primera es la portada
+  let guardando = false;
+
   const overlay = document.createElement('div');
   overlay.className = 'tienda-overlay';
-  overlay.setAttribute('data-preview-carga', '');
-  overlay._urls = urls;
+  overlay.setAttribute('data-panel-fotos', '');
+  overlay._urls = [];
   overlay.innerHTML = `
-    <div class="tienda-editor" style="max-width:520px">
+    <div class="tienda-editor" style="max-width:640px" role="dialog" aria-modal="true">
       <header>
         <div style="min-width:0;flex:1">
           <h3>${escHtml(f.nombre)}</h3>
-          <p>Así se va a ver. Confirmá o elegí otra.</p>
+          <p>La portada es la que se ve en el listado y abre la ficha; las demás
+             van como miniaturas debajo.</p>
         </div>
         <button class="pc-btn" data-accion="cancelar" style="padding:6px 10px">
           <span class="material-icons">close</span>
         </button>
       </header>
       <div class="cuerpo">
-        <div class="tienda-fotos">
-          ${urls.map((u, i) => `
-            <div class="tienda-foto-item">
-              <img src="${u}" alt="" data-accion="ver" data-i="${i}">
-              ${i === 0 && urls.length > 1 ? '<span class="principal">PRINCIPAL</span>' : ''}
-            </div>`).join('')}
-        </div>
+        <div class="tienda-fotos" data-fotos></div>
+        <div class="tienda-pista" data-pista style="margin-top:10px"></div>
       </div>
       <footer>
-        <button class="pc-btn" data-accion="cambiar" style="padding:9px 16px">
-          <span class="material-icons" style="font-size:17px">sync</span> Elegir otra
-        </button>
-        <button class="pc-btn" data-accion="cancelar" style="padding:9px 16px;margin-left:auto">
-          Cancelar
-        </button>
-        <button class="pc-btn" data-accion="confirmar"
+        <span class="tienda-pista" data-estado style="margin:0 auto 0 0"></span>
+        <button class="pc-btn" data-accion="cancelar" style="padding:9px 16px">Cancelar</button>
+        <button class="pc-btn" data-accion="guardar"
                 style="padding:9px 20px;background:#4361ee;color:#fff;border-color:#4361ee">
-          Usar ${archivos.length > 1 ? 'estas fotos' : 'esta foto'}
+          Guardar
         </button>
       </footer>
     </div>`;
 
+  const $ = sel => overlay.querySelector(sel);
+  const decir = (texto, error = false) => {
+    const nodo = $('[data-estado]');
+    nodo.textContent = texto || '';
+    nodo.style.color = error ? 'var(--tint-red-fg)' : 'var(--text-muted)';
+  };
+  const srcDe = clave => nuevas.has(clave) ? nuevas.get(clave).url : clave;
+
+  function agregar(archivos) {
+    // Lo nuevo va ADELANTE: quien sube una foto la sube para que se vea, y
+    // la primera nueva pasa a ser la portada. Después se puede acomodar.
+    const frescas = [];
+    for (const archivo of archivos) {
+      const clave = `nueva:${contador++}`;
+      const url = URL.createObjectURL(archivo);
+      overlay._urls.push(url);
+      nuevas.set(clave, { archivo, url });
+      frescas.push(clave);
+    }
+    claves = [...frescas, ...claves];
+    pintar();
+  }
+
+  function pintar() {
+    const ultima = claves.length - 1;
+    const cuantasNuevas = claves.filter(c => nuevas.has(c)).length;
+    const quitadas = fotosQuitadas(f.fotos, claves).length;
+
+    $('[data-fotos]').innerHTML = claves.map((clave, i) => `
+      <div class="tienda-foto-item ${i === 0 ? 'es-portada' : ''} ${nuevas.has(clave) ? 'es-nueva' : ''}">
+        <img src="${escHtml(srcDe(clave))}" alt="" data-accion="ver" data-i="${i}">
+        ${nuevas.has(clave) ? '<span class="tienda-foto-nueva">NUEVA</span>' : ''}
+        ${i === 0 ? '<span class="principal">PORTADA</span>' : ''}
+        <div class="tienda-foto-acciones">
+          ${i > 0 ? `<button data-accion="portada" data-i="${i}" title="Usar de portada">
+                       <span class="material-icons">star</span></button>` : ''}
+          ${i > 0 ? `<button data-accion="izquierda" data-i="${i}" title="Mover a la izquierda">
+                       <span class="material-icons">chevron_left</span></button>` : ''}
+          ${i < ultima ? `<button data-accion="derecha" data-i="${i}" title="Mover a la derecha">
+                       <span class="material-icons">chevron_right</span></button>` : ''}
+          <button data-accion="quitar" data-i="${i}" title="${nuevas.has(clave) ? 'No subir esta' : 'Sacar esta foto del producto'}">
+            <span class="material-icons">delete</span></button>
+        </div>
+      </div>`).join('')
+      + `<button class="tienda-subir" data-accion="agregar">
+           <span class="material-icons">add_photo_alternate</span> Agregar
+         </button>`;
+
+    // El pie dice qué va a pasar al guardar, para que no haya sorpresas: "se
+    // suben 2, se saca 1" antes de tocar el botón.
+    const partes = [];
+    if (cuantasNuevas) partes.push(`se ${cuantasNuevas === 1 ? 'sube 1 foto nueva' : `suben ${cuantasNuevas} fotos nuevas`}`);
+    if (quitadas) partes.push(`se ${quitadas === 1 ? 'saca 1' : `sacan ${quitadas}`} del producto`);
+    $('[data-pista]').textContent = !claves.length
+      ? 'Sin fotos el producto no sale a la vidriera. Agregá al menos una.'
+      : partes.length
+        ? `Al guardar ${partes.join(' y ')}. La tienda se actualiza en el momento.`
+        : 'Acomodá el orden o agregá más. Nada cambia hasta guardar.';
+
+    $('[data-accion="guardar"]').disabled = guardando
+      || (!cuantasNuevas && !quitadas && claves.join('\n') === f.fotos.join('\n'));
+  }
+
+  async function guardar() {
+    if (guardando) return;
+    guardando = true;
+    _subiendo = true;
+    overlay.querySelectorAll('button').forEach(b => { b.disabled = true; });
+    document.querySelectorAll('[data-cargar]').forEach(b => { b.disabled = true; });
+
+    const subidas = [];
+    try {
+      // 1. Se suben las nuevas, en el orden en que quedaron.
+      const imagenes = [];
+      const pendientes = claves.filter(c => nuevas.has(c)).length;
+      let n = 0;
+      for (const clave of claves) {
+        if (!nuevas.has(clave)) { imagenes.push(clave); continue; }
+        n++;
+        const cual = pendientes > 1 ? ` (${n} de ${pendientes})` : '';
+        const url = await subirFoto(id, nuevas.get(clave).archivo,
+          { alProgreso: t => decir(t + cual) });
+        subidas.push(url);
+        imagenes.push(url);
+      }
+
+      // 2. Lo que se sacó de la galería se desvincula de las variedades que
+      //    lo usaran, en el mismo guardado: si no, la ficha queda con una
+      //    imagen rota al elegir ese color.
+      const quitadas = fotosQuitadas(f.fotos, imagenes);
+      const producto = _catalogo.get(id);
+      const cambios = { tienda_imagenes: imagenes };
+      let ajustes = producto?.tienda_variedades;
+      let hayDesvinculadas = false;
+      for (const url of quitadas) {
+        const r = desvincularFoto(ajustes, url);
+        if (r.desvinculadas.length) { ajustes = r.ajustes; hayDesvinculadas = true; }
+      }
+      if (hayDesvinculadas) cambios.tienda_variedades = limpiarAjustes(ajustes);
+
+      decir('Guardando…');
+      const resultado = await guardarYEspejar(_db, id, cambios, _habilitados, _subExcluidos);
+
+      // 3. El catálogo en memoria queda al día para que refrescar no la pierda.
+      if (producto) {
+        producto.tienda_imagenes = imagenes;
+        if (hayDesvinculadas) {
+          if (cambios.tienda_variedades === undefined) delete producto.tienda_variedades;
+          else producto.tienda_variedades = cambios.tienda_variedades;
+        }
+      }
+      f.fotos = imagenes.slice();
+
+      // 4. Con foto ya no está pendiente: sale de las dos listas. Se saca
+      //    recién ahora: si el guardado hubiera fallado, tenía que seguir acá.
+      //    Sin fotos (las sacó todas) sigue pendiente, con lo que quedó.
+      if (imagenes.length) {
+        await deleteDoc(doc(_db, 'tienda_fotos_pedidas', id)).catch(() => {});
+        _lista = _lista.filter(x => x.id !== id);
+        _esperando = _esperando.filter(x => x.id !== id);
+      }
+      pintarLista();
+
+      // 5. Recién ahora se borran de Storage las que se sacaron: al revés, un
+      //    fallo al guardar dejaba el producto apuntando a fotos que ya no
+      //    existen.
+      quitadas.forEach(url => borrarFoto(url));
+
+      if (!resultado?.publicado) {
+        // Pasa cuando el producto está sin stock o su rubro no se publica: la
+        // foto quedó guardada igual, pero no se ve en la tienda todavía.
+        console.info(`[fotos] ${id}: fotos guardadas, sin publicar (${resultado?.motivo})`);
+      }
+      cerrarPanelFotos();
+      estado(id, imagenes.length ? '' : 'Quedó sin fotos: sigue pendiente.');
+    } catch (err) {
+      console.error('[fotos] no se pudo guardar:', err);
+      // Lo que se alcanzó a subir y no quedó guardado no sirve para nada.
+      subidas.forEach(url => borrarFoto(url));
+      guardando = false;
+      overlay.querySelectorAll('button').forEach(b => { b.disabled = false; });
+      pintar();
+      decir(err?.message || 'No se pudo guardar. Probá de nuevo.', true);
+    } finally {
+      _subiendo = false;
+      document.querySelectorAll('[data-cargar]').forEach(b => { b.disabled = false; });
+    }
+  }
+
   // Seleccionar texto del título y soltar el mouse afuera del recuadro
-  // también dispara "click" en el overlay: sin este control, cerraba la
-  // preview solo por marcar texto.
+  // también dispara "click" en el overlay: sin este control, cerraba el
+  // panel solo por marcar texto.
   let bajoPropio = false;
   overlay.addEventListener('mousedown', ev => { bajoPropio = ev.target === overlay; });
   overlay.addEventListener('click', ev => {
     const boton = ev.target.closest('[data-accion]');
     const accion = boton?.dataset.accion;
-    if (!accion && !(ev.target === overlay && bajoPropio)) return;
-
-    if (accion === 'ver') { verFotoGrande(urls[Number(boton.dataset.i)]); return; }
-
-    if (accion === 'cambiar') {
-      // El propio overlay se reemplaza solo cuando llegue el próximo "change"
-      // del input: si cancela el selector de archivos, esta preview sigue
-      // en pie con lo que ya había elegido.
-      const input = document.getElementById('fotosArchivo');
-      input.dataset.para = id;
-      input.click();
+    if (!accion) {
+      if (ev.target === overlay && bajoPropio && !guardando) cerrarPanelFotos();
       return;
     }
-    if (accion === 'confirmar') {
-      cerrarPreviewCarga();
-      subirArchivos(id, f, archivos);
-      return;
+    const i = Number(boton.dataset.i);
+
+    if (accion === 'ver') { verFotoGrande(srcDe(claves[i])); return; }
+    if (guardando) return;
+    if (accion === 'cancelar') { cerrarPanelFotos(); return; }
+    if (accion === 'guardar') { guardar(); return; }
+    if (accion === 'agregar') { elegirArchivos(id); return; }
+    if (accion === 'portada') { claves = ponerDePortada(claves, i); pintar(); return; }
+    if (accion === 'izquierda') { claves = moverFoto(claves, i, i - 1); pintar(); return; }
+    if (accion === 'derecha') { claves = moverFoto(claves, i, i + 1); pintar(); return; }
+    if (accion === 'quitar') {
+      const clave = claves[i];
+      claves = claves.filter((_, k) => k !== i);
+      if (nuevas.has(clave)) {
+        URL.revokeObjectURL(nuevas.get(clave).url);
+        nuevas.delete(clave);
+      }
+      pintar();
     }
-    cerrarPreviewCarga();
   });
 
-  overlay._alTeclado = ev => { if (ev.key === 'Escape') cerrarPreviewCarga(); };
+  overlay._alTeclado = ev => { if (ev.key === 'Escape' && !guardando) cerrarPanelFotos(); };
   document.addEventListener('keydown', overlay._alTeclado);
 
   document.body.appendChild(overlay);
-}
-
-async function subirArchivos(id, f, archivos) {
-  _subiendo = true;
-  document.querySelectorAll('[data-cargar]').forEach(b => { b.disabled = true; });
-
-  try {
-    // Las nuevas van adelante: la primera de la lista es la que la tienda
-    // muestra en la card, y quien sube una foto la sube para que se vea.
-    const nuevas = [];
-    for (const [i, archivo] of archivos.entries()) {
-      const cual = archivos.length > 1 ? ` (${i + 1} de ${archivos.length})` : '';
-      const url = await subirFoto(id, archivo,
-        { alProgreso: t => estado(id, t + cual) });
-      nuevas.push(url);
-    }
-
-    estado(id, 'Guardando…');
-    const imagenes = [...nuevas, ...f.fotos];
-    const resultado = await guardarYEspejar(_db, id, { tienda_imagenes: imagenes },
-                                            _habilitados, _subExcluidos);
-
-    // El catálogo en memoria queda al día para que refrescar no la pierda.
-    const datos = _catalogo.get(id);
-    if (datos) datos.tienda_imagenes = imagenes;
-
-    // Con la foto cargada ya no está pendiente. Se saca recién ahora: si el
-    // guardado hubiera fallado, el producto tenía que seguir en la lista.
-    await deleteDoc(doc(_db, 'tienda_fotos_pedidas', id));
-    _lista = _lista.filter(x => x.id !== id);
-    pintar();
-
-    if (!resultado?.publicado) {
-      // Pasa cuando el producto está sin stock o su rubro no se publica: la
-      // foto quedó guardada igual, pero no se ve en la tienda todavía.
-      console.info(`[fotos] ${id}: foto guardada, sin publicar (${resultado?.motivo})`);
-    }
-  } catch (err) {
-    console.error('[fotos] no se pudo cargar la foto:', err);
-    estado(id, err?.message || 'No se pudo subir.', true);
-  } finally {
-    _subiendo = false;
-    document.querySelectorAll('[data-cargar]').forEach(b => { b.disabled = false; });
-  }
+  _panel = { id, agregar };
+  agregar(archivosIniciales);
 }
 
 /* ── Sacar de la lista ────────────────────────────────────────────────────── */
@@ -446,7 +584,7 @@ async function sacar(id) {
   try {
     await deleteDoc(doc(_db, 'tienda_fotos_pedidas', id));
     _lista = _lista.filter(x => x.id !== id);
-    pintar();
+    pintarLista();
   } catch (err) {
     console.error('[fotos] no se pudo sacar:', err);
     estado(id, 'No se pudo sacar.', true);

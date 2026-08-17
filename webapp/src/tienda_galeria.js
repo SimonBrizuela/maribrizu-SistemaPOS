@@ -133,6 +133,16 @@ export function fotosHuerfanas(candidatas, imagenes, ajustes) {
   return [...new Set(limpiarLista(candidatas))].filter(u => !enUso.has(u));
 }
 
+/**
+ * Las fotos que estaban antes y ya no están después: son las que hay que
+ * sacar de Storage (y desvincular de las variedades) al guardar la galería.
+ * Lo nuevo que todavía no se subió no cuenta: no está en ninguna de las dos.
+ */
+export function fotosQuitadas(antes, despues) {
+  const quedan = new Set(limpiarLista(despues));
+  return [...new Set(limpiarLista(antes))].filter(u => !quedan.has(u));
+}
+
 function limpiarLista(imagenes) {
   return (Array.isArray(imagenes) ? imagenes : [])
     .map(u => String(u ?? '').trim())

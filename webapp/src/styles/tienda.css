@@ -250,6 +250,15 @@
 }
 .tienda-foto-acciones .material-icons { font-size: 14px !important; }
 
+/* Foto recién elegida, todavía sin subir (panel de Fotos Pedidas): franja
+   arriba, espejo de PORTADA abajo; los botones bajan para no pisarla. */
+.tienda-foto-nueva {
+  position: absolute; left: 0; right: 0; top: 0; text-align: center;
+  background: var(--tint-green-fg); color: #fff; font-size: 9.5px; font-weight: 700;
+  padding: 2px 0; letter-spacing: .3px;
+}
+.tienda-foto-item.es-nueva .tienda-foto-acciones { top: 20px; }
+
 /* Elegir una foto para una variedad: el mismo tile, pero es un botón entero */
 .tienda-foto-elegible { cursor: pointer; font-family: inherit; }
 .tienda-foto-elegible img { cursor: pointer; }
