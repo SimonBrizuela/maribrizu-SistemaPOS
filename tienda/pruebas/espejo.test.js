@@ -115,6 +115,46 @@ describe('lo que decide el panel', () => {
   });
 });
 
+describe('las fotos', () => {
+  const de = id => casos.find(c => c.doc_id === id).datos;
+
+  it('salen todas y en orden: la primera es la portada', () => {
+    expect(documentoEspejo(de('p10')).imagenes).toEqual([
+      'https://ejemplo/lapiz-portada.webp',
+      'https://ejemplo/lapiz-detalle.webp',
+      'https://ejemplo/lapiz-caja.webp',
+    ]);
+  });
+
+  it('cada variedad lleva su foto, y sin foto queda en null', () => {
+    const v = documentoEspejo(de('p10')).variedades;
+    expect(v.map(x => [x.nombre, x.imagen])).toEqual([
+      ['Rojo', 'https://ejemplo/lapiz-rojo.webp'],
+      // Un espacio en blanco no es una foto.
+      ['Azul Francia', null],
+      ['Verde', null],
+    ]);
+  });
+
+  it('la foto de la variedad no toca la galería del producto', () => {
+    // La foto del rojo se ve al elegir "Rojo"; no se cuela entre las tres de
+    // la galería, que son las del producto en general.
+    expect(documentoEspejo(de('p10')).imagenes).not.toContain('https://ejemplo/lapiz-rojo.webp');
+  });
+
+  it('la foto suelta del catálogo del POS sale al espejo, no solo pasa la puerta', () => {
+    // Antes "sin foto" y el documento usaban reglas distintas: el producto
+    // pasaba la puerta por su imagen_url y salía al espejo con la lista vacía.
+    expect(documentoEspejo(de('p11')).imagenes).toEqual(['https://ejemplo/regla-vieja.jpg']);
+    expect(motivoDeNoPublicar(de('p11'), ['LIBRERIA'], {})).toBe(null);
+  });
+
+  it('con galería propia, la foto suelta del POS no cuenta', () => {
+    const d = { ...de('p11'), tienda_imagenes: ['https://ejemplo/regla-nueva.webp', ''] };
+    expect(documentoEspejo(d).imagenes).toEqual(['https://ejemplo/regla-nueva.webp']);
+  });
+});
+
 describe('de a cuánto se vende', () => {
   const de = id => casos.find(c => c.doc_id === id).datos;
 

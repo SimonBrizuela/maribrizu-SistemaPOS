@@ -170,5 +170,50 @@
       "conjunto_total": 60,
       "precio_venta": 14900
     }
+  },
+  {
+    "que_prueba": "Galería de fotos con portada, y una foto propia por variedad",
+    "doc_id": "p10",
+    "datos": {
+      "nombre": "LAPIZ FABER 2B",
+      "codigo": "7701",
+      "marca": "FABER",
+      "rubro": "libreria",
+      "categoria": "LAPICES",
+      "estado": "activo",
+      "es_conjunto": true,
+      "conjunto_tipo": "caja",
+      "conjunto_contenido": 12,
+      "conjunto_precio_unidad": 500,
+      "precio_venta": 5400,
+      "conjunto_colores": [
+        { "color": "ROJO", "unidades": 1, "restante": 3 },
+        { "color": "AZUL", "unidades": 0, "restante": 7 },
+        { "color": "VERDE", "unidades": 2, "restante": 0 }
+      ],
+      "tienda_imagenes": [
+        "https://ejemplo/lapiz-portada.webp",
+        "https://ejemplo/lapiz-detalle.webp",
+        "https://ejemplo/lapiz-caja.webp"
+      ],
+      "tienda_variedades": {
+        "rojo": { "publicar": true, "nombre": null, "imagen": "https://ejemplo/lapiz-rojo.webp" },
+        "azul": { "publicar": true, "nombre": "Azul Francia", "imagen": "  " },
+        "verde": { "publicar": true, "nombre": null, "imagen": null }
+      }
+    }
+  },
+  {
+    "que_prueba": "Solo tiene la foto suelta del catálogo del POS: esa es la que sale",
+    "doc_id": "p11",
+    "datos": {
+      "nombre": "REGLA 30 CM",
+      "codigo": "8801",
+      "rubro": "libreria",
+      "estado": "activo",
+      "precio_venta": 900,
+      "stock": 40,
+      "imagen_url": "https://ejemplo/regla-vieja.jpg"
+    }
   }
 ]

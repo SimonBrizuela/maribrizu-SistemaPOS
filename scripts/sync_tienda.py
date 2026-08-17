@@ -248,6 +248,10 @@ def variedades_de(datos):
     clave. Se guarda normalizado porque el nombre visible cambia (el panel
     muestra "Celeste", el catalogo dice "CELESTE") y una clave que depende de
     como se escribio el color se pierde al primer retoque.
+
+    Cada ajuste puede traer `imagen`: la foto de ESA variedad, que la tienda
+    muestra al elegirla en vez de la portada del producto. Gemelo de
+    variedadesDe() en webapp/src/tienda_espejo.js.
     """
     colores = datos.get('conjunto_colores') or []
     if not isinstance(colores, list):
@@ -284,19 +288,29 @@ def variedades_de(datos):
         stock = int(unidades * contenido + restante)
         precio = color.get('precio')
         publico = ''
+        imagen = ''
         if isinstance(ajuste, dict):
             publico = str(ajuste.get('nombre') or '').strip()
+            imagen = str(ajuste.get('imagen') or '').strip()
 
         salida.append({
             'nombre': publico or nombre_bonito(nombre),
             'stock': max(0, stock),
             'precio': round(float(precio)) if precio else None,
+            'imagen': imagen or None,
         })
     return salida
 
 
 def imagenes_de(datos):
-    """Las fotos del producto, con el mismo criterio que usa el espejo."""
+    """
+    Las fotos del producto, en el orden en que se muestran: la primera es la
+    portada, las demas la galeria.
+
+    Es la MISMA regla que decide "sin foto" en se_publica(): lo que pasa esa
+    puerta sale al espejo con esas fotos y no con una lista vacia. Gemelo de
+    imagenesDe() en webapp/src/tienda_espejo.js.
+    """
     propias = datos.get('tienda_imagenes')
     if isinstance(propias, list) and propias:
         return [str(x) for x in propias if x]
@@ -377,10 +391,6 @@ def armar_documento(doc_id, datos):
 
     m = medidas_de(datos)
 
-    imagenes = datos.get('tienda_imagenes')
-    if not isinstance(imagenes, list):
-        imagenes = []
-
     return {
         'nombre': nombre,
         'descripcion': str(datos.get('tienda_descripcion') or '').strip(),
@@ -411,7 +421,7 @@ def armar_documento(doc_id, datos):
         'categoria': nombre_bonito(datos.get('categoria')),
         'sub_rubro': nombre_bonito(datos.get('sub_rubro')),
         'marca': marca,
-        'imagenes': [str(u) for u in imagenes if u],
+        'imagenes': imagenes_de(datos),
         'variedades': m['variedades'],
         'destacado': datos.get('tienda_destacado') is True,
         'tokens': tokenizar(nombre, marca, datos.get('categoria'), datos.get('sub_rubro')),

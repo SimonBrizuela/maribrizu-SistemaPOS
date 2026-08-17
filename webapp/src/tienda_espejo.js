@@ -88,6 +88,8 @@ function numero(datos, clave, porDefecto = 0) {
  *
  * `tienda_variedades` es lo que decidió el panel, con el nombre del catálogo
  * normalizado como clave — el nombre visible cambia y el del catálogo no.
+ * Cada ajuste puede traer `imagen`: la foto de ESA variedad (el rojo, el azul),
+ * que la tienda muestra al elegirla en vez de la portada del producto.
  */
 export function variedadesDe(datos) {
   const colores = Array.isArray(datos?.conjunto_colores) ? datos.conjunto_colores : [];
@@ -112,6 +114,7 @@ export function variedadesDe(datos) {
       nombre: String(ajuste?.nombre || '').trim() || nombreBonito(nombre),
       stock: Math.max(0, Math.trunc(unidades * contenido + restante)),
       precio: precio ? Math.round(precio) : null,
+      imagen: String(ajuste?.imagen ?? '').trim() || null,
     });
   }
   return salida;
@@ -212,6 +215,21 @@ export function ventaMinima(datos, unidad) {
   return { minimo: Math.round(minimo * 100) / 100, paso: Math.round(paso * 100) / 100 };
 }
 
+/**
+ * Las fotos del producto, en el orden en que se muestran: la primera es la
+ * portada (la de la card y la que abre la ficha), las demás son la galería.
+ *
+ * Es la MISMA regla que decide "sin foto" en motivoDeNoPublicar(): un producto
+ * que pasa esa puerta tiene que salir al espejo con esas fotos y no con una
+ * lista vacía. Gemelo de imagenes_de() en scripts/sync_tienda.py.
+ */
+export function imagenesDe(datos) {
+  const propias = datos?.tienda_imagenes;
+  if (Array.isArray(propias) && propias.length) return propias.filter(Boolean).map(String);
+  const suelta = datos?.imagen_url || datos?.imagen;
+  return suelta ? [String(suelta)] : [];
+}
+
 /** El documento tal cual va a `tienda_productos`. Gemelo de armar_documento(). */
 export function documentoEspejo(datos) {
   const nombre = String(datos?.tienda_nombre ?? '').trim() || nombreBonito(datos?.nombre);
@@ -220,7 +238,6 @@ export function documentoEspejo(datos) {
   if (marca.toUpperCase() === 'SIN MARCA') marca = '';
 
   const m = medidasDe(datos);
-  const imagenes = Array.isArray(datos?.tienda_imagenes) ? datos.tienda_imagenes : [];
 
   return {
     nombre,
@@ -244,7 +261,7 @@ export function documentoEspejo(datos) {
     categoria: nombreBonito(datos?.categoria),
     sub_rubro: nombreBonito(datos?.sub_rubro),
     marca,
-    imagenes: imagenes.filter(Boolean).map(String),
+    imagenes: imagenesDe(datos),
     variedades: m.variedades,
     destacado: datos?.tienda_destacado === true,
     tokens: tokenizar(nombre, marca, datos?.categoria, datos?.sub_rubro),
@@ -288,14 +305,6 @@ export function claveDeRubro(texto) {
  * El interruptor por producto sigue ganándole a las dos: es lo más específico
  * que puede decir alguien, y por eso se evalúa antes.
  */
-/** Las fotos del producto, con el mismo criterio que usa el espejo. */
-function imagenesDe(datos) {
-  const propias = datos?.tienda_imagenes;
-  if (Array.isArray(propias) && propias.length) return propias.filter(Boolean);
-  const suelta = datos?.imagen_url || datos?.imagen;
-  return suelta ? [suelta] : [];
-}
-
 export function motivoDeNoPublicar(datos, rubrosHabilitados = null,
                                    subrubrosExcluidos = null) {
   if (datos?.tienda_publicar === false) return 'excluido a mano';
