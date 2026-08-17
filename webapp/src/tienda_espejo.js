@@ -27,7 +27,7 @@
  *     viven en el mismo documento del catálogo. El sync los respeta.
  */
 import {
-  doc, getDoc, setDoc, updateDoc, deleteDoc, collection, writeBatch,
+  doc, getDoc, getDocFromCache, setDoc, updateDoc, deleteDoc, collection, writeBatch,
   query, orderBy, limit, getDocs, serverTimestamp, deleteField,
 } from 'firebase/firestore';
 
@@ -348,6 +348,41 @@ export function estaPublicable(datos, rubrosHabilitados = null,
 
 /* ── Escritura ───────────────────────────────────────────────────────────── */
 
+/*
+ * Por qué acá se evita el SDK para LEER.
+ *
+ * El SDK de Firestore atiende todo por una sola cola: los listeners grandes del
+ * panel (el catálogo entero, las ventas por día) y cualquier lectura suelta.
+ * Medido en esta webapp: un `getDoc` de un documento puede tardar más de un
+ * minuto si la cola está ocupada. Guardar desde la tienda hacía tres de esas
+ * lecturas en fila (el catálogo recién escrito, el espejo, y la consulta del
+ * `orden`), y por eso "Guardar" tardaba una barbaridad o parecía colgado.
+ *
+ * Lo que se hace ahora:
+ *   · El catálogo no se relee: quien guarda ya tiene el producto en memoria y
+ *     pasa `datos`; los cambios se aplican encima. Sin `datos`, se lee del
+ *     cache local (que ya tiene la escritura recién hecha) y solo de última
+ *     del servidor.
+ *   · El espejo (`tienda_productos`) es de lectura pública: se lee por la API
+ *     REST, que no pasa por la cola del SDK. Si la REST falla se cae al SDK,
+ *     que anda, solo que puede tardar.
+ * Las escrituras siguen por el SDK: van por otro canal y no sufren la cola.
+ */
+
+const PROYECTO = 'mari-d7c71';
+const REST = `https://firestore.googleapis.com/v1/projects/${PROYECTO}/databases/(default)/documents`;
+const ESPERA_REST_MS = 8000;
+
+/** Aplica `cambios` (undefined = borrar) sobre una copia de `datos`. */
+export function aplicarCambios(datos, cambios) {
+  const salida = { ...(datos || {}) };
+  for (const [clave, valor] of Object.entries(cambios || {})) {
+    if (valor === undefined) delete salida[clave];
+    else salida[clave] = valor;
+  }
+  return salida;
+}
+
 /**
  * Guarda lo que decidió el panel y deja la tienda igual de actualizada.
  *
@@ -362,11 +397,14 @@ export function estaPublicable(datos, rubrosHabilitados = null,
  * @param {object} cambios     campos `tienda_*` a guardar (undefined = borrar)
  * @param {string[]|null} rubrosHabilitados
  * @param {object|null} subrubrosExcluidos
+ * @param {{datos?: object|null}} [opciones]  el producto tal como lo tiene el
+ *        panel en memoria; con eso no hace falta releerlo después de escribir
  * @returns {Promise<{publicado: boolean, motivo: string|null}>}
  */
 export async function guardarYEspejar(db, docId, cambios, rubrosHabilitados = null,
-                                      subrubrosExcluidos = null) {
+                                      subrubrosExcluidos = null, { datos = null } = {}) {
   const referencia = doc(db, 'catalogo', docId);
+  const t0 = performance.now();
 
   // Se limpia en vez de guardar `undefined`: un campo borrado vuelve al
   // comportamiento automático, y eso es distinto de tenerlo en falso.
@@ -375,11 +413,25 @@ export async function guardarYEspejar(db, docId, cambios, rubrosHabilitados = nu
     aGuardar[clave] = valor === undefined ? deleteField() : valor;
   }
   if (Object.keys(aGuardar).length) await updateDoc(referencia, aGuardar);
+  const t1 = performance.now();
 
-  const snap = await getDoc(referencia);
-  if (!snap.exists()) return { publicado: false, motivo: 'el producto ya no existe' };
+  let actuales;
+  if (datos && typeof datos === 'object') {
+    actuales = aplicarCambios(datos, cambios);
+  } else {
+    // El cache local ya tiene la escritura de recién (el SDK la aplica antes de
+    // mandarla), así que esto no espera nada.
+    let snap = null;
+    try { snap = await getDocFromCache(referencia); } catch (_) { /* no estaba */ }
+    if (!snap) snap = await getDoc(referencia);
+    if (!snap.exists()) return { publicado: false, motivo: 'el producto ya no existe' };
+    actuales = snap.data();
+  }
 
-  return espejar(db, docId, snap.data(), rubrosHabilitados, subrubrosExcluidos);
+  const resultado = await espejar(db, docId, actuales, rubrosHabilitados, subrubrosExcluidos);
+  const t2 = performance.now();
+  console.info(`[tienda] guardar ${docId}: catálogo ${Math.round(t1 - t0)} ms · espejo ${Math.round(t2 - t1)} ms`);
+  return resultado;
 }
 
 /** Escribe (o borra) el documento del espejo según corresponda. */
@@ -399,10 +451,10 @@ export async function espejar(db, docId, datos, rubrosHabilitados = null,
   // la posición dentro de la lista completa y no se pueden deducir de un
   // producto solo. Lo recién publicado va al final hasta la próxima corrida,
   // que es honesto: no se cuela adelante de nada.
-  const anterior = await getDoc(referencia);
-  if (anterior.exists()) {
-    documento.orden = anterior.get('orden') ?? await proximoOrden(db);
-    documento.orden_rubro = anterior.get('orden_rubro') ?? 0;
+  const anterior = await leerOrdenDelEspejo(db, docId);
+  if (anterior.existe) {
+    documento.orden = anterior.orden ?? await proximoOrden(db);
+    documento.orden_rubro = anterior.orden_rubro ?? 0;
   } else {
     documento.orden = await proximoOrden(db);
     documento.orden_rubro = 999999;
@@ -410,6 +462,145 @@ export async function espejar(db, docId, datos, rubrosHabilitados = null,
 
   await setDoc(referencia, documento);
   return { publicado: true, motivo: null };
+}
+
+/**
+ * Si el producto ya está en el espejo, y con qué `orden`. Por REST primero
+ * (lectura pública, sin pasar por la cola del SDK); si eso falla, por el SDK.
+ */
+async function leerOrdenDelEspejo(db, docId) {
+  const porRest = await leerEspejoRest(docId);
+  if (porRest) return porRest;
+
+  const snap = await getDoc(doc(db, 'tienda_productos', docId));
+  if (!snap.exists()) return { existe: false, orden: null, orden_rubro: null };
+  return {
+    existe: true,
+    orden: numeroONull(snap.get('orden')),
+    orden_rubro: numeroONull(snap.get('orden_rubro')),
+  };
+}
+
+async function leerEspejoRest(docId) {
+  const leido = await leerDocEspejoRest(docId, ['orden', 'orden_rubro']);
+  if (leido === null) return null;
+  if (!leido.existe) return { existe: false, orden: null, orden_rubro: null };
+  return {
+    existe: true,
+    orden: numeroONull(leido.datos.orden),
+    orden_rubro: numeroONull(leido.datos.orden_rubro),
+  };
+}
+
+async function maxOrdenRest() {
+  const filas = await consultarEspejoRest({
+    campos: ['orden'], ordenarPor: 'orden', descendente: true, limite: 1,
+  });
+  if (filas === null) return null;
+  return filas.length ? (numeroONull(filas[0].datos.orden) ?? 0) : 0;
+}
+
+/**
+ * Un documento del espejo por REST: `{existe, datos}` con los campos pedidos
+ * (o todos), o `null` si la REST no respondió y hay que caer al SDK.
+ * `tienda_productos` es de lectura pública: no hace falta credencial.
+ */
+export async function leerDocEspejoRest(docId, campos = null) {
+  const mascara = campos?.length
+    ? '?' + campos.map(c => `mask.fieldPaths=${encodeURIComponent(c)}`).join('&') : '';
+  try {
+    const r = await conEspera(`${REST}/tienda_productos/${encodeURIComponent(docId)}${mascara}`);
+    if (r.status === 404) return { existe: false, datos: null };
+    if (!r.ok) return null;
+    const cuerpo = await r.json();
+    return { existe: true, datos: decodificarCampos(cuerpo?.fields) };
+  } catch (err) {
+    console.warn('[tienda] espejo por REST no respondió, se usa el SDK:', err?.message || err);
+    return null;
+  }
+}
+
+/**
+ * Consulta al espejo por REST. Devuelve `[{id, datos}]`, o `null` si la REST no
+ * respondió. Filtra por igualdad en `donde` ({campo: valor}); `campos` limita
+ * lo que viaja (un rubro son cientos de documentos con tokens y variedades).
+ */
+export async function consultarEspejoRest({
+  donde = null, campos = null, ordenarPor = null, descendente = false, limite = null,
+} = {}) {
+  const consulta = { from: [{ collectionId: 'tienda_productos' }] };
+  const filtros = Object.entries(donde || {}).map(([campo, valor]) => ({
+    fieldFilter: { field: { fieldPath: campo }, op: 'EQUAL', value: codificarValor(valor) },
+  }));
+  if (filtros.length === 1) consulta.where = filtros[0];
+  else if (filtros.length > 1) consulta.where = { compositeFilter: { op: 'AND', filters: filtros } };
+  if (campos?.length) consulta.select = { fields: campos.map(c => ({ fieldPath: c })) };
+  if (ordenarPor) {
+    consulta.orderBy = [{ field: { fieldPath: ordenarPor },
+                          direction: descendente ? 'DESCENDING' : 'ASCENDING' }];
+  }
+  if (limite) consulta.limit = limite;
+
+  try {
+    const r = await conEspera(`${REST}:runQuery`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ structuredQuery: consulta }),
+    });
+    if (!r.ok) return null;
+    const filas = await r.json();
+    return (Array.isArray(filas) ? filas : [])
+      .filter(f => f?.document?.name)
+      .map(f => ({
+        id: String(f.document.name).split('/').pop(),
+        datos: decodificarCampos(f.document.fields),
+      }));
+  } catch (err) {
+    console.warn('[tienda] consulta por REST no respondió, se usa el SDK:', err?.message || err);
+    return null;
+  }
+}
+
+function conEspera(url, opciones = {}) {
+  const control = new AbortController();
+  const reloj = setTimeout(() => control.abort(), ESPERA_REST_MS);
+  return fetch(url, { ...opciones, signal: control.signal }).finally(() => clearTimeout(reloj));
+}
+
+/* Los valores de la REST de Firestore vienen tipados ({integerValue: "3"},
+   {stringValue: "x"}, {mapValue: {fields}}). Esto los pasa a JS común. */
+export function decodificarCampos(fields) {
+  const salida = {};
+  for (const [clave, valor] of Object.entries(fields || {})) salida[clave] = decodificarValor(valor);
+  return salida;
+}
+
+export function decodificarValor(v) {
+  if (!v || typeof v !== 'object') return null;
+  if ('nullValue' in v) return null;
+  if ('stringValue' in v) return v.stringValue;
+  if ('booleanValue' in v) return Boolean(v.booleanValue);
+  if ('integerValue' in v) return Number(v.integerValue);
+  if ('doubleValue' in v) return Number(v.doubleValue);
+  if ('timestampValue' in v) return new Date(v.timestampValue);
+  if ('arrayValue' in v) return (v.arrayValue?.values || []).map(decodificarValor);
+  if ('mapValue' in v) return decodificarCampos(v.mapValue?.fields);
+  if ('referenceValue' in v) return String(v.referenceValue).split('/').pop();
+  return null;
+}
+
+/** El camino inverso, para los filtros: solo lo que se compara por igualdad. */
+export function codificarValor(valor) {
+  if (valor === null || valor === undefined) return { nullValue: null };
+  if (typeof valor === 'boolean') return { booleanValue: valor };
+  if (typeof valor === 'number') {
+    return Number.isInteger(valor) ? { integerValue: String(valor) } : { doubleValue: valor };
+  }
+  return { stringValue: String(valor) };
+}
+
+function numeroONull(n) {
+  return Number.isFinite(n) ? n : null;
 }
 
 /**
@@ -509,6 +700,8 @@ export async function recomputarRubros(db, productos, rubrosHabilitados,
 }
 
 async function proximoOrden(db) {
+  const porRest = await maxOrdenRest();
+  if (porRest !== null) return porRest + 1;
   try {
     const snap = await getDocs(query(
       collection(db, 'tienda_productos'), orderBy('orden', 'desc'), limit(1)));

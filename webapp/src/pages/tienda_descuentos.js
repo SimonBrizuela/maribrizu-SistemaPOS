@@ -20,7 +20,7 @@ import {
 } from 'firebase/firestore';
 import { getCached } from '../cache.js';
 import { alertDialog, confirmDialog, escHtml } from '../components/dialogs.js';
-import { nombreBonito } from '../tienda_espejo.js';
+import { nombreBonito, leerDocEspejoRest, consultarEspejoRest } from '../tienda_espejo.js';
 // `.pc-btn` y las tarjetas de la seccion Tienda viven acá. Sin este import los
 // botones salen con el estilo crudo del navegador.
 import '../styles/tienda.css';
@@ -415,7 +415,11 @@ function abrirEditor(d = null) {
       await setDoc(doc(_db, 'tienda_descuentos', id), datos, { merge: true });
       await aplicarEnLaTienda({ ...datos, _id: id });
       cerrar();
-      await recargar();
+      // La lista se actualiza con lo que se acaba de guardar, sin releer la
+      // colección: esa relectura pasaba por la cola del SDK y era lo que dejaba
+      // el botón en "Guardando…" un rato largo.
+      reemplazarEnLista({ _id: id, ...(d || {}), ...datos });
+      await refrescarConteos();
     } catch (e) {
       boton.disabled = false;
       boton.textContent = d ? 'Guardar cambios' : 'Crear descuento';
@@ -450,21 +454,12 @@ async function aplicarEnLaTienda(d, avance = null) {
 
   // Se le pregunta al espejo qué productos caen bajo el descuento, en vez de
   // deducirlo de una copia del catálogo que puede estar vieja.
-  const col = collection(_db, 'tienda_productos');
-  let docs = [];
-  if (d.alcance === 'producto') {
-    const uno = await getDoc(doc(_db, 'tienda_productos', obj));
-    if (uno.exists()) docs = [uno];
-  } else {
-    const rubro = obj.split('|')[0];
-    const snap = await getDocs(query(col, where('rubro', '==', rubro)));
-    docs = snap.docs;
-    if (d.alcance === 'subrubro') {
-      const sub = obj.split('|')[1] || '';
-      docs = docs.filter(x => String((x.data() || {}).sub_rubro || '')
-        .trim().toUpperCase() === sub);
-    }
-  }
+  //
+  // Por REST y no por el SDK: en esta webapp una lectura suelta por el SDK
+  // queda encolada detrás de los listeners grandes y puede tardar más de un
+  // minuto, y esto corre en cada Guardar. El espejo es de lectura pública. Si
+  // la REST no responde se cae al SDK, que anda pero puede tardar.
+  const docs = await productosDelDescuento(d, obj);
 
   // En lote y no de a uno: un rubro grande son cientos de productos, y con un
   // request por producto el boton se quedaba mudo varios segundos y parecia que
@@ -475,7 +470,7 @@ async function aplicarEnLaTienda(d, avance = null) {
     const lote = writeBatch(_db);
     let enLote = 0;
     for (const x of docs.slice(i, i + TOPE)) {
-      const datos = x.data() || {};
+      const datos = x.datos || {};
       const lista = Number(datos.precio_anterior) || Number(datos.precio) || 0;
       if (lista <= 0) continue;
       const nuevo = apagado ? lista : precioConDescuento(lista, d);
@@ -497,6 +492,30 @@ async function aplicarEnLaTienda(d, avance = null) {
     if (typeof avance === 'function') avance(tocados, docs.length);
   }
   return tocados;
+}
+
+/** Los productos publicados que caen bajo un descuento, como `[{id, datos}]`. */
+async function productosDelDescuento(d, obj) {
+  const CAMPOS = ['precio', 'precio_anterior', 'sub_rubro'];
+
+  if (d.alcance === 'producto') {
+    const porRest = await leerDocEspejoRest(obj, CAMPOS);
+    if (porRest !== null) return porRest.existe ? [{ id: obj, datos: porRest.datos }] : [];
+    const uno = await getDoc(doc(_db, 'tienda_productos', obj));
+    return uno.exists() ? [{ id: uno.id, datos: uno.data() }] : [];
+  }
+
+  const rubro = obj.split('|')[0];
+  let docs = await consultarEspejoRest({ donde: { rubro }, campos: CAMPOS });
+  if (docs === null) {
+    const snap = await getDocs(query(collection(_db, 'tienda_productos'), where('rubro', '==', rubro)));
+    docs = snap.docs.map(x => ({ id: x.id, datos: x.data() }));
+  }
+  if (d.alcance === 'subrubro') {
+    const sub = obj.split('|')[1] || '';
+    docs = docs.filter(x => String(x.datos?.sub_rubro || '').trim().toUpperCase() === sub);
+  }
+  return docs;
 }
 
 /** Confirmación breve arriba de la lista: apretar y no ver nada da desconfianza. */
@@ -640,7 +659,7 @@ export async function renderTiendaDescuentos(container, db) {
         const n = await aplicarEnLaTienda({ ...d, activo }, (hechos, total) => {
           if (btn) btn.textContent = `Aplicando… ${hechos}/${total}`;
         });
-        await recargar();
+        pintar();
         avisar(`${activo ? 'Activado' : 'Apagado'} · ${n} producto${n === 1 ? '' : 's'}`);
       } catch (e) {
         d.activo = !activo;
@@ -662,7 +681,26 @@ export async function renderTiendaDescuentos(container, db) {
       // rubro entero rebajado y sin nada que explique por qué.
       await aplicarEnLaTienda({ ...d, activo: false });
       await deleteDoc(doc(_db, 'tienda_descuentos', d._id));
-      await recargar();
+      _descuentos = _descuentos.filter(x => x._id !== d._id);
+      _publicadosPorDescuento.delete(d._id);
+      pintar();
     }
   });
+}
+
+/** Mete o reemplaza un descuento en la lista en memoria, en su lugar por nombre. */
+function reemplazarEnLista(d) {
+  _descuentos = _descuentos.filter(x => x._id !== d._id).concat([d])
+    .sort((a, b) => String(a.nombre).localeCompare(String(b.nombre), 'es'));
+  pintar();
+}
+
+/** Recalcula cuántos publicados toca cada descuento (cacheado) y repinta. */
+async function refrescarConteos() {
+  try {
+    await contarPublicados();
+    pintar();
+  } catch (e) {
+    console.warn('[descuentos] no se pudieron contar los publicados:', e?.message || e);
+  }
 }

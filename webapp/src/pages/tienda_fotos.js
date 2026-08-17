@@ -480,7 +480,8 @@ function abrirPanelFotos(id, f, archivosIniciales) {
       if (hayDesvinculadas) cambios.tienda_variedades = limpiarAjustes(ajustes);
 
       decir('Guardando…');
-      const resultado = await guardarYEspejar(_db, id, cambios, _habilitados, _subExcluidos);
+      const resultado = await guardarYEspejar(_db, id, cambios, _habilitados, _subExcluidos,
+                                              { datos: producto || null });
 
       // 3. El catálogo en memoria queda al día para que refrescar no la pierda.
       if (producto) {

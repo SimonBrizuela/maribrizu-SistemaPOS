@@ -17,7 +17,7 @@
  * vez que se abre esta pantalla. Como cada cambio se espeja al instante, lo que
  * se ve acá es lo que hay publicado.
  */
-import { collection, doc, getDoc, setDoc, getDocs, orderBy, query } from 'firebase/firestore';
+import { collection, doc, setDoc, getDocs, orderBy, query } from 'firebase/firestore';
 import { getCached } from '../cache.js';
 import { leerDocRapido } from '../config.js';
 import { alertDialog, escHtml, verFotoGrande } from '../components/dialogs.js';
@@ -274,7 +274,10 @@ function pintarContadores() {
  * vez de esperar el rebote de Firestore.
  */
 async function guardar(p, cambios) {
-  const resultado = await guardarYEspejar(_db, p.id, cambios, _rubrosHabilitados);
+  // Con `datos` no hace falta releer el catálogo después de escribir: en esta
+  // webapp una lectura suelta por el SDK puede tardar más de un minuto.
+  const resultado = await guardarYEspejar(_db, p.id, cambios, _rubrosHabilitados, null,
+                                          { datos: p.datos });
 
   Object.entries(cambios).forEach(([clave, valor]) => {
     if (valor === undefined) delete p.datos[clave];
@@ -302,14 +305,13 @@ async function abrirAvisos(db, rubros) {
   const ref = doc(db, 'tienda_config', 'avisos');
   let guardados = { rubros: {}, subrubros: {} };
   try {
-    const snap = await getDoc(ref);
-    if (snap.exists()) {
-      const d = snap.data() || {};
-      guardados = {
-        rubros: d.rubros && typeof d.rubros === 'object' ? d.rubros : {},
-        subrubros: d.subrubros && typeof d.subrubros === 'object' ? d.subrubros : {},
-      };
-    }
+    // Cache primero y revalidación atrás: un getDoc directo acá dejaba el
+    // botón "Avisos" mudo hasta un minuto, encolado detrás de los listeners.
+    const d = await leerDocRapido(ref, { etiqueta: 'tienda_config/avisos', vacio: {} }) || {};
+    guardados = {
+      rubros: d.rubros && typeof d.rubros === 'object' ? d.rubros : {},
+      subrubros: d.subrubros && typeof d.subrubros === 'object' ? d.subrubros : {},
+    };
   } catch (e) {
     console.warn('avisos: no se pudieron leer', e?.message || e);
   }
