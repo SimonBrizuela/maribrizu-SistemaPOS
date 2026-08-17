@@ -232,9 +232,11 @@
 /* Fotos */
 .tienda-fotos { display: flex; gap: 10px; flex-wrap: wrap; }
 .tienda-foto-item {
-  position: relative; width: 92px; height: 92px; border-radius: 10px;
+  position: relative; width: 108px; height: 108px; border-radius: 10px;
   overflow: hidden; border: 1px solid var(--border); background: var(--bg);
+  padding: 0;
 }
+.tienda-foto-item.es-portada { border-color: #4361ee; box-shadow: 0 0 0 1px #4361ee; }
 .tienda-foto-item img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: zoom-in; }
 .tienda-foto-item .principal {
   position: absolute; left: 0; bottom: 0; right: 0; text-align: center;
@@ -247,6 +249,17 @@
   background: rgba(0,0,0,.62); color: #fff; display: flex; align-items: center; justify-content: center;
 }
 .tienda-foto-acciones .material-icons { font-size: 14px !important; }
+
+/* Elegir una foto para una variedad: el mismo tile, pero es un botón entero */
+.tienda-foto-elegible { cursor: pointer; font-family: inherit; }
+.tienda-foto-elegible img { cursor: pointer; }
+.tienda-foto-elegible:hover { border-color: #4361ee; }
+.tienda-foto-elegible[aria-pressed="true"] { border-color: #4361ee; box-shadow: 0 0 0 2px #4361ee; }
+.tienda-foto-tilde {
+  position: absolute; top: 5px; right: 5px; width: 24px; height: 24px; border-radius: 50%;
+  background: #4361ee; color: #fff; display: flex; align-items: center; justify-content: center;
+}
+.tienda-foto-tilde .material-icons { font-size: 16px !important; }
 
 /* Foto grande, sin salir del editor */
 .tienda-foto-zoom {
@@ -266,7 +279,7 @@
 }
 .tienda-foto-zoom-cerrar:hover { background: rgba(255,255,255,.28); }
 .tienda-subir {
-  width: 92px; height: 92px; border-radius: 10px; cursor: pointer;
+  width: 108px; height: 108px; border-radius: 10px; cursor: pointer;
   border: 1.5px dashed var(--border); background: var(--card-bg); color: var(--text-muted);
   display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 3px; font-size: 11.5px; font-weight: 600; font-family: inherit;
@@ -275,10 +288,21 @@
 
 /* Variedades */
 .tienda-variedad {
-  display: grid; grid-template-columns: 42px minmax(0, 1fr) 1fr 84px;
+  display: grid; grid-template-columns: 42px 40px minmax(0, 1fr) 1fr 84px;
   gap: 10px; align-items: center; padding: 7px 0;
   border-bottom: 1px solid var(--border);
 }
+/* La foto de la variedad: un cuadrito que muestra la que tiene o invita a
+   ponerle una. Con foto el borde es firme; sin foto, punteado como "Agregar". */
+.tienda-variedad-foto {
+  width: 40px; height: 40px; border-radius: 8px; padding: 0; cursor: pointer;
+  border: 1.5px dashed var(--border); background: var(--card-bg); color: var(--text-muted);
+  display: flex; align-items: center; justify-content: center; overflow: hidden;
+}
+.tienda-variedad-foto:hover { border-color: #4361ee; color: #4361ee; }
+.tienda-variedad-foto.con-foto { border-style: solid; }
+.tienda-variedad-foto img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tienda-variedad-foto .material-icons { font-size: 18px !important; }
 .tienda-variedad:last-child { border-bottom: none; }
 .tienda-variedad .original { font-size: 13px; font-weight: 600; }
 .tienda-variedad .datos { font-size: 11.5px; color: var(--text-muted); }
@@ -302,8 +326,12 @@
   .tienda-fila { grid-template-columns: 44px minmax(0, 1fr) 92px; row-gap: 8px; }
   .tienda-fila .tienda-stock { display: none; }
   .tienda-dos { grid-template-columns: 1fr; }
-  .tienda-variedad { grid-template-columns: 42px minmax(0, 1fr); }
-  .tienda-variedad .datos { grid-column: 2; }
+  /* En el teléfono: interruptor, foto y nombre en un renglón; el campo del
+     nombre público abajo, a lo ancho. El "se muestra / oculta" repite lo que
+     ya dice el interruptor y acá no entra: se esconde. */
+  .tienda-variedad { grid-template-columns: 42px 40px minmax(0, 1fr); row-gap: 6px; }
+  .tienda-variedad input { grid-column: 2 / -1; }
+  .tienda-variedad > .datos { display: none; }
 }
 
 /* ── Avisarle al cliente ──────────────────────────────────────────────────

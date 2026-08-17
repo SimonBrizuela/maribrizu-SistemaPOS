@@ -19,7 +19,7 @@ import { collection, deleteDoc, doc, getDocs, orderBy, query } from 'firebase/fi
 import { getCached } from '../cache.js';
 import { leerDocRapido } from '../config.js';
 import { confirmDialog, escHtml, verFotoGrande } from '../components/dialogs.js';
-import { guardarYEspejar, motivoDeNoPublicar, nombreBonito, subirFoto } from '../tienda_espejo.js';
+import { guardarYEspejar, imagenesDe, motivoDeNoPublicar, nombreBonito, subirFoto } from '../tienda_espejo.js';
 import '../styles/tienda.css';
 
 let _db = null;
@@ -154,15 +154,6 @@ async function traerPedidas() {
     const snap = await getDocs(collection(_db, 'tienda_fotos_pedidas'));
     return snap.docs;
   }
-}
-
-/** Las fotos publicadas del producto, con el mismo criterio que el espejo. */
-function imagenesDe(datos) {
-  if (!datos) return [];
-  const propias = datos.tienda_imagenes;
-  if (Array.isArray(propias) && propias.length) return propias.filter(Boolean).map(String);
-  const suelta = datos.imagen_url || datos.imagen;
-  return suelta ? [String(suelta)] : [];
 }
 
 /* ── Pintado ──────────────────────────────────────────────────────────────── */

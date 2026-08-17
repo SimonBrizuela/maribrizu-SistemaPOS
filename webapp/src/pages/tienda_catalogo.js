@@ -25,6 +25,10 @@ import {
   guardarYEspejar, motivoDeNoPublicar, medidasDe, nombreBonito, normalizar,
   subirFoto, borrarFoto,
 } from '../tienda_espejo.js';
+import {
+  ponerDePortada, moverFoto, quitarFoto, desvincularFoto, vincularFoto,
+  fotoDeVariedad, limpiarAjustes, fotosHuerfanas,
+} from '../tienda_galeria.js';
 import '../styles/tienda.css';
 
 const POR_TANDA = 60;
@@ -153,6 +157,9 @@ function fila(p) {
   const variedades = p.medidas.variedades.length
     ? ` · ${p.medidas.variedades.length} variedades`
     : '';
+  // Cuántas fotos tiene, cuando son más de una: dice de un vistazo a qué
+  // producto le falta galería sin abrirlo.
+  const fotos = p.imagenes.length > 1 ? ` · ${p.imagenes.length} fotos` : '';
   const pack = p.medidas.precio_pack
     ? ` · ${escHtml(p.medidas.pack_nombre)} ${pesos(p.medidas.precio_pack)}`
     : '';
@@ -163,7 +170,7 @@ function fila(p) {
       <div style="min-width:0">
         <div class="tienda-nombre">${escHtml(p.nombre)}</div>
         <div class="tienda-sub">
-          ${escHtml(p.rubro || 'sin rubro')}${escHtml(variedades)}${pack}
+          ${escHtml(p.rubro || 'sin rubro')}${escHtml(variedades)}${escHtml(fotos)}${pack}
         </div>
         ${p.nombre !== nombreBonito(p.nombreCatalogo) ? `
           <div class="tienda-sub" style="display:flex;align-items:center;gap:3px">
@@ -377,7 +384,7 @@ async function abrirAvisos(db, rubros) {
 
 function abrirEditor(p) {
   const m = p.medidas;
-  const ajustes = (p.datos.tienda_variedades && typeof p.datos.tienda_variedades === 'object')
+  let ajustes = (p.datos.tienda_variedades && typeof p.datos.tienda_variedades === 'object')
     ? { ...p.datos.tienda_variedades } : {};
 
   // Las variedades salen del catálogo del POS, con el nombre tal cual lo
@@ -463,9 +470,11 @@ function abrirEditor(p) {
           <h4>Fotos</h4>
           <div class="tienda-fotos" id="edFotos"></div>
           <div class="tienda-pista" id="edFotosPista">
-            La primera es la que se ve en el listado. Se guardan al instante.
+            La portada es la que se ve en el listado y abre la ficha; las demás
+            se ven como miniaturas debajo. Se guardan al instante.
           </div>
           <input type="file" id="edArchivo" accept="image/*" multiple hidden>
+          <input type="file" id="edArchivoVariedad" accept="image/*" hidden>
         </div>
 
         </div>
@@ -529,7 +538,8 @@ function abrirEditor(p) {
           <div id="edVariedades"></div>
           <div class="tienda-pista">
             Las que se apaguen no salen en la tienda y su stock no cuenta para el
-            total publicado. El nombre en blanco usa el del catálogo.
+            total publicado. El nombre en blanco usa el del catálogo. La foto de
+            cada una se ve al elegirla en la ficha; sin foto propia se ve la portada.
           </div>
         </div>` : ''}
       </div>
@@ -638,14 +648,22 @@ function abrirEditor(p) {
   pintarMinimo();
 
   /* ── Fotos ── */
+  // La galería se guarda al instante (cada foto es una subida que ya pasó);
+  // lo demás del editor espera a "Guardar cambios". Las operaciones sobre la
+  // lista viven en tienda_galeria.js, que es lo que se prueba.
   function pintarFotos() {
+    const ultima = imagenes.length - 1;
     $('#edFotos').innerHTML = imagenes.map((url, i) => `
-      <div class="tienda-foto-item">
+      <div class="tienda-foto-item ${i === 0 ? 'es-portada' : ''}">
         <img src="${escHtml(url)}" alt="" loading="lazy" data-foto="ver" data-i="${i}">
-        ${i === 0 ? '<span class="principal">PRINCIPAL</span>' : ''}
+        ${i === 0 ? '<span class="principal">PORTADA</span>' : ''}
         <div class="tienda-foto-acciones">
-          ${i > 0 ? `<button data-foto="principal" data-i="${i}" title="Poner de principal">
-                       <span class="material-icons">arrow_upward</span></button>` : ''}
+          ${i > 0 ? `<button data-foto="portada" data-i="${i}" title="Usar de portada">
+                       <span class="material-icons">star</span></button>` : ''}
+          ${i > 0 ? `<button data-foto="izquierda" data-i="${i}" title="Mover a la izquierda">
+                       <span class="material-icons">chevron_left</span></button>` : ''}
+          ${i < ultima ? `<button data-foto="derecha" data-i="${i}" title="Mover a la derecha">
+                       <span class="material-icons">chevron_right</span></button>` : ''}
           <button data-foto="borrar" data-i="${i}" title="Borrar">
             <span class="material-icons">delete</span></button>
         </div>
@@ -656,45 +674,83 @@ function abrirEditor(p) {
   }
   pintarFotos();
 
-  async function guardarFotos(mensaje) {
+  async function guardarFotos(mensaje, extra = {}) {
     $('#edFotosPista').textContent = 'Guardando…';
     try {
-      await guardar(p, { tienda_imagenes: imagenes });
+      await guardar(p, { tienda_imagenes: imagenes, ...extra });
       p.imagenes = imagenes.slice();
       $('#edFotosPista').textContent = mensaje;
       refrescar();
+      return true;
     } catch (err) {
       console.error('[tienda] fotos:', err);
       $('#edFotosPista').textContent = 'No se pudo guardar. Probá de nuevo.';
+      return false;
     }
   }
+
+  let ocupadoFotos = false;
 
   $('#edFotos').addEventListener('click', async ev => {
     const boton = ev.target.closest('[data-foto]');
     if (!boton) return;
     const i = Number(boton.dataset.i);
+    const accion = boton.dataset.foto;
 
-    if (boton.dataset.foto === 'ver') { verFotoGrande(imagenes[i]); return; }
+    if (accion === 'ver') { verFotoGrande(imagenes[i]); return; }
+    if (accion === 'agregar') { $('#edArchivo').click(); return; }
 
-    if (boton.dataset.foto === 'agregar') { $('#edArchivo').click(); return; }
+    // Dos clicks seguidos mientras se guarda el primero mandarían dos listas
+    // distintas y ganaría la que llegue última, no la última que se pidió.
+    if (ocupadoFotos) return;
+    ocupadoFotos = true;
+    try {
+      if (accion === 'portada') {
+        imagenes = ponerDePortada(imagenes, i);
+        pintarFotos();
+        await guardarFotos('Listo, esa es la portada.');
+        return;
+      }
 
-    if (boton.dataset.foto === 'principal') {
-      const [movida] = imagenes.splice(i, 1);
-      imagenes.unshift(movida);
-      pintarFotos();
-      await guardarFotos('Listo, esa es la principal.');
-      return;
-    }
+      if (accion === 'izquierda' || accion === 'derecha') {
+        imagenes = moverFoto(imagenes, i, accion === 'izquierda' ? i - 1 : i + 1);
+        pintarFotos();
+        await guardarFotos('Orden guardado.');
+        return;
+      }
 
-    if (boton.dataset.foto === 'borrar') {
-      const url = imagenes[i];
-      imagenes.splice(i, 1);
-      pintarFotos();
-      await guardarFotos('Foto borrada.');
-      // Recién se saca de Storage cuando el producto ya no la referencia: al
-      // revés, un fallo al guardar deja el producto apuntando a una foto que
-      // ya no existe.
-      borrarFoto(url);
+      if (accion === 'borrar') {
+        const url = imagenes[i];
+        // Si una variedad la tenía puesta, se le saca en el mismo guardado:
+        // dejarla apuntando a una foto borrada es una imagen rota en la ficha
+        // hasta que alguien toque "Guardar cambios".
+        const quitada = quitarFoto(imagenes, ajustes, url);
+        imagenes = quitada.imagenes;
+        ajustes = quitada.ajustes;
+        pintarFotos();
+        pintarVariedades();
+
+        // Lo que se persiste son los ajustes GUARDADOS sin esa foto, no los
+        // que se están editando: cancelar después tiene que seguir siendo
+        // cancelar. Se mira lo guardado por separado porque puede diferir de
+        // lo que se edita (le sacaron la foto en memoria y todavía no guardaron).
+        const guardados = desvincularFoto(p.datos.tienda_variedades, url);
+        const extra = guardados.desvinculadas.length
+          ? { tienda_variedades: limpiarAjustes(guardados.ajustes) }
+          : {};
+        const cuantas = new Set([...quitada.desvinculadas, ...guardados.desvinculadas]).size;
+        const guardado = await guardarFotos(
+          cuantas === 0 ? 'Foto borrada.'
+            : cuantas === 1 ? 'Foto borrada. Una variedad la usaba y quedó sin foto.'
+            : `Foto borrada. ${cuantas} variedades la usaban y quedaron sin foto.`,
+          extra);
+        // Recién se saca de Storage cuando el producto ya no la referencia: al
+        // revés, un fallo al guardar deja el producto apuntando a una foto que
+        // ya no existe.
+        if (guardado) borrarFoto(url);
+      }
+    } finally {
+      ocupadoFotos = false;
     }
   });
 
@@ -709,7 +765,7 @@ function abrirEditor(p) {
       try {
         const url = await subirFoto(p.id, archivo,
           { alProgreso: t => { $('#edFotosPista').textContent = t; } });
-        imagenes.push(url);
+        imagenes = [...imagenes, url];
         pintarFotos();
       } catch (err) {
         console.error('[tienda] subida:', err);
@@ -727,10 +783,17 @@ function abrirEditor(p) {
     caja.innerHTML = colores.map(c => {
       const ajuste = ajustes[c.clave] || {};
       const publicada = ajuste.publicar !== false;
+      const foto = fotoDeVariedad(ajustes, c.clave);
       return `
         <div class="tienda-variedad ${publicada ? '' : 'apagada'}" data-clave="${escHtml(c.clave)}">
           <button class="tienda-switch" style="width:36px;height:21px" data-variedad="interruptor"
                   aria-checked="${publicada}"></button>
+          <button class="tienda-variedad-foto ${foto ? 'con-foto' : ''}" data-variedad="foto"
+                  title="${foto ? 'Cambiar la foto de esta variedad' : 'Ponerle una foto a esta variedad'}">
+            ${foto
+              ? `<img src="${escHtml(foto)}" alt="" loading="lazy">`
+              : '<span class="material-icons">add_photo_alternate</span>'}
+          </button>
           <div>
             <div class="original">${escHtml(nombreBonito(c.original))}</div>
             <div class="datos">
@@ -749,12 +812,147 @@ function abrirEditor(p) {
   pintarVariedades();
 
   $('#edVariedades')?.addEventListener('click', ev => {
-    const boton = ev.target.closest('[data-variedad="interruptor"]');
+    const boton = ev.target.closest('[data-variedad="interruptor"], [data-variedad="foto"]');
     if (!boton) return;
     const clave = boton.closest('[data-clave]').dataset.clave;
+
+    if (boton.dataset.variedad === 'foto') {
+      const color = colores.find(c => c.clave === clave);
+      abrirFotoDeVariedad(clave, nombreBonito(color?.original || clave));
+      return;
+    }
+
     const ajuste = ajustes[clave] || {};
     ajustes[clave] = { ...ajuste, publicar: ajuste.publicar === false };
     pintarVariedades();
+  });
+
+  /* ── La foto de una variedad ──
+     Puede ser una de la galería (lo normal: la portada muestra el producto y
+     cada color tiene su foto adentro) o una subida solo para ella. La elección
+     queda en `ajustes` y se guarda con "Guardar cambios", igual que el nombre;
+     lo que se sube acá se sube ya, y si después se cancela se borra. */
+  const subidasEnSesion = [];
+  let claveEligiendo = null;
+
+  function cerrarFotoDeVariedad() {
+    const previo = document.querySelector('.tienda-overlay[data-foto-variedad]');
+    if (!previo) return;
+    if (previo._alTeclado) document.removeEventListener('keydown', previo._alTeclado);
+    previo.remove();
+  }
+
+  function abrirFotoDeVariedad(clave, nombreVariedad) {
+    cerrarFotoDeVariedad();
+    claveEligiendo = clave;
+    const actual = fotoDeVariedad(ajustes, clave);
+
+    // La propia (subida solo para esta variedad) no está en la galería: se
+    // muestra primero, marcada, para que se vea qué tiene puesto hoy.
+    const propia = actual && !imagenes.includes(actual) ? actual : null;
+    const opciones = [
+      ...(propia ? [{ url: propia, etiqueta: 'PROPIA' }] : []),
+      ...imagenes.map((url, i) => ({ url, etiqueta: i === 0 ? 'PORTADA' : '' })),
+    ];
+
+    const capa = document.createElement('div');
+    capa.className = 'tienda-overlay';
+    capa.setAttribute('data-foto-variedad', '');
+    capa.innerHTML = `
+      <div class="tienda-editor" style="max-width:560px" role="dialog" aria-modal="true">
+        <header>
+          <div style="min-width:0;flex:1">
+            <h3>Foto de ${escHtml(nombreVariedad)}</h3>
+            <p>Se ve en la ficha al elegir esta variedad, y en el carrito.</p>
+          </div>
+          <button class="pc-btn" data-accion="cerrar" style="padding:6px 10px">
+            <span class="material-icons">close</span>
+          </button>
+        </header>
+        <div class="cuerpo">
+          ${opciones.length ? `
+            <div class="tienda-pista" style="margin-bottom:10px">Elegí una de las fotos del producto:</div>
+            <div class="tienda-fotos">
+              ${opciones.map(o => `
+                <button class="tienda-foto-item tienda-foto-elegible" data-accion="elegir"
+                        data-url="${escHtml(o.url)}" aria-pressed="${o.url === actual}"
+                        title="${o.url === actual ? 'Es la que tiene puesta' : 'Usar esta'}">
+                  <img src="${escHtml(o.url)}" alt="" loading="lazy">
+                  ${o.etiqueta ? `<span class="principal">${o.etiqueta}</span>` : ''}
+                  ${o.url === actual ? '<span class="tienda-foto-tilde"><span class="material-icons">check</span></span>' : ''}
+                </button>`).join('')}
+            </div>` : `
+            <div class="tienda-pista" style="margin-bottom:10px">
+              El producto todavía no tiene fotos en la galería. Podés subir una
+              solo para esta variedad.
+            </div>`}
+          <div class="tienda-pista" id="edVariedadFotoEstado" style="margin-top:12px"></div>
+        </div>
+        <footer>
+          <button class="pc-btn" data-accion="subir" style="padding:9px 16px">
+            <span class="material-icons" style="font-size:17px">upload</span> Subir una foto
+          </button>
+          ${actual ? `
+            <button class="pc-btn" data-accion="quitar" style="padding:9px 16px">
+              <span class="material-icons" style="font-size:17px">hide_image</span> Sin foto
+            </button>` : ''}
+          <button class="pc-btn" data-accion="cerrar" style="padding:9px 16px;margin-left:auto">
+            Cerrar
+          </button>
+        </footer>
+      </div>`;
+
+    let bajoPropio = false;
+    capa.addEventListener('mousedown', ev => { bajoPropio = ev.target === capa; });
+    capa.addEventListener('click', ev => {
+      const boton = ev.target.closest('[data-accion]');
+      const accion = boton?.dataset.accion;
+      if (!accion) {
+        if (ev.target === capa && bajoPropio) cerrarFotoDeVariedad();
+        return;
+      }
+      if (accion === 'cerrar') { cerrarFotoDeVariedad(); return; }
+      if (accion === 'elegir') {
+        ajustes = vincularFoto(ajustes, clave, boton.dataset.url);
+        pintarVariedades();
+        cerrarFotoDeVariedad();
+        return;
+      }
+      if (accion === 'quitar') {
+        ajustes = vincularFoto(ajustes, clave, null);
+        pintarVariedades();
+        cerrarFotoDeVariedad();
+        return;
+      }
+      if (accion === 'subir') { $('#edArchivoVariedad').click(); }
+    });
+
+    capa._alTeclado = ev => { if (ev.key === 'Escape') cerrarFotoDeVariedad(); };
+    document.addEventListener('keydown', capa._alTeclado);
+    document.body.appendChild(capa);
+  }
+
+  $('#edArchivoVariedad').addEventListener('change', async ev => {
+    const [archivo] = Array.from(ev.target.files || []);
+    ev.target.value = '';
+    if (!archivo || !claveEligiendo) return;
+    const clave = claveEligiendo;
+    const decir = t => {
+      const caja = document.getElementById('edVariedadFotoEstado');
+      if (caja) caja.textContent = t;
+    };
+
+    try {
+      const url = await subirFoto(p.id, archivo, { alProgreso: decir });
+      subidasEnSesion.push(url);
+      ajustes = vincularFoto(ajustes, clave, url);
+      pintarVariedades();
+      cerrarFotoDeVariedad();
+      estado.textContent = 'Foto puesta. Se guarda con "Guardar cambios".';
+    } catch (err) {
+      console.error('[tienda] foto de variedad:', err);
+      decir(`No se pudo subir: ${err.message}`);
+    }
   });
 
   $('#edVariedades')?.addEventListener('input', ev => {
@@ -765,8 +963,22 @@ function abrirEditor(p) {
   });
 
   /* ── Cerrar y guardar ── */
-  const cerrar = () => { overlay.remove(); document.removeEventListener('keydown', alTeclado); };
-  const alTeclado = ev => { if (ev.key === 'Escape') cerrar(); };
+  const cerrar = () => {
+    cerrarFotoDeVariedad();
+    overlay.remove();
+    document.removeEventListener('keydown', alTeclado);
+    // Lo subido para una variedad que al final no se guardó (se cerró sin
+    // guardar, o se cambió por otra) queda huérfano en Storage: se borra acá.
+    // Se compara contra lo GUARDADO, no contra lo que se estaba editando.
+    fotosHuerfanas(subidasEnSesion, p.imagenes, p.datos.tienda_variedades)
+      .forEach(url => borrarFoto(url));
+  };
+  const alTeclado = ev => {
+    if (ev.key !== 'Escape') return;
+    // Con el selector de foto abierto, Escape cierra ese y no el editor.
+    if (document.querySelector('.tienda-overlay[data-foto-variedad]')) return;
+    cerrar();
+  };
   document.addEventListener('keydown', alTeclado);
 
   // Precio, stock, variedades y nombre interno se editan en el catálogo
@@ -795,14 +1007,9 @@ function abrirEditor(p) {
     boton.disabled = true;
     estado.textContent = 'Guardando…';
 
-    // Las variedades sin nada que decir no se guardan: un mapa lleno de
-    // entradas vacías engorda el documento y no cambia nada.
-    const limpias = {};
-    for (const [clave, ajuste] of Object.entries(ajustes)) {
-      const nombre = String(ajuste?.nombre || '').trim();
-      const oculta = ajuste?.publicar === false;
-      if (nombre || oculta) limpias[clave] = { publicar: !oculta, nombre: nombre || null };
-    }
+    // Las variedades sin nada que decir no se guardan (limpiarAjustes lo
+    // resuelve): un mapa lleno de entradas vacías engorda el documento.
+    const limpias = limpiarAjustes(ajustes);
 
     const nombreEscrito = $('#edNombre').value.trim();
     const nombre = nombreEscrito === nombreBonito(p.nombreCatalogo) ? '' : nombreEscrito;
@@ -825,9 +1032,10 @@ function abrirEditor(p) {
         tienda_pack_nombre: packNombre || undefined,
         tienda_minimo: minimo > 0 ? minimo : undefined,
         tienda_paso: paso > 0 ? paso : undefined,
-        tienda_variedades: Object.keys(limpias).length ? limpias : undefined,
+        tienda_variedades: limpias,
       });
 
+      // Ya está todo guardado: cerrar() no encuentra nada huérfano que borrar.
       cerrar();
       refrescar();
       avisar(publicado
