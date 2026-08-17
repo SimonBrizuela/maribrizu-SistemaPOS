@@ -235,7 +235,7 @@
   position: relative; width: 92px; height: 92px; border-radius: 10px;
   overflow: hidden; border: 1px solid var(--border); background: var(--bg);
 }
-.tienda-foto-item img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.tienda-foto-item img { width: 100%; height: 100%; object-fit: cover; display: block; cursor: zoom-in; }
 .tienda-foto-item .principal {
   position: absolute; left: 0; bottom: 0; right: 0; text-align: center;
   background: rgba(0,0,0,.62); color: #fff; font-size: 10px; font-weight: 700;
@@ -247,6 +247,24 @@
   background: rgba(0,0,0,.62); color: #fff; display: flex; align-items: center; justify-content: center;
 }
 .tienda-foto-acciones .material-icons { font-size: 14px !important; }
+
+/* Foto grande, sin salir del editor */
+.tienda-foto-zoom {
+  position: fixed; inset: 0; z-index: 10100; background: rgba(0,0,0,.82);
+  display: flex; align-items: center; justify-content: center; padding: 32px;
+  cursor: zoom-out;
+}
+.tienda-foto-zoom img {
+  max-width: min(90vw, 720px); max-height: 90vh; border-radius: 12px;
+  box-shadow: 0 12px 48px rgba(0,0,0,.5); cursor: default; display: block;
+}
+.tienda-foto-zoom-cerrar {
+  position: absolute; top: 18px; right: 18px; width: 40px; height: 40px;
+  border-radius: 50%; border: none; cursor: pointer;
+  background: rgba(255,255,255,.15); color: #fff;
+  display: flex; align-items: center; justify-content: center;
+}
+.tienda-foto-zoom-cerrar:hover { background: rgba(255,255,255,.28); }
 .tienda-subir {
   width: 92px; height: 92px; border-radius: 10px; cursor: pointer;
   border: 1.5px dashed var(--border); background: var(--card-bg); color: var(--text-muted);

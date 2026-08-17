@@ -20,7 +20,7 @@
 import { collection, doc, getDoc, setDoc, getDocs, orderBy, query } from 'firebase/firestore';
 import { getCached } from '../cache.js';
 import { leerDocRapido } from '../config.js';
-import { alertDialog, escHtml } from '../components/dialogs.js';
+import { alertDialog, escHtml, verFotoGrande } from '../components/dialogs.js';
 import {
   guardarYEspejar, motivoDeNoPublicar, medidasDe, nombreBonito, normalizar,
   subirFoto, borrarFoto,
@@ -345,7 +345,12 @@ async function abrirAvisos(db, rubros) {
   const cerrar = () => overlay.remove();
   overlay.querySelector('.avisos-cerrar').addEventListener('click', cerrar);
   overlay.querySelector('.avisos-cancelar').addEventListener('click', cerrar);
-  overlay.addEventListener('click', ev => { if (ev.target === overlay) cerrar(); });
+  // Seleccionar texto de un campo y soltar el mouse afuera también dispara
+  // "click" en el overlay: sin este control, cerraba el diálogo solo por
+  // marcar texto.
+  let avisosBajoPropio = false;
+  overlay.addEventListener('mousedown', ev => { avisosBajoPropio = ev.target === overlay; });
+  overlay.addEventListener('click', ev => { if (ev.target === overlay && avisosBajoPropio) cerrar(); });
 
   overlay.querySelector('.avisos-guardar').addEventListener('click', async ev => {
     const boton = ev.currentTarget;
@@ -438,8 +443,7 @@ function abrirEditor(p) {
           <div class="tienda-campo">
             <label>Nombre público</label>
             <input type="text" id="edNombre" maxlength="90"
-                   value="${escHtml(String(p.datos.tienda_nombre || ''))}"
-                   placeholder="${escHtml(nombreBonito(p.nombreCatalogo))}">
+                   value="${escHtml(String(p.datos.tienda_nombre || nombreBonito(p.nombreCatalogo)))}">
           </div>
           <div class="tienda-campo">
             <label>Descripción</label>
@@ -637,7 +641,7 @@ function abrirEditor(p) {
   function pintarFotos() {
     $('#edFotos').innerHTML = imagenes.map((url, i) => `
       <div class="tienda-foto-item">
-        <img src="${escHtml(url)}" alt="" loading="lazy">
+        <img src="${escHtml(url)}" alt="" loading="lazy" data-foto="ver" data-i="${i}">
         ${i === 0 ? '<span class="principal">PRINCIPAL</span>' : ''}
         <div class="tienda-foto-acciones">
           ${i > 0 ? `<button data-foto="principal" data-i="${i}" title="Poner de principal">
@@ -669,6 +673,8 @@ function abrirEditor(p) {
     const boton = ev.target.closest('[data-foto]');
     if (!boton) return;
     const i = Number(boton.dataset.i);
+
+    if (boton.dataset.foto === 'ver') { verFotoGrande(imagenes[i]); return; }
 
     if (boton.dataset.foto === 'agregar') { $('#edArchivo').click(); return; }
 
@@ -774,8 +780,14 @@ function abrirEditor(p) {
     window.navigateToPage?.('catalogo');
   });
 
+  // Seleccionar texto (nombre, descripción) y soltar el mouse afuera del
+  // recuadro también dispara "click" en el overlay: sin este control, cerraba
+  // el editor solo por marcar texto.
+  let editorBajoPropio = false;
+  overlay.addEventListener('mousedown', ev => { editorBajoPropio = ev.target === overlay; });
   overlay.addEventListener('click', ev => {
-    if (ev.target === overlay || ev.target.closest('[data-cerrar]')) cerrar();
+    if (ev.target.closest('[data-cerrar]')) { cerrar(); return; }
+    if (ev.target === overlay && editorBajoPropio) cerrar();
   });
 
   $('#edGuardar').addEventListener('click', async () => {
@@ -792,7 +804,8 @@ function abrirEditor(p) {
       if (nombre || oculta) limpias[clave] = { publicar: !oculta, nombre: nombre || null };
     }
 
-    const nombre = $('#edNombre').value.trim();
+    const nombreEscrito = $('#edNombre').value.trim();
+    const nombre = nombreEscrito === nombreBonito(p.nombreCatalogo) ? '' : nombreEscrito;
     const descripcion = $('#edDescripcion').value.trim();
     const packNombre = $('#edPackNombre').value.trim();
     const unidad = $('#edUnidad').value;

@@ -18,7 +18,7 @@
 import { collection, deleteDoc, doc, getDocs, orderBy, query } from 'firebase/firestore';
 import { getCached } from '../cache.js';
 import { leerDocRapido } from '../config.js';
-import { confirmDialog, escHtml } from '../components/dialogs.js';
+import { confirmDialog, escHtml, verFotoGrande } from '../components/dialogs.js';
 import { guardarYEspejar, motivoDeNoPublicar, nombreBonito, subirFoto } from '../tienda_espejo.js';
 import '../styles/tienda.css';
 
@@ -295,12 +295,108 @@ async function alElegirArchivo(ev) {
   const input = ev.target;
   const id = input.dataset.para;
   const archivos = [...(input.files || [])];
+  input.value = '';
   if (!id || !archivos.length || _subiendo) return;
 
   // Puede venir de cualquiera de las dos tablas.
   const f = _lista.find(x => x.id === id) || _esperando.find(x => x.id === id);
   if (!f) return;
 
+  abrirPreviewCarga(id, f, archivos);
+}
+
+/* ── Preview antes de guardar ─────────────────────────────────────────────── */
+// Se sube directo a Storage sin mostrar nada: si la foto sale movida o es la
+// que no era, ya quedó pegada en el producto y hay que entrar a corregirla a
+// mano. Antes de subir se ve grande cómo va a quedar, con la salida de
+// "elegí otra" a mano por si la primera no convenció.
+
+function cerrarPreviewCarga() {
+  const previo = document.querySelector('.tienda-overlay[data-preview-carga]');
+  if (!previo) return;
+  (previo._urls || []).forEach(u => URL.revokeObjectURL(u));
+  if (previo._alTeclado) document.removeEventListener('keydown', previo._alTeclado);
+  previo.remove();
+}
+
+function abrirPreviewCarga(id, f, archivos) {
+  cerrarPreviewCarga();
+
+  const urls = archivos.map(a => URL.createObjectURL(a));
+  const overlay = document.createElement('div');
+  overlay.className = 'tienda-overlay';
+  overlay.setAttribute('data-preview-carga', '');
+  overlay._urls = urls;
+  overlay.innerHTML = `
+    <div class="tienda-editor" style="max-width:520px">
+      <header>
+        <div style="min-width:0;flex:1">
+          <h3>${escHtml(f.nombre)}</h3>
+          <p>Así se va a ver. Confirmá o elegí otra.</p>
+        </div>
+        <button class="pc-btn" data-accion="cancelar" style="padding:6px 10px">
+          <span class="material-icons">close</span>
+        </button>
+      </header>
+      <div class="cuerpo">
+        <div class="tienda-fotos">
+          ${urls.map((u, i) => `
+            <div class="tienda-foto-item">
+              <img src="${u}" alt="" data-accion="ver" data-i="${i}">
+              ${i === 0 && urls.length > 1 ? '<span class="principal">PRINCIPAL</span>' : ''}
+            </div>`).join('')}
+        </div>
+      </div>
+      <footer>
+        <button class="pc-btn" data-accion="cambiar" style="padding:9px 16px">
+          <span class="material-icons" style="font-size:17px">sync</span> Elegir otra
+        </button>
+        <button class="pc-btn" data-accion="cancelar" style="padding:9px 16px;margin-left:auto">
+          Cancelar
+        </button>
+        <button class="pc-btn" data-accion="confirmar"
+                style="padding:9px 20px;background:#4361ee;color:#fff;border-color:#4361ee">
+          Usar ${archivos.length > 1 ? 'estas fotos' : 'esta foto'}
+        </button>
+      </footer>
+    </div>`;
+
+  // Seleccionar texto del título y soltar el mouse afuera del recuadro
+  // también dispara "click" en el overlay: sin este control, cerraba la
+  // preview solo por marcar texto.
+  let bajoPropio = false;
+  overlay.addEventListener('mousedown', ev => { bajoPropio = ev.target === overlay; });
+  overlay.addEventListener('click', ev => {
+    const boton = ev.target.closest('[data-accion]');
+    const accion = boton?.dataset.accion;
+    if (!accion && !(ev.target === overlay && bajoPropio)) return;
+
+    if (accion === 'ver') { verFotoGrande(urls[Number(boton.dataset.i)]); return; }
+
+    if (accion === 'cambiar') {
+      // El propio overlay se reemplaza solo cuando llegue el próximo "change"
+      // del input: si cancela el selector de archivos, esta preview sigue
+      // en pie con lo que ya había elegido.
+      const input = document.getElementById('fotosArchivo');
+      input.dataset.para = id;
+      input.click();
+      return;
+    }
+    if (accion === 'confirmar') {
+      cerrarPreviewCarga();
+      subirArchivos(id, f, archivos);
+      return;
+    }
+    cerrarPreviewCarga();
+  });
+
+  overlay._alTeclado = ev => { if (ev.key === 'Escape') cerrarPreviewCarga(); };
+  document.addEventListener('keydown', overlay._alTeclado);
+
+  document.body.appendChild(overlay);
+}
+
+async function subirArchivos(id, f, archivos) {
   _subiendo = true;
   document.querySelectorAll('[data-cargar]').forEach(b => { b.disabled = true; });
 
@@ -341,7 +437,6 @@ async function alElegirArchivo(ev) {
   } finally {
     _subiendo = false;
     document.querySelectorAll('[data-cargar]').forEach(b => { b.disabled = false; });
-    input.value = '';
   }
 }
 

@@ -20,6 +20,33 @@ function _esc(s) {
 // dentro de los `message` de los diálogos, que se renderizan como HTML.
 export function escHtml(s) { return _esc(s); }
 
+// Foto grande arriba de todo, sin cerrar lo que estaba abierto atrás. Usa la
+// clase `.tienda-foto-zoom` de styles/tienda.css.
+export function verFotoGrande(url) {
+  document.querySelector('.tienda-foto-zoom')?.remove();
+  const zoom = document.createElement('div');
+  zoom.className = 'tienda-foto-zoom';
+  zoom.innerHTML = `
+    <button class="tienda-foto-zoom-cerrar" aria-label="Cerrar">
+      <span class="material-icons">close</span>
+    </button>
+    <img src="${_esc(url)}" alt="">`;
+  const cerrar = () => {
+    zoom.remove();
+    document.removeEventListener('keydown', porTecla);
+  };
+  function porTecla(ev) { if (ev.key === 'Escape') cerrar(); }
+  // Igual que en los demás overlays: solo cierra si el click empezó y
+  // terminó afuera de la foto, no si fue un arrastre que soltó ahí.
+  let bajoPropio = false;
+  zoom.addEventListener('mousedown', ev => { bajoPropio = ev.target === zoom; });
+  zoom.addEventListener('click', ev => {
+    if (ev.target.closest('.tienda-foto-zoom-cerrar') || (ev.target === zoom && bajoPropio)) cerrar();
+  });
+  document.addEventListener('keydown', porTecla);
+  document.body.appendChild(zoom);
+}
+
 function _icon(type) {
   // type: 'confirm' | 'danger' | 'info' | 'success' | 'warning' | 'error'
   return ({
@@ -66,6 +93,10 @@ function _buildOverlay({ title, bodyHtml, footerHtml, type = 'confirm', maxWidth
     </div>
   `;
   document.body.appendChild(overlay);
+  // Seleccionar texto del mensaje y soltar el mouse afuera del recuadro
+  // también dispara "click" en el overlay: sin este control, cerraba el
+  // diálogo solo por marcar texto.
+  overlay.addEventListener('mousedown', e => { overlay._bajoPropio = e.target === overlay; });
   return overlay;
 }
 
@@ -105,7 +136,7 @@ export function confirmDialog({
     document.addEventListener('keydown', onKey);
     overlay.querySelector('.ad-ok').addEventListener('click', () => cleanup(true));
     overlay.querySelector('.ad-cancel').addEventListener('click', () => cleanup(false));
-    overlay.addEventListener('click', e => { if (e.target === overlay) cleanup(false); });
+    overlay.addEventListener('click', e => { if (e.target === overlay && overlay._bajoPropio) cleanup(false); });
     setTimeout(() => overlay.querySelector('.ad-ok')?.focus(), 30);
   });
 }
@@ -134,7 +165,7 @@ export function alertDialog({
     };
     document.addEventListener('keydown', onKey);
     overlay.querySelector('.ad-ok').addEventListener('click', cleanup);
-    overlay.addEventListener('click', e => { if (e.target === overlay) cleanup(); });
+    overlay.addEventListener('click', e => { if (e.target === overlay && overlay._bajoPropio) cleanup(); });
     setTimeout(() => overlay.querySelector('.ad-ok')?.focus(), 30);
   });
 }
@@ -173,7 +204,7 @@ export function promptDialog({
     document.addEventListener('keydown', onKey);
     overlay.querySelector('.ad-ok').addEventListener('click', () => cleanup(input.value));
     overlay.querySelector('.ad-cancel').addEventListener('click', () => cleanup(null));
-    overlay.addEventListener('click', e => { if (e.target === overlay) cleanup(null); });
+    overlay.addEventListener('click', e => { if (e.target === overlay && overlay._bajoPropio) cleanup(null); });
     input.addEventListener('focus', () => { input.select(); });
     setTimeout(() => input.focus(), 30);
   });
