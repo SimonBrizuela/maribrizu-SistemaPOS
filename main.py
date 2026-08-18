@@ -121,8 +121,51 @@ def _reconcile_orphans_on_startup(db):
             pass
         logger.info(
             f"Reconcile orphans (startup): {result.get('checked', 0)} locales, "
-            f"{result.get('deleted', 0)} borrados."
+            f"{result.get('deleted', 0)} borrados, "
+            f"{result.get('faltantes', 0)} vendibles que faltan."
         )
+
+        # Productos vendibles del catalogo que no estan en esta PC. No vuelven
+        # solos: el delta sync baja unicamente lo que cambio desde el ultimo
+        # sync, y un producto que se cayo de la base no cambia hace meses.
+        # Borrando la marca del ultimo sync, el delta baja el catalogo entero y
+        # los da de alta.
+        if result.get('faltantes'):
+            # Si un producto no logra entrar (un codigo de barras repetido, por
+            # ejemplo) el reconcile lo va a seguir viendo como faltante. El
+            # margen de 24hs evita que eso se convierta en un sync completo
+            # cada vez que alguien abre el POS.
+            alta_file = DATA_DIR / "last_alta_faltantes.txt"
+            ultima_alta = 0.0
+            if alta_file.exists():
+                try:
+                    ultima_alta = float(alta_file.read_text(encoding='utf-8').strip())
+                except Exception:
+                    ultima_alta = 0.0
+
+            if (_t.time() - ultima_alta) < (24 * 3600):
+                logger.info(
+                    f"Reconcile orphans: {result.get('faltantes')} faltantes, "
+                    f"pero ya se intentó darlos de alta hace menos de 24hs."
+                )
+                return
+
+            logger.info(
+                f"Reconcile orphans: dando de alta lo que falta "
+                f"({result.get('faltantes')} productos, "
+                f"ej. {', '.join(result.get('faltantes_ids', [])[:5])})."
+            )
+            try:
+                (DATA_DIR / "last_product_sync.txt").unlink(missing_ok=True)
+                alta_file.write_text(str(_t.time()), encoding='utf-8')
+            except Exception as e:
+                logger.warning(f"Reconcile orphans: no se pudo forzar el sync: {e}")
+            else:
+                fb.delta_sync_products_startup(
+                    db,
+                    on_done=lambda n: logger.info(
+                        f"Reconcile orphans: {n} productos aplicados al dar de alta."),
+                )
     except Exception as e:
         logger.warning(f"Reconcile orphans (startup): error {e}")
 
@@ -161,9 +204,12 @@ def _sync_inventory_from_firebase(db):
             )
             if meta_doc.exists:
                 meta = meta_doc.to_dict() or {}
-                fb_ts = meta.get('last_updated')
-                if fb_ts is not None:
-                    fb_epoch = fb_ts.timestamp() if hasattr(fb_ts, 'timestamp') else 0.0
+                # El panel lo escribe como fecha y el POS como texto: se lee
+                # igual en todos lados desde marcas_de_tiempo.
+                from pos_system.models.marcas_de_tiempo import a_fecha
+                fb_fecha = a_fecha(meta.get('last_updated'))
+                if fb_fecha is not None:
+                    fb_epoch = fb_fecha.timestamp()
                     if fb_epoch > 0 and fb_epoch <= local_epoch:
                         logger.info("Firebase: Catálogo sin cambios — sync omitido.")
                         return

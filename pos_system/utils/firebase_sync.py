@@ -769,6 +769,24 @@ class FirebaseSync:
             raise fallo
         return None
 
+    def _tiene_lapida_vigente(self, codigo: str) -> bool:
+        """
+        True si ese codigo tiene una lapida que sigue mandando, o sea que el
+        producto esta borrado de verdad aunque su doc siga en el catalogo.
+        """
+        if not self.enabled or not codigo:
+            return False
+        try:
+            snap = self.db.collection('catalogo_deleted').document(
+                str(codigo).strip()).get()
+            if not snap.exists:
+                return False
+            deleted_at = (snap.to_dict() or {}).get('deleted_at')
+        except Exception as e:
+            logger.debug(f"_tiene_lapida_vigente: {codigo}: {e}")
+            return False
+        return self._lapida_vigente(codigo, deleted_at)
+
     def _lapida_vigente(self, codigo: str, deleted_at) -> bool:
         """
         True si esa lapida todavia tiene que borrar el producto local.
@@ -932,30 +950,59 @@ class FirebaseSync:
         Productos locales SIN firebase_id Y SIN barcode no se tocan
         (productos cargados a mano sin codigo, ej. 'VARIOS').
 
-        Retorna {'deleted': n, 'softdeleted': n, 'checked': n}.
+        De la misma pasada sale la cuenta inversa: los productos vendibles del
+        catalogo que NO estan en la base local. Un producto que se cayo de la
+        PC (una purga, una lapida vieja, un borrado a mano) no vuelve nunca por
+        el delta sync, porque el delta solo baja lo que cambio desde el ultimo
+        sync y ese producto no cambia hace meses. Quedaba invisible en la caja
+        sin que nadie se enterara.
+
+        Retorna {'deleted': n, 'softdeleted': n, 'checked': n, 'faltantes': n,
+        'faltantes_ids': [...]}.
         """
-        out = {'deleted': 0, 'softdeleted': 0, 'checked': 0}
+        out = {'deleted': 0, 'softdeleted': 0, 'checked': 0,
+               'faltantes': 0, 'faltantes_ids': []}
         if not self.enabled:
             return out
         try:
-            # 1. Stream del catalogo: doc.id + cod_barra + codigo.
+            # 1. Stream del catalogo: doc.id + cod_barra + codigo, y lo minimo
+            #    para saber si el producto es vendible.
             firestore_ids = set()
             firestore_codes = set()
+            vendibles = {}          # doc_id -> codigos con los que puede matchear
             for doc in self.db.collection('catalogo').stream():
                 firestore_ids.add(doc.id)
                 d = doc.to_dict() or {}
+                codigos_doc = {doc.id}
                 cb = d.get('cod_barra')
                 if cb is not None and str(cb).strip():
                     firestore_codes.add(str(cb).strip())
+                    codigos_doc.add(str(cb).strip())
                 c = d.get('codigo')
                 if c is not None and str(c).strip():
                     firestore_codes.add(str(c).strip())
+                    codigos_doc.add(str(c).strip())
+
+                # Mismo criterio que el delta sync para saltear productos.
+                nombre = str(d.get('nombre') or d.get('name') or '').strip()
+                precio = float(d.get('precio_venta') or d.get('precio')
+                               or d.get('price') or 0)
+                estado = str(d.get('estado') or 'activo').lower()
+                if nombre and precio > 0 and estado != 'sin_precio':
+                    vendibles[doc.id] = codigos_doc
 
             # 2. Todos los productos locales con algun identificador.
             rows = db_manager.execute_query(
                 "SELECT id, firebase_id, barcode FROM products"
             ) or []
             out['checked'] = len(rows)
+
+            locales = set()
+            for r in rows:
+                for campo in ('firebase_id', 'barcode'):
+                    v = r.get(campo)
+                    if v is not None and str(v).strip():
+                        locales.add(str(v).strip())
 
             orphans = []
             for r in rows:
@@ -999,10 +1046,22 @@ class FirebaseSync:
             except Exception as e:
                 logger.warning(f"reconcile_all_orphans: fantasmas legacy: {e}")
 
+            # 4. La cuenta inversa: vendibles del catalogo que faltan en la
+            #    PC. Se excluyen los que tienen lapida vigente, que son
+            #    borrados de verdad cuyo doc quedo colgado en el catalogo.
+            faltantes = [doc_id for doc_id, codigos in vendibles.items()
+                         if not (codigos & locales)]
+            if faltantes:
+                faltantes = [doc_id for doc_id in faltantes
+                             if not self._tiene_lapida_vigente(doc_id)]
+            out['faltantes'] = len(faltantes)
+            out['faltantes_ids'] = faltantes[:50]
+
             logger.info(
                 f"reconcile_all_orphans: {len(rows)} locales, "
                 f"{len(firestore_ids)} ids + {len(firestore_codes)} codigos "
-                f"en Firestore, {len(orphans)} huerfanos."
+                f"en Firestore, {len(orphans)} huerfanos, "
+                f"{len(faltantes)} vendibles que faltan en la PC."
             )
 
             out['deleted'] = db_manager.hard_delete_products(orphans)
@@ -2050,7 +2109,10 @@ class FirebaseSync:
             try:
                 from firebase_admin import firestore as _fs
                 now_dt  = now_ar().astimezone(timezone.utc)
-                now_str = now_dt.strftime('%Y-%m-%dT%H:%M:%S')
+                # Con la zona escrita: el mismo campo lo tocan el POS (en hora
+                # de acá) y el panel (en UTC), y sin el offset no hay forma de
+                # saber cuál de las dos es.
+                now_str = now_dt.strftime('%Y-%m-%dT%H:%M:%S%z')
                 batch = self.db.batch()
                 updated = 0
                 tienda = []          # (firebase_id, stock que quedó) para la web
@@ -2279,7 +2341,10 @@ class FirebaseSync:
             try:
                 from firebase_admin import firestore as _fs
                 now_dt  = now_ar().astimezone(timezone.utc)
-                now_str = now_dt.strftime('%Y-%m-%dT%H:%M:%S')
+                # Con la zona escrita: el mismo campo lo tocan el POS (en hora
+                # de acá) y el panel (en UTC), y sin el offset no hay forma de
+                # saber cuál de las dos es.
+                now_str = now_dt.strftime('%Y-%m-%dT%H:%M:%S%z')
                 pc_id   = _get_pc_id()
 
                 batch = self.db.batch()
@@ -2437,9 +2502,13 @@ class FirebaseSync:
                     return
 
                 meta = meta_doc.to_dict() or {}
-                firebase_ts = str(meta.get('last_updated', '') or '')
+                # El panel escribe una fecha y el POS texto ISO en hora de acá:
+                # comparar eso como texto daba siempre "al día" y los productos
+                # nuevos del panel no bajaban nunca (ver marcas_de_tiempo).
+                from pos_system.models.marcas_de_tiempo import hay_cambios
+                firebase_ts = meta.get('last_updated')
 
-                inventario_al_dia = bool(firebase_ts and firebase_ts <= last_local_ts)
+                inventario_al_dia = not hay_cambios(firebase_ts, last_local_ts)
                 if inventario_al_dia:
                     logger.info(f"Delta sync: inventario al día ({firebase_ts}) — solo se reconciliarán borrados.")
                 else:
@@ -2449,21 +2518,15 @@ class FirebaseSync:
                 #    Si tenemos last_local_ts → bajar SÓLO docs cambiados desde entonces
                 #    (where(>last_local_ts)). Si no hay last_local_ts (instalación nueva),
                 #    se hace stream() completo una sola vez.
-                last_local_dt = None
-                if last_local_ts:
-                    for _f in ('%Y-%m-%dT%H:%M:%S.%f%z','%Y-%m-%dT%H:%M:%S%z',
-                               '%Y-%m-%dT%H:%M:%S.%f','%Y-%m-%dT%H:%M:%S',
-                               '%Y-%m-%d %H:%M:%S.%f','%Y-%m-%d %H:%M:%S'):
-                        try:
-                            _dt = datetime.strptime(last_local_ts, _f)
-                            last_local_dt = _dt if _dt.tzinfo else _dt.replace(tzinfo=timezone.utc)
-                            break
-                        except ValueError:
-                            continue
-                    # Damos un margen de 5min hacia atrás para cubrir relojes
-                    # ligeramente desincronizados o writes en transito.
-                    if last_local_dt:
-                        last_local_dt = last_local_dt - timedelta(minutes=5)
+                # El marcador lo escribe el POS en hora de acá y sin zona: leerlo
+                # como UTC adelantaba tres horas la ventana y se salteaba todo
+                # lo que había cambiado en el medio.
+                from pos_system.models.marcas_de_tiempo import a_fecha
+                last_local_dt = a_fecha(last_local_ts) if last_local_ts else None
+                # Damos un margen de 5min hacia atrás para cubrir relojes
+                # ligeramente desincronizados o writes en transito.
+                if last_local_dt:
+                    last_local_dt = last_local_dt - timedelta(minutes=5)
 
                 if last_local_dt:
                     try:
@@ -2664,8 +2727,9 @@ class FirebaseSync:
                 if deleted:
                     logger.info(f"Delta sync: {deleted} productos eliminados (hard delete).")
 
-                # 7. Guardar timestamp del sync exitoso
-                now_str = now_ar().strftime('%Y-%m-%dT%H:%M:%S')
+                # 7. Guardar timestamp del sync exitoso, con la zona escrita:
+                #    sin ella, la próxima corrida tiene que adivinarla.
+                now_str = now_ar().strftime('%Y-%m-%dT%H:%M:%S%z')
                 sync_file.write_text(now_str, encoding="utf-8")
                 logger.info(f"Delta sync: {n_updated} productos actualizados.")
 
