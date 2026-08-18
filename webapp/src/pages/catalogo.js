@@ -13,6 +13,7 @@ import {
   sugerirCantidad, valorizarStock, validarInventario,
 } from '../inventario_resumen.js';
 import { alertDialog, promptDialog } from '../components/dialogs.js';
+import { levantarLapida, levantarLapidas } from '../lapidas.js';
 import {
   TIPOS_BULTO, bultoDe, labelTipo, aUnidades, aBultos, textoBultos, alertaPorBulto,
 } from '../bulto.js';
@@ -383,12 +384,17 @@ async function subirCatalogoFirebase(db, productos, onProgress) {
   for (let i = 0; i < productos.length; i += BATCH_SIZE) {
     const batch = writeBatch(db);
     const chunk = productos.slice(i, i + BATCH_SIZE);
+    const idsSubidos = [];
     for (const p of chunk) {
       const id = p.codigo || slugify(p.nombre) || `prod-${i}-${count}`;
       const ref = doc(collection(db, 'catalogo'), id);
       batch.set(ref, { ...p, doc_id: id });
+      idsSubidos.push(id);
     }
     await batch.commit();
+    // Si alguno de estos códigos ya tuvo lápida, el POS borraría el producto
+    // recién subido en cuanto lo baje.
+    await levantarLapidas(db, idsSubidos);
     count += chunk.length;
     if (onProgress) onProgress(count, productos.length);
   }
@@ -730,6 +736,7 @@ export async function _registerCatalogoDeleted(db, docId) {
     });
   } catch(e) { /* silently ignore */ }
 }
+
 
 // ── JsBarcode lazy load + generador de etiqueta PNG ──────────────────────────
 let _jsBarcodePromise = null;
@@ -4613,6 +4620,9 @@ export async function renderCatalogo(container, db) {
             duplicado:           false,
           };
           await setDoc(doc(db, 'catalogo', docIdFinal), createDoc);
+          // El código pudo ser de un producto borrado: si queda su lápida, el
+          // POS borra este producto nuevo apenas lo baja.
+          await levantarLapida(db, docIdFinal);
         } else {
           docIdFinal = prod.doc_id;
           idNumFinal = prod.id || docIdFinal;
