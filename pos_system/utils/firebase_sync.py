@@ -1161,6 +1161,21 @@ class FirebaseSync:
             return set(codigos)
         return vivos
 
+    def descartar_codigos_vivos(self, pares):
+        """
+        Filtra los borrados por lapida: saca los que hoy usa un producto vivo.
+
+        pares : iterable de (id_local, codigo).
+        Devuelve (a_borrar, salvados). Es el mismo criterio en los tres caminos
+        que borran por lapida, para que no se arreglen de a uno.
+        """
+        pares = list(pares or [])
+        if not pares:
+            return [], 0
+        vivos = self._codigos_vivos({cod for _lid, cod in pares})
+        a_borrar = [(lid, cod) for lid, cod in pares if cod not in vivos]
+        return a_borrar, len(pares) - len(a_borrar)
+
     def fetch_catalogo_deleted_ids(self) -> list:
         """Lee todos los doc IDs de catalogo_deleted (tombstones de productos)."""
         if not self.enabled:
@@ -2460,6 +2475,11 @@ class FirebaseSync:
 
         self._run(_do)
 
+    # Un solo delta sync a la vez: lo lanzan el arranque de la ventana, el
+    # reconcile cuando encuentra faltantes y el sync manual. Dos corriendo
+    # juntos se pisan el marcador del ultimo sync y traban SQLite.
+    _delta_lock = threading.Lock()
+
     def delta_sync_products_startup(self, local_db, on_done=None):
         """
         Al arrancar el POS, detecta en segundo plano si hay productos nuevos o
@@ -2481,6 +2501,11 @@ class FirebaseSync:
 
         def _do():
             n_updated = 0
+            if not FirebaseSync._delta_lock.acquire(blocking=False):
+                logger.info("Delta sync: ya hay uno corriendo — se omite este.")
+                if on_done:
+                    on_done(0)
+                return
             try:
                 from pos_system.config import DATA_DIR
                 sync_file = DATA_DIR / "last_product_sync.txt"
@@ -2711,10 +2736,20 @@ class FirebaseSync:
                                 'deleted_at', '>', last_local_dt
                             )
                         deleted_docs = list(qd.stream())
+                        candidatos = []
                         for dd in deleted_docs:
                             entry = local_by_firebase_id.get(dd.id)
                             if entry:
-                                stale_fids.append((entry[0], dd.id))
+                                candidatos.append((entry[0], dd.id))
+                        # Los codigos se reciclan: si el codigo lo usa hoy un
+                        # producto vivo del catalogo, la lapida es de otro y
+                        # borrarlo dejaria un producto real fuera de la caja.
+                        if candidatos:
+                            stale_fids, salvados = self.descartar_codigos_vivos(candidatos)
+                            if salvados:
+                                logger.info(
+                                    f"Delta sync: {salvados} producto(s) conservados, "
+                                    f"su codigo lo usa un producto vivo del catalogo.")
                         if deleted_docs:
                             logger.info(f"Delta sync: {len(deleted_docs)} tombstones detectados desde {last_local_dt.isoformat()}")
                 except Exception as e:
@@ -2735,6 +2770,8 @@ class FirebaseSync:
 
             except Exception as e:
                 logger.error(f"Delta sync productos: error inesperado: {e}")
+            finally:
+                FirebaseSync._delta_lock.release()
 
             if on_done:
                 on_done(n_updated)

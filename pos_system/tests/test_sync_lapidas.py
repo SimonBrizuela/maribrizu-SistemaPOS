@@ -264,6 +264,64 @@ def test_el_producto_que_esta_local_por_su_codigo_de_barras_no_es_faltante():
     assert out['faltantes'] == 0
 
 
+# ── El filtro que comparten los tres caminos que borran ──────────────────────
+def test_descartar_codigos_vivos_deja_pasar_solo_a_los_fantasmas():
+    fb = _sync()
+
+    a_borrar, salvados = fb.descartar_codigos_vivos([
+        (1, 'JUG545000'),      # vivo: es Cebitas
+        (2, '987867'),         # vivo: el producto vive en otro doc
+        (3, 'FANTASMA-9'),     # ya no está en el catálogo
+    ])
+
+    assert a_borrar == [(3, 'FANTASMA-9')]
+    assert salvados == 2
+
+
+def test_descartar_codigos_vivos_sin_nada_que_filtrar():
+    fb = _sync()
+    assert fb.descartar_codigos_vivos([]) == ([], 0)
+    assert fb.descartar_codigos_vivos(None) == ([], 0)
+
+
+def test_descartar_codigos_vivos_sin_red_no_deja_borrar_nada():
+    fb = _sync()
+
+    class _Rota:
+        def collection(self, _nombre):
+            raise RuntimeError('sin red')
+
+    fb.db = _Rota()
+
+    a_borrar, salvados = fb.descartar_codigos_vivos([(1, 'JUG545000'), (2, 'X')])
+
+    assert a_borrar == []
+    assert salvados == 2
+
+
+# ── Un solo delta sync a la vez ──────────────────────────────────────────────
+def test_no_arrancan_dos_delta_sync_juntos():
+    # Lo lanzan el arranque de la ventana, el reconcile y el sync manual.
+    import threading
+    from pos_system.utils.firebase_sync import FirebaseSync as FS
+
+    fb = _sync()
+    resultados = []
+    FS._delta_lock.acquire()          # simula uno ya corriendo
+    try:
+        listo = threading.Event()
+        fb.delta_sync_products_startup(
+            _BaseLocal([]), on_done=lambda n: (resultados.append(n), listo.set()))
+        assert listo.wait(timeout=5), 'el segundo delta sync se colgó'
+    finally:
+        FS._delta_lock.release()
+
+    assert resultados == [0]
+    # El candado queda libre para el siguiente.
+    assert FS._delta_lock.acquire(blocking=False)
+    FS._delta_lock.release()
+
+
 if __name__ == '__main__':
     import pytest
     raise SystemExit(pytest.main([__file__, '-q']))

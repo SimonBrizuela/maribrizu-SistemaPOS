@@ -479,15 +479,11 @@ class DownloadWorker(QThread):
                     # y borrarlo dejaría un producto real fuera de la caja.
                     salvados = 0
                     if rows_to_delete:
-                        vivos = fb._codigos_vivos(
-                            {str(r['firebase_id']) for r in rows_to_delete})
-                        if vivos:
-                            antes = len(rows_to_delete)
-                            rows_to_delete = [
-                                r for r in rows_to_delete
-                                if str(r['firebase_id']) not in vivos
-                            ]
-                            salvados = antes - len(rows_to_delete)
+                        a_borrar, salvados = fb.descartar_codigos_vivos(
+                            [(r['id'], str(r['firebase_id'])) for r in rows_to_delete])
+                        ids_a_borrar = {lid for lid, _cod in a_borrar}
+                        rows_to_delete = [r for r in rows_to_delete
+                                          if r['id'] in ids_a_borrar]
 
                     if rows_to_delete:
                         ids_to_delete = [r['id'] for r in rows_to_delete]

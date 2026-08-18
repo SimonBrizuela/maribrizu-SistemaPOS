@@ -70,6 +70,10 @@ def main():
         f'--add-data "{styles_path}{os.pathsep}pos_system/ui" '
         f'--add-data "{styles_graphite}{os.pathsep}pos_system/ui" '
         f'--icon "{icon_path}" '
+        # Se importan dentro de funciones del sync: van explicitos para no
+        # depender de que PyInstaller los encuentre solo.
+        f'--hidden-import=pos_system.models.tombstones '
+        f'--hidden-import=pos_system.models.marcas_de_tiempo '
         f'--hidden-import=firebase_admin '
         f'--hidden-import=firebase_admin.credentials '
         f'--hidden-import=firebase_admin.firestore '
