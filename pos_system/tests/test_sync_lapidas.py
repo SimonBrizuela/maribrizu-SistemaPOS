@@ -24,13 +24,14 @@ ANTES = LAPIDA - timedelta(days=4)
 # El catálogo del día: Cebitas nació después de la lápida de su código.
 CATALOGO = {
     'JUG545000': {'nombre': 'BLISTER DE CEBITAS', 'cod_barra': '987913',
-                  'codigo': 'JUG545000', 'fecha_creacion': DESPUES,
-                  'ultima_actualizacion': DESPUES},
+                  'codigo': 'JUG545000', 'precio_venta': 2200,
+                  'fecha_creacion': DESPUES, 'ultima_actualizacion': DESPUES},
     '190500000708': {'nombre': 'MEDIA PERLA BLANCA 4MM X METRO',
                      'cod_barra': '987867', 'codigo': '190500000708',
-                     'ultima_actualizacion': DESPUES},
+                     'precio_venta': 23800, 'ultima_actualizacion': DESPUES},
     'VIEJO-1': {'nombre': 'PRODUCTO BORRADO DE VERDAD', 'codigo': 'VIEJO-1',
-                'fecha_creacion': ANTES, 'ultima_actualizacion': ANTES},
+                'precio_venta': 100, 'fecha_creacion': ANTES,
+                'ultima_actualizacion': ANTES},
 }
 
 
@@ -81,8 +82,8 @@ class _Ref:
 
 
 class _Firestore:
-    def __init__(self, catalogo):
-        self._cols = {'catalogo': catalogo}
+    def __init__(self, catalogo, lapidas=None):
+        self._cols = {'catalogo': catalogo, 'catalogo_deleted': lapidas or {}}
 
     def collection(self, nombre):
         return _Coleccion(self._cols.get(nombre, {}))
@@ -96,6 +97,10 @@ class _BaseLocal:
         self.borrados = []
 
     def execute_query(self, sql, params=()):
+        if 'SELECT id, firebase_id, barcode FROM products' == sql.strip():
+            return [dict(f) for f in self.filas]
+        if 'SELECT id FROM products ' in sql and 'firebase_id IS NULL' in sql:
+            return []
         if 'SELECT id, firebase_id, barcode FROM products' in sql:
             codigos = set(str(p) for p in params)
             return [f for f in self.filas
@@ -205,6 +210,58 @@ def test_sin_poder_verificar_la_purga_no_borra():
 
     assert out['deleted'] == 0
     assert base.borrados == []
+
+
+# ── Lo que falta en la caja ──────────────────────────────────────────────────
+def test_reconcile_avisa_de_los_vendibles_que_no_estan_en_la_pc():
+    # La PC tiene Cebitas y nada más: los otros dos del catálogo faltan.
+    fb = _sync()
+    base = _BaseLocal([{'id': 1, 'firebase_id': 'JUG545000', 'barcode': '987913'}])
+
+    out = fb.reconcile_all_orphans(base)
+
+    assert out['faltantes'] == 2
+    assert sorted(out['faltantes_ids']) == ['190500000708', 'VIEJO-1']
+    assert out['deleted'] == 0
+
+
+def test_un_producto_con_lapida_vigente_no_cuenta_como_faltante():
+    # VIEJO-1 está borrado de verdad: su doc quedó colgado en el catálogo.
+    fb = _sync()
+    fb.db = _Firestore(dict(CATALOGO), {'VIEJO-1': {'deleted_at': DESPUES}})
+    base = _BaseLocal([{'id': 1, 'firebase_id': 'JUG545000', 'barcode': '987913'}])
+
+    out = fb.reconcile_all_orphans(base)
+
+    assert out['faltantes_ids'] == ['190500000708']
+
+
+def test_el_producto_sin_precio_no_se_cuenta_como_faltante():
+    # El sync los saltea a propósito, así que pedir su alta sería un bucle.
+    catalogo = dict(CATALOGO)
+    catalogo['SIN-PRECIO'] = {'nombre': 'PRODUCTO A COTIZAR', 'precio_venta': 0,
+                              'estado': 'sin_precio',
+                              'ultima_actualizacion': DESPUES}
+    fb = _sync()
+    fb.db = _Firestore(catalogo)
+    base = _BaseLocal([{'id': 1, 'firebase_id': 'JUG545000', 'barcode': '987913'}])
+
+    out = fb.reconcile_all_orphans(base)
+
+    assert 'SIN-PRECIO' not in out['faltantes_ids']
+
+
+def test_el_producto_que_esta_local_por_su_codigo_de_barras_no_es_faltante():
+    fb = _sync()
+    base = _BaseLocal([
+        {'id': 1, 'firebase_id': None, 'barcode': '987913'},
+        {'id': 2, 'firebase_id': None, 'barcode': '987867'},
+        {'id': 3, 'firebase_id': 'VIEJO-1', 'barcode': None},
+    ])
+
+    out = fb.reconcile_all_orphans(base)
+
+    assert out['faltantes'] == 0
 
 
 if __name__ == '__main__':
