@@ -856,17 +856,177 @@ function recomputeRubrosTotals() {
 // ── Sub-vista: MESES (acordeones) ─────────────────────────────────────────────
 function renderMeses(body) {
   const meses = mesesOrdenados('desc');
+  // Arriba: resumen mes a mes que se arma solo (carga async, ver fillMesAMes).
+  const auto = `<div data-mes-auto>
+    <div class="ct-loading" style="padding:16px 0"><div class="spinner" style="width:24px;height:24px;border-width:3px"></div></div>
+  </div>`;
+  const fichasHead = `<div class="bal-sec-head">
+    <span class="material-icons">edit_note</span>
+    <div><b>Fichas del mes</b><small>Lo que cargás a mano o vino del Excel. El resumen de arriba no las toca.</small></div>
+  </div>`;
   const caption = `<div class="bal-caption"><span class="material-icons">calendar_month</span>
     Una ficha por mes (como cada hoja del Excel): saldos de cierre, compras/gastos por rubro y los montos fijos
     aplicados — con override por mes. El botón <b>Autocompletar</b> trae los saldos desde las ventas reales.</div>`;
   const toolbar = `<div class="bal-toolbar" style="margin-bottom:12px">
     <button type="button" class="bal-add-btn" data-add-mes><span class="material-icons">add</span> Agregar mes</button></div>`;
-  body.innerHTML = caption + toolbar + (meses.map(ym => mesAccordionHtml(ym)).join('') || `
+  body.innerHTML = auto + fichasHead + caption + toolbar + (meses.map(ym => mesAccordionHtml(ym)).join('') || `
     <div class="bal-empty"><span class="material-icons">calendar_month</span>
       <div class="bal-empty-sub">No hay meses cargados.</div></div>`);
 
   body.querySelector('[data-add-mes]')?.addEventListener('click', addMes);
   meses.forEach(ym => bindMesAccordion(body, ym));
+
+  const host = body.querySelector('[data-mes-auto]');
+  if (host) fillMesAMes(host).catch(() => { if (host.isConnected) host.innerHTML = ''; });
+}
+
+// ── Mes a mes automático (arriba de las fichas de "Meses") ────────────────────
+// Mismo criterio que Semana a Semana pero por mes: ingresos, egresos, saldo y
+// caja al cierre salen del detalle del "Día por día". Es solo lectura: no
+// escribe nada en cfg.meses, así que las fichas manuales quedan intactas.
+async function fillMesAMes(host) {
+  const hoy = hoyAR();
+  const ymHoy = hoy.slice(0, 7), ddHoy = hoy.slice(8, 10);
+  const primero = mesesOrdenados('asc')[0] || ymHoy;
+  const meses = ymRange(primero <= ymHoy ? primero : ymHoy, ymHoy);
+  const docs = {};
+  await Promise.all(meses.map(async ym => { docs[ym] = await loadDiasMes(db, ym); }));
+  if (!host.isConnected || view !== 'meses') return;   // cambió de pestaña mientras cargaba
+
+  const r2 = v => Math.round(v * 100) / 100;
+  const zero = () => ({ efectivo: 0, mp: 0, lapos: 0, sin: 0, total: 0 });
+  const filas = [];
+  meses.forEach(ym => {
+    const doc = docs[ym];
+    const dias = (doc && doc.dias) || {};
+    const f = { ym, cargados: 0, ultDd: null, ing: zero(), egr: zero(), porDia: [], cierre: null, delta: null };
+    Object.keys(dias).sort().forEach(dd => {
+      const t = diaTotales(dias[dd]);
+      if (!t.ing.total && !t.com.total) return;   // día plantilla sin montos
+      ['efectivo', 'mp', 'lapos', 'sin', 'total'].forEach(k => { f.ing[k] += t.ing[k]; f.egr[k] += t.com[k]; });
+      f.cargados++; f.ultDd = dd;
+      f.porDia.push({ dd, ing: t.ing.total });
+    });
+    if (!f.cargados) return;
+    // Caja al cierre: acumulado del mes al último día con datos. Solo si el mes
+    // tiene apertura cargada (sin apertura el acumulado miente).
+    const ap = doc && doc.apertura;
+    if (ap && (ap.efectivo != null || ap.mp != null || ap.lapos != null)) {
+      const a = acumuladoHasta(dias, ap, f.ultDd);
+      f.cierre = r2(a.efectivo + a.mp + a.lapos + a.sin);
+    }
+    filas.push(f);
+  });
+
+  if (!filas.length) {
+    host.innerHTML = `<div class="bal-caption"><span class="material-icons">insights</span>
+      El <b>resumen mes a mes</b> se arma solo con lo cargado en "Día por día". Cargá días ahí (o usá
+      "Importar días") y los meses aparecen acá sin tocar nada.</div>`;
+    return;
+  }
+
+  // Variación de ingresos contra el mes anterior con datos. Para el mes en curso
+  // se compara contra los MISMOS días del mes anterior: si no, un mes a medio
+  // andar siempre parece una caída.
+  filas.forEach((f, i) => {
+    const prev = filas[i - 1];
+    if (!prev) return;
+    const enCurso = f.ym === ymHoy;
+    const base = enCurso
+      ? prev.porDia.reduce((s, d) => s + (d.dd <= ddHoy ? d.ing : 0), 0)
+      : prev.ing.total;
+    if (!base) return;
+    f.delta = { pct: Math.round(((f.ing.total - base) / base) * 1000) / 10, prev: prev.ym, parcial: enCurso };
+  });
+
+  // Promedios sobre los últimos 6 meses cerrados (el mes en curso distorsiona).
+  const cerrados = filas.filter(f => f.ym !== ymHoy).slice(-6);
+  const promIng = cerrados.length ? cerrados.reduce((s, f) => s + f.ing.total, 0) / cerrados.length : 0;
+  const promEgr = cerrados.length ? cerrados.reduce((s, f) => s + f.egr.total, 0) / cerrados.length : 0;
+  const promSaldo = promIng - promEgr;
+
+  const medioRow = (label, ing, egr) => `
+    <div class="bal-sem-det-item">
+      <span>${label}</span>
+      <b><span class="bal-sem-mas">+${fmt(r2(ing))}</span> <span class="bal-sem-menos">−${fmt(r2(egr))}</span>
+      <span class="bal-sem-igual${negCls(ing - egr)}">= ${money(r2(ing - egr))}</span></b>
+    </div>`;
+
+  let anioPrev = null;
+  const rows = [...filas].reverse().map(f => {
+    const saldo = r2(f.ing.total - f.egr.total);
+    const enCurso = f.ym === ymHoy;
+    const prom = f.cargados ? r2(f.ing.total / f.cargados) : 0;
+    const mejor = f.porDia.reduce((a, b) => (!a || b.ing > a.ing ? b : a), null);
+    const anio = f.ym.slice(0, 4);
+    const divider = anio !== anioPrev ? `<tr class="bal-row-sep"><td colspan="5">${anio}</td></tr>` : '';
+    anioPrev = anio;
+    const d = f.delta;
+    const deltaHtml = d
+      ? `<span class="kpi-delta bal-mam-delta ${d.pct >= 0 ? 'kpi-delta-up' : 'kpi-delta-down'}"
+           title="Ingresos contra ${esc(mesLabelAny(d.prev))}${d.parcial ? ` (mismos días, hasta el ${ddHoy})` : ''}"
+           >${d.pct >= 0 ? '+' : '−'}${fmt(Math.abs(d.pct))}%</span>`
+      : '';
+    return `${divider}
+      <tr class="bal-sem-row" data-mam="${f.ym}">
+        <td class="bal-td-lbl">
+          <div class="bal-sem-lbl"><b>${esc(mesLabelAny(f.ym))}</b>
+            ${enCurso ? '<span class="bal-sem-badge">Mes en curso</span>' : ''}</div>
+          <small>${f.cargados} ${f.cargados === 1 ? 'día cargado' : 'días cargados'}</small>
+        </td>
+        <td>${money(r2(f.ing.total))}${deltaHtml}</td>
+        <td>${f.egr.total ? money(r2(f.egr.total)) : '—'}</td>
+        <td class="bal-sem-saldo${negCls(saldo)}">${money(saldo)}</td>
+        <td class="bal-td-total${negCls(f.cierre)}">${f.cierre != null ? money(f.cierre) : '—'}</td>
+      </tr>
+      <tr class="bal-sem-det" data-mamdet="${f.ym}" style="display:none">
+        <td colspan="5">
+          <div class="bal-sem-det-grid">
+            ${medioRow('Efectivo', f.ing.efectivo, f.egr.efectivo)}
+            ${medioRow('Mercado Pago', f.ing.mp, f.egr.mp)}
+            ${medioRow('Lapos', f.ing.lapos, f.egr.lapos)}
+            ${(f.ing.sin || f.egr.sin) ? medioRow('Sin medio', f.ing.sin, f.egr.sin) : ''}
+            <div class="bal-sem-det-item"><span>Ingreso promedio por día</span><b>${money(prom)}</b></div>
+            ${mejor ? `<div class="bal-sem-det-item"><span>Mejor día</span><b>${ddmm(`${f.ym}-${mejor.dd}`)} · ${money(r2(mejor.ing))}</b></div>` : ''}
+          </div>
+        </td>
+      </tr>`;
+  }).join('');
+
+  host.innerHTML = `
+    <div class="bal-caption"><span class="material-icons">insights</span>
+      Resumen <b>mes a mes</b> armado solo desde el detalle del "Día por día" — se actualiza cuando cargás días y
+      <b>no toca</b> las fichas de abajo. Click en un mes para ver el desglose por medio de pago.</div>
+
+    <div class="bal-sem-stats">
+      <div class="bal-sem-stat"><span>Meses con datos</span><b>${filas.length}</b></div>
+      <div class="bal-sem-stat"><span>Ingresos promedio ${cerrados.length ? `(últ. ${cerrados.length} ${cerrados.length === 1 ? 'mes' : 'meses'})` : ''}</span><b>${money(r2(promIng))}</b></div>
+      <div class="bal-sem-stat"><span>Egresos promedio</span><b>${money(r2(promEgr))}</b></div>
+      <div class="bal-sem-stat"><span>Saldo promedio</span><b class="${negCls(promSaldo).trim()}">${money(r2(promSaldo))}</b></div>
+    </div>
+
+    <div class="bal-card bal-xls">
+      <div class="bal-card-title"><span class="material-icons">calendar_month</span> Mes a mes</div>
+      <div class="bal-table-wrap">
+        <table class="bal-table bal-xls-table">
+          <thead><tr>
+            <th class="bal-th-lbl">Mes</th>
+            <th>Ingresos</th>
+            <th>Egresos</th>
+            <th>Saldo del mes</th>
+            <th class="bal-th-total">Caja al cierre</th>
+          </tr></thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </div>`;
+
+  host.querySelectorAll('.bal-sem-row[data-mam]').forEach(tr => {
+    tr.addEventListener('click', () => {
+      const det = host.querySelector(`.bal-sem-det[data-mamdet="${tr.dataset.mam}"]`);
+      if (det) det.style.display = det.style.display === 'none' ? '' : 'none';
+    });
+  });
 }
 
 function mesAccordionHtml(ym) {

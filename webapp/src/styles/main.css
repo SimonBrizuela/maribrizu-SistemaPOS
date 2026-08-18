@@ -4136,6 +4136,16 @@ html[data-theme="dark"] { --bal-green: #3f7d63; --bal-green-soft: rgba(63,125,99
 .bal-sem-menos { color: var(--tint-red-fg); }
 .bal-sem-igual { color: var(--text-strong); font-weight: 800; margin-left: 4px; }
 
+/* ── Mes a mes automático (dentro de "Meses") ── */
+.bal-mam-delta { margin-top: 0; margin-left: 8px; vertical-align: 1px; font-variant-numeric: tabular-nums; }
+.bal-sec-head {
+  display: flex; align-items: center; gap: 10px;
+  margin: 26px 0 14px; padding-top: 18px; border-top: 1px solid var(--border);
+}
+.bal-sec-head .material-icons { font-size: 20px !important; color: var(--text-muted); }
+.bal-sec-head b { display: block; font-size: 14px; color: var(--text-strong); }
+.bal-sec-head small { display: block; font-size: 12px; color: var(--text-muted); margin-top: 1px; }
+
 @media (max-width: 620px) {
   .bal-mov-ing { grid-template-columns: 1fr 90px 110px 28px; }
   .bal-mov-com { grid-template-columns: 1fr 1fr; }
