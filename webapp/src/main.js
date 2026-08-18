@@ -382,6 +382,13 @@ async function loadPage(page, forceRefresh = false, fromLiveUpdate = false) {
   if (typeof window._pcsCleanup === 'function') {
     try { window._pcsCleanup(); } catch {}
   }
+  // Lo mismo para el resto de las páginas que dejan un listener abierto. Se
+  // borra después de llamarlo: es de la página que se está yendo, y dejarlo
+  // puesto haría que la siguiente corra una limpieza que no es suya.
+  if (typeof window.__limpiarPagina === 'function') {
+    try { window.__limpiarPagina(); } catch {}
+    window.__limpiarPagina = null;
+  }
 
   // Arrancar listeners realtime que esta página necesita (idempotente).
   // Si ya están corriendo, no-op. Si no, dispara su primer snapshot — getCached()

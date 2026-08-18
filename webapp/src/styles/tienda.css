@@ -77,6 +77,20 @@
 .tienda-etiqueta.auto      { background: var(--bg);            color: var(--text-muted); }
 .tienda-etiqueta.destacado { background: var(--tint-yellow-bg); color: var(--tint-yellow-fg); }
 .tienda-etiqueta.sinfoto   { background: var(--bg); color: var(--text-muted); }
+.tienda-etiqueta.recien    { background: var(--tint-purple-bg); color: var(--tint-purple-fg); margin-left: 6px; }
+
+/* Lo que entró desde la tienda mientras la pantalla estaba abierta. El fondo se
+   apaga solo: sirve para encontrarlo la primera vez, no para quedar pintado. */
+.fila-recien > td { background: var(--tint-purple-bg); animation: recien-entra 6s ease-out forwards; }
+
+@keyframes recien-entra {
+  0%, 55% { background: var(--tint-purple-bg); }
+  100%    { background: transparent; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fila-recien > td { animation: none; background: var(--tint-purple-bg); }
+}
 
 /* ── Interruptor ─────────────────────────────────────────────────────────── */
 .tienda-switch {

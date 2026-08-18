@@ -10,6 +10,10 @@
  * del espejo `tienda_productos`, así que alcanza para ir a buscar la foto que
  * tiene hoy y para guardarle la nueva.
  *
+ * La lista se escucha en vivo: mientras alguien recorre la tienda marcando
+ * productos desde el celular, acá van apareciendo solos y señalados como
+ * nuevos, sin tener que recargar la página cada dos minutos.
+ *
  * "Cargar" o "Cambiar" abren el panel de fotos del producto: las que ya tiene
  * y las que se acaban de elegir, juntas, para decidir cuál es la portada, en
  * qué orden van, cuáles se sacan y agregar más. Nada se sube ni se toca hasta
@@ -18,7 +22,7 @@
  * producto de esta lista. Si algo falla en el medio, el producto sigue
  * pendiente: es preferible que aparezca de más y no que se pierda.
  */
-import { collection, doc, getDocs, orderBy, query } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, onSnapshot, orderBy, query } from 'firebase/firestore';
 import { getCached } from '../cache.js';
 import { leerDocRapido } from '../config.js';
 import { confirmDialog, escHtml, verFotoGrande } from '../components/dialogs.js';
@@ -39,6 +43,11 @@ let _habilitados = [];
 let _subExcluidos = {};
 let _subiendo = false;          // un guardado por vez: el input es uno solo
 let _panel = null;              // el panel de fotos abierto, si hay uno
+let _unsubPedidas = null;       // el listener de lo que se marca desde la tienda
+let _primerSnapshot = true;     // el primero trae toda la lista, no novedades
+let _repintarAlSoltar = false;  // llegó algo mientras había un panel abierto
+let _nuevas = new Set();        // ids que entraron sin recargar, para señalarlos
+let _olvidarNuevas = null;      // temporizador que apaga esa señal
 
 export async function renderTiendaFotos(container, db) {
   _db = db;
@@ -66,6 +75,10 @@ export async function renderTiendaFotos(container, db) {
 
     <input type="file" id="fotosArchivo" accept="image/*" multiple hidden>
     <div id="fotosCuerpo"><div class="tienda-pista">Cargando…</div></div>`;
+
+  // Al volver a entrar a la pantalla, cortar lo que hubiera quedado escuchando.
+  cortarEscucha();
+  window.__limpiarPagina = cortarEscucha;
 
   document.getElementById('fotosRefrescar').addEventListener('click', cargar);
   document.getElementById('fotosImprimir').addEventListener('click', imprimir);
@@ -98,21 +111,7 @@ async function cargar() {
       ? publicacion.rubros.map(r => String(r).trim().toUpperCase()) : [];
     _subExcluidos = publicacion?.subrubros_excluidos || {};
 
-    _lista = docs.map(d => {
-      const v = d.data() || {};
-      const producto = _catalogo.get(d.id);
-      return {
-        id: d.id,
-        nombre: v.nombre || producto?.nombre || '(sin nombre)',
-        rubro: v.rubro || producto?.rubro || '',
-        teniaFoto: v.tenia_foto === true,
-        cuando: v.pedido_en?.toDate?.() || null,
-        // Lo que hoy se ve en la tienda. Es lo que hay que reemplazar, así que
-        // conviene tenerlo a la vista mientras se elige la nueva.
-        fotos: imagenesDe(producto),
-        enCatalogo: Boolean(producto),
-      };
-    }).sort((a, b) => (b.cuando?.getTime() || 0) - (a.cuando?.getTime() || 0));
+    _lista = ordenarPorFecha(docs.map(d => filaDePedido(d.id, d.data() || {})));
 
     // Los que YA están en la vidriera sin foto entran solos a la lista. Antes
     // dependían de que alguien los marcara desde la tienda: mientras tanto se
@@ -144,6 +143,12 @@ async function cargar() {
     _esperando = automaticos;
 
     pintarLista();
+
+    // Recién ahora: el listener necesita el catálogo en memoria para saber qué
+    // foto tiene hoy cada producto que le llegue. Su primer snapshot repite la
+    // lectura de arriba —una colección de decenas de documentos, al lado de los
+    // 9.000 del catálogo— y a cambio la pantalla queda al día sola.
+    escucharPedidas();
   } catch (err) {
     console.error('[fotos] no se pudo leer la lista:', err);
     cuerpo.innerHTML = `
@@ -164,6 +169,150 @@ async function traerPedidas() {
     const snap = await getDocs(collection(_db, 'tienda_fotos_pedidas'));
     return snap.docs;
   }
+}
+
+/**
+ * Un renglón de la lista a partir del documento de `tienda_fotos_pedidas`.
+ *
+ * El nombre y el rubro viajan en el propio pedido porque quien marca puede
+ * estar viendo un producto que todavía no bajó al catálogo de esta pestaña.
+ */
+function filaDePedido(id, v) {
+  const producto = _catalogo.get(id);
+  return {
+    id,
+    nombre: v.nombre || producto?.nombre || '(sin nombre)',
+    rubro: v.rubro || producto?.rubro || '',
+    teniaFoto: v.tenia_foto === true,
+    cuando: v.pedido_en?.toDate?.() || null,
+    // Lo que hoy se ve en la tienda. Es lo que hay que reemplazar, así que
+    // conviene tenerlo a la vista mientras se elige la nueva.
+    fotos: imagenesDe(producto),
+    enCatalogo: Boolean(producto),
+  };
+}
+
+function ordenarPorFecha(filas) {
+  return filas.sort((a, b) => (b.cuando?.getTime() || 0) - (a.cuando?.getTime() || 0));
+}
+
+/**
+ * Escucha `tienda_fotos_pedidas` en vivo.
+ *
+ * Mientras el personal recorre el local marcando desde el celular, la lista de
+ * acá se va llenando sola. Antes había que recordar apretar Actualizar, y en la
+ * práctica se recargaba la página entera cada dos minutos para ver si había
+ * entrado algo.
+ *
+ * Lo que llega mientras hay un panel de fotos abierto o una subida en curso se
+ * aplica al cerrar: repintar la tabla debajo de un panel abierto le mueve el
+ * piso a quien está eligiendo la portada.
+ */
+function escucharPedidas() {
+  cortarEscucha();
+
+  const alLlegar = (snap) => {
+    const primera = _primerSnapshot;
+    _primerSnapshot = false;
+
+    const antes = new Set(_lista.map(f => f.id));
+    _lista = ordenarPorFecha(snap.docs.map(d => filaDePedido(d.id, d.data() || {})));
+
+    // Lo que entró estando la pantalla abierta se señala; en el primer
+    // snapshot no, que ahí es toda la lista.
+    if (!primera) {
+      for (const f of _lista) if (!antes.has(f.id)) _nuevas.add(f.id);
+    }
+
+    // Un producto recién marcado puede no estar en el catálogo que esta
+    // pantalla tiene en memoria (se cachea diez minutos). Sin sus datos la fila
+    // sale diciendo "ya no está en el catálogo" y sin el botón para cargarle la
+    // foto, que es justo lo que se vino a hacer.
+    const faltan = _lista.filter(f => !f.enCatalogo).map(f => f.id);
+    if (faltan.length) completarDelCatalogo(faltan);
+
+    if (_panel || _subiendo) { _repintarAlSoltar = true; return; }
+    pintarLista();
+  };
+
+  const alFallar = (err) => {
+    // Sin el índice o con documentos viejos sin fecha, la consulta ordenada
+    // falla entera. Se escucha igual, sin orden, y se ordena en memoria.
+    console.warn('[fotos] listener ordenado no disponible, se escucha sin orden:', err?.message || err);
+    _unsubPedidas = onSnapshot(collection(_db, 'tienda_fotos_pedidas'), alLlegar,
+      e => console.error('[fotos] no se pudo escuchar la lista:', e));
+  };
+
+  try {
+    _unsubPedidas = onSnapshot(
+      query(collection(_db, 'tienda_fotos_pedidas'), orderBy('pedido_en', 'desc')),
+      alLlegar, alFallar);
+  } catch (err) {
+    alFallar(err);
+  }
+}
+
+const _buscados = new Set();     // ids ya consultados de a uno, para no repetir
+
+/**
+ * Trae del catálogo los productos que la pantalla no tenía en memoria.
+ *
+ * Son pocos y de a uno: los que se acaban de marcar desde la tienda. Cada id se
+ * consulta una sola vez — si de verdad no está en el catálogo, la fila lo dice
+ * y no tiene sentido volver a preguntar en cada snapshot.
+ */
+async function completarDelCatalogo(ids) {
+  const nuevos = ids.filter(id => !_buscados.has(id));
+  if (!nuevos.length) return;
+  nuevos.forEach(id => _buscados.add(id));
+
+  let encontrados = 0;
+  await Promise.all(nuevos.map(async id => {
+    try {
+      const snap = await getDoc(doc(_db, 'catalogo', id));
+      if (!snap.exists()) return;
+      _catalogo.set(id, { ...snap.data(), doc_id: id });
+      encontrados++;
+    } catch (err) {
+      console.warn('[fotos] no se pudo traer', id, err?.message || err);
+    }
+  }));
+  if (!encontrados) return;
+
+  // Completar las filas que estaban a medias, sin tocar lo que ya venía del
+  // pedido (la fecha, sobre todo: es el orden de la tabla).
+  _lista = _lista.map(f => {
+    const producto = f.enCatalogo ? null : _catalogo.get(f.id);
+    if (!producto) return f;
+    return {
+      ...f,
+      nombre: f.nombre === '(sin nombre)' ? (producto.nombre || f.nombre) : f.nombre,
+      rubro: f.rubro || producto.rubro || '',
+      fotos: imagenesDe(producto),
+      enCatalogo: true,
+    };
+  });
+
+  if (_panel || _subiendo) { _repintarAlSoltar = true; return; }
+  pintarLista();
+}
+
+function cortarEscucha() {
+  if (_unsubPedidas) {
+    try { _unsubPedidas(); } catch (_) { /* ya estaba cortado */ }
+  }
+  _unsubPedidas = null;
+  _primerSnapshot = true;
+  clearTimeout(_olvidarNuevas);
+  _nuevas.clear();
+  _repintarAlSoltar = false;
+}
+
+/** Aplica lo que llegó mientras había un panel abierto o una subida en curso. */
+function soltarRepintadoPendiente() {
+  if (!_repintarAlSoltar || _panel || _subiendo) return;
+  _repintarAlSoltar = false;
+  pintarLista();
 }
 
 /* ── Pintado ──────────────────────────────────────────────────────────────── */
@@ -223,6 +372,15 @@ function pintarLista() {
             + 'les carga una foto. Hasta entonces no se muestran en la tienda.',
             _esperando, 'fotosTablaEsperando')}`;
 
+  // La señal de "recién marcado" dura lo que tarda en encontrarse: el fondo se
+  // apaga solo por CSS y acá se olvida el id, así el próximo pintado ya sale
+  // limpio. Sin esto, lo marcado hace media hora seguiría gritando.
+  if (_nuevas.size) {
+    const vistos = [..._nuevas];
+    clearTimeout(_olvidarNuevas);
+    _olvidarNuevas = setTimeout(() => vistos.forEach(id => _nuevas.delete(id)), 8000);
+  }
+
   cuerpo.querySelectorAll('[data-sacar]').forEach(b => {
     b.addEventListener('click', () => sacar(b.dataset.sacar));
   });
@@ -233,8 +391,9 @@ function pintarLista() {
 
 function filaHtml(f) {
   const foto = f.fotos[0];
+  const recien = _nuevas.has(f.id);
   return `
-    <tr data-fila="${escHtml(f.id)}">
+    <tr data-fila="${escHtml(f.id)}"${recien ? ' class="fila-recien"' : ''}>
       <td>
         ${foto
           ? `<img src="${escHtml(foto)}" alt="" class="tienda-foto" loading="lazy">`
@@ -243,7 +402,8 @@ function filaHtml(f) {
              </div>`}
       </td>
       <td>
-        <div class="tienda-nombre">${escHtml(f.nombre)}</div>
+        <div class="tienda-nombre">${escHtml(f.nombre)}${
+          recien ? '<span class="tienda-etiqueta recien">recién marcado</span>' : ''}</div>
         ${f.enCatalogo
           ? (f.fotos.length > 1
               ? `<div class="tienda-sub">${f.fotos.length} fotos cargadas</div>` : '')
@@ -340,6 +500,8 @@ function cerrarPanelFotos() {
     previo.remove();
   }
   _panel = null;
+  // Lo que entró mientras el panel estaba abierto se pinta ahora.
+  soltarRepintadoPendiente();
 }
 
 function abrirPanelFotos(id, f, archivosIniciales) {
@@ -527,6 +689,8 @@ function abrirPanelFotos(id, f, archivosIniciales) {
     } finally {
       _subiendo = false;
       document.querySelectorAll('[data-cargar]').forEach(b => { b.disabled = false; });
+      // Si mientras se subía entró algo desde la tienda, se pinta ahora.
+      soltarRepintadoPendiente();
     }
   }
 
@@ -586,6 +750,7 @@ async function sacar(id) {
   try {
     await borrarDoc(_db, 'tienda_fotos_pedidas', id);
     _lista = _lista.filter(x => x.id !== id);
+    _nuevas.delete(id);
     pintarLista();
   } catch (err) {
     console.error('[fotos] no se pudo sacar:', err);
