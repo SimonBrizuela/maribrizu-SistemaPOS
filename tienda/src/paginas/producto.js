@@ -8,6 +8,7 @@ import { montarCinta } from '../cinta.js';
 import { fijarAmbito } from '../sugerencias.js';
 import { fijarTitulo, fijarProducto } from '../seo.js';
 import { htmlGaleria, montarGaleria } from '../galeria.js';
+import { botonFotoFicha } from '../fotos.js';
 
 /**
  * Como se nombra el pack entero.
@@ -188,7 +189,10 @@ export async function producto({ montar, params }) {
       </nav>
 
       <div class="ficha-producto">
-        <div class="ficha-producto__foto galeria" data-galeria>${medios}</div>
+        <div class="ficha-producto__foto galeria" data-galeria>
+          ${medios}
+          ${botonFotoFicha(p)}
+        </div>
 
         <div class="ficha-producto__datos">
           <div>

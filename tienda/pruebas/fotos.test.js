@@ -194,3 +194,72 @@ describe('la casilla en la card, de punta a punta', () => {
     expect((html.match(/marca-foto/g) || []).length).toBeGreaterThanOrEqual(2);
   });
 });
+
+describe('pedir la foto desde la ficha del producto', () => {
+  it('el botón está apenas se entra a ver el producto', async () => {
+    const fotos = await cargarModulo();
+    fotos.aplicarModoDesdeURL();
+
+    const html = fotos.botonFotoFicha(PRODUCTO);
+    expect(html).toContain('data-marcar-foto="abc123"');
+    expect(html).toContain('aria-pressed="false"');
+    // Los mismos datos que la card: los guarda el mismo enganche.
+    expect(html).toContain('data-foto-nombre="Cuaderno Rivadavia ABC"');
+    expect(html).toContain('data-foto-rubro="LIBRERIA"');
+  });
+
+  it('dice qué hace según el producto tenga foto o no', async () => {
+    const fotos = await cargarModulo();
+    fotos.aplicarModoDesdeURL();
+
+    expect(fotos.botonFotoFicha(PRODUCTO)).toContain('Pedir foto</span>');
+    expect(fotos.botonFotoFicha({ ...PRODUCTO, imagenes: ['https://x/1.webp'] }))
+      .toContain('Pedir otra foto');
+  });
+
+  it('ya pedida, lo dice y queda marcado', async () => {
+    const fotos = await cargarModulo();
+    fotos.aplicarModoDesdeURL();
+    await fotos.alternarMarca(PRODUCTO);
+
+    const html = fotos.botonFotoFicha(PRODUCTO);
+    expect(html).toContain('pedir-foto--puesta');
+    expect(html).toContain('aria-pressed="true"');
+    expect(html).toContain('Foto pedida');
+  });
+
+  it('lo marcado desde la ficha se ve marcado en la card, y al revés', async () => {
+    const fotos = await cargarModulo();
+    fotos.aplicarModoDesdeURL();
+    await fotos.alternarMarca(PRODUCTO);
+
+    expect(fotos.tildeFoto(PRODUCTO)).toContain('marca-foto--puesta');
+    expect(fotos.botonFotoFicha(PRODUCTO)).toContain('pedir-foto--puesta');
+    expect(setDoc).toHaveBeenCalledTimes(1);
+    expect(setDoc.mock.calls[0][0]).toEqual({ col: 'tienda_fotos_pedidas', id: 'abc123' });
+  });
+
+  it('apagado en ese aparato, la ficha sale limpia', async () => {
+    globalThis.location = { href: 'https://beta.liceolibreria.com/p/abc123?fotos=0' };
+    const fotos = await cargarModulo();
+    fotos.aplicarModoDesdeURL();
+    expect(fotos.botonFotoFicha(PRODUCTO)).toBe('');
+  });
+
+  it('escapa el nombre del producto en los atributos', async () => {
+    const fotos = await cargarModulo();
+    fotos.aplicarModoDesdeURL();
+
+    const html = fotos.botonFotoFicha({ ...PRODUCTO, nombre: 'Regla 30" <b>rota</b>' });
+    expect(html).not.toContain('<b>rota</b>');
+    expect(html).toContain('&quot;');
+  });
+
+  it('el texto del botón sale de la misma regla que usa el enganche', async () => {
+    const fotos = await cargarModulo();
+    expect(fotos.textoPedido(false, false)).toBe('Pedir foto');
+    expect(fotos.textoPedido(false, true)).toBe('Pedir otra foto');
+    expect(fotos.textoPedido(true, false)).toBe('Foto pedida');
+    expect(fotos.textoPedido(true, true)).toBe('Foto pedida');
+  });
+});

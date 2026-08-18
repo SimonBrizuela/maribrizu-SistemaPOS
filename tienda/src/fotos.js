@@ -169,6 +169,38 @@ export function tildeFoto(p) {
 }
 
 /**
+ * El mismo pedido, pero para la ficha del producto.
+ *
+ * En la ficha hay una sola foto y espacio para decirlo con palabras: un tilde
+ * suelto en la esquina ahí se lee como "seleccionado" y no como "falta la
+ * foto". Es el mismo boton por dentro (mismos `data-`), asi que lo maneja el
+ * enganche de siempre y el estado se comparte con las cards.
+ *
+ * Es lo que faltaba para marcar sin volver atras: se busca el producto, se
+ * entra a verlo, y desde ahi mismo se pide la foto.
+ */
+export function botonFotoFicha(p) {
+  if (!modoFotos()) return '';
+  const marcado = estaMarcado(p.id);
+  const tieneFoto = Boolean(p.imagenes?.length);
+  return `
+    <button type="button" class="pedir-foto${marcado ? ' pedir-foto--puesta' : ''}"
+            data-marcar-foto="${esc(p.id)}" aria-pressed="${marcado}"
+            data-foto-nombre="${esc(p.nombre || '')}"
+            data-foto-rubro="${esc(p.rubro || '')}"
+            data-foto-tiene="${tieneFoto ? '1' : ''}">
+      ${icono('tilde', { tam: 16, grosor: 3 })}
+      <span data-texto-foto>${textoPedido(marcado, tieneFoto)}</span>
+    </button>`;
+}
+
+/** Lo que dice el botón de la ficha según cómo esté el producto. */
+export function textoPedido(marcado, tieneFoto) {
+  if (marcado) return 'Foto pedida';
+  return tieneFoto ? 'Pedir otra foto' : 'Pedir foto';
+}
+
+/**
  * La píldora que cuenta lo marcado y deja apagar el modo.
  *
  * Aparece recién con el primer producto marcado. Ahora que el tilde lo ve
@@ -233,14 +265,18 @@ export function engancharTildes() {
     try {
       const puesta = await alternarMarca(p);
       boton.classList.toggle('marca-foto--puesta', puesta);
+      boton.classList.toggle('pedir-foto--puesta', puesta);
       boton.setAttribute('aria-pressed', String(puesta));
       boton.title = puesta ? 'Sacar de la lista de fotos' : 'Marcar para cambiar la foto';
+      // El de la ficha lo dice con palabras y hay que cambiarlas.
+      const texto = boton.querySelector('[data-texto-foto]');
+      if (texto) texto.textContent = textoPedido(puesta, Boolean(boton.dataset.fotoTiene));
       // La píldora nace con la primera marca; después solo se actualiza.
       iniciarBarraFotos();
       refrescarCuenta();
     } catch (_) {
-      boton.classList.add('marca-foto--error');
-      setTimeout(() => boton.classList.remove('marca-foto--error'), 1200);
+      boton.classList.add('marca-foto--error', 'pedir-foto--error');
+      setTimeout(() => boton.classList.remove('marca-foto--error', 'pedir-foto--error'), 1200);
     } finally {
       boton.disabled = false;
     }

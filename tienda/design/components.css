@@ -1460,6 +1460,48 @@ textarea.campo__control { min-height: 96px; resize: vertical; line-height: var(-
   color: #fff;
 }
 
+/* El mismo pedido en la ficha del producto, donde hay una sola foto y lugar
+   para decirlo con palabras. Va debajo de la galería, alineado a la izquierda:
+   es una nota sobre la foto, no una acción de compra, y no tiene que competir
+   con el botón de agregar. */
+.pedir-foto {
+  display: inline-flex;
+  align-items: center;
+  /* La ficha apila la foto y las miniaturas en una columna que estira lo que
+     le metan: sin esto el botón agarra todo el ancho de la foto. */
+  align-self: flex-start;
+  gap: var(--e-2);
+  padding: 8px var(--e-3);
+  border: 1px solid var(--border-2);
+  border-radius: var(--r-full);
+  background: var(--surface);
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--t-sm);
+  font-weight: 600;
+  cursor: pointer;
+  transition:
+    background var(--m-rapido) var(--curva),
+    color var(--m-rapido) var(--curva),
+    border-color var(--m-rapido) var(--curva),
+    transform var(--m-rapido) var(--curva);
+}
+
+.pedir-foto:hover { border-color: var(--primary); color: var(--primary); }
+.pedir-foto:active { transform: scale(0.97); }
+
+.pedir-foto--puesta {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-ink);
+}
+
+.pedir-foto--error {
+  background: var(--liceo-rojo);
+  border-color: var(--liceo-rojo);
+  color: #fff;
+}
+
 /* Píldora fija con lo que se lleva marcado. Se apoya arriba de la nav inferior
    y de la barra del pedido para no taparlas en el celular. */
 .barra-fotos {
