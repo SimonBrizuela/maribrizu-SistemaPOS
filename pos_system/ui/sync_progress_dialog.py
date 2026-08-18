@@ -474,15 +474,35 @@ class DownloadWorker(QThread):
                         ) or []
                         rows_to_delete.extend(rows)
 
+                    # Los códigos se reciclan: si el código lo usa hoy un
+                    # producto vivo del catálogo, la lápida es de otro producto
+                    # y borrarlo dejaría un producto real fuera de la caja.
+                    salvados = 0
+                    if rows_to_delete:
+                        vivos = fb._codigos_vivos(
+                            {str(r['firebase_id']) for r in rows_to_delete})
+                        if vivos:
+                            antes = len(rows_to_delete)
+                            rows_to_delete = [
+                                r for r in rows_to_delete
+                                if str(r['firebase_id']) not in vivos
+                            ]
+                            salvados = antes - len(rows_to_delete)
+
                     if rows_to_delete:
                         ids_to_delete = [r['id'] for r in rows_to_delete]
                         productos_eliminados = db.hard_delete_products(ids_to_delete)
+
+                    if salvados:
+                        self.log_message.emit(
+                            f'{salvados} producto(s) conservados: su código '
+                            f'lo usa un producto vivo del catálogo.', 'info')
 
                     if productos_eliminados:
                         self.log_message.emit(
                             f'{productos_eliminados} productos eliminados '
                             f'(borrados en Firebase).', 'ok')
-                    if not rows_to_delete:
+                    if not rows_to_delete and not salvados:
                         self.log_message.emit(
                             f'{len(fb_deleted_ids)} tombstone(s) sin match '
                             f'local (ya estaban borrados).', 'info')

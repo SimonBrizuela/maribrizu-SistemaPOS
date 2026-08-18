@@ -1174,7 +1174,17 @@ class ProductDialog(QDialog):
             else:
                 product_id = self.product_model.create(product_data)
                 success = product_id is not None
-                
+                # Los codigos se reciclan: si este ya tuvo lapida, las demas
+                # PCs borrarian el producto nuevo al sincronizar.
+                if success and product_data.get('firebase_id'):
+                    try:
+                        from pos_system.utils.firebase_sync import get_firebase_sync
+                        fb = get_firebase_sync()
+                        if fb:
+                            fb.limpiar_lapida(product_data['firebase_id'])
+                    except Exception:
+                        pass
+
             if success:
                 QMessageBox.information(self, 'Éxito', 'Producto guardado correctamente')
                 self.accept()

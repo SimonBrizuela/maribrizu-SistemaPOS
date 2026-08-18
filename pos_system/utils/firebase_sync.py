@@ -713,6 +713,80 @@ class FirebaseSync:
         except Exception as e:
             logger.error(f"Firebase: No se pudo iniciar listener de rubros: {e}")
 
+    def limpiar_lapida(self, codigo: str):
+        """
+        Borra la lapida de un codigo que vuelve a estar en uso.
+
+        Los codigos se reciclan (el generador reparte el numero de un producto
+        borrado). Si la lapida queda, las otras PCs borran el producto nuevo en
+        cuanto lo bajan: existe en la nube y no aparece en ninguna caja.
+        """
+        if not self.enabled or not codigo:
+            return
+        cod = str(codigo).strip()
+
+        def _do():
+            try:
+                self.db.collection('catalogo_deleted').document(cod).delete()
+                logger.info(f"Firebase: lapida de '{cod}' levantada (codigo en uso).")
+            except Exception as e:
+                logger.warning(f"Firebase: no se pudo levantar la lapida de '{cod}': {e}")
+        self._run(_do)
+
+    def producto_del_catalogo(self, codigo: str) -> Optional[dict]:
+        """
+        Busca en `catalogo` el producto que hoy usa ese codigo. Primero por
+        doc_id (1 lectura) y, si no esta, por los campos `cod_barra` y `codigo`.
+
+        Devuelve el doc, o None si el codigo no lo usa nadie. Si ninguna de las
+        consultas pudo correr levanta el error: "no existe" y "no se pudo
+        averiguar" no son lo mismo, y de eso depende que se borre o no un
+        producto de la caja.
+        """
+        if not self.enabled or not codigo:
+            return None
+        cod = str(codigo).strip()
+        fallo = None
+        try:
+            snap = self.db.collection('catalogo').document(cod).get()
+            if snap.exists:
+                return snap.to_dict() or {}
+        except Exception as e:
+            fallo = e
+            logger.debug(f"producto_del_catalogo: get {cod}: {e}")
+        consultas_ok = fallo is None
+        for campo in ('cod_barra', 'codigo'):
+            try:
+                docs = list(self.db.collection('catalogo')
+                            .where(campo, '==', cod).limit(1).stream())
+                consultas_ok = True
+                if docs:
+                    return docs[0].to_dict() or {}
+            except Exception as e:
+                fallo = e
+                logger.debug(f"producto_del_catalogo: query {campo}={cod}: {e}")
+        if not consultas_ok:
+            raise fallo
+        return None
+
+    def _lapida_vigente(self, codigo: str, deleted_at) -> bool:
+        """
+        True si esa lapida todavia tiene que borrar el producto local.
+
+        Los codigos se reciclan: un producto nuevo puede nacer con el codigo de
+        uno borrado. Si el catalogo tiene un producto vivo con ese codigo y es
+        posterior a la lapida, la lapida es de otro producto y no borra nada.
+        Ante un error de red se devuelve False (no borrar): un producto de mas
+        se arregla en el proximo sync, uno borrado de menos cuesta ventas.
+        """
+        from pos_system.models.tombstones import lapida_manda
+        try:
+            producto = self.producto_del_catalogo(codigo)
+        except Exception as e:
+            logger.warning(f"_lapida_vigente: no se pudo verificar {codigo}: {e}")
+            return False
+        return lapida_manda(deleted_at, producto)
+
     def start_catalogo_deleted_listener(self, db_manager,
                                          on_change: Optional[Callable] = None):
         """
@@ -793,6 +867,17 @@ class FirebaseSync:
                             (doc_id, doc_id)
                         ) or []
                         if not rows:
+                            if doc_ts and (max_ts is None or doc_ts > max_ts):
+                                max_ts = doc_ts
+                            continue
+                        # El codigo puede haberse reciclado: si hoy hay un
+                        # producto vivo con ese codigo, la lapida es de otro
+                        # producto y no tiene que borrarlo. Manda el catalogo.
+                        if not self._lapida_vigente(doc_id, doc_ts):
+                            logger.info(
+                                f"Tombstones: '{doc_id}' ignorado, "
+                                f"el codigo lo usa un producto vivo."
+                            )
                             if doc_ts and (max_ts is None or doc_ts > max_ts):
                                 max_ts = doc_ts
                             continue
@@ -949,27 +1034,73 @@ class FirebaseSync:
 
         try:
             CHUNK = 400
-            matched_ids = set()
+            matched = {}          # id local -> codigos que lo matchearon
             for i in range(0, len(codes), CHUNK):
                 chunk = codes[i:i + CHUNK]
                 ph = ','.join(['?'] * len(chunk))
                 rows = db_manager.execute_query(
-                    f"SELECT id FROM products "
+                    f"SELECT id, firebase_id, barcode FROM products "
                     f"WHERE firebase_id IN ({ph}) OR barcode IN ({ph})",
                     tuple(chunk) + tuple(chunk)
                 ) or []
                 for r in rows:
-                    matched_ids.add(r['id'])
+                    propios = {str(r.get(c)).strip()
+                               for c in ('firebase_id', 'barcode')
+                               if r.get(c) is not None and str(r.get(c)).strip()}
+                    matched.setdefault(r['id'], set()).update(propios & set(chunk))
+
+            # Los codigos se reciclan: si el codigo lo usa hoy un producto vivo
+            # del catalogo, la lista lo trajo por una lapida vieja de otro
+            # producto y borrarlo dejaria sin vender algo que existe.
+            vivos = self._codigos_vivos({c for cs in matched.values() for c in cs})
+            matched_ids = {pid for pid, cs in matched.items() if not (cs & vivos)}
+            salvados = len(matched) - len(matched_ids)
 
             out['deleted'] = db_manager.hard_delete_products(matched_ids)
 
             logger.info(
                 f"purge_products_by_codes: {len(codes)} codigos, "
-                f"{len(matched_ids)} matches, borrados {out['deleted']}."
+                f"{len(matched)} matches, {salvados} salvados por estar vivos "
+                f"en el catalogo, borrados {out['deleted']}."
             )
         except Exception as e:
             logger.error(f"purge_products_by_codes: {e}")
         return out
+
+    def _codigos_vivos(self, codigos) -> set:
+        """
+        De los codigos dados, cuales los usa hoy un producto del catalogo.
+
+        Hasta 150 codigos pregunta uno por uno (lecturas puntuales); arriba de
+        eso conviene una sola pasada por el catalogo, que es lo mismo que hace
+        reconcile_all_orphans.
+        """
+        codigos = {str(c).strip() for c in (codigos or []) if c and str(c).strip()}
+        if not self.enabled or not codigos:
+            return set()
+
+        vivos = set()
+        try:
+            if len(codigos) <= 150:
+                for cod in codigos:
+                    if self.producto_del_catalogo(cod) is not None:
+                        vivos.add(cod)
+                return vivos
+
+            for doc in self.db.collection('catalogo').stream():
+                if doc.id in codigos:
+                    vivos.add(doc.id)
+                d = doc.to_dict() or {}
+                for campo in ('cod_barra', 'codigo'):
+                    v = d.get(campo)
+                    if v is not None and str(v).strip() in codigos:
+                        vivos.add(str(v).strip())
+        except Exception as e:
+            # Sin poder verificar no se borra nada: se devuelven todos como
+            # vivos y el proximo sync vuelve a intentarlo.
+            logger.warning(f"_codigos_vivos: no se pudo verificar ({e}).")
+            return set(codigos)
+        return vivos
 
     def fetch_catalogo_deleted_ids(self) -> list:
         """Lee todos los doc IDs de catalogo_deleted (tombstones de productos)."""
