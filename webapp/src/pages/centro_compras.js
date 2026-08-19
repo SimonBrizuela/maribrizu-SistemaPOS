@@ -9,8 +9,11 @@
 //   presupuesto = ingresosMes − gastosFijosMes − rentabilidad − comprasProductoMes
 //
 // Ingresos y gastos fijos salen del Balance Mensual (control_config/balance y
-// control_config/dias_<ym>). Las alertas de reposición vienen de notifications.js
-// y acá se clasifican en tres niveles: SÍ O SÍ (se agota o ya no hay Y rota),
+// control_config/dias_<ym>). Las alertas de reposición vienen de notifications.js.
+// A la lista entra: lo que está POR DEBAJO de su stock mínimo cargado, y lo que
+// no tiene mínimo pero se vende seguido y el stock no cubre el horizonte; lo que
+// tiene mínimo y está bien NO figura (ver fuentesCompra). Después se clasifica
+// en tres niveles: SÍ O SÍ (se agota o ya no hay Y rota),
 // IMPORTANTE (sin stock aunque venda poco, o top vendido bajo mínimo) y PUEDE
 // ESPERAR. Dentro de cada nivel se ordena por la plata que se deja de facturar
 // si falta (ritmo × precio de venta). El presupuesto se asigna en dos pasadas:
@@ -184,12 +187,36 @@ function tierDe(a) {
 // por cobertura (rotan pero el stock no llega a los días objetivo — ej: las
 // hojas que se gastan con cada impresión). Si un producto ya está en alerta
 // (global o por variedad), manda la alerta.
+//
+// Regla de entrada: el stock mínimo manda. Un producto CON mínimo cargado (a
+// nivel producto o en alguna variedad) solo figura cuando está por debajo — su
+// alerta configurada —; si está bien no aparece, aunque el ritmo diga que
+// conviene adelantar la compra. Un producto SIN mínimo figura solo si de
+// verdad se vende (rota en la ventana) y el stock no cubre el horizonte.
+function tieneMinimoConfigurado(p) {
+  if (!p) return false;
+  if (Number(p.stock_min) > 0) return true;
+  const colores = Array.isArray(p.conjunto_colores) ? p.conjunto_colores : [];
+  return colores.some(c => Number(c.stock_min) > 0);
+}
+
 function fuentesCompra(alertasBase, comprasCfg) {
   const dias = Number(comprasCfg.cobertura_dias_objetivo) || COBERTURA_DEFAULT;
-  const vistos = new Set((alertasBase || []).map(a => String(a.doc_id)));
-  const out = [...(alertasBase || [])];
+  const out = [];
+  for (const a of (alertasBase || [])) {
+    // Variantes auto-detectadas (sin mínimo cargado) que casi no se venden:
+    // no son compra pendiente, son ruido en la lista.
+    if (a.auto && (Number(a.unidades_ventana) || 0) < MIN_ROTACION) continue;
+    // Urgencia por ritmo de un producto que SÍ tiene mínimo y está por encima:
+    // el mínimo que cargó el dueño manda, todavía no corresponde comprarlo.
+    if (a.origen === 'ritmo' && tieneMinimoConfigurado(a.producto)) continue;
+    out.push(a);
+  }
+  const vistos = new Set(out.map(a => String(a.doc_id)));
   for (const c of obtenerCandidatosCompra(dias)) {
-    if (!vistos.has(String(c.doc_id))) out.push(c);
+    if (vistos.has(String(c.doc_id))) continue;
+    if (tieneMinimoConfigurado(c.producto)) continue;   // el mínimo manda
+    out.push(c);
   }
   return out;
 }
@@ -745,13 +772,12 @@ function rowHtml(r, i, esContinuacion) {
     esContinuacion ? 'cc-row-varcont' : '',
   ].filter(Boolean).join(' ');
 
+  // Un solo chip por fila. El nivel ya lo dice el orden de la lista y las
+  // píldoras de arriba; "sin stock" ya se ve en la columna Stock (0 en rojo)
+  // y en el texto de cobertura. Repetirlo en cada fila era puro ruido.
   let chip = '';
   if (r.registrado) chip = `<span class="cc-chip cc-chip-ok">registrado</span>`;
-  else {
-    if (r.tier === 'sisi') chip = `<span class="cc-chip cc-chip-sisi">sí o sí</span>`;
-    else if (r.tier === 'importante') chip = `<span class="cc-chip cc-chip-urg">importante</span>`;
-    if (r.critico) chip += ` <span class="cc-chip cc-chip-red">sin stock</span>`;
-  }
+  else if (r.tier === 'sisi') chip = `<span class="cc-chip cc-chip-sisi">sí o sí</span>`;
 
   const checkbox = r.sinCosto || r.registrado
     ? `<span class="material-icons cc-check-off" title="${r.sinCosto ? 'Sin costo cargado' : 'Ya registrado'}">${r.sinCosto ? 'block' : 'check_circle'}</span>`
@@ -772,9 +798,13 @@ function rowHtml(r, i, esContinuacion) {
   const subtotal = r.sinCosto ? '—' : money(r.subtotal, 0);
   const acumulado = r.fits ? money(r.acumulado, 0) : '—';   // solo tiene sentido dentro del plan
 
-  const perdida = !r.registrado && r.tier !== 'opcional' && r.perdidaSemana > 0
-    ? `<div class="cc-perdida">Dejás de vender ~${money(r.perdidaSemana)}/sem si falta</div>`
-    : '';
+  // Cobertura y plata en riesgo en UNA línea apagada: con una fila por producto
+  // se lee igual, y la página deja de ser una pared de texto rojo repetido.
+  const detalles = [];
+  if (r.cobertura_texto) detalles.push(esc(r.cobertura_texto));
+  if (!r.registrado && r.tier !== 'opcional' && r.perdidaSemana > 0) {
+    detalles.push(`dejás de vender ~${money(r.perdidaSemana)}/sem si falta`);
+  }
 
   const stk = stockRealDe(r);
   const stockTitle = [stk.title, 'Stock real leído del Catálogo'].filter(Boolean).join('\n');
@@ -795,8 +825,7 @@ function rowHtml(r, i, esContinuacion) {
                 title="Abrir este producto en el Catálogo">${esc(nombreBase)}<span class="material-icons">open_in_new</span></button>
         ${varChip}${chip}
       </div>
-      ${r.cobertura_texto ? `<div class="cc-cob">${esc(r.cobertura_texto)}</div>` : ''}
-      ${perdida}
+      ${detalles.length ? `<div class="cc-cob">${detalles.join(' · ')}</div>` : ''}
     </td>
     <td><span class="badge badge-gray">${esc(r.rubro || 'Sin rubro')}</span></td>
     <td class="cc-stock${stk.total <= 0 ? ' is-cero' : ''}" title="${esc(stockTitle)}">${esc(stk.texto)}</td>
@@ -878,7 +907,6 @@ function paintResumen() {
     `<div class="cc-tier-pill ${cls}">${label} <span>${g.n} · ${money(g.total)}</span></div>`;
   const warnCosto = sinCosto.length === 0 ? '' :
     `<div class="cc-tier-pill cc-tier-nocost" title="Cargales el costo en la columna Costo de la tabla — se guarda en el Catálogo">
-       <span class="material-icons">warning_amber</span>
        ${sinCosto.length} sin costo${sinCostoImp ? ` (${sinCostoImp} importante${sinCostoImp === 1 ? '' : 's'})` : ''}</div>`;
 
   el.innerHTML = pill('cc-tier-sisi', 'Sí o sí', sisi)

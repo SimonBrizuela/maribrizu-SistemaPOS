@@ -4469,20 +4469,26 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
 .cc-warn .material-icons { font-size: 18px !important; }
 .cc-warn-danger { background: var(--tint-red-bg); color: var(--tint-red-fg); }
 
-/* Resumen por nivel de prioridad */
+/* Resumen por nivel de prioridad. Píldoras neutras con un punto de color: el
+   nivel se identifica igual y la cabecera deja de competir con la tabla (tres
+   bloques rojo/naranja llenos gritaban más que los datos). */
 .cc-tiers { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 12px; }
 .cc-tiers:empty { display: none; }
 .cc-tier-pill {
-  display: inline-flex; align-items: center; gap: 7px; padding: 6px 12px; border-radius: 999px;
-  font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .3px;
+  display: inline-flex; align-items: center; gap: 7px; padding: 5px 12px; border-radius: 999px;
+  font-size: 12px; font-weight: 600; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border-strong);
   font-variant-numeric: tabular-nums;
 }
-.cc-tier-pill span { font-weight: 600; text-transform: none; letter-spacing: 0; opacity: .9; }
-.cc-tier-sisi { background: var(--tint-red-bg); color: var(--tint-red-fg); }
-.cc-tier-imp  { background: var(--tint-orange-bg); color: var(--tint-orange-fg); }
-.cc-tier-opc  { background: var(--surface-3); color: var(--text-muted); }
-.cc-tier-nocost { background: var(--surface-3); color: var(--warning); }
-.cc-tier-nocost .material-icons { font-size: 15px !important; }
+.cc-tier-pill::before {
+  content: ''; width: 8px; height: 8px; border-radius: 50%; flex: none;
+  background: var(--cc-dot, var(--border-strong));
+}
+.cc-tier-pill span { font-weight: 700; color: var(--text-strong); }
+.cc-tier-sisi { --cc-dot: var(--danger); }
+.cc-tier-imp  { --cc-dot: var(--warning); }
+.cc-tier-opc  { --cc-dot: var(--border-strong); }
+.cc-tier-nocost { --cc-dot: var(--warning); }
 
 /* Barra de registro */
 .cc-registrar {
@@ -4524,21 +4530,25 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
 .cc-table th {
   text-align: left; padding: 10px 12px; font-size: 11px; font-weight: 600; color: var(--text-muted);
   text-transform: uppercase; letter-spacing: .3px; background: var(--surface-3); position: sticky; top: 0; z-index: 1;
+  white-space: nowrap;
 }
 .cc-table td { padding: 9px 12px; border-top: 1px solid var(--border); vertical-align: middle; font-variant-numeric: tabular-nums; }
 .cc-table tbody tr:hover { background: var(--surface-hover); }
 .cc-prod { font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.cc-cob { font-size: 11px; color: var(--text-muted); margin-top: 2px; }
-.cc-row-espera { opacity: .58; }
+.cc-cob {
+  font-size: 12px; margin-top: 2px;
+  color: var(--text-muted);   /* fallback si el navegador no soporta color-mix */
+  color: color-mix(in srgb, var(--text-muted) 55%, var(--text));
+}
+/* Fuera del plan: apenas atenuada. El corte punteado ya separa; con .58 la
+   tabla entera quedaba ilegible cuando el presupuesto no alcanzaba para nada. */
+.cc-row-espera { opacity: .9; }
 .cc-row-reg { background: var(--tint-green-bg) !important; }
 .cc-row-reg .cc-prod { color: var(--text-muted); }
 
 .cc-chip { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px; text-transform: uppercase; letter-spacing: .3px; }
-.cc-chip-urg { background: var(--tint-orange-bg); color: var(--tint-orange-fg); }
-.cc-chip-red { background: var(--tint-red-bg); color: var(--tint-red-fg); }
 .cc-chip-ok  { background: var(--tint-green-bg); color: var(--tint-green-fg); }
 .cc-chip-sisi { background: var(--danger); color: #fff; }
-.cc-perdida { font-size: 11px; font-weight: 600; color: var(--tint-red-fg); margin-top: 2px; }
 
 .cc-check { width: 18px; height: 18px; accent-color: var(--primary); cursor: pointer; }
 .cc-check-off { font-size: 18px !important; color: var(--border-strong); }
@@ -4555,10 +4565,13 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
 .cc-cost:focus { border-color: var(--primary); border-style: solid; }
 .cc-cost::placeholder { color: var(--warning); font-style: italic; }
 
+/* Línea de corte del presupuesto: divisor sobrio. Las filas de abajo ya van
+   atenuadas, no hace falta una franja rayada roja para marcar el límite. */
 .cc-cutoff td {
-  background: repeating-linear-gradient(45deg, var(--tint-red-bg), var(--tint-red-bg) 10px, transparent 10px, transparent 20px);
-  color: var(--tint-red-fg); font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .4px;
-  padding: 7px 12px; text-align: center; border-top: 2px dashed var(--danger); border-bottom: 2px dashed var(--danger);
+  background: var(--surface-2); color: var(--text-muted);
+  font-weight: 600; font-size: 12px; letter-spacing: .2px;
+  padding: 6px 12px; text-align: center;
+  border-top: 2px dashed var(--border-strong); border-bottom: 2px dashed var(--border-strong);
 }
 .cc-cutoff .material-icons { font-size: 15px !important; vertical-align: -3px; margin-right: 4px; }
 .cc-empty { text-align: center; padding: 40px !important; color: var(--text-muted); }

@@ -2,7 +2,7 @@ import { initializeApp } from "firebase/app";
 import {
   initializeFirestore,
   persistentLocalCache,
-  persistentMultipleTabManager,
+  persistentSingleTabManager,
   CACHE_SIZE_UNLIMITED,
   setLogLevel,
 } from "firebase/firestore";
@@ -58,11 +58,20 @@ if (appCheckKey) {
 // que el primer pintado tras un reload sea instantáneo y el tráfico a
 // Firestore sea mínimo.
 //
-// persistentMultipleTabManager → si la admin tiene varias pestañas abiertas,
-// comparten el mismo cache local sin pisarse.
+// persistentSingleTabManager → cada pestaña es INDEPENDIENTE. Antes se usaba
+// persistentMultipleTabManager (cache compartido entre pestañas), pero en ese
+// modo una sola pestaña es la "primaria" que habla con el server y las demás
+// dependen de ella vía IndexedDB: con nuestro volumen (~12k docs de catálogo,
+// ~17k de ventas) y el throttling de pestañas en background de Chrome, la
+// segunda pestaña quedaba esperando a la primaria y no cargaba nunca.
+// Con single-tab, la primera pestaña se queda con el cache en disco; las
+// siguientes no pueden tomar el lock y el SDK cae solo a cache en memoria
+// (avisa con un warning en consola): leen directo del server, sin esperar a
+// nadie. La hidratación propia (pos_snapshots en store.js) igual les da el
+// primer pintado instantáneo en cualquier pestaña.
 export const db = initializeFirestore(app, {
   localCache: persistentLocalCache({
-    tabManager: persistentMultipleTabManager(),
+    tabManager: persistentSingleTabManager(),
     cacheSizeBytes: CACHE_SIZE_UNLIMITED,
   }),
 });
