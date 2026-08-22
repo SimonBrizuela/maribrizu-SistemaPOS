@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
   packsAGuardar, packsAMostrar, repartirTotal, totalConjunto, totalVariedad,
-  guardaCerrados,
+  guardaCerrados, descontarDeTotal,
 } from '../../webapp/src/conjunto.js';
 
 const AQUI = dirname(fileURLToPath(import.meta.url));
@@ -55,6 +55,17 @@ describe('repartir un total en cerrados y sueltos', () => {
       }
     }
   });
+});
+
+describe('descontar de un total (lo que hace el watcher y el reconciliador)', () => {
+  for (const caso of CASOS.descontar_de_total) {
+    it(caso.nombre, () => {
+      const r = descontarDeTotal(caso.total, caso.delta, caso.contenido);
+      expect(r.total).toBe(caso.esp_total);
+      expect(r.unidades).toBe(caso.unidades);
+      expect(r.restante).toBe(caso.restante);
+    });
+  }
 });
 
 describe('total de un conjunto con variedades', () => {

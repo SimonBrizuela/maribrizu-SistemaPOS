@@ -74,6 +74,19 @@ def repartir_total(total, contenido):
     return float(cerrados), resto
 
 
+def descontar_de_total(total, delta, contenido):
+    """
+    Saca `delta` unidades sueltas de un conjunto y vuelve a partir lo que queda
+    en (cerrados, sueltos). Si los sueltos no alcanzan, se abre un pack solo.
+    `delta` negativo devuelve mercaderia. Nunca baja de cero.
+
+    Devuelve (total, unidades, restante).
+    """
+    nuevo = max(0.0, _num(total) - _num(delta))
+    u, r = repartir_total(nuevo, contenido)
+    return nuevo, u, r
+
+
 def packs_a_guardar(packs_vistos, sueltos):
     """
     Packs cerrados a guardar a partir de lo que carga el personal.

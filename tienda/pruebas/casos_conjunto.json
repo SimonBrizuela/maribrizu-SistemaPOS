@@ -28,6 +28,14 @@
     {"nombre": "negativo se clava en cero", "total": -5, "contenido": 10, "unidades": 0, "restante": 0},
     {"nombre": "fracciones (metros)", "total": 12.5, "contenido": 5, "unidades": 2, "restante": 2.5}
   ],
+  "descontar_de_total": [
+    {"nombre": "vender 1 de 3 cerradas abre un pack", "total": 750, "delta": 1, "contenido": 250, "esp_total": 749, "unidades": 2, "restante": 249},
+    {"nombre": "mas de lo que hay deja cero", "total": 36, "delta": 40, "contenido": 250, "esp_total": 0, "unidades": 0, "restante": 0},
+    {"nombre": "delta negativo devuelve mercaderia", "total": 786, "delta": -10, "contenido": 250, "esp_total": 796, "unidades": 3, "restante": 46},
+    {"nombre": "delta cero no mueve nada", "total": 100, "delta": 0, "contenido": 250, "esp_total": 100, "unidades": 0, "restante": 100},
+    {"nombre": "total nulo en la nube cuenta como cero", "total": null, "delta": 3, "contenido": 250, "esp_total": 0, "unidades": 0, "restante": 0},
+    {"nombre": "sin contenido todo queda suelto", "total": 40, "delta": 5, "contenido": 0, "esp_total": 35, "unidades": 0, "restante": 35}
+  ],
   "total_conjunto": [
     {"nombre": "dos variedades con el contenido del producto", "contenido": 250, "colores": [{"unidades": 2, "restante": 36}, {"unidades": 1, "restante": 0}], "esperado": 786},
     {"nombre": "variedad con contenido propio", "contenido": 50, "colores": [{"unidades": 2, "restante": 3, "contenido": 12}, {"unidades": 1, "restante": 0}], "esperado": 77},

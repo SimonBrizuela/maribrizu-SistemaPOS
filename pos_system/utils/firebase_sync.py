@@ -15,6 +15,8 @@ import uuid as _uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Callable
 
+from pos_system.utils import stock_links as _stock_links
+
 # Timezone Argentina (UTC-3, sin DST)
 _TZ_AR = timezone(timedelta(hours=-3))
 
@@ -2142,7 +2144,8 @@ class FirebaseSync:
                         rows = db_manager.execute_query(
                             "SELECT id, firebase_id, stock, es_conjunto, "
                             "       conjunto_unidades, conjunto_restante, conjunto_total, "
-                            "       conjunto_colores, COALESCE(stock_ilimitado, 0) AS stock_ilimitado "
+                            "       conjunto_colores, COALESCE(stock_ilimitado, 0) AS stock_ilimitado, "
+                            "       vinculaciones, vinculado_a, vinculado_cantidad "
                             "FROM products WHERE id = ?",
                             (int(pid),)
                         )
@@ -2152,6 +2155,14 @@ class FirebaseSync:
                         continue
                     row = rows[0]
                     firebase_id = str(row.get('firebase_id') or '').strip()
+
+                    # Producto vinculado (una impresión): su stock vive en el
+                    # papel, que viaja por la cola de vínculos. El propio no se
+                    # toca, igual que en SQLite; restarlo acá dejaba a las
+                    # impresiones en -3.000 en la nube y a la migración del
+                    # 13-08 marcando varias como servicio.
+                    if _stock_links.has_links(row):
+                        continue
 
                     # Producto Conjunto: no se toca `stock`, se sincroniza el
                     # estado absoluto (unidades / restante / total) que el modelo
@@ -2333,147 +2344,149 @@ class FirebaseSync:
         else:
             _do()
 
-    def sync_vinculaciones_after_sale(self, sale_id: int,
-                                      vincs_to_sync: list,
-                                      db_manager) -> None:
-        """Push de los targets vinculados al catálogo en Firestore + marca
-        cada item de `ventas_por_dia/{pc_id}_{sale_id}_{idx}` con
-        `consumibles_procesado: True` y el detalle del descuento.
+    def push_vinculos_pendientes(self, db_manager, en_hilo: bool = True) -> None:
+        """Sube a Firestore los descuentos por vinculación que esperan en la cola
+        local (`vinc_pendientes`): el papel que consumió cada impresión y la
+        marca `consumibles_procesado` en el item de `ventas_por_dia`.
 
-        Patrón:
-          - Producto plano: stock = Increment(-delta) (atómico, multi-PC safe).
-          - Producto conjunto: push absoluto (conjunto_total/unidades/restante
-            + stock mirror) leídos desde SQLite local — el modelo de venta
-            ya recalculó el estado correcto.
+        Cada venta va en UNA transacción de Firestore: el conjunto se descuenta
+        del total que tiene la nube y se vuelve a repartir, los planos con
+        Increment, y los items se marcan; todo o nada. Recién con el commit las
+        filas pasan a `fb_synced = 1`, así que si se corta en el medio el
+        reintento (cada 3 minutos y al arrancar) vuelve a hacer lo mismo sin
+        duplicar nada.
 
-        Marca `consumibles_procesado` para que el watcher web no duplique
-        el descuento si está activo simultáneamente.
+        Antes esto salía en un hilo suelto con el número absoluto de la PC: sin
+        Firebase se perdía (1.264 hojas entre el 10 y el 12 de agosto de 2026)
+        y una PC atrasada pisaba lo que habían vendido las otras.
         """
-        if not self.enabled or not vincs_to_sync:
+        if not self.enabled or db_manager is None:
             return
 
         def _do():
             try:
-                from firebase_admin import firestore as _fs
-                now_dt  = now_ar().astimezone(timezone.utc)
-                # Con la zona escrita: el mismo campo lo tocan el POS (en hora
-                # de acá) y el panel (en UTC), y sin el offset no hay forma de
-                # saber cuál de las dos es.
-                now_str = now_dt.strftime('%Y-%m-%dT%H:%M:%S%z')
-                pc_id   = _get_pc_id()
-
-                batch = self.db.batch()
-                touched_targets = set()
-                touched_items   = {}  # item_idx -> list[descuento dict]
-
-                for v in vincs_to_sync:
-                    item_idx   = v.get('item_idx')
-                    target_fid = str(v.get('target_fid') or '').strip()
-                    local_id   = v.get('target_local_id')
-                    delta      = float(v.get('delta') or 0)
-                    # Línea ya descontada (producto que se cargó a un fiado): no
-                    # hay stock que mover, sólo marcar el item para que el
-                    # watcher web no aplique sus vinculaciones de nuevo.
-                    if v.get('solo_marcar'):
-                        touched_items.setdefault(item_idx, [])
-                        continue
-                    if not target_fid or delta == 0:
-                        continue
-
-                    # Acumular descuento por item para marcar consumibles_procesado
-                    desc_entry = {
-                        'contexto':  v.get('contexto') or '',
-                        'target_id': target_fid,
-                        'cantidad':  delta,
-                    }
-                    touched_items.setdefault(item_idx, []).append(desc_entry)
-
-                    # Evitar pushear el mismo target dos veces (si dos items del
-                    # mismo ticket descontaron del mismo target). Lo leemos
-                    # desde SQLite que ya tiene el estado final agregado.
-                    if target_fid in touched_targets:
-                        continue
-                    touched_targets.add(target_fid)
-
-                    if v.get('is_conjunto'):
-                        # Estado absoluto desde SQLite (ya descontado)
-                        try:
-                            rows = db_manager.execute_query(
-                                "SELECT stock, conjunto_total, conjunto_unidades, conjunto_restante "
-                                "FROM products WHERE id = ?",
-                                (int(local_id),)
-                            ) or []
-                        except Exception:
-                            rows = []
-                        if not rows:
-                            continue
-                        r = rows[0]
-                        payload = {
-                            'stock':                int(r.get('stock') or 0),
-                            'conjunto_total':       float(r.get('conjunto_total') or 0),
-                            'conjunto_unidades':    float(r.get('conjunto_unidades') or 0),
-                            'conjunto_restante':    float(r.get('conjunto_restante') or 0),
-                            'ultima_actualizacion': now_dt,
-                        }
-                        cat_ref = self.db.collection('catalogo').document(target_fid)
-                        batch.set(cat_ref, payload, merge=True)
-                        # Mirror en inventario (doc_id = id numérico local).
-                        try:
-                            inv_ref = self.db.collection('inventario').document(str(int(local_id)))
-                            batch.set(inv_ref, payload, merge=True)
-                        except Exception:
-                            pass
+                from pos_system.utils import vinculos_pendientes as _vp
+                filas = _vp.pendientes(db_manager)
+                if not filas:
+                    return
+                subidas = 0
+                for sale_id, grupo in _vp.agrupar(filas):
+                    ids = [int(f['id']) for f in grupo]
+                    if self._aplicar_vinculos_remoto(sale_id, grupo, db_manager):
+                        _vp.marcar_subidos(db_manager, ids)
+                        subidas += len(ids)
                     else:
-                        # Stock plano: decremento atómico
-                        cat_ref = self.db.collection('catalogo').document(target_fid)
-                        batch.set(cat_ref, {
-                            'stock': _fs.Increment(-delta),
-                            'ultima_actualizacion': now_dt,
-                        }, merge=True)
-                        try:
-                            inv_ref = self.db.collection('inventario').document(str(int(local_id)))
-                            batch.set(inv_ref, {
-                                'stock': _fs.Increment(-delta),
-                                'ultima_actualizacion': now_dt,
-                            }, merge=True)
-                        except Exception:
-                            pass
+                        # Casi siempre es que no hay internet: las que siguen
+                        # van a fallar igual. Se anota el intento y se corta.
+                        _vp.marcar_fallo(db_manager, ids)
+                        break
+                if subidas:
+                    logger.info(f"Firebase: {subidas} descuento(s) por vinculación subidos.")
+            except Exception as e:
+                logger.warning(f"Firebase: no se pudo subir la cola de vínculos: {e}")
 
-                # Marcar items en ventas_por_dia. Sólo aplica cuando el descuento
-                # vino de una venta real: el saldado de fiado con saldo a favor
-                # descuenta stock sin generar venta (sale_id=None) y ahí no hay
-                # doc que marcar.
+        if en_hilo:
+            self._run(_do)
+        else:
+            _do()
+
+    def _aplicar_vinculos_remoto(self, sale_id, grupo: list, db_manager) -> bool:
+        """Una venta (o un movimiento suelto, `sale_id=None`) contra Firestore,
+        en una transacción. Devuelve True si quedó escrito."""
+        from firebase_admin import firestore as _fs
+        from pos_system.utils import vinculos_pendientes as _vp
+
+        now_dt  = now_ar().astimezone(timezone.utc)
+        # Con la zona escrita: el mismo campo lo tocan el POS (en hora de acá)
+        # y el panel (en UTC), y sin el offset no hay forma de saber cuál es.
+        now_str = now_dt.strftime('%Y-%m-%dT%H:%M:%S%z')
+        pc_id   = _get_pc_id()
+        col_cat = self.db.collection('catalogo')
+        col_inv = self.db.collection('inventario')
+        col_vpd = self.db.collection('ventas_por_dia')
+
+        fids = []
+        inv_ids = {}
+        for f in grupo:
+            fid = str(f.get('target_fid') or '').strip()
+            if not fid or f.get('solo_marcar'):
+                continue
+            if fid not in fids:
+                fids.append(fid)
+            try:
+                if f.get('target_local_id') is not None:
+                    inv_ids[fid] = str(int(f['target_local_id']))
+            except (TypeError, ValueError):
+                pass
+
+        try:
+            transaccion = self.db.transaction()
+
+            @_fs.transactional
+            def _tx(tx):
+                # Firestore exige todas las lecturas antes de la primera escritura.
+                estado = {}
+                for fid in fids:
+                    snap = col_cat.document(fid).get(transaction=tx)
+                    estado[fid] = (snap.to_dict() or {}) if snap.exists else None
+                plan = _vp.planear(grupo, estado)
+
+                for fid, c in plan['conjuntos'].items():
+                    tx.set(col_cat.document(fid), {
+                        'conjunto_total':       c['total'],
+                        'conjunto_unidades':    c['unidades'],
+                        'conjunto_restante':    c['restante'],
+                        'stock':                c['stock'],
+                        'ultima_actualizacion': now_dt,
+                    }, merge=True)
+                    if fid in inv_ids:
+                        tx.set(col_inv.document(inv_ids[fid]), {
+                            'stock': c['stock'], 'ultima_actualizacion': now_dt,
+                        }, merge=True)
+                for fid, delta in plan['planos'].items():
+                    tx.set(col_cat.document(fid), {
+                        'stock': _fs.Increment(-delta), 'ultima_actualizacion': now_dt,
+                    }, merge=True)
+                    if fid in inv_ids:
+                        tx.set(col_inv.document(inv_ids[fid]), {
+                            'stock': _fs.Increment(-delta), 'ultima_actualizacion': now_dt,
+                        }, merge=True)
+                # El item se marca aunque un target se haya salteado: el
+                # descuento local ya pasó, y sin la marca el watcher del panel
+                # lo descontaría otra vez.
                 if sale_id:
-                    col_vpd = self.db.collection('ventas_por_dia')
-                    for item_idx, descuentos in touched_items.items():
-                        doc_id = f"{pc_id}_{sale_id}_{item_idx}"
-                        batch.set(col_vpd.document(doc_id), {
+                    for idx, descuentos in plan['items'].items():
+                        tx.set(col_vpd.document(f"{pc_id}_{sale_id}_{idx}"), {
                             'consumibles_procesado':    True,
                             'consumibles_procesado_at': now_dt,
                             'consumibles_descuentos':   descuentos,
                         }, merge=True)
+                return plan
 
-                batch.commit()
+            plan = _tx(transaccion)
+        except Exception as e:
+            logger.warning(f"Firebase: vinculación de venta {sale_id or '-'} no subió: {e}")
+            return False
 
-                # Tocar metadata para que las otras PCs detecten el cambio
+        for fid, motivo in plan['saltados']:
+            logger.info(f"Firebase: vinculación a {fid} salteada ({motivo}).")
+        if plan['conjuntos'] or plan['planos']:
+            # Tocar metadata para que las otras PCs detecten el cambio.
+            try:
+                self.db.collection('config').document('catalogo_meta').set(
+                    {'last_updated': now_str}, merge=True)
+                self.db.collection('config').document('inventario_meta').set(
+                    {'last_updated': now_str}, merge=True)
+            except Exception:
+                pass
+            # La tienda mira el total del papel, como en cualquier venta.
+            cambios = [(fid, c['total']) for fid, c in plan['conjuntos'].items()]
+            if cambios:
                 try:
-                    self.db.collection('config').document('catalogo_meta').set(
-                        {'last_updated': now_str}, merge=True
-                    )
-                    self.db.collection('config').document('inventario_meta').set(
-                        {'last_updated': now_str}, merge=True
-                    )
+                    self._avisar_a_la_tienda(cambios)
                 except Exception:
                     pass
-
-                logger.info(
-                    f"Firebase: vinculaciones aplicadas — "
-                    f"{len(touched_targets)} target(s), {len(touched_items)} item(s) marcados."
-                )
-            except Exception as e:
-                logger.error(f"Firebase: error en sync_vinculaciones_after_sale: {e}")
-
-        self._run(_do)
+        return True
 
     # Un solo delta sync a la vez: lo lanzan el arranque de la ventana, el
     # reconcile cuando encuentra faltantes y el sync manual. Dos corriendo

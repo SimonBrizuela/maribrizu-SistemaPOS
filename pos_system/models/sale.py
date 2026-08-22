@@ -9,7 +9,7 @@ from pos_system.database.db_manager import DatabaseManager
 from pos_system.models.conjunto import (
     contenido_de, repartir_total, total_conjunto, total_variedad,
 )
-from pos_system.utils import stock_ledger
+from pos_system.utils import stock_ledger, vinculos_pendientes
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +123,12 @@ class Sale:
                     referencia=f'Venta #{sale_id}',
                 )
 
+            # Los descuentos de papel (vinculaciones) quedan en cola en ESTA
+            # transacción: si la nube no está, esperan acá y los sube el
+            # reintento. Antes salían en un hilo suelto y sin Firebase se
+            # perdían, con la venta subiendo igual más tarde.
+            vinculos_pendientes.encolar(cursor, sale_id, vincs_para_sync_remoto)
+
             # 3. Actualizar caja registradora
             if cash_register_id:
                 if payment_type == 'cash':
@@ -161,16 +167,12 @@ class Sale:
             ).start()
 
         # ── Sync remoto de vinculaciones (catalogo-level) ────────────────────
-        # Ya descontamos stock de los targets en SQLite. Acá pusheamos los
-        # nuevos stocks/conjunto_* al catalogo en Firestore y marcamos los items
-        # con `consumibles_procesado: True` en ventas_por_dia (evita que el
-        # watcher web duplique el descuento).
+        # Ya descontamos stock de los targets en SQLite y la cola quedó anotada.
+        # Acá se empuja lo pendiente: descuenta el papel en Firestore y marca
+        # los items con `consumibles_procesado: True` en ventas_por_dia (evita
+        # que el watcher web duplique el descuento).
         if vincs_para_sync_remoto:
-            threading.Thread(
-                target=self._sync_vincs_to_firebase,
-                args=(sale_id, vincs_para_sync_remoto),
-                daemon=True,
-            ).start()
+            self._sync_vincs_to_firebase()
 
         # Sincronizar resumen mensual
         try:
@@ -447,6 +449,11 @@ class Sale:
                     mp_para_sync_remoto, vincs_para_sync_remoto,
                     usuario=usuario, motivo=motivo, referencia=referencia,
                 )
+            # Sin venta no hay item que marcar en ventas_por_dia: a la cola van
+            # sólo los descuentos reales, sin las entradas de sólo-marcado.
+            vinculos_pendientes.encolar(
+                cursor, None,
+                [v for v in vincs_para_sync_remoto if not v.get('solo_marcar')])
 
         self._propagar_stock_a_firebase(
             aplicados, mp_para_sync_remoto, vincs_para_sync_remoto,
@@ -498,6 +505,9 @@ class Sale:
                     usuario=usuario, motivo=motivo, referencia=referencia,
                 )
                 repuestos.append(reverso)
+            vinculos_pendientes.encolar(
+                cursor, None,
+                [v for v in vincs_para_sync_remoto if not v.get('solo_marcar')])
 
         self._propagar_stock_a_firebase(
             repuestos, mp_para_sync_remoto, vincs_para_sync_remoto,
@@ -563,24 +573,16 @@ class Sale:
         `items` con cantidad positiva descuentan y con cantidad negativa
         reponen: Firestore usa Increment(-cantidad) en los dos casos.
         """
-        # Acá no hay venta, así que no hay doc de `ventas_por_dia` que marcar:
-        # las entradas de sólo-marcado no tienen a dónde ir.
-        vincs_para_sync = [v for v in (vincs_para_sync or [])
-                           if not v.get('solo_marcar')]
         if mp_para_sync:
             threading.Thread(
                 target=self._sync_mp_to_firebase,
                 args=(mp_para_sync,),
                 daemon=True,
             ).start()
-        if vincs_para_sync:
-            # sale_id=None → sync_vinculaciones_after_sale sólo empuja el stock
-            # de los targets y no intenta marcar docs de `ventas_por_dia`.
-            threading.Thread(
-                target=self._sync_vincs_to_firebase,
-                args=(None, vincs_para_sync),
-                daemon=True,
-            ).start()
+        # Los descuentos de papel ya están en la cola local (los anotó quien
+        # movió el stock, en su misma transacción); acá sólo se empujan.
+        if any(not v.get('solo_marcar') for v in (vincs_para_sync or [])):
+            self._sync_vincs_to_firebase()
         # El historial de movimientos sube siempre, haya o no items que empujar:
         # una vinculación o un conjunto mueven stock sin pasar por `items`.
         try:
@@ -912,18 +914,18 @@ class Sale:
                     detalle=f"Consumido por {item.get('product_name') or ''}".strip(),
                 )
 
-    def _sync_vincs_to_firebase(self, sale_id: int,
-                                vincs_to_sync: List[Dict]) -> None:
-        """Empuja a Firestore el descuento de los targets vinculados + marca
-        cada item afectado en `ventas_por_dia` con `consumibles_procesado: True`.
-        Llamado en background tras commit local.
+    def _sync_vincs_to_firebase(self) -> None:
+        """Empuja a Firestore la cola local de vínculos: el descuento de los
+        targets + la marca `consumibles_procesado: True` en cada item de
+        `ventas_por_dia`. Corre en hilo; lo que no suba lo reintenta la ventana
+        principal cada 3 minutos.
         """
         try:
             from pos_system.utils.firebase_sync import get_firebase_sync
             fb = get_firebase_sync()
             if not fb or not getattr(fb, 'enabled', False):
                 return
-            fb.sync_vinculaciones_after_sale(sale_id, vincs_to_sync, self.db)
+            fb.push_vinculos_pendientes(self.db)
         except Exception as e:
             logger.warning(f"_sync_vincs_to_firebase: error general: {e}")
 

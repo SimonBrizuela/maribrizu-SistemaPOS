@@ -65,6 +65,15 @@ export function repartirTotal(total, contenido) {
 }
 
 /**
+ * Saca `delta` unidades sueltas de un conjunto y vuelve a partir lo que queda.
+ * Si los sueltos no alcanzan, se abre un pack solo. `delta` negativo devuelve
+ * mercadería. Nunca baja de cero.
+ */
+export function descontarDeTotal(total, delta, contenido) {
+  return repartirTotal(Math.max(0, num(total) - num(delta)), contenido);
+}
+
+/**
  * Packs cerrados a guardar a partir de lo que tipeó el personal: los packs que
  * ve (incluido el abierto) y los sueltos. Con sueltos, uno de esos packs es el
  * abierto y no se cuenta entero.

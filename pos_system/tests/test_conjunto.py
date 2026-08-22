@@ -15,8 +15,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
 from pos_system.models.conjunto import (
-    contenido_de, packs_a_guardar, packs_a_mostrar, repartir_total,
-    total_conjunto, total_variedad,
+    contenido_de, descontar_de_total, packs_a_guardar, packs_a_mostrar,
+    repartir_total, total_conjunto, total_variedad,
 )
 from pos_system.ui.conjunto_dialog import aplicar_venta
 
@@ -136,6 +136,12 @@ def test_repartir_casos_compartidos():
     for caso in CASOS['repartir_total']:
         u, r = repartir_total(caso['total'], caso['contenido'])
         assert (u, r) == (caso['unidades'], caso['restante']), caso['nombre']
+
+
+def test_descontar_de_total_casos_compartidos():
+    for caso in CASOS['descontar_de_total']:
+        total, u, r = descontar_de_total(caso['total'], caso['delta'], caso['contenido'])
+        assert (total, u, r) == (caso['esp_total'], caso['unidades'], caso['restante']), caso['nombre']
 
 
 def test_total_conjunto_casos_compartidos():

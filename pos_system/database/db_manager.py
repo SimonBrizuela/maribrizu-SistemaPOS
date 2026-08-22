@@ -405,6 +405,15 @@ class DatabaseManager:
             except Exception as e:
                 logger.warning(f"No se pudo crear stock_movimientos: {e}")
 
+            # Cola de descuentos por vinculación (el papel de cada impresión)
+            # que todavía no llegaron a Firestore. Misma idea que el historial:
+            # se anota en la transacción de la venta y se sube cuando se puede.
+            try:
+                from pos_system.utils.vinculos_pendientes import asegurar_tabla as _asegurar_vinc
+                _asegurar_vinc(cursor)
+            except Exception as e:
+                logger.warning(f"No se pudo crear vinc_pendientes: {e}")
+
             # Tabla de configuración
             cursor.execute("""
                 CREATE TABLE IF NOT EXISTS config (
