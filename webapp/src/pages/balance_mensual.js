@@ -16,6 +16,7 @@ import { collection, getDocs, getDoc, query, orderBy, limit, doc, setDoc, update
 import { cssVar } from '../theme.js';
 import { confirmDialog, alertDialog, promptDialog } from '../components/dialogs.js';
 import { refreshVencimientos, setPagosMesFromDias } from './calendario_core.js';
+import { cadenaMeses, cajaAlDia, aperturaDe, hayMontos, rangoMeses, cuentasDelPeriodo, cuentasMpDe, normCuenta } from '../balance_cadena.js';
 
 const MEDIOS = [
   { k: 'efectivo', label: 'Efectivo' },
@@ -30,6 +31,12 @@ let mountEl = null;
 let view = 'ganancia';
 const openMeses = new Set();
 let saving = false;
+// Cadena de saldos (balance_cadena.js): ym → {apertura, cierre, origen...}. Se
+// recalcula al montar y después de cada guardado; de acá sale "Caja actual".
+let cadena = null;
+// Nombres de cuentas de Mercado Pago vistos en los ingresos (MP JOSE, MP AGUSTIN...):
+// se ofrecen en el medio de pago de las compras para saber de qué MP salió la plata.
+let mpCuentas = [];
 
 // ── Helpers de formato / parseo es-AR ─────────────────────────────────────────
 function fmt(n) {
@@ -124,12 +131,50 @@ function totalFijosMes(ym) {
 }
 function fuenteValida(f) { return MEDIOS.some(m => m.k === f) ? f : 'efectivo'; }
 
-// "Caja actual" = plata que tengo hoy por medio de pago. Es el saldo de cierre del
-// mes más reciente que tenga saldos (el último "SALDO DIARIO ACUMULADO" del Excel).
+// ── Cadena de saldos ──────────────────────────────────────────────────────────
+// Lo tipeado manda y lo que falta se calcula: la apertura de un mes es la
+// tipeada o el cierre del anterior; el cierre son los saldos tipeados (mes
+// pasado) o apertura + días. Así "Caja actual" es la de hoy sin que nadie
+// tenga que "fijar el cierre" cada mes ni cargar la apertura del siguiente.
+function saldosTipeados() {
+  const out = {};
+  Object.entries(cfg?.meses || {}).forEach(([ym, m]) => { if (m && m.saldos) out[ym] = m.saldos; });
+  return out;
+}
+function mesesDeLaCadena() {
+  const ymHoy = hoyAR().slice(0, 7);
+  const primero = mesesOrdenados('asc')[0] || ymHoy;
+  return ymRange(primero <= ymHoy ? primero : ymHoy, ymHoy);
+}
+async function recalcularCadena() {
+  const meses = mesesDeLaCadena();
+  const docs = {};
+  await Promise.all(meses.map(async ym => { docs[ym] = await loadDiasMes(db, ym); }));
+  cadena = cadenaMeses({ meses, tipeados: saldosTipeados(), docs, hoy: hoyAR() });
+  mpCuentas = cuentasMpDe(docs);
+  return cadena;
+}
+// Apertura con la que arranca un mes en el Día por día: la tipeada, o la que
+// viene de la cadena (cierre del mes anterior).
+function aperturaEfectiva(ym, docMes) {
+  const ap = docMes && docMes.apertura;
+  if (hayMontos(ap)) return { efectivo: Number(ap.efectivo) || 0, mp: Number(ap.mp) || 0, lapos: Number(ap.lapos) || 0, origen: 'tipeada' };
+  const enc = aperturaDe(cadena, ym);
+  if (enc) return { ...enc, origen: 'cierre_anterior' };
+  return { efectivo: 0, mp: 0, lapos: 0, origen: 'ninguna' };
+}
+
+// "Caja actual" = plata que tengo hoy por medio de pago: el acumulado del mes en
+// curso al último día cargado (o el cierre del último mes con datos). Hasta el
+// 22-08 era el último mes con saldos tipeados y se quedaba en junio.
 function cajaActual() {
+  if (cadena) {
+    const c = cajaAlDia(cadena, hoyAR());
+    if (c) return c;
+  }
   for (const ym of mesesOrdenados('desc')) {
     const s = cfg.meses?.[ym]?.saldos;
-    if (s && (s.efectivo != null || s.mp != null || s.lapos != null)) return { ym, saldos: s };
+    if (s && (s.efectivo != null || s.mp != null || s.lapos != null)) return { ym, dd: null, saldos: s, origen: 'tipeado' };
   }
   return null;
 }
@@ -137,14 +182,18 @@ function cajaActualHtml() {
   const c = cajaActual();
   if (!c) return '';
   const s = c.saldos;
-  const ef = Number(s.efectivo) || 0, mp = Number(s.mp) || 0, lp = Number(s.lapos) || 0;
-  const tot = ef + mp + lp;
+  const ef = Number(s.efectivo) || 0, mp = Number(s.mp) || 0, lp = Number(s.lapos) || 0, sin = Number(s.sin) || 0;
+  const tot = ef + mp + lp + sin;
+  const cuando = c.dd ? `al ${c.dd}/${c.ym.slice(5, 7)}` : `al cierre de ${esc(mesLabel(c.ym))}`;
+  const como = c.origen === 'calculado'
+    ? (c.aperturaOrigen === 'cierre_anterior' ? 'sigue del cierre del mes anterior más los días cargados' : 'apertura del mes más los días cargados')
+    : 'saldos tipeados en el Resumen';
   return `
     <div class="bal-caja-band">
       <div class="bal-caja-head">
         <span class="material-icons">account_balance_wallet</span>
         <span class="bal-caja-title">Caja actual</span>
-        <small>al cierre de ${esc(mesLabel(c.ym))}</small>
+        <small title="${esc(como)}">${cuando}</small>
       </div>
       <div class="bal-caja-medios">
         <div class="bal-caja-item is-efectivo"><span>Efectivo</span><b class="${negCls(ef).trim()}">${money(ef)}</b></div>
@@ -523,7 +572,7 @@ export async function mountBalanceMensual(paneEl, _db) {
   db = _db;
   view = localStorage.getItem('bal:view') || 'ganancia';
   if (view === 'fijos') view = 'dia';   // la pestaña Montos fijos se movió a Día por día
-  if (!['ganancia', 'resumen', 'semana', 'dia', 'meses', 'buscar'].includes(view)) view = 'ganancia';
+  if (!['ganancia', 'resumen', 'semana', 'dia', 'cuentas', 'meses', 'buscar'].includes(view)) view = 'ganancia';
   openMeses.clear();
   curDiaYm = curDiaDD = null;   // la vista Día por día arranca siempre en hoy
   paneEl.innerHTML = `<div class="ct-loading"><div class="spinner" style="width:24px;height:24px;border-width:3px"></div></div>`;
@@ -536,6 +585,7 @@ export async function mountBalanceMensual(paneEl, _db) {
   try {
     await Promise.all(mesesOrdenados('desc').map(ym => loadDiasMes(db, ym)));
   } catch (_) {}
+  try { await recalcularCadena(); } catch (err) { console.error('[balance] cadena de saldos', err); }
   curDiasDoc = null;
   histReset();
   attachHistKeyboard();
@@ -555,6 +605,7 @@ function render() {
     { k: 'resumen',  label: 'Resumen vivo',     icon: 'table_chart' },
     { k: 'semana',   label: 'Semana a Semana',  icon: 'view_week' },
     { k: 'dia',      label: 'Día por día',      icon: 'today' },
+    { k: 'cuentas',  label: 'Cuentas',          icon: 'account_balance' },
     { k: 'meses',    label: 'Meses',            icon: 'calendar_month' },
     { k: 'buscar',   label: 'Buscar',           icon: 'search' },
   ];
@@ -638,35 +689,54 @@ function renderBody() {
   const sTop = scroller ? scroller.scrollTop : window.scrollY;
   const restore = () => { if (scroller) scroller.scrollTop = sTop; else window.scrollTo(0, sTop); };
   if (view === 'ganancia') renderGanancia(body);
-  else if (view === 'resumen') { renderResumen(body); restore(); }
+  else if (view === 'resumen') renderResumen(body).then(restore);
   else if (view === 'semana') renderSemana(body);
   else if (view === 'dia') renderDia(body);
+  else if (view === 'cuentas') renderCuentas(body);
   else if (view === 'meses') { renderMeses(body); restore(); }
   else if (view === 'buscar') renderBuscar(body);
   else { view = 'dia'; renderDia(body); }
 }
 
 // ── Sub-vista: RESUMEN vivo ───────────────────────────────────────────────────
-function renderResumen(body) {
+async function renderResumen(body) {
   const meses = mesesOrdenados('asc');
   const allRubros = rubrosLista();          // 12 rubros + 3 agregados (orden = índice de data-rub-rowtot)
   const rubros = cfg.rubros || [];
   const agregados = cfg.agregados || [];
+  if (!cadena) { try { await recalcularCadena(); } catch (_) {} }
+  if (view !== 'resumen') return;
+  const cad = cadena || {};
 
   const inputCell = (attrs, v) =>
     `<td><input class="bal-cell-input${negCls(v)}" type="text" inputmode="decimal" ${attrs}
        value="${v == null ? '' : fmt(v)}" placeholder="—"></td>`;
 
+  // Saldo de cierre a mostrar: el tipeado, o el calculado por la cadena
+  // (apertura + días) cuando no hay nada tipeado. El calculado se ve en gris
+  // e itálica; tipear un número lo fija.
+  const saldoAuto = (ym, k) =>
+    (saldoVal(ym, k) == null && cad[ym] && cad[ym].cierreOrigen === 'calculado') ? cad[ym].cierre[k] : null;
+  const saldoEf = (ym, k) => { const t = saldoVal(ym, k); return t == null ? saldoAuto(ym, k) : t; };
+  const totalEf = (ym) => MEDIOS.reduce((s, m) => s + (Number(saldoEf(ym, m.k)) || 0), 0);
+  const saldoCell = (ym, m) => {
+    const auto = saldoAuto(ym, m.k);
+    if (auto == null) return inputCell(`data-saldo-ym="${ym}" data-saldo-medio="${m.k}"`, saldoVal(ym, m.k));
+    return `<td><input class="bal-cell-input is-auto${negCls(auto)}" type="text" inputmode="decimal"
+       data-saldo-ym="${ym}" data-saldo-medio="${m.k}" value="${fmt(auto)}"
+       title="Calculado: apertura del mes + días cargados. Tipeá un número para fijarlo."></td>`;
+  };
+
   // Tabla SALDOS: filas = meses, columnas = medios + total
   const saldosRows = meses.map(ym => `
     <tr>
       <td class="bal-td-lbl">${esc(mesLabel(ym))}</td>
-      ${MEDIOS.map(m => inputCell(`data-saldo-ym="${ym}" data-saldo-medio="${m.k}"`, saldoVal(ym, m.k))).join('')}
-      <td class="bal-td-total${negCls(totalSaldos(ym))}" data-saldo-rowtot="${ym}">${money(totalSaldos(ym))}</td>
+      ${MEDIOS.map(m => saldoCell(ym, m)).join('')}
+      <td class="bal-td-total${negCls(totalEf(ym))}" data-saldo-rowtot="${ym}">${money(totalEf(ym))}</td>
     </tr>`).join('');
 
   const colTot = {};
-  MEDIOS.forEach(m => { colTot[m.k] = meses.reduce((s, ym) => s + (Number(saldoVal(ym, m.k)) || 0), 0); });
+  MEDIOS.forEach(m => { colTot[m.k] = meses.reduce((s, ym) => s + (Number(saldoEf(ym, m.k)) || 0), 0); });
   const grandSaldos = MEDIOS.reduce((s, m) => s + colTot[m.k], 0);
 
   // Tabla RUBROS: filas = rubros (+ separador + agregados), columnas = meses + total fila.
@@ -801,8 +871,9 @@ function onSaldoEdit(inp) {
   recomputeSaldosTotals();
   const headChip = mountEl.querySelector(`[data-mes-total="${ym}"]`);
   if (headChip) headChip.textContent = money(totalSaldos(ym));
+  persistMes(ym, { saldos: { [medio]: val }, origen: mes.origen })
+    .then(() => recalcularCadena()).then(refreshCajaBand).catch(() => {});
   refreshCajaBand();
-  persistMes(ym, { saldos: { [medio]: val }, origen: mes.origen });
 }
 
 function onRubroEdit(inp) {
@@ -819,13 +890,19 @@ function onRubroEdit(inp) {
 
 function recomputeSaldosTotals() {
   const meses = mesesOrdenados('asc');
+  // Se lee lo que muestra cada celda (tipeado o calculado por la cadena), así
+  // los totales cierran con lo que el usuario tiene adelante.
+  const enCelda = (ym, k) => {
+    const inp = mountEl.querySelector(`[data-saldo-ym="${ym}"][data-saldo-medio="${k}"]`);
+    return inp ? (parseNum(inp.value) || 0) : (Number(saldoVal(ym, k)) || 0);
+  };
   meses.forEach(ym => {
     const cell = mountEl.querySelector(`[data-saldo-rowtot="${ym}"]`);
-    if (cell) cell.textContent = money(totalSaldos(ym));
+    if (cell) cell.textContent = money(MEDIOS.reduce((s, m) => s + enCelda(ym, m.k), 0));
   });
   let grand = 0;
   MEDIOS.forEach(m => {
-    const tot = meses.reduce((s, ym) => s + (Number(saldoVal(ym, m.k)) || 0), 0);
+    const tot = meses.reduce((s, ym) => s + enCelda(ym, m.k), 0);
     grand += tot;
     const cell = mountEl.querySelector(`[data-saldo-coltot="${m.k}"]`);
     if (cell) cell.textContent = money(tot);
@@ -895,6 +972,7 @@ async function fillMesAMes(host) {
 
   const r2 = v => Math.round(v * 100) / 100;
   const zero = () => ({ efectivo: 0, mp: 0, lapos: 0, sin: 0, total: 0 });
+  const cad = cadenaMeses({ meses, tipeados: saldosTipeados(), docs, hoy: hoyAR() });
   const filas = [];
   meses.forEach(ym => {
     const doc = docs[ym];
@@ -908,10 +986,10 @@ async function fillMesAMes(host) {
       f.porDia.push({ dd, ing: t.ing.total });
     });
     if (!f.cargados) return;
-    // Caja al cierre: acumulado del mes al último día con datos. Solo si el mes
-    // tiene apertura cargada (sin apertura el acumulado miente).
-    const ap = doc && doc.apertura;
-    if (ap && (ap.efectivo != null || ap.mp != null || ap.lapos != null)) {
+    // Caja al cierre: acumulado del mes al último día con datos, desde la
+    // apertura que da la cadena (tipeada o el cierre del mes anterior).
+    const ap = aperturaDe(cad, ym);
+    if (ap) {
       const a = acumuladoHasta(dias, ap, f.ultDd);
       f.cierre = r2(a.efectivo + a.mp + a.lapos + a.sin);
     }
@@ -1843,6 +1921,217 @@ function mondayOf(iso) {
 }
 function ddmm(iso) { return `${iso.slice(8, 10)}/${iso.slice(5, 7)}`; }
 
+// ── Sub-vista: CUENTAS (la plata por cuenta) ───────────────────────────────────
+// Cuánto entró, cuánto salió y cuánto hay en cada cuenta: Efectivo, cada
+// Mercado Pago por separado (MP JOSE, MP AGUSTIN: el nombre con que se carga el
+// ingreso) y Lapos. El saldo de hoy por medio sale de la cadena; el reparto de
+// Mercado Pago entre cuentas, de los movimientos del período (en las compras,
+// del medio "MP JOSE" / "MP AGUSTIN" elegido en cada fila).
+let ctaPeriodo = localStorage.getItem('bal:cta_periodo') || 'mes';
+let ctaRango = (() => { try { return JSON.parse(localStorage.getItem('bal:cta_rango') || 'null'); } catch (_) { return null; } })();
+
+function ctaRangoActual() {
+  const hoy = hoyAR();
+  const [y, m] = hoy.slice(0, 7).split('-').map(Number);
+  const ym2 = (yy, mm) => `${yy}-${String(mm).padStart(2, '0')}`;
+  const finMes = (yy, mm) => `${ym2(yy, mm)}-${String(new Date(yy, mm, 0).getDate()).padStart(2, '0')}`;
+  if (ctaPeriodo === 'mesant') {
+    const py = m === 1 ? y - 1 : y, pm = m === 1 ? 12 : m - 1;
+    return { d: `${ym2(py, pm)}-01`, h: finMes(py, pm) };
+  }
+  if (ctaPeriodo === 'tres') {
+    const idx = (y * 12 + (m - 1)) - 2;
+    return { d: `${ym2(Math.floor(idx / 12), (idx % 12) + 1)}-01`, h: hoy };
+  }
+  if (ctaPeriodo === 'anio') return { d: `${y}-01-01`, h: hoy };
+  if (ctaPeriodo === 'custom' && ctaRango?.desde) {
+    const hta = ctaRango.hasta || ctaRango.desde;
+    return ctaRango.desde <= hta ? { d: ctaRango.desde, h: hta } : { d: hta, h: ctaRango.desde };
+  }
+  return { d: `${ym2(y, m)}-01`, h: hoy };
+}
+
+async function renderCuentas(body) {
+  const { d, h } = ctaRangoActual();
+  const periodos = [
+    { k: 'mes',    t: 'Este mes' },
+    { k: 'mesant', t: 'Mes anterior' },
+    { k: 'tres',   t: '3 meses' },
+    { k: 'anio',   t: 'Este año' },
+    { k: 'custom', t: '<span class="material-icons" style="font-size:15px;vertical-align:-3px;margin-right:3px">date_range</span>Personalizado' },
+  ];
+  body.innerHTML = `
+    <div class="ct-toolbar">
+      <div class="ct-periodo">
+        ${periodos.map(p => `<button type="button" class="ct-periodo-btn${p.k === ctaPeriodo ? ' active' : ''}" data-p="${p.k}">${p.t}</button>`).join('')}
+      </div>
+      <span class="bal-cta-sub" style="margin-left:auto">${ddmm(d)}/${d.slice(0, 4)} → ${ddmm(h)}/${h.slice(0, 4)}</span>
+    </div>
+    <div id="cta-custom" class="ct-custom-panel" style="display:${ctaPeriodo === 'custom' ? '' : 'none'}">
+      <div class="ct-custom-grp">
+        <div class="ct-custom-title">Rango por días</div>
+        <div class="ct-custom-row">
+          <label>Desde<input type="date" id="cta-desde" value="${ctaRango?.desde || ''}"></label>
+          <label>Hasta<input type="date" id="cta-hasta" value="${ctaRango?.hasta || ''}"></label>
+          <button type="button" id="cta-aplicar" class="ct-custom-apply">Aplicar</button>
+        </div>
+      </div>
+    </div>
+    <div id="cta-body"><div class="ct-loading"><div class="spinner" style="width:24px;height:24px;border-width:3px"></div></div></div>`;
+
+  body.querySelectorAll('.ct-periodo-btn').forEach(btn => btn.addEventListener('click', () => {
+    ctaPeriodo = btn.dataset.p;
+    localStorage.setItem('bal:cta_periodo', ctaPeriodo);
+    renderBody();
+  }));
+  body.querySelector('#cta-aplicar')?.addEventListener('click', () => {
+    const desde = body.querySelector('#cta-desde')?.value;
+    if (!desde) return;
+    ctaRango = { desde, hasta: body.querySelector('#cta-hasta')?.value || desde };
+    localStorage.setItem('bal:cta_rango', JSON.stringify(ctaRango));
+    ctaPeriodo = 'custom';
+    localStorage.setItem('bal:cta_periodo', 'custom');
+    renderBody();
+  });
+
+  const meses = rangoMeses(d.slice(0, 7), h.slice(0, 7));
+  const docs = {};
+  await Promise.all(meses.map(async ym => { docs[ym] = await loadDiasMes(db, ym); }));
+  if (!cadena) { try { await recalcularCadena(); } catch (_) {} }
+  if (view !== 'cuentas') return;
+  const host = body.querySelector('#cta-body');
+  if (!host) return;
+
+  const r = cuentasDelPeriodo({ docs, desde: d, hasta: h });
+  const caja = cajaActual();
+  const r2 = v => Math.round(v * 100) / 100;
+
+  if (!r.dias) {
+    host.innerHTML = `<div class="bal-caption"><span class="material-icons">account_balance</span>
+      No hay días cargados en este período. Cargalos en <b>Día por día</b> y acá aparece la plata por cuenta.</div>`;
+    return;
+  }
+
+  // Tarjetas por medio: saldo de hoy (cadena) + lo que se movió en el período.
+  const cuando = caja ? (caja.dd ? `al ${caja.dd}/${caja.ym.slice(5, 7)}` : `al cierre de ${esc(mesLabel(caja.ym))}`) : '';
+  const card = (k, label, cls) => {
+    const pm = r.porMedio[k] || { ingresos: 0, egresos: 0, neto: 0 };
+    const saldo = caja && caja.saldos && caja.saldos[k] != null ? Number(caja.saldos[k]) : null;
+    return `
+      <div class="bal-cta-card ${cls}">
+        <span>${label} <span class="bal-cta-sub">${saldo != null ? 'hoy ' + cuando : ''}</span></span>
+        <b class="${saldo != null ? negCls(saldo).trim() : ''}">${saldo != null ? money(saldo) : '—'}</b>
+        <small><span class="mas">+${fmt(pm.ingresos)}</span><span class="menos">−${fmt(pm.egresos)}</span><span class="igual${negCls(pm.neto)}">= ${money(pm.neto)}</span></small>
+      </div>`;
+  };
+  const totalPeriodo = ['efectivo', 'mp', 'lapos', 'sin'].reduce((s, k) => s + (r.porMedio[k]?.neto || 0), 0);
+  const cardTotal = `
+      <div class="bal-cta-card is-total">
+        <span>Total <span class="bal-cta-sub">${caja ? 'hoy ' + cuando : ''}</span></span>
+        <b class="${caja ? negCls(caja.total).trim() : ''}">${caja ? money(caja.total) : '—'}</b>
+        <small><span class="igual${negCls(totalPeriodo)}">período: ${money(r2(totalPeriodo))}</span></small>
+      </div>`;
+
+  // Tabla por cuenta (acá Mercado Pago se abre en MP JOSE / MP AGUSTIN).
+  const totIng = r.cuentas.reduce((s, c) => s + c.ingresos, 0);
+  const totEgr = r.cuentas.reduce((s, c) => s + c.egresos, 0);
+  const medioLbl = { efectivo: 'Efectivo', mp: 'Mercado Pago', lapos: 'Lapos', sin: 'Sin medio' };
+  const filas = r.cuentas.map(c => {
+    const pct = totIng > 0 ? Math.round(c.ingresos / totIng * 100) : 0;
+    return `
+      <tr>
+        <td class="bal-td-lbl">${esc(c.label)}${c.medio === 'mp' ? `<span class="bal-cta-sub">${medioLbl[c.medio]}</span>` : ''}</td>
+        <td>${c.ingresos ? money(c.ingresos) : '—'}</td>
+        <td>${c.egresos ? money(c.egresos) : '—'}</td>
+        <td class="bal-td-total${negCls(c.neto)}">${money(c.neto)}</td>
+        <td><div style="display:flex;align-items:center;gap:8px"><div class="bal-cta-bar" style="flex:1"><i style="width:${pct}%"></i></div><span class="bal-cta-sub">${pct}%</span></div></td>
+      </tr>`;
+  }).join('');
+  const sinAsignar = r.cuentas.find(c => c.clave === 'mp:' && c.egresos > 0);
+
+  // Detalle de ingresos: por cuenta, qué motivos y cuántas veces.
+  const ingresosHtml = r.cuentas.filter(c => c.ingresos > 0).map(c => `
+    <div class="bal-cta-grupo">
+      <div class="bal-cta-grupo-h"><span>${esc(c.label)}</span><span>${money(c.ingresos)}</span></div>
+      ${c.ingPorMotivo.map(x => `
+        <div class="bal-cta-linea"><span>${esc(x.motivo)} <span class="veces">· ${x.veces} ${x.veces === 1 ? 'día' : 'días'}</span></span><b>${money(x.total)}</b></div>`).join('')}
+    </div>`).join('');
+
+  // Detalle de egresos: por cuenta, rubros y proveedores, y la lista completa.
+  const egresosHtml = r.cuentas.filter(c => c.egresos > 0).map(c => {
+    const top = c.egresos || 1;
+    const movs = c.movimientos.filter(m => m.tipo === 'egreso');
+    return `
+    <div class="bal-cta-grupo">
+      <div class="bal-cta-grupo-h"><span>${esc(c.label)}</span><span>${money(c.egresos)}</span></div>
+      <div class="bal-cta-sub" style="margin:2px 0 4px">Por rubro</div>
+      ${c.egrPorRubro.map(x => `
+        <div class="bal-cta-linea"><span>${esc(x.rubro)} <span class="veces">· ${x.veces}</span></span>
+          <div class="bal-cta-bar" style="width:90px"><i style="width:${Math.round(x.total / top * 100)}%"></i></div><b>${money(x.total)}</b></div>`).join('')}
+      <div class="bal-cta-sub" style="margin:8px 0 4px">Por proveedor / motivo</div>
+      ${c.egrPorProveedor.slice(0, 8).map(x => `
+        <div class="bal-cta-linea"><span>${esc(x.proveedor)} <span class="veces">· ${x.veces}</span></span><b>${money(x.total)}</b></div>`).join('')}
+      ${c.egrPorProveedor.length > 8 ? `<div class="bal-cta-sub">y ${c.egrPorProveedor.length - 8} más</div>` : ''}
+      <details class="bal-cta-movs">
+        <summary>Ver los ${movs.length} movimientos</summary>
+        <div class="bal-table-wrap"><table class="bal-table">
+          <thead><tr><th class="bal-th-lbl">Fecha</th><th class="bal-th-lbl">Proveedor / motivo</th><th class="bal-th-lbl">Rubro</th><th class="bal-th-total">Monto</th></tr></thead>
+          <tbody>${movs.map(m => `
+            <tr data-ir="${m.iso}" title="Abrir el día">
+              <td class="bal-td-lbl">${ddmm(m.iso)}/${m.iso.slice(2, 4)}</td><td>${esc(m.proveedor || '—')}</td><td>${esc(m.rubro || '—')}</td>
+              <td class="bal-td-total">${money(m.monto)}</td></tr>`).join('')}
+          </tbody></table></div>
+      </details>
+    </div>`;
+  }).join('');
+
+  host.innerHTML = `
+    <div class="bal-cta-cards">
+      ${card('efectivo', 'Efectivo', 'is-efectivo')}
+      ${card('mp', 'Mercado Pago', 'is-mp')}
+      ${card('lapos', 'Lapos', 'is-lapos')}
+      ${cardTotal}
+    </div>
+    <div class="bal-caption"><span class="material-icons">account_balance</span>
+      Arriba, la plata que hay hoy en cada medio (sigue la cadena de cierres). Abajo, lo que entró y salió
+      <b>por cuenta</b> en el período: Mercado Pago se abre en cada cuenta según el nombre del ingreso
+      (MP JOSE, MP AGUSTIN) y, en las compras, según el medio elegido en cada fila.
+      ${r.dias} ${r.dias === 1 ? 'día cargado' : 'días cargados'}.</div>
+
+    <div class="bal-card bal-xls" style="margin-bottom:16px">
+      <div class="bal-card-title"><span class="material-icons">compare_arrows</span> Por cuenta en el período</div>
+      <div class="bal-table-wrap">
+        <table class="bal-table bal-xls-table">
+          <thead><tr><th class="bal-th-lbl">Cuenta</th><th>Ingresos</th><th>Egresos</th><th class="bal-th-total">Neto</th><th>Parte de los ingresos</th></tr></thead>
+          <tbody>${filas}</tbody>
+          <tfoot><tr class="bal-row-total">
+            <td class="bal-td-lbl">Total</td><td>${money(r2(totIng))}</td><td>${money(r2(totEgr))}</td>
+            <td class="bal-td-total${negCls(totIng - totEgr)}">${money(r2(totIng - totEgr))}</td><td></td>
+          </tr></tfoot>
+        </table>
+      </div>
+      ${sinAsignar ? `<div class="bal-dia-faltas" style="margin-top:10px"><span class="material-icons">info</span>
+        Hay <b>${money(sinAsignar.egresos)}</b> de compras pagadas con Mercado Pago sin decir de cuál. En cada compra, elegí
+        <b>${mpCuentas.join('</b> o <b>') || 'la cuenta'}</b> como medio para que entre en su cuenta.</div>` : ''}
+    </div>
+
+    <div class="bal-cta-grid2">
+      <div class="bal-card bal-xls">
+        <div class="bal-card-title"><span class="material-icons">south_east</span> Ingresos por cuenta</div>
+        ${ingresosHtml || '<div class="bal-mov-empty">Sin ingresos en el período</div>'}
+      </div>
+      <div class="bal-card bal-xls">
+        <div class="bal-card-title"><span class="material-icons">north_east</span> Egresos detallados por cuenta</div>
+        ${egresosHtml || '<div class="bal-mov-empty">Sin egresos en el período</div>'}
+      </div>
+    </div>`;
+
+  host.querySelectorAll('[data-ir]').forEach(tr => tr.addEventListener('click', () => {
+    const iso = tr.dataset.ir;
+    gotoDia(iso.slice(0, 7), iso.slice(8, 10));
+  }));
+}
+
 async function renderSemana(body) {
   body.innerHTML = `<div class="ct-loading"><div class="spinner" style="width:24px;height:24px;border-width:3px"></div></div>`;
   // Del primer mes del balance al mes actual: el mes en curso puede tener días
@@ -1891,12 +2180,13 @@ async function renderSemana(body) {
   }
 
   const r2 = v => Math.round(v * 100) / 100;
-  // Caja al cierre de cada semana: acumulado del mes del último día con datos.
-  // Solo si ese mes tiene apertura cargada (sin apertura el acumulado miente).
+  // Caja al cierre de cada semana: acumulado del mes del último día con datos,
+  // arrancando de la apertura del mes según la cadena (tipeada o cierre anterior).
+  const cad = cadenaMeses({ meses, tipeados: saldosTipeados(), docs, hoy: hoyAR() });
   lista.forEach(w => {
     const m = docs[w.fin.ym];
-    const ap = m && m.apertura;
-    if (ap && (ap.efectivo != null || ap.mp != null || ap.lapos != null)) {
+    const ap = aperturaDe(cad, w.fin.ym);
+    if (m && ap) {
       const a = acumuladoHasta(m.dias, ap, w.fin.dd);
       w.cierre = r2(a.efectivo + a.mp + a.lapos + a.sin);
     }
@@ -2110,9 +2400,21 @@ function defaultIngresos(dias) {
 }
 
 // Opciones del <select> de medio para una fila de movimiento (incluye "—" vacío).
-function medioOptions(sel) {
-  return MEDIOS.map(m => `<option value="${m.k}" ${sel === m.k ? 'selected' : ''}>${m.label}</option>`).join('') +
-    `<option value="" ${!sel ? 'selected' : ''}>—</option>`;
+// Opciones del medio de pago. En las compras, Mercado Pago se abre en las cuentas
+// vistas en los ingresos (MP JOSE, MP AGUSTIN...) para saber de cuál salió la
+// plata: se guarda medio 'mp' + `cuenta`. El valor de esas opciones es 'mp:NOMBRE'.
+function medioOptions(sel, cuenta = null, conCuentasMp = false) {
+  const selMp = sel === 'mp' && normCuenta(cuenta) ? 'mp:' + normCuenta(cuenta) : null;
+  const nombres = conCuentasMp ? [...mpCuentas] : [];
+  if (selMp && !nombres.includes(selMp.slice(3))) nombres.push(selMp.slice(3));
+  return MEDIOS.map(m => {
+    let opts = `<option value="${m.k}" ${sel === m.k && !selMp ? 'selected' : ''}>${m.label}</option>`;
+    if (m.k === 'mp') {
+      opts += nombres.map(n =>
+        `<option value="mp:${esc(n)}" ${selMp === 'mp:' + n ? 'selected' : ''}>&nbsp;&nbsp;${esc(n)}</option>`).join('');
+    }
+    return opts;
+  }).join('') + `<option value="" ${!sel ? 'selected' : ''}>—</option>`;
 }
 
 // HTML de una fila de movimiento (ingreso o compra). Se usa tanto en el render
@@ -2131,7 +2433,7 @@ function movRowHtml(x, i, tipo) {
     <div class="bal-mov-row bal-mov-com" data-mov="compras" data-i="${i}">
       <input data-f="proveedor" value="${esc(x.proveedor || '')}" placeholder="Proveedor / motivo" autocomplete="off">
       <input data-f="rubro" value="${esc(x.rubro || '')}" placeholder="Rubro" autocomplete="off">
-      <select data-f="medio">${medioOptions(x.medio)}</select>
+      <select data-f="medio">${medioOptions(x.medio, x.cuenta, true)}</select>
       <input data-f="monto" inputmode="decimal" value="${fmt(Number(x.monto) || 0)}" style="text-align:right">
       <button class="bal-fijo-del" data-del title="Quitar"><span class="material-icons">close</span></button>
     </div>`;
@@ -2442,10 +2744,17 @@ async function renderDia(body) {
   // Plantilla por defecto: un día sin ingresos arranca con las filas típicas
   // (Caja/Efectivo · MP · Lapos) vacías y editables. No se persiste hasta cargar un monto.
   if (!dia.ingresos || !dia.ingresos.length) dia.ingresos = defaultIngresos(dias);
+  // Las cuentas MP del día entran a la lista que ofrecen las compras.
+  (dia.ingresos || []).forEach(x => {
+    const n = x.medio === 'mp' ? normCuenta(x.motivo) : '';
+    if (n && !mpCuentas.includes(n)) { mpCuentas.push(n); mpCuentas.sort(); }
+  });
   const t = diaTotales(dia);
   // Cierre por medio + saldo acumulado (réplica del Excel). El "work" incluye el
   // día en edición para que el acumulado refleje lo que se está cargando ahora.
-  const apertura = curDiasDoc.apertura || {};
+  // La apertura es la tipeada o, si no hay, el cierre del mes anterior (cadena).
+  const apTipeada = curDiasDoc.apertura || {};
+  const apertura = aperturaEfectiva(curDiaYm, curDiasDoc);
   const workDias = Object.assign({}, dias, { [curDiaDD]: dia });
   const pm = diaPorMedio(dia);
   const accum = acumuladoHasta(workDias, apertura, curDiaDD);
@@ -2454,9 +2763,10 @@ async function renderDia(body) {
   // CERRADO (histórico ya cargado) y hoy/futuro ABIERTO.
   const cerrado = (dia.cerrado === true || dia.cerrado === false) ? dia.cerrado : (iso < hoyAR());
 
+  // Cerrar el día ya no es un paso: los días pasados se cierran solos y la
+  // caja de arriba sigue al último día cargado. Lo único que falta es cargar.
   const faltas = [];
   if (!dia.ingresos.some(x => Number(x.monto) > 0)) faltas.push('cargar la caja / ingresos');
-  if (!cerrado) faltas.push('cerrar el día');
 
   // Tira de días del mes (estado) + "mes a la fecha"
   const [yy, mm] = curDiaYm.split('-').map(Number);
@@ -2482,7 +2792,8 @@ async function renderDia(body) {
     const d = String(k).padStart(2, '0');
     if (`${curDiaYm}-${d}` > today) continue;
     const s = diaState(d);
-    if (s === 'is-abierto') sinCerrar++;   // solo días operados sin cerrar (no los vacíos)
+    // Solo días PASADOS operados y reabiertos a mano: hoy está abierto porque sí.
+    if (s === 'is-abierto' && `${curDiaYm}-${d}` < today) sinCerrar++;
   }
   let mesIng = 0, mesCom = 0, cargados = 0;
   Object.keys(dias).forEach(k => {
@@ -2497,8 +2808,8 @@ async function renderDia(body) {
 
   body.innerHTML = `
     <div class="bal-caption"><span class="material-icons">today</span>
-      Detalle día por día (cada movimiento, como el Excel). Cargá ingresos y compras, el saldo se calcula solo,
-      y al terminar <b>cerrás el día</b> para pasar al siguiente. Todo se guarda.</div>
+      Detalle día por día (cada movimiento, como el Excel). Cargá ingresos y compras y el saldo se calcula solo.
+      Los días pasados <b>se cierran solos</b> y la caja de arriba sigue al último día cargado. Todo se guarda.</div>
 
 
     <div class="bal-dia-nav">
@@ -2594,9 +2905,15 @@ async function renderDia(body) {
         <span class="bal-field-lbl">Saldo inicial del mes <small>(${esc(mesLabel(curDiaYm))})</small></span>
         <span class="bal-apertura-inputs">
           ${MEDIOS.map(m => `<label><small>${esc(m.label)}</small>
-            <input class="bal-cell-input" type="text" inputmode="decimal" data-apertura="${m.k}"
-              value="${apertura[m.k] == null ? '' : fmt(apertura[m.k])}" placeholder="0,00"></label>`).join('')}
+            <input class="bal-cell-input${apertura.origen === 'cierre_anterior' && apTipeada[m.k] == null ? ' is-auto' : ''}" type="text" inputmode="decimal" data-apertura="${m.k}"
+              value="${apTipeada[m.k] == null ? '' : fmt(apTipeada[m.k])}"
+              placeholder="${apertura.origen === 'cierre_anterior' ? fmt(apertura[m.k]) : '0,00'}"></label>`).join('')}
         </span>
+        ${apertura.origen === 'cierre_anterior'
+          ? `<small class="bal-apertura-hint">Sigue del cierre del mes anterior (${money(apertura.efectivo)} · ${money(apertura.mp)} · ${money(apertura.lapos)}). Tipeá un número solo si contaste la plata.</small>`
+          : apertura.origen === 'ninguna'
+            ? `<small class="bal-apertura-hint">Sin apertura: el acumulado arranca de cero. Cargá con cuánto empezó el mes.</small>`
+            : ''}
       </div>
     </div>`;
 
@@ -2627,7 +2944,7 @@ function updateMedios(body, dia) {
   const dd = dia.fecha ? dia.fecha.slice(8, 10) : curDiaDD;
   if (curDiasDoc.ym !== ym) return;   // navegación en curso: el reload renderiza
   const dias = curDiasDoc.dias || {};
-  const apertura = curDiasDoc.apertura || {};
+  const apertura = aperturaEfectiva(ym, curDiasDoc);
   const work = Object.assign({}, dias, { [dd]: dia });
   const pm = diaPorMedio(dia);
   const accum = acumuladoHasta(work, apertura, dd);
@@ -2664,6 +2981,8 @@ function bindDia(body, dia) {
     setPagosMesFromDias(ymAtBind, Object.assign({}, (curDiasDoc && curDiasDoc.dias) || {}, { [ddAtBind]: dia }));
     return saveDiasMes(db, ymAtBind, { dias: { [ddAtBind]: dia } })
       .then(() => recordDias(ymAtBind, `Día ${ddAtBind} · ${mesLabel(ymAtBind)}`, ddAtBind))
+      // La caja de arriba sigue al día: cada movimiento guardado la mueve.
+      .then(() => recalcularCadena().then(refreshCajaBand).catch(() => {}))
       .catch(err => {
         console.error('[balance] error guardando día', err);
         alertDialog({ title: 'No se pudo guardar', message: 'Revisá la conexión e intentá de nuevo.', type: 'error' });
@@ -2708,7 +3027,11 @@ function bindDia(body, dia) {
       if (inp.tagName === 'INPUT' && f === 'monto') inp.addEventListener('focus', () => inp.select());
       inp.addEventListener('change', () => {
         if (f === 'monto') { item.monto = parseNum(inp.value) || 0; inp.value = fmt(item.monto); }
-        else if (f === 'medio') item.medio = inp.value || null;
+        else if (f === 'medio') {
+          // 'mp:NOMBRE' = Mercado Pago de una cuenta en particular.
+          if (inp.value.startsWith('mp:')) { item.medio = 'mp'; item.cuenta = inp.value.slice(3); }
+          else { item.medio = inp.value || null; delete item.cuenta; }
+        }
         else item[f] = inp.value.trim();
         patchDiaTotales(body, dia);
         if (tipo === 'compras') refreshFdiaPanel();
@@ -2779,6 +3102,7 @@ function bindDia(body, dia) {
       updateMedios(body, dia);
       // Vacío ⇒ deleteField (el merge de Firestore ignora null y dejaría el viejo).
       saveDiasMes(db, ymAtBind, { apertura: { [medio]: v == null ? deleteField() : v } })
+        .then(() => recalcularCadena().then(refreshCajaBand).catch(() => {}))
         .catch(err => { console.error('[balance] error guardando apertura', err); });
     });
   });
@@ -2787,7 +3111,7 @@ function bindDia(body, dia) {
   // cierre del mes en el Resumen — igual que el último "SALDO DIARIO ACUMULADO".
   body.querySelector('[data-fijar-cierre]')?.addEventListener('click', async () => {
     const dias = curDiasDoc.dias || {};
-    const apertura = curDiasDoc.apertura || {};
+    const apertura = aperturaEfectiva(ymAtBind, curDiasDoc);
     const work = Object.assign({}, dias, { [curDiaDD]: dia });
     const close = acumuladoHasta(work, apertura, '31');
     const r2 = v => Math.round(v * 100) / 100;

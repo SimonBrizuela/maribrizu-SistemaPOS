@@ -4607,3 +4607,38 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
 }
 .btn-primary:hover { background: var(--primary-dark); }
 .btn-primary:disabled { opacity: .6; cursor: not-allowed; }
+
+/* ── Control Total · Cuentas y cadena de saldos ─────────────────────────── */
+.bal-cell-input.is-auto { color: var(--text-muted); font-style: italic; }
+.bal-apertura-hint { display: block; width: 100%; font-size: 11px; color: var(--text-muted); margin-top: 4px; }
+.bal-cta-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 12px; margin-bottom: 14px; }
+.bal-cta-card {
+  background: var(--card-bg); border-radius: var(--radius); box-shadow: var(--shadow);
+  padding: 14px 16px; border-left: 4px solid var(--border);
+}
+.bal-cta-card.is-efectivo { border-left-color: var(--bal-green); }
+.bal-cta-card.is-mp { border-left-color: var(--tint-blue-fg); }
+.bal-cta-card.is-lapos { border-left-color: var(--tint-purple-fg); }
+.bal-cta-card.is-total { border-left-color: var(--text-strong); }
+.bal-cta-card > span { font-size: 11px; text-transform: uppercase; letter-spacing: .4px; color: var(--text-muted); font-weight: 700; }
+.bal-cta-card > b { display: block; font-size: 20px; color: var(--text-strong); font-variant-numeric: tabular-nums; margin: 3px 0 6px; }
+.bal-cta-card > b.bal-neg { color: var(--tint-red-fg); }
+.bal-cta-card small { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--text-muted); }
+.bal-cta-card small .mas { color: var(--tint-green-fg); font-weight: 600; }
+.bal-cta-card small .menos { color: var(--tint-red-fg); }
+.bal-cta-card small .igual { font-weight: 700; color: var(--text); }
+.bal-cta-card small .igual.bal-neg { color: var(--tint-red-fg); }
+.bal-cta-sub { font-size: 11px; color: var(--text-muted); font-weight: 500; margin-left: 6px; text-transform: none; letter-spacing: 0; }
+.bal-cta-bar { height: 6px; border-radius: 3px; background: var(--bg); overflow: hidden; min-width: 60px; }
+.bal-cta-bar > i { display: block; height: 100%; background: var(--bal-green); border-radius: 3px; }
+.bal-cta-grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 16px; }
+.bal-cta-grupo { padding: 10px 0 6px; }
+.bal-cta-grupo + .bal-cta-grupo { border-top: 1px solid var(--border); }
+.bal-cta-grupo-h { display: flex; justify-content: space-between; align-items: baseline; font-weight: 800; color: var(--text-strong); margin-bottom: 6px; font-variant-numeric: tabular-nums; }
+.bal-cta-linea { display: flex; align-items: center; gap: 10px; padding: 3px 0; font-size: 13px; }
+.bal-cta-linea > span:first-child { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.bal-cta-linea .veces { color: var(--text-muted); font-size: 11px; }
+.bal-cta-linea b { font-variant-numeric: tabular-nums; min-width: 110px; text-align: right; color: var(--text-strong); }
+.bal-cta-movs summary { cursor: pointer; font-size: 12px; color: var(--text-muted); padding: 6px 0; }
+.bal-cta-movs tr[data-ir] { cursor: pointer; }
+@media (max-width: 720px) { .bal-cta-grid2 { grid-template-columns: 1fr; } }
