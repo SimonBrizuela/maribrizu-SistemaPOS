@@ -1668,7 +1668,8 @@ export async function renderCatalogo(container, db) {
         cTotal = _stockDesglose.reduce((s, d) => s + d.total, 0);
       }
 
-      const _fmtStock = (n) => (Number.isInteger(n) ? `${n}${cUShort}` : `${Number(n).toFixed(2)}${cUShort}`);
+      // Con separador de miles, como lo muestra la ficha: "49.948 u", no "49948u".
+      const _fmtStock = (n) => `${Number(n).toLocaleString('es-AR', { maximumFractionDigits: 2 })}${cUShort ? ' ' + cUShort : ''}`;
       // Producto vinculado: la disponibilidad sale del/los producto(s) de stock
       // vinculado(s), no del stock propio. _stockShown clampea negativos
       // (sobrevendido → 0; -1 → ∞ servicio): nunca se muestra stock negativo.
