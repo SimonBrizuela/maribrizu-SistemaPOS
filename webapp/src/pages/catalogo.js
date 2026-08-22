@@ -7,7 +7,7 @@ import { getCached, invalidateCache, invalidateCacheByPrefix, peekCacheValue } f
 import { ensureCollections, onStoreChange } from '../store.js';
 import { initCatalogoHistory, fieldLabel } from '../catalogo_history.js';
 import { registrarMovimiento, movimientosDe, MOTIVOS } from '../stock_ledger.js';
-import { avisarStockALaTienda } from '../tienda_espejo.js';
+import { avisarStockALaTienda, reflejarSiPublicado } from '../tienda_espejo.js';
 import { packsAGuardar, packsAMostrar, guardaCerrados, num as numConj } from '../conjunto.js';
 import {
   recomputarResumenInventario, resumenEstaVencido, computarResumen,
@@ -4669,6 +4669,12 @@ export async function renderCatalogo(container, db) {
           }
         } catch (_) {}
 
+        // Si está en la tienda, que la tienda lo vea ya: nombre, precio, stock,
+        // pack, variedades. Antes esperaba al sync de las 6 horas.
+        if (!esNuevo) {
+          reflejarSiPublicado(db, docIdFinal, { ...prod, ...update, doc_id: docIdFinal }).catch(() => {});
+        }
+
         // Sincronizar con inventario para que el POS reciba el precio actualizado.
         try {
           const invDocId = String(idNumFinal);
@@ -4813,6 +4819,10 @@ export async function renderCatalogo(container, db) {
           }
         }
         allProductos[prodIdx] = { ...prod, ...update };
+        // Precio o stock tocados en la grilla: la tienda los ve al instante.
+        if (_cambio && (field === 'precio_venta' || field === 'stock')) {
+          reflejarSiPublicado(db, id, { ...allProductos[prodIdx], doc_id: id }).catch(() => {});
+        }
         if (_cambio) hist.recordUpdate(id, _before, _after, {
           label: `${fieldLabel(field)} de ${prod.nombre || prod.name || id}`,
           syncInv: (field === 'stock' || field === 'precio_venta' || field === 'costo'),

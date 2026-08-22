@@ -49,13 +49,41 @@ export function normalizar(texto) {
     .replace(/[̀-ͯ]/g, '').trim();
 }
 
+// Unidades que van en minúscula cuando acompañan a un número: "250 ml",
+// "40x50 cm", "18mm". Las mismas que UNIDADES en sync_tienda.py.
+const UNIDADES = new Set(['ml', 'mm', 'cm', 'cms', 'm', 'mt', 'mts', 'mtr', 'mtrs', 'gr', 'grs', 'g',
+                          'kg', 'kgs', 'lt', 'lts', 'l', 'cc', 'hjs', 'hs', 'h', 'hojas', 'u', 'un',
+                          'unid', 'w', 'v']);
+const MEDIDA = /^([xX]?)(\d+(?:[.,]\d+)?)(?:([xX])(\d+(?:[.,]\d+)?))?([A-Za-z]{1,5})?(\.?)$/;
+
+// Un número con su unidad o una medida pegada: 250ML → 250ml, 14X40CM →
+// 14x40cm, X80 → x80. Lo que no es eso (C12-003, A4, 2B, 24/6) es un código y
+// se deja en mayúsculas, que es como vino.
+function medidaBonita(palabra) {
+  const m = MEDIDA.exec(palabra);
+  if (!m) return palabra.toUpperCase();
+  const [, x1, n1, x2, n2, unidad, punto] = m;
+  if (unidad && !UNIDADES.has(unidad.toLowerCase())) return palabra.toUpperCase();
+  return `${x1.toLowerCase()}${n1}${(x2 || '').toLowerCase()}${n2 || ''}${(unidad || '').toLowerCase()}${punto}`;
+}
+
+const tieneDigito = (s) => /\d/.test(s || '');
+const terminaEnDigito = (s) => /\d$/.test(s || '');
+
+// El catálogo guarda todo en mayúsculas porque el POS lo muestra así en
+// pantalla chica. Los códigos quedan como vinieron; las medidas se escriben
+// como las escribe la gente. Gemelo de nombre_bonito() en sync_tienda.py;
+// casos en tienda/pruebas/casos_nombre_bonito.json.
 export function nombreBonito(texto) {
   const palabras = String(texto ?? '').trim().split(/\s+/).filter(Boolean);
   if (!palabras.length) return '';
   return palabras.map((palabra, i) => {
-    // Códigos y medidas (C12-003, A4, 500ML) se dejan como vinieron.
-    if (/\d/.test(palabra)) return palabra.toUpperCase();
+    if (tieneDigito(palabra)) return medidaBonita(palabra);
     const baja = palabra.toLowerCase();
+    const anterior = i > 0 ? palabras[i - 1] : '';
+    const siguiente = i + 1 < palabras.length ? palabras[i + 1] : '';
+    if (i > 0 && UNIDADES.has(baja.replace(/\.$/, '')) && terminaEnDigito(anterior)) return baja;
+    if (baja === 'x' && tieneDigito(anterior) && tieneDigito(siguiente)) return 'x';
     if (i > 0 && MENORES.has(baja)) return baja;
     return baja.charAt(0).toUpperCase() + baja.slice(1);
   }).join(' ');
@@ -466,6 +494,42 @@ export async function espejar(db, docId, datos, rubrosHabilitados = null,
 
   await reemplazarDoc(db, 'tienda_productos', docId, documento, { marcaTiempo: 'actualizado' });
   return { publicado: true, motivo: null };
+}
+
+// Qué rubros y subrubros están habilitados (tienda_config/publicacion), con
+// un minuto de memoria: se consulta en cada guardado de la ficha y no cambia
+// cada vez.
+let _publicacion = null;
+let _publicacionAt = 0;
+export async function leerPublicacion(db) {
+  if (_publicacion && Date.now() - _publicacionAt < 60000) return _publicacion;
+  let datos = {};
+  try {
+    const snap = await getDoc(doc(db, 'tienda_config', 'publicacion'));
+    if (snap.exists()) datos = snap.data() || {};
+  } catch (_) { /* sin config: las reglas que no dependen de ella siguen valiendo */ }
+  const rubros = Array.isArray(datos.rubros) ? datos.rubros.map(r => String(r).trim().toUpperCase()) : null;
+  _publicacion = { rubros, subrubrosExcluidos: datos.subrubros_excluidos || null };
+  _publicacionAt = Date.now();
+  return _publicacion;
+}
+
+/**
+ * Vuelve a escribir el espejo de un producto que YA está en la tienda, con
+ * los datos que acaba de guardar el panel. Un producto que no está publicado
+ * no se publica desde acá: eso lo decide el catálogo de la tienda.
+ *
+ * Hasta el 2026-08-22 renombrar un producto o cambiarle el precio desde la
+ * ficha recién llegaba a la tienda con el sync de las 6 horas; entre medio la
+ * vidriera vendía con el nombre y el precio viejos.
+ */
+export async function reflejarSiPublicado(db, docId, datos) {
+  let snap;
+  try { snap = await getDoc(doc(db, 'tienda_productos', docId)); }
+  catch (_) { return { publicado: false, motivo: 'no se pudo leer el espejo' }; }
+  if (!snap.exists()) return { publicado: false, motivo: 'no está en la tienda' };
+  const { rubros, subrubrosExcluidos } = await leerPublicacion(db);
+  return espejar(db, docId, datos, rubros, subrubrosExcluidos);
 }
 
 /**

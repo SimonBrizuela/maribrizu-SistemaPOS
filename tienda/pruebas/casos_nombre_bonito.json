@@ -1,0 +1,27 @@
+{
+  "_nota": "Casos compartidos de nombre_bonito (scripts/sync_tienda.py) y nombreBonito (webapp/src/tienda_espejo.js). Los corren pos_system/tests/test_nombre_bonito.py y tienda/pruebas/nombre_bonito.test.js.",
+  "casos": [
+    {"que": "mayusculas del catalogo a titulo", "entrada": "CUADERNO RIVADAVIA TAPA DURA", "salida": "Cuaderno Rivadavia Tapa Dura"},
+    {"que": "las palabras menores van en minuscula salvo al principio", "entrada": "CINTA DE PAPEL PARA ENMASCARAR", "salida": "Cinta de Papel para Enmascarar"},
+    {"que": "la primera palabra siempre con mayuscula aunque sea menor", "entrada": "DE TODO UN POCO", "salida": "De Todo Un Poco"},
+    {"que": "codigos con numeros quedan en mayuscula", "entrada": "GOMA KEYROAD KR971137", "salida": "Goma Keyroad KR971137"},
+    {"que": "formato de hoja y numero de cuaderno quedan como vinieron", "entrada": "BLOCK A4 CUADERNO N3 Nº10", "salida": "Block A4 Cuaderno N3 Nº10"},
+    {"que": "unidad pegada al numero en minuscula", "entrada": "ACRILICO ETERNA X 250ML", "salida": "Acrilico Eterna X 250ml"},
+    {"que": "unidad separada del numero en minuscula", "entrada": "ACRILICO ETERNA X 250 ML", "salida": "Acrilico Eterna X 250 ml"},
+    {"que": "punto final de la unidad se conserva", "entrada": "ACRILICO ETERNA X 50ML.", "salida": "Acrilico Eterna X 50ml."},
+    {"que": "medidas pegadas con x", "entrada": "BOLSA BOTELLA 14X40CM", "salida": "Bolsa Botella 14x40cm"},
+    {"que": "medidas separadas con x entre numeros", "entrada": "BASTIDOR CASAS 40 X 50", "salida": "Bastidor Casas 40 x 50"},
+    {"que": "la X de 'por' antes de una cantidad no cambia", "entrada": "CUADERNO ESPIRAL X 84 HOJAS", "salida": "Cuaderno Espiral X 84 hojas"},
+    {"que": "x pegada a la cantidad", "entrada": "BLOCK ALFA A4 X80", "salida": "Block Alfa A4 x80"},
+    {"que": "milimetros y metros, y la x entre dos medidas en minuscula", "entrada": "CINTA STIKO 18MM X 20MT", "salida": "Cinta Stiko 18mm x 20mt"},
+    {"que": "decimales con punto y coma", "entrada": "ALAMBRE 0.45MM 50M ROLLO 1,5KG", "salida": "Alambre 0.45mm 50m Rollo 1,5kg"},
+    {"que": "dureza de lapiz no es una unidad", "entrada": "LAPIZ FABER 2B", "salida": "Lapiz Faber 2B"},
+    {"que": "fracciones y barras quedan en mayuscula", "entrada": "ABROCHADORA PINZA 24/6 E/C", "salida": "Abrochadora Pinza 24/6 E/c"},
+    {"que": "gramos y kilos", "entrada": "SILICONA BARRA X 1KG 500GR", "salida": "Silicona Barra X 1kg 500gr"},
+    {"que": "hojas sueltas despues de un numero", "entrada": "RESMA A4 500 HOJAS", "salida": "Resma A4 500 hojas"},
+    {"que": "hs despues de numero", "entrada": "CUADERNO X 50HS", "salida": "Cuaderno X 50hs"},
+    {"que": "vacio", "entrada": "", "salida": ""},
+    {"que": "espacios de mas", "entrada": "  BETUN  DE  JUDEA  ", "salida": "Betun de Judea"},
+    {"que": "acentos se respetan", "entrada": "CUADERNO CALIGRAFÍA", "salida": "Cuaderno Caligrafía"}
+  ]
+}

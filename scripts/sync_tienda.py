@@ -70,13 +70,44 @@ def normalizar(texto):
     return ''.join(c for c in s if unicodedata.category(c) != 'Mn').strip()
 
 
+# Unidades que van en minuscula cuando acompañan a un numero: "250 ml",
+# "40x50 cm", "18mm". Son las que el personal escribia a mano en los nombres
+# propios de la tienda antes de que el catalogo fuera la unica fuente.
+UNIDADES = {'ml', 'mm', 'cm', 'cms', 'm', 'mt', 'mts', 'mtr', 'mtrs', 'gr', 'grs', 'g',
+            'kg', 'kgs', 'lt', 'lts', 'l', 'cc', 'hjs', 'hs', 'h', 'hojas', 'u', 'un',
+            'unid', 'w', 'v'}
+
+_MEDIDA = re.compile(r'([xX]?)(\d+(?:[.,]\d+)?)(?:([xX])(\d+(?:[.,]\d+)?))?([A-Za-z]{1,5})?(\.?)')
+
+
+def _medida_bonita(palabra):
+    """
+    Un numero con su unidad o una medida pegada: 250ML -> 250ml, 14X40CM ->
+    14x40cm, X80 -> x80, 0.45MM -> 0.45mm. Lo que no es eso (C12-003, A4, 2B,
+    24/6, KR971137) es un codigo y se deja en mayusculas, que es como vino.
+    """
+    m = _MEDIDA.fullmatch(palabra)
+    if not m:
+        return palabra.upper()
+    x1, n1, x2, n2, unidad, punto = m.groups()
+    if unidad and unidad.lower() not in UNIDADES:
+        return palabra.upper()
+    return f"{x1.lower()}{n1}{(x2 or '').lower()}{n2 or ''}{(unidad or '').lower()}{punto}"
+
+
+def _termina_en_digito(palabra):
+    return bool(palabra) and palabra[-1].isdigit()
+
+
 def nombre_bonito(texto):
     """
     El catalogo guarda todo en mayusculas porque el POS lo muestra asi en
     pantalla chica. Gritado en una tienda se ve agresivo y barato.
 
-    Lo que trae numeros mezclados (C12-003, A4, 500ML) se deja como vino: suele
-    ser un codigo o una medida y en formato titulo queda peor.
+    Los codigos (C12-003, A4, KR971137) se dejan como vinieron. Las medidas se
+    escriben como las escribe la gente: "250 ml", "40x50 cm", "18mm x 20mt".
+    Misma regla que nombreBonito() en webapp/src/tienda_espejo.js; los casos
+    estan en tienda/pruebas/casos_nombre_bonito.json.
     """
     palabras = str(texto or '').strip().split()
     if not palabras:
@@ -84,10 +115,16 @@ def nombre_bonito(texto):
     salida = []
     for i, palabra in enumerate(palabras):
         if any(c.isdigit() for c in palabra):
-            salida.append(palabra.upper())
+            salida.append(_medida_bonita(palabra))
             continue
         baja = palabra.lower()
-        if i > 0 and baja in MENORES:
+        anterior = palabras[i - 1] if i > 0 else ''
+        siguiente = palabras[i + 1] if i + 1 < len(palabras) else ''
+        if i > 0 and baja.rstrip('.') in UNIDADES and _termina_en_digito(anterior):
+            salida.append(baja)
+        elif baja == 'x' and any(c.isdigit() for c in anterior) and any(c.isdigit() for c in siguiente):
+            salida.append('x')
+        elif i > 0 and baja in MENORES:
             salida.append(baja)
         else:
             salida.append(baja[:1].upper() + baja[1:])
