@@ -149,6 +149,25 @@ def test_planear_plano_servicio_y_faltantes():
     assert len(plan['items'][0]) == 4
 
 
+def test_lo_que_otro_ya_marco_no_se_descuenta_de_nuevo():
+    grupo = [
+        {'item_idx': 0, 'target_fid': 'P', 'delta': 3.0},
+        {'item_idx': 1, 'target_fid': 'P', 'delta': 2.0},
+        {'item_idx': 2, 'solo_marcar': 1},
+    ]
+    # El reconciliador ya aplicó el item 0 mientras la PC estaba sin nube.
+    vivo = vp.sin_los_ya_marcados(grupo, {0})
+    assert [f.get('item_idx') for f in vivo] == [1, 2]
+    plan = vp.planear(vivo, {'P': {'es_conjunto': True, 'conjunto_total': 100, 'conjunto_contenido': 10}})
+    assert plan['conjuntos']['P']['total'] == 98
+    assert 0 not in plan['items']
+    # Sin nada marcado, el grupo pasa entero.
+    assert vp.sin_los_ya_marcados(grupo, None) == grupo
+    # Todo marcado: no queda nada que escribir, pero la cola igual se da por subida.
+    assert vp.planear(vp.sin_los_ya_marcados(grupo, {0, 1, 2}), {}) == {
+        'conjuntos': {}, 'planos': {}, 'items': {}, 'saltados': []}
+
+
 def test_planear_devolucion_suma():
     plan = vp.planear([{'item_idx': 0, 'target_fid': 'P', 'delta': -10.0}],
                       {'P': {'es_conjunto': True, 'conjunto_total': 536, 'conjunto_contenido': 250}})

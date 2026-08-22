@@ -1059,14 +1059,16 @@ function initApp(session) {
   // Prefetch en idle de las páginas más usadas (no bloquea la carga inicial)
   prefetchPageModules(['ventas', 'historial', 'control_total', 'catalogo']);
 
-  // Watcher de consumibles: DESHABILITADO desde POS v3.0.43 — el descuento
-  // por vinculaciones ahora lo hace el POS de escritorio en sale.py
-  // (`_aplicar_vinculaciones_local` + `sync_vinculaciones_after_sale`).
-  // El POS marca cada item de ventas_por_dia con `consumibles_procesado: true`,
-  // por lo que el watcher web ya no es necesario y mantenerlo activo correría
-  // riesgo de doble descuento si la PC sin webapp abierto vendiera con un
-  // build viejo de POS. Se deja el código por si se necesita reactivar como
-  // fallback.
+  // Watcher de consumibles: DESHABILITADO desde POS v3.0.43. El descuento por
+  // vinculaciones lo hace el POS de escritorio en sale.py
+  // (`_aplicar_vinculaciones_local` + la cola `vinc_pendientes`, que sube por
+  // transacción y marca cada item de ventas_por_dia con
+  // `consumibles_procesado: true`). Lo que una PC sin nube deja colgado lo
+  // aplica `scripts/reconciliar_consumibles.py` desde GitHub Actions cada 6 h,
+  // así que el panel no necesita estar abierto para que el papel cierre.
+  // El código queda por si hace falta reactivarlo: desde el 22-08 entiende
+  // conjuntos (descuenta `conjunto_total`) y el POS lee la marca del item
+  // antes de descontar, así que prenderlo no duplica.
   // const initWatcher = () => initConsumiblesWatcher(db);
   // if (window.requestIdleCallback) {
   //   window.requestIdleCallback(initWatcher, { timeout: 5000 });

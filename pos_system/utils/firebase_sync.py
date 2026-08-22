@@ -2425,11 +2425,22 @@ class FirebaseSync:
             @_fs.transactional
             def _tx(tx):
                 # Firestore exige todas las lecturas antes de la primera escritura.
+                # Primero los items: si otro (el reconciliador de GitHub, el
+                # watcher del panel) ya marcó alguno mientras esta PC esperaba
+                # para reintentar, ese papel ya está descontado y no se toca.
+                marcados = set()
+                if sale_id:
+                    for idx in sorted({f.get('item_idx') for f in grupo}):
+                        snap = col_vpd.document(f"{pc_id}_{sale_id}_{idx}").get(transaction=tx)
+                        if snap.exists and (snap.to_dict() or {}).get('consumibles_procesado') is True:
+                            marcados.add(idx)
+                vivo = _vp.sin_los_ya_marcados(grupo, marcados)
                 estado = {}
                 for fid in fids:
                     snap = col_cat.document(fid).get(transaction=tx)
                     estado[fid] = (snap.to_dict() or {}) if snap.exists else None
-                plan = _vp.planear(grupo, estado)
+                plan = _vp.planear(vivo, estado)
+                plan['ya_marcados'] = len(marcados)
 
                 for fid, c in plan['conjuntos'].items():
                     tx.set(col_cat.document(fid), {
@@ -2470,6 +2481,9 @@ class FirebaseSync:
 
         for fid, motivo in plan['saltados']:
             logger.info(f"Firebase: vinculación a {fid} salteada ({motivo}).")
+        if plan.get('ya_marcados'):
+            logger.info(f"Firebase: {plan['ya_marcados']} item(s) de la venta {sale_id} "
+                        f"ya estaban descontados por otra mano; no se repiten.")
         if plan['conjuntos'] or plan['planos']:
             # Tocar metadata para que las otras PCs detecten el cambio.
             try:

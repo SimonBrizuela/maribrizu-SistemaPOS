@@ -180,6 +180,17 @@ def limpiar_viejas(db_manager, dias: int = 60) -> int:
         return 0
 
 
+def sin_los_ya_marcados(grupo: List[dict], marcados) -> List[dict]:
+    """
+    Saca del grupo las filas de los items que ya tienen `consumibles_procesado`
+    en la nube. Ese item lo descontó otra mano (el reconciliador de GitHub o el
+    watcher del panel) mientras esta PC esperaba para reintentar: volver a
+    restarlo sería contar el papel dos veces. `marcados` son los `item_idx`.
+    """
+    marcados = set(marcados or ())
+    return [f for f in grupo if f.get('item_idx') not in marcados]
+
+
 def planear(grupo: List[dict], estado_nube: Dict[str, Optional[dict]]) -> dict:
     """
     Qué escribir en Firestore para un grupo de filas, a partir de lo que hay en
