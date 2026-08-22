@@ -27,6 +27,7 @@ import {
 } from 'firebase/firestore';
 import { invalidateCacheByPrefix } from './cache.js';
 import { registrarMovimiento } from './stock_ledger.js';
+import { descontarDeTotal, num as numConj } from './conjunto.js';
 
 let _db = null;
 let _initialized = false;
@@ -154,16 +155,42 @@ async function _procesarItem(itemRef, itemData) {
           continue;
         }
         const data = snap.data();
-        const stockActual = Number(data.stock) || 0;
-        // Stock -1 = servicio/ilimitado: no descontar.
-        if (stockActual === -1) {
+        const nombreTarget = data.nombre || '';
+        const targetIdInv = data.id != null ? String(data.id) : w.target_id;
+        // Servicio: por la bandera, y por el -1 de las bases viejas.
+        if (data.stock_ilimitado === true || Number(data.stock) === -1) {
           procesados.push({ ...w, skip: 'stock_ilimitado' });
           continue;
         }
-        const nuevoStock = Math.max(0, stockActual - w.total);
-        const nombreTarget = data.nombre || '';
-        const targetIdInv = data.id != null ? String(data.id) : w.target_id;
 
+        const esConj = data.es_conjunto === true || data.es_conjunto === 1;
+        if (esConj) {
+          // El papel de las impresiones es un conjunto: lo que vale es
+          // `conjunto_total`, no `stock`. Hasta el 22-08 acá se tocaba sólo
+          // `stock` y el POS lo pisaba en la venta siguiente: el descuento
+          // del watcher se perdía sin dejar rastro. Misma regla que el POS
+          // (descontar_de_total): se resta del total y se vuelve a repartir.
+          if (Array.isArray(data.conjunto_colores) && data.conjunto_colores.length) {
+            procesados.push({ ...w, skip: 'variedades' });
+            continue;
+          }
+          const antes = numConj(data.conjunto_total);
+          const r = descontarDeTotal(antes, w.total, data.conjunto_contenido);
+          const stockEspejo = Math.max(0, Math.floor(r.total));
+          tx.update(targetRefs[i], {
+            conjunto_total:    r.total,
+            conjunto_unidades: r.unidades,
+            conjunto_restante: r.restante,
+            stock:             stockEspejo,
+            ultima_actualizacion: serverTimestamp(),
+          });
+          updates.push({ id: targetIdInv, stock: stockEspejo, nombre: nombreTarget });
+          procesados.push({ ...w, nuevoStock: r.total, stockAntes: antes, nombreTarget });
+          continue;
+        }
+
+        const stockActual = Number(data.stock) || 0;
+        const nuevoStock = Math.max(0, stockActual - w.total);
         tx.update(targetRefs[i], {
           stock: nuevoStock,
           ultima_actualizacion: serverTimestamp(),
