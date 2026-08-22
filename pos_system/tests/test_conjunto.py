@@ -15,9 +15,18 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
 from pos_system.models.conjunto import (
-    contenido_de, repartir_total, total_conjunto, total_variedad,
+    contenido_de, packs_a_guardar, packs_a_mostrar, repartir_total,
+    total_conjunto, total_variedad,
 )
 from pos_system.ui.conjunto_dialog import aplicar_venta
+
+# Los mismos casos los corre el panel (tienda/pruebas/conjunto.test.js): la
+# regla esta escrita dos veces y asi se comprueba que diga lo mismo.
+_RAIZ = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+with open(os.path.join(_RAIZ, 'tienda', 'pruebas', 'casos_conjunto.json'),
+          encoding='utf-8') as _f:
+    import json as _json
+    CASOS = _json.load(_f)
 
 
 def test_contenido_propio_gana_al_del_producto():
@@ -105,6 +114,46 @@ def test_venta_y_reverso_dejan_el_mismo_total():
         total_variedad({'unidades': u, 'restante': r}, contenido) + consumido,
         contenido)
     assert total_variedad({'unidades': ru, 'restante': rr}, contenido) == antes
+
+
+def test_packs_a_guardar_casos_compartidos():
+    for caso in CASOS['packs_a_guardar']:
+        assert packs_a_guardar(caso['packs'], caso['sueltos']) == caso['esperado'], caso['nombre']
+
+
+def test_packs_a_mostrar_casos_compartidos():
+    for caso in CASOS['packs_a_mostrar']:
+        assert packs_a_mostrar(caso['cerrados'], caso['sueltos']) == caso['esperado'], caso['nombre']
+
+
+def test_lo_que_se_tipea_vuelve_igual_al_reabrir():
+    for caso in CASOS['ida_y_vuelta']:
+        cerrados = packs_a_guardar(caso['packs'], caso['sueltos'])
+        assert packs_a_mostrar(cerrados, caso['sueltos']) == caso['packs'], caso['nombre']
+
+
+def test_repartir_casos_compartidos():
+    for caso in CASOS['repartir_total']:
+        u, r = repartir_total(caso['total'], caso['contenido'])
+        assert (u, r) == (caso['unidades'], caso['restante']), caso['nombre']
+
+
+def test_total_conjunto_casos_compartidos():
+    for caso in CASOS['total_conjunto']:
+        assert total_conjunto(caso['colores'], caso['contenido']) == caso['esperado'], caso['nombre']
+
+
+def test_el_pack_fantasma_del_papel():
+    # El caso real del 22-08: el personal cargo "3 packs y 36 sueltas" de papel
+    # ilustracion (packs de 250) mirando el resumen, que decia 536. El sistema
+    # guardaba 3 cerrados = 786 y descontaba desde ahi: la gondola se vacio con
+    # el sistema mostrando 250 hojas.
+    cerrados = packs_a_guardar(3, 36)
+    assert total_variedad({'unidades': cerrados, 'restante': 36}, 250) == 536
+    # Al vender una hoja el POS reparte el total y el formulario vuelve a
+    # mostrar 3 packs (2 cerrados + el abierto).
+    u, r = repartir_total(535, 250)
+    assert packs_a_mostrar(u, r) == 3
 
 
 if __name__ == '__main__':

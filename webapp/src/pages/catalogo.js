@@ -8,6 +8,7 @@ import { ensureCollections, onStoreChange } from '../store.js';
 import { initCatalogoHistory, fieldLabel } from '../catalogo_history.js';
 import { registrarMovimiento, movimientosDe, MOTIVOS } from '../stock_ledger.js';
 import { avisarStockALaTienda } from '../tienda_espejo.js';
+import { packsAGuardar, packsAMostrar, guardaCerrados, num as numConj } from '../conjunto.js';
 import {
   recomputarResumenInventario, resumenEstaVencido, computarResumen,
   sugerirCantidad, valorizarStock, validarInventario,
@@ -2627,7 +2628,7 @@ export async function renderCatalogo(container, db) {
               </div>
               <div>
                 <label id="lbl_titulo_unidades" style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:0.5px;display:block;margin-bottom:4px">ROLLOS ENTEROS</label>
-                <input id="ed_conj_unidades" type="number" min="0" step="1" value="${prod.conjunto_unidades ?? ''}" placeholder="Ej: 5" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
+                <input id="ed_conj_unidades" type="number" min="0" step="1" value="${prod.conjunto_unidades == null ? '' : (guardaCerrados(prod) ? packsAMostrar(prod.conjunto_unidades, prod.conjunto_restante) : prod.conjunto_unidades)}" placeholder="Ej: 5" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
               </div>
               <div>
                 <label id="lbl_titulo_contenido" style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:0.5px;display:block;margin-bottom:4px">METROS POR ROLLO</label>
@@ -4164,7 +4165,9 @@ export async function renderCatalogo(container, db) {
       }
       _addColorRow(
         c && c.color ? c.color : '',
-        c && c.unidades != null ? c.unidades : '',
+        // Guardados como packs cerrados: se muestran con el abierto, como los
+        // cuenta el personal. Los viejos siguen mostrando lo que tienen.
+        c && c.unidades != null ? (guardaCerrados(prod) ? packsAMostrar(c.unidades, c.restante) : c.unidades) : '',
         c && c.restante != null ? c.restante : '',
         c && c.precio != null ? c.precio : '',
         c && c.contenido != null ? c.contenido : '',
@@ -4461,14 +4464,30 @@ export async function renderCatalogo(container, db) {
           }
         }
 
+        // Lo que tipea el personal son los packs que ve en el estante, incluido
+        // el abierto, y aparte los sueltos. Se guardan packs CERRADOS: con
+        // sueltos, uno de los packs vistos es el abierto y se descuenta. Hasta
+        // el 22-08 se guardaban todos como cerrados y cada papel quedaba con un
+        // pack fantasma. Ver webapp/src/conjunto.js.
+        //
+        // Los productos viejos (sin `conjunto_packs_cerrados`) siguen con la
+        // lectura anterior hasta que los migre scripts/corregir_pack_abierto.py:
+        // convertirlos acá a ciegas le sacaría un pack a los que el POS ya dejó
+        // en cerrados.
+        const eraConjunto = prod.es_conjunto === true || prod.es_conjunto === 1;
+        const convertirPacks = esNuevo || !eraConjunto || guardaCerrados(prod);
         let cU, cR;
         if (tieneColores) {
+          if (convertirPacks) {
+            coloresArr.forEach(c => { c.unidades = packsAGuardar(c.unidades, c.restante); });
+          }
           cU = coloresArr.reduce((a, c) => a + (c.unidades || 0), 0);
           cR = coloresArr.reduce((a, c) => a + (c.restante || 0), 0);
         } else {
-          cU = parseFloat(overlay.querySelector('#ed_conj_unidades').value) || 0;
+          const packsVistos = parseFloat(overlay.querySelector('#ed_conj_unidades').value) || 0;
           const cRraw = overlay.querySelector('#ed_conj_restante').value.trim();
           cR = cRraw === '' ? null : (parseFloat(cRraw) || 0);
+          cU = convertirPacks ? packsAGuardar(packsVistos, cR || 0) : packsVistos;
         }
 
         // Total = packs cerrados × contenido + unidades sueltas.
@@ -4496,6 +4515,7 @@ export async function renderCatalogo(container, db) {
 
         conjuntoFields = {
           es_conjunto:           true,
+          ...(convertirPacks ? { conjunto_packs_cerrados: true } : {}),
           conjunto_tipo:         cTipo,
           conjunto_unidad_medida: cUM,
           conjunto_unidades:     cU,
@@ -4512,6 +4532,7 @@ export async function renderCatalogo(container, db) {
       } else {
         conjuntoFields = {
           es_conjunto:           false,
+          conjunto_packs_cerrados: null,
           conjunto_tipo:         null,
           conjunto_unidad_medida: null,
           conjunto_unidades:     null,
@@ -4631,6 +4652,21 @@ export async function renderCatalogo(container, db) {
 
         invalidateCacheByPrefix('catalogo');
         _touchCatalogoMeta(db).catch(() => {});
+
+        // La ficha también mueve stock, y hasta ahora era la única puerta que
+        // no dejaba rastro: 366 productos con el stock cambiado por fuera del
+        // historial el 22-08, entre ellos las correcciones a mano de los papeles.
+        try {
+          const antesStk  = esNuevo ? 0 : (esConjunto ? numConj(prod.conjunto_total) : numConj(prod.stock));
+          const despuesStk = esConjunto ? numConj(conjuntoFields.conjunto_total) : numConj(nuevoStock);
+          if (antesStk !== despuesStk) {
+            registrarMovimiento(db, {
+              docId: docIdFinal, nombre: nuevoNombre || '',
+              motivo: 'edicion_manual', antes: antesStk, despues: despuesStk,
+              detalle: esNuevo ? 'Alta desde la ficha' : 'Ficha del producto',
+            });
+          }
+        } catch (_) {}
 
         // Sincronizar con inventario para que el POS reciba el precio actualizado.
         try {
@@ -6552,6 +6588,9 @@ export async function renderCatalogo(container, db) {
       const desglose = _variedadesDesgloseInv(p);
       const globalCont = Number(p.conjunto_contenido || 0);
       const tipoLabel = (p.conjunto_tipo || 'pack');
+      // Migrado a packs cerrados: se muestran y se leen con el abierto, como
+      // los cuenta el personal (ver webapp/src/conjunto.js).
+      const cerradosGuardados = guardaCerrados(p);
 
       overlay.innerHTML = `
         <div style="background:var(--surface);border-radius:18px;max-width:640px;width:100%;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 12px 48px rgba(0,0,0,0.22);overflow:hidden">
@@ -6590,8 +6629,9 @@ export async function renderCatalogo(container, db) {
         const row = document.createElement('div');
         row.dataset.varRow = '1';
         row.dataset.esNueva = esNueva ? '1' : '0';
-        const origPacks = existente ? (Number(existente.u) || 0) : 0;
         const origSuelt = existente ? (Number(existente.r) || 0) : 0;
+        const origPacks = !existente ? 0
+          : (cerradosGuardados ? packsAMostrar(existente.u, origSuelt) : (Number(existente.u) || 0));
         row.dataset.origPacks = String(origPacks);
         row.dataset.origSueltos = String(origSuelt);
         row.style.cssText = 'display:grid;grid-template-columns:1fr 90px 90px;gap:8px;align-items:center;background:var(--surface);border:1.5px solid var(--border);border-radius:10px;padding:8px 10px';
@@ -6621,7 +6661,7 @@ export async function renderCatalogo(container, db) {
       overlay.querySelector('#rellInv_add').addEventListener('click', () => _addRow('', null, true));
 
       function actualizarResumen() {
-        let totP = 0, totS = 0, nuevas = 0, hayCambio = false;
+        let totP = 0, totS = 0, totCerrados = 0, nuevas = 0, hayCambio = false;
         overlay.querySelectorAll('[data-var-row]').forEach(r => {
           const packs   = parseInt(r.querySelector('.r_packs').value) || 0;
           const sueltos = parseFloat(r.querySelector('.r_sueltos').value) || 0;
@@ -6630,8 +6670,9 @@ export async function renderCatalogo(container, db) {
           if (packs !== oP || sueltos !== oS) hayCambio = true;
           if (r.dataset.esNueva === '1' && (packs > 0 || sueltos > 0)) nuevas += 1;
           totP += packs; totS += sueltos;
+          totCerrados += cerradosGuardados ? packsAGuardar(packs, sueltos) : packs;
         });
-        const totalUn = (totP * (globalCont || 1)) + totS;
+        const totalUn = (totCerrados * (globalCont || 1)) + totS;
         if (!hayCambio) {
           resumenEl.style.display = 'none';
         } else {
@@ -6667,7 +6708,11 @@ export async function renderCatalogo(container, db) {
             const nombre = (r.querySelector('.r_color')?.value || '').trim();
             if (nombre && (packs > 0 || sueltos > 0)) {
               huboCambios = true;
-              nuevasACrear.push({ color: nombre, unidades: packs, restante: sueltos });
+              nuevasACrear.push({
+                color: nombre,
+                unidades: cerradosGuardados ? packsAGuardar(packs, sueltos) : packs,
+                restante: sueltos,
+              });
             }
             return;
           }
@@ -6677,7 +6722,7 @@ export async function renderCatalogo(container, db) {
           if (packs !== oP || sueltos !== oS) huboCambios = true;
           existentesActualizadas.push({
             ...orig,
-            unidades: packs,
+            unidades: cerradosGuardados ? packsAGuardar(packs, sueltos) : packs,
             restante: sueltos,
           });
         });
@@ -6705,7 +6750,16 @@ export async function renderCatalogo(container, db) {
           const _after  = { conjunto_colores: nuevoConjunto, conjunto_total: Math.round(totalNuevo) };
           await updateDoc(doc(db, 'catalogo', _docId), {
             ..._after,
+            // Los agregados planos acompañan a las variedades: el POS y la
+            // tienda leen el total, pero un número viejo acá confunde al que mira.
+            conjunto_unidades: nuevoConjunto.reduce((acc, c) => acc + (Number(c.unidades) || 0), 0),
+            conjunto_restante: nuevoConjunto.reduce((acc, c) => acc + (Number(c.restante) || 0), 0),
             ultima_actualizacion: serverTimestamp(),
+          });
+          registrarMovimiento(db, {
+            docId: _docId, nombre: p.nombre || p.name || '',
+            motivo: 'edicion_manual', antes: numConj(p.conjunto_total), despues: Math.round(totalNuevo),
+            detalle: 'Stock por variedad desde Inventario',
           });
           invalidateCacheByPrefix('catalogo');
           // Avisar al POS + sincronizar inventario con el total agregado del conjunto.

@@ -1,0 +1,36 @@
+{
+  "_nota": "Casos compartidos entre pos_system/models/conjunto.py y webapp/src/conjunto.js. Los corren pos_system/tests/test_conjunto.py y tienda/pruebas/conjunto.test.js: si las dos reglas no dan lo mismo, una de las dos esta mal.",
+  "packs_a_guardar": [
+    {"nombre": "3 packs y 36 sueltos: uno de los 3 es el abierto", "packs": 3, "sueltos": 36, "esperado": 2},
+    {"nombre": "sin sueltos, todos cerrados", "packs": 3, "sueltos": 0, "esperado": 3},
+    {"nombre": "sueltos sin ningun pack: no hay de donde restar", "packs": 0, "sueltos": 36, "esperado": 0},
+    {"nombre": "un solo pack abierto", "packs": 1, "sueltos": 12, "esperado": 0},
+    {"nombre": "sueltos vacios o nulos cuentan como cero", "packs": 4, "sueltos": null, "esperado": 4},
+    {"nombre": "packs negativos se clavan en cero", "packs": -2, "sueltos": 5, "esperado": 0},
+    {"nombre": "mas sueltos que un pack igual resta uno solo", "packs": 3, "sueltos": 450, "esperado": 2}
+  ],
+  "packs_a_mostrar": [
+    {"nombre": "2 cerrados y 36 sueltos se ven como 3 packs", "cerrados": 2, "sueltos": 36, "esperado": 3},
+    {"nombre": "sin sueltos se ven los cerrados tal cual", "cerrados": 3, "sueltos": 0, "esperado": 3},
+    {"nombre": "solo sueltos se ven como 1 pack (el abierto)", "cerrados": 0, "sueltos": 36, "esperado": 1},
+    {"nombre": "nulos cuentan como cero", "cerrados": null, "sueltos": null, "esperado": 0}
+  ],
+  "ida_y_vuelta": [
+    {"nombre": "lo que se tipea vuelve igual al reabrir", "packs": 3, "sueltos": 36},
+    {"nombre": "idem sin sueltos", "packs": 5, "sueltos": 0},
+    {"nombre": "idem con un solo pack abierto", "packs": 1, "sueltos": 7}
+  ],
+  "repartir_total": [
+    {"nombre": "786 hojas en packs de 250", "total": 786, "contenido": 250, "unidades": 3, "restante": 36},
+    {"nombre": "justo tres packs", "total": 750, "contenido": 250, "unidades": 3, "restante": 0},
+    {"nombre": "vender una de tres cerradas abre un pack sola", "total": 749, "contenido": 250, "unidades": 2, "restante": 249},
+    {"nombre": "sin contenido todo queda suelto", "total": 40, "contenido": 0, "unidades": 0, "restante": 40},
+    {"nombre": "negativo se clava en cero", "total": -5, "contenido": 10, "unidades": 0, "restante": 0},
+    {"nombre": "fracciones (metros)", "total": 12.5, "contenido": 5, "unidades": 2, "restante": 2.5}
+  ],
+  "total_conjunto": [
+    {"nombre": "dos variedades con el contenido del producto", "contenido": 250, "colores": [{"unidades": 2, "restante": 36}, {"unidades": 1, "restante": 0}], "esperado": 786},
+    {"nombre": "variedad con contenido propio", "contenido": 50, "colores": [{"unidades": 2, "restante": 3, "contenido": 12}, {"unidades": 1, "restante": 0}], "esperado": 77},
+    {"nombre": "lista vacia", "contenido": 50, "colores": [], "esperado": 0}
+  ]
+}

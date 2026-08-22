@@ -72,3 +72,22 @@ def repartir_total(total, contenido):
     if resto < EPS:
         return float(cerrados), 0.0
     return float(cerrados), resto
+
+
+def packs_a_guardar(packs_vistos, sueltos):
+    """
+    Packs cerrados a guardar a partir de lo que carga el personal.
+
+    En el estante se cuentan los packs que se ven, incluido el abierto, y aparte
+    los sueltos: "3 packs y 36 sueltos" son 2 cerrados mas uno abierto con 36.
+    Con sueltos, uno de los packs vistos es el abierto y no se cuenta entero.
+    El panel hace la misma traduccion en `webapp/src/conjunto.js`.
+    """
+    p = max(0.0, _num(packs_vistos))
+    return max(0.0, p - 1) if _num(sueltos) > 0 else p
+
+
+def packs_a_mostrar(cerrados, sueltos):
+    """Inversa de `packs_a_guardar`: los cerrados mas el abierto, si hay sueltos."""
+    c = max(0.0, _num(cerrados))
+    return c + 1 if _num(sueltos) > 0 else c
