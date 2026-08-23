@@ -16,7 +16,7 @@
  * poder abrirla desde el mostrador con la conexión del local— pero no tanto como
  * las de producto: acá hay números chicos que se tienen que poder leer.
  */
-import { doc, serverTimestamp, setDoc } from 'firebase/firestore';
+import { doc, getDoc, serverTimestamp, setDoc } from 'firebase/firestore';
 import { db } from './firebase.js';
 
 const LADO_MAXIMO = 1600;
@@ -47,14 +47,12 @@ export function esComprobanteValido(archivo) {
 }
 
 /**
- * Lo que este navegador subió para un pedido, para poder mostrárselo.
+ * El comprobante de un pedido, para la vista previa.
  *
- * `tienda_comprobantes` no tiene lectura pública a propósito, así que la
- * pantalla del pedido no puede preguntarle a la base "¿ya mandó algo?". Pero
- * el que sube es casi siempre el que vuelve a mirar, y en su aparato el dato
- * está: se guarda acá al subir y la pantalla lo usa para la vista previa.
- * En otro aparato simplemente no hay miniatura; el estado "enviado" no depende
- * de esto, porque un pedido por transferencia nace recién con el comprobante.
+ * Primero el recuerdo local (instantáneo, lo dejó este navegador al subir);
+ * si no hay —otro aparato, o se subió antes de que existiera el recuerdo— se
+ * busca el documento. La lectura es por id, con la misma llave que el pedido:
+ * quien tiene el link ve su pedido entero, y esto es parte de él.
  */
 const CLAVE_RECUERDO = 'll-comprobante-';
 
@@ -66,10 +64,24 @@ export function comprobanteRecordado(pedidoId) {
   }
 }
 
-function recordarComprobante(pedidoId, dato) {
+export function recordarComprobante(pedidoId, dato) {
   try {
     localStorage.setItem(CLAVE_RECUERDO + String(pedidoId), JSON.stringify(dato));
   } catch (_) { /* navegación privada: la vista previa no aparece y ya */ }
+}
+
+export async function traerComprobante(pedidoId) {
+  try {
+    const snap = await getDoc(doc(db, 'tienda_comprobantes', String(pedidoId)));
+    if (!snap.exists()) return null;
+    const d = snap.data() || {};
+    return d.url ? { url: String(d.url), tipo: d.tipo === 'pdf' ? 'pdf' : 'imagen' } : null;
+  } catch (err) {
+    // Sin permiso o sin red: la vista previa no aparece, el estado "enviado"
+    // se muestra igual porque el pedido por transferencia nace del comprobante.
+    console.warn('[comprobante] no se pudo leer:', err?.code || err);
+    return null;
+  }
 }
 
 /**

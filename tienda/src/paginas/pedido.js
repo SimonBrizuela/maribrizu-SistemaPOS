@@ -18,7 +18,8 @@
 import { cargarConfig, configEnCache } from '../datos.js';
 // La validación viene del módulo chico; el que sube (con el SDK de Storage
 // atrás) se carga recién cuando alguien elige un archivo.
-import { esComprobanteValido, comprobanteRecordado } from '../comprobante.js';
+import { esComprobanteValido, comprobanteRecordado, recordarComprobante,
+         traerComprobante } from '../comprobante.js';
 import { pie, vacio } from '../componentes.js';
 import { pesos, esc, distancia, cuando, haceCuanto, lineasDeHorario } from '../formato.js';
 import { icono, franjaMarca } from '../iconos.js';
@@ -189,6 +190,19 @@ export async function pedido({ montar, params }) {
   }, () => {
     if (document.contains(caja)) pintarPerdido();
   });
+
+  // La miniatura del comprobante cuando este navegador no fue el que lo subió
+  // (otro aparato, o se subió antes de que existiera el recuerdo local): se
+  // busca el documento y se guarda como recuerdo, así los próximos pintados lo
+  // tienen al instante. El recibo se parcha en el lugar si ya está en pantalla.
+  if (!comprobanteRecordado(params.id)) {
+    traerComprobante(params.id).then(datos => {
+      if (!datos || !document.contains(caja)) return;
+      recordarComprobante(params.id, datos);
+      const recibo = caja.querySelector('[data-comprobante] .comprobante__recibo');
+      if (recibo) recibo.outerHTML = reciboComprobante(datos);
+    });
+  }
 }
 
 /**

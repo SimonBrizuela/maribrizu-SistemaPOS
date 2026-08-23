@@ -2437,11 +2437,21 @@
 /* El verde del "enviado" vive en el título del recibo; el botón de cambiarlo
    queda neutro, que es una acción secundaria y no una confirmación. */
 .pedido-ficha__transferencia { margin-block: var(--e-3); }
-.pedido-ficha__transferencia .transferencia__dato { padding: var(--e-2) var(--e-3); }
-.pedido-ficha__transferencia .transferencia__dato span { min-width: 64px; }
-/* En la columna angosta de la ficha el alias a tamaño grande se partía en dos
-   renglones ("libreria.li / ceo"), y un dato que se copia no puede partirse. */
-.pedido-ficha__transferencia .transferencia__dato--alias b { font-size: var(--t-md); }
+/* En la columna angosta de la ficha la etiqueta al costado no deja lugar y el
+   alias se partía en dos renglones ("libreria.li / ceo") — y un dato que se
+   copia no puede partirse. La etiqueta pasa arriba, a lo ancho, y el valor se
+   queda con toda la fila junto al botón de copiar. */
+.pedido-ficha__transferencia .transferencia__dato {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  row-gap: 2px;
+  padding: var(--e-2) var(--e-3);
+}
+.pedido-ficha__transferencia .transferencia__dato span {
+  grid-column: 1 / -1;
+  min-width: 0;
+}
 
 /* El mapa va a sangre entre dos partes de la ficha: enmarcarlo otra vez sería
    una caja adentro de otra caja. */

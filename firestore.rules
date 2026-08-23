@@ -365,9 +365,16 @@ service cloud.firestore {
     // por una función accesoria.
     //
     // El id del documento es el del pedido, así que subir dos veces reemplaza
-    // en vez de acumular. Lo lee solo el local, desde el panel.
+    // en vez de acumular.
+    //
+    // `get` es público por lo mismo que en `tienda_pedidos`: el id no se puede
+    // adivinar y quien tiene el link del pedido ya ve el total, la dirección y
+    // el estado — la vista previa de su propio comprobante no le muestra nada
+    // que no sea suyo. Listar sigue siendo solo del local: nadie puede barrer
+    // la colección para juntar comprobantes ajenos.
     match /tienda_comprobantes/{pedidoId} {
-      allow read: if authorized();
+      allow get: if true;
+      allow list: if authorized();
       allow create, update: if comprobanteValido(pedidoId);
       allow delete: if authorized();
     }
