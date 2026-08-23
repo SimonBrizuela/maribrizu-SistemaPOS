@@ -1,0 +1,73 @@
+name: Reconciliar consumibles
+
+# El papel de cada impresion lo descuenta la PC que vende. Si esa PC estaba sin
+# nube en el momento (o corre una version vieja), la venta sube despues pero el
+# papel queda sin descontar: el item de `ventas_por_dia` queda sin la marca
+# `consumibles_procesado`. Entre el 10 y el 12 de agosto de 2026 asi se fueron
+# 1.264 hojas en todas las PCs a la vez.
+#
+# Esto corre aca, sin depender de ninguna PC, y aplica los que quedaron
+# colgados con la misma regla que el POS (scripts/reconciliar_consumibles.py).
+# Sale 12 minutos antes que el sync de la tienda, para que ese ya lea los
+# totales corregidos.
+
+on:
+  schedule:
+    - cron: '5 */6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: reconciliar-consumibles
+  cancel-in-progress: false
+
+jobs:
+  reconciliar:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Dependencias
+        run: pip install firebase-admin
+
+      - name: Credencial
+        env:
+          FIREBASE_KEY_JSON: ${{ secrets.FIREBASE_KEY_JSON }}
+        run: |
+          if [ -z "$FIREBASE_KEY_JSON" ]; then
+            echo "Falta el secreto FIREBASE_KEY_JSON en el repositorio."
+            exit 1
+          fi
+          umask 077
+          printf '%s' "$FIREBASE_KEY_JSON" > firebase_key.json
+          python -c "import json; json.load(open('firebase_key.json'))" \
+            && echo "credencial cargada"
+
+      - name: Reconciliar
+        # El log lista codigos de papel y cantidades: informacion del negocio en
+        # un repositorio publico. Se guarda entero por si falla y solo sale el
+        # resumen.
+        run: |
+          set -o pipefail
+          python scripts/reconciliar_consumibles.py --aplicar > corrida.log 2>&1 || {
+            echo "La reconciliacion fallo. Ultimas lineas:"
+            tail -n 20 corrida.log >&2
+            exit 1
+          }
+          head -n 1 corrida.log
+          tail -n 1 corrida.log
+
+      - name: Borrar la credencial
+        if: always()
+        run: rm -f firebase_key.json corrida.log
