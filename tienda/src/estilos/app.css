@@ -2394,13 +2394,17 @@
   background: var(--surface);
 }
 .comprobante__miniatura {
+  position: relative;
   flex: none;
   width: 56px;
   height: 56px;
+  padding: 0;
   border-radius: var(--r-sm);
   border: 1px solid var(--border);
   overflow: hidden;
   display: block;
+  background: none;
+  cursor: zoom-in;
 }
 .comprobante__miniatura img {
   width: 100%;
@@ -2408,6 +2412,56 @@
   object-fit: cover;
   display: block;
 }
+/* La lupita de la esquina avisa que la miniatura se agranda. */
+.comprobante__lupa {
+  position: absolute;
+  right: 3px;
+  bottom: 3px;
+  width: 18px;
+  height: 18px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-full);
+  background: rgba(255, 255, 255, .92);
+  color: var(--text-2);
+  box-shadow: 0 0 0 1px var(--border);
+}
+
+/* ── El visor del comprobante ─────────────────────────────────────────────
+   La imagen grande sobre fondo oscuro, sin salir de la página: la dirección
+   del archivo no tiene por qué aparecer en la barra del navegador. */
+.visor {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--z-toast) + 1);
+  display: grid;
+  place-items: center;
+  padding: var(--e-5);
+  background: rgba(10, 8, 12, .84);
+}
+.visor__imagen {
+  max-width: min(920px, 100%);
+  max-height: 100%;
+  border-radius: var(--r-md);
+  background: #FFFFFF;
+  box-shadow: var(--s-4);
+}
+.visor__cerrar {
+  position: absolute;
+  top: var(--e-4);
+  right: var(--e-4);
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: var(--r-full);
+  background: rgba(255, 255, 255, .16);
+  color: #FFFFFF;
+  cursor: pointer;
+  transition: background var(--m-rapido) var(--curva);
+}
+.visor__cerrar:hover { background: rgba(255, 255, 255, .28); }
 .comprobante__icono {
   flex: none;
   width: 56px;

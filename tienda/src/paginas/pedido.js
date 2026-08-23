@@ -122,6 +122,12 @@ export async function pedido({ montar, params }) {
     }
   });
 
+  // La miniatura del comprobante abre el visor, sin salir de la página.
+  caja.addEventListener('click', ev => {
+    const boton = ev.target.closest('[data-ver-comprobante]');
+    if (boton) abrirVisor(boton.dataset.verComprobante);
+  });
+
   // Copiar el alias sin salir de la ficha: es el dato que el cliente lleva al
   // homebanking y tipearlo a mano es donde se equivoca.
   caja.addEventListener('click', async ev => {
@@ -507,12 +513,53 @@ function detalleDelPedido(p, modo) {
  * Los pedidos ya entregados o cancelados no muestran nada: ahí no hay nada
  * que revisar.
  */
+/**
+ * Visor del comprobante: la imagen grande sobre un fondo oscuro, acá mismo.
+ * Se cierra con la cruz, tocando afuera o con Escape, y devuelve el foco a
+ * la miniatura que lo abrió.
+ */
+function abrirVisor(url) {
+  const visor = document.createElement('div');
+  visor.className = 'visor';
+  visor.setAttribute('role', 'dialog');
+  visor.setAttribute('aria-modal', 'true');
+  visor.setAttribute('aria-label', 'Tu comprobante');
+  visor.innerHTML = `
+    <button type="button" class="visor__cerrar" aria-label="Cerrar">
+      ${icono('cerrar', { tam: 18 })}
+    </button>
+    <img class="visor__imagen" src="${esc(url)}" alt="Tu comprobante">`;
+
+  const habia = document.activeElement;
+  const porTecla = ev => { if (ev.key === 'Escape') cerrar(); };
+  const cerrar = () => {
+    document.removeEventListener('keydown', porTecla);
+    visor.remove();
+    habia?.focus?.();
+  };
+
+  // La imagen no cierra; el fondo y la cruz sí.
+  visor.addEventListener('click', ev => {
+    if (ev.target.closest('.visor__imagen')) return;
+    cerrar();
+  });
+  document.addEventListener('keydown', porTecla);
+
+  document.body.appendChild(visor);
+  visor.querySelector('.visor__cerrar').focus();
+}
+
 function reciboComprobante(recuerdo) {
+  // La miniatura abre un visor acá mismo, no una pestaña nueva: la dirección
+  // del archivo es un chorizo de Storage con el nombre del proyecto adentro,
+  // y el cliente no tiene por qué verlo en la barra de direcciones.
   const miniatura = recuerdo?.url && recuerdo.tipo === 'imagen'
-    ? `<a class="comprobante__miniatura" href="${esc(recuerdo.url)}"
-          target="_blank" rel="noopener" title="Ver el comprobante entero">
+    ? `<button type="button" class="comprobante__miniatura"
+               data-ver-comprobante="${esc(recuerdo.url)}"
+               aria-label="Ver el comprobante entero">
          <img src="${esc(recuerdo.url)}" alt="Tu comprobante" loading="lazy">
-       </a>`
+         <span class="comprobante__lupa">${icono('buscar', { tam: 12, grosor: 2.5 })}</span>
+       </button>`
     : `<span class="comprobante__icono">${icono('hoja', { tam: 18 })}</span>`;
 
   return `
