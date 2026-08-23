@@ -26,7 +26,29 @@ import { cotizar, rangoDeTramos, llegaAEnvioGratis } from '../envio.js';
 import { montarDirecciones } from '../direcciones.js';
 import { montarMapa } from '../mapa.js';
 
+/**
+ * Despierta las tres funciones del checkout apenas se abre la pantalla.
+ *
+ * Cada una vive en su propia lambda y la primera llamada de la sesión pagaba
+ * el arranque en frío (medido: 2,1 s la cotización fría, 0,4 s caliente), justo
+ * cuando el cliente tipeaba su dirección. Avisándoles ahora, se despiertan y
+ * dejan su config leída mientras él llena el nombre y el teléfono. Si alguna
+ * falla no pasa nada: era solo un aviso, y la llamada de verdad degrada igual
+ * que siempre.
+ */
+function despertarFunciones() {
+  const aviso = {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: '{"warmup":1}',
+  };
+  fetch('/.netlify/functions/direcciones', aviso).catch(() => {});
+  fetch('/.netlify/functions/envio', aviso).catch(() => {});
+  fetch('/.netlify/functions/mapa?warmup=1').catch(() => {});
+}
+
 export async function checkout({ montar }) {
+  despertarFunciones();
   const cfg = await cargarConfig();
   const avisos = await cargarAvisos();
   document.title = 'Confirmar tu pedido · Librería Liceo';

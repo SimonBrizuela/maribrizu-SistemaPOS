@@ -30,6 +30,12 @@ let _configCache = null;
 let _configCacheAt = 0;
 const CONFIG_TTL_MS = 10 * 60_000;
 
+// El área de reparto se lee de Firestore. En el arranque en frío eso se
+// serializaba adelante de la primera consulta a Places y la primera tecleada
+// del cliente pagaba las dos esperas juntas: acá arranca apenas la instancia
+// despierta, en paralelo con el resto de la inicialización.
+areaDeReparto().catch(() => {});
+
 // Radio del area donde se aceptan direcciones, en metros. Es mas grande que el
 // radio de reparto a proposito: al que vive apenas afuera se le muestra su
 // direccion y el checkout le dice "fuera de radio", que es una respuesta. No
@@ -53,6 +59,14 @@ export default async (peticion) => {
     cuerpo = await peticion.json();
   } catch {
     return new Response('Cuerpo inválido', { status: 400 });
+  }
+
+  // El checkout avisa apenas se abre, mientras el cliente llena sus datos.
+  // Despertarse ahora es lo que evita que la primera tecleada de la dirección
+  // pague los dos segundos del arranque en frío. No toca Google: cuesta cero.
+  if (cuerpo.warmup) {
+    areaDeReparto().catch(() => {});
+    return new Response(null, { status: 204 });
   }
 
   // El token de sesion lo genera el navegador y agrupa las consultas de un

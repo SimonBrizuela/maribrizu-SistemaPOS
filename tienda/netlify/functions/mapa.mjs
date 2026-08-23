@@ -33,6 +33,12 @@ const LADO_MAXIMO = 640;
 const RADIO_PERMITIDO_KM = 60;
 
 export default async (peticion) => {
+  // Aviso de precalentamiento del checkout: despertarse ya, para que la
+  // imagen de verdad no pague el arranque en frío. Sin pedirle nada a Google.
+  if (new URL(peticion.url).searchParams.has('warmup')) {
+    return new Response(null, { status: 204 });
+  }
+
   const clave = process.env.GOOGLE_MAPS_STATIC_KEY
              || process.env.GOOGLE_PLACES_KEY
              || process.env.GOOGLE_ROUTES_KEY;

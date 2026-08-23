@@ -37,12 +37,22 @@ export default async (peticion) => {
     return new Response('Sin clave de Routes', { status: 503 });
   }
 
-  let destino;
+  let cuerpo;
   try {
-    ({ destino } = await peticion.json());
+    cuerpo = await peticion.json();
   } catch {
     return new Response('Cuerpo inválido', { status: 400 });
   }
+
+  // Aviso de precalentamiento del checkout: despierta la instancia y deja la
+  // config leída, así la cotización de verdad no paga el arranque en frío
+  // (medido: 2,1 s fría contra 0,4 s caliente). No llama a Routes.
+  if (cuerpo?.warmup) {
+    leerConfig().catch(() => {});
+    return new Response(null, { status: 204 });
+  }
+
+  const destino = cuerpo?.destino;
 
   if (!coordenadaValida(destino)) {
     return new Response('Destino inválido', { status: 400 });
