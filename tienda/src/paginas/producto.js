@@ -108,6 +108,19 @@ function listaDeVariedades(variedades) {
     <div class="variedades__lista${enPista ? ' variedades__lista--pista' : ''}"
          role="group" aria-labelledby="tit-variedades"${enPista ? ' data-pista' : ''}>${botones}</div>`;
 
+  // Las flechas existen para el mouse (el CSS las esconde en el celular, donde
+  // el dedo arrastra). Van después de la lista para poder apagarlas desde CSS
+  // con las clases --inicio y --fin que ya marca el scroll.
+  const flechas = `
+    <button type="button" class="variedades__flecha variedades__flecha--izq"
+            data-pista-atras aria-label="Ver los colores anteriores">
+      ${icono('izquierda', { tam: 16, grosor: 2.5 })}
+    </button>
+    <button type="button" class="variedades__flecha variedades__flecha--der"
+            data-pista-adelante aria-label="Ver más colores">
+      ${icono('derecha', { tam: 16, grosor: 2.5 })}
+    </button>`;
+
   return `
     <div class="variedades">
       <span class="campo__label" id="tit-variedades">
@@ -115,7 +128,7 @@ function listaDeVariedades(variedades) {
         <em data-elegida class="variedades__elegida">${
           enPista ? `· ${disponibles} ${comoSeLlaman(variedades)}` : ''}</em>
       </span>
-      ${enPista ? `<div class="variedades__marco">${lista}</div>` : lista}
+      ${enPista ? `<div class="variedades__marco">${lista}${flechas}</div>` : lista}
     </div>`;
 }
 
@@ -357,6 +370,31 @@ export async function producto({ montar, params }) {
     // Al entrar puede no haber desborde: en la pantalla ancha de una PC entran
     // los treinta y no hay nada que correr.
     marcarBordes();
+
+    /* Con mouse la pista no se podía recorrer: la rueda va para abajo, no hay
+       gesto de arrastre y la barrita de 8 px es un blanco imposible. La rueda
+       pasa a correr la pista, y en los bordes se suelta para que la página
+       siga scrolleando y no quede secuestrada. */
+    pista.addEventListener('wheel', ev => {
+      if (!ev.deltaY || ev.deltaX) return;   // el trackpad horizontal ya anda
+      const falta = pista.scrollWidth - pista.clientWidth;
+      if (falta <= 0) return;
+      const enElFin = ev.deltaY > 0 && pista.scrollLeft >= falta - 1;
+      const enElInicio = ev.deltaY < 0 && pista.scrollLeft <= 0;
+      if (enElFin || enElInicio) return;
+      ev.preventDefault();
+      pista.scrollLeft += ev.deltaY;
+    }, { passive: false });
+
+    // Las flechas saltan de a pantalla, dejando un botón de solape como
+    // referencia. Sin animación si el aparato pidió quietud.
+    const suave = matchMedia('(prefers-reduced-motion: reduce)').matches
+      ? 'auto' : 'smooth';
+    const salto = () => Math.max(pista.clientWidth * 0.8, 160);
+    document.querySelector('[data-pista-atras]')?.addEventListener('click',
+      () => pista.scrollBy({ left: -salto(), behavior: suave }));
+    document.querySelector('[data-pista-adelante]')?.addEventListener('click',
+      () => pista.scrollBy({ left: salto(), behavior: suave }));
   }
 
   /* ── Cuántos lleva ──────────────────────────────────────────────────────

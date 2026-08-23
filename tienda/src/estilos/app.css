@@ -856,6 +856,40 @@
   .variedades__lista--pista::-webkit-scrollbar-track { background: transparent; }
 }
 
+/* Flechas de la pista. Solo con mouse: en el celular el dedo arrastra y las
+   flechas taparían botones. Cada una desaparece cuando su lado ya no tiene
+   nada que mostrar, con las mismas clases --inicio/--fin que apagan el
+   degradé. En el celular quedan en display:none. */
+.variedades__flecha { display: none; }
+
+@media (hover: hover) and (pointer: fine) {
+  .variedades__flecha {
+    display: grid;
+    place-items: center;
+    position: absolute;
+    /* El centro visual de la pista, descontando la barra de abajo. */
+    top: calc(50% - 6px);
+    transform: translateY(-50%);
+    width: 32px;
+    height: 32px;
+    border: 1px solid var(--border);
+    border-radius: var(--r-full);
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: var(--s-2);
+    cursor: pointer;
+    z-index: 1;
+    transition: background var(--m-rapido) var(--curva);
+  }
+  .variedades__flecha:hover { background: var(--surface-2); }
+  .variedades__flecha:active { transform: translateY(-50%) scale(.94); }
+  .variedades__flecha--izq { left: calc(-1 * var(--e-2)); }
+  .variedades__flecha--der { right: calc(-1 * var(--e-2)); }
+
+  .variedades__lista--inicio ~ .variedades__flecha--izq,
+  .variedades__lista--fin ~ .variedades__flecha--der { display: none; }
+}
+
 /* Un nombre largo —"Naranja Pastel / Piel"— no puede hacer una columna del
    ancho de la pantalla. */
 .variedad__nombre {
