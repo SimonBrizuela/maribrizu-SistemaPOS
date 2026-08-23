@@ -47,6 +47,32 @@ export function esComprobanteValido(archivo) {
 }
 
 /**
+ * Lo que este navegador subió para un pedido, para poder mostrárselo.
+ *
+ * `tienda_comprobantes` no tiene lectura pública a propósito, así que la
+ * pantalla del pedido no puede preguntarle a la base "¿ya mandó algo?". Pero
+ * el que sube es casi siempre el que vuelve a mirar, y en su aparato el dato
+ * está: se guarda acá al subir y la pantalla lo usa para la vista previa.
+ * En otro aparato simplemente no hay miniatura; el estado "enviado" no depende
+ * de esto, porque un pedido por transferencia nace recién con el comprobante.
+ */
+const CLAVE_RECUERDO = 'll-comprobante-';
+
+export function comprobanteRecordado(pedidoId) {
+  try {
+    return JSON.parse(localStorage.getItem(CLAVE_RECUERDO + String(pedidoId)) || 'null');
+  } catch (_) {
+    return null;
+  }
+}
+
+function recordarComprobante(pedidoId, dato) {
+  try {
+    localStorage.setItem(CLAVE_RECUERDO + String(pedidoId), JSON.stringify(dato));
+  } catch (_) { /* navegación privada: la vista previa no aparece y ya */ }
+}
+
+/**
  * Sube el comprobante y lo deja anotado para el local.
  * Devuelve { url, tipo }.
  */
@@ -80,7 +106,9 @@ export async function subirComprobante(pedidoId, archivo, { alProgreso = null } 
     subido_en: serverTimestamp(),
   });
 
-  return { url, tipo: esPdf ? 'pdf' : 'imagen' };
+  const subido = { url, tipo: esPdf ? 'pdf' : 'imagen' };
+  recordarComprobante(pedidoId, subido);
+  return subido;
 }
 
 /**

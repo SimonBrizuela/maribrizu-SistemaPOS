@@ -2380,6 +2380,53 @@
 /* Adjuntar el comprobante de la transferencia. Queda debajo del alias, que es
    el dato que la persona acaba de usar para pagar. */
 .comprobante { margin-top: var(--e-3); }
+
+/* El recibo: la miniatura de lo subido (o el icono si fue en otro aparato o es
+   un PDF) al lado del "enviado". La miniatura abre el archivo entero. */
+.comprobante__recibo {
+  display: flex;
+  align-items: center;
+  gap: var(--e-3);
+  padding: var(--e-3);
+  margin-bottom: var(--e-3);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.comprobante__miniatura {
+  flex: none;
+  width: 56px;
+  height: 56px;
+  border-radius: var(--r-sm);
+  border: 1px solid var(--border);
+  overflow: hidden;
+  display: block;
+}
+.comprobante__miniatura img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+.comprobante__icono {
+  flex: none;
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+}
+.comprobante__texto { min-width: 0; }
+.comprobante__titulo {
+  display: flex;
+  align-items: center;
+  gap: var(--e-1);
+  font-size: var(--t-sm);
+  font-weight: var(--peso-semi);
+  color: var(--liceo-verde-txt);
+}
 .comprobante__pista {
   font-size: var(--t-xs);
   color: var(--text-2);
@@ -2387,7 +2434,14 @@
   margin-top: var(--e-2);
 }
 .comprobante__pista--mal { color: var(--liceo-rojo-txt); }
-.comprobante--listo .boton { border-color: var(--liceo-verde); color: var(--liceo-verde-txt); }
+/* El verde del "enviado" vive en el título del recibo; el botón de cambiarlo
+   queda neutro, que es una acción secundaria y no una confirmación. */
+.pedido-ficha__transferencia { margin-block: var(--e-3); }
+.pedido-ficha__transferencia .transferencia__dato { padding: var(--e-2) var(--e-3); }
+.pedido-ficha__transferencia .transferencia__dato span { min-width: 64px; }
+/* En la columna angosta de la ficha el alias a tamaño grande se partía en dos
+   renglones ("libreria.li / ceo"), y un dato que se copia no puede partirse. */
+.pedido-ficha__transferencia .transferencia__dato--alias b { font-size: var(--t-md); }
 
 /* El mapa va a sangre entre dos partes de la ficha: enmarcarlo otra vez sería
    una caja adentro de otra caja. */
@@ -3057,8 +3111,37 @@
   border-bottom: 1px solid var(--border);
 }
 .transferencia__dato:last-child { border-bottom: none; }
-.transferencia__dato span { color: var(--text-2); font-size: var(--t-sm); min-width: 88px; }
-.transferencia__dato b { flex: 1; min-width: 0; font-size: var(--t-md); word-break: break-word; }
+/* La etiqueta en versalitas chicas y el valor con la tipografía de los
+   títulos: son los datos que el cliente lleva al homebanking, tienen que
+   leerse como datos y no como una línea más de texto. */
+.transferencia__dato span {
+  min-width: 96px;
+  color: var(--text-3);
+  font-size: var(--t-xs);
+  font-weight: var(--peso-semi);
+  letter-spacing: .08em;
+  text-transform: uppercase;
+}
+.transferencia__dato b {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--font-titulo);
+  font-size: var(--t-md);
+  word-break: break-word;
+}
+/* El alias es EL dato: fila teñida con el violeta de marca y el valor más
+   grande. El total también crece, que es lo segundo que se copia. */
+.transferencia__dato--alias { background: var(--primary-bg); }
+.transferencia__dato--alias span { color: var(--primary-txt); }
+.transferencia__dato--alias b {
+  font-size: var(--t-lg);
+  color: var(--primary-txt);
+  letter-spacing: -.01em;
+  /* El alias se corta solo en los puntos, nunca adentro de una palabra. */
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+.transferencia__dato--total b { font-size: var(--t-lg); }
 
 .transferencia__pedido {
   margin-top: var(--e-5);

@@ -18,7 +18,7 @@
 import { cargarConfig, configEnCache } from '../datos.js';
 // La validación viene del módulo chico; el que sube (con el SDK de Storage
 // atrás) se carga recién cuando alguien elige un archivo.
-import { esComprobanteValido } from '../comprobante.js';
+import { esComprobanteValido, comprobanteRecordado } from '../comprobante.js';
 import { pie, vacio } from '../componentes.js';
 import { pesos, esc, distancia, cuando, haceCuanto, lineasDeHorario } from '../formato.js';
 import { icono, franjaMarca } from '../iconos.js';
@@ -104,18 +104,36 @@ export async function pedido({ montar, params }) {
       const { subirComprobante } = await import('../comprobante.js');
       const { tipo } = await subirComprobante(params.id, archivo,
                                               { alProgreso: t => decir(t) });
-      bloque.classList.add('comprobante--listo');
-      if (boton) {
-        boton.innerHTML = `${icono('tilde', { tam: 15 })} Comprobante enviado`;
-        boton.disabled = false;
+      // El recibo se rearma con lo recién subido: miniatura nueva, pista limpia.
+      const recibo = bloque.querySelector('.comprobante__recibo');
+      if (recibo) recibo.outerHTML = reciboComprobante(comprobanteRecordado(params.id));
+      const pistaNueva = bloque.querySelector('[data-estado-comprobante]');
+      if (pistaNueva) {
+        pistaNueva.textContent = tipo === 'pdf'
+          ? 'Recibimos el PDF nuevo. Lo revisamos y te confirmamos el pedido.'
+          : 'Recibimos la foto nueva. La revisamos y te confirmamos el pedido.';
       }
-      decir(tipo === 'pdf'
-        ? 'Recibimos el PDF. Lo revisamos y te confirmamos.'
-        : 'Recibimos la foto. La revisamos y te confirmamos.');
+      if (boton) boton.disabled = false;
     } catch (err) {
       console.error('[comprobante]', err);
       decir(err?.message || 'No se pudo enviar. Probá de nuevo.', true);
       if (boton) boton.disabled = false;
+    }
+  });
+
+  // Copiar el alias sin salir de la ficha: es el dato que el cliente lleva al
+  // homebanking y tipearlo a mano es donde se equivoca.
+  caja.addEventListener('click', async ev => {
+    const boton = ev.target.closest('[data-copiar-alias]');
+    if (!boton) return;
+    const alias = caja.querySelector('[data-alias]')?.textContent?.trim();
+    if (!alias) return;
+    try {
+      await navigator.clipboard.writeText(alias);
+      boton.textContent = 'Copiado';
+      setTimeout(() => { boton.textContent = 'Copiar'; }, 2000);
+    } catch (_) {
+      avisar('Copialo a mano: ' + alias, { duracion: 6000 });
     }
   });
 
@@ -464,29 +482,48 @@ function detalleDelPedido(p, modo) {
  * apilan y el mapa ocupa el lugar que sobraba diciendo algo.
  */
 /**
- * Adjuntar el comprobante de la transferencia.
+ * El comprobante de la transferencia, que ya está enviado.
  *
- * Va acá y no en el checkout porque recién en esta pantalla el cliente tiene el
- * alias y el monto para transferir: pedirle el comprobante antes sería pedirle
- * algo que todavía no puede tener.
+ * Un pedido por transferencia nace recién cuando el comprobante llega, así que
+ * en esta pantalla SIEMPRE hay uno: pedirlo de nuevo como si faltara hacía
+ * dudar al cliente de si su pago llegó. Se muestra que está recibido, con la
+ * vista previa cuando este navegador fue el que lo subió, y un botón para
+ * cambiarlo por si la captura salió mal (subir de nuevo reemplaza, no acumula).
  *
- * Los pedidos ya entregados o cancelados no lo muestran: adjuntar ahí no le
- * sirve a nadie.
+ * Los pedidos ya entregados o cancelados no muestran nada: ahí no hay nada
+ * que revisar.
  */
+function reciboComprobante(recuerdo) {
+  const miniatura = recuerdo?.url && recuerdo.tipo === 'imagen'
+    ? `<a class="comprobante__miniatura" href="${esc(recuerdo.url)}"
+          target="_blank" rel="noopener" title="Ver el comprobante entero">
+         <img src="${esc(recuerdo.url)}" alt="Tu comprobante" loading="lazy">
+       </a>`
+    : `<span class="comprobante__icono">${icono('hoja', { tam: 18 })}</span>`;
+
+  return `
+    <div class="comprobante__recibo">
+      ${miniatura}
+      <div class="comprobante__texto">
+        <p class="comprobante__titulo">${icono('tilde', { tam: 14, grosor: 3 })} Comprobante enviado</p>
+        <p class="comprobante__pista" data-estado-comprobante>${
+          recuerdo?.tipo === 'pdf' ? 'Recibimos el PDF. ' : ''
+        }Lo revisamos y te confirmamos el pedido.</p>
+      </div>
+    </div>`;
+}
+
 function bloqueComprobante(p) {
   if (['entregado', 'cancelado'].includes(p.estado)) return '';
 
   return `
-    <div class="comprobante" data-comprobante>
+    <div class="comprobante comprobante--listo" data-comprobante>
       <input type="file" accept="image/*,application/pdf" hidden data-archivo-comprobante>
+      ${reciboComprobante(comprobanteRecordado(p.id))}
       <button type="button" class="boton boton--secundario boton--chico"
               data-subir-comprobante>
-        ${icono('hoja', { tam: 15 })} Adjuntar comprobante
+        Cambiar el comprobante
       </button>
-      <p class="comprobante__pista" data-estado-comprobante>
-        Sacale una foto a la transferencia o subí el PDF: lo revisamos y te
-        confirmamos el pedido.
-      </p>
     </div>`;
 }
 
@@ -526,8 +563,18 @@ function ficha(p, cfg, modo) {
           <span class="pedido-ficha__apoyo pedido-ficha__apoyo--enlinea">${
             retiro ? 'al retirarlo' : 'al recibirlo'}</span>
         </p>
-        ${p.pago?.modo === 'transferencia' && cfg.pago?.alias
-          ? `<p class="pedido-ficha__apoyo">Alias <strong>${esc(cfg.pago.alias)}</strong></p>` : ''}
+        ${p.pago?.modo === 'transferencia' && cfg.pago?.alias ? `
+          <div class="transferencia__datos pedido-ficha__transferencia">
+            <div class="transferencia__dato transferencia__dato--alias">
+              <span>Alias</span><b data-alias>${esc(cfg.pago.alias)}</b>
+              <button type="button" class="boton boton--secundario boton--chico"
+                      data-copiar-alias>Copiar</button>
+            </div>
+            ${cfg.pago.titular ? `
+              <div class="transferencia__dato">
+                <span>Titular</span><b>${esc(cfg.pago.titular)}</b>
+              </div>` : ''}
+          </div>` : ''}
         ${p.pago?.modo === 'transferencia' ? bloqueComprobante(p) : ''}
       </div>
 

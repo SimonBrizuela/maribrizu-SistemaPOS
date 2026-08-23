@@ -626,6 +626,8 @@ textarea.campo__control { min-height: 96px; resize: vertical; line-height: var(-
 .opcion__texto { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
 .opcion__titulo { font-weight: var(--peso-semi); font-size: var(--t-base); }
 .opcion__detalle { font-size: var(--t-sm); color: var(--text-2); line-height: 1.4; }
+/* El alias adentro del detalle se lee como dato, no como texto de apoyo. */
+.opcion__alias { color: var(--text); font-weight: var(--peso-semi); }
 .opcion__precio {
   font-family: var(--font-titulo);
   font-weight: var(--peso-bold);

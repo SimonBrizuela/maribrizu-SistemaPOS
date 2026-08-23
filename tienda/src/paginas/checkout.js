@@ -280,7 +280,8 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
                   <span class="opcion__titulo">Transferencia</span>
                   <span class="opcion__detalle">${
                     cfg.pago?.alias
-                      ? `A ${esc(cfg.pago.alias)}${cfg.pago.titular ? ` · ${esc(cfg.pago.titular)}` : ''}`
+                      ? `Alias <b class="opcion__alias">${esc(cfg.pago.alias)}</b>${
+                          cfg.pago.titular ? ` · ${esc(cfg.pago.titular)}` : ''}`
                       : 'Te pasamos los datos cuando confirmemos el pedido.'
                   }</span>
                 </span>
@@ -756,7 +757,7 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
 
           <div class="transferencia__datos">
             ${alias ? `
-              <div class="transferencia__dato">
+              <div class="transferencia__dato transferencia__dato--alias">
                 <span>Alias</span>
                 <b data-alias>${esc(alias)}</b>
                 <button type="button" class="boton boton--secundario boton--chico"
@@ -770,7 +771,7 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
               <div class="transferencia__dato">
                 <span>A nombre de</span><b>${esc(titular)}</b>
               </div>` : ''}
-            <div class="transferencia__dato">
+            <div class="transferencia__dato transferencia__dato--total">
               <span>Total</span><b>${pesos(total)}</b>
             </div>
           </div>
