@@ -2,7 +2,7 @@
  * Piezas de interfaz que se repiten en varias pantallas.
  * Devuelven HTML como texto; quien las usa lo inserta y engancha los eventos.
  */
-import { pesos, esc, nombreBonito, colorDeVariedad, lineasDeHorario } from './formato.js';
+import { pesos, esc, nombreBonito, marcaCorta, colorDeVariedad, lineasDeHorario } from './formato.js';
 import { icono, franjaMarca } from './iconos.js';
 import { tildeFoto } from './fotos.js';
 
@@ -13,7 +13,7 @@ import { tildeFoto } from './fotos.js';
  * arriba con z-index. Envolver el boton dentro del <a> seria HTML invalido y en
  * la practica haria que cada toque en el signo abriera la ficha del producto.
  */
-export function cardProducto(p, indice = 0, { conRubro = true } = {}) {
+export function cardProducto(p, indice = 0, { conRubro = true, conDestacado = true } = {}) {
   const agotado = p.stock <= 0;
   const foto = p.imagenes?.[0];
 
@@ -24,8 +24,9 @@ export function cardProducto(p, indice = 0, { conRubro = true } = {}) {
   const etiqueta = nombreBonito(p.rubro) || p.categoria;
 
   // Segunda linea de contexto. Sin foto, la marca o la subcategoria son lo unico
-  // que separa "Bolsa Carton Color 30X32" de "Bolsa Carton Color 30X41".
-  const detalle = [p.marca, p.sub_rubro].filter(Boolean).join(' · ');
+  // que separa "Bolsa Carton Color 30X32" de "Bolsa Carton Color 30X41". La
+  // marca va resumida: el campo con todas las marcas posibles vive en la ficha.
+  const detalle = [marcaCorta(p.marca), p.sub_rubro].filter(Boolean).join(' · ');
 
   const bloqueFoto = foto
     ? `<div class="card-producto__foto">
@@ -50,12 +51,14 @@ export function cardProducto(p, indice = 0, { conRubro = true } = {}) {
     : '';
 
   // El descuento le gana a "Más pedido": es el dato que hace frenar el ojo.
+  // `conDestacado` lo apaga adentro de la sección "Lo más pedido": ahí el
+  // título ya lo dice y repetirlo en cada card era ruido.
   const pctOferta = p.descuento?.porcentaje > 0 ? p.descuento.porcentaje : null;
   const cinta = agotado
     ? '<span class="card-producto__cinta ficha">Sin stock</span>'
     : pctOferta
       ? `<span class="card-producto__cinta ficha ficha--oferta">−${pctOferta}%</span>`
-      : (p.destacado && foto ? '<span class="card-producto__cinta ficha ficha--rubro">Más pedido</span>' : '');
+      : (conDestacado && p.destacado && foto ? '<span class="card-producto__cinta ficha ficha--rubro">Más pedido</span>' : '');
 
   // Con variedades el signo lleva a elegir, no agrega a ciegas: sumar "un
   // boligrafo" cuando hay cinco colores obliga a corregirlo despues.

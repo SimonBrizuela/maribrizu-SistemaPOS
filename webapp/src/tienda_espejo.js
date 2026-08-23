@@ -30,6 +30,10 @@ import {
   doc, getDoc, getDocFromCache, collection, writeBatch,
   query, orderBy, limit, getDocs, serverTimestamp, deleteField,
 } from 'firebase/firestore';
+// La lista de tildes vive en la tienda (mismo patrón que tienda/src/horarios.js
+// en tienda_ajustes.js): una sola lista en JS, y la copia en Python de
+// sync_tienda.py comparada por tienda/pruebas/nombre_bonito.test.js.
+import { conTilde } from '../../tienda/src/formato.js';
 
 /* ── Texto ────────────────────────────────────────────────────────────────
  * Copias de `normalizar`, `nombre_bonito` y `tokenizar` de sync_tienda.py.
@@ -85,7 +89,10 @@ export function nombreBonito(texto) {
     if (i > 0 && UNIDADES.has(baja.replace(/\.$/, '')) && terminaEnDigito(anterior)) return baja;
     if (baja === 'x' && tieneDigito(anterior) && tieneDigito(siguiente)) return 'x';
     if (i > 0 && MENORES.has(baja)) return baja;
-    return baja.charAt(0).toUpperCase() + baja.slice(1);
+    // "BOLIGRAFO" → "Bolígrafo": el catálogo perdió las tildes al cargarse en
+    // mayúsculas y mostradas así delatan que el nombre salió de un sistema.
+    const acentuada = conTilde(baja);
+    return acentuada.charAt(0).toUpperCase() + acentuada.slice(1);
   }).join(' ');
 }
 

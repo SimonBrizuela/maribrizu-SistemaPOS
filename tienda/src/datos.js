@@ -168,12 +168,25 @@ export async function cargarRubros() {
     try {
       const snap = await getDoc(doc(db, 'tienda_config', 'rubros'));
       if (!snap.exists()) return [];
-      return (snap.data().lista || [])
+      const lista = (snap.data().lista || [])
         .filter(r => r.cantidad > 0)
         // Los subrubros vienen del mismo agregado, ya con lo que quedó
         // publicado en cada uno. Un rubro guardado antes de que existieran no
         // los trae, y ahí la tienda simplemente no muestra la segunda fila.
         .map(r => ({ ...r, subrubros: Array.isArray(r.subrubros) ? r.subrubros : [] }));
+
+      // El mismo rubro tipeado con y sin tilde llega como dos entradas
+      // ("LIBRERÍA 881" y "LIBRERIA 2") y la portada muestra la tienda
+      // duplicada. Acá gana el que tiene más productos y el mellizo no se
+      // dibuja; sus productos siguen saliendo en "Todo" y en la búsqueda
+      // hasta que fix_rubros_sin_acento.py los normalice en el catálogo.
+      const porNombre = new Map();
+      for (const r of lista) {
+        const clave = normalizar(r.clave);
+        const visto = porNombre.get(clave);
+        if (!visto || r.cantidad > visto.cantidad) porNombre.set(clave, r);
+      }
+      return lista.filter(r => porNombre.get(normalizar(r.clave)) === r);
     } catch (err) {
       console.error('[datos] no se pudieron leer los rubros:', err);
       return [];

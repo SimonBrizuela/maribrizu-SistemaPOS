@@ -161,6 +161,51 @@ export function despiezar(texto, extras = null) {
  */
 const MENORES = new Set(['de', 'del', 'la', 'las', 'el', 'los', 'y', 'con', 'sin', 'para', 'por', 'a', 'en']);
 
+/**
+ * Las tildes que el catalogo perdio al cargarse en mayusculas desde el POS.
+ *
+ * "BOLIGRAFO" mostrado como "Boligrafo" delata que el nombre salio de un
+ * sistema, no de una persona. Es una lista curada de palabras del rubro, no un
+ * corrector: solo entra una palabra si en este catalogo no puede ser otra cosa
+ * ("ingles" aca es el color verde ingles, no una parte del cuerpo).
+ *
+ * La usan nombreBonito() de este archivo (rubros y subrubros de la tienda),
+ * nombreBonito() en webapp/src/tienda_espejo.js (que la importa de aca) y
+ * nombre_bonito() en scripts/sync_tienda.py (copia en Python, comparada por
+ * tienda/pruebas/nombre_bonito.test.js contra casos_nombre_bonito.json).
+ */
+export const TILDES = {
+  acrilica: 'acrílica', acrilico: 'acrílico', album: 'álbum',
+  algodon: 'algodón', artistica: 'artística', artistico: 'artístico',
+  basica: 'básica', basico: 'básico', betun: 'betún',
+  boligrafo: 'bolígrafo', boligrafos: 'bolígrafos',
+  carton: 'cartón', ceramica: 'cerámica', clasica: 'clásica',
+  clasico: 'clásico', compas: 'compás', corazon: 'corazón',
+  cordon: 'cordón', cotillon: 'cotillón', crayon: 'crayón',
+  economica: 'económica', economico: 'económico',
+  elastica: 'elástica', elastico: 'elástico', fantasia: 'fantasía',
+  fibron: 'fibrón', fotografica: 'fotográfica', fotografico: 'fotográfico',
+  geometria: 'geometría', grafica: 'gráfica', grafico: 'gráfico',
+  ingles: 'inglés', japones: 'japonés', jugueteria: 'juguetería',
+  lamina: 'lámina', laminas: 'láminas', lapices: 'lápices', lapiz: 'lápiz',
+  lenceria: 'lencería', libreria: 'librería', linea: 'línea',
+  magica: 'mágica', magico: 'mágico', marron: 'marrón',
+  matematica: 'matemática', matematicas: 'matemáticas',
+  merceria: 'mercería', metalica: 'metálica', metalico: 'metálico',
+  metrica: 'métrica', metrico: 'métrico', numero: 'número',
+  numeros: 'números', oleo: 'óleo', oleos: 'óleos',
+  papeleria: 'papelería', perfumeria: 'perfumería',
+  plastica: 'plástica', plastico: 'plástico', poliester: 'poliéster',
+  practica: 'práctica', practico: 'práctico', quimica: 'química',
+  regaleria: 'regalería', tempera: 'témpera', temperas: 'témperas',
+  titulo: 'título', util: 'útil', utiles: 'útiles', vison: 'visón',
+};
+
+/** "boligrafo" → "bolígrafo"; lo que no está en la lista vuelve como vino. */
+export function conTilde(baja) {
+  return TILDES[baja] || baja;
+}
+
 export function nombreBonito(texto) {
   const palabras = String(texto || '').trim().split(/\s+/).filter(Boolean);
   if (!palabras.length) return '';
@@ -169,11 +214,25 @@ export function nombreBonito(texto) {
     .map((original, i) => {
       // Codigos y medidas (C12-003, A4, 500ML): se respetan como vinieron.
       if (/\d/.test(original)) return original.toUpperCase();
-      const baja = original.toLowerCase();
+      const baja = conTilde(original.toLowerCase());
       if (i > 0 && MENORES.has(baja)) return baja;
       return baja.charAt(0).toUpperCase() + baja.slice(1);
     })
     .join(' ');
+}
+
+/**
+ * La marca de una card, resumida.
+ *
+ * Los productos genericos llevan todas las marcas posibles en un solo campo
+ * ("LUMA/CARPEL/CBX/CREATIVA ART") y en la card eso se corta con puntos
+ * suspensivos en cualquier parte. Se muestra la primera y cuantas mas hay; el
+ * campo completo queda para la ficha, donde entra.
+ */
+export function marcaCorta(marca) {
+  const partes = String(marca || '').split('/').map(p => p.trim()).filter(Boolean);
+  if (partes.length <= 1) return String(marca || '').trim();
+  return `${partes[0]} +${partes.length - 1}`;
 }
 
 /** "BOLIGRAFO FILGO GEL" → "boligrafo-filgo-gel" para la URL. */

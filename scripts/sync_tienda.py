@@ -99,6 +99,40 @@ def _termina_en_digito(palabra):
     return bool(palabra) and palabra[-1].isdigit()
 
 
+# Las tildes que el catalogo perdio al cargarse en mayusculas desde el POS.
+# "BOLIGRAFO" mostrado como "Boligrafo" delata que el nombre salio de un
+# sistema. Lista curada del rubro, no un corrector: solo entra una palabra si
+# en este catalogo no puede ser otra cosa. Copia de TILDES en
+# tienda/src/formato.js (que tambien usa webapp/src/tienda_espejo.js); las
+# comparan las pruebas de nombre bonito contra casos_nombre_bonito.json.
+TILDES = {
+    'acrilica': 'acrílica', 'acrilico': 'acrílico', 'album': 'álbum',
+    'algodon': 'algodón', 'artistica': 'artística', 'artistico': 'artístico',
+    'basica': 'básica', 'basico': 'básico', 'betun': 'betún',
+    'boligrafo': 'bolígrafo', 'boligrafos': 'bolígrafos',
+    'carton': 'cartón', 'ceramica': 'cerámica', 'clasica': 'clásica',
+    'clasico': 'clásico', 'compas': 'compás', 'corazon': 'corazón',
+    'cordon': 'cordón', 'cotillon': 'cotillón', 'crayon': 'crayón',
+    'economica': 'económica', 'economico': 'económico',
+    'elastica': 'elástica', 'elastico': 'elástico', 'fantasia': 'fantasía',
+    'fibron': 'fibrón', 'fotografica': 'fotográfica', 'fotografico': 'fotográfico',
+    'geometria': 'geometría', 'grafica': 'gráfica', 'grafico': 'gráfico',
+    'ingles': 'inglés', 'japones': 'japonés', 'jugueteria': 'juguetería',
+    'lamina': 'lámina', 'laminas': 'láminas', 'lapices': 'lápices', 'lapiz': 'lápiz',
+    'lenceria': 'lencería', 'libreria': 'librería', 'linea': 'línea',
+    'magica': 'mágica', 'magico': 'mágico', 'marron': 'marrón',
+    'matematica': 'matemática', 'matematicas': 'matemáticas',
+    'merceria': 'mercería', 'metalica': 'metálica', 'metalico': 'metálico',
+    'metrica': 'métrica', 'metrico': 'métrico', 'numero': 'número',
+    'numeros': 'números', 'oleo': 'óleo', 'oleos': 'óleos',
+    'papeleria': 'papelería', 'perfumeria': 'perfumería',
+    'plastica': 'plástica', 'plastico': 'plástico', 'poliester': 'poliéster',
+    'practica': 'práctica', 'practico': 'práctico', 'quimica': 'química',
+    'regaleria': 'regalería', 'tempera': 'témpera', 'temperas': 'témperas',
+    'titulo': 'título', 'util': 'útil', 'utiles': 'útiles', 'vison': 'visón',
+}
+
+
 def nombre_bonito(texto):
     """
     El catalogo guarda todo en mayusculas porque el POS lo muestra asi en
@@ -127,7 +161,9 @@ def nombre_bonito(texto):
         elif i > 0 and baja in MENORES:
             salida.append(baja)
         else:
-            salida.append(baja[:1].upper() + baja[1:])
+            # "BOLIGRAFO" -> "Bolígrafo": las tildes que el catalogo perdio.
+            acentuada = TILDES.get(baja, baja)
+            salida.append(acentuada[:1].upper() + acentuada[1:])
     return ' '.join(salida)
 
 

@@ -183,12 +183,15 @@
     inset: 0;
     /* El velo no es parejo: carga arriba, donde están el título y la bajada, y
        afloja abajo, donde sólo hay fichas de color que se defienden solas. Con
-       poco desenfoque la foto tiene detalle y el texto necesita esa ayuda. */
+       poco desenfoque la foto tiene detalle y el texto necesita esa ayuda.
+       Del medio para abajo se aflojó de nuevo (52% y 22%): con el velo
+       anterior la foto no se veía y la portada quedaba como un bloque negro
+       vacío; el título y la bajada viven arriba del 52%, que no se tocó. */
     background: linear-gradient(to bottom,
       var(--ink-superficie) 0%,
       color-mix(in srgb, var(--ink-superficie) 62%, transparent) 18%,
-      color-mix(in srgb, var(--ink-superficie) 62%, transparent) 52%,
-      color-mix(in srgb, var(--ink-superficie) 34%, transparent) 78%,
+      color-mix(in srgb, var(--ink-superficie) 52%, transparent) 52%,
+      color-mix(in srgb, var(--ink-superficie) 22%, transparent) 78%,
       var(--ink-superficie) 100%);
   }
 

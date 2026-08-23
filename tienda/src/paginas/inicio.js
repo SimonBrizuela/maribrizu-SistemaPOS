@@ -156,6 +156,16 @@ export async function inicio({ montar }) {
 
   const rubros = await cargarRubros();
 
+  // La portada es vidriera, no índice. Un rubro con "1 disponible" al lado de
+  // los de ochocientos hace ver vacía la tienda entera: abajo de cinco
+  // productos con stock no gana ficha ni tira. Sigue entero en el catálogo y
+  // en la búsqueda. Si ninguno llega al corte —catálogo recién cargado— se
+  // muestran todos, que una portada pelada es peor.
+  const CORTE_PORTADA = 5;
+  const conStock = r => r.con_stock ?? r.cantidad;
+  const vidriera = (lista => lista.length ? lista : rubros)(
+    rubros.filter(r => conStock(r) >= CORTE_PORTADA));
+
   const cajaRubros = document.querySelector('[data-rubros]');
   if (cajaRubros) {
     // Las fichas entran escalonadas igual que el texto de arriba, pero el
@@ -163,13 +173,14 @@ export async function inicio({ montar }) {
     // portada: llegan después de consultar los rubros y encadenarlas al
     // retraso original las dejaría apareciendo de a una con la consulta ya
     // resuelta.
-    cajaRubros.innerHTML = rubros.map((r, i) => `
+    cajaRubros.innerHTML = vidriera.map((r, i) => `
       <a class="rubro-ficha entra" style="--entra-orden:${i}"
          data-rubro="${esc(r.clave)}" href="/catalogo/${encodeURIComponent(r.clave)}">
         <span class="rubro-ficha__icono">${icono(iconoDeRubro(r.clave), { tam: 20 })}</span>
         <span class="rubro-ficha__texto">
           <span class="rubro-ficha__nombre">${esc(r.nombre)}</span>
-          <span class="rubro-ficha__cuenta">${(r.con_stock ?? r.cantidad).toLocaleString('es-AR')} disponibles</span>
+          <span class="rubro-ficha__cuenta">${(r.con_stock ?? r.cantidad).toLocaleString('es-AR')} disponible${
+            (r.con_stock ?? r.cantidad) === 1 ? '' : 's'}</span>
         </span>
       </a>`).join('');
 
@@ -186,7 +197,7 @@ export async function inicio({ montar }) {
   // Las consultas de todos los rubros salen juntas. En serie serían seis viajes
   // encadenados y la portada tardaría seis veces más en llenarse.
   const conProductos = await Promise.all(
-    rubros.map(async r => {
+    vidriera.map(async r => {
       // Cada tira arranca dentro de lo que más se vende de ese rubro.
       //
       // Antes saltaba a un punto al azar de todo el rubro, porque el catálogo
@@ -221,7 +232,7 @@ export async function inicio({ montar }) {
           <a class="tira__ver" href="/catalogo" style="color:var(--primary-txt)">Ver todo</a>
         </div>
         <div class="tira__productos">
-          ${destacados.map((p, i) => cardProducto(p, i)).join('')}
+          ${destacados.map((p, i) => cardProducto(p, i, { conDestacado: false })).join('')}
         </div>
       </section>`);
   }

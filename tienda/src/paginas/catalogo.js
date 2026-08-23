@@ -225,6 +225,16 @@ export async function catalogo({ montar, params, query }) {
   let cursor = null;
   let acumulados = 0;
 
+  // El total sale del mismo agregado que pinta las fichas de la portada.
+  // "24+ productos" mientras se pagina leía como si la tienda tuviera
+  // veinticuatro cosas; el número entero dice lo que hay de verdad y no
+  // cambia con cada "Ver más". Si el agregado no lo trae, se cae al conteo
+  // acumulado de antes.
+  const totalConocido = texto ? null
+    : sub ? (subrubros.find(s => s.nombre === sub)?.cantidad || null)
+    : rubro ? (rubros.find(r => r.clave === rubro)?.cantidad || null)
+    : (rubros.reduce((t, r) => t + (r.cantidad || 0), 0) || null);
+
   async function traerTanda(primera) {
     const { productos, cursor: siguiente, hayMas } =
       await traerProductos({ rubro, sub, cursor, cantidad: POR_PAGINA });
@@ -262,7 +272,9 @@ export async function catalogo({ montar, params, query }) {
       });
     }
 
-    cuenta.textContent = `${acumulados}${hayMas ? '+' : ''} producto${acumulados === 1 ? '' : 's'}`;
+    cuenta.textContent = totalConocido
+      ? `${totalConocido.toLocaleString('es-AR')} producto${totalConocido === 1 ? '' : 's'}`
+      : `${acumulados}${hayMas ? '+' : ''} producto${acumulados === 1 ? '' : 's'}`;
 
     zonaMas.innerHTML = hayMas
       ? '<button class="boton boton--secundario boton--grande" data-cargar>Ver más productos</button>'

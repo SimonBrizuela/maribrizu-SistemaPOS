@@ -282,12 +282,19 @@ button, input, select, textarea { font: inherit; color: inherit; }
 .card-producto__foto {
   position: relative;
   aspect-ratio: 1 / 1;
-  background: var(--surface-2);
+  background: #FFFFFF;
   overflow: hidden;
 }
+/* `contain` sobre fondo blanco, con un respiro parejo. Las fotos vienen de
+   cualquier lado —estudio, escaneo del packaging, foto ambientada— y recortadas
+   con `cover` cada una imponía su encuadre: la grilla parecía diez tiendas
+   distintas. Contenidas sobre el mismo blanco y con el mismo margen, las de
+   fondo blanco se funden con la card y las demás quedan enmarcadas igual que
+   sus vecinas. */
 .card-producto__foto img {
   width: 100%; height: 100%;
-  object-fit: cover;
+  object-fit: contain;
+  padding: 6%;
   transition: transform var(--m-lento) var(--curva);
 }
 @media (hover: hover) {
@@ -423,7 +430,12 @@ button, input, select, textarea { font: inherit; color: inherit; }
 
 /* 36 px con el área táctil extendida a 44 por fuera: el círculo visible no
    necesita ser grande, pero el dedo sí necesita margen. A 375 px la card mide
-   unos 160 px de ancho y un círculo de 40 apretaba el precio contra el borde. */
+   unos 160 px de ancho y un círculo de 40 apretaba el precio contra el borde.
+
+   Siempre violeta, no del color del rubro: agregar al pedido es LA acción de
+   la tienda y tiene que verse igual en toda la grilla. El rubro ya tiñe la
+   etiqueta y la barra de la card sin foto; teñir también el botón lo volvía
+   decoración. */
 .card-producto__agregar {
   flex: none;
   width: 36px; height: 36px;
@@ -431,8 +443,8 @@ button, input, select, textarea { font: inherit; color: inherit; }
   place-items: center;
   border: none;
   border-radius: var(--r-full);
-  background: var(--rubro, var(--primary));
-  color: var(--rubro-tinta, var(--primary-ink));
+  background: var(--primary);
+  color: var(--primary-ink);
   cursor: pointer;
   transition: transform var(--m-rapido) var(--curva), filter var(--m-rapido) var(--curva);
   touch-action: manipulation;
