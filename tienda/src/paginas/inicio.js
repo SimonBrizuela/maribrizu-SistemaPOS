@@ -1,4 +1,5 @@
 import { cargarConfig, cargarRubros, traerDestacados, traerProductos } from '../datos.js';
+import { plegarGrupos } from '../grupos.js';
 import { cardProducto, grilla, grillaCargando, pie } from '../componentes.js';
 import { franjaMarca, icono, iconoDeRubro, resplandores } from '../iconos.js';
 import { esc } from '../formato.js';
@@ -232,14 +233,14 @@ export async function inicio({ montar }) {
           <a class="tira__ver" href="/catalogo" style="color:var(--primary-txt)">Ver todo</a>
         </div>
         <div class="tira__productos">
-          ${destacados.map((p, i) => cardProducto(p, i, { conDestacado: false })).join('')}
+          ${plegarGrupos(destacados).map((p, i) => cardProducto(p, i, { conDestacado: false })).join('')}
         </div>
       </section>`);
   }
 
   partes.push(...conProductos
     .filter(x => x.productos.length)
-    .map(x => tira(x.rubro, x.productos)));
+    .map(x => tira(x.rubro, plegarGrupos(x.productos))));
 
   cajaTiras.innerHTML = partes.length
     ? partes.join('')

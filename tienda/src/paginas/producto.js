@@ -1,4 +1,6 @@
-import { cargarConfig, cargarAvisos, avisoDe, traerProducto, traerProductos } from '../datos.js';
+import { cargarConfig, cargarAvisos, avisoDe, traerProducto, traerProductos, traerGrupo }
+  from '../datos.js';
+import { ordenarPorTamano, plegarGrupos } from '../grupos.js';
 import { grilla, pie, vacio, conArticulo } from '../componentes.js';
 import { pesos, esc, nombreBonito, colorDeVariedad } from '../formato.js';
 import { icono } from '../iconos.js';
@@ -78,6 +80,36 @@ function textoMinimo(p) {
  * lo que avisa que hay más; se apaga al llegar al final.
  */
 const MUCHAS_VARIEDADES = 12;
+
+/**
+ * El selector de tamaños de un grupo.
+ *
+ * El mismo producto cargado en el catálogo como "Cierre Común 10 cm", "12 cm",
+ * "14 cm"… es UNA ficha con estos botones: se elige el tamaño acá y la ficha
+ * pasa a mostrar el precio, el stock y los colores de ESE tamaño. Un tamaño
+ * que se queda sin stock sale del espejo como cualquier producto agotado, así
+ * que todos los botones que se ven se pueden elegir.
+ */
+export function listaDeTamanos(tamanos, actualId) {
+  if (tamanos.length < 2) return '';
+
+  const botones = tamanos.map(t => `
+    <button class="variedad" data-tamano="${esc(t.id)}"
+            aria-pressed="${String(t.id === actualId)}"
+            ${t.stock <= 0 ? 'disabled' : ''}
+            title="${esc(t.tamano || t.nombre)}${t.stock <= 0 ? ' · sin stock' : ''}">
+      <span class="variedad__nombre">${esc(t.tamano || t.nombre)}</span>
+    </button>`).join('');
+
+  return `
+    <div class="variedades">
+      <span class="campo__label" id="tit-tamanos">
+        Elegí el tamaño
+        <em class="variedades__elegida">· ${tamanos.length} tamaños</em>
+      </span>
+      <div class="variedades__lista" role="group" aria-labelledby="tit-tamanos">${botones}</div>
+    </div>`;
+}
 
 /** "· 30 colores" cuando casi todas tienen color; si no, "· 30 opciones". */
 function comoSeLlaman(variedades) {
@@ -164,6 +196,13 @@ export async function producto({ montar, params }) {
   // Quien esta mirando un abrojo probablemente busque otra cosa de merceria.
   fijarAmbito(p.rubro);
 
+  // Los demas tamaños del grupo, cuando este producto es parte de uno. Con un
+  // solo tamaño publicado no hay nada que elegir y el selector no se muestra.
+  const tamanos = p.grupo_clave
+    ? ordenarPorTamano(await traerGrupo(p.grupo_clave))
+    : [];
+  const enGrupo = tamanos.length > 1;
+
   // Los que se cortan del rollo llevan cinta metrica en vez de contador: 350
   // productos del catalogo (cintas, cordones, elastico, abrojo).
   const porMetro = p.unidad === 'metro';
@@ -220,7 +259,10 @@ export async function producto({ montar, params }) {
         <div class="ficha-producto__datos">
           <div>
             <span class="card-producto__rubro">${esc(p.categoria || p.rubro)}</span>
-            <h1 class="ficha-producto__titulo" style="margin-top:var(--e-2)">${esc(p.nombre)}</h1>
+            <!-- Con grupo, el título es el del grupo: "Cierre Común 10 cm" con
+                 el 10 cm ya marcado abajo era decir lo mismo dos veces. -->
+            <h1 class="ficha-producto__titulo" style="margin-top:var(--e-2)">${
+              esc(enGrupo ? p.grupo : p.nombre)}</h1>
             ${p.marca ? `<p style="color:var(--text-2);font-size:var(--t-sm);margin-top:var(--e-1)">${esc(p.marca)}</p>` : ''}
           </div>
 
@@ -245,6 +287,7 @@ export async function producto({ montar, params }) {
           ${p.descripcion ? `<p style="color:var(--text-2);line-height:var(--alto-suelto)">${esc(p.descripcion)}</p>` : ''}
 
           <div class="${agotado ? '' : 'ficha-compra'}">
+          ${enGrupo ? listaDeTamanos(tamanos, p.id) : ''}
           ${listaVariedades}
 
           ${agotado ? `
@@ -330,6 +373,22 @@ export async function producto({ montar, params }) {
 
     ${pie(cfg)}
   `);
+
+  /* ── Tamaños ────────────────────────────────────────────────────────────
+     Cambiar de tamaño rearma la ficha con el otro producto del grupo, en el
+     lugar y sin volver arriba: es la misma pantalla con el precio, el stock y
+     los colores de ESE tamaño. La URL acompaña, así el enlace que se comparte
+     lleva al tamaño elegido, y "atrás" vuelve al anterior. */
+  document.querySelectorAll('[data-tamano]').forEach(boton => {
+    boton.addEventListener('click', async () => {
+      const id = boton.dataset.tamano;
+      if (id === p.id) return;
+      const scroll = window.scrollY;
+      window.history.pushState({}, '', `/p/${encodeURIComponent(id)}`);
+      await producto({ montar, params: { id } });
+      window.scrollTo({ top: scroll, behavior: 'instant' });
+    });
+  });
 
   /* ── Galería ─────────────────────────────────────────────────────────────── */
   const galeria = montarGaleria(document.querySelector('[data-galeria]'), p);
@@ -525,8 +584,11 @@ export async function producto({ montar, params }) {
   });
 
   /* ── Relacionados ───────────────────────────────────────────────────────── */
+  // Sin los hermanos del grupo: "Otros de Mercería" mostrando los demás
+  // tamaños del mismo cierre es el ruido que el selector vino a sacar.
   const { productos } = await traerProductos({ rubro: p.rubro, cantidad: 6 });
-  const otros = productos.filter(x => x.id !== p.id).slice(0, 5);
+  const otros = plegarGrupos(productos.filter(x => x.id !== p.id
+    && (!p.grupo_clave || x.grupo_clave !== p.grupo_clave))).slice(0, 5);
   const caja = document.querySelector('[data-relacionados]');
   if (caja) caja.innerHTML = otros.length ? grilla(otros) : '';
 }

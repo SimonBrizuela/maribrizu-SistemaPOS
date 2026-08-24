@@ -66,14 +66,19 @@ function fila(p, texto) {
 
   const meta = [nombreBonito(p.rubro), p.marca].filter(Boolean).join(' · ');
 
+  // Un grupo de tamaños sugiere con el nombre del grupo: "Cierre Común ·
+  // varios tamaños" dice más que el tamaño puntual que casualmente rankeó.
+  const nombre = p.grupo || p.nombre;
+
   return `
     <a class="sugerencia${p.stock <= 0 ? ' sugerencia--agotada' : ''}"
        href="/p/${esc(p.id)}" role="option" aria-selected="false"
        data-rubro="${esc(p.rubro)}" data-id="${esc(p.id)}">
       <span class="sugerencia__foto">${foto}</span>
       <span class="sugerencia__datos">
-        <span class="sugerencia__nombre">${resaltar(p.nombre, texto)}</span>
+        <span class="sugerencia__nombre">${resaltar(nombre, texto)}</span>
         <span class="sugerencia__meta">${esc(meta)}${
+          p.grupo ? ' · varios tamaños' : ''}${
           p.stock <= 0 ? ' · sin stock' : ''}</span>
       </span>
       <span class="sugerencia__precio cifra">${pesos(p.precio)}${

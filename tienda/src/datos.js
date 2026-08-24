@@ -240,6 +240,11 @@ function armarProducto(snap) {
     variedades: Array.isArray(d.variedades) ? d.variedades : [],
     destacado: d.destacado === true,
     tokens: Array.isArray(d.tokens) ? d.tokens : [],
+    // El mismo producto en varios tamaños: el panel los agrupa y la grilla
+    // los pliega en una sola card (ver grupos.js).
+    grupo: d.grupo ? String(d.grupo) : null,
+    grupo_clave: d.grupo_clave ? String(d.grupo_clave) : null,
+    tamano: d.tamano ? String(d.tamano) : null,
   };
 }
 
@@ -361,6 +366,34 @@ export async function traerProducto(id) {
   return cacheado(`producto:${id}`, async () => {
     const snap = await getDoc(doc(db, 'tienda_productos', id));
     return snap.exists() ? armarProducto(snap) : null;
+  });
+}
+
+/**
+ * Todos los tamaños de un grupo, para el selector de la ficha.
+ *
+ * Es una igualdad sola sobre `grupo_clave`, así que no necesita índice
+ * compuesto. Solo llegan los tamaños publicados: uno sin stock no está en el
+ * espejo, igual que cualquier otro producto agotado.
+ */
+export async function traerGrupo(grupoClave) {
+  if (!grupoClave) return [];
+  return cacheado(`grupo:${grupoClave}`, async () => {
+    try {
+      const snap = await getDocs(query(
+        collection(db, 'tienda_productos'),
+        where('grupo_clave', '==', grupoClave),
+        limit(60),
+      ));
+      const miembros = snap.docs.map(armarProducto);
+      // Cambiar de tamaño en la ficha pide ese producto: ya lo tenemos acá,
+      // así que el cambio es instantáneo y no gasta otra lectura.
+      for (const m of miembros) _cache.set(`producto:${m.id}`, m);
+      return miembros;
+    } catch (err) {
+      console.error('[datos] grupo:', err);
+      return [];
+    }
   });
 }
 
@@ -547,6 +580,10 @@ export async function sugerir(texto, { rubro = null, cantidad = 6 } = {}) {
       }
     }
 
+    // Un grupo de tamaños sugiere una sola vez: ocho renglones "Cierre Común
+    // 10 cm / 12 cm / …" tapaban cualquier otra sugerencia.
+    const grupos = new Set();
+
     return salida
       .sort((a, b) => {
         // Lo que hay en stock primero, y despues lo que empieza con lo escrito:
@@ -556,6 +593,12 @@ export async function sugerir(texto, { rubro = null, cantidad = 6 } = {}) {
         const eb = normalizar(b.nombre).startsWith(q) ? 0 : 1;
         if (ea !== eb) return ea - eb;
         return a.nombre.length - b.nombre.length;
+      })
+      .filter(p => {
+        if (!p.grupo_clave) return true;
+        if (grupos.has(p.grupo_clave)) return false;
+        grupos.add(p.grupo_clave);
+        return true;
       })
       .slice(0, cantidad);
   });

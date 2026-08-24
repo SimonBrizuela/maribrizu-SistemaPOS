@@ -1,5 +1,6 @@
 import { cargarConfig, cargarRubros, subrubrosDe, traerProductos, buscar, POR_PAGINA }
   from '../datos.js';
+import { plegarGrupos } from '../grupos.js';
 import { grilla, grillaCargando, pie, vacio } from '../componentes.js';
 import { esc, nombreBonito } from '../formato.js';
 import { icono } from '../iconos.js';
@@ -216,14 +217,22 @@ export async function catalogo({ montar, params, query }) {
       });
       return;
     }
-    cuenta.textContent = `${encontrados.length} producto${encontrados.length === 1 ? '' : 's'}`;
-    lista.innerHTML = grilla(encontrados);
+    // Los tamaños de un mismo producto salen como UNA card: buscar "cierre"
+    // devolvía veinte casi idénticas y el resultado se leía como ruido. El
+    // número acompaña lo que se ve: cada grupo cuenta una vez.
+    const agrupados = plegarGrupos(encontrados);
+    cuenta.textContent = `${agrupados.length} producto${agrupados.length === 1 ? '' : 's'}`;
+    lista.innerHTML = grilla(agrupados);
     return;
   }
 
   /* ── Listado con paginado ──────────────────────────────────────────────── */
   let cursor = null;
   let acumulados = 0;
+
+  // Grupos de tamaños ya dibujados, entre tandas: si un tamaño cae en una
+  // página posterior, no vuelve a dibujar la card del grupo.
+  const gruposVistos = new Set();
 
   // El total sale del mismo agregado que pinta las fichas de la portada.
   // "24+ productos" mientras se pagina leía como si la tienda tuviera
@@ -240,7 +249,11 @@ export async function catalogo({ montar, params, query }) {
       await traerProductos({ rubro, sub, cursor, cantidad: POR_PAGINA });
 
     cursor = siguiente;
-    acumulados += productos.length;
+
+    // Cada grupo de tamaños es una sola card; el conteo acompaña a las cards
+    // para que el número de arriba no contradiga lo que se ve abajo.
+    const cards = plegarGrupos(productos, gruposVistos);
+    acumulados += cards.length;
 
     if (primera) {
       if (!productos.length) {
@@ -259,12 +272,12 @@ export async function catalogo({ montar, params, query }) {
             });
         return;
       }
-      lista.innerHTML = grilla(productos);
+      lista.innerHTML = grilla(cards);
     } else {
       // Se agrega al final sin repintar lo que ya está: repintar la grilla
       // entera reinicia la animación de todas las cards y hace saltar el scroll.
       const caja = document.createElement('div');
-      caja.innerHTML = grilla(productos);
+      caja.innerHTML = grilla(cards);
       const contenedor = lista.querySelector('.grilla');
       [...caja.querySelectorAll('.card-producto')].forEach((card, i) => {
         card.style.setProperty('--i', String(i));
