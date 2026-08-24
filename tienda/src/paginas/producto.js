@@ -1,5 +1,5 @@
 import { cargarConfig, cargarAvisos, avisoDe, traerProducto, traerProductos } from '../datos.js';
-import { grilla, pie, vacio } from '../componentes.js';
+import { grilla, pie, vacio, conArticulo } from '../componentes.js';
 import { pesos, esc, nombreBonito, colorDeVariedad } from '../formato.js';
 import { icono } from '../iconos.js';
 import * as carrito from '../carrito.js';
@@ -168,10 +168,17 @@ export async function producto({ montar, params }) {
   // productos del catalogo (cintas, cordones, elastico, abrojo).
   const porMetro = p.unidad === 'metro';
 
+  // Solo por pack entero (las tanzas): sin cinta métrica ni precio por metro.
+  // Se compra el rollo, con un contador de rollos, al precio del rollo.
+  const soloRollo = carrito.soloPack(p);
+  const rollosDisponibles = soloRollo
+    ? Math.max(0, Math.floor(p.stock / p.pack_contenido)) : 0;
+
   const variedades = p.variedades || [];
   const hayVariedades = variedades.length > 0;
   const disponibles = variedades.filter(v => v.stock > 0);
-  const agotado = p.stock <= 0 || (hayVariedades && !disponibles.length);
+  const agotado = p.stock <= 0 || (hayVariedades && !disponibles.length)
+    || (soloRollo && rollosDisponibles === 0);
 
   // Con variedades se arranca sin ninguna elegida a proposito: preseleccionar
   // un color hace que el cliente agregue el equivocado sin darse cuenta.
@@ -183,13 +190,16 @@ export async function producto({ montar, params }) {
 
   const listaVariedades = hayVariedades ? listaDeVariedades(variedades) : '';
 
-  const restante = porMetro ? `${p.stock} metros` : `${p.stock}`;
+  const nombrePack = String(p.pack_nombre || p.pack_tipo || 'pack').toLowerCase();
+  const restante = soloRollo
+    ? `${rollosDisponibles} ${nombrePack}${rollosDisponibles === 1 ? '' : 's'}`
+    : porMetro ? `${p.stock} metros` : `${p.stock}`;
   const estadoStock = agotado
     ? `<span class="dato-stock" style="color:var(--text-2)">${icono('atencion', { tam: 18 })} Sin stock por ahora</span>`
-    : (p.stock <= (porMetro ? 3 : 5)
+    : ((soloRollo ? rollosDisponibles : p.stock) <= (soloRollo ? 2 : porMetro ? 3 : 5)
         ? `<span class="dato-stock" style="color:var(--alerta)">${icono('atencion', { tam: 18 })} Quedan ${restante}</span>`
         : `<span class="dato-stock" style="color:var(--exito)">${icono('tilde', { tam: 18 })} ${
-            porMetro ? `Hay ${restante} en el rollo` : 'Hay stock'}</span>`);
+            soloRollo ? `Hay ${restante}` : porMetro ? `Hay ${restante} en el rollo` : 'Hay stock'}</span>`);
 
   montar(`
     <div class="contenedor" data-rubro="${esc(p.rubro)}">
@@ -221,11 +231,15 @@ export async function producto({ montar, params }) {
                 <span class="ficha-oferta__antes cifra">${pesos(p.precio_anterior)}</span>
                 <span class="ficha-oferta__nombre">${esc(p.descuento.nombre)}</span>
               </div>` : ''}
-            <div class="ficha-producto__precio cifra" data-precio>${pesos(p.precio)}${
-              porMetro ? '<small style="font-size:var(--t-base);font-weight:600;color:var(--text-2)"> el metro</small>' : ''
+            <div class="ficha-producto__precio cifra" data-precio>${
+              pesos(soloRollo ? p.precio_pack : p.precio)}${
+              soloRollo
+                ? `<small style="font-size:var(--t-base);font-weight:600;color:var(--text-2)"> ${
+                    esc(conArticulo(nombrePack))} de ${p.pack_contenido}${porMetro ? ' m' : ' u'}</small>`
+                : porMetro ? '<small style="font-size:var(--t-base);font-weight:600;color:var(--text-2)"> el metro</small>' : ''
             }</div>
             ${estadoStock}
-            ${textoMinimo(p)}
+            ${soloRollo ? '' : textoMinimo(p)}
           </div>
 
           ${p.descripcion ? `<p style="color:var(--text-2);line-height:var(--alto-suelto)">${esc(p.descripcion)}</p>` : ''}
@@ -247,9 +261,10 @@ export async function producto({ montar, params }) {
               </a>
             </div>`
           : `
-            ${porMetro ? '<div data-cinta></div>' : `
+            ${porMetro && !soloRollo ? '<div data-cinta></div>' : `
               <div class="cantidad" data-cantidad>
-                <span class="cantidad__label" id="tit-cantidad">Cuántos llevás</span>
+                <span class="cantidad__label" id="tit-cantidad">${
+                  soloRollo ? `Cuántos ${esc(nombrePack)}s llevás` : 'Cuántos llevás'}</span>
                 <div class="contador contador--grande" role="group" aria-labelledby="tit-cantidad">
                   <button class="contador__boton" data-menos aria-label="Uno menos">
                     ${icono('menos', { tam: 18, grosor: 2.5 })}
@@ -275,7 +290,7 @@ export async function producto({ montar, params }) {
             <button class="boton boton--primario boton--grande boton--bloque" data-agregar>
               ${icono('carrito', { tam: 20 })} <span data-etiqueta-agregar>Agregar al pedido</span>
             </button>
-            ${p.precio_pack ? `
+            ${p.precio_pack && !soloRollo ? `
               <button class="opcion-pack" data-pack>
                 <span class="opcion-pack__texto">
                   <span class="opcion-pack__titulo">Llevar ${esc(nombreDelPack(p))
@@ -407,8 +422,10 @@ export async function producto({ montar, params }) {
      cartulina tiene 1.180 en total y 12 celestes, y prometer 30 celestes
      termina en una llamada incómoda. Por eso el contador se rearma cada vez que
      se elige un color. */
-  const minimo = carrito.minimoDe(p);
-  const paso = carrito.pasoDe(p);
+  // Solo rollo: el contador cuenta rollos, de a uno. El mínimo del producto
+  // (que es el contenido del rollo, en metros) queda para la cuenta de stock.
+  const minimo = soloRollo ? 1 : carrito.minimoDe(p);
+  const paso = soloRollo ? 1 : carrito.pasoDe(p);
   const cajaCinta = document.querySelector('[data-cinta]');
   const cajaCantidad = document.querySelector('[data-cantidad]');
   const etiqueta = document.querySelector('[data-etiqueta-agregar]');
@@ -431,7 +448,9 @@ export async function producto({ montar, params }) {
   function pintarCantidad() {
     if (!cajaCantidad) return;
 
-    const tope = Math.max(minimo, Math.floor(stockDisponible() / paso) * paso);
+    const tope = soloRollo
+      ? Math.max(minimo, Math.floor(stockDisponible() / p.pack_contenido))
+      : Math.max(minimo, Math.floor(stockDisponible() / paso) * paso);
     cuantos = Math.min(tope, Math.max(minimo, cuantos));
 
     cajaCantidad.querySelector('[data-valor]').textContent =
@@ -445,7 +464,8 @@ export async function producto({ montar, params }) {
       ? `Es todo lo que hay${elegida ? ` de ${elegida.toLowerCase()}` : ''}`
       : (minimo > 1 ? `Mínimo ${minimo}` : '');
 
-    etiqueta.textContent = `Agregar ${cuantos} · ${pesos(precioActual() * cuantos)}`;
+    etiqueta.textContent = `Agregar ${cuantos} · ${
+      pesos((soloRollo ? p.precio_pack : precioActual()) * cuantos)}`;
   }
 
   cajaCantidad?.addEventListener('click', ev => {
@@ -492,7 +512,11 @@ export async function producto({ montar, params }) {
       document.querySelector('[data-variedad]:not([disabled])')?.focus();
       return;
     }
-    carrito.agregar(p, { variedad: elegida, cantidad: porMetro ? metros : cuantos });
+    carrito.agregar(p, {
+      variedad: elegida,
+      cantidad: porMetro && !soloRollo ? metros : cuantos,
+      esPack: soloRollo,
+    });
 
     // El contador vuelve al mínimo: dejarlo en 6 hace que el próximo toque
     // sume otros 6 sin que nadie lo haya pedido.

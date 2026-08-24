@@ -5,6 +5,20 @@
 import { pesos, esc, nombreBonito, marcaCorta, colorDeVariedad, lineasDeHorario } from './formato.js';
 import { icono, franjaMarca } from './iconos.js';
 import { tildeFoto } from './fotos.js';
+import { soloPack } from './carrito.js';
+
+/**
+ * "rollo" → "el rollo" · "caja de 12" → "la caja de 12".
+ *
+ * El género por la última letra de la primera palabra no es gramática, pero
+ * alcanza para rollo, caja, bolsa, bobina, cartón y pack — todo lo que existe
+ * en el catálogo. Si ya viene con artículo se respeta tal cual.
+ */
+export function conArticulo(nombre) {
+  const n = String(nombre || 'pack').toLowerCase().trim();
+  if (/^(el|la|los|las) /.test(n)) return n;
+  return (/a$/.test(n.split(' ')[0]) ? 'la ' : 'el ') + n;
+}
 
 /**
  * Card de producto.
@@ -14,7 +28,10 @@ import { tildeFoto } from './fotos.js';
  * la practica haria que cada toque en el signo abriera la ficha del producto.
  */
 export function cardProducto(p, indice = 0, { conRubro = true, conDestacado = true } = {}) {
-  const agotado = p.stock <= 0;
+  // Un producto que solo se vende por pack está agotado cuando no queda un
+  // pack entero: prometer "el rollo de 100 m" con 60 m sueltos es un reclamo.
+  const soloRollo = soloPack(p);
+  const agotado = p.stock <= 0 || (soloRollo && p.stock < p.pack_contenido);
   const foto = p.imagenes?.[0];
 
   // Se muestra el rubro, no la subcategoria. La subcategoria del catalogo es
@@ -90,10 +107,14 @@ export function cardProducto(p, indice = 0, { conRubro = true, conDestacado = tr
         ${detalle ? `<span class="card-producto__detalle">${esc(detalle)}</span>` : ''}
         ${tiraVariedades}
         <div class="card-producto__pie">
-          <div>${anterior}<span class="card-producto__precio cifra">${pesos(p.precio)}</span>${
-            p.unidad === 'metro'
-              ? '<span style="display:block;font-size:var(--t-xs);color:var(--text-2);font-weight:600;line-height:1.2">el metro</span>'
-              : ''
+          <div>${soloRollo ? '' : anterior}<span class="card-producto__precio cifra">${
+            pesos(soloRollo ? p.precio_pack : p.precio)}</span>${
+            soloRollo
+              ? `<span style="display:block;font-size:var(--t-xs);color:var(--text-2);font-weight:600;line-height:1.2">${
+                  esc(conArticulo(p.pack_nombre || p.pack_tipo))}</span>`
+              : p.unidad === 'metro'
+                ? '<span style="display:block;font-size:var(--t-xs);color:var(--text-2);font-weight:600;line-height:1.2">el metro</span>'
+                : ''
           }</div>
           ${accion}
         </div>

@@ -32,6 +32,31 @@ beforeEach(() => {
   vi.mocked(traerProducto).mockReset();
 });
 
+describe('soloPack', () => {
+  it('mínimo igual o mayor al contenido del pack = solo se vende el pack', () => {
+    expect(carrito.soloPack({ ...CINTA, minimo: 25 })).toBe(true);
+    expect(carrito.soloPack({ ...CINTA, minimo: 100 })).toBe(true);
+  });
+
+  it('con mínimo menor al contenido se sigue vendiendo suelto', () => {
+    expect(carrito.soloPack({ ...CINTA, minimo: 5 })).toBe(false);
+    expect(carrito.soloPack(CINTA)).toBe(false);
+  });
+
+  it('sin pack ofrecido no hay solo-pack posible', () => {
+    expect(carrito.soloPack({ ...CINTA, precio_pack: null, minimo: 25 })).toBe(false);
+    expect(carrito.soloPack({ ...CINTA, pack_contenido: null, minimo: 25 })).toBe(false);
+  });
+
+  it('agregar un producto solo-pack como pack cuenta packs, de a uno', () => {
+    const tanza = { ...CINTA, nombre: 'Tanza Rigida 0.40', minimo: 25, stock: 100 };
+    expect(carrito.agregar(tanza, { esPack: true })).toBe(1);
+    const r = carrito.items()[0];
+    expect(r.es_pack).toBe(true);
+    expect(r.precio).toBe(4500);
+  });
+});
+
 describe('agregar', () => {
   it('el paso lo decide la unidad: medio metro de cinta, un cuaderno', () => {
     expect(carrito.agregar(CINTA)).toBe(0.5);

@@ -45,6 +45,20 @@ export function minimoDe(producto) {
   return propio > 0 ? Math.max(propio, paso) : paso;
 }
 
+/**
+ * Si el producto se vende únicamente por pack entero (el rollo, la caja).
+ *
+ * La señal la da el panel sin campo nuevo: un mínimo igual o mayor al
+ * contenido del pack dice que lo suelto no se ofrece — pedir 100 metros de
+ * una tanza de 100 es pedir el rollo. La ficha y las cards pasan a ofrecer
+ * solo el pack, al precio del pack; el precio por metro deja de mostrarse.
+ */
+export function soloPack(producto) {
+  const contenido = Number(producto?.pack_contenido);
+  return Number(producto?.precio_pack) > 0 && contenido > 0
+    && Number(producto?.minimo) >= contenido;
+}
+
 /** 2.5 -> "2,5 m"  ·  3 -> "3" */
 export function formatearCantidad(cantidad, unidad) {
   if (unidad === 'metro') return `${cantidad.toFixed(1).replace('.', ',')} m`;

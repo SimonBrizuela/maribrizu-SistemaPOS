@@ -173,7 +173,7 @@ document.addEventListener('click', async ev => {
       // Sin aviso: la barra de abajo muestra la foto entrando y el total
       // moverse, y a diferencia del aviso se queda ahí mientras se sigue
       // comprando.
-      carrito.agregar(p);
+      carrito.agregar(p, { esPack: carrito.soloPack(p) });
     } finally {
       agregar.disabled = false;
     }
