@@ -674,20 +674,12 @@ function abrirGrupos() {
         </button>
       </header>
       <div class="cuerpo">
-        ${grupos.length ? grupos.map(([g, xs]) => {
-          const publicados = xs.filter(x => x.publicado).length;
-          const etiquetas = xs.map(x => x.tamano).filter(Boolean);
-          return `
-            <button class="tienda-grupo-item" data-grupo="${escHtml(g)}">
-              <span style="min-width:0;flex:1;text-align:left">
-                <span class="tienda-nombre" style="display:block">${escHtml(g)}</span>
-                <span class="tienda-sub">${xs.length} tamaños · ${publicados} en la tienda${
-                  etiquetas.length ? ` · ${escHtml(etiquetas.slice(0, 6).join(', '))}${
-                    etiquetas.length > 6 ? '…' : ''}` : ''}</span>
-              </span>
-              <span class="material-icons" style="font-size:18px;color:var(--text-muted)">chevron_right</span>
-            </button>`;
-        }).join('') : `
+        ${grupos.length ? `
+          <div class="tienda-campo" style="margin-bottom:12px">
+            <input type="text" id="grsBuscar" autocomplete="off"
+                   placeholder="Buscar entre los ${grupos.length} grupos…">
+          </div>
+          <div data-lista-grupos></div>` : `
           <div class="tienda-pista" style="margin-top:0">
             Todavía no hay ningún grupo. Armá el primero: buscá los productos
             que son lo mismo en distinto tamaño ("Cierre Común 10 cm", "12 cm"…)
@@ -705,6 +697,36 @@ function abrirGrupos() {
       </footer>
     </div>`;
 
+  // Con cientos de grupos la lista entera no se recorre con el ojo: se filtra
+  // por nombre del grupo, rubro, etiqueta de tamaño o cualquiera de los
+  // productos que tiene adentro.
+  const buscables = grupos.map(([g, xs]) => [g, xs, normalizar(
+    [g, xs[0]?.rubro, ...xs.map(x => x.tamano), ...xs.map(x => x.nombre)]
+      .filter(Boolean).join(' '))]);
+
+  function pintarListaGrupos() {
+    const caja = capa.querySelector('[data-lista-grupos]');
+    if (!caja) return;
+    const q = normalizar(capa.querySelector('#grsBuscar')?.value.trim() || '');
+    const filtrados = q ? buscables.filter(([, , texto]) => texto.includes(q)) : buscables;
+
+    caja.innerHTML = filtrados.length ? filtrados.map(([g, xs]) => {
+      const publicados = xs.filter(x => x.publicado).length;
+      const etiquetas = xs.map(x => x.tamano).filter(Boolean);
+      return `
+        <button class="tienda-grupo-item" data-grupo="${escHtml(g)}">
+          <span style="min-width:0;flex:1;text-align:left">
+            <span class="tienda-nombre" style="display:block">${escHtml(g)}</span>
+            <span class="tienda-sub">${xs.length} tamaños · ${publicados} en la tienda${
+              etiquetas.length ? ` · ${escHtml(etiquetas.slice(0, 6).join(', '))}${
+                etiquetas.length > 6 ? '…' : ''}` : ''}</span>
+          </span>
+          <span class="material-icons" style="font-size:18px;color:var(--text-muted)">chevron_right</span>
+        </button>`;
+    }).join('')
+      : '<div class="tienda-pista" style="margin-top:6px">Ningún grupo se llama así.</div>';
+  }
+
   const cerrar = () => {
     if (capa._alTeclado) document.removeEventListener('keydown', capa._alTeclado);
     capa.remove();
@@ -712,6 +734,9 @@ function abrirGrupos() {
 
   let bajoPropio = false;
   capa.addEventListener('mousedown', ev => { bajoPropio = ev.target === capa; });
+  capa.addEventListener('input', ev => {
+    if (ev.target.id === 'grsBuscar') pintarListaGrupos();
+  });
   capa.addEventListener('click', ev => {
     if (ev.target === capa && bajoPropio) { cerrar(); return; }
     if (ev.target.closest('[data-accion="cerrar"]')) { cerrar(); return; }
@@ -730,6 +755,8 @@ function abrirGrupos() {
   capa._alTeclado = ev => { if (ev.key === 'Escape') cerrar(); };
   document.addEventListener('keydown', capa._alTeclado);
   document.body.appendChild(capa);
+  pintarListaGrupos();
+  capa.querySelector('#grsBuscar')?.focus();
 }
 
 /* ── Editor ───────────────────────────────────────────────────────────────── */
