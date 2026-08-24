@@ -204,6 +204,35 @@
     }
   },
   {
+    "que_prueba": "Grupo de tamaños: grupo, clave normalizada y tamaño",
+    "doc_id": "p12",
+    "datos": {
+      "nombre": "CIERRE COMUN 10 CM",
+      "codigo": "5501",
+      "rubro": "merceria",
+      "categoria": "CIERRES",
+      "sub_rubro": "Cierre Fijo Comun",
+      "estado": "activo",
+      "precio_venta": 300,
+      "stock": 40,
+      "tienda_grupo": "Cierre Común",
+      "tienda_tamano": "10 cm"
+    }
+  },
+  {
+    "que_prueba": "Un tamaño suelto sin grupo no publica nada de grupo",
+    "doc_id": "p13",
+    "datos": {
+      "nombre": "CIERRE COMUN 12 CM",
+      "codigo": "5502",
+      "rubro": "merceria",
+      "estado": "activo",
+      "precio_venta": 300,
+      "stock": 12,
+      "tienda_tamano": "12 cm"
+    }
+  },
+  {
     "que_prueba": "Solo tiene la foto suelta del catálogo del POS: esa es la que sale",
     "doc_id": "p11",
     "datos": {

@@ -115,6 +115,30 @@ describe('lo que decide el panel', () => {
   });
 });
 
+describe('el grupo de tamaños', () => {
+  const de = id => casos.find(c => c.doc_id === id).datos;
+
+  it('publica el grupo, su clave normalizada y el tamaño', () => {
+    const d = documentoEspejo(de('p12'));
+    expect(d.grupo).toBe('Cierre Común');
+    // Normalizada: el nombre visible puede cambiar de tildes sin partir el
+    // grupo en dos.
+    expect(d.grupo_clave).toBe('cierre comun');
+    expect(d.tamano).toBe('10 cm');
+    // El grupo se indexa: buscar "cierre comun" encuentra los tamaños aunque
+    // el panel les cambie el nombre propio.
+    expect(d.tokens).toContain('cierre');
+    expect(d.tokens).toContain('comun');
+  });
+
+  it('un tamaño suelto sin grupo no publica nada de grupo', () => {
+    const d = documentoEspejo(de('p13'));
+    expect(d.grupo).toBeNull();
+    expect(d.grupo_clave).toBeNull();
+    expect(d.tamano).toBeNull();
+  });
+});
+
 describe('las fotos', () => {
   const de = id => casos.find(c => c.doc_id === id).datos;
 

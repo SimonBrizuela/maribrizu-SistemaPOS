@@ -462,6 +462,14 @@ def armar_documento(doc_id, datos):
     if marca.upper() == 'SIN MARCA':
         marca = ''
 
+    # El grupo de tamaños: "Cierre Común" junta los cierres de 10, 12, 14 cm...
+    # en una sola card de la tienda, y `tamano` es la etiqueta de ESTE producto
+    # dentro del grupo. Los dos los decide el panel; sin grupo, el tamaño
+    # suelto no significa nada y no se publica. Gemelo de documentoEspejo() en
+    # webapp/src/tienda_espejo.js.
+    grupo = str(datos.get('tienda_grupo') or '').strip()
+    tamano = str(datos.get('tienda_tamano') or '').strip()
+
     m = medidas_de(datos)
 
     return {
@@ -497,7 +505,14 @@ def armar_documento(doc_id, datos):
         'imagenes': imagenes_de(datos),
         'variedades': m['variedades'],
         'destacado': datos.get('tienda_destacado') is True,
-        'tokens': tokenizar(nombre, marca, datos.get('categoria'), datos.get('sub_rubro')),
+        'grupo': grupo or None,
+        # Normalizado para consultar por igualdad: el nombre visible del grupo
+        # puede cambiar de mayusculas o tildes sin partir el grupo en dos.
+        'grupo_clave': normalizar(grupo) if grupo else None,
+        'tamano': (tamano or None) if grupo else None,
+        # El grupo tambien se indexa: buscar "cierre comun" tiene que
+        # encontrar los tamaños aunque el panel les cambie el nombre propio.
+        'tokens': tokenizar(nombre, marca, datos.get('categoria'), datos.get('sub_rubro'), grupo),
         # Nombre normalizado para las sugerencias mientras se escribe.
         # `tokens` sirve para buscar palabras completas, pero no para prefijos:
         # array-contains compara exacto, asi que "abro" no encuentra "abrojo".
@@ -658,6 +673,88 @@ def clave_de_orden(doc):
         -doc.get('vendidos', 0),
         normalizar(doc['nombre']),
     )
+
+
+def valor_de_tamano(tamano):
+    """
+    Los numeros de una etiqueta de tamaño, para ordenar como ordena una
+    persona: "9 cm" antes que "10 cm" (alfabetico los da vuelta) y "10x15"
+    antes que "10x20". Sin numeros queda al final. Misma idea que
+    valorDeTamano() en tienda/src/grupos.js.
+    """
+    numeros = re.findall(r'\d+(?:[.,]\d+)?', str(tamano or ''))
+    if not numeros:
+        return (float('inf'),)
+    return tuple(float(n.replace(',', '.')) for n in numeros)
+
+
+def ordenar_publicables(publicables):
+    """
+    Los ids en el orden de la vidriera, con los grupos de tamaños JUNTOS.
+
+    El orden normal rankea por ventas, asi que los tamaños de un mismo grupo
+    quedaban desparramados por el catalogo entero: la tienda los pliega en una
+    sola card, y con los miembros repartidos en paginas distintas esa card
+    salia con datos a medias. El grupo completo toma el lugar de su mejor
+    miembro, y adentro se ordena del tamaño mas chico al mas grande.
+    """
+    base = {k: clave_de_orden(doc) for k, doc in publicables.items()}
+    mejor = {}
+    for k, doc in publicables.items():
+        g = doc.get('grupo_clave')
+        if g and (g not in mejor or base[k] < mejor[g]):
+            mejor[g] = base[k]
+
+    def clave(k):
+        doc = publicables[k]
+        g = doc.get('grupo_clave')
+        if not g:
+            return (base[k], 1, (), '')
+        return (mejor[g], 0, valor_de_tamano(doc.get('tamano')), normalizar(doc['nombre']))
+
+    return sorted(publicables, key=clave)
+
+
+def contar_rubros(publicables):
+    """
+    Cuanto hay en cada rubro y en cada subrubro, para la portada y los filtros.
+
+    Un grupo de tamaños cuenta UNA vez por rubro y por subrubro: la tienda lo
+    muestra como una sola card y el numero de la portada acompaña eso. Misma
+    regla que recomputarRubros() en webapp/src/tienda_espejo.js. Lo facturado
+    si suma todos los tamaños: es plata real y solo ordena los rubros.
+    """
+    conteo = {}
+    con_stock = {}
+    factura = {}
+    # Los subrubros que quedaron publicados en cada rubro. Es la segunda fila
+    # de filtros de la tienda: sacarlos del catalogo entero mostraria filtros
+    # que no devuelven nada.
+    subrubros = {}
+    grupos_en_rubro = set()
+    grupos_en_sub = set()
+    for doc in publicables.values():
+        if not doc['rubro']:
+            continue
+        rubro = doc['rubro']
+        grupo = doc.get('grupo_clave')
+        factura[rubro] = factura.get(rubro, 0) + doc.get('facturado', 0)
+
+        sub = str(doc.get('sub_rubro') or '').strip().upper()
+        if sub and (not grupo or (rubro, sub, grupo) not in grupos_en_sub):
+            if grupo:
+                grupos_en_sub.add((rubro, sub, grupo))
+            dentro = subrubros.setdefault(rubro, {})
+            dentro[sub] = dentro.get(sub, 0) + 1
+
+        if grupo:
+            if (rubro, grupo) in grupos_en_rubro:
+                continue
+            grupos_en_rubro.add((rubro, grupo))
+        conteo[rubro] = conteo.get(rubro, 0) + 1
+        if doc['stock'] > 0:
+            con_stock[rubro] = con_stock.get(rubro, 0) + 1
+    return conteo, con_stock, factura, subrubros
 
 
 # Cada cuanto se vuelve a contar lo vendido. El ranking mueve el orden de la
@@ -842,7 +939,7 @@ def main():
         print(f'  {len(a_mano)} destacados marcados a mano en el panel')
 
     # ── Numerar para el orden del catalogo ────────────────────────────────
-    ordenados = sorted(publicables, key=lambda k: clave_de_orden(publicables[k]))
+    ordenados = ordenar_publicables(publicables)
 
     # `orden` es global: sirve para el listado completo del catalogo.
     for i, doc_id in enumerate(ordenados):
@@ -868,24 +965,7 @@ def main():
     print(f'  {len(dar_de_baja)} se dan de baja')
 
     # ── Rubros con su conteo, para la portada ─────────────────────────────
-    conteo = {}
-    con_stock = {}
-    factura = {}
-    # Los subrubros que quedaron publicados en cada rubro. Es la segunda fila de
-    # filtros de la tienda: sacarlos del catalogo entero mostraria filtros que
-    # no devuelven nada.
-    subrubros = {}
-    for doc in publicables.values():
-        if not doc['rubro']:
-            continue
-        conteo[doc['rubro']] = conteo.get(doc['rubro'], 0) + 1
-        factura[doc['rubro']] = factura.get(doc['rubro'], 0) + doc['facturado']
-        if doc['stock'] > 0:
-            con_stock[doc['rubro']] = con_stock.get(doc['rubro'], 0) + 1
-        sub = str(doc.get('sub_rubro') or '').strip().upper()
-        if sub:
-            dentro = subrubros.setdefault(doc['rubro'], {})
-            dentro[sub] = dentro.get(sub, 0) + 1
+    conteo, con_stock, factura, subrubros = contar_rubros(publicables)
 
     # Los rubros salen ordenados por lo que facturan, no por cuantos productos
     # tienen. Son dos ordenes muy distintos: Regaleria tiene 594 productos y

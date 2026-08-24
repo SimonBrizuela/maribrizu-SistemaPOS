@@ -272,6 +272,13 @@ export function documentoEspejo(datos) {
   let marca = String(datos?.marca ?? '').trim();
   if (marca.toUpperCase() === 'SIN MARCA') marca = '';
 
+  // El grupo de tamaños: "Cierre Común" junta los cierres de 10, 12, 14 cm…
+  // en una sola card de la tienda, y `tamano` es la etiqueta de ESTE producto
+  // dentro del grupo. Los dos los decide el panel; sin grupo, el tamaño suelto
+  // no significa nada y no se publica.
+  const grupo = String(datos?.tienda_grupo ?? '').trim();
+  const tamano = String(datos?.tienda_tamano ?? '').trim();
+
   const m = medidasDe(datos);
 
   return {
@@ -299,7 +306,14 @@ export function documentoEspejo(datos) {
     imagenes: imagenesDe(datos),
     variedades: m.variedades,
     destacado: datos?.tienda_destacado === true,
-    tokens: tokenizar(nombre, marca, datos?.categoria, datos?.sub_rubro),
+    grupo: grupo || null,
+    // Normalizado para consultar por igualdad: el nombre visible del grupo
+    // puede cambiar de mayúsculas o de tildes sin partir el grupo en dos.
+    grupo_clave: grupo ? normalizar(grupo) : null,
+    tamano: grupo ? (tamano || null) : null,
+    // El grupo también se indexa: buscar "cierre común" tiene que encontrar
+    // los tamaños aunque el panel les haya cambiado el nombre propio.
+    tokens: tokenizar(nombre, marca, datos?.categoria, datos?.sub_rubro, grupo),
     nombre_busqueda: normalizar(nombre),
     codigo: String(datos?.codigo ?? ''),
     actualizado: serverTimestamp(),
@@ -755,10 +769,18 @@ export async function recomputarRubros(db, productos, rubrosHabilitados,
                                        subrubrosExcluidos = null) {
   const conteo = new Map();
 
+  // Un grupo de tamaños cuenta UNA vez por rubro y por subrubro: la tienda lo
+  // muestra como una sola card, y el número de la portada acompaña lo que se
+  // ve. Misma regla que el bloque de lista_rubros en scripts/sync_tienda.py.
+  const gruposEnRubro = new Set();
+  const gruposEnSub = new Set();
+
   for (const { datos } of productos) {
     if (motivoDeNoPublicar(datos, rubrosHabilitados, subrubrosExcluidos)) continue;
     const rubro = String(datos?.rubro ?? '').trim().toUpperCase();
     if (!rubro) continue;
+
+    const grupo = normalizar(datos?.tienda_grupo);
 
     const actual = conteo.get(rubro) || { cantidad: 0, con_stock: 0, subrubros: new Map() };
     if (!actual.subrubros) actual.subrubros = new Map();
@@ -767,12 +789,18 @@ export async function recomputarRubros(db, productos, rubrosHabilitados,
     // la tienda usa para la segunda fila de filtros: listarlos desde el
     // catálogo entero mostraría filtros que no devuelven nada.
     const sub = claveDeRubro(datos?.sub_rubro);
-    if (sub) actual.subrubros.set(sub, (actual.subrubros.get(sub) || 0) + 1);
+    if (sub && (!grupo || !gruposEnSub.has(`${rubro}|${sub}|${grupo}`))) {
+      if (grupo) gruposEnSub.add(`${rubro}|${sub}|${grupo}`);
+      actual.subrubros.set(sub, (actual.subrubros.get(sub) || 0) + 1);
+    }
 
-    actual.cantidad++;
-    // Publicado implica stock, pero se cuenta igual: el campo lo usa la portada
-    // para saber hasta dónde puede saltar al elegir productos al azar.
-    if (medidasDe(datos).stock > 0) actual.con_stock++;
+    if (!grupo || !gruposEnRubro.has(`${rubro}|${grupo}`)) {
+      if (grupo) gruposEnRubro.add(`${rubro}|${grupo}`);
+      actual.cantidad++;
+      // Publicado implica stock, pero se cuenta igual: el campo lo usa la
+      // portada para saber hasta dónde puede saltar al elegir al azar.
+      if (medidasDe(datos).stock > 0) actual.con_stock++;
+    }
     conteo.set(rubro, actual);
   }
 
