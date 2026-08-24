@@ -1162,12 +1162,26 @@ class FiadosView(QWidget):
             linea.setdefault('category', it.get('categoria') or '')
 
             pid = int(linea.get('product_id') or it.get('product_id') or 0)
-            # Item cargado desde la web: viene con el id del catálogo (Firestore),
-            # hay que traducirlo al id local para descontar el stock correcto.
-            if not pid and str(it.get('product_fid') or '').strip():
+            fid = str(it.get('product_fid') or '').strip()
+            # El product_id del fiado es el id local de la PC donde se anotó:
+            # en otra PC puede no existir (el INSERT de sale_items viola el
+            # FOREIGN KEY) o ser otro producto con el mismo número. Solo se
+            # acepta si la fila existe y el nombre coincide; si no, se busca
+            # por firebase_id.
+            if pid and not linea.get('is_mp'):
+                rows = self.db.execute_query(
+                    "SELECT name FROM products WHERE id = ? LIMIT 1", (pid,)
+                ) or []
+                nombre_local = ' '.join(str(rows[0]['name'] or '').split()).upper() if rows else ''
+                nombre_item  = ' '.join(str(linea['product_name']).split()).upper()
+                if not nombre_local or nombre_local not in nombre_item:
+                    pid = 0
+            # Item cargado desde la web, o id local que no correspondía: el
+            # firebase_id es el nombre global del producto y manda cuando está.
+            if not pid and fid:
                 rows = self.db.execute_query(
                     "SELECT id FROM products WHERE firebase_id = ? LIMIT 1",
-                    (str(it['product_fid']).strip(),)
+                    (fid,)
                 ) or []
                 if rows:
                     pid = int(rows[0]['id'])
@@ -1175,6 +1189,10 @@ class FiadosView(QWidget):
             if not pid and not linea.get('is_mp'):
                 # Sin producto del catálogo → se cobra como item libre (Varios).
                 linea['is_varios'] = True
+                if not linea.get('stock_descontado'):
+                    avisos.append((linea['product_name'],
+                                   'no está en el catálogo de esta PC — '
+                                   'se cobra sin descontar su stock'))
 
             if linea.get('is_conjunto') and not linea.get('stock_descontado'):
                 ok, err = revalidar_conjunto(self.db, linea)
