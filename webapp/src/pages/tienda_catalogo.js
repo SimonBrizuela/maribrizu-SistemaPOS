@@ -23,8 +23,9 @@ import { leerDocRapido } from '../config.js';
 import { alertDialog, escHtml, verFotoGrande } from '../components/dialogs.js';
 import {
   guardarYEspejar, motivoDeNoPublicar, medidasDe, nombreBonito, normalizar,
-  subirFoto, borrarFoto, actualizarDoc,
+  subirFoto, borrarFoto, actualizarDoc, leerPublicacion, recomputarRubros,
 } from '../tienda_espejo.js';
+import { sugerirGrupo, restoDeNombre } from '../tienda_grupos.js';
 import {
   ponerDePortada, moverFoto, quitarFoto, desvincularFoto, vincularFoto,
   fotoDeVariedad, limpiarAjustes, fotosHuerfanas, variedadesDeFoto,
@@ -86,11 +87,16 @@ function preparar(datos, rubrosHabilitados) {
     interruptor: datos.tienda_publicar === true ? 'si'
                : datos.tienda_publicar === false ? 'no' : 'auto',
     destacado: datos.tienda_destacado === true,
+    // El grupo de tamaños: en la tienda los miembros salen como UNA sola
+    // publicación y el tamaño se elige adentro de la ficha.
+    grupo: String(datos.tienda_grupo || '').trim(),
+    tamano: String(datos.tienda_tamano || '').trim(),
     imagenes,
     medidas,
     motivo,
     publicado: motivo === null,
-    buscable: normalizar([datos.nombre, datos.tienda_nombre, datos.marca, datos.codigo]
+    buscable: normalizar([datos.nombre, datos.tienda_nombre, datos.tienda_grupo,
+                          datos.marca, datos.codigo]
       .filter(Boolean).join(' ')),
   };
 }
@@ -142,6 +148,10 @@ function fila(p) {
     : `<div class="tienda-foto tienda-foto--falta"><span class="material-icons">image_not_supported</span></div>`;
 
   const etiquetas = [];
+  if (p.grupo) {
+    etiquetas.push(`<span class="tienda-etiqueta grupo"><span class="material-icons">straighten</span>${
+      escHtml(p.grupo)}${p.tamano ? ` · ${escHtml(p.tamano)}` : ''}</span>`);
+  }
   if (p.destacado) {
     etiquetas.push('<span class="tienda-etiqueta destacado"><span class="material-icons">star</span>Destacado</span>');
   }
@@ -172,11 +182,6 @@ function fila(p) {
         <div class="tienda-sub">
           ${escHtml(p.rubro || 'sin rubro')}${escHtml(variedades)}${escHtml(fotos)}${pack}
         </div>
-        ${p.nombre !== nombreBonito(p.nombreCatalogo) ? `
-          <div class="tienda-sub" style="display:flex;align-items:center;gap:3px">
-            <span class="material-icons" style="font-size:12px">link</span>
-            ${escHtml(p.nombreCatalogo)}
-          </div>` : ''}
         <div style="display:flex;gap:5px;flex-wrap:wrap;margin-top:4px">${etiquetas.join('')}</div>
       </div>
       <div class="tienda-precio">
@@ -386,6 +391,347 @@ async function abrirAvisos(db, rubros) {
   });
 }
 
+/* ── Grupos de tamaños ─────────────────────────────────────────────────────
+ * El mismo producto cargado como "Cierre Común 10 cm", "12 cm", "14 cm"… sale
+ * en la tienda como UNA publicación: la card muestra el grupo y el cliente
+ * elige el tamaño adentro de la ficha. Acá se arma el grupo: se tildan los
+ * productos, el nombre y las etiquetas se proponen solos desde los nombres
+ * (tienda_grupos.js), y todo queda en campos `tienda_*` del catálogo.
+ */
+
+function cerrarGrupoEditor() {
+  const previo = document.querySelector('.tienda-overlay[data-grupo-editor]');
+  if (!previo) return;
+  if (previo._alTeclado) document.removeEventListener('keydown', previo._alTeclado);
+  previo.remove();
+}
+
+/**
+ * El editor de UN grupo.
+ *
+ * @param {string|null} nombreGrupo  grupo existente a editar, o null para nuevo
+ * @param {object|null} semilla      producto con el que arranca un grupo nuevo
+ * @param {Function|null} alGuardar  se llama después de guardar bien
+ */
+function abrirGrupo(nombreGrupo = null, semilla = null, alGuardar = null) {
+  cerrarGrupoEditor();
+
+  let miembros = nombreGrupo ? _productos.filter(x => x.grupo === nombreGrupo) : [];
+  if (semilla && !miembros.some(x => x.id === semilla.id)) {
+    miembros = [...miembros, _productos.find(x => x.id === semilla.id) || semilla];
+  }
+
+  // La propuesta: el nombre del grupo y la etiqueta de cada tamaño salen de lo
+  // que los nombres comparten. Lo ya guardado no se pisa.
+  const sugerido = sugerirGrupo(miembros.map(x => x.nombre));
+  let nombre = nombreGrupo || sugerido.grupo;
+  const tamanos = {};
+  miembros.forEach((x, i) => {
+    tamanos[x.id] = x.tamano || sugerido.tamanos[i] || '';
+  });
+
+  const capa = document.createElement('div');
+  capa.className = 'tienda-overlay';
+  capa.setAttribute('data-grupo-editor', '');
+  capa.innerHTML = `
+    <div class="tienda-editor" style="max-width:680px" role="dialog" aria-modal="true">
+      <header>
+        <div style="min-width:0;flex:1">
+          <h3>${nombreGrupo ? 'Grupo de tamaños' : 'Nuevo grupo de tamaños'}</h3>
+          <p>El grupo sale en la tienda como una sola publicación; el cliente
+             elige el tamaño adentro de la ficha.</p>
+        </div>
+        <button class="pc-btn" data-accion="cerrar" style="padding:6px 10px">
+          <span class="material-icons">close</span>
+        </button>
+      </header>
+      <div class="cuerpo">
+        <div class="tienda-campo">
+          <label>Cómo se llama en la tienda</label>
+          <input type="text" id="grNombre" maxlength="90" value="${escHtml(nombre)}"
+                 placeholder="Cierre Común">
+          <div class="tienda-pista">
+            Es el título que ve el cliente. Los nombres del catálogo general no
+            cambian.
+          </div>
+        </div>
+
+        <div class="tienda-campo" style="margin-top:14px">
+          <label>Los tamaños del grupo</label>
+          <div id="grMiembros"></div>
+          <div class="tienda-pista">
+            La etiqueta es lo que se elige en la ficha: "10 cm", "Nº 3",
+            "Grande". Sale sola del nombre; corregila si quedó rara.
+          </div>
+        </div>
+
+        <div class="tienda-campo" style="margin-top:14px">
+          <label>Agregar productos al grupo</label>
+          <input type="text" id="grBuscar" placeholder="Buscá por nombre, marca o código…"
+                 autocomplete="off">
+          <div id="grResultados"></div>
+        </div>
+      </div>
+      <footer>
+        <span id="grEstado" style="margin-right:auto;font-size:12.5px;color:var(--text-muted)"></span>
+        <button class="pc-btn" data-accion="cerrar" style="padding:9px 16px">Cancelar</button>
+        <button class="pc-btn" id="grGuardar"
+                style="padding:9px 20px;background:#4361ee;color:#fff;border-color:#4361ee">
+          Guardar el grupo
+        </button>
+      </footer>
+    </div>`;
+
+  const $g = sel => capa.querySelector(sel);
+  const estado = () => $g('#grEstado');
+
+  function pintarMiembros() {
+    const caja = $g('#grMiembros');
+    if (!miembros.length) {
+      caja.innerHTML = `
+        <div class="tienda-pista" style="margin:2px 0 0">
+          Todavía no hay productos: buscalos abajo y agregalos.
+        </div>`;
+      return;
+    }
+    caja.innerHTML = miembros.map(x => `
+      <div class="tienda-grupo-fila" data-id="${escHtml(x.id)}">
+        ${x.imagenes[0]
+          ? `<img class="tienda-foto" style="width:34px;height:34px" src="${escHtml(x.imagenes[0])}" alt="">`
+          : '<div class="tienda-foto tienda-foto--falta" style="width:34px;height:34px"><span class="material-icons" style="font-size:16px">image_not_supported</span></div>'}
+        <div style="min-width:0;flex:1">
+          <div class="tienda-nombre" style="font-size:12.5px">${escHtml(x.nombre)}</div>
+          <div class="tienda-sub">${pesos(x.medidas.precio)} · ${
+            x.medidas.stock > 0 ? `${x.medidas.stock} en stock` : 'sin stock'}</div>
+        </div>
+        <input type="text" data-tamano maxlength="30" value="${escHtml(tamanos[x.id] || '')}"
+               placeholder="10 cm" aria-label="Etiqueta de tamaño de ${escHtml(x.nombre)}">
+        <button class="pc-btn" data-quitar title="Sacar del grupo" style="padding:5px 8px">
+          <span class="material-icons" style="font-size:16px">close</span>
+        </button>
+      </div>`).join('');
+  }
+
+  function pintarResultados() {
+    const caja = $g('#grResultados');
+    const q = normalizar($g('#grBuscar').value.trim());
+    if (q.length < 2) { caja.innerHTML = ''; return; }
+
+    const candidatos = _productos
+      .filter(x => !miembros.some(m => m.id === x.id) && x.buscable.includes(q))
+      .slice(0, 12);
+
+    caja.innerHTML = candidatos.length ? candidatos.map(x => `
+      <button class="tienda-grupo-candidato" data-agregar="${escHtml(x.id)}">
+        <span style="min-width:0;flex:1;text-align:left">
+          <span class="tienda-nombre" style="font-size:12.5px;display:block">${escHtml(x.nombre)}</span>
+          <span class="tienda-sub">${escHtml(x.rubro)} · ${pesos(x.medidas.precio)}${
+            x.grupo ? ` · hoy está en «${escHtml(x.grupo)}», se muda` : ''}</span>
+        </span>
+        <span class="material-icons" style="font-size:18px">add</span>
+      </button>`).join('')
+      : '<div class="tienda-pista" style="margin-top:6px">Nada se llama así.</div>';
+  }
+
+  function reproponer() {
+    // Con más miembros la propuesta mejora; lo que ya se tipeó no se pisa.
+    const propuesta = sugerirGrupo(miembros.map(x => x.nombre));
+    if (!$g('#grNombre').value.trim() && propuesta.grupo) {
+      $g('#grNombre').value = propuesta.grupo;
+    }
+    const grupoActual = $g('#grNombre').value.trim();
+    miembros.forEach((x, i) => {
+      if (!tamanos[x.id]) {
+        tamanos[x.id] = restoDeNombre(x.nombre, grupoActual) || propuesta.tamanos[i] || '';
+      }
+    });
+  }
+
+  capa.addEventListener('input', ev => {
+    if (ev.target.id === 'grBuscar') { pintarResultados(); return; }
+    if (ev.target.matches('[data-tamano]')) {
+      const id = ev.target.closest('[data-id]').dataset.id;
+      tamanos[id] = ev.target.value;
+    }
+  });
+
+  let bajoPropio = false;
+  capa.addEventListener('mousedown', ev => { bajoPropio = ev.target === capa; });
+  capa.addEventListener('click', async ev => {
+    if (ev.target === capa && bajoPropio) { cerrarGrupoEditor(); return; }
+    if (ev.target.closest('[data-accion="cerrar"]')) { cerrarGrupoEditor(); return; }
+
+    const agregar = ev.target.closest('[data-agregar]');
+    if (agregar) {
+      const x = _productos.find(z => z.id === agregar.dataset.agregar);
+      if (x) {
+        miembros = [...miembros, x];
+        tamanos[x.id] = x.tamano || '';
+        reproponer();
+        pintarMiembros();
+        pintarResultados();
+      }
+      return;
+    }
+
+    const quitar = ev.target.closest('[data-quitar]');
+    if (quitar) {
+      const id = quitar.closest('[data-id]').dataset.id;
+      miembros = miembros.filter(x => x.id !== id);
+      delete tamanos[id];
+      pintarMiembros();
+      pintarResultados();
+      return;
+    }
+
+    if (ev.target.closest('#grGuardar')) {
+      const boton = $g('#grGuardar');
+      const nombreFinal = $g('#grNombre').value.trim();
+      if (!nombreFinal) {
+        estado().textContent = 'Ponele un nombre al grupo.';
+        $g('#grNombre').focus();
+        return;
+      }
+      if (miembros.length < 2) {
+        estado().textContent = 'Un grupo necesita al menos dos productos.';
+        return;
+      }
+
+      // Los que estaban en el grupo y ya no: se les borra el campo, así el
+      // sync no los vuelve a juntar.
+      const sacados = (nombreGrupo ? _productos.filter(x => x.grupo === nombreGrupo) : [])
+        .filter(x => !miembros.some(m => m.id === x.id));
+
+      boton.disabled = true;
+      const total = miembros.length + sacados.length;
+      let hechos = 0;
+      try {
+        for (const m of miembros) {
+          estado().textContent = `Guardando ${++hechos} de ${total}…`;
+          await guardar(m, {
+            tienda_grupo: nombreFinal,
+            tienda_tamano: String(tamanos[m.id] || '').trim() || undefined,
+          });
+        }
+        for (const s of sacados) {
+          estado().textContent = `Guardando ${++hechos} de ${total}…`;
+          await guardar(s, { tienda_grupo: undefined, tienda_tamano: undefined });
+        }
+
+        // La portada cuenta cada grupo una vez: el conteo se rehace acá para
+        // no esperar a la próxima corrida del sync. Si falla, el sync lo deja
+        // bien igual.
+        leerPublicacion(_db)
+          .then(({ rubros, subrubrosExcluidos }) => recomputarRubros(
+            _db, _productos.map(x => ({ id: x.id, datos: x.datos })),
+            rubros, subrubrosExcluidos))
+          .catch(err => console.warn('[tienda] rubros tras el grupo:', err?.message || err));
+
+        cerrarGrupoEditor();
+        refrescar();
+        avisar(`Grupo «${nombreFinal}» guardado, con ${miembros.length} tamaños.`);
+        alGuardar?.();
+      } catch (err) {
+        console.error('[tienda] grupo:', err);
+        boton.disabled = false;
+        estado().textContent = 'No se pudo guardar. Probá de nuevo.';
+      }
+    }
+  });
+
+  capa._alTeclado = ev => { if (ev.key === 'Escape') cerrarGrupoEditor(); };
+  document.addEventListener('keydown', capa._alTeclado);
+  document.body.appendChild(capa);
+  pintarMiembros();
+  if (!miembros.length) $g('#grBuscar').focus();
+}
+
+/** La lista de todos los grupos, para verlos y entrarles desde un solo lugar. */
+function abrirGrupos() {
+  document.querySelector('.tienda-overlay[data-grupos]')?.remove();
+
+  const porGrupo = new Map();
+  for (const x of _productos) {
+    if (!x.grupo) continue;
+    if (!porGrupo.has(x.grupo)) porGrupo.set(x.grupo, []);
+    porGrupo.get(x.grupo).push(x);
+  }
+  const grupos = [...porGrupo.entries()].sort((a, b) => a[0].localeCompare(b[0], 'es'));
+
+  const capa = document.createElement('div');
+  capa.className = 'tienda-overlay';
+  capa.setAttribute('data-grupos', '');
+  capa.innerHTML = `
+    <div class="tienda-editor" style="max-width:600px" role="dialog" aria-modal="true">
+      <header>
+        <div style="min-width:0;flex:1">
+          <h3>Grupos de tamaños</h3>
+          <p>El mismo producto en varios tamaños, como una sola publicación de
+             la tienda.</p>
+        </div>
+        <button class="pc-btn" data-accion="cerrar" style="padding:6px 10px">
+          <span class="material-icons">close</span>
+        </button>
+      </header>
+      <div class="cuerpo">
+        ${grupos.length ? grupos.map(([g, xs]) => {
+          const publicados = xs.filter(x => x.publicado).length;
+          const etiquetas = xs.map(x => x.tamano).filter(Boolean);
+          return `
+            <button class="tienda-grupo-item" data-grupo="${escHtml(g)}">
+              <span style="min-width:0;flex:1;text-align:left">
+                <span class="tienda-nombre" style="display:block">${escHtml(g)}</span>
+                <span class="tienda-sub">${xs.length} tamaños · ${publicados} en la tienda${
+                  etiquetas.length ? ` · ${escHtml(etiquetas.slice(0, 6).join(', '))}${
+                    etiquetas.length > 6 ? '…' : ''}` : ''}</span>
+              </span>
+              <span class="material-icons" style="font-size:18px;color:var(--text-muted)">chevron_right</span>
+            </button>`;
+        }).join('') : `
+          <div class="tienda-pista" style="margin-top:0">
+            Todavía no hay ningún grupo. Armá el primero: buscá los productos
+            que son lo mismo en distinto tamaño ("Cierre Común 10 cm", "12 cm"…)
+            y juntalos. En la tienda van a salir una sola vez, con el tamaño
+            para elegir adentro.
+          </div>`}
+      </div>
+      <footer>
+        <button class="pc-btn" data-accion="nuevo" style="padding:9px 16px">
+          <span class="material-icons" style="font-size:17px">add</span> Nuevo grupo
+        </button>
+        <button class="pc-btn" data-accion="cerrar" style="padding:9px 16px;margin-left:auto">
+          Cerrar
+        </button>
+      </footer>
+    </div>`;
+
+  const cerrar = () => {
+    if (capa._alTeclado) document.removeEventListener('keydown', capa._alTeclado);
+    capa.remove();
+  };
+
+  let bajoPropio = false;
+  capa.addEventListener('mousedown', ev => { bajoPropio = ev.target === capa; });
+  capa.addEventListener('click', ev => {
+    if (ev.target === capa && bajoPropio) { cerrar(); return; }
+    if (ev.target.closest('[data-accion="cerrar"]')) { cerrar(); return; }
+    if (ev.target.closest('[data-accion="nuevo"]')) {
+      cerrar();
+      abrirGrupo(null, null, () => abrirGrupos());
+      return;
+    }
+    const item = ev.target.closest('[data-grupo]');
+    if (item) {
+      cerrar();
+      abrirGrupo(item.dataset.grupo, null, () => abrirGrupos());
+    }
+  });
+
+  capa._alTeclado = ev => { if (ev.key === 'Escape') cerrar(); };
+  document.addEventListener('keydown', capa._alTeclado);
+  document.body.appendChild(capa);
+}
+
 /* ── Editor ───────────────────────────────────────────────────────────────── */
 
 function abrirEditor(p) {
@@ -457,6 +803,10 @@ function abrirEditor(p) {
             <label>Nombre público</label>
             <input type="text" id="edNombre" maxlength="90"
                    value="${escHtml(String(p.datos.tienda_nombre || nombreBonito(p.nombreCatalogo)))}">
+            <div class="tienda-pista">
+              Es el nombre solo de la tienda: al guardar queda fijado acá, y un
+              cambio de nombre en el catálogo general ya no lo toca.
+            </div>
           </div>
           <div class="tienda-campo">
             <label>Descripción</label>
@@ -483,6 +833,11 @@ function abrirEditor(p) {
           <input type="file" id="edArchivoVariedad" accept="image/*" hidden>
         </div>
 
+        </div>
+
+        <div class="tienda-bloque">
+          <h4>Tamaños</h4>
+          <div id="edGrupo"></div>
         </div>
 
         <div class="tienda-bloque">
@@ -602,6 +957,62 @@ function abrirEditor(p) {
     if (!boton) return;
     interruptor = boton.dataset.valor;
     pintarPublicar();
+  });
+
+  /* ── El grupo de tamaños ── */
+  function pintarGrupo() {
+    const caja = $('#edGrupo');
+    if (!caja) return;
+    const grupo = String(p.datos.tienda_grupo || '').trim();
+    const tamano = String(p.datos.tienda_tamano || '').trim();
+
+    caja.innerHTML = grupo
+      ? `<div class="tienda-grupo-actual">
+           <span class="material-icons">straighten</span>
+           <div style="flex:1;min-width:0">
+             Sale en la tienda dentro de <b>${escHtml(grupo)}</b>${
+               tamano ? ` como <b>${escHtml(tamano)}</b>` : ', todavía sin etiqueta de tamaño'}.
+             El cliente ve una sola publicación y elige el tamaño adentro.
+           </div>
+         </div>
+         <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+           <button class="pc-btn" data-grupo="editar">Cambiar el grupo</button>
+           <button class="pc-btn" data-grupo="sacar">Sacar de este grupo</button>
+         </div>`
+      : `<div class="tienda-pista" style="margin-top:0">
+           ¿Se hace en varios tamaños? Agrupalos y en la tienda salen como una
+           sola publicación, con el tamaño para elegir adentro de la ficha.
+         </div>
+         <button class="pc-btn" data-grupo="editar" style="margin-top:10px">
+           <span class="material-icons" style="font-size:16px;vertical-align:-3px">straighten</span>
+           Agrupar tamaños…
+         </button>`;
+  }
+  pintarGrupo();
+
+  $('#edGrupo').addEventListener('click', async ev => {
+    const boton = ev.target.closest('[data-grupo]');
+    if (!boton) return;
+
+    if (boton.dataset.grupo === 'editar') {
+      abrirGrupo(String(p.datos.tienda_grupo || '').trim() || null, p, pintarGrupo);
+      return;
+    }
+
+    // Sacar del grupo se guarda al toque, como las fotos: es una acción
+    // puntual y esperar al "Guardar cambios" del editor confunde.
+    boton.disabled = true;
+    estado.textContent = 'Sacando del grupo…';
+    try {
+      await guardar(p, { tienda_grupo: undefined, tienda_tamano: undefined });
+      estado.textContent = 'Quedó fuera del grupo.';
+      pintarGrupo();
+      refrescar();
+    } catch (err) {
+      console.error('[tienda] grupo:', err);
+      boton.disabled = false;
+      estado.textContent = 'No se pudo sacar del grupo.';
+    }
   });
 
   /* ── Forma de venta ── */
@@ -1104,7 +1515,7 @@ function abrirEditor(p) {
   const alTeclado = ev => {
     if (ev.key !== 'Escape') return;
     // Con un selector abierto encima, Escape cierra ese y no el editor.
-    if (document.querySelector('.tienda-overlay[data-foto-variedad], .tienda-overlay[data-colores-foto]')) return;
+    if (document.querySelector('.tienda-overlay[data-foto-variedad], .tienda-overlay[data-colores-foto], .tienda-overlay[data-grupo-editor], .tienda-overlay[data-grupos]')) return;
     cerrar();
   };
   document.addEventListener('keydown', alTeclado);
@@ -1139,8 +1550,10 @@ function abrirEditor(p) {
     // resuelve): un mapa lleno de entradas vacías engorda el documento.
     const limpias = limpiarAjustes(ajustes);
 
-    const nombreEscrito = $('#edNombre').value.trim();
-    const nombre = nombreEscrito === nombreBonito(p.nombreCatalogo) ? '' : nombreEscrito;
+    // El nombre queda fijado tal cual se ve, aunque coincida con el del
+    // catálogo: así un cambio de nombre en el catálogo general ya no pisa el
+    // de la tienda, ni al guardar la ficha ni en el sync.
+    const nombre = $('#edNombre').value.trim();
     const descripcion = $('#edDescripcion').value.trim();
     const packNombre = $('#edPackNombre').value.trim();
     const unidad = $('#edUnidad').value;
@@ -1215,6 +1628,11 @@ export async function renderTiendaCatalogo(container, db) {
       <select id="tiendaRubro" style="min-width:150px"><option value="">Todos los rubros</option></select>
       <input type="text" id="tiendaBuscar" placeholder="Nombre, marca o código…"
              style="flex:1;min-width:200px;max-width:320px">
+      <button class="pc-btn" id="tiendaGrupos"
+              title="El mismo producto en varios tamaños, como una sola publicación">
+        <span class="material-icons" style="font-size:16px;vertical-align:-3px">straighten</span>
+        Tamaños
+      </button>
       <button class="pc-btn" id="tiendaAvisos" title="Avisos que ve el cliente antes de comprar">
         <span class="material-icons" style="font-size:16px;vertical-align:-3px">campaign</span>
         Avisos
@@ -1278,6 +1696,10 @@ export async function renderTiendaCatalogo(container, db) {
 
   document.getElementById('tiendaAvisos').addEventListener('click', () => {
     abrirAvisos(db, rubros);
+  });
+
+  document.getElementById('tiendaGrupos').addEventListener('click', () => {
+    abrirGrupos();
   });
 
   const buscador = document.getElementById('tiendaBuscar');

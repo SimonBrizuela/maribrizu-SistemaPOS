@@ -608,3 +608,70 @@
   opacity: .75;
 }
 .pc-btn.active .pc-btn__n { background: rgba(255,255,255,.22); opacity: 1; }
+
+/* ── Grupos de tamaños ─────────────────────────────────────────────────────
+   El mismo producto en varios tamaños, como una sola publicación de la
+   tienda: la etiqueta en la fila, el aviso del editor y el armado del grupo. */
+.tienda-etiqueta.grupo {
+  background: var(--tint-blue-bg);
+  color: var(--tint-blue-fg);
+  text-transform: none;
+  letter-spacing: 0;
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tienda-grupo-actual {
+  display: flex;
+  gap: 9px;
+  align-items: flex-start;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg);
+  font-size: 13px;
+  line-height: 1.45;
+}
+.tienda-grupo-actual .material-icons { font-size: 18px; color: var(--text-muted); }
+
+.tienda-grupo-fila {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--border);
+}
+.tienda-grupo-fila:last-child { border-bottom: none; }
+/* La etiqueta del tamaño es corta ("10 cm", "Nº 3"): un campo angosto deja
+   claro que no va el nombre entero ahí. */
+.tienda-grupo-fila input[data-tamano] {
+  width: 110px;
+  flex: none;
+  padding: 7px 9px;
+  font-size: 12.5px;
+  border: 1.5px solid var(--border);
+  border-radius: 7px;
+  box-sizing: border-box;
+  background: var(--surface);
+  color: var(--text);
+}
+.tienda-grupo-fila input[data-tamano]:focus { border-color: #4361ee; outline: none; }
+
+.tienda-grupo-candidato,
+.tienda-grupo-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 9px 10px;
+  margin-top: 6px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+  font: inherit;
+  color: inherit;
+}
+.tienda-grupo-candidato:hover,
+.tienda-grupo-item:hover { border-color: #4361ee; }
