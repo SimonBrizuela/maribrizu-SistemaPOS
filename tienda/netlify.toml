@@ -11,6 +11,17 @@
   publish = "dist"
   functions = "netlify/functions"
 
+# Cabeceras de seguridad para todo el sitio. La tienda no se muestra dentro de
+# un iframe de nadie, no usa cámara, micrófono ni ubicación, y el navegador no
+# tiene por qué adivinar tipos de contenido. HSTS ya lo manda Netlify.
+[[headers]]
+  for = "/*"
+  [headers.values]
+    X-Content-Type-Options = "nosniff"
+    X-Frame-Options = "DENY"
+    Referrer-Policy = "strict-origin-when-cross-origin"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=()"
+
 # El index nunca se cachea: es el que trae la lista de assets con hash. Si queda
 # cacheado, el navegador sigue pidiendo el JS de la versión anterior.
 [[headers]]
