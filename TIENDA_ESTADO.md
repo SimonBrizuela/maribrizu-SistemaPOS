@@ -438,7 +438,9 @@ mismo que estar en falso.
 |---|---|
 | `tienda_publicar` | `true` publica siempre, `false` nunca, ausente sigue al rubro |
 | `tienda_destacado` | aparece en la portada |
-| `tienda_nombre` | nombre público, en vez del del POS prolijado |
+| `tienda_nombre` | nombre público, **propio de la tienda**: la ficha del panel lo fija tal cual se ve, y renombrar en el catálogo general ya no lo pisa (`scripts/fijar_nombres_tienda.py` lo fija para todo lo publicado) |
+| `tienda_grupo` | grupo de tamaños: los productos con el mismo grupo salen como UNA publicación ("Cierre Común") y el cliente elige el tamaño adentro de la ficha |
+| `tienda_tamano` | la etiqueta de este producto dentro del grupo ("10 cm", "Nº 3") |
 | `tienda_descripcion` | el texto abajo del precio |
 | `tienda_imagenes` | la galería: la primera es la **portada** (card del listado y foto que abre la ficha), las demás salen como miniaturas debajo. Se ordenan y se elige la portada desde el editor |
 | `tienda_unidad` | `metro` o `unidad`, cuando el POS lo dedujo mal |
