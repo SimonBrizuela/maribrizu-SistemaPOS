@@ -192,7 +192,7 @@ export async function renderPromociones(container, db) {
     .promo-modal .modal-title .material-icons { color:var(--primary); }
     .promo-modal .form-group { margin-bottom:14px; }
     .promo-modal label { display:block; font-size:12.5px; font-weight:600; color:var(--text-muted); margin-bottom:5px; text-transform:none; letter-spacing:0; }
-    .promo-modal input[type="text"], .promo-modal input[type="number"],
+    .promo-modal input[type="text"], .promo-modal input[type="number"]:not(.modo-min-input),
     .promo-modal select, .promo-modal textarea {
       width:100%; padding:9px 12px; border:1.5px solid var(--border); border-radius:8px;
       background:var(--surface); color:var(--text); font-size:14px; box-sizing:border-box;
@@ -212,21 +212,29 @@ export async function renderPromociones(container, db) {
     .pm-kind.prod { background:var(--tint-gray-bg); color:var(--tint-gray-fg); }
     .pm-kind.var  { background:var(--tint-purple-bg); color:var(--tint-purple-fg); }
 
-    /* Chips de productos/variantes elegidos, con los modos Pack/Unidad */
-    .selected-products-list { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
-    .pm-chip { display:flex; align-items:center; flex-wrap:wrap; gap:6px; background:var(--surface-2); border:1px solid var(--border); color:var(--text); border-radius:8px; padding:6px 8px 6px 10px; font-size:12.5px; }
-    .pm-chip .pm-chip-name { font-weight:600; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+    /* Productos/variantes elegidos: una fila por item. Arriba el nombre, abajo
+       en qué modo de venta aplica la promo (Pack / Unidad) con su mínimo. */
+    .selected-products-list { display:flex; flex-direction:column; gap:8px; margin-top:8px; }
+    .pm-chip { background:var(--surface-2); border:1px solid var(--border); border-radius:10px; padding:9px 12px; }
+    .pm-chip-head { display:flex; align-items:center; gap:7px; }
+    .pm-chip-name { font-weight:600; font-size:13px; color:var(--text); min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
     .pm-chip.is-var .pm-chip-name { color:var(--tint-purple-fg); }
-    .pm-chip .material-icons.pm-var-ic { font-size:14px !important; color:var(--tint-purple-fg); }
-    .pm-modos { display:inline-flex; gap:5px; margin-left:auto; align-items:center; }
-    .pm-modo { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:700; padding:3px 9px; border-radius:999px; border:1.5px solid var(--border); cursor:pointer; background:var(--surface); color:var(--text-muted); user-select:none; line-height:1.5; }
-    .pm-modo .material-icons { font-size:13px !important; }
+    .pm-chip .material-icons.pm-var-ic { font-size:15px !important; color:var(--tint-purple-fg); }
+    .pm-chip .pm-x { margin-left:auto; background:none; border:none; cursor:pointer; color:var(--text-muted); padding:2px 6px; line-height:1; font-size:16px; border-radius:6px; flex:none; }
+    .pm-chip .pm-x:hover { color:var(--tint-red-fg); background:var(--tint-red-bg); }
+    .pm-chip-modos { display:flex; align-items:center; gap:8px; flex-wrap:wrap; margin-top:8px; padding-top:9px; border-top:1px dashed var(--border); }
+    .pm-modos-lbl { font-size:11.5px; color:var(--text-muted); font-weight:600; }
+    .pm-modo { display:inline-flex; align-items:center; gap:5px; font-size:12px; font-weight:600; padding:4px 11px; border-radius:999px; border:1.5px solid var(--border); cursor:pointer; background:var(--surface); color:var(--text-muted); user-select:none; line-height:1.6; }
+    .pm-modo .material-icons { font-size:14px !important; }
     .pm-modo:hover { border-color:var(--border-strong); }
     .pm-modo.on { background:var(--primary); border-color:var(--primary); color:#fff; }
-    .pm-modo.off { text-decoration:line-through; opacity:.75; }
-    .pm-modo input { width:44px; font-size:11px; padding:1px 3px; margin-left:2px; border-radius:5px; border:1px solid rgba(255,255,255,.45); background:rgba(255,255,255,.18); color:#fff; font-weight:700; text-align:center; outline:none; -moz-appearance:textfield; font-family:inherit; }
-    .pm-chip .pm-x { background:none; border:none; cursor:pointer; color:var(--text-muted); padding:2px; line-height:1; font-size:15px; border-radius:4px; }
-    .pm-chip .pm-x:hover { color:var(--tint-red-fg); background:var(--tint-red-bg); }
+    .pm-modo.off .pm-off-txt { font-weight:500; font-size:11px; }
+    .promo-modal .pm-modo input.modo-min-input {
+      width:58px; font-size:12px; padding:1px 4px; margin:0 1px; border-radius:6px;
+      border:1px solid rgba(255,255,255,.5); background:rgba(255,255,255,.16); color:#fff;
+      font-weight:700; text-align:center; outline:none; -moz-appearance:textfield; font-family:inherit;
+    }
+    .promo-modal .pm-modo input.modo-min-input:focus { background:rgba(255,255,255,.28); }
 
     .modal-footer { display:flex; justify-content:flex-end; gap:10px; margin-top:20px; padding-top:16px; border-top:1px solid var(--border); }
     .btn-cancel { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:9px 18px; font-size:14px; cursor:pointer; font-weight:600; color:var(--text-muted); }
@@ -503,10 +511,9 @@ export async function renderPromociones(container, db) {
           <div class="product-search-results" id="mProductoResults"></div>
         </div>
         <div class="selected-products-list" id="mSelectedProducts"></div>
-        <div class="form-hint">Si el producto se vende como pack <b>y</b> como unidad, el chip muestra los dos modos:
-          <b>con tilde (violeta)</b> = la promo aplica vendiendo así · <b>tachado con ✕</b> = no aplica.
-          El número del modo activo es su cantidad mínima (vacío = usa la mínima global de arriba).
-          Ojo: si dejás <b>Unidad</b> con tilde, la mínima global también se cumple con unidades sueltas.</div>
+        <div class="form-hint">En productos que se venden por pack <b>y</b> por unidad, tocá cada botón para elegir
+          en qué modo aplica la promo. "Desde" es la cantidad mínima de ese modo; vacío usa la mínima global.
+          Ojo: con <b>Unidad</b> activa, la mínima global también se cumple con unidades sueltas.</div>
       </div>
 
       <div class="modal-footer">
@@ -524,38 +531,45 @@ export async function renderPromociones(container, db) {
     function renderSelectedChips() {
       const container2 = modal.querySelector('#mSelectedProducts');
       const MODO_LABEL = { pack: 'Pack', unidad: 'Unidad' };
+      const PLURAL = { pack: 'packs', unidad: 'unidades' };
       container2.innerHTML = selectedItems.map(key => {
         const esVariante = key.includes(VAR_SEP);
         const nombre = labelForKey(key);
         const disponibles = modosForKey(key);
         const activos = modosPorItem[key] || {};
         const icon = esVariante ? '<span class="material-icons pm-var-ic">palette</span>' : '';
-        // Solo mostramos los toggles si el item ofrece más de un modo.
-        // Estado inconfundible: tilde lleno = la promo APLICA en ese modo;
-        // tachado con ✕ = NO aplica. El input del modo activo es su mínimo.
-        const togglesHtml = (disponibles.length > 1) ? `
-          <span class="pm-modos">
+        // Los modos solo aparecen si el item se vende de más de una forma.
+        // Cada modo se lee solo: "✓ Pack · desde 10 packs" aplica; "✕ Unidad
+        // — no aplica" está apagado. Tocar el botón lo prende/apaga.
+        const modosHtml = (disponibles.length > 1) ? `
+          <div class="pm-chip-modos">
+            <span class="pm-modos-lbl">La promo aplica vendiendo por:</span>
             ${disponibles.map(m => {
               const on = !!activos[m];
               const minVal = on ? (activos[m].min || 0) : 0;
-              const inputHtml = on
-                ? `<input type="number" min="0" step="1" data-modo-min="${key}|${m}" value="${minVal || ''}" placeholder="mín"
-                     title="Cantidad mínima de ${MODO_LABEL[m].toLowerCase()}s para activar la promo (vacío = usa la mínima global)"
-                     class="modo-min-input">`
-                : '';
-              return `<span class="pm-modo ${on ? 'on' : 'off'}" data-modo-toggle="${key}|${m}"
-                  title="${on
-                    ? `La promo APLICA vendiendo por ${MODO_LABEL[m].toLowerCase()}. Tocá para que no aplique.`
-                    : `La promo NO aplica vendiendo por ${MODO_LABEL[m].toLowerCase()}. Tocá para activarla.`}">
-                  <span class="material-icons">${on ? 'check' : 'close'}</span>${MODO_LABEL[m] || m}${inputHtml}
+              if (on) {
+                return `<span class="pm-modo on" data-modo-toggle="${key}|${m}"
+                    title="Aplica vendiendo por ${PLURAL[m]}. Tocá para que NO aplique.">
+                    <span class="material-icons">check</span>${MODO_LABEL[m]} · desde
+                    <input type="number" min="0" step="1" class="modo-min-input" data-modo-min="${key}|${m}"
+                      value="${minVal || ''}" placeholder="global"
+                      title="Cantidad mínima de ${PLURAL[m]} para que arranque la promo. Vacío = usa la mínima global de arriba.">
+                    ${PLURAL[m]}
+                  </span>`;
+              }
+              return `<span class="pm-modo off" data-modo-toggle="${key}|${m}"
+                  title="NO aplica vendiendo por ${PLURAL[m]}. Tocá para activarla.">
+                  <span class="material-icons">close</span>${MODO_LABEL[m]} <span class="pm-off-txt">— no aplica</span>
                 </span>`;
             }).join('')}
-          </span>` : '';
-        return `<span class="pm-chip${esVariante ? ' is-var' : ''}">
-          ${icon}<span class="pm-chip-name" title="${nombre}">${nombre}</span>
-          ${togglesHtml}
-          <button data-remove="${key}" class="pm-x" title="Quitar de la promo">×</button>
-        </span>`;
+          </div>` : '';
+        return `<div class="pm-chip${esVariante ? ' is-var' : ''}">
+          <div class="pm-chip-head">
+            ${icon}<span class="pm-chip-name" title="${nombre}">${nombre}</span>
+            <button data-remove="${key}" class="pm-x" title="Quitar de la promo">×</button>
+          </div>
+          ${modosHtml}
+        </div>`;
       }).join('');
 
       container2.querySelectorAll('button[data-remove]').forEach(btn => {
