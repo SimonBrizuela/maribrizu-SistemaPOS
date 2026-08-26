@@ -99,6 +99,19 @@ function saldoVal(ym, medio) {
 function totalSaldos(ym) {
   return MEDIOS.reduce((acc, m) => acc + (Number(saldoVal(ym, m.k)) || 0), 0);
 }
+// Saldo de cierre calculado por la cadena (apertura + días) cuando no hay nada
+// tipeado para ese mes; null si lo tipeado manda o la cadena no lo tiene.
+function saldoAutoDe(ym, medio) {
+  return (saldoVal(ym, medio) == null && cadena && cadena[ym] && cadena[ym].cierreOrigen === 'calculado')
+    ? cadena[ym].cierre[medio] : null;
+}
+function saldoEfDe(ym, medio) {
+  const t = saldoVal(ym, medio);
+  return t == null ? saldoAutoDe(ym, medio) : t;
+}
+function totalSaldosEf(ym) {
+  return MEDIOS.reduce((acc, m) => acc + (Number(saldoEfDe(ym, m.k)) || 0), 0);
+}
 function rubroVal(ym, rubro) {
   const v = cfg.meses?.[ym]?.rubros?.[rubro];
   return v == null ? null : Number(v);
@@ -1013,11 +1026,12 @@ function renderMeses(body) {
   </div>`;
   const fichasHead = `<div class="bal-sec-head">
     <span class="material-icons">edit_note</span>
-    <div><b>Fichas del mes</b><small>Lo que cargás a mano o vino del Excel. El resumen de arriba no las toca.</small></div>
+    <div><b>Fichas del mes</b><small>Saldos y rubros se completan solos desde el "Día por día" (en gris); lo que tipeás manda.</small></div>
   </div>`;
   const caption = `<div class="bal-caption"><span class="material-icons">calendar_month</span>
     Una ficha por mes (como cada hoja del Excel): saldos de cierre, compras/gastos por rubro y los montos fijos
-    aplicados — con override por mes. El botón <b>Autocompletar</b> trae los saldos desde las ventas reales.</div>`;
+    aplicados — con override por mes. Las celdas <i>en gris</i> vienen calculadas de los días cargados y
+    tipear un número las fija. El botón <b>Autocompletar</b> trae los saldos desde las ventas reales.</div>`;
   const toolbar = `<div class="bal-toolbar" style="margin-bottom:12px">
     <button type="button" class="bal-add-btn" data-add-mes><span class="material-icons">add</span> Agregar mes</button></div>`;
   body.innerHTML = auto + fichasHead + caption + toolbar + (meses.map(ym => mesAccordionHtml(ym)).join('') || `
@@ -1191,7 +1205,7 @@ function mesAccordionHtml(ym) {
         <span class="material-icons bal-mes-chevron">chevron_right</span>
         <span class="bal-mes-label">${esc(mesLabel(ym))}</span>
         <span class="bal-mes-origen is-${origen}">${origen}</span>
-        <span class="bal-mes-total" data-mes-total="${ym}">${money(totalSaldos(ym))}</span>
+        <span class="bal-mes-total" data-mes-total="${ym}">${money(totalSaldosEf(ym))}</span>
         <button type="button" class="bal-mes-del" data-mes-del="${ym}" title="Eliminar mes"><span class="material-icons">delete_outline</span></button>
       </div>
       <div class="bal-mes-body">${abierto ? mesBodyHtml(ym) : ''}</div>
@@ -1217,13 +1231,16 @@ function mesBodyHtml(ym) {
         </div>
         ${MEDIOS.map(m => {
           const v = saldoVal(ym, m.k);
+          const auto = v == null ? saldoAutoDe(ym, m.k) : null;
           return `<div class="bal-field">
             <span class="bal-field-lbl">${esc(m.label)}</span>
-            <input class="bal-cell-input" type="text" inputmode="decimal"
-              data-msaldo-ym="${ym}" data-msaldo-medio="${m.k}" value="${v == null ? '' : fmt(v)}" placeholder="—">
+            <input class="bal-cell-input${auto != null ? ' is-auto' : ''}" type="text" inputmode="decimal"
+              data-msaldo-ym="${ym}" data-msaldo-medio="${m.k}"
+              value="${v != null ? fmt(v) : auto != null ? fmt(auto) : ''}" placeholder="—"
+              ${auto != null ? 'title="Calculado: apertura del mes + días cargados. Tipeá un número para fijarlo."' : ''}>
           </div>`;
         }).join('')}
-        <div class="bal-subtotal"><span>Total cierre</span><span data-msaldo-tot="${ym}">${money(totalSaldos(ym))}</span></div>
+        <div class="bal-subtotal"><span>Total cierre</span><span data-msaldo-tot="${ym}">${money(totalSaldosEf(ym))}</span></div>
       </div>
 
       <div>
@@ -1330,12 +1347,25 @@ function bindMesBody(card, ym) {
   card.querySelector('[data-autofill]')?.addEventListener('click', () => autofillMes(ym));
   card.querySelectorAll('[data-mrubver]').forEach(b => b.addEventListener('click', () => openRubroDetalle(b.dataset.mrubver, ym)));
   // Detalle por proveedor / sueldos: se calcula del día por día (carga lazy).
+  // La misma carga completa en gris los rubros vacíos de la ficha (suma de las
+  // compras del mes por rubro): lo tipeado manda, lo que falta se calcula.
   const detEl = card.querySelector(`[data-mes-detalle="${ym}"]`);
   if (detEl) {
     detEl.innerHTML = `<div class="ct-loading" style="padding:10px"><div class="spinner" style="width:20px;height:20px;border-width:2px"></div></div>`;
     loadDiasMes(db, ym)
       .then(docM => {
         if (!detEl.isConnected) return;
+        const autoRub = comprasPorRubro(docM, rubrosLista());
+        card.querySelectorAll('input[data-mrub-ym]').forEach(inp => {
+          const r = inp.dataset.mrubRubro;
+          if (inp.value.trim() !== '' || rubroVal(ym, r) != null) return;
+          const v = autoRub[r];
+          if (v == null) return;
+          inp.value = fmt(v);
+          inp.classList.add('is-auto');
+          inp.title = 'Calculado de las compras cargadas en Día por día. Tipeá un número para fijarlo.';
+        });
+        patchMesTotales(card, ym);
         const { porProveedor, sueldos } = agregadosDelMes(docM);
         detEl.innerHTML = mesDetalleHtml(porProveedor, sueldos, ym);
         detEl.querySelectorAll('[data-provver]').forEach(b => b.addEventListener('click', () => openProveedorDetalle(b.dataset.provver, ym)));
@@ -1359,9 +1389,11 @@ function bindMesBody(card, ym) {
       mes.saldos[medio] = val;
       if (mes.origen === 'excel') mes.origen = 'manual';
       inp.value = val == null ? '' : fmt(val);
+      if (val != null) inp.classList.remove('is-auto');   // tipeado: ya no es calculado
       patchMesTotales(card, ym);
       refreshCajaBand();
-      persistMes(ym, { saldos: { [medio]: val }, origen: mes.origen });
+      persistMes(ym, { saldos: { [medio]: val }, origen: mes.origen })
+        .then(() => recalcularCadena()).then(refreshCajaBand).catch(() => {});
     });
   });
   card.querySelectorAll('input[data-mrub-ym]').forEach(inp => {
@@ -1374,6 +1406,7 @@ function bindMesBody(card, ym) {
       mes.rubros[rubro] = val;
       if (mes.origen === 'excel') mes.origen = 'manual';
       inp.value = val == null ? '' : fmt(val);
+      if (val != null) inp.classList.remove('is-auto');   // tipeado: ya no es calculado
       patchMesTotales(card, ym);
       persistMes(ym, { rubros: { [rubro]: val }, origen: mes.origen });
     });
@@ -1413,14 +1446,20 @@ function bindMesBody(card, ym) {
 }
 
 function patchMesTotales(card, ym) {
+  // Los totales se leen de lo que muestran las celdas (tipeado o calculado en
+  // gris), así cierran con lo que el usuario tiene adelante. Con la ficha
+  // cerrada no hay celdas: cae al valor efectivo (tipeado o cadena).
+  const sumCeldas = (sel) => [...card.querySelectorAll(sel)].reduce((s, i) => s + (parseNum(i.value) || 0), 0);
+  const saldoInputs = card.querySelectorAll('input[data-msaldo-ym]');
+  const totSaldos = saldoInputs.length ? sumCeldas('input[data-msaldo-ym]') : totalSaldosEf(ym);
   const ts = card.querySelector(`[data-msaldo-tot="${ym}"]`);
-  if (ts) ts.textContent = money(totalSaldos(ym));
+  if (ts) ts.textContent = money(totSaldos);
   const tr = card.querySelector(`[data-mrub-tot="${ym}"]`);
-  if (tr) tr.textContent = money(totalRubrosMes(ym));
+  if (tr) tr.textContent = money(sumCeldas('input[data-mrub-ym]'));
   const tf = card.querySelector(`[data-mfijo-tot="${ym}"]`);
   if (tf) tf.textContent = money(totalFijosMes(ym));
   const head = mountEl.querySelector(`[data-mes-total="${ym}"]`);
-  if (head) head.textContent = money(totalSaldos(ym));
+  if (head) head.textContent = money(totSaldos);
 }
 
 // ── Sub-vista: RESUMEN (del período) ──────────────────────────────────────────
