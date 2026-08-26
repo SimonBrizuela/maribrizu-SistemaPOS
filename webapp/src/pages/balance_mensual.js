@@ -566,6 +566,34 @@ async function removeMes(ym) {
   recordBal('Eliminar mes');
 }
 
+// Las vistas del Balance (Resumen vivo, Meses, Semana a Semana…) listan los
+// meses de cfg.meses, que hasta ahora se creaban a mano en "Meses": el Resumen
+// vivo se quedaba clavado en el último mes agregado aunque el Día por día
+// siguiera cargando caja todos los días. Al abrir, los meses que faltan hasta
+// el actual se crean solos (solo la ficha, sin datos: los días ya viven en
+// dias_<ym> y lo demás queda para completar). Una sola escritura, sin ensuciar
+// el historial de undo (corre antes de histReset). Si falla el guardado, los
+// meses igual quedan en memoria para esta sesión.
+async function autocrearMesesFaltantes() {
+  const ymHoy = hoyAR().slice(0, 7);
+  const last = mesesOrdenados('desc')[0];
+  if (!last || last >= ymHoy) return;   // sin histórico manda el import; al día no hay nada que crear
+  const patch = { meses: {} };
+  for (const ym of ymRange(last, ymHoy)) {
+    if (cfg.meses[ym]) continue;
+    const mes = ensureMes(ym);
+    mes.label = labelFromYm(ym);
+    mes.origen = 'auto';
+    patch.meses[ym] = { label: mes.label, origen: 'auto' };
+  }
+  if (!Object.keys(patch.meses).length) return;
+  try {
+    await saveBalanceConfig(db, patch);
+  } catch (err) {
+    console.error('[balance] autocrear meses faltantes', err);
+  }
+}
+
 // ── Punto de entrada ──────────────────────────────────────────────────────────
 export async function mountBalanceMensual(paneEl, _db) {
   mountEl = paneEl;
@@ -577,6 +605,7 @@ export async function mountBalanceMensual(paneEl, _db) {
   curDiaYm = curDiaDD = null;   // la vista Día por día arranca siempre en hoy
   paneEl.innerHTML = `<div class="ct-loading"><div class="spinner" style="width:24px;height:24px;border-width:3px"></div></div>`;
   cfg = await loadBalanceConfig(db);
+  if (tieneDatos()) await autocrearMesesFaltantes();
   // Precarga el detalle diario de TODOS los meses en paralelo. Sin esto, los
   // renders y agregados que recorren el histórico llamaban loadDiasMes uno por
   // uno (~300ms c/u secuencial → ~6s con ~20 meses de histórico). loadDiasMes
