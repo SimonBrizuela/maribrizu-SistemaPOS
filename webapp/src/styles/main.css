@@ -4489,7 +4489,15 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
 .cc-tier-imp  { --cc-dot: var(--warning); }
 .cc-tier-opc  { --cc-dot: var(--border-strong); }
 .cc-tier-nocost { --cc-dot: var(--warning); }
-.cc-tier-anotado { --cc-dot: var(--tint-yellow-fg); }
+/* Píldora "En el cuaderno": es un botón que filtra la tabla a solo lo anotado. */
+.cc-tier-anotado { --cc-dot: var(--tint-yellow-fg); cursor: pointer; font-family: inherit; }
+.cc-tier-anotado .material-icons { font-size: 15px !important; color: var(--text-muted); }
+.cc-tier-anotado:hover { border-color: var(--tint-yellow-fg); }
+.cc-tier-anotado.is-on {
+  background: var(--tint-yellow-bg); border-color: var(--tint-yellow-fg);
+  color: var(--tint-yellow-fg);
+}
+.cc-tier-anotado.is-on span, .cc-tier-anotado.is-on .material-icons { color: var(--tint-yellow-fg); }
 
 /* Barra de registro */
 .cc-registrar {
@@ -4561,13 +4569,16 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
 }
 .cc-anotar {
   display: inline-flex; align-items: center; justify-content: center;
-  width: 26px; height: 26px; border: none; border-radius: 6px; cursor: pointer;
-  background: none; color: var(--text-muted); opacity: .45; padding: 0;
+  width: 28px; height: 28px; border: 1px solid var(--border); border-radius: 8px;
+  cursor: pointer; background: var(--surface); color: var(--text-muted); padding: 0;
 }
 .cc-anotar .material-icons { font-size: 19px !important; }
-.cc-table tbody tr:hover .cc-anotar { opacity: 1; }
-.cc-anotar:hover { background: var(--surface-3); color: var(--text); }
-.cc-anotar.is-on { opacity: 1; color: var(--tint-yellow-fg); }
+.cc-anotar:hover { border-color: var(--border-strong); color: var(--text); }
+.cc-anotar.is-on {
+  background: var(--tint-yellow-bg); border-color: var(--tint-yellow-fg);
+  color: var(--tint-yellow-fg);
+}
+.cc-row-anotado .cc-anotar.is-on { background: var(--card-bg); }
 
 .cc-check { width: 18px; height: 18px; accent-color: var(--primary); cursor: pointer; }
 .cc-check-off { font-size: 18px !important; color: var(--border-strong); }

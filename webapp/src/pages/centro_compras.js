@@ -507,6 +507,7 @@ export async function renderCentroCompras(container, db) {
     budget,
     rows,
     period: 'mes',        // 'mes' | 'semana'
+    filtroAnotados: false,   // true = la tabla muestra solo lo marcado "en el cuaderno"
     topeManual: null,
     medio: fuenteValida(comprasCfg.medio_default),
     proveedor: comprasCfg.proveedor_default || '',
@@ -798,13 +799,18 @@ function paintTable() {
     return;
   }
   const disp = budgetActivo();
+  // Filtro "en el cuaderno" (click en la píldora de arriba): la tabla muestra
+  // solo lo anotado. Si no queda nada anotado, el filtro se apaga solo (la
+  // píldora desaparece y no habría forma de sacarlo).
+  if (s.filtroAnotados && !s.rows.some(r => r.anotado && !r.registrado)) s.filtroAnotados = false;
+  const visible = r => !s.filtroAnotados || (r.anotado && !r.registrado);
   // El plan (lo que entra en la plata + lo ya registrado) va arriba; después la
   // línea de corte y abajo SOLO lo que no entra (o no tiene costo). data-idx
   // siempre apunta al índice real en s.rows, así los handlers no dependen del
   // orden visual. Las variantes consecutivas del mismo producto se marcan como
   // "continuación" para que se vea que van juntas.
   const arriba = [], abajo = [];
-  s.rows.forEach((r, i) => ((r.registrado || r.fits) ? arriba : abajo).push(i));
+  s.rows.forEach((r, i) => { if (visible(r)) ((r.registrado || r.fits) ? arriba : abajo).push(i); });
   const parts = [];
   let prevDoc = null;
   const emit = (i) => {
@@ -981,9 +987,13 @@ function paintResumen() {
     `<div class="cc-tier-pill cc-tier-nocost" title="Cargales el costo en la columna Costo de la tabla — se guarda en el Catálogo">
        ${sinCosto.length} sin costo${sinCostoImp ? ` (${sinCostoImp} importante${sinCostoImp === 1 ? '' : 's'})` : ''}</div>`;
   const anotados = act.filter(r => r.anotado).length;
+  if (anotados === 0) _state.filtroAnotados = false;
+  const filtroOn = _state.filtroAnotados;
   const pillAnotados = anotados === 0 ? '' :
-    `<div class="cc-tier-pill cc-tier-anotado" title="Ya los anotaste en el cuaderno — enfocate en el resto">
-       En el cuaderno <span>${anotados}</span></div>`;
+    `<button type="button" class="cc-tier-pill cc-tier-anotado${filtroOn ? ' is-on' : ''}" data-action="filtro-anotados"
+       title="${filtroOn ? 'Mostrando solo lo del cuaderno. Click para ver la lista completa.' : 'Click para ver solo lo que ya está en el cuaderno'}">
+       En el cuaderno <span>${anotados}</span>
+       <span class="material-icons">${filtroOn ? 'filter_alt_off' : 'filter_alt'}</span></button>`;
 
   el.innerHTML = pill('cc-tier-sisi', 'Sí o sí', sisi)
     + pill('cc-tier-imp', 'Importante', imp)
@@ -1085,6 +1095,11 @@ function onClick(e) {
       break;
     case 'anotar':
       toggleAnotado(Number(btn.dataset.idx));
+      break;
+    case 'filtro-anotados':
+      s.filtroAnotados = !s.filtroAnotados;
+      paintTable();
+      paintResumen();
       break;
     case 'ver-catalogo':
       window.__pendingCatalogoOpen = btn.dataset.doc;
