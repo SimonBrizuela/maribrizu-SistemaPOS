@@ -174,7 +174,8 @@ export function invalidateDiasMes(ym) { invalidateCache(diasKey(ym)); }
 // presupuesto de inversión: rentabilidad a separar (monto fijo + piso %) y la
 // cobertura objetivo para sugerir cantidades. { rentabilidad_monto,
 // rentabilidad_piso_pct, cobertura_dias_objetivo, medio_default, proveedor_default,
-// rubros_excluidos }.
+// rubros_excluidos, anotados: { "<doc_id>[|variante]": "YYYY-MM-DD" } } — anotados
+// es la marca "ya lo pasé al cuaderno de compras" del Centro de Compras.
 const COMPRAS_KEY = 'control_config:compras';
 
 /** Carga la config del Centro de Compras (o {} si no existe todavía). */

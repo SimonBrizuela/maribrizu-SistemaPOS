@@ -4489,6 +4489,7 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
 .cc-tier-imp  { --cc-dot: var(--warning); }
 .cc-tier-opc  { --cc-dot: var(--border-strong); }
 .cc-tier-nocost { --cc-dot: var(--warning); }
+.cc-tier-anotado { --cc-dot: var(--tint-yellow-fg); }
 
 /* Barra de registro */
 .cc-registrar {
@@ -4549,6 +4550,24 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
 .cc-chip { font-size: 10px; font-weight: 700; padding: 2px 7px; border-radius: 999px; text-transform: uppercase; letter-spacing: .3px; }
 .cc-chip-ok  { background: var(--tint-green-bg); color: var(--tint-green-fg); }
 .cc-chip-sisi { background: var(--danger); color: #fff; }
+
+/* "Ya lo anoté en el cuaderno": la fila queda pintada de amarillo cuaderno con
+   un chip que dice desde cuándo, y la lapicera de la fila prende o saca la
+   marca. Así se ve de un vistazo qué falta repasar y qué ya está en el papel. */
+.cc-row-anotado { background: var(--tint-yellow-bg) !important; }
+.cc-chip-anotado {
+  background: var(--card-bg); color: var(--tint-yellow-fg);
+  border: 1px solid var(--tint-yellow-fg); text-transform: none;
+}
+.cc-anotar {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 26px; height: 26px; border: none; border-radius: 6px; cursor: pointer;
+  background: none; color: var(--text-muted); opacity: .45; padding: 0;
+}
+.cc-anotar .material-icons { font-size: 19px !important; }
+.cc-table tbody tr:hover .cc-anotar { opacity: 1; }
+.cc-anotar:hover { background: var(--surface-3); color: var(--text); }
+.cc-anotar.is-on { opacity: 1; color: var(--tint-yellow-fg); }
 
 .cc-check { width: 18px; height: 18px; accent-color: var(--primary); cursor: pointer; }
 .cc-check-off { font-size: 18px !important; color: var(--border-strong); }

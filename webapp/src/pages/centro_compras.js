@@ -24,7 +24,7 @@
 // libro diario del Balance, así el semáforo baja y el gasto queda contabilizado
 // en un solo lugar.
 
-import { doc, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, updateDoc, serverTimestamp, deleteField } from 'firebase/firestore';
 import { loadBalanceConfig, loadDiasMes, saveDiasMes, loadComprasConfig, saveComprasConfig } from '../config.js';
 import { refrescarAlertas, obtenerCandidatosCompra } from '../notifications.js';
 import { sugerirCantidad } from '../inventario_resumen.js';
@@ -42,6 +42,11 @@ const COBERTURA_DEFAULT = 30;    // días de venta a cubrir al sugerir cantidad
 const MIN_COBERTURA_DIAS = 7;    // piso al achicar cantidades de lo SÍ O SÍ cuando la plata no alcanza
 const MIN_ROTACION = 3;          // unidades vendidas en la ventana para considerar que "rota"
 const TIER_RANK = { sisi: 0, importante: 1, opcional: 2 };
+// Marca "ya lo anoté en el cuaderno": si el producto salió de la lista (se repuso
+// o dejó de rotar) la marca vieja se limpia sola pasados estos días. Mientras el
+// producto siga figurando, la marca no caduca nunca (hay cosas que tardan meses
+// en conseguirse y justamente para eso está).
+const ANOTADO_CADUCA_DIAS = 60;
 
 // ── Formato / parseo es-AR (réplica de balance_mensual.js) ────────────────────
 function fmt(n, dec = 2) {
@@ -293,8 +298,15 @@ function stockRealDe(r) {
   return { texto: `${fmt(st, 0)} u.`, title: '', total: st };
 }
 
+// Clave de la marca "anotado en el cuaderno": por producto, o por variante si la
+// fila es una variedad (se anotan por separado, cada color se consigue o no).
+function keyAnotado(r) {
+  return String(r.doc_id) + (r.esVariedad ? `|${r.variedad || ''}` : '');
+}
+
 function buildRows(alertas, comprasCfg) {
   const cobertura = Number(comprasCfg.cobertura_dias_objetivo) || COBERTURA_DEFAULT;
+  const anotados = comprasCfg.anotados || {};
   const rows = [];
   for (const a of (alertas || [])) {
     const cost = Math.max(0, Number(a.producto?.costo) || 0);
@@ -343,7 +355,7 @@ function buildRows(alertas, comprasCfg) {
     const diasCob = Number.isFinite(a.dias_cobertura) ? Math.max(0, a.dias_cobertura) : Infinity;
     const perdidaHorizonte = velDia * precio * Math.max(0, cobertura - Math.min(diasCob, cobertura));
 
-    rows.push({
+    const row = {
       doc_id: a.doc_id,
       nombre: a.nombre || '(sin nombre)',
       rubro: a.rubro || '',
@@ -372,7 +384,10 @@ function buildRows(alertas, comprasCfg) {
       acumulado: 0,
       checked: false,
       registrado: false,
-    });
+      anotado: null,
+    };
+    row.anotado = anotados[keyAnotado(row)] || null;
+    rows.push(row);
   }
   rows.sort((a, b) => {
     if (TIER_RANK[a.tier] !== TIER_RANK[b.tier]) return TIER_RANK[a.tier] - TIER_RANK[b.tier];
@@ -504,6 +519,51 @@ export async function renderCentroCompras(container, db) {
   root.innerHTML = pageHtml();
   bindEvents(root);
   recalc(true);
+  limpiarAnotadosViejos();
+}
+
+// ── Marca "ya lo anoté en el cuaderno" ────────────────────────────────────────
+// El dueño lleva la lista de compras en un cuaderno de papel. La marca dice "este
+// ya está en el cuaderno": la fila queda resaltada y NO se saca de la lista (si
+// el proveedor no lo tiene, el faltante sigue vivo semanas). Queda guardada en
+// control_config/compras, así se ve igual desde cualquier PC.
+async function toggleAnotado(i) {
+  const s = _state;
+  const r = s.rows[i];
+  if (!r) return;
+  const k = keyAnotado(r);
+  r.anotado = r.anotado ? null : hoyAR();
+  const mapa = { ...(s.comprasCfg.anotados || {}) };
+  if (r.anotado) mapa[k] = r.anotado; else delete mapa[k];
+  s.comprasCfg = { ...s.comprasCfg, anotados: mapa };
+  paintTable();
+  paintResumen();
+  try {
+    await saveComprasConfig(_db, { anotados: { [k]: r.anotado ? r.anotado : deleteField() } });
+  } catch (e) {
+    console.warn('[centro_compras] no se pudo guardar la marca de anotado:', e);
+  }
+}
+
+// Limpieza silenciosa: marcas de productos que ya no figuran en la lista (se
+// repusieron o dejaron de rotar) se borran pasados ANOTADO_CADUCA_DIAS. Las de
+// productos que siguen en la lista no se tocan nunca.
+function limpiarAnotadosViejos() {
+  const s = _state;
+  const mapa = s.comprasCfg.anotados || {};
+  const claves = Object.keys(mapa);
+  if (!claves.length) return;
+  const vivos = new Set(s.rows.map(keyAnotado));
+  const limite = new Date(Date.now() - ANOTADO_CADUCA_DIAS * 86400000)
+    .toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+  const borrar = claves.filter(k => !vivos.has(k) && String(mapa[k] || '') < limite);
+  if (!borrar.length) return;
+  const nuevo = { ...mapa };
+  const partial = {};
+  for (const k of borrar) { delete nuevo[k]; partial[k] = deleteField(); }
+  s.comprasCfg = { ...s.comprasCfg, anotados: nuevo };
+  saveComprasConfig(_db, { anotados: partial })
+    .catch(e => console.warn('[centro_compras] limpiar anotados viejos:', e));
 }
 
 function fuenteValida(f) { return MEDIOS.some(m => m.k === f) ? f : 'efectivo'; }
@@ -607,7 +667,7 @@ function pageHtml() {
     <div class="table-card cc-table-card">
       <div class="table-card-header">
         <h3>Lista de compra priorizada</h3>
-        <span class="cc-hint">Ordenada por prioridad y plata en riesgo · Registrar descuenta el presupuesto, no el stock.</span>
+        <span class="cc-hint">Ordenada por prioridad y plata en riesgo · Registrar descuenta el presupuesto, no el stock · La lapicera marca lo que ya está en el cuaderno.</span>
       </div>
       <div class="table-wrap">
         <table class="cc-table">
@@ -766,8 +826,10 @@ function paintTable() {
 function rowHtml(r, i, esContinuacion) {
   // Atenuada solo si quedó fuera del plan y el usuario tampoco la marcó a mano.
   const espera = !r.registrado && !r.sinCosto && !r.fits && !r.checked;
+  const anotado = !r.registrado && !!r.anotado;
   const cls = [
     r.registrado ? 'cc-row-reg' : '',
+    anotado ? 'cc-row-anotado' : '',
     espera ? 'cc-row-espera' : '',
     esContinuacion ? 'cc-row-varcont' : '',
   ].filter(Boolean).join(' ');
@@ -778,6 +840,16 @@ function rowHtml(r, i, esContinuacion) {
   let chip = '';
   if (r.registrado) chip = `<span class="cc-chip cc-chip-ok">registrado</span>`;
   else if (r.tier === 'sisi') chip = `<span class="cc-chip cc-chip-sisi">sí o sí</span>`;
+
+  // Marca "ya lo anoté en el cuaderno": chip con la fecha + botón para prender
+  // o sacar la marca. No toca la selección ni el presupuesto: es solo para no
+  // volver a anotar lo mismo cada vez que se repasa la lista.
+  const fAnot = anotado ? `${r.anotado.slice(8, 10)}/${r.anotado.slice(5, 7)}` : '';
+  if (anotado) chip += `<span class="cc-chip cc-chip-anotado" title="Lo anotaste en el cuaderno el ${fAnot}. Sigue en la lista hasta que lo compres o le saques la marca.">en el cuaderno ${fAnot}</span>`;
+  const btnAnotar = r.registrado ? '' :
+    `<button type="button" class="cc-anotar${anotado ? ' is-on' : ''}" data-action="anotar" data-idx="${i}"
+       title="${anotado ? 'Sacar la marca del cuaderno' : 'Marcar que ya lo anotaste en el cuaderno'}">
+       <span class="material-icons">edit_note</span></button>`;
 
   const checkbox = r.sinCosto || r.registrado
     ? `<span class="material-icons cc-check-off" title="${r.sinCosto ? 'Sin costo cargado' : 'Ya registrado'}">${r.sinCosto ? 'block' : 'check_circle'}</span>`
@@ -823,7 +895,7 @@ function rowHtml(r, i, esContinuacion) {
         ${esContinuacion ? '<span class="material-icons cc-var-arrow" title="Otra variante del producto de arriba">subdirectory_arrow_right</span>' : ''}
         <button type="button" class="cc-prod-btn" data-action="ver-catalogo" data-doc="${esc(String(r.doc_id))}"
                 title="Abrir este producto en el Catálogo">${esc(nombreBase)}<span class="material-icons">open_in_new</span></button>
-        ${varChip}${chip}
+        ${varChip}${chip}${btnAnotar}
       </div>
       ${detalles.length ? `<div class="cc-cob">${detalles.join(' · ')}</div>` : ''}
     </td>
@@ -908,10 +980,15 @@ function paintResumen() {
   const warnCosto = sinCosto.length === 0 ? '' :
     `<div class="cc-tier-pill cc-tier-nocost" title="Cargales el costo en la columna Costo de la tabla — se guarda en el Catálogo">
        ${sinCosto.length} sin costo${sinCostoImp ? ` (${sinCostoImp} importante${sinCostoImp === 1 ? '' : 's'})` : ''}</div>`;
+  const anotados = act.filter(r => r.anotado).length;
+  const pillAnotados = anotados === 0 ? '' :
+    `<div class="cc-tier-pill cc-tier-anotado" title="Ya los anotaste en el cuaderno — enfocate en el resto">
+       En el cuaderno <span>${anotados}</span></div>`;
 
   el.innerHTML = pill('cc-tier-sisi', 'Sí o sí', sisi)
     + pill('cc-tier-imp', 'Importante', imp)
     + pill('cc-tier-opc', 'Puede esperar', opc)
+    + pillAnotados
     + warnCosto;
 }
 
@@ -1005,6 +1082,9 @@ function onClick(e) {
     }
     case 'plata-auto':
       guardarPlataManual(null);
+      break;
+    case 'anotar':
+      toggleAnotado(Number(btn.dataset.idx));
       break;
     case 'ver-catalogo':
       window.__pendingCatalogoOpen = btn.dataset.doc;
@@ -1181,10 +1261,24 @@ async function registrarCompra(btn) {
   btn.disabled = false;
 
   // Update en vivo: marcar filas registradas, subir lo comprado, bajar el semáforo.
+  // La marca del cuaderno se limpia sola: si se registró la compra, ya no hay
+  // nada pendiente de conseguir.
   const idsReg = new Set(items.map(r => r.doc_id));
+  const anotDel = {};
   s.rows.forEach(r => {
-    if (idsReg.has(r.doc_id)) { r.registrado = true; r.checked = false; }
+    if (idsReg.has(r.doc_id)) {
+      r.registrado = true;
+      r.checked = false;
+      if (r.anotado) { anotDel[keyAnotado(r)] = deleteField(); r.anotado = null; }
+    }
   });
+  if (Object.keys(anotDel).length) {
+    const mapa = { ...(s.comprasCfg.anotados || {}) };
+    for (const k of Object.keys(anotDel)) delete mapa[k];
+    s.comprasCfg = { ...s.comprasCfg, anotados: mapa };
+    saveComprasConfig(_db, { anotados: anotDel })
+      .catch(e => console.warn('[centro_compras] limpiar anotados comprados:', e));
+  }
   // Reflejar la compra en el diasDoc en memoria (por si se registra otra en la
   // sesión) — solo si la fecha cae en el mes del semáforo.
   if (ymF === s.ym) {
