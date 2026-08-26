@@ -46,7 +46,14 @@ jobs:
           cache: pip
 
       - name: Dependencias
-        run: pip install firebase-admin
+        # Versiones FIJADAS a las que corren todos los dias en el POS del local.
+        # El 25-08 una version rota de las libs de Google (mandaba el database id
+        # url-encodeado: "Invalid database id %28default%29") tumbo 4 corridas
+        # seguidas; sin pin, cada corrida instala lo ultimo que haya y juega a
+        # la loteria. Si hay que actualizar, probar local primero y subir el pin.
+        run: >
+          pip install firebase-admin==7.3.0 google-cloud-firestore==2.26.0
+          google-api-core==2.30.2 grpcio==1.80.0
 
       - name: Credencial
         env:
