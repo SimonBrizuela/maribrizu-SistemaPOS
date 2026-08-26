@@ -18,7 +18,8 @@
  * se ve acá es lo que hay publicado.
  */
 import { collection, doc, getDocs, orderBy, query } from 'firebase/firestore';
-import { getCached } from '../cache.js';
+import { getCached, peekCacheValue } from '../cache.js';
+import { onStoreChange } from '../store.js';
 import { leerDocRapido } from '../config.js';
 import { alertDialog, escHtml, verFotoGrande } from '../components/dialogs.js';
 import {
@@ -62,6 +63,8 @@ let _filtro = 'todos';
 let _rubro = '';
 let _busqueda = '';
 let _mostrando = POR_TANDA;
+let _storeUnsub = null;
+let _refrescoTimer = null;
 
 /* ── Lectura del catálogo ─────────────────────────────────────────────────── */
 
@@ -99,6 +102,16 @@ function preparar(datos, rubrosHabilitados) {
                           datos.marca, datos.codigo]
       .filter(Boolean).join(' ')),
   };
+}
+
+function prepararTodos(catalogo, habilitados) {
+  return (catalogo || [])
+    .filter(d => d && d.doc_id)
+    // Documentos viejos guardaron un `doc_id` numérico que pisa el de
+    // Firestore; el resto del panel lo normaliza igual.
+    .map(d => preparar(typeof d.doc_id === 'string' ? d : { ...d, doc_id: String(d.doc_id) },
+                       habilitados))
+    .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
 }
 
 async function leerRubrosHabilitados(db) {
@@ -1683,13 +1696,7 @@ export async function renderTiendaCatalogo(container, db) {
   ]);
 
   _rubrosHabilitados = habilitados;
-  _productos = (catalogo || [])
-    .filter(d => d && d.doc_id)
-    // Documentos viejos guardaron un `doc_id` numérico que pisa el de
-    // Firestore; el resto del panel lo normaliza igual.
-    .map(d => preparar(typeof d.doc_id === 'string' ? d : { ...d, doc_id: String(d.doc_id) },
-                       habilitados))
-    .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
+  _productos = prepararTodos(catalogo, habilitados);
 
   // El rubro se elige de los que existen de verdad en el catálogo, no de una
   // lista fija: los rubros los inventa quien carga los productos en el POS.
@@ -1704,6 +1711,40 @@ export async function renderTiendaCatalogo(container, db) {
 
   refrescar();
   pintarContadores();
+
+  /* ── El catálogo vivo ─────────────────────────────────────────────────
+     La pantalla pinta primero con la foto guardada del catálogo, que puede
+     ser de ayer: rápida, pero sin lo que cambió desde entonces (un grupo
+     recién armado, un nombre). Cuando el listener del store trae el catálogo
+     fresco, la lista se rehace sola — sin tocar el filtro, la búsqueda ni un
+     diálogo abierto. Sin esto, el diálogo Tamaños decía "no hay ningún
+     grupo" hasta recargar la página a mano. Mismo patrón que fiados.js. */
+  if (_storeUnsub) { try { _storeUnsub(); } catch (_) {} _storeUnsub = null; }
+  _storeUnsub = onStoreChange(col => {
+    if (col !== 'catalogo') return;
+
+    // La página se desmontó (el usuario navegó a otra): soltar el listener.
+    if (!document.body.contains(container)) {
+      try { _storeUnsub && _storeUnsub(); } catch (_) {}
+      _storeUnsub = null;
+      clearTimeout(_refrescoTimer);
+      return;
+    }
+
+    // Cada venta del POS toca `catalogo`: se junta la ráfaga y se rehace una
+    // sola vez. Con un editor o diálogo abierto no se pisa nada; el próximo
+    // cambio (o guardar, que ya refresca) vuelve a pintar.
+    clearTimeout(_refrescoTimer);
+    _refrescoTimer = setTimeout(() => {
+      if (!document.body.contains(container)) return;
+      if (document.querySelector('.tienda-overlay')) return;
+      const datos = peekCacheValue('catalogo:all');
+      if (!Array.isArray(datos) || !datos.length) return;
+      _productos = prepararTodos(datos, _rubrosHabilitados);
+      refrescar();
+      pintarContadores();
+    }, 400);
+  });
 
   /* ── Eventos ── */
   document.getElementById('tiendaFiltros').addEventListener('click', ev => {
