@@ -375,6 +375,10 @@ function buildRows(alertas, comprasCfg) {
       perdidaSemana: velDia * 7 * precio,
       perdidaHorizonte,
       producto: a.producto || null,
+      // Texto por el que busca el buscador de la lista: nombre (base y de la
+      // alerta), variante y rubro, todo normalizado sin acentos.
+      busca: normRubro([a.nombre, a.producto?.nombre, esVariedad ? a.variedad : '', a.rubro]
+        .filter(Boolean).join(' ')),
       qty,
       cost: costRow,
       subtotal: qty * costRow,
@@ -508,6 +512,7 @@ export async function renderCentroCompras(container, db) {
     rows,
     period: 'mes',        // 'mes' | 'semana'
     filtroAnotados: false,   // true = la tabla muestra solo lo marcado "en el cuaderno"
+    busqueda: '',            // texto del buscador de la lista (se filtra sin acentos)
     topeManual: null,
     medio: fuenteValida(comprasCfg.medio_default),
     proveedor: comprasCfg.proveedor_default || '',
@@ -668,6 +673,14 @@ function pageHtml() {
     <div class="table-card cc-table-card">
       <div class="table-card-header">
         <h3>Lista de compra priorizada</h3>
+        <div class="cc-buscar">
+          <span class="material-icons">search</span>
+          <input id="cc-buscar" type="text" autocomplete="off" placeholder="Buscar en la lista…"
+                 value="${esc(s.busqueda)}" />
+          <button type="button" class="cc-buscar-x" data-action="buscar-clear" title="Limpiar búsqueda">
+            <span class="material-icons">close</span>
+          </button>
+        </div>
         <span class="cc-hint">Ordenada por prioridad y plata en riesgo · Registrar descuenta el presupuesto, no el stock · La lapicera marca lo que ya está en el cuaderno.</span>
       </div>
       <div class="table-wrap">
@@ -803,7 +816,11 @@ function paintTable() {
   // solo lo anotado. Si no queda nada anotado, el filtro se apaga solo (la
   // píldora desaparece y no habría forma de sacarlo).
   if (s.filtroAnotados && !s.rows.some(r => r.anotado && !r.registrado)) s.filtroAnotados = false;
-  const visible = r => !s.filtroAnotados || (r.anotado && !r.registrado);
+  // Buscador: filtra en vivo por nombre, variante o rubro, sin acentos. Se
+  // combina con el filtro del cuaderno (los dos a la vez achican la lista).
+  const q = normRubro(s.busqueda || '');
+  const visible = r => (!s.filtroAnotados || (r.anotado && !r.registrado))
+    && (!q || r.busca.includes(q));
   // El plan (lo que entra en la plata + lo ya registrado) va arriba; después la
   // línea de corte y abajo SOLO lo que no entra (o no tiene costo). data-idx
   // siempre apunta al índice real en s.rows, así los handlers no dependen del
@@ -811,6 +828,11 @@ function paintTable() {
   // "continuación" para que se vea que van juntas.
   const arriba = [], abajo = [];
   s.rows.forEach((r, i) => { if (visible(r)) ((r.registrado || r.fits) ? arriba : abajo).push(i); });
+  if (!arriba.length && !abajo.length) {
+    tbody.innerHTML = `<tr><td colspan="9" class="cc-empty">
+      <span class="material-icons">search_off</span> Nada en la lista coincide con "${esc(s.busqueda)}".</td></tr>`;
+    return;
+  }
   const parts = [];
   let prevDoc = null;
   const emit = (i) => {
@@ -1101,6 +1123,13 @@ function onClick(e) {
       paintTable();
       paintResumen();
       break;
+    case 'buscar-clear': {
+      s.busqueda = '';
+      const inp = document.getElementById('cc-buscar');
+      if (inp) { inp.value = ''; inp.focus(); }
+      paintTable();
+      break;
+    }
     case 'ver-catalogo':
       window.__pendingCatalogoOpen = btn.dataset.doc;
       window.__catalogoVolverA = 'centro_compras';
@@ -1153,6 +1182,7 @@ function onChange(e) {
 }
 
 let _topeTimer = null;
+let _buscarTimer = null;
 function onInput(e) {
   const s = _state;
   if (e.target.id === 'cc-tope') {
@@ -1162,6 +1192,14 @@ function onInput(e) {
       s.topeManual = (v != null && v > 0) ? v : null;
       recalc(true);
     }, 250);
+    return;
+  }
+  if (e.target.id === 'cc-buscar') {
+    clearTimeout(_buscarTimer);
+    _buscarTimer = setTimeout(() => {
+      s.busqueda = e.target.value.trim();
+      paintTable();
+    }, 150);
     return;
   }
   if (e.target.id === 'cc-prov') { s.proveedor = e.target.value; }
