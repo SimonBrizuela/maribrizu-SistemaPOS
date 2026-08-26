@@ -21,6 +21,11 @@ from pos_system.models.conjunto import contenido_de, total_variedad
 from pos_system.models.sale import Sale
 from pos_system.models.cash_register import CashRegister
 from pos_system.models.promotion import Promotion
+from pos_system.utils.promos import (
+    promo_match_key as _promo_match_key_pura,
+    promo_min_override as _promo_min_override_pura,
+    mejor_promo_linea as _mejor_promo_linea,
+)
 from pos_system.utils.pdf_generator import PDFGenerator
 from pos_system.utils.stock_links import has_links, effective_stock, build_target_index, shown_stock, es_ilimitado
 from pos_system.ui.conjunto_dialog import ConjuntoDialog, UNIDADES as _CONJ_UNIDADES, TIPOS as _CONJ_TIPOS, parse_colores as _conj_parse_colores
@@ -3920,71 +3925,26 @@ class SalesView(QWidget):
 
 
     def _promo_match_key(self, fb_promo: dict, refs: tuple, color: str = '', sale_mode: str = ''):
-        """Si la promo matchea este item, devuelve la key matcheada; sino None.
-
-        refs: tupla con identificadores posibles del producto (firebase_id, barcode, id, name).
-        color: color/variante del item conjunto. '' = sin variante.
-        sale_mode: 'pack' | 'unidad' | '' (N/A).
-
-        Estructura `modos` del doc Firestore (admite ambas formas):
-          - Legacy: {key: ['pack','unidad']}
-          - Nueva:  {key: {'pack': {'min': N}, 'unidad': {'min': N}}}
-        Si la key no está en `modos`, se asume "todos los modos, sin override".
-        """
-        modos_map = fb_promo.get('modos') or {}
-        if not isinstance(modos_map, dict):
-            modos_map = {}
-
-        def _modo_ok(key: str) -> bool:
-            if not sale_mode:
-                return True
-            allowed = modos_map.get(key)
-            if not allowed:
-                return True  # default: cualquier modo
-            if isinstance(allowed, dict):
-                return sale_mode in allowed
-            return sale_mode in allowed  # list/tuple
-
-        prod_refs = fb_promo.get('productos') or []
-        for p in prod_refs:
-            if p in refs and _modo_ok(p):
-                return p
-        variantes = fb_promo.get('variantes') or []
-        if color and variantes:
-            color_lc = str(color).strip().lower()
-            for v in variantes:
-                if not isinstance(v, dict):
-                    continue
-                pid = v.get('producto_id') or v.get('product_id')
-                vcolor = str(v.get('color') or '').strip().lower()
-                if pid in refs and vcolor == color_lc:
-                    key = f"{pid}::var::{v.get('color')}"
-                    if _modo_ok(key):
-                        return key
-        return None
+        """Delegado en pos_system.utils.promos (funciones puras, con tests)."""
+        return _promo_match_key_pura(fb_promo, refs, color=color, sale_mode=sale_mode)
 
     def _promo_targets(self, fb_promo: dict, refs: tuple, color: str = '', sale_mode: str = '') -> bool:
         """Boolean wrapper de _promo_match_key (compat con callers viejos)."""
         return self._promo_match_key(fb_promo, refs, color=color, sale_mode=sale_mode) is not None
 
     def _promo_min_override(self, fb_promo: dict, key: str, sale_mode: str) -> int:
-        """Cantidad mínima por modo definida en el chip del producto/variante.
-        0 si no hay override (se cae al `cantidad_minima` global de la promo).
-        """
-        if not key or not sale_mode:
-            return 0
-        modos_map = fb_promo.get('modos') or {}
-        if not isinstance(modos_map, dict):
-            return 0
-        entry = modos_map.get(key)
-        if not isinstance(entry, dict):
-            return 0
-        mode_entry = entry.get(sale_mode)
-        if isinstance(mode_entry, dict):
-            return max(0, int(mode_entry.get('min') or 0))
-        if isinstance(mode_entry, (int, float)):
-            return max(0, int(mode_entry))
-        return 0
+        """Delegado en pos_system.utils.promos (funciones puras, con tests)."""
+        return _promo_min_override_pura(fb_promo, key, sale_mode)
+
+    def _promo_refs_for(self, product: dict) -> tuple:
+        """Identificadores con los que una promo del panel puede referirse a este
+        producto: doc_id de Firebase, código de barras, id local y nombre."""
+        return (
+            str(product.get('firebase_id') or ''),
+            str(product.get('barcode') or ''),
+            str(product.get('id', '')),
+            str(product.get('name') or ''),
+        )
 
     def _resolve_price_for_product(self, product: dict, quantity: int = 1, color: str = '') -> dict:
         """
@@ -4023,41 +3983,16 @@ class SalesView(QWidget):
                 promo_id             = best_promo['id']
                 promo_label          = label
 
-        # 3. Buscar promo activa en Firebase (definidas desde la webapp)
-        product_doc_id   = str(product.get('id', ''))
-        product_barcode  = str(product.get('barcode') or '')
-        product_name     = str(product.get('name') or '')
-        product_firebase = str(product.get('firebase_id') or '')  # doc_id en Firebase
-        refs = (product_firebase, product_barcode, product_doc_id, product_name)
-        for fb_promo in self._firebase_promos:
-            if not fb_promo.get('activo', True):
-                continue
-            match_key = self._promo_match_key(fb_promo, refs, color=color)
-            if not match_key:
-                continue
-            cant_min_global = int(fb_promo.get('cantidad_minima') or 1)
-            # En _resolve_price_for_product no conocemos el sale_mode (productos no-conjunto).
-            # Solo aplica el override si la key del match coincide con el del chip.
-            cant_min = cant_min_global
-            if quantity < cant_min:
-                continue
-            # Convertir la promo de Firebase al formato que entiende calculate_promo_for_cart_item
-            tipo = fb_promo.get('tipo', '')
-            promo_local = {
-                'promo_type':        tipo,
-                'discount_value':    float(fb_promo.get('valor') or 0),
-                'required_quantity': int(fb_promo.get('cantidad_requerida') or 1),
-                'free_quantity':     max(0, int(fb_promo.get('cantidad_requerida') or 1) - int(fb_promo.get('cantidad_paga') or 1)),
-                'max_quantity':      int(fb_promo.get('cantidad_maxima') or 0),
-                'name':              fb_promo.get('nombre', ''),
-            }
-            eff, fb_disc, label = Promotion.calculate_promo_for_cart_item(
-                promo_local, quantity, original_price
-            )
+        # 3. Buscar promo activa en Firebase (definidas desde la webapp). Sin
+        # sale_mode: productos no-conjunto se venden de una sola forma.
+        refs = self._promo_refs_for(product)
+        best = _mejor_promo_linea(self._firebase_promos, refs, quantity, original_price, color=color)
+        if best is not None:
+            fb_promo, eff, fb_disc, label = best
             if fb_disc > discount_amount:
                 unit_price           = eff
                 discount_amount      = fb_disc
-                discount_type_final  = tipo
+                discount_type_final  = fb_promo.get('tipo', '')
                 discount_value_final = float(fb_promo.get('valor') or 0)
                 promo_id             = fb_promo.get('_id', '')
                 promo_label          = f'[Web] {label or fb_promo.get("nombre", "")}'
@@ -4218,59 +4153,7 @@ class SalesView(QWidget):
                 qty_cart   = 1
                 unit_cart  = precio_total
 
-            # Aplicar promo por variante (Firebase) si hay match para este color
-            # Solo cuando qty_cart >= 1 entero (la lógica de NxM/2x1/pack asume unidades enteras).
-            line_unit_price      = unit_cart
-            line_original_price  = unit_cart
-            line_discount_type   = None
-            line_discount_value  = 0
-            line_discount_amount = 0
-            line_promo_id        = None
-            line_promo_label     = ''
-            line_subtotal        = precio_total
-            # Modo de venta para matchear modos de la promo:
-            #   vender_por=conjunto → 'pack'; unidad/fraccion → 'unidad'.
-            _vp = (r.get('vender_por') or '').lower()
-            sale_mode = 'pack' if _vp == 'conjunto' else ('unidad' if _vp in ('unidad', 'fraccion') else '')
-            if es_entera and qty_cart >= 1:
-                pid_local = str(product.get('id', ''))
-                pid_fb    = str(product.get('firebase_id') or '')
-                pid_bc    = str(product.get('barcode') or '')
-                pid_name  = str(product.get('name') or '')
-                refs_v = (pid_fb, pid_bc, pid_local, pid_name)
-                best_disc = 0
-                for fb_promo in self._firebase_promos:
-                    if not fb_promo.get('activo', True):
-                        continue
-                    match_key = self._promo_match_key(fb_promo, refs_v, color=color, sale_mode=sale_mode)
-                    if not match_key:
-                        continue
-                    cant_min_global = int(fb_promo.get('cantidad_minima') or 1)
-                    cant_min_mode   = self._promo_min_override(fb_promo, match_key, sale_mode)
-                    effective_min   = max(cant_min_global, cant_min_mode)
-                    if qty_cart < effective_min:
-                        continue
-                    promo_local = {
-                        'promo_type':        fb_promo.get('tipo', ''),
-                        'discount_value':    float(fb_promo.get('valor') or 0),
-                        'required_quantity': int(fb_promo.get('cantidad_requerida') or 1),
-                        'free_quantity':     max(0, int(fb_promo.get('cantidad_requerida') or 1) - int(fb_promo.get('cantidad_paga') or 1)),
-                        'max_quantity':      int(fb_promo.get('cantidad_maxima') or 0),
-                        'name':              fb_promo.get('nombre', ''),
-                    }
-                    eff, fb_disc, label = Promotion.calculate_promo_for_cart_item(
-                        promo_local, qty_cart, unit_cart
-                    )
-                    if fb_disc > best_disc:
-                        best_disc           = fb_disc
-                        line_unit_price     = eff
-                        line_discount_type  = promo_local['promo_type']
-                        line_discount_value = promo_local['discount_value']
-                        line_discount_amount = fb_disc
-                        line_promo_id       = fb_promo.get('_id', '')
-                        line_promo_label    = f'[Web] {label or promo_local["name"]}'
-                        line_subtotal       = round(eff * qty_cart, 2)
-            self.cart.append({
+            item = {
                 'product_id':    product['id'],
                 'product_name':  nombre_largo,
                 # Para conjuntos, el descuento real de stock se hace via
@@ -4278,14 +4161,14 @@ class SalesView(QWidget):
                 # por el dialog). El quantity del cart es sólo visual: el
                 # spinner queda readonly para evitar desincronización.
                 'quantity':         qty_cart,
-                'unit_price':       line_unit_price,
-                'original_price':   line_original_price,
-                'discount_type':    line_discount_type,
-                'discount_value':   line_discount_value,
-                'discount_amount':  line_discount_amount,
-                'promo_id':         line_promo_id,
-                'promo_label':      line_promo_label,
-                'subtotal':         line_subtotal,
+                'unit_price':       unit_cart,
+                'original_price':   unit_cart,
+                'discount_type':    None,
+                'discount_value':   0,
+                'discount_amount':  0,
+                'promo_id':         None,
+                'promo_label':      '',
+                'subtotal':         precio_total,
                 'max_stock':        9999,
                 'category':         product.get('category'),
                 # Flags / payload conjunto (consumidos por el descuento de stock al cerrar venta)
@@ -4299,8 +4182,58 @@ class SalesView(QWidget):
                 'conjunto_after_unidades': r['after_unidades'],
                 'conjunto_after_restante': r['after_restante'],
                 'conjunto_color':          color,   # '' = legacy
-            })
+            }
+            # Promos del panel: la mejor que aplique a esta cantidad/modo/color.
+            self._reprice_conjunto_line(item, product=product)
+            self.cart.append(item)
         self.update_cart_display()
+
+    def _reprice_conjunto_line(self, item, product=None):
+        """Re-evalúa las promos del panel para una línea conjunto del carrito.
+
+        Parte del precio original de la línea y aplica la mejor promo vigente
+        para su cantidad y modo de venta (pack o unidad) — o la saca si la
+        cantidad ya no llega al mínimo. Se usa al agregar la línea y cada vez
+        que cambia la cantidad desde el carrito. Respeta el precio editado a
+        mano y las cantidades decimales (1,5 m: sin promo).
+        """
+        if item.get('manual_price_override'):
+            return
+        qty  = float(item.get('quantity') or 0)
+        base = float(item.get('original_price') or item.get('unit_price') or 0)
+        es_entera = qty > 0 and abs(qty - round(qty)) < 1e-9
+        _vp = (item.get('conjunto_vender_por') or '').lower()
+        sale_mode = 'pack' if _vp == 'conjunto' else ('unidad' if _vp in ('unidad', 'fraccion') else '')
+        color = str(item.get('conjunto_color') or '').strip()
+        if product is None:
+            try:
+                product = self.product_model.get_by_id(item['product_id'])
+            except Exception:
+                product = None
+        refs = self._promo_refs_for(product) if product else ('', '', str(item.get('product_id', '')), '')
+
+        best = None
+        if es_entera and int(round(qty)) >= 1:
+            best = _mejor_promo_linea(self._firebase_promos, refs, int(round(qty)), base,
+                                      color=color, sale_mode=sale_mode)
+        if best is not None:
+            fb_promo, eff, disc, label = best
+            item['unit_price']      = eff
+            item['discount_type']   = fb_promo.get('tipo', '')
+            item['discount_value']  = float(fb_promo.get('valor') or 0)
+            item['discount_amount'] = disc
+            item['promo_id']        = fb_promo.get('_id', '')
+            item['promo_label']     = f'[Web] {label or fb_promo.get("nombre", "")}'
+            item['subtotal']        = round(eff * qty, 2)
+        elif item.get('promo_id') or item.get('discount_amount'):
+            # Había promo y dejó de aplicar (bajó del mínimo): volver al precio base.
+            item['unit_price']      = base
+            item['discount_type']   = None
+            item['discount_value']  = 0
+            item['discount_amount'] = 0
+            item['promo_id']        = None
+            item['promo_label']     = ''
+            item['subtotal']        = round(base * qty, 2)
 
     def update_cart_display(self):
         from pos_system.ui.theme import COLORS as _T
@@ -4691,6 +4624,10 @@ class SalesView(QWidget):
             if abs(delta) > 1e-9:
                 self._adjust_conjunto_after_for_delta(item, delta)
             item['product_name'] = self._rebuild_conjunto_name(item)
+            # Las promos del panel dependen de la cantidad Y del modo de venta:
+            # al cruzar el mínimo se activan, y al bajar de él se van. Antes la
+            # línea quedaba con el precio con el que entró al carrito.
+            self._reprice_conjunto_line(item)
             self._refresh_cart_row_pricing(row, item)
             self._refresh_cart_totals(row)
             return
