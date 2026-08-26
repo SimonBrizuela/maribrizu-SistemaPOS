@@ -727,6 +727,24 @@ function renderBody() {
   else { view = 'dia'; renderDia(body); }
 }
 
+// Suma las compras de un mes por rubro de la lista del RESUMEN (nombre
+// normalizado, sin acentos ni mayúsculas). Compras con rubros que no están en
+// la lista quedan afuera: el RESUMEN muestra su lista fija de filas.
+function comprasPorRubro(docM, rubros) {
+  const idx = {};
+  rubros.forEach(r => { idx[normRubro(r)] = r; });
+  const out = {};
+  Object.values((docM && docM.dias) || {}).forEach(d => {
+    (d.compras || []).forEach(c => {
+      const key = idx[normRubro(c.rubro)];
+      const v = Number(c.monto) || 0;
+      if (!key || !v) return;
+      out[key] = Math.round(((out[key] || 0) + v) * 100) / 100;
+    });
+  });
+  return out;
+}
+
 // ── Sub-vista: RESUMEN vivo ───────────────────────────────────────────────────
 async function renderResumen(body) {
   const meses = mesesOrdenados('asc');
@@ -734,6 +752,12 @@ async function renderResumen(body) {
   const rubros = cfg.rubros || [];
   const agregados = cfg.agregados || [];
   if (!cadena) { try { await recalcularCadena(); } catch (_) {} }
+  // Compras por rubro calculadas desde el Día por día, para las celdas que no
+  // tienen valor tipeado — mismo criterio que los saldos: lo tipeado manda, lo
+  // que falta se calcula y se ve en gris. Sin esto, los meses nuevos (fichas
+  // auto) mostraban la tabla de rubros vacía aunque los días estuvieran cargados.
+  const rubrosCalc = {};
+  await Promise.all(meses.map(async ym => { rubrosCalc[ym] = comprasPorRubro(await loadDiasMes(db, ym), allRubros); }));
   if (view !== 'resumen') return;
   const cad = cadena || {};
 
@@ -770,28 +794,41 @@ async function renderResumen(body) {
 
   // Tabla RUBROS: filas = rubros (+ separador + agregados), columnas = meses + total fila.
   // El índice de data-rub-rowtot es la posición GLOBAL en allRubros (lo usa recomputeRubrosTotals).
+  // Celda: el valor tipeado, o el calculado de las compras del Día por día (en
+  // gris e itálica, como los saldos). Tipear un número lo fija.
+  const rubroAuto = (ym, r) => rubroVal(ym, r) == null ? (rubrosCalc[ym]?.[r] ?? null) : null;
+  const rubroEf = (ym, r) => { const t = rubroVal(ym, r); return t == null ? rubroAuto(ym, r) : t; };
+  const rubroCell = (ym, r) => {
+    const auto = rubroAuto(ym, r);
+    if (auto == null) return inputCell(`data-rub-ym="${ym}" data-rub-rubro="${esc(r)}"`, rubroVal(ym, r));
+    return `<td><input class="bal-cell-input is-auto${negCls(auto)}" type="text" inputmode="decimal"
+       data-rub-ym="${ym}" data-rub-rubro="${esc(r)}" value="${fmt(auto)}"
+       title="Calculado de las compras cargadas en Día por día. Tipeá un número para fijarlo."></td>`;
+  };
   const rubroRow = (r) => {
     const idx = allRubros.indexOf(r);
-    const rowTot = meses.reduce((s, ym) => s + (Number(rubroVal(ym, r)) || 0), 0);
+    const rowTot = meses.reduce((s, ym) => s + (Number(rubroEf(ym, r)) || 0), 0);
     return `<tr class="${esAgregado(r) ? 'bal-row-agregado' : ''}">
       <td class="bal-td-lbl bal-rub-cell">
         <input class="bal-rub-name" data-rub-rename="${esc(r)}" value="${esc(r)}" title="Renombrar (se actualiza en todos los meses)">
         <button type="button" class="bal-rub-ver" data-rub-ver="${esc(r)}" title="Ver detalle de los días"><span class="material-icons">visibility</span></button>
         <button type="button" class="bal-rub-del" data-rub-del="${esc(r)}" title="Eliminar fila"><span class="material-icons">close</span></button>
       </td>
-      ${meses.map(ym => inputCell(`data-rub-ym="${ym}" data-rub-rubro="${esc(r)}"`, rubroVal(ym, r))).join('')}
+      ${meses.map(ym => rubroCell(ym, r)).join('')}
       <td class="bal-td-total${negCls(rowTot)}" data-rub-rowtot="${idx}">${money(rowTot)}</td>
     </tr>`;
   };
   const sepRow = agregados.length
     ? `<tr class="bal-row-sep"><td colspan="${meses.length + 2}">Agregados</td></tr>`
     : '';
-  const grandRubros = allRubros.reduce((s, r) => s + meses.reduce((a, ym) => a + (Number(rubroVal(ym, r)) || 0), 0), 0);
+  const totalEfRubrosMes = (ym) => allRubros.reduce((s, r) => s + (Number(rubroEf(ym, r)) || 0), 0);
+  const grandRubros = meses.reduce((s, ym) => s + totalEfRubrosMes(ym), 0);
 
   body.innerHTML = `
     <div class="bal-caption"><span class="material-icons">grid_on</span>
       Réplica viva de la hoja <b>RESUMEN</b> del Excel. Editás las celdas en el lugar y los totales
-      (el <code>SUM</code> del Excel) se recalculan al instante. Los saldos quedan guardados en la página.</div>
+      (el <code>SUM</code> del Excel) se recalculan al instante. Las celdas <i>en gris</i> se calculan solas
+      desde lo cargado en "Día por día"; tipeá un número para fijarlas.</div>
 
     <div class="bal-card bal-xls" style="margin-bottom:16px">
       <div class="bal-card-title"><span class="material-icons">account_balance_wallet</span> Saldos de cierre por medio de pago</div>
@@ -825,7 +862,7 @@ async function renderResumen(body) {
           <tbody>${rubros.map(rubroRow).join('')}${sepRow}${agregados.map(rubroRow).join('')}</tbody>
           <tfoot><tr class="bal-row-total">
             <td class="bal-td-lbl">Total mes</td>
-            ${meses.map(ym => `<td data-rub-coltot="${ym}">${money(totalRubrosMes(ym))}</td>`).join('')}
+            ${meses.map(ym => `<td data-rub-coltot="${ym}">${money(totalEfRubrosMes(ym))}</td>`).join('')}
             <td class="bal-td-total" data-rub-grand>${money(grandRubros)}</td>
           </tr></tfoot>
         </table>
@@ -897,6 +934,7 @@ function onSaldoEdit(inp) {
   mes.saldos[medio] = val;
   if (mes.origen === 'excel') mes.origen = 'manual';
   inp.value = val == null ? '' : fmt(val);
+  if (val != null) inp.classList.remove('is-auto');   // tipeado: ya no es calculado
   recomputeSaldosTotals();
   const headChip = mountEl.querySelector(`[data-mes-total="${ym}"]`);
   if (headChip) headChip.textContent = money(totalSaldos(ym));
@@ -913,6 +951,7 @@ function onRubroEdit(inp) {
   mes.rubros[rubro] = val;
   if (mes.origen === 'excel') mes.origen = 'manual';
   inp.value = val == null ? '' : fmt(val);
+  if (val != null) inp.classList.remove('is-auto');   // tipeado: ya no es calculado
   recomputeRubrosTotals();
   persistMes(ym, { rubros: { [rubro]: val }, origen: mes.origen });
 }
@@ -943,14 +982,20 @@ function recomputeSaldosTotals() {
 function recomputeRubrosTotals() {
   const meses = mesesOrdenados('asc');
   const rubros = rubrosLista();
+  // Igual que los saldos: se lee lo que muestra cada celda (tipeado o calculado
+  // desde los días), así los totales cierran con lo que el usuario tiene adelante.
+  const enCelda = (ym, r) => {
+    const inp = mountEl.querySelector(`[data-rub-ym="${ym}"][data-rub-rubro="${CSS.escape(r)}"]`);
+    return inp ? (parseNum(inp.value) || 0) : (Number(rubroVal(ym, r)) || 0);
+  };
   rubros.forEach((r, idx) => {
-    const tot = meses.reduce((s, ym) => s + (Number(rubroVal(ym, r)) || 0), 0);
+    const tot = meses.reduce((s, ym) => s + enCelda(ym, r), 0);
     const cell = mountEl.querySelector(`[data-rub-rowtot="${idx}"]`);
     if (cell) cell.textContent = money(tot);
   });
   let grand = 0;
   meses.forEach(ym => {
-    const tot = totalRubrosMes(ym);
+    const tot = rubros.reduce((s, r) => s + enCelda(ym, r), 0);
     grand += tot;
     const cell = mountEl.querySelector(`[data-rub-coltot="${ym}"]`);
     if (cell) cell.textContent = money(tot);
