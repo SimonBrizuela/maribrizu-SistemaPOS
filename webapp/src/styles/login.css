@@ -143,9 +143,9 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 
-.form-group { display: flex; flex-direction: column; gap: 6px; }
+.login-card .form-group { display: flex; flex-direction: column; gap: 6px; }
 
-.form-group label {
+.login-card .form-group label {
   font-size: 11px;
   font-weight: 600;
   color: rgba(232,227,218,0.55);
@@ -153,20 +153,20 @@
   letter-spacing: 2px;
 }
 
-.form-group .input-wrap {
+.login-card .form-group .input-wrap {
   position: relative;
   display: flex;
   align-items: center;
 }
 
-.form-group .input-wrap .material-icons {
+.login-card .form-group .input-wrap .material-icons {
   position: absolute;
   left: 12px;
   color: rgba(232,227,218,0.4);
   font-size: 20px !important;
 }
 
-.form-group input {
+.login-card .form-group input {
   width: 100%;
   padding: 12px 12px 12px 40px;
   background: #0e0d0b;
@@ -179,9 +179,9 @@
   color: #fff;
 }
 
-.form-group input::placeholder { color: rgba(232,227,218,0.25); }
+.login-card .form-group input::placeholder { color: rgba(232,227,218,0.25); }
 
-.form-group input:focus {
+.login-card .form-group input:focus {
   border-color: #F7941D;
   background: #15130f;
 }

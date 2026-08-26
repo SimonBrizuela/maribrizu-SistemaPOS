@@ -153,64 +153,91 @@ export async function renderPromociones(container, db) {
   <style>
     .promo-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:20px; flex-wrap:wrap; gap:10px; }
     .promo-header h3 { margin:0; font-size:1.2rem; color:var(--text-strong); }
-    .btn-primary { background:#4361ee; color:#fff; border:none; border-radius:8px; padding:9px 18px; font-size:14px; font-weight:600; cursor:pointer; display:flex; align-items:center; gap:6px; }
-    .btn-primary:hover { background:#3a56d4; }
-    .btn-sm { padding:5px 10px; font-size:12px; border-radius:6px; border:none; cursor:pointer; font-weight:600; display:inline-flex; align-items:center; gap:4px; }
-    .btn-edit { background:var(--tint-yellow-bg); color:var(--tint-yellow-fg); }
-    .btn-edit:hover { background:var(--tint-yellow-bg); }
-    .btn-delete { background:var(--tint-red-bg); color:var(--tint-red-fg); }
-    .btn-delete:hover { background:var(--tint-red-bg); }
-    .btn-toggle-on  { background:var(--tint-green-bg); color:var(--tint-green-fg); }
-    .btn-toggle-on:hover  { background:#a3cfbb; }
-    .btn-toggle-off { background:var(--surface-2); color:var(--text-muted); }
-    .btn-toggle-off:hover { background:var(--border); }
-    .promo-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap:16px; }
-    .promo-card { background:var(--surface); border-radius:12px; border:1px solid var(--border); padding:18px; box-shadow:0 2px 8px rgba(0,0,0,.05); }
-    .promo-card.inactive { opacity:.6; border-style:dashed; }
-    .promo-card-header { display:flex; justify-content:space-between; align-items:flex-start; margin-bottom:10px; }
-    .promo-name { font-size:1rem; font-weight:700; color:var(--text-strong); margin:0 0 4px; }
-    .promo-type-badge { background:var(--tint-blue-bg); color:var(--tint-blue-fg); border-radius:6px; padding:2px 8px; font-size:11px; font-weight:700; display:inline-flex; align-items:center; gap:3px; white-space:nowrap; }
+    .btn-primary { background:var(--primary); color:#fff; border:none; border-radius:10px; padding:9px 18px; font-size:14px; font-weight:600; cursor:pointer; display:flex; align-items:center; gap:6px; }
+    .btn-primary:hover { background:var(--primary-dark); }
+    .btn-sm { padding:6px 11px; font-size:12px; border-radius:8px; border:1px solid transparent; cursor:pointer; font-weight:600; display:inline-flex; align-items:center; gap:4px; }
+    .btn-edit { background:var(--surface); color:var(--text); border-color:var(--border); }
+    .btn-edit:hover { border-color:var(--border-strong); }
+    .btn-delete { background:var(--surface); color:var(--tint-red-fg); border-color:var(--border); }
+    .btn-delete:hover { background:var(--tint-red-bg); border-color:var(--tint-red-fg); }
+    .btn-toggle-on  { background:var(--surface); color:var(--text-muted); border-color:var(--border); }
+    .btn-toggle-on:hover, .btn-toggle-off:hover { border-color:var(--border-strong); }
+    .btn-toggle-off { background:var(--surface); color:var(--tint-green-fg); border-color:var(--border); }
+    .promo-grid { display:grid; grid-template-columns: repeat(auto-fill, minmax(330px, 1fr)); gap:16px; }
+    .promo-card { background:var(--card-bg); border-radius:12px; border:1px solid var(--border); padding:16px 18px; box-shadow:var(--shadow-sm); display:flex; flex-direction:column; }
+    .promo-card:hover { border-color:var(--border-strong); }
+    .promo-card.inactive { opacity:.55; }
+    .promo-card-header { display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin-bottom:10px; }
+    .promo-name { font-size:15px; font-weight:700; color:var(--text-strong); margin:0 0 6px; }
+    .promo-state { font-size:11px; padding:3px 9px; border-radius:999px; font-weight:700; white-space:nowrap; flex:none; }
+    .promo-state.on  { background:var(--tint-green-bg); color:var(--tint-green-fg); }
+    .promo-state.off { background:var(--surface-2); color:var(--text-muted); }
+    .promo-type-badge { background:var(--tint-purple-bg); color:var(--tint-purple-fg); border-radius:6px; padding:2px 8px; font-size:11px; font-weight:700; display:inline-flex; align-items:center; gap:4px; white-space:nowrap; }
     .promo-type-badge .material-icons { font-size:13px !important; }
     .promo-desc { font-size:12px; color:var(--text-muted); margin-bottom:10px; }
-    .promo-detail { font-size:13px; color:var(--text-muted); margin-bottom:6px; display:flex; align-items:center; gap:6px; }
-    .promo-detail .material-icons { font-size:15px !important; color:var(--tint-blue-fg); }
-    .promo-products { display:flex; flex-wrap:wrap; gap:4px; margin-top:8px; }
-    .promo-product-tag { background:var(--tint-blue-bg); color:var(--tint-blue-fg); border-radius:4px; padding:2px 6px; font-size:11px; max-width:160px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-    .promo-actions { display:flex; gap:6px; margin-top:14px; flex-wrap:wrap; }
+    .promo-detail { font-size:13px; color:var(--text); margin-bottom:5px; display:flex; align-items:center; gap:7px; }
+    .promo-detail b { color:var(--text-strong); }
+    .promo-detail .material-icons { font-size:15px !important; color:var(--text-muted); }
+    .promo-products-lbl { font-size:11px; color:var(--text-muted); margin:10px 0 4px; font-weight:700; text-transform:uppercase; letter-spacing:.3px; }
+    .promo-products { display:flex; flex-wrap:wrap; gap:4px; }
+    .promo-product-tag { background:var(--tint-gray-bg); color:var(--tint-gray-fg); border-radius:5px; padding:2px 7px; font-size:11.5px; max-width:100%; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+    .promo-actions { display:flex; gap:6px; margin-top:auto; padding-top:14px; flex-wrap:wrap; }
     .empty-state { text-align:center; padding:60px 20px; color:var(--text-muted); }
-    .empty-state .material-icons { font-size:48px; display:block; margin-bottom:12px; color:#adb5bd; }
+    .empty-state .material-icons { font-size:48px; display:block; margin-bottom:12px; color:var(--border-strong); }
 
-    /* Modal */
-    .modal-overlay { position:fixed; inset:0; background:rgba(0,0,0,.45); z-index:9999; display:flex; align-items:center; justify-content:center; padding:16px; }
-    .modal-box { background:var(--surface); border-radius:14px; padding:28px; width:100%; max-width:560px; max-height:90vh; overflow-y:auto; box-shadow:0 8px 32px rgba(0,0,0,.18); }
-    .modal-title { font-size:1.1rem; font-weight:700; color:var(--text-strong); margin:0 0 20px; }
-    .form-group { margin-bottom:14px; }
-    .form-group label { display:block; font-size:13px; font-weight:600; color:var(--text-muted); margin-bottom:5px; }
-    .form-group input, .form-group select, .form-group textarea {
-      width:100%; padding:8px 12px; border:1.5px solid var(--border); border-radius:8px;
-      font-size:14px; box-sizing:border-box; font-family:inherit; outline:none; transition:border .2s;
+    /* ── Modal (clases propias para que ningún CSS global lo pise) ── */
+    .promo-modal { position:fixed; inset:0; background:var(--overlay); z-index:9999; display:flex; align-items:center; justify-content:center; padding:16px; }
+    .promo-modal .modal-box { background:var(--card-bg); border:1px solid var(--border); border-radius:14px; padding:24px 26px; width:100%; max-width:600px; max-height:92vh; overflow-y:auto; box-shadow:var(--shadow-modal); }
+    .promo-modal .modal-title { font-size:1.1rem; font-weight:700; color:var(--text-strong); margin:0 0 18px; display:flex; align-items:center; gap:8px; }
+    .promo-modal .modal-title .material-icons { color:var(--primary); }
+    .promo-modal .form-group { margin-bottom:14px; }
+    .promo-modal label { display:block; font-size:12.5px; font-weight:600; color:var(--text-muted); margin-bottom:5px; text-transform:none; letter-spacing:0; }
+    .promo-modal input[type="text"], .promo-modal input[type="number"],
+    .promo-modal select, .promo-modal textarea {
+      width:100%; padding:9px 12px; border:1.5px solid var(--border); border-radius:8px;
+      background:var(--surface); color:var(--text); font-size:14px; box-sizing:border-box;
+      font-family:inherit; outline:none; transition:border-color .15s;
     }
-    .form-group input:focus, .form-group select:focus, .form-group textarea:focus { border-color:#4361ee; }
+    .promo-modal input:focus, .promo-modal select:focus, .promo-modal textarea:focus { border-color:var(--primary); }
+    .promo-modal input::placeholder, .promo-modal textarea::placeholder { color:var(--text-muted); opacity:.8; }
     .form-row { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
-    .form-hint { font-size:11px; color:var(--text-muted); margin-top:3px; }
+    .form-hint { font-size:11.5px; color:var(--text-muted); margin-top:4px; line-height:1.45; }
     .product-search-box { position:relative; }
-    .product-search-results { position:absolute; top:100%; left:0; right:0; background:var(--surface); border:1.5px solid var(--border); border-radius:8px; max-height:200px; overflow-y:auto; z-index:100; box-shadow:0 4px 16px rgba(0,0,0,.1); display:none; }
+    .product-search-results { position:absolute; top:100%; left:0; right:0; background:var(--card-bg); border:1.5px solid var(--border); border-radius:8px; max-height:220px; overflow-y:auto; z-index:100; box-shadow:var(--shadow-lg); display:none; }
     .product-search-results.visible { display:block; }
-    .product-result-item { padding:8px 12px; cursor:pointer; font-size:13px; border-bottom:1px solid var(--border); }
-    .product-result-item:hover { background:var(--tint-blue-bg); }
-    .selected-products-list { display:flex; flex-wrap:wrap; gap:6px; margin-top:8px; min-height:24px; }
-    .selected-product-tag { background:var(--tint-blue-bg); color:var(--tint-blue-fg); border-radius:6px; padding:3px 8px; font-size:12px; display:inline-flex; align-items:center; gap:4px; }
-    .selected-product-tag button { background:none; border:none; cursor:pointer; color:var(--tint-blue-fg); padding:0; line-height:1; font-size:14px; }
-    .modal-footer { display:flex; justify-content:flex-end; gap:10px; margin-top:20px; padding-top:16px; border-top:1px solid #e9ecef; }
-    .btn-cancel { background:var(--surface-2); border:1px solid var(--border); border-radius:8px; padding:8px 18px; font-size:14px; cursor:pointer; font-weight:600; color:var(--text-muted); }
-    .btn-cancel:hover { background:var(--surface-2); }
-    .btn-save { background:#4361ee; color:#fff; border:none; border-radius:8px; padding:9px 22px; font-size:14px; font-weight:700; cursor:pointer; }
-    .btn-save:hover { background:#3a56d4; }
+    .product-result-item { padding:8px 12px; cursor:pointer; font-size:13px; border-bottom:1px solid var(--border); color:var(--text); }
+    .product-result-item:last-child { border-bottom:none; }
+    .product-result-item:hover { background:var(--surface-hover); }
+    .pm-kind { border-radius:4px; padding:1px 6px; font-size:10px; font-weight:700; margin-right:6px; }
+    .pm-kind.prod { background:var(--tint-gray-bg); color:var(--tint-gray-fg); }
+    .pm-kind.var  { background:var(--tint-purple-bg); color:var(--tint-purple-fg); }
+
+    /* Chips de productos/variantes elegidos, con los modos Pack/Unidad */
+    .selected-products-list { display:flex; flex-direction:column; gap:6px; margin-top:8px; }
+    .pm-chip { display:flex; align-items:center; flex-wrap:wrap; gap:6px; background:var(--surface-2); border:1px solid var(--border); color:var(--text); border-radius:8px; padding:6px 8px 6px 10px; font-size:12.5px; }
+    .pm-chip .pm-chip-name { font-weight:600; min-width:0; overflow:hidden; text-overflow:ellipsis; }
+    .pm-chip.is-var .pm-chip-name { color:var(--tint-purple-fg); }
+    .pm-chip .material-icons.pm-var-ic { font-size:14px !important; color:var(--tint-purple-fg); }
+    .pm-modos { display:inline-flex; gap:5px; margin-left:auto; align-items:center; }
+    .pm-modo { display:inline-flex; align-items:center; gap:4px; font-size:11px; font-weight:700; padding:3px 9px; border-radius:999px; border:1.5px solid var(--border); cursor:pointer; background:var(--surface); color:var(--text-muted); user-select:none; line-height:1.5; }
+    .pm-modo .material-icons { font-size:13px !important; }
+    .pm-modo:hover { border-color:var(--border-strong); }
+    .pm-modo.on { background:var(--primary); border-color:var(--primary); color:#fff; }
+    .pm-modo.off { text-decoration:line-through; opacity:.75; }
+    .pm-modo input { width:44px; font-size:11px; padding:1px 3px; margin-left:2px; border-radius:5px; border:1px solid rgba(255,255,255,.45); background:rgba(255,255,255,.18); color:#fff; font-weight:700; text-align:center; outline:none; -moz-appearance:textfield; font-family:inherit; }
+    .pm-chip .pm-x { background:none; border:none; cursor:pointer; color:var(--text-muted); padding:2px; line-height:1; font-size:15px; border-radius:4px; }
+    .pm-chip .pm-x:hover { color:var(--tint-red-fg); background:var(--tint-red-bg); }
+
+    .modal-footer { display:flex; justify-content:flex-end; gap:10px; margin-top:20px; padding-top:16px; border-top:1px solid var(--border); }
+    .btn-cancel { background:var(--surface); border:1px solid var(--border); border-radius:8px; padding:9px 18px; font-size:14px; cursor:pointer; font-weight:600; color:var(--text-muted); }
+    .btn-cancel:hover { border-color:var(--border-strong); color:var(--text); }
+    .btn-save { background:var(--primary); color:#fff; border:none; border-radius:8px; padding:9px 22px; font-size:14px; font-weight:700; cursor:pointer; }
+    .btn-save:hover { background:var(--primary-dark); }
     .field-hide { display:none; }
     /* Mini input dentro del toggle de modo: sin spinners nativos */
     .modo-min-input::-webkit-outer-spin-button,
     .modo-min-input::-webkit-inner-spin-button { -webkit-appearance:none; margin:0; }
-    .modo-min-input::placeholder { color:rgba(255,255,255,.7); font-weight:500; }
+    .modo-min-input::placeholder { color:rgba(255,255,255,.75); font-weight:500; }
   </style>
 
   <div class="promo-header">
@@ -298,22 +325,21 @@ export async function renderPromociones(container, db) {
               <span class="material-icons">${tipo.icon}</span>${tipo.label}
             </span>
           </div>
-          <span style="font-size:11px;padding:3px 8px;border-radius:20px;font-weight:700;${activo ? 'background:var(--tint-green-bg);color:var(--tint-green-fg)' : 'background:var(--surface-2);color:var(--text-muted)'}">
-            ${activo ? 'Activa' : 'Inactiva'}
-          </span>
+          <span class="promo-state ${activo ? 'on' : 'off'}">${activo ? 'Activa' : 'Inactiva'}</span>
         </div>
         ${p.descripcion ? `<div class="promo-desc">${p.descripcion}</div>` : ''}
         ${detalleHtml}
         ${cantMinHtml}
         ${cantMaxHtml}
         ${itemsNombres.length > 0 ? `
-          <div style="font-size:12px;color:var(--text-muted);margin-top:8px;margin-bottom:4px;font-weight:600">
-            Productos (${productosNombres.length})${variantesNombres.length ? ` · Variantes (${variantesNombres.length})` : ''}:
+          <div class="promo-products-lbl">
+            Productos (${productosNombres.length})${variantesNombres.length ? ` · Variantes (${variantesNombres.length})` : ''}
           </div>
           <div class="promo-products">
             ${itemsNombres.slice(0, 5).map(n => `<span class="promo-product-tag" title="${n}">${n}</span>`).join('')}
             ${itemsNombres.length > 5 ? `<span class="promo-product-tag">+${itemsNombres.length - 5} más</span>` : ''}
-          </div>` : '<div class="promo-desc" style="margin-top:8px">⚠️ Sin productos asignados</div>'
+          </div>` : `<div class="promo-detail" style="color:var(--tint-orange-fg)">
+            <span class="material-icons" style="color:var(--tint-orange-fg)">warning_amber</span>Sin productos asignados</div>`
         }
         <div class="promo-actions">
           <button class="btn-sm btn-edit" data-action="edit" data-id="${p._id}">
@@ -414,10 +440,10 @@ export async function renderPromociones(container, db) {
     selectedItems.forEach(ensureModos);
 
     const modal = document.createElement('div');
-    modal.className = 'modal-overlay';
+    modal.className = 'promo-modal';
     modal.innerHTML = `
     <div class="modal-box">
-      <div class="modal-title">${isEdit ? 'Editar Promoción' : 'Nueva Promoción'}</div>
+      <div class="modal-title"><span class="material-icons">local_offer</span>${isEdit ? 'Editar promoción' : 'Nueva promoción'}</div>
 
       <div class="form-group">
         <label>Nombre *</label>
@@ -477,7 +503,10 @@ export async function renderPromociones(container, db) {
           <div class="product-search-results" id="mProductoResults"></div>
         </div>
         <div class="selected-products-list" id="mSelectedProducts"></div>
-        <div class="form-hint">Si el producto se vende como pack <b>y</b> como unidad, vas a ver dos toggles (<b>Pack</b> / <b>Unidad</b>) en su chip. Tocá para activar/desactivar el modo. El número adentro del toggle es la cantidad mínima de ese modo para activar la promo (0 = usa la cantidad mínima global).</div>
+        <div class="form-hint">Si el producto se vende como pack <b>y</b> como unidad, el chip muestra los dos modos:
+          <b>con tilde (violeta)</b> = la promo aplica vendiendo así · <b>tachado con ✕</b> = no aplica.
+          El número del modo activo es su cantidad mínima (vacío = usa la mínima global de arriba).
+          Ojo: si dejás <b>Unidad</b> con tilde, la mínima global también se cumple con unidades sueltas.</div>
       </div>
 
       <div class="modal-footer">
@@ -500,36 +529,32 @@ export async function renderPromociones(container, db) {
         const nombre = labelForKey(key);
         const disponibles = modosForKey(key);
         const activos = modosPorItem[key] || {};
-        const bg = esVariante ? 'background:var(--tint-purple-bg);color:var(--tint-purple-fg)' : '';
-        const icon = esVariante
-          ? '<span class="material-icons" style="font-size:13px;vertical-align:middle">palette</span> '
-          : '';
+        const icon = esVariante ? '<span class="material-icons pm-var-ic">palette</span>' : '';
         // Solo mostramos los toggles si el item ofrece más de un modo.
+        // Estado inconfundible: tilde lleno = la promo APLICA en ese modo;
+        // tachado con ✕ = NO aplica. El input del modo activo es su mínimo.
         const togglesHtml = (disponibles.length > 1) ? `
-          <span style="display:inline-flex;gap:4px;margin-left:6px;padding-left:6px;border-left:1px solid var(--border);align-items:center">
+          <span class="pm-modos">
             ${disponibles.map(m => {
               const on = !!activos[m];
               const minVal = on ? (activos[m].min || 0) : 0;
-              const stylesOn  = 'background:#4361ee;color:#fff;border-color:#4361ee';
-              const stylesOff = 'background:var(--surface);color:var(--text-muted);border-color:var(--border)';
-              // Input solo visible si el modo está ON
               const inputHtml = on
-                ? `<input type="number" min="0" step="1" data-modo-min="${key}|${m}" value="${minVal || ''}" placeholder="min"
-                     title="Cantidad mínima de ${MODO_LABEL[m].toLowerCase()}s para activar (0 = usa el global)"
-                     class="modo-min-input"
-                     style="width:52px;font-size:11px;padding:2px 4px;margin-left:5px;border-radius:4px;border:1px solid rgba(255,255,255,0.4);background:rgba(255,255,255,0.22);color:inherit;font-weight:700;text-align:center;outline:none;-moz-appearance:textfield">`
+                ? `<input type="number" min="0" step="1" data-modo-min="${key}|${m}" value="${minVal || ''}" placeholder="mín"
+                     title="Cantidad mínima de ${MODO_LABEL[m].toLowerCase()}s para activar la promo (vacío = usa la mínima global)"
+                     class="modo-min-input">`
                 : '';
-              return `<span data-modo-toggle="${key}|${m}"
-                  style="display:inline-flex;align-items:center;font-size:10px;font-weight:700;padding:2px 6px;border-radius:11px;border:1px solid;cursor:pointer;line-height:1.4;${on ? stylesOn : stylesOff}"
-                  title="${on ? 'Activo' : 'Inactivo'} para ${MODO_LABEL[m]}">
-                  ${MODO_LABEL[m] || m}${inputHtml}
+              return `<span class="pm-modo ${on ? 'on' : 'off'}" data-modo-toggle="${key}|${m}"
+                  title="${on
+                    ? `La promo APLICA vendiendo por ${MODO_LABEL[m].toLowerCase()}. Tocá para que no aplique.`
+                    : `La promo NO aplica vendiendo por ${MODO_LABEL[m].toLowerCase()}. Tocá para activarla.`}">
+                  <span class="material-icons">${on ? 'check' : 'close'}</span>${MODO_LABEL[m] || m}${inputHtml}
                 </span>`;
             }).join('')}
           </span>` : '';
-        return `<span class="selected-product-tag" style="${bg};padding:4px 6px 4px 10px">
-          ${icon}${nombre}
+        return `<span class="pm-chip${esVariante ? ' is-var' : ''}">
+          ${icon}<span class="pm-chip-name" title="${nombre}">${nombre}</span>
           ${togglesHtml}
-          <button data-remove="${key}" title="Quitar" style="margin-left:6px">×</button>
+          <button data-remove="${key}" class="pm-x" title="Quitar de la promo">×</button>
         </span>`;
       }).join('');
 
@@ -592,8 +617,8 @@ export async function renderPromociones(container, db) {
       if (matches.length === 0) { resultsDiv.classList.remove('visible'); return; }
       resultsDiv.innerHTML = matches.map(it => {
         const tag = it.kind === 'variante'
-          ? `<span style="background:var(--tint-purple-bg);color:var(--tint-purple-fg);border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;margin-right:6px">VAR</span>`
-          : `<span style="background:var(--tint-blue-bg);color:var(--tint-blue-fg);border-radius:4px;padding:1px 6px;font-size:10px;font-weight:700;margin-right:6px">PROD</span>`;
+          ? `<span class="pm-kind var">VAR</span>`
+          : `<span class="pm-kind prod">PROD</span>`;
         const sub = it.subtitulo ? ` <small style="color:var(--text-muted)">${it.subtitulo}</small>` : '';
         return `<div class="product-result-item" data-key="${it.key}">${tag}${it.nombre}${sub}</div>`;
       }).join('');
