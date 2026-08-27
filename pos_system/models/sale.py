@@ -360,6 +360,23 @@ class Sale:
             # es la diferencia entre los dos totales — negativa si salió, y
             # positiva sola cuando esto es un reverso.
             previo = stock_ledger.snapshot(cursor, item['product_id'])
+
+            # Un conjunto lleva DOS contadores del mismo stock: `conjunto_total`
+            # (packs × contenido + sueltas), que es el que mueve la venta, y el
+            # `stock` plano que leen los reportes y el diagnóstico. Hasta acá la
+            # venta movía sólo el primero y el segundo se quedaba con el número
+            # del día que se cargó el producto, así que la brecha crecía con
+            # cada venta: 453 conjuntos habían llegado a diferir en 17.630
+            # unidades, y `diag_movimientos.py --sospechosos` los marcaba como
+            # tocados por fuera del registro cuando nadie los había tocado.
+            # Los dos se escriben juntos, en la misma transacción.
+            if not previo.get('ilimitado'):
+                cursor.execute(
+                    "UPDATE products SET stock = ?, updated_at = ? WHERE id = ?",
+                    (max(0, int(math.floor(nuevo_total))), now_iso,
+                     item['product_id'])
+                )
+
             stock_ledger.registrar(
                 cursor,
                 motivo=motivo,
