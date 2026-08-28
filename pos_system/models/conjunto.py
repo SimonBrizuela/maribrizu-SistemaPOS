@@ -22,6 +22,60 @@ POS y del panel, y no todos la hacian igual. Dos se desviaban:
 
 EPS = 1e-9
 
+# ── Como se llama cada presentacion y cada unidad ─────────────────────────
+#
+# Viven aca, en un modulo sin Qt, porque no las usa solo el dialogo de venta:
+# el POS escribe el nombre del renglon con estas etiquetas ("PAPEL A4 · 1
+# pack(s)", "CINTA · 2,5 m") y el panel las vuelve a leer para saber cuanto
+# stock devolver cuando se borra una venta (`webapp/src/stock_revert.js`, que
+# tiene su copia). Si una etiqueta cambia de un lado y no del otro, borrar la
+# venta NO devuelve el stock de ese producto y solo queda un aviso en consola.
+#
+# `tienda/pruebas/stock_revert.test.js` compara las dos tablas.
+
+TIPOS = {
+    'rollo':     {'label': 'Rollo',     'unidad_default': 'm',  'vende_por': ['fraccion', 'conjunto']},
+    'pack':      {'label': 'Pack',      'unidad_default': 'u',  'vende_por': ['unidad', 'conjunto']},
+    'caja':      {'label': 'Caja',      'unidad_default': 'u',  'vende_por': ['unidad', 'conjunto']},
+    'bobina':    {'label': 'Bobina',    'unidad_default': 'm',  'vende_por': ['fraccion', 'conjunto']},
+    'bolsa':     {'label': 'Bolsa',     'unidad_default': 'kg', 'vende_por': ['fraccion', 'conjunto']},
+    'plancha':   {'label': 'Plancha',   'unidad_default': 'm2', 'vende_por': ['fraccion', 'conjunto']},
+    'cartulina': {'label': 'Cartulina', 'unidad_default': 'u',  'vende_por': ['unidad', 'conjunto']},
+    'papel':     {'label': 'Papel',     'unidad_default': 'u',  'vende_por': ['unidad', 'conjunto']},
+    'carton':    {'label': 'Cartón',    'unidad_default': 'u',  'vende_por': ['unidad', 'conjunto']},
+    'goma_eva':  {'label': 'Goma Eva',  'unidad_default': 'u',  'vende_por': ['unidad', 'conjunto']},
+    'cinta':     {'label': 'Cinta',     'unidad_default': 'm',  'vende_por': ['fraccion', 'conjunto']},
+    'tela':      {'label': 'Tela',      'unidad_default': 'm',  'vende_por': ['fraccion', 'conjunto']},
+    'unidad':    {'label': 'Unidad',    'unidad_default': 'u',  'vende_por': ['unidad', 'conjunto']},
+    'otro':      {'label': 'Otro',      'unidad_default': 'u',  'vende_por': ['unidad', 'conjunto']},
+}
+
+UNIDADES = {
+    'm':   {'label': 'metros',      'short': 'm',  'base': 'longitud', 'factor': 1.0},
+    'cm':  {'label': 'centímetros', 'short': 'cm', 'base': 'longitud', 'factor': 0.01},
+    'u':   {'label': 'unidades',    'short': 'u',  'base': 'cuenta',   'factor': 1.0},
+    'g':   {'label': 'gramos',      'short': 'g',  'base': 'masa',     'factor': 0.001},
+    'kg':  {'label': 'kilogramos',  'short': 'kg', 'base': 'masa',     'factor': 1.0},
+    'l':   {'label': 'litros',      'short': 'L',  'base': 'volumen',  'factor': 1.0},
+    'ml':  {'label': 'mililitros',  'short': 'mL', 'base': 'volumen',  'factor': 0.001},
+    'm2':  {'label': 'metro²',      'short': 'm²', 'base': 'area',     'factor': 1.0},
+}
+
+# La webapp guarda nombres largos ('metros', 'unidades'); aca se normalizan al
+# short. Gemelo de UNIDAD_WEBAPP en `webapp/src/stock_revert.js`.
+WEBAPP_UNIDAD = {
+    'metros':      'm',
+    'centimetros': 'cm',
+    'cm':          'cm',
+    'unidades':    'u',
+    'gramos':      'g',
+    'kilos':       'kg',
+    'kg':          'kg',
+    'litros':      'l',
+    'l':           'l',
+    'm2':          'm2',
+}
+
 
 def _num(x, por_defecto=0.0):
     try:

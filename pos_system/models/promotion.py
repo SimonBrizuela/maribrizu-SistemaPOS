@@ -216,9 +216,15 @@ class Promotion:
             (effective_unit_price, discount_amount_total, promo_label)
         """
         ptype = promo.get('promo_type')
-        dval  = float(promo.get('discount_value', 0))
-        req   = int(promo.get('required_quantity', 1))
-        free  = int(promo.get('free_quantity', 0))
+        # Los valores se saneen acá y no en quien llama: esta función la usan el
+        # carrito, el panel del POS y las promos que bajan de Firestore, y basta
+        # con que UNA de esas puertas deje pasar un número raro para que la
+        # venta cobre de más o reviente en el mostrador. Un descuento negativo
+        # encarecía el producto; un combo con cantidad requerida en cero
+        # dividía por cero al armar el carrito.
+        dval  = max(0.0, float(promo.get('discount_value', 0) or 0))
+        req   = int(promo.get('required_quantity', 1) or 0)
+        free  = int(promo.get('free_quantity', 0) or 0)
         # Tope opcional. 0/None = sin tope.
         # Para percentage/fixed: cantidad máxima de UNIDADES con descuento.
         # Para 2x1/nxm/bundle: cantidad máxima de PACKS (grupos) con descuento.
@@ -262,7 +268,7 @@ class Promotion:
 
         elif ptype == 'bundle':
             # Precio especial para pack: discount_value es el precio total del pack
-            if quantity >= req and dval > 0:
+            if req > 0 and quantity >= req and dval > 0:
                 groups_natural = quantity // req
                 groups         = groups_natural if max_q <= 0 else min(groups_natural, max_q)
                 units_in_promo = groups * req
@@ -279,6 +285,12 @@ class Promotion:
                 return unit_price, 0.0, ""
 
         else:
+            return unit_price, 0.0, ""
+
+        # Una promo que no descuenta no es una promo. Pasa cuando el precio del
+        # combo quedó por encima de lo que sale suelto: en vez de cobrar de más,
+        # se ignora y la línea va a precio de lista.
+        if discount_total <= 0:
             return unit_price, 0.0, ""
 
         return round(max(eff_price, 0), 4), round(discount_total, 2), label

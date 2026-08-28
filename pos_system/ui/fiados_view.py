@@ -1261,6 +1261,9 @@ class FiadosView(QWidget):
 
         sale_id = None
         metodo = 'Saldo a favor'
+        # Se guarda fuera del if para poder ofrecer el comprobante al final:
+        # el diálogo de cobro es el que sabe si se eligió facturar y a quién.
+        dlg = None
 
         if resto > 0.009:
             if not self._caja_abierta():
@@ -1360,6 +1363,10 @@ class FiadosView(QWidget):
                    daemon=True).start()
         self._sync_items_bg(ids)
 
+        # El papel, antes de los refrescos: el cliente está en el mostrador
+        # esperando, y refrescar las vistas acá destruiría los widgets.
+        self._ofrecer_comprobante(sale_id, dlg)
+
         self._checked = set()
         self.refresh_data()
         self._refrescar_otras_vistas()
@@ -1443,6 +1450,10 @@ class FiadosView(QWidget):
                 f'La venta se registró pero el saldo a favor no quedó guardado:\n{e}'
             )
 
+        # Una entrega a cuenta también es plata que entró a la caja: el cliente
+        # tiene derecho a llevarse el comprobante de lo que dejó.
+        self._ofrecer_comprobante(sale_id, pago_dlg)
+
         self.refresh_data()
         self._refrescar_otras_vistas()
         QMessageBox.information(
@@ -1510,6 +1521,95 @@ class FiadosView(QWidget):
                 w.refresh_all_views()
         except Exception as e:
             logger.warning(f'Fiado: no se pudieron refrescar las otras vistas: {e}')
+
+    def _abrir_pdf(self, ruta):
+        """Abre un PDF con el visor del sistema."""
+        import os
+        import platform
+        import subprocess
+        try:
+            if platform.system() == 'Windows':
+                os.startfile(ruta)
+            elif platform.system() == 'Darwin':
+                subprocess.run(['open', ruta])
+            else:
+                subprocess.run(['xdg-open', ruta])
+            return True
+        except Exception as e:
+            logger.error(f'Fiado: no se pudo abrir el PDF {ruta}: {e}')
+            return False
+
+    def _ofrecer_comprobante(self, sale_id, dlg):
+        """El papel que se lleva el cliente cuando paga su cuenta.
+
+        Cobrar un fiado es una venta como cualquier otra: entra la plata a la
+        caja y se registra en `sales`. Pero acá no se ofrecía ningún
+        comprobante, así que el que venía a pagar la cuenta se iba sin nada
+        mientras que el que compraba en el mostrador se llevaba su ticket.
+
+        Es el mismo flujo que la venta normal: si en el cobro se eligió un
+        perfil de ARCA se emite la factura, y si no, se ofrece el ticket no
+        fiscal. La diferencia es el nombre: acá sabemos quién está pagando, así
+        que el ticket sale a nombre del cliente de la cuenta y no a
+        "Consumidor Final".
+        """
+        if not sale_id:
+            return
+        try:
+            venta = self.sale_model.get_by_id(int(sale_id))
+        except Exception as e:
+            logger.warning(f'Fiado: no se pudo leer la venta #{sale_id}: {e}')
+            return
+        if not venta:
+            return
+
+        venta = dict(venta)
+        cajero = self._cajero()
+        venta['username'] = venta['turno_nombre'] = venta['cajero'] = cajero
+
+        perfil   = getattr(dlg, 'selected_profile', None) if dlg is not None else None
+        cli_afip = getattr(dlg, 'selected_cliente', None) if dlg is not None else None
+        nombre = ((cli_afip or {}).get('razon_social')
+                  or (cli_afip or {}).get('nombre')
+                  or str((self._cliente or {}).get('nombre') or '')).strip()
+
+        if perfil:
+            try:
+                from pos_system.ui.factura_dialog import FacturaDialog
+                fac = FacturaDialog(
+                    self, sale=venta,
+                    auto_virtual=(venta.get('payment_type') == 'transfer'),
+                    perfil=perfil, cliente_data=cli_afip,
+                    notas=getattr(dlg, 'nota_factura', '') or '',
+                )
+                if fac.exec_() == QDialog.Accepted and getattr(fac, 'pdf_path', None):
+                    resp = QMessageBox.question(
+                        self, 'Imprimir', '¿Abrir la factura para imprimirla?',
+                        QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes)
+                    if resp == QMessageBox.Yes:
+                        self._abrir_pdf(fac.pdf_path)
+                    return
+            except Exception as e:
+                logger.exception('Fiado: no se pudo facturar el cobro')
+                QMessageBox.warning(self, 'Factura',
+                                    f'No se pudo emitir la factura:\n{e}')
+            # Si la factura no salió, el cliente no se va sin papel: se le
+            # ofrece igual el ticket de abajo.
+
+        resp = QMessageBox.question(
+            self, 'Ticket de compra', '¿Generar ticket de compra?',
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No)
+        if resp != QMessageBox.Yes:
+            return
+        try:
+            from pos_system.utils.ticket_printer import imprimir_ticket_no_fiscal
+            imprimir_ticket_no_fiscal(
+                venta, parent=self, cajero_name=cajero,
+                cliente_name=nombre or 'Consumidor Final',
+            )
+        except Exception as e:
+            QMessageBox.warning(self, 'Ticket',
+                                f'No se pudo imprimir el ticket: {e}')
 
     def _aviso_cobro_ok(self, total, resto, credito_usado, sale_id):
         detalle = f"Cobrado: ${fmt_money(total)}"

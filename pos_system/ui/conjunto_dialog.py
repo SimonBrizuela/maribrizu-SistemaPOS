@@ -34,48 +34,13 @@ logger = logging.getLogger(__name__)
 # Si el producto trae `conjunto_precio_unidad` cargado a mano, ese valor manda.
 FRACCION_MARGIN = 1.15
 
-TIPOS = {
-    'rollo':     {'label': 'Rollo',     'unidad_default': 'm',  'vende_por': ['fraccion', 'conjunto']},
-    'pack':      {'label': 'Pack',      'unidad_default': 'u',  'vende_por': ['unidad', 'conjunto']},
-    'caja':      {'label': 'Caja',      'unidad_default': 'u',  'vende_por': ['unidad', 'conjunto']},
-    'bobina':    {'label': 'Bobina',    'unidad_default': 'm',  'vende_por': ['fraccion', 'conjunto']},
-    'bolsa':     {'label': 'Bolsa',     'unidad_default': 'kg', 'vende_por': ['fraccion', 'conjunto']},
-    'plancha':   {'label': 'Plancha',   'unidad_default': 'm2', 'vende_por': ['fraccion', 'conjunto']},
-    'cartulina': {'label': 'Cartulina', 'unidad_default': 'u',  'vende_por': ['unidad', 'conjunto']},
-    'papel':     {'label': 'Papel',     'unidad_default': 'u',  'vende_por': ['unidad', 'conjunto']},
-    'carton':    {'label': 'Cartón',    'unidad_default': 'u',  'vende_por': ['unidad', 'conjunto']},
-    'goma_eva':  {'label': 'Goma Eva',  'unidad_default': 'u',  'vende_por': ['unidad', 'conjunto']},
-    'cinta':     {'label': 'Cinta',     'unidad_default': 'm',  'vende_por': ['fraccion', 'conjunto']},
-    'tela':      {'label': 'Tela',      'unidad_default': 'm',  'vende_por': ['fraccion', 'conjunto']},
-    'unidad':    {'label': 'Unidad',    'unidad_default': 'u',  'vende_por': ['unidad', 'conjunto']},
-    'otro':      {'label': 'Otro',      'unidad_default': 'u',  'vende_por': ['unidad', 'conjunto']},
-}
-
-UNIDADES = {
-    'm':   {'label': 'metros',      'short': 'm',  'base': 'longitud', 'factor': 1.0},
-    'cm':  {'label': 'centímetros', 'short': 'cm', 'base': 'longitud', 'factor': 0.01},
-    'u':   {'label': 'unidades',    'short': 'u',  'base': 'cuenta',   'factor': 1.0},
-    'g':   {'label': 'gramos',      'short': 'g',  'base': 'masa',     'factor': 0.001},
-    'kg':  {'label': 'kilogramos',  'short': 'kg', 'base': 'masa',     'factor': 1.0},
-    'l':   {'label': 'litros',      'short': 'L',  'base': 'volumen',  'factor': 1.0},
-    'ml':  {'label': 'mililitros',  'short': 'mL', 'base': 'volumen',  'factor': 0.001},
-    'm2':  {'label': 'metro²',      'short': 'm²', 'base': 'area',     'factor': 1.0},
-}
-
-# La webapp guarda nombres largos ('metros', 'unidades', etc); los normalizo
-# al short usado acá.
-WEBAPP_UNIDAD = {
-    'metros':    'm',
-    'centimetros': 'cm',
-    'cm':        'cm',
-    'unidades':  'u',
-    'gramos':    'g',
-    'kilos':     'kg',
-    'kg':        'kg',
-    'litros':    'l',
-    'l':         'l',
-    'm2':        'm2',
-}
+# Las tablas viven en el modelo, sin Qt: el nombre del renglon que arma este
+# diálogo lo vuelve a leer el panel para devolver stock al borrar una venta, y
+# `tienda/pruebas/stock_revert.test.js` compara las dos copias. Se reexportan
+# acá para no tocar a quien ya las importaba de este módulo.
+from pos_system.models.conjunto import (  # noqa: E402  (se reexportan)
+    TIPOS, UNIDADES, WEBAPP_UNIDAD,
+)
 
 
 def normalizar_unidad(unidad_raw):
