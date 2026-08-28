@@ -274,15 +274,23 @@ class TestSale:
         p = product_model.get_by_id(pid)
         assert p['stock'] == 27  # 30 - 3
 
-    def test_sale_insufficient_stock_raises(self, sale_model, product_model, open_register):
+    def test_se_puede_vender_sin_stock_suficiente(self, sale_model, product_model, open_register):
+        """Vender lo que el sistema dice que no hay tiene que poder hacerse.
+
+        En el mostrador la mercadería está ahí aunque el número diga otra cosa
+        (un conteo viejo, algo que entró y no se cargó). Trabar la venta manda
+        al cliente a la puerta; el stock queda en negativo, que es exactamente
+        cuánto falta reponer y así lo levantan las alertas.
+        """
         pid = product_model.create({'name': 'Escaso', 'price': 1.0, 'stock': 2})
-        with pytest.raises(ValueError):
-            sale_model.create({
-                'total_amount': 5.0,
-                'payment_type': 'cash',
-                'items': [{'product_id': pid, 'product_name': 'Escaso',
-                            'quantity': 5, 'unit_price': 1.0}]
-            })
+        sale_id = sale_model.create({
+            'total_amount': 5.0,
+            'payment_type': 'cash',
+            'items': [{'product_id': pid, 'product_name': 'Escaso',
+                        'quantity': 5, 'unit_price': 1.0}]
+        })
+        assert sale_id is not None
+        assert product_model.get_by_id(pid)['stock'] == -3
 
     def test_sale_invalid_payment_type(self, sale_model, product_model, open_register):
         pid = product_model.create({'name': 'Producto Test', 'price': 1.0, 'stock': 10})
@@ -326,22 +334,25 @@ class TestSale:
         assert summary['total_amount'] == 30.0
 
     def test_atomicity_on_failure(self, sale_model, product_model, open_register):
-        """If stock fails mid-sale, nothing should be committed"""
+        """Una venta inválida no deja nada a medio hacer.
+
+        El tipo de pago se valida antes de abrir la transacción, así que el
+        stock de los productos de esa venta tiene que quedar intacto: media
+        venta escrita es peor que ninguna.
+        """
         pid1 = product_model.create({'name': 'OK Product', 'price': 5.0, 'stock': 10})
-        pid2 = product_model.create({'name': 'No Stock', 'price': 5.0, 'stock': 1})
+        pid2 = product_model.create({'name': 'Otro', 'price': 5.0, 'stock': 4})
 
         with pytest.raises(ValueError):
             sale_model.create({
                 'total_amount': 10.0,
-                'payment_type': 'cash',
+                'payment_type': 'bitcoin',
                 'items': [
                     {'product_id': pid1, 'product_name': 'OK Product', 'quantity': 1, 'unit_price': 5.0},
-                    {'product_id': pid2, 'product_name': 'No Stock', 'quantity': 5, 'unit_price': 5.0},
+                    {'product_id': pid2, 'product_name': 'Otro', 'quantity': 1, 'unit_price': 5.0},
                 ]
             })
 
-        # Stock should be unchanged for both products
-        p1 = product_model.get_by_id(pid1)
-        p2 = product_model.get_by_id(pid2)
-        assert p1['stock'] == 10, "Stock of OK Product should not have changed"
-        assert p2['stock'] == 1, "Stock of No Stock should not have changed"
+        assert product_model.get_by_id(pid1)['stock'] == 10
+        assert product_model.get_by_id(pid2)['stock'] == 4
+        assert sale_model.get_sales_summary()['total_count'] == 0

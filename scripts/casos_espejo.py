@@ -72,7 +72,81 @@ CASOS_PUBLICACION = [
                   'stock': 0, 'rubro': 'LIBRERIA', 'sub_rubro': 'Cuadernos'},
         'rubros': ['LIBRERIA'], 'excluidos': {},
     },
+    # Sin lista de rubros = "contestame por el resto de las reglas". Asi
+    # pregunta quien quiere saber por que un producto no esta en la tienda.
+    # El sync reventaba con TypeError donde el panel contestaba.
+    {
+        'que_prueba': 'sin lista de rubros contesta por el resto de las reglas',
+        'datos': {'nombre': 'Cuaderno', 'estado': 'activo', 'precio_venta': 100,
+                  'stock': 5, 'rubro': 'JUGUETERIA', 'sub_rubro': 'Cuadernos'},
+        'rubros': None, 'excluidos': {},
+    },
+    {
+        'que_prueba': 'sin lista de rubros el subrubro excluido igual pesa',
+        'datos': {'nombre': 'Abrochadora', 'estado': 'activo', 'precio_venta': 100,
+                  'stock': 5, 'rubro': 'LIBRERIA', 'sub_rubro': 'Abrochadora'},
+        'rubros': None, 'excluidos': {'LIBRERIA': ['ABROCHADORA']},
+    },
+    {
+        'que_prueba': 'sin lista de rubros el que no tiene stock sigue sin salir',
+        'datos': {'nombre': 'Cuaderno', 'estado': 'activo', 'precio_venta': 100,
+                  'stock': 0, 'rubro': 'LIBRERIA', 'sub_rubro': 'Cuadernos'},
+        'rubros': None, 'excluidos': {},
+    },
+    # Hay stock, pero menos que la venta minima: no se puede comprar, asi que
+    # no se ofrece. Medido en el catalogo real: tres productos entraban al
+    # pedido y desaparecian al confirmarlo.
+    {
+        'que_prueba': 'con menos stock que la venta minima no sale',
+        'datos': {'nombre': 'Ojos Moviles', 'estado': 'activo', 'precio_venta': 100,
+                  'stock': 42, 'rubro': 'LIBRERIA', 'sub_rubro': 'Apliques',
+                  'tienda_minimo': 50},
+        'rubros': ['LIBRERIA'], 'excluidos': {},
+    },
+    {
+        'que_prueba': 'con stock justo para la venta minima si sale',
+        'datos': {'nombre': 'Ojos Moviles', 'estado': 'activo', 'precio_venta': 100,
+                  'stock': 50, 'rubro': 'LIBRERIA', 'sub_rubro': 'Apliques',
+                  'tienda_minimo': 50},
+        'rubros': ['LIBRERIA'], 'excluidos': {},
+    },
+    # Rubro apagado Y subrubro excluido a la vez: las dos implementaciones
+    # tienen que nombrar la MISMA regla, o el panel dice una cosa y el
+    # diagnostico del sync otra sobre el mismo producto.
+    {
+        'que_prueba': 'rubro apagado y subrubro excluido: gana el subrubro en los dos',
+        'datos': {'nombre': 'Abrochadora', 'estado': 'activo', 'precio_venta': 100,
+                  'stock': 5, 'rubro': 'JUGUETERIA', 'sub_rubro': 'Abrochadora'},
+        'rubros': ['LIBRERIA'], 'excluidos': {'JUGUETERIA': ['ABROCHADORA']},
+    },
 ]
+
+# La misma regla se llama distinto de cada lado ("rubro no habilitado" contra
+# "el rubro no está habilitado"). Para comparar interesa CUAL regla disparo, no
+# como esta redactada: cada motivo se lleva a una de estas claves.
+def clave_de_motivo(motivo):
+    m = str(motivo or '').lower()
+    if 'subrubro' in m:
+        return 'subrubro'
+    if 'rubro' in m:
+        return 'rubro'
+    if 'stock' in m:
+        return 'stock'
+    if 'precio' in m:
+        return 'precio'
+    if 'foto' in m:
+        return 'foto'
+    if 'activo' in m:
+        return 'activo'
+    if 'duplicado' in m:
+        return 'duplicado'
+    if 'nombre' in m:
+        return 'nombre'
+    if 'interno' in m:
+        return 'interno'
+    if 'mano' in m:
+        return 'mano'
+    return 'ok'
 
 
 def publicacion():
@@ -80,10 +154,12 @@ def publicacion():
     salida = []
     for caso in CASOS_PUBLICACION:
         excluidos = {r: set(s) for r, s in caso['excluidos'].items()}
-        ok, _motivo = se_publica(caso['datos'], set(caso['rubros']), excluidos)
+        rubros = None if caso['rubros'] is None else set(caso['rubros'])
+        ok, motivo = se_publica(caso['datos'], rubros, excluidos)
         salida.append({'que_prueba': caso['que_prueba'], 'datos': caso['datos'],
                        'rubros': caso['rubros'], 'excluidos': caso['excluidos'],
-                       'publica': bool(ok)})
+                       'publica': bool(ok), 'motivo': motivo,
+                       'regla': clave_de_motivo(motivo) if not ok else 'ok'})
     return salida
 
 

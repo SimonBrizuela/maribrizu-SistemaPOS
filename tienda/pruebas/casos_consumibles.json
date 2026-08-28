@@ -1,0 +1,100 @@
+[
+  {
+    "que_prueba": "una impresion descuenta su hoja",
+    "producto": {
+      "nombre": "IMPRESION A4",
+      "vinculaciones": [{ "doc_id": "papel-a4", "cantidad": 1, "nombre": "Papel Obra A4" }]
+    },
+    "item": { "producto": "IMPRESION A4", "cantidad": 10 }
+  },
+  {
+    "que_prueba": "una impresion color descuenta hoja y toner",
+    "producto": {
+      "nombre": "IMPRESION COLOR",
+      "vinculaciones": [
+        { "doc_id": "papel-a4", "cantidad": 1 },
+        { "doc_id": "toner", "cantidad": 0.05 }
+      ]
+    },
+    "item": { "producto": "IMPRESION COLOR", "cantidad": 4 }
+  },
+  {
+    "que_prueba": "el formato viejo sigue valiendo",
+    "producto": {
+      "nombre": "FOTOCOPIA",
+      "vinculado_a": "papel-a4",
+      "vinculado_cantidad": 1
+    },
+    "item": { "producto": "FOTOCOPIA", "cantidad": 20 }
+  },
+  {
+    "que_prueba": "un producto sin vinculos no descuenta nada",
+    "producto": { "nombre": "CUADERNO" },
+    "item": { "producto": "CUADERNO", "cantidad": 2 }
+  },
+  {
+    "que_prueba": "un item de un producto que no esta en el catalogo",
+    "producto": null,
+    "item": { "producto": "LO QUE SEA", "cantidad": 1 }
+  },
+  {
+    "que_prueba": "cada variedad decide su descuento",
+    "producto": {
+      "nombre": "IMPRESION FOTOGRAFICA",
+      "es_conjunto": true,
+      "conjunto_colores": [
+        { "color": "Brillante", "vinculaciones": [{ "doc_id": "papel-brillante", "cantidad": 1 }] },
+        { "color": "Mate", "vinculaciones": [{ "doc_id": "papel-mate", "cantidad": 1 }] }
+      ],
+      "vinculaciones": [{ "doc_id": "papel-comun", "cantidad": 1 }]
+    },
+    "item": { "producto": "IMPRESION FOTOGRAFICA", "conjunto_color": "Mate", "cantidad": 3 }
+  },
+  {
+    "que_prueba": "una variedad sin vinculos propios no cae a los del producto",
+    "producto": {
+      "nombre": "IMPRESION FOTOGRAFICA",
+      "es_conjunto": true,
+      "conjunto_colores": [{ "color": "Brillante" }],
+      "vinculaciones": [{ "doc_id": "papel-comun", "cantidad": 1 }]
+    },
+    "item": { "producto": "IMPRESION FOTOGRAFICA", "conjunto_color": "Brillante", "cantidad": 3 }
+  },
+  {
+    "que_prueba": "una variedad que no existe en el producto",
+    "producto": {
+      "nombre": "IMPRESION FOTOGRAFICA",
+      "es_conjunto": true,
+      "conjunto_colores": [{ "color": "Brillante", "vinculaciones": [{ "doc_id": "p1", "cantidad": 1 }] }]
+    },
+    "item": { "producto": "IMPRESION FOTOGRAFICA", "conjunto_color": "Satinado", "cantidad": 3 }
+  },
+  {
+    "que_prueba": "el color se compara sin importar mayusculas ni espacios",
+    "producto": {
+      "nombre": "IMPRESION FOTOGRAFICA",
+      "es_conjunto": true,
+      "conjunto_colores": [{ "color": "  Mate ", "vinculaciones": [{ "doc_id": "papel-mate", "cantidad": 1 }] }]
+    },
+    "item": { "producto": "IMPRESION FOTOGRAFICA", "conjunto_color": "MATE", "cantidad": 1 }
+  },
+  {
+    "que_prueba": "un conjunto sin color usa los vinculos del producto",
+    "producto": {
+      "nombre": "IMPRESION FOTOGRAFICA",
+      "es_conjunto": true,
+      "conjunto_colores": [{ "color": "Mate", "vinculaciones": [{ "doc_id": "papel-mate", "cantidad": 1 }] }],
+      "vinculaciones": [{ "doc_id": "papel-comun", "cantidad": 2 }]
+    },
+    "item": { "producto": "IMPRESION FOTOGRAFICA", "cantidad": 1 }
+  },
+  {
+    "que_prueba": "es_conjunto guardado como 1 cuenta igual",
+    "producto": {
+      "nombre": "IMPRESION FOTOGRAFICA",
+      "es_conjunto": 1,
+      "conjunto_colores": [{ "color": "Mate", "vinculaciones": [{ "doc_id": "papel-mate", "cantidad": 1 }] }]
+    },
+    "item": { "producto": "IMPRESION FOTOGRAFICA", "conjunto_color": "Mate", "cantidad": 1 }
+  }
+]

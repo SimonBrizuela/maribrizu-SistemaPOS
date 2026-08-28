@@ -224,6 +224,39 @@ describe('rubros y subrubros, panel contra sync', () => {
     }
   });
 
+  /*
+   * Cada lado redacta el motivo a su manera ("rubro no habilitado" contra "el
+   * rubro no está habilitado"). Lo que tiene que coincidir es QUÉ regla
+   * disparó: el panel le dice al usuario por qué un producto no está en la
+   * tienda, y el diagnóstico del sync contesta la misma pregunta. Si nombran
+   * reglas distintas, el que va a arreglarlo toca lo que no era.
+   */
+  const reglaDe = motivo => {
+    const m = String(motivo || '').toLowerCase();
+    if (m.includes('subrubro')) return 'subrubro';
+    if (m.includes('rubro')) return 'rubro';
+    if (m.includes('stock')) return 'stock';
+    if (m.includes('precio')) return 'precio';
+    if (m.includes('foto')) return 'foto';
+    if (m.includes('activo')) return 'activo';
+    if (m.includes('duplicado')) return 'duplicado';
+    if (m.includes('nombre')) return 'nombre';
+    if (m.includes('interno')) return 'interno';
+    if (m.includes('mano')) return 'mano';
+    return 'ok';
+  };
+
+  it('y las dos culpan a la misma regla', () => {
+    if (!publicacionSync) return;
+
+    for (const caso of publicacionSync) {
+      const motivo = motivoDeNoPublicar(caso.datos, caso.rubros, caso.excluidos);
+      expect(reglaDe(motivo),
+             `${caso.que_prueba} — el panel culpa a "${motivo}" y el sync a "${caso.motivo}"`)
+        .toBe(caso.regla);
+    }
+  });
+
   it('sin foto no sale a la vidriera: espera en la cola de fotos', () => {
     const base = { nombre: 'Cuaderno', estado: 'activo', precio_venta: 100,
                    stock: 5, rubro: 'LIBRERIA' };

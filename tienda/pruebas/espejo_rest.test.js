@@ -17,9 +17,11 @@ const getIdToken = vi.fn(async () => 'TOKEN');
 vi.mock('../../webapp/src/auth.js', () => ({ auth: { currentUser: { getIdToken } } }));
 
 const lote = { update: vi.fn(), set: vi.fn(), delete: vi.fn(), commit: vi.fn(async () => {}) };
-// El módulo del panel resuelve `firebase/firestore` desde webapp/node_modules,
-// no desde el de la tienda: el espía tiene que apuntar a ese archivo.
-vi.mock('../../webapp/node_modules/firebase/firestore/dist/index.mjs', () => ({
+// Antes esto apuntaba a `webapp/node_modules/firebase/...` con la ruta
+// completa, porque el módulo del panel resolvía su propia copia y el espía no
+// lo alcanzaba. Desde que `vitest.config.js` dedupea `firebase`, las dos puntas
+// resuelven al mismo módulo y alcanza con nombrarlo como lo nombra el código.
+vi.mock('firebase/firestore', () => ({
   doc: (_db, col, id) => ({ col, id }),
   getDoc: vi.fn(), getDocFromCache: vi.fn(), collection: vi.fn(), query: vi.fn(),
   orderBy: vi.fn(), limit: vi.fn(), getDocs: vi.fn(),

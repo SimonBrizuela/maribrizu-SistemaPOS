@@ -1,0 +1,107 @@
+{
+  "ventas": [
+    {
+      "que_prueba": "efectivo puro",
+      "venta": { "payment_type": "cash", "total_amount": 5000, "cash_received": 5000, "change_given": 0, "transfer_amount": 0 }
+    },
+    {
+      "que_prueba": "efectivo con vuelto: entra lo cobrado, no lo recibido",
+      "venta": { "payment_type": "cash", "total_amount": 5000, "cash_received": 10000, "change_given": 5000, "transfer_amount": 0 }
+    },
+    {
+      "que_prueba": "transferencia pura",
+      "venta": { "payment_type": "transfer", "total_amount": 21019, "cash_received": 0, "change_given": 0, "transfer_amount": 0 }
+    },
+    {
+      "que_prueba": "mixta: mitad y mitad",
+      "venta": { "payment_type": "mixed", "total_amount": 10000, "cash_received": 4000, "change_given": 0, "transfer_amount": 6000 }
+    },
+    {
+      "que_prueba": "mixta con vuelto: el vuelto sale del cajon",
+      "venta": { "payment_type": "mixed", "total_amount": 10000, "cash_received": 5000, "change_given": 1000, "transfer_amount": 6000 }
+    },
+    {
+      "que_prueba": "mixta sin desglose: no se inventa efectivo",
+      "venta": { "payment_type": "mixed", "total_amount": 2000, "cash_received": 0, "change_given": 0, "transfer_amount": 0 }
+    },
+    {
+      "que_prueba": "mixta editada: las partes no suman el total, se respeta la proporcion",
+      "venta": { "payment_type": "mixed", "total_amount": 2000, "cash_received": 4000, "change_given": 0, "transfer_amount": 6000 }
+    },
+    {
+      "que_prueba": "venta de cero",
+      "venta": { "payment_type": "mixed", "total_amount": 0, "cash_received": 0, "change_given": 0, "transfer_amount": 0 }
+    }
+  ],
+
+  "repartos": [
+    {
+      "que_prueba": "un solo renglon se lleva todo",
+      "subtotales": [10000], "efectivo": 4000, "transferencia": 6000
+    },
+    {
+      "que_prueba": "tres renglones parejos",
+      "subtotales": [3000, 3000, 4000], "efectivo": 4000, "transferencia": 6000
+    },
+    {
+      "que_prueba": "el resto va al ultimo renglon y no se pierde un centavo",
+      "subtotales": [1, 1, 1], "efectivo": 1, "transferencia": 2
+    },
+    {
+      "que_prueba": "renglones con decimales",
+      "subtotales": [1234.56, 765.44], "efectivo": 1000, "transferencia": 1000
+    },
+    {
+      "que_prueba": "venta de cero: la plata se le carga al primero",
+      "subtotales": [0, 0], "efectivo": 500, "transferencia": 0
+    },
+    {
+      "que_prueba": "sin renglones no hay nada que repartir",
+      "subtotales": [], "efectivo": 100, "transferencia": 0
+    }
+  ],
+
+  "items": [
+    { "que_prueba": "renglon de efectivo", "item": { "tipo_pago": "Efectivo", "subtotal": 5000 } },
+    { "que_prueba": "renglon de transferencia", "item": { "tipo_pago": "Transferencia", "subtotal": 5000 } },
+    { "que_prueba": "renglon mixto viejo, sin reparto guardado", "item": { "tipo_pago": "Mixto", "subtotal": 5000 } },
+    {
+      "que_prueba": "renglon mixto nuevo, con el reparto que hizo el POS",
+      "item": { "tipo_pago": "Mixto", "subtotal": 5000, "monto_efectivo": 2000, "monto_transferencia": 3000 }
+    },
+    {
+      "que_prueba": "renglon con reparto en cero explicito",
+      "item": { "tipo_pago": "Mixto", "subtotal": 5000, "monto_efectivo": 0, "monto_transferencia": 5000 }
+    },
+    { "que_prueba": "renglon viejo sin tipo de pago: sigue contando como efectivo", "item": { "subtotal": 800 } }
+  ],
+
+  "cajas": [
+    {
+      "que_prueba": "una caja con una venta en efectivo, una transferencia y una mixta",
+      "items": [
+        { "pc_id": "PC1", "num_venta": 1, "tipo_pago": "Efectivo", "subtotal": 5000 },
+        { "pc_id": "PC1", "num_venta": 2, "tipo_pago": "Transferencia", "subtotal": 3000 },
+        { "pc_id": "PC1", "num_venta": 3, "tipo_pago": "Mixto", "subtotal": 6000, "monto_efectivo": 2400, "monto_transferencia": 3600 },
+        { "pc_id": "PC1", "num_venta": 3, "tipo_pago": "Mixto", "subtotal": 4000, "monto_efectivo": 1600, "monto_transferencia": 2400 }
+      ]
+    },
+    {
+      "que_prueba": "dos PCs sobre la misma caja",
+      "items": [
+        { "pc_id": "PC1", "num_venta": 7, "tipo_pago": "Efectivo", "subtotal": 1000 },
+        { "pc_id": "PC2", "num_venta": 7, "tipo_pago": "Efectivo", "subtotal": 2000 }
+      ]
+    },
+    {
+      "que_prueba": "caja con una mixta vieja sin reparto: va toda a transferencia",
+      "items": [
+        { "pc_id": "PC1", "num_venta": 9, "tipo_pago": "Mixto", "subtotal": 2000 }
+      ]
+    },
+    {
+      "que_prueba": "caja vacia",
+      "items": []
+    }
+  ]
+}

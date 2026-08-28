@@ -260,6 +260,38 @@ describe('revalidar contra la base', () => {
     vi.mocked(traerProducto).mockResolvedValue(CINTA);
     expect(await carrito.revalidar()).toEqual([]);
   });
+
+  it('saca el rollo cuando el local dejo de venderlo entero', async () => {
+    // El panel tiene un interruptor por producto ("ofrecer el pack") y al
+    // apagarlo el espejo publica `precio_pack: null`. El renglon del rollo se
+    // quedaba con precio cero y el pedido entraba con ese rollo regalado.
+    carrito.agregar(CINTA, { esPack: true });
+    vi.mocked(traerProducto).mockResolvedValue({
+      ...CINTA, precio_pack: null, pack_contenido: null, pack_tipo: null,
+    });
+
+    expect(await carrito.revalidar())
+      .toEqual([{ tipo: 'baja', nombre: 'Cinta Raso 10mm' }]);
+    expect(carrito.estaVacio()).toBe(true);
+  });
+
+  it('el rollo sigue vivo si el local lo sigue vendiendo', async () => {
+    carrito.agregar(CINTA, { esPack: true });
+    vi.mocked(traerProducto).mockResolvedValue(CINTA);
+    expect(await carrito.revalidar()).toEqual([]);
+    expect(carrito.items()[0].precio).toBe(4500);
+  });
+
+  it('nunca deja un renglon en cero: sin precio, sale del pedido', async () => {
+    // Un producto que vuelve sin precio no se puede cobrar. Antes se quedaba
+    // en el pedido a $0 y el aviso decia "cambio de $600 a $0".
+    carrito.agregar(CARTULINA, { cantidad: 2 });
+    vi.mocked(traerProducto).mockResolvedValue({ ...CARTULINA, precio: 0 });
+
+    expect(await carrito.revalidar())
+      .toEqual([{ tipo: 'baja', nombre: 'Cartulina Luma' }]);
+    expect(carrito.estaVacio()).toBe(true);
+  });
 });
 
 describe('ahorro por llevar el pack', () => {

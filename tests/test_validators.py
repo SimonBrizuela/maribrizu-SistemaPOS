@@ -35,8 +35,14 @@ class TestValidatePrice:
         ok, err = validate_price(None)
         assert not ok
 
-    def test_too_large(self):
+    def test_diez_millones_es_un_precio_posible(self):
+        # El tope viejo eran 10 millones y con la inflación quedó corto: hay
+        # productos de librería que pasan ese número. Ahora entra.
         ok, err = validate_price(9999999.99)
+        assert ok and err is None
+
+    def test_too_large(self):
+        ok, err = validate_price(100000000.0)
         assert not ok
 
     def test_string_price(self):
