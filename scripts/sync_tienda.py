@@ -391,13 +391,18 @@ def imagenes_de(datos):
     return [str(suelta)] if suelta else []
 
 
-def se_publica(datos, rubros_habilitados, subrubros_excluidos=None):
+def se_publica(datos, rubros_habilitados=None, subrubros_excluidos=None):
     """Reglas de curado. El interruptor por producto gana sobre el rubro.
 
     El rubro manda: apagado no sale nada de el; prendido sale todo menos los
     subrubros que el panel dejo afuera en `subrubros_excluidos`. Gemelo de
     motivoDeNoPublicar() en webapp/src/tienda_espejo.js: si una de las dos
     cambia sin la otra, el sync vuelve a subir lo que el panel saco.
+
+    `rubros_habilitados=None` es "no filtres por rubro, contestame por el resto
+    de las reglas": asi pregunta quien quiere saber por que un producto no esta
+    en la tienda. El gemelo en JS ya lo aceptaba y aca reventaba con TypeError,
+    de modo que las dos puertas no contestaban lo mismo a la misma pregunta.
     """
     marca_manual = datos.get('tienda_publicar')
     if marca_manual is False:
@@ -431,19 +436,36 @@ def se_publica(datos, rubros_habilitados, subrubros_excluidos=None):
     # El stock se cuenta en unidades vendibles (metros sueltos, boligrafos
     # sueltos), no en packs cerrados. medidas_de() ya resuelve las tres formas
     # que usa el catalogo.
-    if medidas_de(datos)['stock'] <= 0:
+    medidas = medidas_de(datos)
+    if medidas['stock'] <= 0:
+        return False, 'sin stock'
+
+    # Quedan menos unidades que la venta minima: para el cliente es lo mismo
+    # que no haber. Medido sobre el catalogo real, tres productos salian a la
+    # vidriera con el minimo por encima del stock (ojos moviles con minimo 50 y
+    # 42 en gondola, dos tanzas de a 100 con 60 y 70): se podian mirar, se
+    # podian poner en el pedido, y al confirmar desaparecian con un cartel de
+    # "se quedo sin stock". Mejor no ofrecerlos.
+    if medidas.get('minimo') and medidas['stock'] < medidas['minimo']:
         return False, 'sin stock'
 
     if marca_manual is True:
         return True, 'incluido a mano'
 
     rubro = str(datos.get('rubro') or '').strip().upper()
-    if rubro not in rubros_habilitados:
-        return False, 'rubro no habilitado'
 
+    # El subrubro se mira ANTES que el rubro, igual que en el panel: quien
+    # pregunta sin pasar la lista de rubros igual tiene derecho a que le digan
+    # que el subrubro esta excluido, y con las dos listas puestas las dos
+    # implementaciones nombran la misma regla en vez de contestar distinto.
     sub = str(datos.get('sub_rubro') or '').strip().upper()
     if sub and sub in (subrubros_excluidos or {}).get(rubro, set()):
         return False, 'subrubro excluido'
+
+    if rubros_habilitados is None:
+        return True, 'sin filtro de rubros'
+    if rubro not in rubros_habilitados:
+        return False, 'rubro no habilitado'
 
     # La foto es lo ULTIMO que se mira, a proposito: asi "sin foto" significa
     # "sale a la vidriera apenas le saquen una", y no se mezcla con lo que igual

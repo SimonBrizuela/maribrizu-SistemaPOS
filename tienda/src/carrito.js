@@ -377,10 +377,27 @@ export async function revalidar() {
     const contenido = Number(producto.pack_contenido) || 1;
     const stockUnidades = variante ? Number(variante.stock ?? 0) : producto.stock;
 
+    // El local puede dejar de vender el rollo entero: el panel tiene un
+    // interruptor por producto y el espejo publica `precio_pack: null`. El
+    // renglon se quedaba con precio cero y el pedido entraba con el rollo
+    // regalado. No hay pack que revalidar: el renglon se da de baja.
+    if (r.es_pack && !(Number(producto.precio_pack) > 0
+                       && Number(producto.pack_contenido) > 0)) {
+      cambios.push({ tipo: 'baja', nombre: r.nombre });
+      continue;
+    }
+
     const stock = r.es_pack ? Math.floor(stockUnidades / contenido) : stockUnidades;
     const precio = r.es_pack
       ? Number(producto.precio_pack || 0)
       : (variante && variante.precio ? Number(variante.precio) : producto.precio);
+
+    // Red de seguridad: nada sale del carrito a cero. Un producto sin precio no
+    // se puede cobrar, y avisar "cambio de $600 a $0" no es avisar nada.
+    if (!(precio > 0)) {
+      cambios.push({ tipo: 'baja', nombre: r.nombre });
+      continue;
+    }
 
     // El minimo puede haber cambiado desde el panel mientras el carrito
     // esperaba, asi que se relee y se aplica antes de comparar contra el stock.

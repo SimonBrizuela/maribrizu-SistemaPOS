@@ -364,7 +364,16 @@ export function motivoDeNoPublicar(datos, rubrosHabilitados = null,
   if (!nombre) return 'sin nombre';
   if (NOMBRES_INTERNOS.some(p => nombre.startsWith(p))) return 'producto interno del POS';
   if (numero(datos, 'precio_venta') <= 0) return 'sin precio';
-  if (medidasDe(datos).stock <= 0) return 'sin stock';
+
+  const medidas = medidasDe(datos);
+  if (medidas.stock <= 0) return 'sin stock';
+
+  // Queda menos que la venta mínima: para el cliente es lo mismo que no haber.
+  // Sobre el catálogo real había tres productos así (ojos móviles con mínimo 50
+  // y 42 en góndola, dos tanzas de a 100 con 60 y 70): se veían en la vidriera,
+  // entraban al pedido, y al confirmar desaparecían con un "se quedó sin
+  // stock". Mejor no ofrecerlos.
+  if (medidas.minimo && medidas.stock < medidas.minimo) return 'sin stock';
 
   if (datos?.tienda_publicar === true) return null;
 

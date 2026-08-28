@@ -206,7 +206,11 @@ async function consultar() {
 
   try {
     const respuesta = await pedido();
-    if (respuesta.status < 500) return respuesta;
+    // 503 es "no hay clave de Gemini configurada". Es un 5xx pero no es un
+    // tropiezo: es la respuesta definitiva, y volver a preguntar da lo mismo
+    // 900 ms mas tarde. Se cortaba aca igual, pero recien despues de gastar la
+    // segunda llamada y de hacer esperar al primero que escribe.
+    if (respuesta.status < 500 || respuesta.status === 503) return respuesta;
     console.warn('[asistente] arranque en frio, reintentando:', respuesta.status);
   } catch (err) {
     console.warn('[asistente] no salio el pedido, reintentando:', err);

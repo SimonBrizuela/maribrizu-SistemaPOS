@@ -141,7 +141,7 @@ function mover(paso) {
   // tener que salir con Escape.
   if (indice === filas.length) { indice = -1; return; }
   filas[indice].setAttribute('aria-selected', 'true');
-  filas[indice].scrollIntoView({ block: 'nearest' });
+  filas[indice].scrollIntoView?.({ block: 'nearest' });
 }
 
 async function consultar(texto) {
@@ -154,12 +154,25 @@ async function consultar(texto) {
 }
 
 /**
+ * Sube desde donde ocurrió el evento hasta el elemento que se busca.
+ *
+ * Todo va delegado en el documento, y ahí llegan eventos cuyo blanco no es un
+ * elemento: el propio documento, la ventana, un nodo de texto. Ninguno tiene
+ * `closest` y el error se lo come el navegador, así que aparecía como que el
+ * buscador dejaba de responder sin ninguna pista de por qué.
+ */
+function desde(ev, selector) {
+  const blanco = ev?.target;
+  return typeof blanco?.closest === 'function' ? blanco.closest(selector) : null;
+}
+
+/**
  * Engancha el buscador. Se llama una vez al arrancar; el encabezado se repinta
  * seguido, así que todo va delegado en el documento.
  */
 export function iniciarSugerencias() {
   document.addEventListener('input', ev => {
-    const campo = ev.target.closest('.buscador__input');
+    const campo = desde(ev, '.buscador__input');
     if (!campo) return;
 
     const texto = campo.value.trim();
@@ -173,7 +186,7 @@ export function iniciarSugerencias() {
   });
 
   document.addEventListener('keydown', ev => {
-    const campo = ev.target.closest('.buscador__input');
+    const campo = desde(ev, '.buscador__input');
     if (!campo) return;
 
     if (ev.key === 'Escape') { cerrar(); campo.blur(); return; }
@@ -189,7 +202,7 @@ export function iniciarSugerencias() {
   });
 
   document.addEventListener('click', ev => {
-    if (ev.target.closest('[data-todo-el-catalogo]')) {
+    if (desde(ev, '[data-todo-el-catalogo]')) {
       ev.preventDefault();
       ambito = null;
       const campo = document.querySelector('.buscador__input');
@@ -198,8 +211,8 @@ export function iniciarSugerencias() {
     }
     // Un clic en una sugerencia navega por el enlace; el resto de la página
     // cierra el panel.
-    if (ev.target.closest('.sugerencia')) { cerrar(); return; }
-    if (!ev.target.closest('[data-buscador]')) cerrar();
+    if (desde(ev, '.sugerencia')) { cerrar(); return; }
+    if (!desde(ev, '[data-buscador]')) cerrar();
   });
 
   // Al enviar el formulario o cambiar de pantalla, el panel se va.
