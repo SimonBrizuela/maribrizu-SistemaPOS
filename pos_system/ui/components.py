@@ -133,10 +133,30 @@ class PriceInput(QFrame):
             pass
 
     def value(self) -> float:
-        """Retorna el valor como float (0.0 si está vacío)."""
-        text = self._edit.text().strip()
+        """El monto tipeado, como número. 0.0 si el campo está vacío.
+
+        Se lee con la coma decimal, que es la del teclado de acá. El validador
+        del campo usa el idioma del sistema (es_AR): acepta `3500,50` y hasta
+        `1.500,50`, y rechaza el punto. Pero esto lo leía con `float()` a secas,
+        que sólo entiende el punto — así que todo lo que se tipeaba normal
+        volvía como **cero**: un cierre contando `1500,50` registraba 0 y daba
+        un faltante de toda la caja, y un producto guardado a `3500,50` quedaba
+        con precio 0.
+        """
+        return self._a_numero(self._edit.text())
+
+    @staticmethod
+    def _a_numero(texto) -> float:
+        texto = str(texto or '').strip().replace(' ', '')
+        if not texto:
+            return 0.0
+        # Con coma, la coma es el decimal y los puntos son de miles ("1.500,50").
+        # Sin coma, el punto es el decimal ("3500.50"), que es como quedó
+        # guardado todo lo que ya se cargó.
+        if ',' in texto:
+            texto = texto.replace('.', '').replace(',', '.')
         try:
-            return float(text) if text else 0.0
+            return float(texto)
         except ValueError:
             return 0.0
 

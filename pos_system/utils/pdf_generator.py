@@ -67,6 +67,8 @@ def _parse_ar(s):
 import io
 import json
 import base64
+
+from pos_system.utils import medios_de_pago
 try:
     import qrcode
     _QRCODE_AVAILABLE = True
@@ -354,7 +356,7 @@ class PDFGenerator:
 
         # ── Datos de la venta ────────────────────────────────────────────────
         sale_date = _parse_ar(sale['created_at'])
-        payment_text = 'Efectivo' if sale['payment_type'] == 'cash' else 'Transferencia'
+        payment_text = medios_de_pago.etiqueta_de_pago(sale['payment_type'])
 
         info_data = [
             ['N° Ticket:', f'#{sale["id"]}'],
@@ -470,6 +472,12 @@ class PDFGenerator:
                 subtotales.append(['RECIBIDO:', f'${cash_recv:.2f}'])
             if change > 0:
                 subtotales.append(['VUELTO:', f'${change:.2f}'])
+        elif sale['payment_type'] == 'mixed':
+            # El cliente pagó de dos formas: el ticket muestra cuánto por cada
+            # una, que es lo que después le permite reclamar si algo no cierra.
+            _ef, _tr = medios_de_pago.partes_de_venta(sale)
+            subtotales.append(['EFECTIVO:', f'${_ef:.2f}'])
+            subtotales.append(['TRANSFERENCIA:', f'${_tr:.2f}'])
 
         sub_tbl = Table(subtotales, colWidths=[42*mm, 30*mm])
         sub_tbl.setStyle(TableStyle([
@@ -575,7 +583,15 @@ class PDFGenerator:
         # ── Datos de la venta ──────────────────────────────────────────────
         sale_dt = _parse_ar(sale.get('created_at'))
         payment_type = (sale.get('payment_type') or '').lower()
-        forma_pago = 'Efectivo' if payment_type == 'cash' else 'Transferencia'
+        # El ticket es lo que se lleva el cliente: si pagó una parte en mano y
+        # otra por transferencia, tiene que poder ver las dos. Antes decía
+        # "Transferencia" a secas y el efectivo entregado no figuraba.
+        if payment_type == 'mixed':
+            _ef, _tr = medios_de_pago.partes_de_venta(sale)
+            forma_pago = (f'Efectivo ${_fmt_money_ar(_ef)} + '
+                          f'Transferencia ${_fmt_money_ar(_tr)}')
+        else:
+            forma_pago = 'Efectivo' if payment_type == 'cash' else 'Transferencia'
 
         # Items + descuentos
         items_ctx = []
@@ -593,12 +609,12 @@ class PDFGenerator:
             row = {
                 'cantidad': _fmt_qty(qty),
                 'producto': name,
-                'subtotal': f'{subtotal:,.2f}',
-                'precio_unit': f'{unit_price:,.2f}',
+                'subtotal': _fmt_money_ar(subtotal),
+                'precio_unit': _fmt_money_ar(unit_price),
             }
             if disc_amount > 0 and orig_price > 0 and orig_price != unit_price:
-                row['precio_original'] = f'{orig_price:,.2f}'
-                row['descuento_monto'] = f'{disc_amount:,.2f}' if disc_amount > 0 else ''
+                row['precio_original'] = _fmt_money_ar(orig_price)
+                row['descuento_monto'] = _fmt_money_ar(disc_amount) if disc_amount > 0 else ''
                 if disc_type == 'manual':
                     # Descuento con nombre ("Jubilados", "Docente"): el nombre
                     # es el dato que importa, no el porcentaje.
@@ -642,12 +658,12 @@ class PDFGenerator:
             'cajero':            cajero_name or sale.get('cajero', '') or sale.get('username', ''),
             'cliente':           cliente_name or 'Consumidor Final',
             'items':             items_ctx,
-            'subtotal_total':    f'{subtotal_total:,.2f}',
-            'ahorro_total':      f'{ahorro_total:,.2f}' if ahorro_total > 0 else '',
-            'total':             f'{total:,.2f}',
+            'subtotal_total':    _fmt_money_ar(subtotal_total),
+            'ahorro_total':      _fmt_money_ar(ahorro_total) if ahorro_total > 0 else '',
+            'total':             _fmt_money_ar(total),
             'forma_pago':        forma_pago,
-            'recibido':          f'{cash_received:,.2f}' if (payment_type == 'cash' and cash_received > 0) else '',
-            'vuelto':            f'{change_given:,.2f}'  if (payment_type == 'cash' and cash_received > 0) else '',
+            'recibido':          _fmt_money_ar(cash_received) if (payment_type == 'cash' and cash_received > 0) else '',
+            'vuelto':            _fmt_money_ar(change_given)  if (payment_type == 'cash' and cash_received > 0) else '',
         }
 
         # ── Render Mustache (mini) ─────────────────────────────────────────
@@ -992,12 +1008,20 @@ class PDFGenerator:
         # Detalle de ventas
         story.append(Paragraph('DETALLE DE VENTAS', section_style))
         
+        # Una venta con Pago Mixto suma en las dos primeras filas: dejó plata en
+        # el cajón y en el banco. Por eso el TOTAL no es la suma de arriba, y se
+        # aclara cuántas fueron para que el número se pueda rastrear.
+        _mixtas = int(report.get('num_mixed_sales') or 0)
         sales_data = [
             ['Tipo de Pago', 'Cantidad', 'Total'],
             ['Efectivo', str(report['num_cash_sales']), f"${report['cash_sales']:.2f}"],
             ['Transferencia', str(report['num_transfer_sales']), f"${report['transfer_sales']:.2f}"],
-            ['TOTAL', str(report['total_sales_count']), f"${report['total_sales']:.2f}"],
         ]
+        if _mixtas:
+            sales_data.append(
+                ['de las cuales, mixtas', str(_mixtas), '(cuentan en las dos filas)'])
+        sales_data.append(
+            ['TOTAL', str(report['total_sales_count']), f"${report['total_sales']:.2f}"])
         
         sales_table = Table(sales_data, colWidths=[3*inch, 1.5*inch, 1.5*inch])
         sales_table.setStyle(TableStyle([
@@ -1270,6 +1294,11 @@ class PDFGenerator:
         
         story.append(Paragraph(f'Efectivo: {report["num_cash_sales"]} ventas - ${report["cash_sales"]:.2f}', normal_style))
         story.append(Paragraph(f'Transferencia: {report["num_transfer_sales"]} ventas - ${report["transfer_sales"]:.2f}', normal_style))
+        # Las mixtas dejaron plata de los dos lados y por eso figuran arriba en
+        # las dos filas: se aclara para que el total cierre a la vista.
+        if int(report.get('num_mixed_sales') or 0):
+            story.append(Paragraph(
+                f'({report["num_mixed_sales"]} fueron mixtas y cuentan en las dos)', normal_style))
         story.append(Paragraph(f'<b>Total Ventas: {report["total_sales_count"]} - ${report["total_sales"]:.2f}</b>', bold_style))
         
         story.append(Spacer(1, 3*mm))
