@@ -16,7 +16,7 @@ import {
 import { alertDialog, promptDialog } from '../components/dialogs.js';
 import { levantarLapida, levantarLapidas } from '../lapidas.js';
 import {
-  TIPOS_BULTO, bultoDe, labelTipo, aUnidades, aBultos, textoBultos, alertaPorBulto,
+  TIPOS_BULTO, bultoDe, labelTipo, aUnidades, aUnidadesEstable, aBultos, textoBultos, alertaPorBulto,
 } from '../bulto.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -227,7 +227,6 @@ const CATEGORIA_MAP = {
   'PEGAMENTO':        'PEGAMENTO',
   'PLASTICOLA':       'PEGAMENTO',
   'COLA':             'PEGAMENTO',
-  'CINTA DOBLE FAZ':  'PEGAMENTO',
   'CINTA DOBLE FAZ':  'PEGAMENTO',
 
   // Corrector
@@ -4409,8 +4408,15 @@ export async function renderCatalogo(container, db) {
       const _bultoGuardar = _bultoActual();
       const _avisaPorBulto = selAlertaUM.value === 'bulto' && !!_bultoGuardar;
       if (_avisaPorBulto) {
-        if (nuevoStockMin !== null) nuevoStockMin = aUnidades(nuevoStockMin, _bultoGuardar);
-        if (nuevoStockMax !== null) nuevoStockMax = aUnidades(nuevoStockMax, _bultoGuardar);
+        // `aUnidadesEstable` y no `aUnidades`: el campo muestra las cajas con
+        // dos decimales, así que abrir y guardar sin tocar nada corría el
+        // umbral (7 unidades se veían como 0,58 cajas y volvían como 6,96).
+        if (nuevoStockMin !== null) {
+          nuevoStockMin = aUnidadesEstable(nuevoStockMin, _bultoGuardar, prod.stock_min);
+        }
+        if (nuevoStockMax !== null) {
+          nuevoStockMax = aUnidadesEstable(nuevoStockMax, _bultoGuardar, prod.stock_max);
+        }
       }
 
       if (!nuevoNombre) { alertDialog({ title: 'Falta el nombre', message: 'El nombre no puede estar vacío.', type: 'warning' }); btn.disabled = false; btn.innerHTML = _btnLabel; return; }
@@ -4879,7 +4885,9 @@ export async function renderCatalogo(container, db) {
       if (fresco && fresco.por_producto) {
         resumen = fresco;
       } else {
-        resumen = computarResumen(await _ventasPorDiaCrudo());
+        // Con el catálogo, para que lo que se vende fraccionado cuente sus
+        // unidades reales y no la cantidad de packs.
+        resumen = computarResumen(await _ventasPorDiaCrudo(), allProductos);
       }
     }
 
@@ -8131,8 +8139,10 @@ export async function renderCatalogo(container, db) {
       const porBulto = document.getElementById('det_alerta_um').value === 'bulto' && !!_detBulto;
       const enBultos = { min: sMin, max: sMax };
       if (porBulto) {
-        if (sMin !== null) sMin = aUnidades(sMin, _detBulto);
-        if (sMax !== null) sMax = aUnidades(sMax, _detBulto);
+        // Ver el comentario de `aUnidadesEstable`: guardar sin tocar el campo
+        // no puede correr el umbral.
+        if (sMin !== null) sMin = aUnidadesEstable(sMin, _detBulto, p.stock_min);
+        if (sMax !== null) sMax = aUnidadesEstable(sMax, _detBulto, p.stock_max);
       }
       btn.disabled = true; btn.textContent = 'Guardando...';
       const _alertBefore = { stock_min: (p.stock_min ?? null), stock_max: (p.stock_max ?? null) };

@@ -22,6 +22,9 @@ import { collection, getDocs, doc, onSnapshot, query, orderBy, limit, setDoc, ar
 import { getCached } from './cache.js';
 import { fechaDMYtoYMD } from './config.js';
 import { alertaPorBulto, bultoDe, textoBultos } from './bulto.js';
+// Lo que se vende fraccionado llega con el nombre decorado y la cantidad en la
+// presentación vendida: hay que leerlo antes de medir el ritmo.
+import { parseNombreItem, unidadesDelRenglon } from './nombre_item.js';
 
 // ── Estado interno ───────────────────────────────────────────────────────────
 let _db = null;
@@ -196,6 +199,20 @@ const _RE_SERVICIO = /impres|fotocopia|plastific|anillad|encuaderna|escane|lamin
 // Insumos cuyo nombre puede mencionar el servicio ("Hoja para fotocopias A4"):
 // son lo que se REPONE, nunca deben quedar excluidos como servicio.
 const _RE_INSUMO = /hoja|resma|papel|cartulina|opalina|acetato|etiqueta/i;
+/**
+ * Un producto que no lleva control de stock.
+ *
+ * Lo dice su bandera, igual que en el POS (`stock_links.es_ilimitado`). El -1
+ * suelto es el fallback legacy de las fichas sin migrar: a -1 llega solo
+ * cualquier producto vendido estando en cero, así que por sí solo no alcanza
+ * para decidir, pero mientras queden fichas viejas se lo respeta.
+ */
+function _esIlimitado(p) {
+  if (!p) return false;
+  if (p.stock_ilimitado === true || p.stock_ilimitado === 1) return true;
+  return Number(p.stock) === -1;
+}
+
 function _esServicio(p) {
   if (!p) return false;
   const vinc = p.vinculaciones;
@@ -205,11 +222,17 @@ function _esServicio(p) {
   return _RE_SERVICIO.test(nombre);
 }
 
-function _alertasProducto(p) {
+/**
+ * Qué avisos genera UN producto. Se exporta para poder probarla: es la que
+ * decide qué aparece en "reponer" y en el toast del navegador, y sin ella la
+ * página entera se prueba a ojo. Ver `tienda/pruebas/alertas_stock.test.js`.
+ */
+export function _alertasProducto(p) {
   const out = [];
-  // -1 = ilimitado/servicio: nunca alertar.
-  const stockRaw = Number(p.stock);
-  if (stockRaw === -1) return out;
+  // Un servicio no se repone. Antes acá sólo se miraba el número -1, así que
+  // los servicios marcados cuyo stock no era exactamente -1 aparecían igual en
+  // la lista de reposición. Medidos 10 así en el catálogo.
+  if (_esIlimitado(p)) return out;
   if (_esServicio(p)) return out;   // servicios (impresión/fotocopia/etc.): no se reponen
 
   const nombreBase = p.nombre || '(sin nombre)';
@@ -385,6 +408,13 @@ async function _cargarVelocidades() {
     const consumo = new Map();
     const primerNombre = new Map();
     const primerDoc = new Map();
+    // Catálogo por nombre normalizado, para traducir las presentaciones. Se
+    // arma acá porque `_productos` ya está cargado cuando corre esto.
+    const catPorNombre = new Map();
+    for (const p of _productos) {
+      const n = _normNombre(p?.nombre);
+      if (n && !catPorNombre.has(n)) catPorNombre.set(n, p);
+    }
     for (const it of items) {
       if (it.deleted === true) continue;
       const ymd = fechaDMYtoYMD(it.fecha);
@@ -408,9 +438,19 @@ async function _cargarVelocidades() {
         }
       }
 
-      const nombre = _normNombre(it.producto || it.product_name || '');
+      // Por el nombre limpio. Lo que se vende fraccionado llega decorado
+      // ("[Verde]  CINTA  ·  2,5 m") y con ese texto no coincidía con ningún
+      // producto del catálogo: rollos, packs y cartulinas por color quedaban
+      // con ritmo cero y NUNCA se marcaban como "reponer urgente".
+      const crudo = it.producto || it.product_name || '';
+      const nombre = _normNombre(parseNombreItem(crudo).base || crudo);
       if (!nombre) continue;
-      const cant = Number(it.cantidad || it.quantity || 0);
+      // Y la cantidad viene en la presentación vendida: "1 pack(s)" es un 1 que
+      // son 500 hojas. Se traduce con el producto del catálogo.
+      const cant = unidadesDelRenglon(
+        { producto: crudo, cantidad: it.cantidad ?? it.quantity ?? 0 },
+        catPorNombre.get(nombre) || null,
+      );
       if (!cant) continue;
       // Las devoluciones/correcciones (cantidad negativa) restan del ritmo.
       mapa.set(nombre, (mapa.get(nombre) || 0) + cant);
@@ -533,7 +573,7 @@ function _coberturaTexto(a) {
 // ≥ MIN_VENTAS_RITMO en la ventana) y figura en cero/negativo o se agota en
 // ≤ 7 días. Es lo que el dueño necesita reponer aunque nunca configuró mínimos.
 function _alertaVelocidad(p) {
-  if (Number(p.stock) === -1) return null;            // servicio / ilimitado
+  if (_esIlimitado(p)) return null;                   // servicio / ilimitado
   if (_esServicio(p)) return null;                    // impresión/fotocopia/etc.: se repone el insumo, no el servicio
   const { unidades, dias } = _ritmoEfectivo(p);
   if (unidades < MIN_VENTAS_RITMO) return null;
@@ -1049,7 +1089,7 @@ export function obtenerCandidatosCompra(dias = 30) {
   const ign = _cargarIgnorados();
   const out = [];
   for (const p of _productos) {
-    if (Number(p.stock) === -1) continue;   // servicio / ilimitado
+    if (_esIlimitado(p)) continue;          // servicio / ilimitado
     if (_esServicio(p)) continue;           // impresión/fotocopia/etc: se repone el insumo
     if (p.doc_id != null && ign.has(String(p.doc_id))) continue;
     const ritmo = _ritmoEfectivo(p);

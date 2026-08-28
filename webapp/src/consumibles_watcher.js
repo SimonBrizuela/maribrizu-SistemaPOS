@@ -60,7 +60,13 @@ function _buscarVariedad(producto, color) {
 
 // Devuelve array de {target_id, cantidad_por_venta, contexto}.
 // Acepta formato nuevo (vinculaciones[]) y legacy (vinculado_a/cantidad/nombre).
-function _extraerLinks(obj, contexto) {
+//
+// Se exporta junto con `_resolverLinks` para poder compararlas contra su gemela
+// de Python (`links_de` / `links_del_item` en scripts/reconciliar_consumibles.py):
+// las dos deciden el mismo descuento de papel sobre el mismo item y si se
+// separan, el reconciliador de cada 6 h descuenta distinto que el panel.
+// Ver tienda/pruebas/consumibles.test.js.
+export function _extraerLinks(obj, contexto) {
   const out = [];
   if (!obj) return out;
   if (Array.isArray(obj.vinculaciones) && obj.vinculaciones.length > 0) {
@@ -85,7 +91,7 @@ function _extraerLinks(obj, contexto) {
   return out;
 }
 
-function _resolverLinks(producto, conjuntoColor) {
+export function _resolverLinks(producto, conjuntoColor) {
   // Conjunto con variedades + color del item → buscar links de la variedad.
   if (producto && (producto.es_conjunto === true || producto.es_conjunto === 1) && conjuntoColor) {
     const variedad = _buscarVariedad(producto, conjuntoColor);

@@ -17,6 +17,9 @@
 import { collection, getDocs, query, orderBy, limit, doc, setDoc, serverTimestamp } from 'firebase/firestore';
 import { getCached, peekCacheValue } from './cache.js';
 import { ensureCollections } from './store.js';
+// Lo que se vende fraccionado viaja con el nombre decorado y con la cantidad en
+// la presentación vendida: hay que leerlo antes de contarlo.
+import { parseNombreItem, unidadesDelRenglon } from './nombre_item.js';
 
 // Cada cuánto se considera "vencido" el resumen. 6h: el inventario es una vista
 // de gestión, no necesita el dato al segundo; entre regeneraciones igual hay
@@ -84,11 +87,32 @@ export function resumenEstaVencido(resumen, ttl = RESUMEN_TTL_MS) {
 }
 
 /**
+ * Índice de productos por nombre en mayúsculas, para resolver las
+ * presentaciones al computar la velocidad.
+ */
+function _indicePorNombre(catalogo) {
+  const idx = {};
+  for (const p of (catalogo || [])) {
+    const n = String(p?.nombre || '').toUpperCase().trim();
+    if (n && !idx[n]) idx[n] = p;
+  }
+  return idx;
+}
+
+/**
  * Computa el agregado de velocidad desde los items crudos de ventas_por_dia.
  * Pura: recibe los docs y devuelve el shape del resumen (sin generado_at).
+ *
+ * `catalogo` es opcional pero importa: lo que se vende fraccionado viaja con el
+ * nombre decorado ("[Verde]  GOMA EVA  ·  2 u", "PAPEL A4  ·  1 pack(s)") y con
+ * la cantidad en la presentación, no en unidades. Sin el catálogo se puede
+ * limpiar el nombre pero no traducir "1 pack(s)" a las 500 hojas que son.
+ *
  * @param {Array<{producto?:string, fecha?:string, cantidad?:number}>} docs
+ * @param {Array<object>} [catalogo] productos del catálogo
  */
-export function computarResumen(docs) {
+export function computarResumen(docs, catalogo = null) {
+  const porNombre = catalogo ? _indicePorNombre(catalogo) : null;
   const porProducto = {};
   const porDia = {};
   const hace90 = new Date(); hace90.setDate(hace90.getDate() - 90);
@@ -102,14 +126,24 @@ export function computarResumen(docs) {
   (docs || []).forEach(v => {
     const fechaV = _fechaDMY(v.fecha);
     if (!fechaV) return;
-    const cant = Number(v.cantidad) || 1;
+
+    // El nombre del renglón puede venir decorado con la variedad y la
+    // presentación. Indexarlo así lo dejaba sin coincidir con ningún producto
+    // del catálogo: TODO lo que se vende fraccionado figuraba con cero ventas,
+    // el Inventario lo mostraba "sin movimiento" y el Centro de Compras no lo
+    // proponía nunca.
+    const { base } = parseNombreItem(v.producto);
+    const nombre = String(base || '').toUpperCase().trim();
+    const prod = porNombre ? porNombre[nombre] : null;
+    // Y la cantidad viene en la presentación vendida: "1 pack(s)" es 1 y son
+    // 500 hojas. Sin traducirla, el rollo entero pesaba lo mismo que un metro.
+    const cant = unidadesDelRenglon(v, prod);
 
     if (fechaV >= hace14) {
       porDia[v.fecha] = (porDia[v.fecha] || 0) + cant;
       items14 += cant;
     }
 
-    const nombre = (v.producto || '').toUpperCase().trim();
     if (!nombre) return;
     if (fechaV < hace90) return;
 
@@ -161,13 +195,17 @@ export async function recomputarResumenInventario(db, { force = false } = {}) {
   _recomputando = true;
   try {
     ensureCollections(['ventas_por_dia']);
+    // El catálogo se usa para traducir las presentaciones ("1 pack(s)" → 500).
+    // Si el store todavía no lo tiene, el resumen sale igual: los nombres se
+    // limpian lo mismo y sólo quedan sin convertir los renglones fraccionados.
+    const catalogo = peekCacheValue('catalogo:all');
     const docs = await _leerVentasPorDia(db);
 
     // No pisar un resumen bueno con uno vacío por un snapshot transitorio:
     // si no llegaron docs pero ya existe un resumen, dejar el existente.
     if ((!docs || !docs.length) && actual && actual.por_producto) return actual;
 
-    const computed = computarResumen(docs);
+    const computed = computarResumen(docs, Array.isArray(catalogo) ? catalogo : null);
     await setDoc(doc(db, 'inventario_resumen', 'current'),
                  aPayloadFirestore(computed), { merge: false });
     _ultimoRecompute = Date.now();

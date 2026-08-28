@@ -49,84 +49,35 @@ function _linksDe(p) {
 
 function _esConjunto(p) { return p && (p.es_conjunto === true || p.es_conjunto === 1); }
 
+/**
+ * Un producto sin control de stock, al que no hay nada que devolverle: la venta
+ * nunca se lo descontó. Manda la bandera, igual que en el POS; el -1 suelto es
+ * el fallback legacy de las fichas sin migrar. Antes se miraba sólo el número,
+ * así que borrar una venta le SUMABA stock a un servicio marcado cuyo stock no
+ * era exactamente -1.
+ */
+export function _esIlimitado(p) {
+  if (!p) return false;
+  if (p.stock_ilimitado === true || p.stock_ilimitado === 1) return true;
+  return _num(p.stock) === -1;
+}
+
 // ── Nombre del item en `ventas_por_dia` ──────────────────────────────────────
 // El POS guarda el nombre "decorado" cuando la venta salió del diálogo de
 // producto conjunto:  "[Verde]  GOMA EVA 40X60  ·  2 u"  /  "PAPEL A4  ·  1 pack(s)".
-// Hay que separar variante, nombre real y presentación para poder ubicar el
-// producto en el catálogo y saber cuánto stock (en unidad base) devolver.
-const SEPARADOR = '·';
+// Separar variante, nombre real y presentación para ubicar el producto en el
+// catálogo y saber cuánto stock (en unidad base) devolver. La lectura del
+// nombre vive en `nombre_item.js`: la usa también la velocidad de venta del
+// Inventario, y las tablas de ahí son gemelas de las del POS.
+import {
+  CONJ_TIPOS, CONJ_UNIDADES, UNIDAD_WEBAPP, parseNombreItem, factorPorUnidad,
+} from './nombre_item.js';
 
-// Espejo de TIPOS / UNIDADES de pos_system/ui/conjunto_dialog.py
-const CONJ_TIPOS = {
-  rollo: 'rollo', pack: 'pack', caja: 'caja', bobina: 'bobina', bolsa: 'bolsa',
-  plancha: 'plancha', cartulina: 'cartulina', papel: 'papel', carton: 'cartón',
-  goma_eva: 'goma eva', cinta: 'cinta', tela: 'tela', unidad: 'unidad', otro: 'otro',
-};
-const CONJ_UNIDADES = {
-  m:  { short: 'm',  base: 'longitud', factor: 1 },
-  cm: { short: 'cm', base: 'longitud', factor: 0.01 },
-  u:  { short: 'u',  base: 'cuenta',   factor: 1 },
-  g:  { short: 'g',  base: 'masa',     factor: 0.001 },
-  kg: { short: 'kg', base: 'masa',     factor: 1 },
-  l:  { short: 'l',  base: 'volumen',  factor: 1 },
-  ml: { short: 'ml', base: 'volumen',  factor: 0.001 },
-  m2: { short: 'm²', base: 'area',     factor: 1 },
-};
-const UNIDAD_WEBAPP = {
-  metros: 'm', m: 'm', centimetros: 'cm', 'centímetros': 'cm', cm: 'cm',
-  unidades: 'u', u: 'u', gramos: 'g', g: 'g', kilos: 'kg', kilogramos: 'kg', kg: 'kg',
-  litros: 'l', l: 'l', mililitros: 'ml', ml: 'ml', m2: 'm2', 'm²': 'm2',
-};
-
-function _parseNombreItem(txt) {
-  let s = String(txt || '').trim();
-  let color = '';
-  const m = s.match(/^\[([^\]]*)\]\s*(.+)$/);
-  if (m) { color = m[1].trim(); s = m[2].trim(); }
-  let descripcion = '';
-  if (s.includes(SEPARADOR)) {
-    const partes = s.split(SEPARADOR);
-    descripcion = partes.pop().trim();
-    s = partes.join(SEPARADOR).trim();
-  }
-  return { color, base: s, descripcion };
-}
-
-/**
- * Cuánto stock (en unidad base del conjunto) representa UNA unidad del campo
- * `cantidad` del item, según la presentación escrita en el nombre ("1 pack(s)",
- * "2 u", "0.5 m").
- *
- * El POS arma el carrito así: si la cantidad vendida es entera, va como
- * `quantity = N` con el nombre diciendo "N <unidad>"; si es decimal, va como
- * `quantity = 1` y la cantidad real queda sólo en el nombre ("0.5 m"). Por eso
- * el factor incluye N cuando N no es entero.
- *
- * Devuelve null si la unidad no se puede interpretar: es preferible no devolver
- * nada y avisar, antes que devolver una cantidad equivocada.
- */
-function _factorPorUnidad(prod, descripcion) {
-  const m = String(descripcion || '').trim().match(/^([\d]+(?:[.,][\d]+)?)\s*(.+)$/);
-  if (!m) return null;
-  const n = Number(String(m[1]).replace(',', '.'));
-  if (!(n > 0)) return null;
-  const unidadTxt = m[2].trim().toLowerCase();
-  const porItem = Number.isInteger(n) ? 1 : n;
-
-  // Vendido por contenedor entero: "1 pack(s)", "2 rollo(s)".
-  const tipo = CONJ_TIPOS[String(prod.conjunto_tipo || '').toLowerCase()];
-  const contenido = _num(prod.conjunto_contenido);
-  if (tipo && unidadTxt === `${tipo}(s)`) {
-    return contenido > 0 ? porItem * contenido : null;
-  }
-
-  // Vendido por unidad base o por una unidad convertible (cm→m, g→kg, …).
-  const baseKey  = UNIDAD_WEBAPP[String(prod.conjunto_unidad_medida || '').toLowerCase()] || 'u';
-  const specBase = CONJ_UNIDADES[baseKey];
-  const spec = Object.values(CONJ_UNIDADES).find(u => u.short.toLowerCase() === unidadTxt);
-  if (!spec || !specBase || spec.base !== specBase.base) return null;
-  return porItem * (spec.factor / specBase.factor);
-}
+// Se siguen exportando con los nombres de antes: los usa la prueba que compara
+// las tablas contra las del POS.
+export { CONJ_TIPOS, CONJ_UNIDADES, UNIDAD_WEBAPP };
+export const _parseNombreItem = parseNombreItem;
+export const _factorPorUnidad = factorPorUnidad;
 
 function _variedadesDe(p) {
   return Array.isArray(p?.conjunto_colores) ? p.conjunto_colores : [];
@@ -293,7 +244,7 @@ export async function revertirStockVenta(db, { saleId, pcId = '', itemDocs = nul
       const target = porDocId.get(targetId);
       if (!target) { _omitir(dd.contexto || targetId, 'el producto vinculado ya no está en el catálogo'); continue; }
       const nombreTarget = target.nombre || target.name || targetId;
-      if (_num(target.stock) === -1) continue;   // servicio/ilimitado: nunca se descontó
+      if (_esIlimitado(target)) continue;   // servicio/ilimitado: nunca se descontó
       if (_esConjunto(target)) {
         if (_variedadesDe(target).length) {
           _omitir(nombreTarget, 'conjunto con variantes vinculado — ajustá el stock a mano');
@@ -331,7 +282,7 @@ export async function revertirStockVenta(db, { saleId, pcId = '', itemDocs = nul
       _omitir(nombreOriginal, 'vendido por variante o presentación — ajustá el stock a mano');
       continue;
     }
-    if (_num(prod.stock) === -1) continue;                  // servicio/ilimitado
+    if (_esIlimitado(prod)) continue;                       // servicio/ilimitado
     if (_linksDe(prod).length > 0) continue;                // el stock vive en los targets
 
     let cantBase = cantidad;

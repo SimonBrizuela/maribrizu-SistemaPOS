@@ -48,10 +48,12 @@ const pages = {
   dashboard:       { title: 'Dashboard',               loader: () => import('./pages/dashboard.js'),        render: 'renderDashboard',       cacheKey: 'dashboard:ventas',       needs: ['ventas_por_dia', 'ventas', 'historial_diario', 'catalogo'] },
   control_total:   { title: 'Control Total',           loader: () => import('./pages/control_total.js'),    render: 'renderControlTotal',    cacheKey: null,                      needs: ['ventas_por_dia', 'ventas', 'gastos', 'catalogo'] },
   ventas:          { title: 'Ventas',                  loader: () => import('./pages/ventas.js'),           render: 'renderVentas',          cacheKey: 'ventas:lista',           needs: ['ventas_por_dia', 'ventas'] },
-  productos:       { title: 'Productos Más Vendidos',  loader: () => import('./pages/productos.js'),        render: 'renderProductos',       cacheKey: 'productos:mas_vendidos', needs: ['ventas_por_dia'] },
+  // `catalogo` hace falta para traducir las presentaciones de lo que se vende
+  // fraccionado ("1 pack(s)" son 500 hojas) al armar el ranking.
+  productos:       { title: 'Productos Más Vendidos',  loader: () => import('./pages/productos.js'),        render: 'renderProductos',       cacheKey: 'productos:mas_vendidos', needs: ['ventas_por_dia', 'catalogo'] },
   historial:       { title: 'Historial Diario',        loader: () => import('./pages/historial.js'),        render: 'renderHistorial',       cacheKey: 'historial:diario',       needs: ['ventas_por_dia', 'ventas'] },
   cierres:         { title: 'Cierres de Caja',         loader: () => import('./pages/cierres.js'),          render: 'renderCierres',         cacheKey: 'cierres:caja',           needs: ['cierres_caja', 'caja_activa', 'ventas_por_dia', 'catalogo', 'gastos'] },
-  resumenes:       { title: 'Resúmenes Mensuales',     loader: () => import('./pages/resumenes.js'),        render: 'renderResumenes',       cacheKey: 'resumenes:mensuales',    needs: ['ventas_por_dia', 'ventas'] },
+  resumenes:       { title: 'Resúmenes Mensuales',     loader: () => import('./pages/resumenes.js'),        render: 'renderResumenes',       cacheKey: 'resumenes:mensuales',    needs: ['ventas_por_dia', 'ventas', 'catalogo'] },
   calendario:      { title: 'Calendario',              loader: () => import('./pages/calendario.js'),       render: 'renderCalendario',      cacheKey: null,                      needs: [] },
   catalogo:        { title: 'Catálogo de Productos',   loader: () => import('./pages/catalogo.js'),         render: 'renderCatalogo',        cacheKey: null,                      needs: ['catalogo', 'ventas_por_dia', 'inventario_resumen'] },
   turnos:          { title: 'Turnos / Cajeros',        loader: () => import('./pages/turnos.js'),           render: 'renderTurnos',          cacheKey: null,                      needs: [] },
@@ -714,9 +716,11 @@ function bootPreload(force = false) {
 
 // ── Inicializar app principal ──
 function initApp(session) {
-  // Mostrar nombre de usuario en sidebar
-  const statusText = document.getElementById('statusText');
-  if (statusText) statusText.textContent = session.display;
+  // El nombre de quien entró no va en #statusText: ese es el cartel de la
+  // conexión y `setStatus()` lo pisa con "Conectado" un instante después, así
+  // que escribirlo ahí era escribir para nadie. Va en el botón de salir, que es
+  // donde alguien mira cuando quiere saber con qué cuenta está adentro.
+  const quien = String(session?.display || '').trim();
 
   // Inicializar tema (claro por defecto) + botón toggle en el footer
   initTheme();
@@ -750,7 +754,7 @@ function initApp(session) {
     const logoutBtn = document.createElement('button');
     logoutBtn.id = 'logoutBtn';
     logoutBtn.className = 'sidebar-foot-btn';
-    logoutBtn.title = 'Cerrar sesión';
+    logoutBtn.title = quien ? `Cerrar sesión de ${quien}` : 'Cerrar sesión';
     logoutBtn.innerHTML = '<span class="material-icons">logout</span>';
     logoutBtn.addEventListener('click', () => { logout(); location.reload(); });
     sidebarFooter.appendChild(logoutBtn);

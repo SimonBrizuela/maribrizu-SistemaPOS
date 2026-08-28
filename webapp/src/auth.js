@@ -127,6 +127,12 @@ export async function loginWithGoogle() {
     const session = await resolveUser(cred.user);
 
     if (!session) {
+      // La sesión anterior se corta acá y no cuando Firebase avise: si en esta
+      // máquina había alguien logueado y otro entra con una cuenta sin
+      // permiso, entre el `signOut` y el aviso del listener `getSession()`
+      // seguía devolviendo la sesión vieja.
+      _session = null;
+      try { localStorage.removeItem(HINT_KEY); } catch (_) {}
       await signOut(auth);
       return {
         ok: false,
@@ -191,6 +197,9 @@ export async function completeLinkSignIn() {
     } catch (_) {}
 
     if (!session) {
+      // Ídem que en el login con Google: la sesión vieja se corta acá.
+      _session = null;
+      try { localStorage.removeItem(HINT_KEY); } catch (_) {}
       await signOut(auth);
       return { ok: false, error: `La cuenta ${email} no tiene acceso a este sistema.` };
     }

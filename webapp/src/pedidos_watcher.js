@@ -314,4 +314,11 @@ export function detenerPedidosWatcher() {
   _initialized = false;
   _baselineDone = false;
   _avisados = new Set();
+  // La lista también se vacía, y se avisa. Sin esto el badge del menú se queda
+  // con los pedidos del que acaba de salir: ya no hay nadie escuchando la
+  // colección, pero el número sigue ahí como si fuera de ahora.
+  _pendientes = [];
+  for (const cb of _listeners) {
+    try { cb([]); } catch (_) {}
+  }
 }

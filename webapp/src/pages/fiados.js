@@ -426,6 +426,10 @@ function itemsDeCliente(filas, cliente) {
   if (!cliente) return [];
   const localId = cliente.local_id ?? null;
   return filas.filter(it => {
+    // Una línea borrada desde la caja llega con `deleted` en true y el estado
+    // como estaba: si no se descarta acá, el producto que se dio de baja sigue
+    // sumando a la deuda y el cliente queda debiendo algo que ya no debe.
+    if (it.deleted === true) return false;
     const fid = String(it.cliente_fid || '').trim();
     if (fid) return fid === cliente.doc_id;
     if (localId != null && it.cliente_local_id != null) {
@@ -433,6 +437,19 @@ function itemsDeCliente(filas, cliente) {
     }
     return false;
   });
+}
+
+/**
+ * Los clientes que siguen en la lista.
+ *
+ * Hay dos formas de dar de baja a alguien y NO escriben lo mismo. Desde el
+ * panel se marca `activo: false` y `deleted: true`; desde la caja, el POS sólo
+ * marca `deleted`, y el cliente sigue con `activo: true`. Mirar una sola de las
+ * dos dejaba a alguien borrado en el mostrador figurando en el panel, con su
+ * deuda y con la posibilidad de anotarle cosas nuevas.
+ */
+function clientesVivos(clientes) {
+  return (clientes || []).filter(c => c.activo !== false && c.deleted !== true);
 }
 
 /** Saldo a favor = entregas a cuenta − lo ya aplicado a productos. */
@@ -558,9 +575,10 @@ function shell() {
 function pintarResumen(estado) {
   const el = document.getElementById('fiadoResumen');
   if (!el) return;
-  const pendientes = estado.items.filter(i => i.estado === 'pendiente');
+  const pendientes = estado.items.filter(i => i.estado === 'pendiente' && i.deleted !== true);
   const total = pendientes.reduce((a, i) => a + Number(i.subtotal || 0), 0);
-  const conDeuda = estado.clientes.filter(c => totalesCliente(estado.items, estado.pagos, c).deuda > 0).length;
+  const conDeuda = clientesVivos(estado.clientes)
+    .filter(c => totalesCliente(estado.items, estado.pagos, c).deuda > 0).length;
   el.innerHTML = total > 0
     ? `<b>$${fmt(total)}</b> sin cobrar · ${conDeuda} cliente${conDeuda === 1 ? '' : 's'} con cuenta abierta`
     : 'Todas las cuentas al día';
@@ -571,8 +589,7 @@ function pintarLista(estado) {
   if (!host) return;
   const q = _buscarCliente.trim().toLowerCase();
 
-  const filas = estado.clientes
-    .filter(c => c.activo !== false)
+  const filas = clientesVivos(estado.clientes)
     .map(c => ({ c, t: totalesCliente(estado.items, estado.pagos, c) }))
     .filter(({ c }) => {
       if (!q) return true;

@@ -154,6 +154,33 @@ export function aBultos(unidades, bulto) {
   return Math.round((_num(unidades) / c) * 10000) / 10000;
 }
 
+/** Con cuántos decimales se muestra un valor en bultos en el editor. */
+export function comoSeVeEnBultos(unidades, bulto) {
+  return Math.round(aBultos(unidades, bulto) * 100) / 100;
+}
+
+/**
+ * Las unidades a guardar a partir de lo que dice el campo en bultos.
+ *
+ * El editor muestra el umbral convertido a cajas y redondeado a dos decimales,
+ * así que la vuelta no es exacta: un mínimo de 7 unidades con cajas de 12 se
+ * ve como "0,58" y al guardar volvía como 6,96. El número cambiaba solo sin que
+ * nadie tocara nada, y con stock 7 el producto DEJABA de avisar (7 <= 6,96 es
+ * falso).
+ *
+ * Por eso, si el campo sigue mostrando exactamente lo que mostraría el valor
+ * guardado, se entiende que nadie lo tocó y se conserva el original. Si lo
+ * cambió, manda lo que escribió.
+ */
+export function aUnidadesEstable(cantBultos, bulto, unidadesOriginales = null) {
+  const original = _num(unidadesOriginales);
+  if (original > 0 && bulto && _num(bulto.contenido) > 0) {
+    const escrito = Math.round(_num(cantBultos) * 100) / 100;
+    if (comoSeVeEnBultos(original, bulto) === escrito) return original;
+  }
+  return aUnidades(cantBultos, bulto);
+}
+
 function _fmt(n) {
   const v = Math.round(_num(n) * 100) / 100;
   return v.toLocaleString('es-AR', { maximumFractionDigits: 2 });

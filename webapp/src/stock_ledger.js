@@ -34,6 +34,12 @@ export const MOTIVOS = {
 };
 
 function _num(v) {
+  // Sin dato es null, no cero. `Number(null)` da 0 y es finito, así que un
+  // movimiento anotado sólo con la cantidad —el caso del conjunto por
+  // variedad, donde el `stock` plano no aplica— quedaba guardado como "de 0 a
+  // 0" moviendo tres unidades: el historial afirmaba un punto de partida que
+  // nunca existió, que es peor que no decir nada.
+  if (v === null || v === undefined || v === '') return null;
   const n = Number(v);
   return Number.isFinite(n) ? Math.round(n * 10000) / 10000 : null;
 }
