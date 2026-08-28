@@ -4,6 +4,7 @@
  */
 import { collection, getDocs, query, where } from 'firebase/firestore';
 import { getSaleNumberMap, displayNumForVenta } from '../sale_numbers.js';
+import { etiquetaDePago, partesDeVenta, MIXTO, EFECTIVO } from '../medios_de_pago.js';
 
 export async function openSaleModal(venta, db) {
   // Eliminar modal previo si existe
@@ -11,7 +12,14 @@ export async function openSaleModal(venta, db) {
 
   // created_at se guarda con timezone AR (-03:00) → Firestore lo almacena como UTC correcto → no necesita compensación
   const dt = venta.created_at?.toDate ? venta.created_at.toDate() : new Date(venta.created_at);
-  const esEfectivo = venta.payment_type === 'cash';
+  // Una venta puede ser mixta (parte en efectivo, parte por transferencia). Este
+  // modal es a dónde va alguien a mirar cómo se pagó una venta puntual, así que
+  // el desglose tiene que estar acá: mostrarla como transferencia a secas
+  // escondía el efectivo que sí entró al cajón.
+  const etiqueta = etiquetaDePago(venta.payment_type);
+  const esMixto = etiqueta === MIXTO;
+  const esEfectivo = etiqueta === EFECTIVO;
+  const partes = partesDeVenta(venta);
   const saleId = venta.sale_id || venta.id;
   const saleNumMap = await getSaleNumberMap(db);
   const numDisplay = displayNumForVenta(venta, saleNumMap);
@@ -46,12 +54,21 @@ export async function openSaleModal(venta, db) {
             <div class="detail-item">
               <span class="detail-label">Tipo de Pago</span>
               <span class="detail-value">
-                <span class="badge ${esEfectivo ? 'badge-green' : 'badge-blue'}">
-                  ${esEfectivo ? '💵 Efectivo' : '🏦 Transferencia'}
+                <span class="badge ${esEfectivo ? 'badge-green' : esMixto ? 'badge-purple' : 'badge-blue'}">
+                  ${esEfectivo ? '💵 Efectivo' : esMixto ? '💵🏦 Mixto' : '🏦 Transferencia'}
                 </span>
               </span>
             </div>
-            ${esEfectivo ? `
+            ${esMixto ? `
+            <div class="detail-item">
+              <span class="detail-label">En efectivo</span>
+              <span class="detail-value">$${fmt(partes.efectivo)}</span>
+            </div>
+            <div class="detail-item">
+              <span class="detail-label">Por transferencia</span>
+              <span class="detail-value">$${fmt(partes.transferencia)}</span>
+            </div>` : ''}
+            ${(esEfectivo || esMixto) ? `
             <div class="detail-item">
               <span class="detail-label">Efectivo Recibido</span>
               <span class="detail-value">$${fmt(venta.cash_received)}</span>

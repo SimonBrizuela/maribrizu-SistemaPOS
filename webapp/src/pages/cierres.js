@@ -2,6 +2,13 @@ import { collection, getDocs, query, orderBy, where, limit, doc, updateDoc, setD
 import { getCached, invalidateCache } from '../cache.js';
 import { getFechaInicioDate, getFechaInicio, isVentaVarios2, isItemVarios2, fechaDMYtoYMD } from '../config.js';
 import { confirmDialog, alertDialog, escHtml } from '../components/dialogs.js';
+// Cómo se reparte cada renglón entre efectivo y transferencia. La regla vive
+// ahí y tiene gemelo en `pos_system/utils/medios_de_pago.py`, que es el que
+// arma el mismo cierre desde el POS. Ver tienda/pruebas/medios_pago.test.js.
+import { repartoDeItem } from '../medios_de_pago.js';
+// Los renglones fraccionados llegan con el nombre decorado y no cruzan contra
+// el catálogo si se los busca tal cual.
+import { buscarPorNombre } from '../nombre_item.js';
 
 export async function renderCierres(container, db) {
   // Shell vacío al toque: filtros + tabla con headers reales.
@@ -118,6 +125,10 @@ export async function renderCierres(container, db) {
         subtotal:          Number(it.subtotal || 0),
         cantidad:          Number(it.cantidad || 0),
         tipo_pago:         it.tipo_pago || '',
+        // Reparto entre los dos medios de pago, tal como lo dejó el POS. Los
+        // renglones viejos no lo traen y `repartoDeItem` cae al tipo_pago.
+        monto_efectivo:      it.monto_efectivo,
+        monto_transferencia: it.monto_transferencia,
         producto:          it.producto || it.product_name || '-',
         fecha_dt:          dt,
         fecha_ymd:         fechaDMYtoYMD(it.fecha),  // 'YYYY-MM-DD' del día de la venta
@@ -133,15 +144,19 @@ export async function renderCierres(container, db) {
     let total_efectivo = 0, total_transferencia = 0;
     const ventasEf = new Set();
     const ventasTr = new Set();
+    const ventas   = new Set();
     const prodMap  = {};
     for (const it of items) {
       if (!it.fecha_dt) continue;
       const t = it.fecha_dt.getTime();
       if (t < ini || t > fin) continue;
-      const esTr = it.tipo_pago === 'Transferencia';
-      const key  = `${it.pc_id}|${it.num_venta}`;
-      if (esTr) { total_transferencia += it.subtotal; ventasTr.add(key); }
-      else      { total_efectivo      += it.subtotal; ventasEf.add(key); }
+      const parte = repartoDeItem(it);
+      const key   = `${it.pc_id}|${it.num_venta}`;
+      total_efectivo      += parte.efectivo;
+      total_transferencia += parte.transferencia;
+      ventas.add(key);
+      if (parte.efectivo)      ventasEf.add(key);
+      if (parte.transferencia) ventasTr.add(key);
       if (!prodMap[it.producto]) {
         prodMap[it.producto] = { product_name: it.producto, total_quantity: 0, total_amount: 0 };
       }
@@ -154,7 +169,9 @@ export async function renderCierres(container, db) {
       total_transferencia,
       num_ventas_efectivo:      ventasEf.size,
       num_ventas_transferencia: ventasTr.size,
-      total_transacciones:      ventasEf.size + ventasTr.size,
+      // Ventas distintas, no la suma: una mixta figura en las dos listas
+      // porque dejó plata en las dos.
+      total_transacciones:      ventas.size,
       productos_vendidos:       Object.values(prodMap).sort((a, b) => b.total_amount - a.total_amount),
     };
   }
@@ -268,14 +285,18 @@ export async function renderCierres(container, db) {
       let total_efectivo = 0, total_transferencia = 0;
       const ventasEf = new Set();
       const ventasTr = new Set();
+      const ventas   = new Set();
       const prodMap  = {};
       const ventasPorDia = {};  // ymd -> total
       for (const it of items) {
         if (it.cash_register_id !== registerId) continue;
-        const esTr = it.tipo_pago === 'Transferencia';
-        const key  = `${it.pc_id}|${it.num_venta}`;
-        if (esTr) { total_transferencia += it.subtotal; ventasTr.add(key); }
-        else      { total_efectivo      += it.subtotal; ventasEf.add(key); }
+        const parte = repartoDeItem(it);
+        const key   = `${it.pc_id}|${it.num_venta}`;
+        total_efectivo      += parte.efectivo;
+        total_transferencia += parte.transferencia;
+        ventas.add(key);
+        if (parte.efectivo)      ventasEf.add(key);
+        if (parte.transferencia) ventasTr.add(key);
         if (!prodMap[it.producto]) prodMap[it.producto] = { product_name: it.producto, total_quantity: 0, total_amount: 0 };
         prodMap[it.producto].total_quantity += it.cantidad || 1;
         prodMap[it.producto].total_amount   += it.subtotal;
@@ -286,7 +307,7 @@ export async function renderCierres(container, db) {
       s.total_ventas             = total_efectivo + total_transferencia;
       s.num_ventas_efectivo      = ventasEf.size;
       s.num_ventas_transferencia = ventasTr.size;
-      s.total_transacciones      = ventasEf.size + ventasTr.size;
+      s.total_transacciones      = ventas.size;
       s.productos_vendidos       = Object.values(prodMap).sort((a, b) => b.total_amount - a.total_amount);
       // Día operacional = el de mayor venta dentro de los items de esta caja.
       const top = Object.entries(ventasPorDia).sort((a, b) => b[1] - a[1])[0];
@@ -626,6 +647,7 @@ async function calcularYMergearStatsCaja(db, registerId, extras = {}) {
   let total_efectivo = 0, total_transferencia = 0;
   const ventasEf = new Set();
   const ventasTr = new Set();
+  const ventas   = new Set();
   const productosMap = {};
   let lastItemDt = null;
   for (const d of itemsSnap.docs) {
@@ -637,13 +659,12 @@ async function calcularYMergearStatsCaja(db, registerId, extras = {}) {
     const parts = d.id.split('_');
     const pcId = parts.length >= 3 ? parts.slice(0, -2).join('_') : '';
     const nvKey = `${pcId}|${it.num_venta}`;
-    if (it.tipo_pago === 'Transferencia') {
-      total_transferencia += subtotal;
-      ventasTr.add(nvKey);
-    } else {
-      total_efectivo += subtotal;
-      ventasEf.add(nvKey);
-    }
+    const parte = repartoDeItem(it);
+    total_efectivo      += parte.efectivo;
+    total_transferencia += parte.transferencia;
+    ventas.add(nvKey);
+    if (parte.efectivo)      ventasEf.add(nvKey);
+    if (parte.transferencia) ventasTr.add(nvKey);
     const nombre = (it.producto || it.product_name || '').trim();
     if (nombre) {
       if (!productosMap[nombre]) productosMap[nombre] = { product_name: nombre, total_quantity: 0, total_amount: 0 };
@@ -671,7 +692,9 @@ async function calcularYMergearStatsCaja(db, registerId, extras = {}) {
   const num_ventas_efectivo      = ventasEf.size;
   const num_ventas_transferencia = ventasTr.size;
   const total_ventas             = total_efectivo + total_transferencia;
-  const total_transacciones      = num_ventas_efectivo + num_ventas_transferencia;
+  // Ventas distintas: una mixta aportó a las dos columnas y sumarlas la
+  // contaría dos veces.
+  const total_transacciones      = ventas.size;
   const monto_inicial = Number(extras.monto_inicial) || 0;
   const total_retiros = Number(extras.total_retiros) || 0;
   const monto_esperado = monto_inicial + total_efectivo - total_retiros;
@@ -920,7 +943,11 @@ function openCierreModal(c, catByName, gastosAll, db, onSaved) {
   let cmv = 0, ingresoConCosto = 0, ingresoSinCosto = 0, itemsSinCosto = 0;
   const productos = productosRaw.map(p => {
     const nombre    = (p.product_name || p.nombre || '').toUpperCase().trim();
-    const cat       = (catByName || {})[nombre];
+    // Por el nombre limpio: lo que se vende fraccionado llega decorado
+    // ("PAPEL A4 · 1 pack(s)") y no cruzaba contra el catálogo. Su costo
+    // quedaba en cero y el turno lo contaba como "ingreso sin costo cargado"
+    // teniendo el costo cargado desde siempre.
+    const cat       = buscarPorNombre(catByName, p.product_name || p.nombre);
     const cantidad  = Number(p.total_quantity || p.cantidad || 0);
     const ingreso   = Number(p.total_amount || p.total || 0);
     const costoUnit = Number(cat?.costo || 0);

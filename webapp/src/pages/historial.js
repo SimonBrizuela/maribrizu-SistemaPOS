@@ -3,6 +3,9 @@ import { openSaleModal } from '../components/modal.js';
 import { getCached } from '../cache.js';
 import { getFechaInicio, fechaDMYtoYMD, isItemVarios2 } from '../config.js';
 import { getSaleNumberMap, displayNumForItem } from '../sale_numbers.js';
+// Una venta con Pago Mixto deja una parte en el cajón y otra en el banco:
+// `repartoDeItem` es quien sabe cuánto va a cada lado. Gemelo en Python.
+import { repartoDeItem } from '../medios_de_pago.js';
 
 export async function renderHistorial(container, db) {
   // Shell vacío al toque: tablas con headers reales visibles.
@@ -85,9 +88,10 @@ export async function renderHistorial(container, db) {
     }
     const r = resumenMap[f];
     const sub = Number(v.subtotal || 0);
+    const parte = repartoDeItem(v);
     r.total += sub;
-    if ((v.tipo_pago || '') === 'Transferencia') r.transferencia += sub;
-    else r.efectivo += sub;
+    r.transferencia += parte.transferencia;
+    r.efectivo      += parte.efectivo;
     r._ventas.add(`${v._pc_id || ''}|${v.num_venta}`);
   }
   const historial = Object.values(resumenMap)
@@ -239,8 +243,8 @@ export async function renderHistorial(container, db) {
     for (const g of groups) {
       g._totalDay      = g.rows.reduce((s, r) => s + Number(r.subtotal || 0), 0);
       g._totalQty      = g.rows.reduce((s, r) => s + Number(r.cantidad || 0), 0);
-      g._efectivoMonto = g.rows.filter(r => (r.tipo_pago || '') !== 'Transferencia').reduce((s, r) => s + Number(r.subtotal || 0), 0);
-      g._transfMonto   = g.rows.filter(r => (r.tipo_pago || '') === 'Transferencia').reduce((s, r) => s + Number(r.subtotal || 0), 0);
+      g._efectivoMonto = g.rows.reduce((s, r) => s + repartoDeItem(r).efectivo, 0);
+      g._transfMonto   = g.rows.reduce((s, r) => s + repartoDeItem(r).transferencia, 0);
       g._numVentas     = new Set(g.rows.map(r => `${r._pc_id || ''}|${r.num_venta}`)).size;
     }
 
@@ -260,8 +264,8 @@ export async function renderHistorial(container, db) {
     cont.innerHTML = meses.map((m, mIdx) => {
       const allRows = m.days.flatMap(d => d.rows);
       const totalMes    = allRows.reduce((s, r) => s + Number(r.subtotal || 0), 0);
-      const efectivoMes = allRows.filter(r => (r.tipo_pago || '') !== 'Transferencia').reduce((s, r) => s + Number(r.subtotal || 0), 0);
-      const transfMes   = allRows.filter(r => (r.tipo_pago || '') === 'Transferencia').reduce((s, r) => s + Number(r.subtotal || 0), 0);
+      const efectivoMes = allRows.reduce((s, r) => s + repartoDeItem(r).efectivo, 0);
+      const transfMes   = allRows.reduce((s, r) => s + repartoDeItem(r).transferencia, 0);
       const ventasMes   = new Set(allRows.map(r => `${r._pc_id || ''}|${r.num_venta}|${r.fecha}`)).size;
       const isFirstMonth = mIdx === 0;
       // Mes más reciente: render headers de todos los días + body de la primera tabla.

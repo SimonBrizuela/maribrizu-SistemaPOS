@@ -1,8 +1,14 @@
 import { collection, getDocs, query, orderBy, where, limit } from 'firebase/firestore';
-import { getCached } from '../cache.js';
+import { getCached, peekCacheValue } from '../cache.js';
 import { getFechaInicio, isVentaVarios2, isItemVarios2 } from '../config.js';
 import { getSaleNumberMap, displayNumForVenta } from '../sale_numbers.js';
 import { alertDialog, escHtml } from '../components/dialogs.js';
+// Una venta con Pago Mixto deja una parte en el cajón y otra en el banco:
+// `repartoDeItem` es quien sabe cuánto va a cada lado. Gemelo en Python.
+import { repartoDeItem } from '../medios_de_pago.js';
+// Lo fraccionado llega con el nombre decorado y la cantidad en la presentación
+// vendida: hay que leerlo antes de armar el top de productos.
+import { parseNombreItem, buscarPorNombre, unidadesDelRenglon } from '../nombre_item.js';
 
 export async function renderResumenes(container, db) {
   // Shell vacío al toque: stat cards arriba + tabla con headers reales.
@@ -75,6 +81,14 @@ export async function renderResumenes(container, db) {
   const monthNames = ['enero','febrero','marzo','abril','mayo','junio',
                       'julio','agosto','septiembre','octubre','noviembre','diciembre'];
 
+  // El catálogo, para traducir las presentaciones del top de productos. Si el
+  // store todavía no lo tiene, el resumen sale igual sin la conversión.
+  const catPorNombre = {};
+  for (const p of (peekCacheValue('catalogo:all') || [])) {
+    const n = String(p?.nombre || '').toUpperCase().trim();
+    if (n && !catPorNombre[n]) catPorNombre[n] = p;
+  }
+
   const itemsFiltrados = itemsRaw.filter(v => {
     if (v.deleted === true) return false;
     if (isItemVarios2(v)) return false;
@@ -107,14 +121,22 @@ export async function renderResumenes(container, db) {
     if (!yy || !mm) continue;
     const g = getMes(Number(yy), Number(mm));
     const sub = Number(it.subtotal || 0);
+    const parte = repartoDeItem(it);
     g.total += sub;
-    if ((it.tipo_pago || '') === 'Transferencia') g.transferencia += sub;
-    else g.efectivo += sub;
+    g.transferencia += parte.transferencia;
+    g.efectivo      += parte.efectivo;
     g._ventas.add(`${it._pc_id || ''}|${it.num_venta}`);
 
-    const name = it.producto || it.product_name || '?';
+    // Por el nombre limpio y con las unidades traducidas: agrupar por el
+    // renglón decorado partía el mismo producto en varias filas del top, y
+    // sumar "1 rollo(s)" con "2 m" daba un 3 que no significa nada.
+    const crudo = it.producto || it.product_name || '?';
+    const name = String(parseNombreItem(crudo).base || crudo).trim() || '?';
     if (!g._prods[name]) g._prods[name] = { producto: name, cantidad: 0, total: 0 };
-    g._prods[name].cantidad += Number(it.cantidad || 1);
+    g._prods[name].cantidad += unidadesDelRenglon(
+      { producto: crudo, cantidad: it.cantidad ?? 1 },
+      buscarPorNombre(catPorNombre, crudo),
+    );
     g._prods[name].total    += sub;
   }
 

@@ -3,6 +3,9 @@ import { openSaleModal } from '../components/modal.js';
 import { getSaleNumberMap, displayNumForVenta } from '../sale_numbers.js';
 import { isVentaVarios2 } from '../config.js';
 import { getCached, peekCache } from '../cache.js';
+// Cuánto de cada venta entró en mano y cuánto por transferencia. Gemelo en
+// Python: `pos_system/utils/medios_de_pago.py`.
+import { partesDeVenta } from '../medios_de_pago.js';
 
 const CACHE_KEY_VENTAS = 'turnos:ventas1000';
 const CACHE_KEY_NUMMAP = 'turnos:saleNumMap';
@@ -171,10 +174,13 @@ export async function renderTurnos(container, db) {
       if (!porCajero[cajero]) {
         porCajero[cajero] = { ventas: [], total: 0, efectivo: 0, transferencia: 0 };
       }
+      // Una venta con Pago Mixto entró por los dos lados: se reparte, así el
+      // efectivo del turno es el que de verdad quedó en el cajón.
+      const parte = partesDeVenta(v);
       porCajero[cajero].ventas.push(v);
       porCajero[cajero].total        += v.total_amount || 0;
-      porCajero[cajero].efectivo     += v.payment_type === 'cash' ? (v.total_amount || 0) : 0;
-      porCajero[cajero].transferencia+= v.payment_type !== 'cash' ? (v.total_amount || 0) : 0;
+      porCajero[cajero].efectivo     += parte.efectivo;
+      porCajero[cajero].transferencia+= parte.transferencia;
     }
 
     const totalGeneral = Object.values(porCajero).reduce((s, c) => s + c.total, 0);

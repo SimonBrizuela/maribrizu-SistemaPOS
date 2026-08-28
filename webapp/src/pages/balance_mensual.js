@@ -17,6 +17,9 @@ import { cssVar } from '../theme.js';
 import { confirmDialog, alertDialog, promptDialog } from '../components/dialogs.js';
 import { refreshVencimientos, setPagosMesFromDias } from './calendario_core.js';
 import { cadenaMeses, cajaAlDia, aperturaDe, hayMontos, rangoMeses, cuentasDelPeriodo, cuentasMpDe, normCuenta } from '../balance_cadena.js';
+// Cuánto de cada venta entró en mano y cuánto por transferencia. Gemelo de
+// `pos_system/utils/medios_de_pago.py`; existe por el Pago Mixto.
+import { partesDeVenta } from '../medios_de_pago.js';
 
 const MEDIOS = [
   { k: 'efectivo', label: 'Efectivo' },
@@ -3374,9 +3377,15 @@ async function autofillDia(dia, body) {
     if (v.deleted === true || isVentaVarios2(v)) return;
     const f = parseArDate(v.created_at);
     if (f.toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }) !== iso) return;
-    const monto = v.total_amount || 0; acc.count++;
-    if (v.payment_type === 'cash') acc.efectivo += monto;
-    else { const c = v.transfer_account || v.cuenta_id || 'cuenta1'; if (c === 'cuenta2') acc.lapos += monto; else acc.mp += monto; }
+    acc.count++;
+    // Una venta con Pago Mixto dejó parte en el cajón y parte en la cuenta:
+    // se reparte, no se le asigna entera a uno de los dos.
+    const { efectivo, transferencia } = partesDeVenta(v);
+    acc.efectivo += efectivo;
+    if (transferencia) {
+      const c = v.transfer_account || v.cuenta_id || 'cuenta1';
+      if (c === 'cuenta2') acc.lapos += transferencia; else acc.mp += transferencia;
+    }
   });
   if (!acc.count) {
     return alertDialog({ title: 'Sin ventas', message: `No hay ventas registradas el ${fechaLarga(iso)}.`, type: 'warning' });
@@ -3743,11 +3752,15 @@ async function autofillMes(ym) {
     if (v.deleted === true || isVentaVarios2(v)) return;
     const f = parseArDate(v.created_at);
     if (ymAR(f) !== ym) return;
-    const monto = v.total_amount || 0;
     acc.count++;
-    if (v.payment_type === 'cash') { acc.efectivo += monto; return; }
-    const cuenta = v.transfer_account || v.cuenta_id || 'cuenta1';
-    if (cuenta === 'cuenta2') acc.lapos += monto; else acc.mp += monto;
+    // Una venta con Pago Mixto dejó parte en el cajón y parte en la cuenta:
+    // se reparte, no se le asigna entera a uno de los dos.
+    const { efectivo, transferencia } = partesDeVenta(v);
+    acc.efectivo += efectivo;
+    if (transferencia) {
+      const cuenta = v.transfer_account || v.cuenta_id || 'cuenta1';
+      if (cuenta === 'cuenta2') acc.lapos += transferencia; else acc.mp += transferencia;
+    }
   });
 
   if (acc.count === 0) {

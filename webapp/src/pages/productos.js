@@ -1,6 +1,10 @@
 import { collection, getDocs, query, orderBy, limit } from 'firebase/firestore';
-import { getCached } from '../cache.js';
+import { getCached, peekCacheValue } from '../cache.js';
 import { getFechaInicio, getFechaInicioDate, fechaDMYtoYMD, parseArDate } from '../config.js';
+// Lo que se vende fraccionado llega con el nombre decorado y la cantidad en la
+// presentación vendida: sin leerlo, el mismo producto se parte en varias filas
+// y ninguna rankea donde le corresponde.
+import { parseNombreItem, buscarPorNombre, unidadesDelRenglon } from '../nombre_item.js';
 
 export async function renderProductos(container, db) {
   // 1) Shell vacío al toque — labels visibles, filtros funcionales, tabla con encabezados.
@@ -19,11 +23,25 @@ export async function renderProductos(container, db) {
     return snap.docs.map(d => d.data());
   }, { ttl: 5 * 60 * 1000, memOnly: true });
 
+  // El catálogo, para traducir las presentaciones ("1 pack(s)" son 500 hojas).
+  // Se toma del store si ya está; si no, el ranking sale igual y sólo queda sin
+  // convertir lo fraccionado.
+  const catalogo = peekCacheValue('catalogo:all');
+  const porNombre = {};
+  for (const p of (Array.isArray(catalogo) ? catalogo : [])) {
+    const n = String(p?.nombre || '').toUpperCase().trim();
+    if (n && !porNombre[n]) porNombre[n] = p;
+  }
+
   const mapa = {};
   for (const it of itemsVentas) {
     if (it.deleted === true) continue;
     if (fechaDMYtoYMD(it.fecha) < fechaInicioStr) continue;
-    const nombre = it.producto || it.product_name || '-';
+    // Por el nombre limpio: el renglón de una venta fraccionada llega decorado
+    // ("[Verde]  CARTULINA  ·  2 u") y agrupaba por ese texto, así que un mismo
+    // producto salía repartido en varias filas y ninguna rankeaba por el total.
+    const crudo = it.producto || it.product_name || '-';
+    const nombre = String(parseNombreItem(crudo).base || crudo).trim() || '-';
     if (!mapa[nombre]) {
       mapa[nombre] = {
         nombre,
@@ -33,12 +51,18 @@ export async function renderProductos(container, db) {
         ultima_venta: '',
       };
     }
-    mapa[nombre].total_vendido += Number(it.cantidad || it.quantity || 0);
+    // Y las unidades traducidas, o sumar un rollo con un metro daría "3".
+    mapa[nombre].total_vendido += unidadesDelRenglon(
+      { producto: crudo, cantidad: it.cantidad ?? it.quantity ?? 0 },
+      buscarPorNombre(porNombre, crudo),
+    );
     mapa[nombre].ingresos      += Number(it.subtotal || 0);
     const f = it.fecha || '';
     if (f > mapa[nombre].ultima_venta) mapa[nombre].ultima_venta = f;
   }
-  const productos = Object.values(mapa).sort((a, b) => b.total_vendido - a.total_vendido);
+  const productos = Object.values(mapa)
+    .map(p => ({ ...p, total_vendido: Math.round(p.total_vendido * 100) / 100 }))
+    .sort((a, b) => b.total_vendido - a.total_vendido);
 
   const totalUnidades = productos.reduce((s, p) => s + (p.total_vendido || 0), 0);
   const totalIngresos = productos.reduce((s, p) => s + (p.ingresos || 0), 0);

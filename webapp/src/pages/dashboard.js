@@ -4,6 +4,18 @@ import { getCached } from '../cache.js';
 import { getFechaInicioDate, isVentaVarios2, isItemVarios2, fechaDMYtoYMD } from '../config.js';
 import { getSaleNumberMap, displayNumForVenta } from '../sale_numbers.js';
 import { cssVar, getTheme } from '../theme.js';
+// Una venta con Pago Mixto entra por los dos lados. Gemelo en Python:
+// `pos_system/utils/medios_de_pago.py`.
+import { partesDeVenta } from '../medios_de_pago.js';
+// Los renglones fraccionados llegan con el nombre decorado y no cruzan contra
+// el catálogo si se los busca tal cual.
+import { buscarPorNombre, parseNombreItem } from '../nombre_item.js';
+
+/** El nombre del producto de un renglón, sin la variedad ni la presentación. */
+function nombreBaseDelItem(it) {
+  const crudo = it?.producto || it?.product_name || '';
+  return String(parseNombreItem(crudo).base || crudo).toUpperCase().trim();
+}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // CARGA DINÁMICA DE CHART.JS (local /vendor, una sola vez)
@@ -163,7 +175,9 @@ export async function renderDashboard(container, db) {
   const totalMes = sum(ventasMes, 'total_amount');
   const totalMesAnt = sum(ventasMesAnt, 'total_amount');
 
-  const efectivoHoy = sum(ventasHoy.filter(v => v.payment_type === 'cash'), 'total_amount');
+  // Una venta con Pago Mixto aporta a los dos: se reparte, no se la asigna
+  // entera a uno. Ver `medios_de_pago.js`.
+  const efectivoHoy = ventasHoy.reduce((t, v) => t + partesDeVenta(v).efectivo, 0);
   const transferHoy = totalHoy - efectivoHoy;
 
   const ticketProm = ventasMes.length > 0 ? totalMes / ventasMes.length : 0;
@@ -232,8 +246,10 @@ export async function renderDashboard(container, db) {
   const itemsMes = items.filter(i => fechaDMYtoYMD(i.fecha) >= isoDate(inicioMes));
   let ingresoConCostoMes = 0, cmvMes = 0, ingresoSinCostoMes = 0;
   itemsMes.forEach(it => {
-    const nombre = (it.producto || it.product_name || '').toUpperCase().trim();
-    const cat = catPorNombre[nombre];
+    // Por el nombre limpio: lo fraccionado llega decorado ("CINTA · 2,5 m") y
+    // no cruzaba contra el catálogo, así que su venta figuraba sin costo y
+    // quedaba fuera del margen del mes.
+    const cat = buscarPorNombre(catPorNombre, it.producto || it.product_name);
     const sub = Number(it.subtotal || 0);
     const cant = Number(it.cantidad || it.quantity || 0);
     const costoUnit = cat?.costo || 0;
@@ -275,7 +291,7 @@ export async function renderDashboard(container, db) {
   }
 
   // Distribución por método de pago (mes)
-  const efMes = sum(ventasMes.filter(v => v.payment_type === 'cash'), 'total_amount');
+  const efMes = ventasMes.reduce((t, v) => t + partesDeVenta(v).efectivo, 0);
   const trMes = totalMes - efMes;
 
   // Distribución por categoría/rubro (mes en curso)
@@ -385,8 +401,7 @@ export async function renderDashboard(container, db) {
   const margenPorCategoria = {};
   itemsMes.forEach(it => {
     const cat = (it.categoria || 'Sin categoría').trim() || 'Sin categoría';
-    const nombre = (it.producto || it.product_name || '').toUpperCase().trim();
-    const prod = catPorNombre[nombre];
+    const prod = buscarPorNombre(catPorNombre, it.producto || it.product_name);
     const sub = Number(it.subtotal || 0);
     const cant = Number(it.cantidad || it.quantity || 0);
     const costoUnit = prod?.costo || 0;
@@ -410,7 +425,9 @@ export async function renderDashboard(container, db) {
   const items30 = items.filter(i => fechaDMYtoYMD(i.fecha) >= isoDate(hace30));
   const ventasPorProducto30 = {};
   items30.forEach(it => {
-    const k = (it.producto || it.product_name || '').toUpperCase().trim();
+    // Por el nombre limpio: si se indexa el decorado, después no coincide con
+    // `p.nombre` del catálogo y todo lo fraccionado queda con velocidad cero.
+    const k = nombreBaseDelItem(it);
     if (!k) return;
     if (!ventasPorProducto30[k]) ventasPorProducto30[k] = { unidades: 0, ingreso: 0 };
     ventasPorProducto30[k].unidades += Number(it.cantidad || it.quantity || 0);
@@ -430,7 +447,10 @@ export async function renderDashboard(container, db) {
   // Productos sin rotación: stock > 0 y sin venta en >= 30 días
   const ultimaVentaPorProducto = {};
   items.forEach(it => {
-    const k = (it.producto || it.product_name || '').toUpperCase().trim();
+    // Ídem: con el nombre decorado, los rollos y packs figuraban sin ninguna
+    // venta y la lista de "sin rotación" los mostraba parados siendo de los
+    // que más rotan.
+    const k = nombreBaseDelItem(it);
     if (!k) return;
     const fIso = fechaDMYtoYMD(it.fecha);
     if (!ultimaVentaPorProducto[k] || fIso > ultimaVentaPorProducto[k]) {

@@ -759,6 +759,7 @@ tbody td { padding: 12px 16px; color: var(--text); }
 .badge-orange { background: var(--tint-orange-bg); color: var(--tint-orange-fg); }
 .badge-red    { background: var(--tint-red-bg); color: var(--tint-red-fg); }
 .badge-gray   { background: var(--tint-gray-bg); color: var(--tint-gray-fg); }
+.badge-purple { background: var(--tint-purple-bg); color: var(--tint-purple-fg); }
 
 /* ── RANK ── */
 .rank-1 { color: #f9a825; font-weight: 700; }
