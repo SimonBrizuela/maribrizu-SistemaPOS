@@ -369,15 +369,8 @@ class CashView(QWidget):
                     }
                     pdf_path = self.pdf_generator.generate_withdrawal_ticket(withdrawal)
 
-                    # ── Sincronizar con Google Sheets ──
-                    try:
-                        from pos_system.utils.google_sheets_sync import get_sync
-                        sync = get_sync()
-                        if sync and sync.enabled:
-                            sync.sync_withdrawal(withdrawal, register_id=current_register['id'])
-                    except Exception as gs_err:
-                        import logging
-                        logging.getLogger(__name__).warning(f"Google Sheets sync error (retiro): {gs_err}")
+                    # (el retiro ya no se copia a Google Sheets: la planilla se
+                    #  dio de baja. Va a Firebase con el resto del cierre.)
 
                     # Preguntar si desea imprimir
                     reply = QMessageBox.question(
@@ -445,15 +438,8 @@ class CashView(QWidget):
                     import logging
                     logging.getLogger(__name__).error(f"Error generando PDF de cierre: {e}")
 
-                # ── Sincronizar con Google Sheets ──
-                try:
-                    from pos_system.utils.google_sheets_sync import get_sync
-                    sync = get_sync()
-                    if sync and sync.enabled:
-                        sync.sync_cash_closing(closing_report)
-                except Exception as gs_err:
-                    import logging
-                    logging.getLogger(__name__).warning(f"Google Sheets sync error (cierre): {gs_err}")
+                # (el cierre ya no se copia a Google Sheets: la planilla se dio
+                #  de baja. Sube a Firebase por `sync_cash_closing`.)
 
                 difference = final_amount - closing_report['expected_amount']
                 diff_text = ''

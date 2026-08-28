@@ -25,32 +25,6 @@ from pos_system.utils.logger import setup_logger
 logger = setup_logger(__name__)
 
 
-def _init_google_sheets():
-    """
-    Inicializa la sincronización con Google Sheets via webhook de Apps Script.
-    """
-    webhook_url = ""
-    try:
-        from pos_system.config import GOOGLE_SHEETS_WEBHOOK_URL
-        webhook_url = GOOGLE_SHEETS_WEBHOOK_URL or ""
-    except ImportError:
-        pass
-
-    if not webhook_url:
-        logger.info("Google Sheets: No configurado. Sincronización desactivada.")
-        return
-
-    try:
-        from pos_system.utils.google_sheets_sync import init_google_sheets
-        sync = init_google_sheets(webhook_url)
-        if sync.enabled:
-            logger.info("Google Sheets: Sincronización via webhook activa.")
-        else:
-            logger.warning("Google Sheets: No se pudo activar la sincronización.")
-    except Exception as e:
-        logger.error(f"Google Sheets: Error al inicializar: {e}")
-
-
 def _init_firebase(db=None):
     """
     Inicializa la sincronización con Firebase Firestore.
@@ -506,8 +480,9 @@ def main():
 
         def _background_init():
             import time as _t
-            logger.info("Background: Initializing Google Sheets sync...")
-            _init_google_sheets()
+            # Google Sheets dado de baja: la planilla dejó de usarse. Se sacó de
+            # acá para que el POS no siga golpeando el webhook de Apps Script en
+            # cada arranque y cada 40 minutos.
             logger.info("Background: Initializing Firebase sync...")
             _init_firebase(db)
             _t.sleep(1.5)
