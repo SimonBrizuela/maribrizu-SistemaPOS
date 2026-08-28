@@ -1,41 +1,52 @@
 """
 Propone stock minimo y maximo para los productos que no tienen ninguno, a
-partir de lo que realmente se vende. No pisa nada: un producto (o una
-variedad) con minimo O maximo ya cargado queda como esta.
+partir de lo que realmente se vende, y corrige sus propias cargas anteriores.
+No pisa lo cargado a mano: un umbral que no escribio este script queda como
+esta, siempre.
 
-Sin `--aplicar` solo muestra que cargaria. Antes de aplicar: python backup_catalogo.py
+Sin `--aplicar` solo muestra que cambiaria. Antes de aplicar: python backup_catalogo.py
 
     python scripts/sugerir_stock_minimos.py
     python scripts/sugerir_stock_minimos.py --aplicar
 
 De donde sale la demanda:
-  - `ventas_por_dia` de los ultimos 90 dias, renglon por renglon, con la
-    variedad ([Color]  NOMBRE  ·  N u). Las ventas por caja/rollo se pasan a
-    unidades multiplicando por el contenido del pack.
+  - `ventas_por_dia` de todo el historial disponible (hasta 180 dias), renglon
+    por renglon, con la variedad ([Color]  NOMBRE  ·  N u). Las ventas por
+    caja/rollo se pasan a unidades multiplicando por el contenido del pack.
   - `stock_movimientos` con motivo vinculacion/venta_vinculada: el papel que
     consumen las impresiones no pasa por ventas, pero es demanda igual.
 
 La cuenta, por producto y por variedad:
-  - velocidad = vendido en los ultimos 30 dias / 30; si en 30 no hubo nada,
-    la de 90. Se le suma el consumo por vinculos.
+  - Tres miradas de velocidad: ultimos 30 dias, ultimos 90, y el historial
+    completo desde la PRIMERA venta del producto (asi un producto nuevo no
+    divide por meses que no vivio). La velocidad es la MEDIANA de las tres:
+    un pico del ultimo mes no infla el minimo, y la temporada que ya paso no
+    lo mantiene alto.
   - minimo = 7 dias de venta, redondeado para arriba (al menos 1).
   - maximo = 28 dias de venta, y nunca menos que 2 veces el minimo.
-  - Sin señal suficiente no se propone nada: hacen falta >= 3 unidades
-    vendidas en 90 dias y una venta en los ultimos 45 (o consumo por vinculo).
+  - Sin señal suficiente no se propone nada: hacen falta >= 3 unidades en la
+    ventana y una venta en los ultimos 45 dias (o consumo por vinculo).
 
-Donde se escribe:
+Que toca y que no:
+  - Umbral cargado a mano (no figura en ningun minmax_rollback_*.json de este
+    script, o figura con otro valor): NO SE TOCA.
+  - Umbral que escribio este script y sigue tal cual: se recalcula; si cambia
+    se actualiza, y si el producto perdio la señal se QUITA (mejor sin alerta
+    que con una alerta inventada).
   - Producto sin variedades: `stock_min` / `stock_max` a nivel producto, en
-    unidades (asi los leen las alertas).
-  - Producto con variedades: en cada fila de `conjunto_colores` que no tenga
-    nada cargado, con `stock_min_um` explicito: 'pack' cuando el minimo llega
-    a un pack entero, 'unidad' si no. El nivel producto no se toca, y si el
-    producto ya tiene un minimo global cargado se saltea entero.
-  - Servicios / ilimitados / sin ventas: no se tocan.
+    unidades. Con variedades: por fila de `conjunto_colores`, con
+    `stock_min_um` explicito ('pack' cuando el minimo llega a un pack entero,
+    'unidad' si no). Servicios / ilimitados / sin ventas: no se tocan.
+  - Cada aplicacion deja un minmax_rollback_<ts>.json con lo escrito y lo que
+    habia antes; las corridas siguientes lo usan para reconocer lo suyo.
 """
 import argparse
+import glob
+import json
 import math
 import os
 import re
+import statistics
 import sys
 import unicodedata
 from collections import defaultdict
@@ -48,17 +59,47 @@ if hasattr(sys.stdout, 'reconfigure'):
 
 from pos_system.models.conjunto import contenido_de
 
-DIAS_VENTAS = 90
+DIAS_VENTAS = 180
+DIAS_MEDIO = 90
 DIAS_RECIENTE = 30
-DIAS_SIN_VENTA_MAX = 45
+DIAS_SIN_VENTA_MAX = 45   # para AGREGAR un umbral hace falta venta reciente
+DIAS_PARA_QUITAR = 90     # para QUITAR uno propio, 90 dias sin ventas: un
+                          # producto lento no pierde la alerta por un dia
 DIAS_MINIMO = 7
 DIAS_MAXIMO = 28
-SENAL_MINIMA_90 = 3
+SENAL_MINIMA = 3
+EDAD_PISO = 7  # dias: un producto de dos dias no define velocidad
 
-# Unidades de medida que ya vienen en unidad base en el renglon de venta:
+# Unidades de medida que ya vienen en unidad de MEDIDA en el renglon de venta:
 # "1.5 m" son metros, no packs. Todo lo demas (caja, rollo, pack, bolsa...)
 # multiplica por el contenido.
-SUFIJOS_BASE = {'u', 'm', 'cm', 'g', 'kg', 'l', 'ml', 'm2'}
+SUFIJOS_BASE = {'u', 'mm', 'cm', 'm', 'm2', 'g', 'kg', 'l', 'ml'}
+
+# Conversion a la unidad base del producto: 50 cm de fiselina son 0,5 m, no
+# 50 unidades. Solo entre unidades de la misma magnitud; el resto va tal cual.
+_FACTOR = {'mm': 0.001, 'cm': 0.01, 'm': 1.0, 'ml': 0.001, 'l': 1.0,
+           'g': 1.0, 'kg': 1000.0}
+_MAGNITUD = {'mm': 'm', 'cm': 'm', 'm': 'm', 'ml': 'l', 'l': 'l',
+             'g': 'g', 'kg': 'g'}
+_BASE_PRODUCTO = {
+    'metros': 'm', 'metro': 'm', 'm': 'm', 'centimetros': 'cm', 'cm': 'cm',
+    'unidades': 'u', 'unidad': 'u', 'u': 'u', 'gramos': 'g', 'g': 'g',
+    'kilos': 'kg', 'kilogramos': 'kg', 'kg': 'kg', 'litros': 'l', 'l': 'l',
+    'mililitros': 'ml', 'ml': 'ml', 'm2': 'm2',
+}
+
+
+def unidad_base_de(p):
+    crudo = normalizar(p.get('conjunto_unidad_medida')).lower()
+    return _BASE_PRODUCTO.get(crudo, 'u')
+
+
+def a_unidad_base(cantidad, sufijo, base):
+    if sufijo == base or sufijo not in _MAGNITUD or base not in _MAGNITUD:
+        return cantidad
+    if _MAGNITUD[sufijo] != _MAGNITUD[base]:
+        return cantidad
+    return cantidad * _FACTOR[sufijo] / _FACTOR[base]
 
 
 def num(v, por_defecto=0.0):
@@ -78,30 +119,74 @@ def normalizar(texto):
 RE_RENGLON = re.compile(r'^(?:\[(?P<color>[^\]]*)\]\s*)?(?P<nombre>.*?)(?:\s+·\s+(?P<cant>[\d.,]+)\s*(?P<sufijo>\S.*)?)?$')
 
 
-def parsear_renglon(producto, cantidad, contenido):
+def parsear_renglon(producto, cantidad, contenido, base='u'):
     """(nombre_base, color, unidades_base) de un renglon de ventas_por_dia.
 
     El POS guarda "[Negra]  BOLIGRAFO BIC 1 MM  ·  3 u". La cantidad del campo
-    es la de la unidad de venta: si el sufijo no es una unidad base (u, m, g...)
-    la venta fue por envase y se multiplica por el contenido del pack.
+    es la de la unidad de venta: si el sufijo es de medida (u, m, cm, g...) se
+    convierte a la unidad base del producto; si es un envase (caja, rollo...)
+    se multiplica por el contenido del pack.
     """
     m = RE_RENGLON.match(str(producto or '').strip())
     if not m:
         return normalizar(producto), '', num(cantidad)
     nombre = m.group('nombre') or ''
     color = m.group('color') or ''
-    sufijo = (m.group('sufijo') or 'u').strip().lower()
-    sufijo = re.sub(r'\(.*\)$', '', sufijo).strip() or 'u'
+    sufijo = (m.group('sufijo') or base).strip().lower()
+    sufijo = re.sub(r'\(.*\)$', '', sufijo).strip() or base
     unidades = num(cantidad)
-    if sufijo not in SUFIJOS_BASE and num(contenido) > 1:
+    if sufijo in SUFIJOS_BASE:
+        unidades = a_unidad_base(unidades, sufijo, base)
+    elif num(contenido) > 1:
         unidades *= num(contenido)
     return normalizar(nombre), normalizar(color), unidades
 
 
-def velocidad(total_30, total_90, vel_vinculos=0.0):
-    """Unidades por dia: lo reciente manda, lo viejo es el fallback."""
-    base = (total_30 / DIAS_RECIENTE) if total_30 > 0 else (total_90 / DIAS_VENTAS)
-    return base + max(0.0, vel_vinculos)
+class Demanda:
+    """Ventas acumuladas de un producto o una variedad, por antiguedad."""
+
+    __slots__ = ('t30', 't90', 'total', 'primera', 'ultima')
+
+    def __init__(self):
+        self.t30 = self.t90 = self.total = 0.0
+        self.primera = 0    # dias atras de la venta mas vieja
+        self.ultima = 10 ** 6
+
+    def sumar(self, unidades, dias_atras):
+        self.total += unidades
+        if dias_atras < DIAS_RECIENTE:
+            self.t30 += unidades
+        if dias_atras < DIAS_MEDIO:
+            self.t90 += unidades
+        self.primera = max(self.primera, dias_atras)
+        self.ultima = min(self.ultima, dias_atras)
+
+
+def velocidad(d, vel_vinculos=0.0):
+    """Unidades por dia: la mediana de las tres miradas, mas los vinculos.
+
+    Las ventanas se acortan a la edad del producto (dias desde su primera
+    venta): uno que arranco hace 20 dias no divide por 90.
+    """
+    edad = max(EDAD_PISO, min(DIAS_VENTAS, d.primera + 1))
+    tasas = [
+        d.t30 / min(DIAS_RECIENTE, edad),
+        d.t90 / min(DIAS_MEDIO, edad),
+        d.total / edad,
+    ]
+    return statistics.median(tasas) + max(0.0, vel_vinculos)
+
+
+def con_senal(d):
+    """Señal para AGREGAR un umbral nuevo: volumen y venta reciente."""
+    return d.total >= SENAL_MINIMA and d.ultima <= DIAS_SIN_VENTA_MAX
+
+
+def con_senal_para_mantener(d):
+    """Señal para CONSERVAR un umbral propio: mas tolerante. Un producto lento
+    (el hilo encerado que vendio su ultimo rollo hace 46 dias) mantiene su
+    alerta; recien a los 90 dias sin ventas se la saca."""
+    return d.total >= SENAL_MINIMA and d.ultima <= DIAS_PARA_QUITAR
 
 
 def proponer_umbrales(vel):
@@ -136,6 +221,58 @@ def tiene_umbral(d):
 def variedades_de(p):
     c = p.get('conjunto_colores')
     return [v for v in c if isinstance(v, dict)] if isinstance(c, list) else []
+
+
+# --------------------------------------------------------------------------
+# Reconocer lo que escribio este script (para corregirse sin pisar lo manual)
+# --------------------------------------------------------------------------
+
+def cargar_propios(raiz):
+    """Ultimo umbral escrito por este script en cada lugar, leyendo los
+    minmax_rollback_*.json en orden. Devuelve (por_producto, por_variedad):
+    did -> escrito, y (did, color_norm) -> fila escrita."""
+    productos, filas = {}, {}
+    for ruta in sorted(glob.glob(os.path.join(raiz, 'minmax_rollback_*.json'))):
+        try:
+            data = json.load(open(ruta, encoding='utf-8'))
+        except (OSError, ValueError):
+            continue
+        for did, e in (data.get('productos') or {}).items():
+            productos[did] = e.get('escrito') or {}
+        for did, e in (data.get('variedades') or {}).items():
+            for color, fila in (e.get('escrito') or {}).items():
+                filas[(did, normalizar(color))] = fila or {}
+    return productos, filas
+
+
+def es_propio(actual, escrito):
+    """El umbral que esta cargado es exactamente el que escribio el script.
+    Si el dueño lo toco (cualquier campo distinto), ya es suyo y no se pisa."""
+    if not escrito:
+        return False
+    if num(actual.get('stock_min')) != num(escrito.get('stock_min')):
+        return False
+    if num(actual.get('stock_max')) != num(escrito.get('stock_max')):
+        return False
+    um_a, um_e = actual.get('stock_min_um'), escrito.get('stock_min_um')
+    return (um_a or None) == (um_e or None)
+
+
+QUITAR = {'stock_min': None, 'stock_max': None, 'stock_min_um': None}
+
+
+def decidir(actual, escrito_previo, propuesta):
+    """Que hacer en un lugar (producto o fila): None = no tocar, o el dict a
+    escribir. `propuesta` None significa que la señal no alcanza."""
+    if tiene_umbral(actual):
+        if not es_propio(actual, escrito_previo):
+            return None                      # cargado a mano: intocable
+        if propuesta is None:
+            return dict(QUITAR)              # lo puse yo y perdio la señal
+        if es_propio(actual, propuesta):
+            return None                      # ya esta igual
+        return propuesta                     # lo puse yo: se corrige
+    return propuesta                         # libre: solo si hay propuesta
 
 
 def conectar():
@@ -178,6 +315,9 @@ def main():
     docs = {d.id: (d.to_dict() or {}) for d in db.collection('catalogo').stream()}
     print(f'{len(docs)} productos')
 
+    propios_prod, propios_fila = cargar_propios(RAIZ)
+    print(f'Umbrales propios de corridas anteriores: {len(propios_prod)} productos, {len(propios_fila)} variedades')
+
     # Indice nombre normalizado -> doc. Los nombres repetidos se descartan:
     # no se puede saber a cual de los dos fue la venta.
     por_nombre, repetidos = {}, set()
@@ -214,15 +354,12 @@ def main():
     print(f'{len(vel_vinc)} productos con consumo por vinculo (ventana {dias_ledger:.0f} dias)')
 
     # Demanda por producto y por (producto, color), en unidades base.
-    v30, v90 = defaultdict(float), defaultdict(float)
-    v30_color, v90_color = defaultdict(float), defaultdict(float)
-    ultima = {}
-    sin_match = defaultdict(float)
+    dem = defaultdict(Demanda)
+    dem_color = defaultdict(Demanda)
     for dias_atras, producto, color_campo, cantidad in filas:
         nombre, color_parseado, _ = parsear_renglon(producto, cantidad, 0)
         did = por_nombre.get(nombre)
         if not did:
-            sin_match[nombre] += num(cantidad)
             continue
         p = docs[did]
         color = normalizar(color_campo) or color_parseado
@@ -232,101 +369,110 @@ def main():
                 if normalizar(v.get('color')) == color:
                     cont = contenido_de(v, num(p.get('conjunto_contenido')))
                     break
-        _, _, unidades = parsear_renglon(producto, cantidad, cont)
-        v90[did] += unidades
-        if dias_atras < DIAS_RECIENTE:
-            v30[did] += unidades
-        if did not in ultima or dias_atras < ultima[did]:
-            ultima[did] = dias_atras
+        _, _, unidades = parsear_renglon(producto, cantidad, cont, unidad_base_de(p))
+        dem[did].sumar(unidades, dias_atras)
         if color:
-            k = (did, color)
-            v90_color[k] += unidades
-            if dias_atras < DIAS_RECIENTE:
-                v30_color[k] += unidades
+            dem_color[(did, color)].sumar(unidades, dias_atras)
 
-    # Propuestas
-    planes = {}            # did -> {'producto': {...}} | {'variedades': {color_norm: fila_umbral}}
-    saltados = defaultdict(int)
+    # Decisiones
+    planes = {}            # did -> {'producto': campos} | {'variedades': {color: campos}}
+    stats = defaultdict(int)
+    detalle = []           # (total_ventana, nombre, color, antes, campos)
     for did, p in docs.items():
         if p.get('stock_ilimitado') is True or num(p.get('stock')) == -1:
-            saltados['ilimitado'] += 1
-            continue
-        if tiene_umbral(p):
-            saltados['ya configurado'] += 1
+            stats['ilimitados'] += 1
             continue
         vs = variedades_de(p)
         vinc = vel_vinc.get(did, 0.0)
         if vs:
+            # Nivel producto cargado a mano (no propio): esquema del dueño.
+            if tiene_umbral(p) and not es_propio(p, propios_prod.get(did)):
+                stats['configurados a mano'] += 1
+                continue
             filas_nuevas = {}
             for v in vs:
-                if tiene_umbral(v):
-                    continue
                 color = normalizar(v.get('color'))
-                k = (did, color)
-                t90 = v90_color.get(k, 0.0)
-                if t90 < SENAL_MINIMA_90:
+                d = dem_color.get((did, color))
+                propio = tiene_umbral(v) and es_propio(v, propios_fila.get((did, color)))
+                senal = con_senal_para_mantener if propio else con_senal
+                propuesta = None
+                if d and senal(d):
+                    propuesta = umbrales_variedad(
+                        velocidad(d), contenido_de(v, num(p.get('conjunto_contenido'))))
+                accion = decidir(v, propios_fila.get((did, color)), propuesta)
+                if accion is None:
+                    if tiene_umbral(v) and not es_propio(v, propios_fila.get((did, color))):
+                        stats['variedades a mano'] += 1
                     continue
-                vel = velocidad(v30_color.get(k, 0.0), t90)
-                fila = umbrales_variedad(vel, contenido_de(v, num(p.get('conjunto_contenido'))))
-                if fila:
-                    filas_nuevas[color] = fila
+                filas_nuevas[color] = accion
+                clave = ('quitados' if accion == QUITAR
+                         else ('corregidos' if tiene_umbral(v) else 'nuevos'))
+                stats[clave] += 1
+                detalle.append((d.total if d else 0.0, p.get('nombre'), v.get('color'),
+                                {'stock_min': v.get('stock_min'), 'stock_max': v.get('stock_max')},
+                                accion))
             if filas_nuevas:
                 planes[did] = {'variedades': filas_nuevas}
-            else:
-                saltados['sin señal'] += 1
         else:
-            t90 = v90.get(did, 0.0)
-            con_senal = t90 >= SENAL_MINIMA_90 and ultima.get(did, 999) <= DIAS_SIN_VENTA_MAX
-            if not con_senal and vinc <= 0:
-                saltados['sin señal'] += 1
+            d = dem.get(did)
+            propio = tiene_umbral(p) and es_propio(p, propios_prod.get(did))
+            senal = con_senal_para_mantener if propio else con_senal
+            propuesta = None
+            if (d and senal(d)) or vinc > 0:
+                prop = proponer_umbrales(velocidad(d or Demanda(), vinc))
+                if prop:
+                    propuesta = {'stock_min': prop[0], 'stock_max': prop[1]}
+            accion = decidir(p, propios_prod.get(did), propuesta)
+            if accion is None:
+                if tiene_umbral(p) and not es_propio(p, propios_prod.get(did)):
+                    stats['configurados a mano'] += 1
                 continue
-            prop = proponer_umbrales(velocidad(v30.get(did, 0.0), t90, vinc))
-            if not prop:
-                saltados['sin señal'] += 1
-                continue
-            minimo, maximo = prop
-            planes[did] = {'producto': {'stock_min': minimo, 'stock_max': maximo}}
+            planes[did] = {'producto': accion}
+            clave = ('quitados' if accion == QUITAR
+                     else ('corregidos' if tiene_umbral(p) else 'nuevos'))
+            stats[clave] += 1
+            detalle.append((d.total if d else 0.0, p.get('nombre'), '',
+                            {'stock_min': p.get('stock_min'), 'stock_max': p.get('stock_max')},
+                            accion))
 
     # Reporte
-    n_prod = sum(1 for a in planes.values() if 'producto' in a)
-    n_var = sum(len(a['variedades']) for a in planes.values() if 'variedades' in a)
-    n_prod_var = sum(1 for a in planes.values() if 'variedades' in a)
-    print(f'\n== propuesta: {n_prod} productos + {n_var} variedades (en {n_prod_var} productos)')
-    for motivo, cant in sorted(saltados.items()):
-        print(f'   saltados por {motivo}: {cant}')
-
+    print(f'\n== decision: {stats["nuevos"]} nuevos · {stats["corregidos"]} corregidos · '
+          f'{stats["quitados"]} quitados · intactos a mano: '
+          f'{stats["configurados a mano"]} productos + {stats["variedades a mano"]} variedades')
     en_alerta = 0
-    muestras = []
     for did, acc in planes.items():
-        p = docs[did]
-        if 'producto' in acc:
-            if num(p.get('stock')) <= acc['producto']['stock_min']:
-                en_alerta += 1
-            muestras.append((v90.get(did, 0.0), p.get('nombre'), '', acc['producto']))
-        else:
-            for color, fila in acc['variedades'].items():
-                muestras.append((v90_color.get((did, color), 0.0), p.get('nombre'), color, fila))
+        campos = acc.get('producto')
+        if campos and num(campos.get('stock_min')) > 0 \
+                and num(docs[did].get('stock')) <= num(campos.get('stock_min')):
+            en_alerta += 1
     print(f'   productos que quedarian EN ALERTA ya mismo: {en_alerta}')
-    print('\n   Los 15 de mas movimiento:')
-    for total, nombre, color, fila in sorted(muestras, reverse=True)[:15]:
-        um = fila.get('stock_min_um', 'unidad')
-        print(f"   {str(nombre)[:42]:<42} {('[' + color + ']') if color else '':<18} "
-              f"min {fila['stock_min']:>4} max {fila['stock_max']:>5} {um:<6} (vendio {total:.0f} en 90d)")
+    print('\n   Los 20 de mas movimiento:')
+    for total, nombre, color, antes, campos in sorted(detalle, key=lambda t: -t[0])[:20]:
+        um = campos.get('stock_min_um') or 'unidad'
+        antes_txt = (f"{antes['stock_min']:g}/{antes['stock_max']:g}"
+                     if num(antes.get('stock_min')) or num(antes.get('stock_max')) else 'nada')
+        ahora_txt = ('QUITADO' if campos == QUITAR
+                     else f"min {campos['stock_min']} max {campos['stock_max']} {um}")
+        print(f"   {str(nombre)[:40]:<40} {('[' + str(color) + ']') if color else '':<16} "
+              f"{antes_txt:>10} -> {ahora_txt}  ({total:.0f} en {DIAS_VENTAS}d)")
+
+    quitados = [(t, n, c, a) for t, n, c, a, campos in detalle if campos == QUITAR]
+    if quitados:
+        print('\n   Umbrales propios que se quitan (90+ dias sin ventas):')
+        for total, nombre, color, antes in sorted(quitados, key=lambda t: -t[0]):
+            print(f"   {str(nombre)[:44]:<44} {('[' + str(color) + ']') if color else '':<16} "
+                  f"tenia {antes.get('stock_min'):g}/{antes.get('stock_max'):g} · vendio {total:.0f} en {DIAS_VENTAS}d")
 
     if not args.aplicar:
         print('\nSin --aplicar no se escribio nada.')
         return
 
     print('\nEscribiendo...')
-    import json
     ahora = datetime.now(timezone.utc)
     col = db.collection('catalogo')
     escritos = 0
     batch = db.batch()
     n = 0
-    # Vuelta atras exacta: que se escribio y donde, con lo que habia antes.
-    # (Restaurar `conjunto_colores` entero desde un backup pisaria el stock que
-    # se movio con las ventas; esto guarda solo los umbrales tocados.)
     rollback = {'ts': ahora.isoformat(), 'productos': {}, 'variedades': {}}
     for did, acc in planes.items():
         if 'producto' in acc:
@@ -345,17 +491,22 @@ def main():
             doc = col.document(did).get()
             p = doc.to_dict() or {}
             vs = variedades_de(p)
-            cambiadas = []
+            cambiadas = {}
             for v in vs:
-                fila = acc['variedades'].get(normalizar(v.get('color')))
-                if fila and not tiene_umbral(v):
-                    v.update(fila)
-                    cambiadas.append(v.get('color'))
+                color = normalizar(v.get('color'))
+                fila = acc['variedades'].get(color)
+                if fila is None:
+                    continue
+                # Chequeo fresco: solo si sigue siendo mio o esta libre.
+                if tiene_umbral(v) and not es_propio(v, propios_fila.get((did, color))):
+                    continue
+                v.update(fila)
+                cambiadas[v.get('color')] = fila
             if not cambiadas:
                 continue
             rollback['variedades'][did] = {
-                'nombre': p.get('nombre'), 'colores': cambiadas,
-                'escrito': {c: acc['variedades'][normalizar(c)] for c in cambiadas},
+                'nombre': p.get('nombre'), 'colores': list(cambiadas),
+                'escrito': cambiadas,
             }
             batch.set(col.document(did),
                       {'conjunto_colores': vs, 'ultima_actualizacion': ahora}, merge=True)
@@ -367,12 +518,12 @@ def main():
             n = 0
     if n:
         batch.commit()
+    db.collection('config').document('catalogo_meta').set(
+        {'last_updated': ahora.strftime('%Y-%m-%dT%H:%M:%S%z')}, merge=True)
     ruta_rb = os.path.join(RAIZ, f"minmax_rollback_{ahora.strftime('%Y%m%d_%H%M')}.json")
     with open(ruta_rb, 'w', encoding='utf-8') as f:
         json.dump(rollback, f, ensure_ascii=False, indent=1)
     print(f'Vuelta atras guardada en {os.path.basename(ruta_rb)}')
-    db.collection('config').document('catalogo_meta').set(
-        {'last_updated': ahora.strftime('%Y-%m-%dT%H:%M:%S%z')}, merge=True)
     print(f'Listo: {escritos} productos escritos. Panel y POS lo ven en el proximo sync.')
 
 

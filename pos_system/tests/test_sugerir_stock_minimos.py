@@ -15,12 +15,25 @@ _spec = importlib.util.spec_from_file_location(
 _mod = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mod)
 
+Demanda = _mod.Demanda
+QUITAR = _mod.QUITAR
+con_senal = _mod.con_senal
+decidir = _mod.decidir
+es_propio = _mod.es_propio
+normalizar = _mod.normalizar
 parsear_renglon = _mod.parsear_renglon
 proponer_umbrales = _mod.proponer_umbrales
+tiene_umbral = _mod.tiene_umbral
 umbrales_variedad = _mod.umbrales_variedad
 velocidad = _mod.velocidad
-tiene_umbral = _mod.tiene_umbral
-normalizar = _mod.normalizar
+
+
+def demanda(ventas):
+    """[(unidades, dias_atras), ...] -> Demanda"""
+    d = Demanda()
+    for unidades, dias in ventas:
+        d.sumar(unidades, dias)
+    return d
 
 
 # --------------------------------------------------------------------------
@@ -41,8 +54,29 @@ def test_renglon_vendido_por_caja_multiplica_el_contenido():
 
 
 def test_renglon_por_metro_no_multiplica():
-    _, _, unidades = parsear_renglon('CINTA RASO  ·  1.5 m', 1.5, 100)
+    _, _, unidades = parsear_renglon('CINTA RASO  ·  1.5 m', 1.5, 100, base='m')
     assert unidades == 1.5
+
+
+def test_los_centimetros_se_convierten_a_metros():
+    # El caso real de la fiselina: "50 cm" entraba como 50 unidades y el
+    # minimo saltaba a 13 metros. Son 0,5 m.
+    _, _, unidades = parsear_renglon(
+        '[Blanco]  FISELINA (NOVOTEC) LISA GRUESA XMT  ·  50 cm', 50.0, 0, base='m')
+    assert unidades == 0.5
+
+
+def test_una_unidad_de_otra_magnitud_va_tal_cual():
+    # "3 u" en un producto por metro no se puede convertir: queda 3.
+    _, _, unidades = parsear_renglon('ALGO  ·  3 u', 3.0, 0, base='m')
+    assert unidades == 3.0
+
+
+def test_la_venta_por_rollo_multiplica_en_productos_por_metro():
+    # "2 rollo(s)" de hilo de 70 m son 140 m.
+    _, _, unidades = parsear_renglon(
+        '[Blanco]  HILO ENCERADO COLOR (70 MT)  ·  2 rollo(s)', 2.0, 70, base='m')
+    assert unidades == 140.0
 
 
 def test_renglon_simple_sin_sufijo():
@@ -55,6 +89,55 @@ def test_renglon_simple_sin_sufijo():
 def test_el_nombre_matchea_sin_tildes_ni_espacios_dobles():
     # Trampa conocida del catalogo: rubros con y sin tilde.
     assert normalizar('  Boligrafo   BIC ') == normalizar('BOLÍGRAFO BIC')
+
+
+# --------------------------------------------------------------------------
+# La velocidad: mediana de tres miradas, acotada a la edad del producto
+# --------------------------------------------------------------------------
+
+def test_ritmo_parejo_da_lo_mismo_en_las_tres_miradas():
+    # 1 por dia durante 180 dias: las tres tasas son 1.
+    d = demanda([(1, i) for i in range(180)])
+    assert velocidad(d) == 1.0
+
+
+def test_un_pico_del_ultimo_mes_no_infla_el_minimo():
+    # Vendia ~1/dia y el ultimo mes exploto a 5/dia: la mediana se queda con
+    # la mirada larga, no con el pico.
+    d = demanda([(5, i) for i in range(30)] + [(1, i) for i in range(30, 180)])
+    assert velocidad(d) < 2.5
+
+
+def test_la_temporada_que_paso_no_mantiene_el_minimo_alto():
+    # Vendio fuerte hace meses y este mes casi nada: manda lo reciente/medio.
+    d = demanda([(0.2, i) for i in range(30)] + [(6, i) for i in range(120, 180)])
+    assert velocidad(d) < 1.0
+
+
+def test_un_producto_nuevo_no_divide_por_meses_que_no_vivio():
+    # Arranco hace 20 dias vendiendo 2/dia: la velocidad es 2, no 40/180.
+    d = demanda([(2, i) for i in range(20)])
+    assert abs(velocidad(d) - 2.0) < 0.01
+
+
+def test_el_consumo_por_vinculo_suma():
+    d = demanda([(1, i) for i in range(90)])
+    assert velocidad(d, vel_vinculos=2.0) == velocidad(d) + 2.0
+
+
+def test_senal_pide_volumen_y_venta_reciente():
+    assert con_senal(demanda([(2, 5), (2, 40)]))
+    assert not con_senal(demanda([(1, 5)]))            # poco volumen
+    assert not con_senal(demanda([(9, 60), (9, 80)]))  # nada en 45 dias
+
+
+def test_quitar_es_mas_conservador_que_agregar():
+    # El hilo encerado: ultimo rollo hace 46 dias. No alcanza para AGREGAR un
+    # umbral nuevo, pero uno propio existente se mantiene hasta los 90 dias.
+    d = demanda([(70, 46), (280, 77)])
+    assert not con_senal(d)
+    assert _mod.con_senal_para_mantener(d)
+    assert not _mod.con_senal_para_mantener(demanda([(9, 100), (9, 120)]))
 
 
 # --------------------------------------------------------------------------
@@ -77,19 +160,6 @@ def test_sin_velocidad_no_hay_propuesta():
     assert proponer_umbrales(0) is None
 
 
-def test_velocidad_prefiere_los_ultimos_30_dias():
-    assert velocidad(30, 999) == 1.0          # 30 en 30 dias
-    assert velocidad(0, 90) == 1.0            # sin ventas recientes: 90 en 90
-
-
-def test_el_consumo_por_vinculo_suma():
-    assert velocidad(30, 30, vel_vinculos=2.0) == 3.0
-
-
-# --------------------------------------------------------------------------
-# Variedades: la unidad del umbral acompaña al numero
-# --------------------------------------------------------------------------
-
 def test_variedad_de_mucha_venta_va_en_packs():
     # 10 por dia en cajas de 50: minimo 70 unidades -> 2 packs.
     fila = umbrales_variedad(10.0, 50)
@@ -103,23 +173,45 @@ def test_variedad_lenta_va_en_unidades_explicitas():
     assert fila == {'stock_min': 4, 'stock_max': 14, 'stock_min_um': 'unidad'}
 
 
-def test_variedad_suelta_sin_contenido_va_en_unidades():
-    fila = umbrales_variedad(1.0, 0)
-    assert fila['stock_min_um'] == 'unidad'
-    assert fila['stock_min'] == 7
-
-
 # --------------------------------------------------------------------------
-# No pisar nada
+# Corregirse sin pisar lo cargado a mano
 # --------------------------------------------------------------------------
 
-def test_con_minimo_cargado_se_respeta():
+PROPIO = {'stock_min': 10, 'stock_max': 40, 'stock_min_um': 'unidad'}
+
+
+def test_umbral_a_mano_es_intocable():
+    actual = {'stock_min': 5, 'stock_max': 20}
+    assert decidir(actual, escrito_previo=None, propuesta=PROPIO) is None
+
+
+def test_umbral_propio_editado_por_el_dueno_pasa_a_ser_suyo():
+    actual = {'stock_min': 12, 'stock_max': 40, 'stock_min_um': 'unidad'}
+    assert not es_propio(actual, PROPIO)      # el dueño subio el minimo
+    assert decidir(actual, escrito_previo=PROPIO, propuesta={'stock_min': 8, 'stock_max': 30, 'stock_min_um': 'unidad'}) is None
+
+
+def test_umbral_propio_intacto_se_corrige():
+    nueva = {'stock_min': 7, 'stock_max': 28, 'stock_min_um': 'unidad'}
+    assert decidir(dict(PROPIO), escrito_previo=PROPIO, propuesta=nueva) == nueva
+
+
+def test_umbral_propio_sin_senal_se_quita():
+    assert decidir(dict(PROPIO), escrito_previo=PROPIO, propuesta=None) == QUITAR
+
+
+def test_umbral_propio_igual_no_se_reescribe():
+    assert decidir(dict(PROPIO), escrito_previo=PROPIO, propuesta=dict(PROPIO)) is None
+
+
+def test_lugar_libre_recibe_la_propuesta():
+    assert decidir({}, escrito_previo=None, propuesta=PROPIO) == PROPIO
+    assert decidir({}, escrito_previo=None, propuesta=None) is None
+
+
+def test_tiene_umbral():
     assert tiene_umbral({'stock_min': 5})
     assert tiene_umbral({'stock_max': 20})
-    assert tiene_umbral({'stock_min': 5, 'stock_max': 20})
-
-
-def test_sin_umbrales_esta_libre():
     assert not tiene_umbral({})
     assert not tiene_umbral({'stock_min': 0, 'stock_max': None})
 
