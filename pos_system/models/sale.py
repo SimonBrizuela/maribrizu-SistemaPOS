@@ -9,7 +9,7 @@ from pos_system.database.db_manager import DatabaseManager
 from pos_system.models.conjunto import (
     contenido_de, repartir_total, total_conjunto, total_variedad,
 )
-from pos_system.utils import stock_ledger, vinculos_pendientes
+from pos_system.utils import medios_de_pago, stock_ledger, vinculos_pendientes
 
 logger = logging.getLogger(__name__)
 
@@ -959,13 +959,19 @@ class Sale:
         sale = self.get_by_id(sale_id)
         if not sale:
             return None
-        if payment_type is not None and payment_type not in ('cash', 'transfer'):
+        if payment_type is not None and payment_type not in ('cash', 'transfer', 'mixed'):
             raise ValueError(f"Tipo de pago inválido: {payment_type}")
 
         old_total    = float(sale.get('total_amount', 0) or 0)
         old_ptype    = sale.get('payment_type')
         register_id  = sale.get('cash_register_id')
         new_ptype    = payment_type if payment_type is not None else old_ptype
+        # Cómo estaba repartida la venta ANTES de tocarla. Hay que revertir de
+        # la caja exactamente lo que había aportado a cada lado: una venta
+        # mixta puso una parte en efectivo y otra en transferencia, y sacarle
+        # el total entero a la transferencia la dejaba en negativo y el
+        # efectivo inflado con plata de una venta que ya no existe así.
+        old_efectivo, old_transferencia = medios_de_pago.partes_de_venta(sale)
 
         with self.db.get_connection() as conn:
             cursor = conn.cursor()
@@ -1000,38 +1006,57 @@ class Sale:
             )
             new_total = float(cursor.fetchone()[0] or 0)
 
-            # 3. Actualizar venta (total + tipo de pago)
-            cursor.execute(
-                "UPDATE sales SET total_amount = ?, payment_type = ? WHERE id = ?",
-                (new_total, new_ptype, sale_id)
-            )
+            # 3. Cómo queda repartida la venta después de la edición.
+            #    Si sigue siendo mixta, el efectivo no se toca —es plata contada
+            #    que ya está en el cajón— y el ajuste se le hace a la parte
+            #    transferida, que se puede verificar contra el banco.
+            if new_ptype == 'cash':
+                new_efectivo, new_transferencia = new_total, 0.0
+            elif new_ptype == 'mixed':
+                new_efectivo, new_transferencia = medios_de_pago.partes_para_total(sale, new_total)
+            else:
+                new_efectivo, new_transferencia = 0.0, new_total
 
-            # 4. Ajustar caja registradora: revertir el aporte viejo y sumar el nuevo.
+            # 4. Actualizar venta. El desglose del cobro se reescribe solo
+            #    cuando hace falta: si la venta sigue siendo del mismo medio, lo
+            #    recibido y el vuelto son lo que tipeó el cajero y el historial
+            #    los muestra tal cual. Una mixta sí se reescribe siempre: de ahí
+            #    sale cuánta plata tiene que haber en el cajón.
+            if new_ptype == 'mixed':
+                cursor.execute(
+                    "UPDATE sales SET total_amount = ?, payment_type = ?, "
+                    "cash_received = ?, change_given = ?, transfer_amount = ? WHERE id = ?",
+                    (new_total, new_ptype, new_efectivo, 0.0, new_transferencia, sale_id)
+                )
+            elif old_ptype != new_ptype:
+                cursor.execute(
+                    "UPDATE sales SET total_amount = ?, payment_type = ?, "
+                    "cash_received = ?, change_given = ?, transfer_amount = ? WHERE id = ?",
+                    (new_total, new_ptype,
+                     new_total if new_ptype == 'cash' else 0.0, 0.0, 0.0, sale_id)
+                )
+            else:
+                cursor.execute(
+                    "UPDATE sales SET total_amount = ?, payment_type = ? WHERE id = ?",
+                    (new_total, new_ptype, sale_id)
+                )
+
+            # 5. Ajustar caja registradora: revertir el aporte viejo y sumar el nuevo.
             #    Se hace aunque la caja esté cerrada — get_closing_report lee la tabla
             #    cash_register, así que queda consistente en Firebase al re-sincronizar.
             if register_id:
-                # Revertir venta vieja
-                if old_ptype == 'cash':
-                    cursor.execute(
-                        "UPDATE cash_register SET cash_sales = cash_sales - ?, total_sales = total_sales - ? WHERE id = ?",
-                        (old_total, old_total, register_id)
-                    )
-                else:
-                    cursor.execute(
-                        "UPDATE cash_register SET transfer_sales = transfer_sales - ?, total_sales = total_sales - ? WHERE id = ?",
-                        (old_total, old_total, register_id)
-                    )
-                # Sumar venta nueva
-                if new_ptype == 'cash':
-                    cursor.execute(
-                        "UPDATE cash_register SET cash_sales = cash_sales + ?, total_sales = total_sales + ? WHERE id = ?",
-                        (new_total, new_total, register_id)
-                    )
-                else:
-                    cursor.execute(
-                        "UPDATE cash_register SET transfer_sales = transfer_sales + ?, total_sales = total_sales + ? WHERE id = ?",
-                        (new_total, new_total, register_id)
-                    )
+                cursor.execute(
+                    "UPDATE cash_register SET cash_sales = cash_sales - ?, "
+                    "transfer_sales = transfer_sales - ?, total_sales = total_sales - ? "
+                    "WHERE id = ?",
+                    (old_efectivo, old_transferencia, old_total, register_id)
+                )
+                cursor.execute(
+                    "UPDATE cash_register SET cash_sales = cash_sales + ?, "
+                    "transfer_sales = transfer_sales + ?, total_sales = total_sales + ? "
+                    "WHERE id = ?",
+                    (new_efectivo, new_transferencia, new_total, register_id)
+                )
 
         logger.info(
             f"Venta #{sale_id} actualizada: total ${old_total:.2f}→${new_total:.2f}, "
@@ -1118,12 +1143,22 @@ class Sale:
         if not end_date:
             end_date = now_ar().strftime("%Y-%m-%d") + " 23:59:59"
             
+        # Una venta con Pago Mixto se reparte entre las dos columnas: antes no
+        # entraba en ninguna y el efectivo + la transferencia del día no
+        # llegaban al total. Misma regla que `medios_de_pago.partes_de_venta`.
         query = """
-            SELECT 
+            SELECT
                 COUNT(*) as total_count,
                 COALESCE(SUM(total_amount), 0) as total_amount,
-                COALESCE(SUM(CASE WHEN payment_type = 'cash' THEN total_amount ELSE 0 END), 0) as cash_amount,
-                COALESCE(SUM(CASE WHEN payment_type = 'transfer' THEN total_amount ELSE 0 END), 0) as transfer_amount,
+                COALESCE(SUM(CASE
+                    WHEN payment_type = 'cash'  THEN total_amount
+                    WHEN payment_type = 'mixed' THEN MAX(0, COALESCE(cash_received, 0)
+                                                            - COALESCE(change_given, 0))
+                    ELSE 0 END), 0) as cash_amount,
+                COALESCE(SUM(CASE
+                    WHEN payment_type = 'cash'  THEN 0
+                    WHEN payment_type = 'mixed' THEN COALESCE(transfer_amount, 0)
+                    ELSE total_amount END), 0) as transfer_amount,
                 COALESCE(AVG(total_amount), 0) as average_sale
             FROM sales
             WHERE created_at >= ? AND created_at <= ?

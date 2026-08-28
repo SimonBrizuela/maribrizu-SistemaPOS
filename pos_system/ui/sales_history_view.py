@@ -43,6 +43,12 @@ _COLOR_GREEN     = QColor('#3d7a3a')
 _COLOR_BLUE      = QColor('#c1521f')
 _COLOR_RED       = QColor('#a01616')
 _COLOR_GRAY      = QColor('#9b958a')
+_COLOR_PURPLE    = QColor('#6b3fa0')
+# Cómo se lee cada medio de pago en la lista y en el diálogo de edición. El
+# Pago Mixto se mostraba como "Transferencia" y al editarlo se convertía en
+# una: la venta perdía la mitad que se había cobrado en mano.
+_ETIQUETA_PAGO = {'cash': 'Efectivo', 'transfer': 'Transferencia', 'mixed': 'Mixto'}
+_COLOR_PAGO    = {'cash': _COLOR_GREEN, 'transfer': _COLOR_BLUE, 'mixed': _COLOR_PURPLE}
 # Paginación: 30 ventas por página. Al llegar al fondo del scroll, la UI
 # carga las siguientes 30 desde SQLite (que ya está sincronizado con Firebase
 # en background). Así evitamos traer miles de filas a memoria y romper PCs
@@ -553,10 +559,10 @@ class SalesHistoryView(QWidget):
                 tbl.setItem(row, 1, QTableWidgetItem(date_str))
 
                 ptype = sale['payment_type']
-                ptype_label = 'Efectivo' if ptype == 'cash' else 'Transferencia'
+                ptype_label = _ETIQUETA_PAGO.get(ptype, 'Transferencia')
                 ptype_item = QTableWidgetItem(ptype_label)
                 ptype_item.setTextAlignment(Qt.AlignCenter)
-                ptype_item.setForeground(_COLOR_GREEN if ptype == 'cash' else _COLOR_BLUE)
+                ptype_item.setForeground(_COLOR_PAGO.get(ptype, _COLOR_BLUE))
                 tbl.setItem(row, 2, ptype_item)
 
                 total = sale['total_amount']
@@ -758,7 +764,7 @@ class SalesHistoryView(QWidget):
         QMessageBox.information(self, 'Venta actualizada',
             f"Venta #{self._current_sale_id} actualizada.\n"
             f"Nuevo total: ${updated['total_amount']:.2f}\n"
-            f"Pago: {'Efectivo' if updated['payment_type'] == 'cash' else 'Transferencia'}")
+            f"Pago: {_ETIQUETA_PAGO.get(updated['payment_type'], 'Transferencia')}")
 
     def _facturar_current_sale(self):
         """Abre el FacturaDialog para emitir factura AFIP sobre una venta histórica.
@@ -875,7 +881,7 @@ class EditSaleDialog(QDialog):
             _dt = _parse_ar(self.sale.get('created_at')).strftime('%d/%m/%Y %H:%M')
         except Exception:
             _dt = str(self.sale.get('created_at') or '')
-        _pl = 'Efectivo' if self.new_payment_type == 'cash' else 'Transferencia'
+        _pl = _ETIQUETA_PAGO.get(self.new_payment_type, 'Transferencia')
         meta = QLabel(f"{_dt}  ·  {_pl}")
         meta.setStyleSheet(f'color:{_T["text_muted"]}; font-size:12px; background:transparent;')
         head_col.addWidget(meta)
@@ -887,8 +893,11 @@ class EditSaleDialog(QDialog):
         self.pay_combo = QComboBox()
         self.pay_combo.addItem('Efectivo', 'cash')
         self.pay_combo.addItem('Transferencia', 'transfer')
-        idx = 0 if self.new_payment_type == 'cash' else 1
-        self.pay_combo.setCurrentIndex(idx)
+        # Mixto está en la lista para que una venta que se cobró mitad y mitad
+        # no se convierta sola en transferencia al abrir este diálogo.
+        self.pay_combo.addItem('Mixto', 'mixed')
+        _orden = {'cash': 0, 'transfer': 1, 'mixed': 2}
+        self.pay_combo.setCurrentIndex(_orden.get(self.new_payment_type, 1))
         self.pay_combo.setMinimumHeight(34); self.pay_combo.setMinimumWidth(200)
         self.pay_combo.setStyleSheet(
             f"QComboBox {{ border:1px solid {_T['border']}; border-radius:6px;"

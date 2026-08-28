@@ -12,6 +12,7 @@ from matplotlib.figure import Figure
 from pos_system.models.sale import Sale
 from pos_system.models.product import Product
 from pos_system.models.cash_register import CashRegister
+from pos_system.utils import medios_de_pago
 
 logger = logging.getLogger(__name__)
 
@@ -249,8 +250,11 @@ class DashboardView(QWidget):
         top_products = self.sale_model.get_top_selling_products(limit=1, start_date=start_date, end_date=end_date)
 
         total_sales_count = len(all_sales)
-        cash_count = sum(1 for s in all_sales if s['payment_type'] == 'cash')
-        transfer_count = total_sales_count - cash_count
+        # Una venta con Pago Mixto cobró de las dos formas, así que cuenta en
+        # las dos: por eso las dos cuentas pueden sumar más que las ventas.
+        _partes = [medios_de_pago.partes_de_venta(s) for s in all_sales]
+        cash_count = sum(1 for ef, _tr in _partes if ef)
+        transfer_count = sum(1 for _ef, tr in _partes if tr)
 
         # Método de pago preferido
         if total_sales_count == 0:
@@ -398,10 +402,14 @@ class DashboardView(QWidget):
         ax = self.payment_chart.figure.add_subplot(111)
 
         if all_sales:
-            cash_count = sum(1 for s in all_sales if s['payment_type'] == 'cash')
-            transfer_count = len(all_sales) - cash_count
-            cash_amount = sum(s['total_amount'] for s in all_sales if s['payment_type'] == 'cash')
-            transfer_amount = sum(s['total_amount'] for s in all_sales if s['payment_type'] == 'transfer')
+            # Una venta con Pago Mixto entró por los dos lados: cuenta en las
+            # dos barras y su plata se reparte. Antes su total entero se le
+            # atribuía a "Virtual" y el efectivo del gráfico salía corto.
+            partes = [medios_de_pago.partes_de_venta(s) for s in all_sales]
+            cash_count      = sum(1 for ef, _tr in partes if ef)
+            transfer_count  = sum(1 for _ef, tr in partes if tr)
+            cash_amount     = sum(ef for ef, _tr in partes)
+            transfer_amount = sum(tr for _ef, tr in partes)
 
             x_pos = [0, 1]
             width = 0.35

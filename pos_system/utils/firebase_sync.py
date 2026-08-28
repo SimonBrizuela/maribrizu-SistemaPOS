@@ -16,6 +16,7 @@ from datetime import datetime, timezone, timedelta
 from typing import Optional, Callable
 
 from pos_system.utils import stock_links as _stock_links
+from pos_system.utils import medios_de_pago
 
 # Timezone Argentina (UTC-3, sin DST)
 _TZ_AR = timezone(timedelta(hours=-3))
@@ -2932,13 +2933,7 @@ class FirebaseSync:
             try:
                 sale_id    = sale.get('id')
                 created_at = self._parse_dt(sale.get('created_at'))
-                _ptype = sale.get('payment_type')
-                if _ptype == 'cash':
-                    tipo_pago = 'Efectivo'
-                elif _ptype == 'mixed':
-                    tipo_pago = 'Mixto'
-                else:
-                    tipo_pago = 'Transferencia'
+                tipo_pago  = medios_de_pago.etiqueta_de_pago(sale.get('payment_type'))
                 cajero     = (
                     sale.get('turno_nombre')
                     or sale.get('cajero')
@@ -2975,9 +2970,22 @@ class FirebaseSync:
                     cash_register_id = int(cash_register_id) if cash_register_id else None
                 except (TypeError, ValueError):
                     cash_register_id = None
+
+                # Cuánto de cada renglón entró en mano y cuánto por el banco. En
+                # una venta común es todo de un lado, pero una con Pago Mixto se
+                # reparte, y sin este número el cierre de caja tenía que adivinar:
+                # contaba la mixta entera como efectivo y el cajón terminaba
+                # debiendo una plata que había entrado por transferencia.
+                _ef_venta, _tr_venta = medios_de_pago.partes_de_venta(sale)
+                _reparto = medios_de_pago.repartir_subtotales(
+                    [float(it.get('subtotal', 0) or 0) for it in items],
+                    _ef_venta, _tr_venta,
+                )
+
                 for idx, item in enumerate(items):
                     doc_id = f"{pc_id}_{sale_id}_{idx}"
                     ref = col.document(doc_id)
+                    _item_ef, _item_tr = _reparto[idx] if idx < len(_reparto) else (0.0, 0.0)
                     batch.set(ref, {
                         'fecha':          created_at.strftime('%d/%m/%Y'),
                         'hora':           created_at.strftime('%H:%M:%S'),
@@ -2997,6 +3005,12 @@ class FirebaseSync:
                         'conjunto_color':   (item.get('conjunto_color') or item.get('color') or ''),
                         'cash_register_id': cash_register_id,
                         'pc_id':            pc_id,
+                        # Reparto del renglón entre los dos medios de pago. Suma
+                        # `subtotal` salvo redondeo, y es lo que lee el cierre —
+                        # en el POS y en el panel — para saber cuánta plata tiene
+                        # que haber en el cajón.
+                        'monto_efectivo':      _item_ef,
+                        'monto_transferencia': _item_tr,
                     }, merge=True)
                 batch.commit()
                 logger.debug(f"Firebase: Detalle de venta #{sale_id} ({len(items)} items) sincronizado.")
@@ -3175,6 +3189,10 @@ class FirebaseSync:
                 final_amt    = float(report.get('final_amount') or report.get('monto_final', 0) or 0)
                 num_cash     = int(report.get('num_cash_sales') or 0)
                 num_transf   = int(report.get('num_transfer_sales') or 0)
+                # Cuántas ventas hubo, sin contar dos veces las mixtas (que
+                # figuran en las dos columnas porque aportaron a las dos).
+                num_transacciones = int(report.get('total_sales_count')
+                                        or (num_cash + num_transf))
 
                 # Productos vendidos
                 productos_lista = []
@@ -3201,10 +3219,7 @@ class FirebaseSync:
                 try:
                     fb_items = list(self.db.collection('ventas_por_dia')
                                     .where('cash_register_id', '==', int(register_id)).stream())
-                    fb_efectivo = 0.0
-                    fb_transferencia = 0.0
-                    ventas_ef_keys = set()
-                    ventas_tr_keys = set()
+                    vivos = []
                     productos_fb = {}
                     for it in fb_items:
                         d_it = it.to_dict() or {}
@@ -3214,25 +3229,33 @@ class FirebaseSync:
                         # pc_id derivado del doc id (esquema {pc}_{num}_{idx})
                         parts = it.id.split('_')
                         pcid = '_'.join(parts[:-2]) if len(parts) >= 3 else ''
-                        nv_key = f"{pcid}|{d_it.get('num_venta')}"
-                        if d_it.get('tipo_pago') == 'Transferencia':
-                            fb_transferencia += sub
-                            ventas_tr_keys.add(nv_key)
-                        else:
-                            fb_efectivo += sub
-                            ventas_ef_keys.add(nv_key)
+                        d_it['pc_id'] = pcid or d_it.get('pc_id') or ''
+                        vivos.append(d_it)
                         prod = d_it.get('producto') or d_it.get('product_name') or '-'
                         if prod not in productos_fb:
                             productos_fb[prod] = {'product_name': prod, 'total_quantity': 0.0, 'total_amount': 0.0}
                         productos_fb[prod]['total_quantity'] += cant
                         productos_fb[prod]['total_amount']   += sub
+
+                    # El reparto entre los dos medios de pago vive en
+                    # `medios_de_pago`, con gemelo en el panel: una venta con
+                    # Pago Mixto aporta a los dos lados y contarla entera como
+                    # efectivo dejaba el `monto_esperado` pidiendo en el cajón
+                    # plata que había entrado por transferencia.
+                    resumen = medios_de_pago.resumir_items(vivos)
+                    fb_efectivo      = resumen['efectivo']
+                    fb_transferencia = resumen['transferencia']
+
                     # Solo preferimos Firestore si tiene >= ventas que el local
                     # (proteccion contra Firestore con datos desactualizados).
                     if (fb_efectivo + fb_transferencia) >= (efectivo + transferencia):
                         efectivo        = fb_efectivo
                         transferencia   = fb_transferencia
-                        num_cash        = len(ventas_ef_keys)
-                        num_transf      = len(ventas_tr_keys)
+                        num_cash        = resumen['num_ventas_efectivo']
+                        num_transf      = resumen['num_ventas_transferencia']
+                        # Ventas distintas, no la suma: una mixta figura en las
+                        # dos listas porque aportó a las dos.
+                        num_transacciones = resumen['transacciones']
                         esperado        = inicial + efectivo - retiros
                         productos_lista = sorted(productos_fb.values(),
                                                  key=lambda p: -p['total_amount'])
@@ -3254,7 +3277,7 @@ class FirebaseSync:
                     'total_efectivo':        efectivo,
                     'total_transferencia':   transferencia,
                     'total_retiros':         retiros,
-                    'total_transacciones':   num_cash + num_transf,
+                    'total_transacciones':   num_transacciones,
                     'num_ventas_efectivo':   num_cash,
                     'num_ventas_transferencia': num_transf,
                     'cajero':                report.get('username') or report.get('cajero', ''),

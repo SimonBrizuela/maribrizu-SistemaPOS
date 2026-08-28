@@ -104,15 +104,28 @@ class CashRegister:
             GROUP BY payment_type
         """
         sales_counts = self.db.execute_query(sales_count_query, (cash_register_id,))
-        
+
+        # Una venta con Pago Mixto cobró parte en mano y parte por
+        # transferencia, así que suma en las DOS columnas: la fila "Efectivo"
+        # del ticket cuenta las ventas que dejaron algo en el cajón. Por eso el
+        # total no es la suma de las dos — es cuántas ventas hubo, y antes de
+        # esto las mixtas no aparecían en ninguna y el cierre las perdía.
         num_cash_sales = 0
         num_transfer_sales = 0
+        num_mixed_sales = 0
+        total_count = 0
         for sc in sales_counts:
+            cantidad = sc['total'] or 0
+            total_count += cantidad
             if sc['payment_type'] == 'cash':
-                num_cash_sales = sc['total']
-            elif sc['payment_type'] == 'transfer':
-                num_transfer_sales = sc['total']
-        
+                num_cash_sales += cantidad
+            elif sc['payment_type'] == 'mixed':
+                num_mixed_sales += cantidad
+                num_cash_sales += cantidad
+                num_transfer_sales += cantidad
+            else:
+                num_transfer_sales += cantidad
+
         # Obtener detalles de productos vendidos
         products_query = """
             SELECT 
@@ -146,7 +159,8 @@ class CashRegister:
             'final_amount': register.get('final_amount', expected_amount),
             'num_cash_sales': num_cash_sales,
             'num_transfer_sales': num_transfer_sales,
-            'total_sales_count': num_cash_sales + num_transfer_sales,
+            'num_mixed_sales': num_mixed_sales,
+            'total_sales_count': total_count,
             'products': products,
             'withdrawals_list': withdrawals,
             'notes': register.get('notes', '')
