@@ -8,7 +8,7 @@ import { ensureCollections, onStoreChange } from '../store.js';
 import { initCatalogoHistory, fieldLabel } from '../catalogo_history.js';
 import { registrarMovimiento, movimientosDe, MOTIVOS } from '../stock_ledger.js';
 import { avisarStockALaTienda, reflejarSiPublicado } from '../tienda_espejo.js';
-import { packsAGuardar, packsAMostrar, guardaCerrados, num as numConj } from '../conjunto.js';
+import { packsAGuardar, packsAMostrar, guardaCerrados, formularioIncluyeAbierto, packsCerradosTipeados, camposStockRapido, num as numConj } from '../conjunto.js';
 import {
   recomputarResumenInventario, resumenEstaVencido, computarResumen,
   sugerirCantidad, valorizarStock, validarInventario,
@@ -3005,6 +3005,10 @@ export async function renderCatalogo(container, db) {
         variedadesUI = [];
       }
       const hayVariedades = variedadesUI.length > 0;
+      // En productos viejos (sin la marca `conjunto_packs_cerrados`) los inputs
+      // muestran los cerrados tal cual vende el POS: restar el pack abierto acá
+      // mostraba una caja menos de la que hay (caso ALFILER ERIZO: 64 vs 112).
+      const tipeadoConAbierto = formularioIncluyeAbierto(prod, esNuevo);
 
       if (hayVariedades) {
         let total = 0;
@@ -3012,7 +3016,7 @@ export async function renderCatalogo(container, db) {
           const vu = Number(v.unidades) || 0;
           const vr = Number(v.restante) || 0;
           const vc = (Number(v.contenido) > 0) ? Number(v.contenido) : c;
-          const cerr = Math.max(0, vu - (vr > 0 ? 1 : 0));
+          const cerr = packsCerradosTipeados(vu, vr, tipeadoConAbierto);
           const t = cerr * vc + vr;
           total += t;
           return { nombre: v.color, cerr, vc, vr, t };
@@ -3026,7 +3030,7 @@ export async function renderCatalogo(container, db) {
           `<div style="font-size:18px;font-weight:800;color:var(--text-strong)">${total.toLocaleString('es-AR')} ${um}</div>` +
           (detalleHtml ? `<div style="margin-top:6px;display:flex;flex-direction:column;gap:2px">${detalleHtml}</div>` : '');
       } else if (u > 0 && c > 0) {
-        const cerrados = Math.max(0, (u - (r > 0 ? 1 : 0)));
+        const cerrados = packsCerradosTipeados(u, r, tipeadoConAbierto);
         const totalCerrados = cerrados * c;
         const total = totalCerrados + r;
         const detalleR = r > 0 ? ` + ${r} ${um} ${sueltos.toLowerCase()} en ${sg.toLowerCase()} ${abierto.toLowerCase()}` : '';
@@ -4475,8 +4479,7 @@ export async function renderCatalogo(container, db) {
         // lectura anterior hasta que los migre scripts/corregir_pack_abierto.py:
         // convertirlos acá a ciegas le sacaría un pack a los que el POS ya dejó
         // en cerrados.
-        const eraConjunto = prod.es_conjunto === true || prod.es_conjunto === 1;
-        const convertirPacks = esNuevo || !eraConjunto || guardaCerrados(prod);
+        const convertirPacks = formularioIncluyeAbierto(prod, esNuevo);
         let cU, cR;
         if (tieneColores) {
           if (convertirPacks) {
@@ -7248,12 +7251,25 @@ export async function renderCatalogo(container, db) {
     if (nuevo === null) return;
     const valor = parseInt(nuevo);
     if (isNaN(valor) || valor < 0) { alertDialog({ title: 'Stock inválido', message: 'Ingresá un número válido (0 o mayor).', type: 'warning' }); return; }
+    // Un conjunto guarda el mismo stock dos veces (plano + packs/sueltas):
+    // se escriben juntos o la carga desaparece en la ficha y en el POS.
+    const campos = camposStockRapido(p, valor);
+    if (!campos) {
+      alertDialog({
+        title: 'Producto con variedades',
+        message: `El stock de <b>"${_escHtml(p.nombre)}"</b> se reparte entre variedades.<br>Cargalo desde <b>Editar producto</b>, en la fila de la variedad que corresponda, así queda bien repartido.`,
+        type: 'warning',
+      });
+      return;
+    }
     const _stockPrev = p.stock ?? null;
     try {
-      await updateDoc(doc(db, 'catalogo', docId), { stock: valor, ultima_actualizacion: serverTimestamp() });
+      const antes = {};
+      for (const k of Object.keys(campos)) antes[k] = p[k] ?? null;
+      await updateDoc(doc(db, 'catalogo', docId), { ...campos, ultima_actualizacion: serverTimestamp() });
       invalidateCacheByPrefix('catalogo');
-      p.stock = valor;
-      if (_stockPrev !== valor) hist.recordUpdate(docId, { stock: _stockPrev }, { stock: valor }, {
+      Object.assign(p, campos);
+      if (_stockPrev !== valor) hist.recordUpdate(docId, antes, { ...campos }, {
         label: `Stock de ${p.nombre || p.name || docId}`,
       });
       registrarMovimiento(db, {

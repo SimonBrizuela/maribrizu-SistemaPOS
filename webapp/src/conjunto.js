@@ -97,3 +97,52 @@ export function packsAMostrar(cerrados, sueltos) {
 export function guardaCerrados(producto) {
   return producto?.conjunto_packs_cerrados === true;
 }
+
+/**
+ * Si lo que muestra y tipea el formulario incluye el pack abierto (regla
+ * nueva). En productos nuevos o ya migrados sí; en los viejos los inputs
+ * muestran `unidades` tal cual está guardado, que es lo que el POS vende como
+ * cerrados — restarles uno en pantalla muestra un pack menos del que hay.
+ * Misma condición que decide `convertirPacks` al guardar.
+ */
+export function formularioIncluyeAbierto(producto, esNuevo) {
+  if (esNuevo) return true;
+  const eraConjunto = producto?.es_conjunto === true || producto?.es_conjunto === 1;
+  return !eraConjunto || guardaCerrados(producto);
+}
+
+/**
+ * Packs cerrados a partir de lo tipeado en el formulario, respetando la
+ * convención del producto: con la regla nueva lo tipeado incluye el abierto y
+ * se descuenta; con la vieja ya son los cerrados y van tal cual.
+ */
+export function packsCerradosTipeados(packsTipeados, sueltos, incluyeAbierto) {
+  return incluyeAbierto
+    ? packsAGuardar(packsTipeados, sueltos)
+    : Math.max(0, num(packsTipeados));
+}
+
+/**
+ * Campos a escribir cuando se edita el stock total desde el editor rápido del
+ * inventario. Hasta ahora ese editor tocaba solo el `stock` plano y el
+ * conjunto quedaba atrás: la caja cargada a mano desaparecía en la ficha
+ * (caso real: ALFILER ERIZO, 27-08). Devuelve null si el producto tiene
+ * variedades — ahí no se puede saber a qué variedad va la mercadería y el
+ * número se carga desde la ficha.
+ */
+export function camposStockRapido(producto, valor) {
+  const p = producto || {};
+  const esConjunto = p.es_conjunto === true || p.es_conjunto === 1;
+  if (!esConjunto) return { stock: Math.max(0, num(valor)) };
+  const tieneVariedades = Array.isArray(p.conjunto_colores)
+    && p.conjunto_colores.some(c => c && typeof c === 'object');
+  if (tieneVariedades) return null;
+  const r = repartirTotal(valor, num(p.conjunto_contenido));
+  return {
+    stock: Math.max(0, Math.floor(r.total)),
+    conjunto_unidades: r.unidades,
+    conjunto_restante: r.restante,
+    conjunto_total: r.total,
+    conjunto_packs_cerrados: true,
+  };
+}
