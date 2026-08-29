@@ -4693,3 +4693,487 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
 .bal-cta-movs summary { cursor: pointer; font-size: 12px; color: var(--text-muted); padding: 6px 0; }
 .bal-cta-movs tr[data-ir] { cursor: pointer; }
 @media (max-width: 720px) { .bal-cta-grid2 { grid-template-columns: 1fr; } }
+
+/* ── AVISOS FLOTANTES (stock, pedidos) ────────────────────────────────────── */
+/* Una sola pila para toda la app, al costado derecho y debajo de la barra
+   superior: no tapa la búsqueda, los filtros ni el contenido que se está
+   mirando. Los avisos que no se pueden perder van arriba de todo. */
+#llToastStack {
+  position: fixed;
+  top: 74px; right: 18px;
+  z-index: 9000;
+  display: flex; flex-direction: column; gap: 10px;
+  width: min(376px, calc(100vw - 36px));
+  max-height: calc(100dvh - 96px);
+  pointer-events: none;
+}
+
+.ll-toast {
+  --t-fg: var(--tint-gray-fg);
+  --t-bg: var(--tint-gray-bg);
+  --t-solid: #455a64;
+  pointer-events: auto;
+  position: relative;
+  overflow: hidden;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.06), 0 14px 34px -14px rgba(0,0,0,.38);
+  font-family: inherit;
+  color: var(--text);
+  opacity: 0;
+  transform: translateX(18px);
+  transition: opacity .2s ease, transform .2s cubic-bezier(.22,.61,.36,1);
+}
+.ll-toast--entra { opacity: 1; transform: none; }
+.ll-toast--sale  { opacity: 0; transform: translateX(18px); }
+
+.ll-toast--rojo    { --t-fg: var(--tint-red-fg);    --t-bg: var(--tint-red-bg);    --t-solid: #c62828; }
+.ll-toast--naranja { --t-fg: var(--tint-orange-fg); --t-bg: var(--tint-orange-bg); --t-solid: #e65100; }
+.ll-toast--verde   { --t-fg: var(--tint-green-fg);  --t-bg: var(--tint-green-bg);  --t-solid: #2f7a3d; }
+.ll-toast--violeta { --t-fg: var(--tint-purple-fg); --t-bg: var(--tint-purple-bg); --t-solid: var(--primary); }
+/* El boton lleva texto blanco: en oscuro el violeta claro no da contraste. */
+html[data-theme="dark"] .ll-toast--violeta { --t-solid: var(--primary-dark); }
+
+/* Los que quedan hasta que alguien los cierra llevan un filo del color: se
+   distinguen de un vistazo del resto de la pila. */
+.ll-toast--fijo::before {
+  content: ''; position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+  background: var(--t-solid);
+}
+
+.ll-toast-fila { display: flex; align-items: flex-start; gap: 11px; padding: 13px 13px 13px 15px; }
+
+.ll-toast-ico {
+  flex-shrink: 0;
+  width: 32px; height: 32px; border-radius: 9px;
+  display: flex; align-items: center; justify-content: center;
+  background: var(--t-bg); color: var(--t-fg);
+  font-size: 19px !important;
+}
+
+.ll-toast-cuerpo { flex: 1; min-width: 0; }
+
+.ll-toast-tope { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 3px; }
+.ll-toast-etiqueta {
+  font-size: 10.5px; font-weight: 800; text-transform: uppercase;
+  letter-spacing: .6px; color: var(--t-fg);
+}
+.ll-toast-chip {
+  font-size: 9.5px; font-weight: 800; letter-spacing: .4px; text-transform: uppercase;
+  padding: 2px 7px; border-radius: 99px;
+  background: var(--tint-gray-bg); color: var(--tint-gray-fg);
+}
+.ll-toast-chip--rojo    { background: var(--tint-red-bg);    color: var(--tint-red-fg); }
+.ll-toast-chip--naranja { background: var(--tint-orange-bg); color: var(--tint-orange-fg); }
+.ll-toast-chip--verde   { background: var(--tint-green-bg);  color: var(--tint-green-fg); }
+.ll-toast-chip--violeta { background: var(--tint-purple-bg); color: var(--tint-purple-fg); }
+
+.ll-toast-titulo {
+  font-size: 13.5px; font-weight: 700; line-height: 1.3; color: var(--text-strong);
+  overflow-wrap: anywhere;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+
+.ll-toast-detalle { font-size: 12px; color: var(--text-muted); line-height: 1.45; margin-top: 4px; }
+.ll-toast-detalle b { color: var(--text); font-variant-numeric: tabular-nums; }
+.ll-toast-detalle .ll-toast-sep { opacity: .45; margin: 0 5px; }
+.ll-toast-detalle .ll-toast-alt { color: var(--t-fg); font-weight: 600; }
+.ll-toast-nota {
+  display: flex; align-items: center; gap: 5px; margin-top: 5px;
+  font-size: 11.5px; font-weight: 600; color: var(--t-fg);
+}
+.ll-toast-nota .material-icons { font-size: 14px !important; }
+
+.ll-toast-acciones { display: flex; gap: 7px; margin-top: 10px; }
+.ll-toast-btn {
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-muted);
+  border-radius: 8px; padding: 6px 12px; cursor: pointer;
+  font-family: inherit; font-size: 12px; font-weight: 600;
+  transition: background .15s, border-color .15s, color .15s;
+}
+.ll-toast-btn:hover { background: var(--surface-3); color: var(--text); border-color: var(--border-strong); }
+.ll-toast-btn--pri {
+  background: var(--t-solid); border-color: var(--t-solid); color: #fff; font-weight: 700;
+}
+.ll-toast-btn--pri:hover { background: var(--t-solid); border-color: var(--t-solid); color: #fff; filter: brightness(1.08); }
+
+.ll-toast-x {
+  flex-shrink: 0; border: none; background: none; cursor: pointer;
+  color: var(--text-muted); padding: 3px; border-radius: 7px; line-height: 1;
+  display: flex; transition: background .15s, color .15s;
+}
+.ll-toast-x:hover { background: var(--surface-3); color: var(--text); }
+.ll-toast-x .material-icons { font-size: 17px !important; }
+
+/* Cuánto le queda al aviso antes de irse solo. Se frena al pasar el mouse. */
+.ll-toast-barra { position: absolute; left: 0; right: 0; bottom: 0; height: 2px; background: var(--border); }
+.ll-toast-barra > i {
+  display: block; height: 100%; width: 100%;
+  background: var(--t-solid); opacity: .55; transform-origin: left center;
+  animation: llToastBarra linear forwards;
+}
+@keyframes llToastBarra { from { transform: scaleX(1); } to { transform: scaleX(0); } }
+
+@media (max-width: 768px) {
+  #llToastStack { top: 68px; right: 10px; left: 10px; width: auto; }
+}
+/* Con movimiento reducido el aviso aparece sin deslizarse, pero aparece: es
+   información, no decoración. */
+@media (prefers-reduced-motion: reduce) {
+  .ll-toast { transform: none; transition: opacity .15s linear; }
+  .ll-toast--sale { transform: none; }
+}
+
+/* ── CATÁLOGO: la barra de trabajo y las tarjetas de arriba ───────────────── */
+/* Buscador, filtros y letra inicial son una sola herramienta: iban sueltos
+   sobre el fondo mientras todo lo demás era una tarjeta, y la página se leía
+   como cinco bloques desparejos. Acá van juntos, en una sola pieza. */
+.cat-toolbar {
+  --cat-accent: #1877f2;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 12px 14px;
+  margin-bottom: 16px;
+}
+.cat-toolbar .filter-bar { margin-bottom: 0; }
+.cat-toolbar #abcBar {
+  display: flex; flex-wrap: wrap; gap: 5px; align-items: center;
+  margin-top: 12px; padding-top: 11px;
+  border-top: 1px solid var(--border);
+}
+.abc-lbl {
+  font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px;
+  color: var(--text-muted); margin-right: 4px;
+}
+.abc-btn {
+  min-width: 36px; padding: 5px 9px;
+  border: 1px solid var(--border); border-radius: 7px;
+  background: var(--surface); color: var(--text);
+  font-family: inherit; font-size: 12px; font-weight: 700; cursor: pointer;
+  transition: background .12s, border-color .12s, color .12s;
+}
+.abc-btn--todas { padding: 5px 13px; }
+.abc-btn:hover:not(:disabled):not(.on) { background: var(--surface-3); border-color: var(--border-strong); }
+.abc-btn:disabled { opacity: .35; cursor: not-allowed; }
+.abc-btn.on { background: var(--cat-accent); border-color: var(--cat-accent); color: #fff; }
+.abc-n { font-size: 10px; font-weight: 500; color: var(--text-muted); margin-left: 4px; }
+.abc-btn.on .abc-n { color: rgba(255,255,255,.8); }
+
+/* Seis tarjetas altas empujaban la tabla fuera de la pantalla: son un resumen,
+   no el contenido de la página. */
+.cards-grid.cat-stats {
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 12px; margin-bottom: 0;
+}
+.cat-stats .stat-card {
+  padding: 13px 15px; gap: 2px;
+  border: 1px solid var(--border); box-shadow: var(--shadow-sm);
+}
+.cat-stats .stat-card .icon-wrap { width: 32px; height: 32px; border-radius: 9px; margin-bottom: 7px; }
+.cat-stats .stat-card .icon-wrap .material-icons { font-size: 18px !important; }
+.cat-stats .stat-card .label { font-size: 10.5px; letter-spacing: .5px; }
+.cat-stats .stat-card .value { font-size: 23px; font-variant-numeric: tabular-nums; }
+
+/* Precios y stock con dígitos del mismo ancho: la columna se lee de un vistazo. */
+#catTable td, #catTable th { font-variant-numeric: tabular-nums; }
+
+/* En pantallas chicas mandan las reglas responsive de siempre. */
+@media (max-width: 900px) {
+  .cards-grid.cat-stats { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+  .cat-stats .stat-card .value { font-size: 20px; }
+}
+@media (max-width: 640px) {
+  .cards-grid.cat-stats { grid-template-columns: 1fr 1fr; gap: 8px; }
+  .cat-toolbar { padding: 10px 11px; }
+}
+
+/* ── NOTIFICACIONES: la lista de lo que hay que reponer ───────────────────── */
+/* Se mira parado frente a la góndola o con el proveedor esperando: manda la
+   densidad. Una fila por producto, el ancho completo de la pantalla, y los
+   números de arriba son los filtros. Antes eran tarjetas de tres líneas en una
+   columna angosta: con 1.900 alertas había que bajar cientos de pantallas. */
+.nf-page {
+  display: flex; flex-direction: column; gap: 12px; min-width: 0;
+  /* Los mide el JS al montar; estos son el respaldo si algo falla. */
+  --nf-bar-top: 55px;
+  --nf-sec-top: 52px;
+}
+
+/* Estado de los avisos del navegador: resuelto = una línea; pendiente = caja. */
+.nf-permiso {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  font-size: 12.5px; line-height: 1.4;
+}
+.nf-permiso .material-icons { font-size: 18px; }
+.nf-permiso--ok { color: var(--tint-green-fg); padding: 2px 2px 0; }
+.nf-permiso--info, .nf-permiso--pausa, .nf-permiso--bloq, .nf-permiso--cta {
+  border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 11px 14px; background: var(--surface); color: var(--text);
+}
+.nf-permiso--pausa { background: var(--tint-yellow-bg); color: var(--tint-orange-fg); border-color: transparent; }
+.nf-permiso--bloq  { background: var(--tint-red-bg); color: var(--tint-red-fg); border-color: transparent; }
+.nf-permiso--cta   { border-color: var(--primary); }
+.nf-permiso--cta .material-icons { color: var(--primary); font-size: 22px; }
+.nf-permiso > span:nth-child(2) { flex: 1; min-width: 180px; }
+.nf-lnk {
+  border: none; background: none; padding: 0 2px; cursor: pointer;
+  font-family: inherit; font-size: 12.5px; font-weight: 700; color: inherit;
+  text-decoration: underline; text-underline-offset: 2px;
+}
+.nf-btn-pri {
+  border: none; background: var(--primary); color: #fff; cursor: pointer;
+  border-radius: 8px; padding: 7px 15px; font-family: inherit; font-size: 12.5px; font-weight: 700;
+}
+
+/* Barra de filtros: queda pegada arriba, debajo de la barra del sistema. */
+.nf-bar {
+  position: sticky; top: var(--nf-bar-top); z-index: 20;
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: var(--surface); border: 1px solid var(--border);
+  border-radius: var(--radius); box-shadow: var(--shadow-sm);
+  padding: 9px 11px;
+}
+/* Tapa el hueco entre la barra del sistema y esta: sin esto se ven las filas
+   pasando por atras cuando se scrollea. */
+.nf-bar::before {
+  content: ''; position: absolute; left: -1px; right: -1px; top: -12px; height: 12px;
+  background: var(--bg);
+}
+.nf-chips { display: flex; gap: 7px; flex-wrap: wrap; flex: 1; min-width: 0; }
+.nf-chip {
+  --c-fg: var(--text);
+  display: inline-flex; align-items: baseline; gap: 7px;
+  border: 1px solid var(--border); border-radius: 10px;
+  background: var(--surface); color: var(--text-muted);
+  padding: 6px 12px; cursor: pointer; font-family: inherit;
+  transition: border-color .12s, background .12s, color .12s;
+}
+.nf-chip .nf-chip-n { font-size: 16px; font-weight: 800; color: var(--c-fg); font-variant-numeric: tabular-nums; }
+.nf-chip .nf-chip-t { font-size: 11.5px; font-weight: 700; text-transform: uppercase; letter-spacing: .4px; }
+.nf-chip--urg  { --c-fg: var(--tint-red-fg); }
+.nf-chip--cero { --c-fg: var(--tint-red-fg); }
+.nf-chip--bajo { --c-fg: var(--tint-orange-fg); }
+.nf-chip:hover:not(:disabled):not(.on) { border-color: var(--border-strong); background: var(--surface-3); }
+.nf-chip:disabled { opacity: .45; cursor: default; }
+.nf-chip.on { background: var(--surface-3); border-color: var(--c-fg); color: var(--text); }
+.nf-chip.on .nf-chip-t { color: var(--c-fg); }
+
+.nf-tools { display: flex; align-items: center; gap: 8px; }
+.nf-buscar-wrap { position: relative; display: flex; align-items: center; }
+.nf-buscar-wrap .material-icons {
+  position: absolute; left: 9px; font-size: 19px; color: var(--text-muted); pointer-events: none;
+}
+.nf-buscar, .nf-select {
+  border: 1px solid var(--border); border-radius: 9px; background: var(--surface); color: var(--text);
+  font-family: inherit; font-size: 13px; padding: 8px 11px; outline: none;
+}
+.nf-buscar { padding-left: 34px; width: 260px; }
+.nf-buscar:focus, .nf-select:focus { border-color: var(--primary); }
+.nf-select { max-width: 190px; }
+
+/* Título de sección: una línea, no una tarjeta. */
+.nf-sec {
+  position: sticky; top: calc(var(--nf-bar-top) + var(--nf-sec-top)); z-index: 10;
+  display: flex; align-items: center; gap: 7px;
+  padding: 10px 4px 7px; font-size: 12.5px; color: var(--text);
+  background: var(--bg);
+  /* Tapa el hueco de arriba: sin esto se ve una tira de la fila anterior
+     pasando entre la barra y el titulo. */
+  box-shadow: 0 -6px 0 0 var(--bg);
+}
+.nf-sec .material-icons { font-size: 17px; }
+.nf-sec--urg  { color: var(--tint-red-fg); }
+.nf-sec--cero .material-icons { color: var(--tint-red-fg); }
+.nf-sec--bajo .material-icons { color: var(--tint-orange-fg); }
+.nf-sec-txt { font-size: 11.5px; color: var(--text-muted); font-weight: 500; }
+.nf-lista { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.nf-seccion { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.nf-seccion:first-child > .nf-sec { padding-top: 2px; }
+
+.nf-row {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 2.2fr) minmax(136px, .9fr) minmax(0, 1.35fr) 92px 60px;
+  grid-template-areas: "ico prod datos ritmo pedir acts";
+  align-items: center; gap: 4px 12px;
+  background: var(--surface);
+  border: 1px solid var(--border); border-left: 3px solid var(--nf-c, var(--border));
+  border-radius: 10px; padding: 7px 10px 7px 11px;
+  cursor: pointer; text-align: left;
+  transition: background .12s, border-color .12s;
+}
+.nf-row:hover { background: var(--surface-3); border-color: var(--border-strong); border-left-color: var(--nf-c); }
+.nf-row:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+.nf-row--urg  { --nf-c: #c62828; background: var(--tint-red-bg); }
+.nf-row--cero { --nf-c: #c62828; }
+.nf-row--bajo { --nf-c: #ef8a20; }
+.nf-row--grupo { grid-template-areas: "ico prod datos vars vars acts"; }
+
+.nf-ico { grid-area: ico; font-size: 18px !important; color: var(--nf-c); }
+.nf-prod {
+  grid-area: prod; display: flex; align-items: baseline; gap: 6px;
+  min-width: 0; overflow: hidden; white-space: nowrap;
+}
+.nf-nombre {
+  font-size: 13px; font-weight: 700; color: var(--text-strong);
+  overflow: hidden; text-overflow: ellipsis;
+}
+.nf-tag {
+  flex-shrink: 0; font-size: 10px; font-weight: 600; letter-spacing: .2px;
+  color: var(--text-muted); background: var(--surface-3);
+  border-radius: 5px; padding: 1px 6px;
+}
+.nf-tag--top   { color: var(--tint-red-fg);    background: var(--tint-red-bg);    font-weight: 800; text-transform: uppercase; font-size: 9px; }
+.nf-tag--var   { color: var(--tint-purple-fg); background: var(--tint-purple-bg); }
+.nf-tag--rubro { color: var(--tint-blue-fg);   background: var(--tint-blue-bg); }
+
+.nf-datos {
+  grid-area: datos; font-size: 12px; color: var(--text-muted);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+  /* Sin esto, un "Sin stock (figura -20) / min 20 - max 80" se pinta fuera de
+     la fila y estira la pagina entera a lo ancho. */
+  min-width: 0; overflow: hidden; text-overflow: ellipsis;
+}
+.nf-datos b { color: var(--text); }
+.nf-cero { color: var(--tint-red-fg) !important; }
+.nf-bajo-txt { color: var(--tint-orange-fg) !important; }
+.nf-fig { font-size: 11px; }
+
+.nf-ritmo {
+  grid-area: ritmo; display: flex; align-items: center; gap: 4px;
+  font-size: 11.5px; font-weight: 600; color: var(--nf-c, var(--text-muted));
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.nf-ritmo .material-icons { font-size: 14px !important; flex-shrink: 0; }
+
+.nf-pedir {
+  grid-area: pedir; text-align: right; white-space: nowrap;
+  font-size: 12px; font-weight: 700; color: var(--primary); font-variant-numeric: tabular-nums;
+}
+
+/* Un producto puede tener 100 colores en cero. Cerrada, la fila muestra una
+   tira; el boton con el numero la abre y ahi si se ven todos, en un bloque que
+   scrollea solo para que la fila no se coma la pantalla. */
+.nf-vars { grid-area: vars; display: flex; align-items: center; gap: 7px; min-width: 0; }
+.nf-chips-var {
+  flex: 1; min-width: 0;
+  display: flex; flex-wrap: nowrap; gap: 4px; overflow: hidden;
+  /* El corte lo hace un degrade: una pastilla cortada al medio parece un error. */
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 26px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 26px), transparent);
+}
+.nf-row--abierta .nf-chips-var {
+  flex-wrap: wrap; align-content: flex-start;
+  overflow-y: auto; max-height: 132px; padding: 1px 6px 1px 0;
+  -webkit-mask-image: none; mask-image: none;
+  /* La barrita fina avisa que abajo hay mas, sin ocupar lugar. */
+  scrollbar-width: thin; scrollbar-color: var(--border-strong) transparent;
+}
+.nf-row--abierta .nf-chips-var::-webkit-scrollbar { width: 6px; }
+.nf-row--abierta .nf-chips-var::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 99px; }
+.nf-mas-var {
+  flex-shrink: 0; display: inline-flex; align-items: center; gap: 3px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-muted);
+  border-radius: 99px; padding: 2px 9px 2px 6px; cursor: pointer;
+  font-family: inherit; font-size: 11px; font-weight: 700; font-variant-numeric: tabular-nums;
+  transition: background .12s, color .12s, border-color .12s;
+}
+.nf-mas-var:hover { background: var(--surface-3); color: var(--text); border-color: var(--border-strong); }
+.nf-mas-var .material-icons { font-size: 14px !important; }
+.nf-row--abierta .nf-mas-var { background: var(--surface-3); color: var(--text); }
+.nf-row--abierta { align-items: start; }
+.nf-row--abierta .nf-ico, .nf-row--abierta .nf-acts, .nf-row--abierta .nf-mas-var { align-self: center; }
+.nf-var {
+  flex-shrink: 0; font-size: 10.5px; font-weight: 700; white-space: nowrap;
+  color: var(--tint-orange-fg); background: var(--tint-orange-bg);
+  border-radius: 99px; padding: 2px 8px;
+}
+.nf-var.is-cero { color: var(--tint-red-fg); background: var(--tint-red-bg); }
+.nf-var--mas { color: var(--text-muted); background: var(--surface-3); }
+
+.nf-acts { grid-area: acts; display: flex; align-items: center; justify-content: flex-end; gap: 2px; }
+.nf-act {
+  border: none; background: none; cursor: pointer; color: var(--text-muted);
+  padding: 4px; border-radius: 7px; display: flex; line-height: 1;
+  opacity: .55; transition: opacity .12s, background .12s, color .12s;
+}
+.nf-row:hover .nf-act { opacity: 1; }
+.nf-act .material-icons { font-size: 17px !important; }
+.nf-act:hover { background: var(--surface-hover); color: var(--text); }
+.nf-act[data-ocultar]:hover { color: var(--tint-red-fg); background: var(--tint-red-bg); }
+
+.nf-pie {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 12px 2px 4px; font-size: 12.5px; color: var(--text-muted);
+}
+.nf-btn {
+  display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text);
+  border-radius: 9px; padding: 7px 13px; cursor: pointer;
+  font-family: inherit; font-size: 12.5px; font-weight: 700;
+}
+.nf-btn:hover { background: var(--surface-3); border-color: var(--border-strong); }
+.nf-btn .material-icons { font-size: 17px !important; }
+.nf-btn--fin { margin-left: auto; color: var(--text-muted); }
+
+.nf-vacio {
+  background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius);
+  padding: 34px 20px; text-align: center; color: var(--text-muted); font-size: 13px;
+}
+.nf-vacio .material-icons { font-size: 40px !important; color: var(--tint-green-fg); }
+.nf-vacio-t { font-size: 15px; font-weight: 700; color: var(--text); margin: 8px 0 3px; }
+.nf-vacio .nf-btn { margin-top: 14px; }
+
+/* Pantallas medianas: la fila pasa a dos líneas antes de que algo se recorte.
+   Los datos quedan juntos a la izquierda: separados por medio metro de blanco
+   no se leen como una misma fila. */
+@media (max-width: 1150px) {
+  .nf-row {
+    grid-template-columns: 22px auto auto minmax(0, 1fr) 60px;
+    grid-template-areas:
+      "ico prod  prod  prod  acts"
+      "ico datos ritmo pedir acts";
+    align-items: start;
+    row-gap: 2px;
+  }
+  .nf-row--grupo {
+    grid-template-columns: 22px minmax(0, 1fr) 60px;
+    grid-template-areas:
+      "ico prod  acts"
+      "ico datos acts"
+      "ico vars  acts";
+  }
+  .nf-ico, .nf-acts { align-self: center; }
+  .nf-pedir { text-align: left; justify-self: start; }
+}
+
+@media (max-width: 780px) {
+  .nf-bar { padding: 8px; }
+  .nf-tools { width: 100%; flex-wrap: wrap; }
+  .nf-buscar-wrap { flex: 1 1 170px; min-width: 0; }
+  .nf-buscar { width: 100%; }
+  .nf-select { flex: 1 1 140px; min-width: 0; max-width: none; }
+  .nf-row {
+    grid-template-columns: 20px minmax(0, 1fr) auto 46px;
+    grid-template-areas:
+      "ico prod  prod  acts"
+      "ico datos pedir acts"
+      "ico ritmo ritmo acts";
+    gap: 3px 9px;
+  }
+  .nf-row--grupo {
+    grid-template-columns: 20px minmax(0, 1fr) 46px;
+    grid-template-areas:
+      "ico prod  acts"
+      "ico datos acts"
+      "ico vars  acts";
+  }
+  .nf-prod { flex-wrap: wrap; white-space: normal; }
+  .nf-nombre { white-space: normal; }
+  .nf-datos, .nf-ritmo { white-space: normal; overflow: visible; }
+  .nf-act { opacity: 1; }
+  .nf-chip { padding: 5px 10px; }
+  .nf-chip .nf-chip-n { font-size: 14px; }
+}

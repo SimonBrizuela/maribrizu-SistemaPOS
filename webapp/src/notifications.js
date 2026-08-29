@@ -2,7 +2,7 @@
  * Notificaciones globales de stock bajo.
  *
  * Detecta productos cuyo stock efectivo ya está en o por debajo de `stock_min`,
- * y dispara dos avisos: un toast in-app que aparece arriba en cualquier página,
+ * y dispara dos avisos: un toast in-app al costado derecho de cualquier página,
  * y (si el usuario lo permite) una notificación nativa del navegador. Desde
  * cualquiera de los dos, el click lleva al editor del producto en el catálogo
  * para que el usuario pueda rellenar.
@@ -25,6 +25,7 @@ import { alertaPorBulto, bultoDe, textoBultos } from './bulto.js';
 // Lo que se vende fraccionado llega con el nombre decorado y la cantidad en la
 // presentación vendida: hay que leerlo antes de medir el ritmo.
 import { parseNombreItem, unidadesDelRenglon } from './nombre_item.js';
+import { mostrarToast } from './components/toasts.js';
 
 // ── Estado interno ───────────────────────────────────────────────────────────
 let _db = null;
@@ -33,7 +34,6 @@ let _productos = [];           // último snapshot del catálogo
 let _activeIds = new Set();    // doc_ids actualmente en alerta (stock <= stock_min)
 let _lastStockPorKey = new Map(); // key → último stock notificado, para re-alertar si baja más
 let _listeners = new Set();    // suscriptores (página /notificaciones)
-let _toastRoot = null;
 let _unsubMeta = null;
 let _lastMetaTs = null;
 let _refreshing = false;
@@ -64,6 +64,7 @@ const LS_BROWSER_ENABLED = 'notif:browser_enabled';
 const LS_IGNORADOS = 'notif:ignorados';   // cache local del listado (carga instantánea)
 const IGNORADOS_DOC = ['config', 'notif_ignorados'];   // doc Firestore compartido entre PCs
 const TOAST_DURATION_MS = 9000;
+const TOAST_MAX_INDIVIDUALES = 3;   // más que esto sale como resumen
 
 // ── Productos ocultados por el usuario ───────────────────────────────────────
 // Fuente de verdad: doc Firestore `config/notif_ignorados` { ids: [...] }, así
@@ -705,7 +706,15 @@ async function _doRefrescar({ silent }) {
         return false;
       });
       console.info(`[notificaciones] refresh → ${alertas.length} activas, ${aDisparar.length} a notificar`);
-      for (const a of aDisparar) _mostrarToast(a);
+      // Una importación o un cierre de caja pueden cruzar el mínimo de veinte
+      // productos de una. Veinte tarjetas apiladas no las lee nadie: salen las
+      // tres primeras y el resto va en un solo aviso que lleva a la lista.
+      if (aDisparar.length > TOAST_MAX_INDIVIDUALES) {
+        aDisparar.slice(0, TOAST_MAX_INDIVIDUALES).forEach(_mostrarToast);
+        _mostrarToastResumen(aDisparar.slice(TOAST_MAX_INDIVIDUALES), []);
+      } else {
+        for (const a of aDisparar) _mostrarToast(a);
+      }
       if (aDisparar.length && _browserEnabled() && _permPermitida()) {
         _mostrarNotifNavegador(aDisparar);
       }
@@ -847,26 +856,9 @@ export function mostrarNotificacionDePrueba() {
 }
 
 // ── Toasts in-app ────────────────────────────────────────────────────────────
-function _ensureToastRoot() {
-  if (_toastRoot && document.body.contains(_toastRoot)) return _toastRoot;
-  _toastRoot = document.createElement('div');
-  _toastRoot.id = 'notifToastRoot';
-  _toastRoot.style.cssText = [
-    'position:fixed',
-    'top:14px',
-    'left:50%',
-    'transform:translateX(-50%)',
-    'z-index:9000',
-    'display:flex',
-    'flex-direction:column',
-    'gap:10px',
-    'pointer-events:none',
-    'width:min(440px, calc(100vw - 28px))',
-  ].join(';');
-  document.body.appendChild(_toastRoot);
-  return _toastRoot;
-}
-
+// La pila la maneja components/toasts.js: una sola para toda la app, al costado
+// derecho, para que un aviso de stock no tape la búsqueda ni se superponga con
+// el de un pedido nuevo.
 function _fmt(n) {
   const v = Number(n);
   if (!isFinite(v)) return '0';
@@ -874,155 +866,69 @@ function _fmt(n) {
 }
 
 function _mostrarToast(a) {
-  const root = _ensureToastRoot();
-  const toast = document.createElement('div');
-  toast.setAttribute('role', 'alert');
-
   // Tres niveles: urgente (rota + por agotarse) > sin stock > stock bajo.
   const urgente = !!a.urgente;
-  const acento  = urgente ? '#b00020' : a.critico ? '#c62828' : '#f57c00';
-  const acentoTxt = urgente ? '#b00020' : a.critico ? '#c62828' : '#b45309';
-  const tier    = urgente ? 'Reponer urgente' : a.critico ? 'Sin stock' : 'Stock bajo';
-  const icono   = urgente ? 'priority_high' : a.critico ? 'error' : 'warning';
+  const tono  = urgente || a.critico ? 'rojo' : 'naranja';
+  const tier  = urgente ? 'Reponer urgente' : a.critico ? 'Sin stock' : 'Stock bajo';
+  const icono = urgente ? 'priority_high' : a.critico ? 'error' : 'warning';
   const cobertura = _coberturaTexto(a);
+  const stockTxt = a.stock_texto || (_fmt(a.stock) + (a.unidad_label ? ' ' + a.unidad_label : ''));
 
-  toast.style.cssText = [
-    'pointer-events:auto',
-    'background:var(--surface)',
-    `border-left:${urgente ? '5px' : '4px'} solid ${acento}`,
-    'border-radius:12px',
-    `box-shadow:0 6px 24px rgba(0,0,0,${urgente ? '0.24' : '0.18'})`,
-    'padding:12px 14px',
-    'display:flex',
-    'align-items:flex-start',
-    'gap:10px',
-    'font-family:Inter,system-ui,sans-serif',
-    'color:var(--text)',
-    'transform:translateY(-12px)',
-    'opacity:0',
-    'transition:transform 0.25s ease, opacity 0.25s ease',
-  ].join(';');
-
-  toast.innerHTML = `
-    <span class="material-icons" style="color:${acento};font-size:22px;flex-shrink:0">${icono}</span>
-    <div style="flex:1;min-width:0">
-      <div style="display:flex;align-items:center;gap:6px;margin-bottom:2px">
-        <span style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;color:${acentoTxt}">${tier}</span>
-        ${a.es_top ? `<span style="font-size:9px;font-weight:800;letter-spacing:0.4px;color:var(--tint-red-fg);background:var(--tint-red-bg);border:1px solid var(--border);padding:1px 6px;border-radius:99px;text-transform:uppercase">Top ventas</span>` : ''}
-      </div>
-      <div style="font-size:14px;font-weight:700;line-height:1.3;word-wrap:break-word">${_escape(a.nombre)}</div>
-      <div style="font-size:12px;color:var(--text-muted);margin-top:3px">
-        Quedan <b style="color:${acentoTxt}">${_escape(a.stock_texto || (_fmt(a.stock) + (a.unidad_label ? ' ' + a.unidad_label : '')))}</b>
-        ${a.stock_equiv ? `<span style="color:var(--text-muted)">(${_escape(a.stock_equiv)})</span>` : ''}
-        <span style="color:var(--text-muted)">/ mín ${_escape(a.min_texto || _fmt(a.stock_min))}</span>
-        ${a.sugerencia ? ` · <span style="color:var(--primary)">pedir ~${_escape(a.sugerencia_texto || _fmt(a.sugerencia))}</span>` : ''}
-      </div>
-      ${cobertura ? `<div style="font-size:11.5px;font-weight:600;color:${urgente ? 'var(--tint-red-fg)' : 'var(--primary)'};margin-top:3px;display:flex;align-items:center;gap:4px">
-        <span class="material-icons" style="font-size:14px">trending_up</span>${_escape(cobertura)}
-      </div>` : ''}
-      <div style="display:flex;gap:8px;margin-top:8px">
-        <button data-act="rellenar" style="background:${urgente ? acento : '#7b3fa6'};color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">
-          ${urgente ? 'Reponer ahora' : 'Rellenar'}
-        </button>
-        <button data-act="cerrar" style="background:transparent;color:var(--text-muted);border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">
-          Cerrar
-        </button>
-      </div>
-    </div>
-    <button data-act="x" aria-label="Cerrar" style="background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px;line-height:1;flex-shrink:0">
-      <span class="material-icons" style="font-size:18px">close</span>
-    </button>
+  const detalle = `
+    Quedan <b>${_escape(stockTxt)}</b>${a.stock_equiv ? ` (${_escape(a.stock_equiv)})` : ''}
+    <span class="ll-toast-sep">·</span>mín ${_escape(a.min_texto || _fmt(a.stock_min))}
+    ${a.sugerencia ? `<span class="ll-toast-sep">·</span><span class="ll-toast-alt">pedir ~${_escape(a.sugerencia_texto || _fmt(a.sugerencia))}</span>` : ''}
+    ${cobertura ? `<div class="ll-toast-nota"><span class="material-icons">trending_up</span>${_escape(cobertura)}</div>` : ''}
   `;
 
-  let timer = setTimeout(() => _cerrarToast(toast), TOAST_DURATION_MS);
-  toast.addEventListener('mouseenter', () => { clearTimeout(timer); });
-  toast.addEventListener('mouseleave', () => { timer = setTimeout(() => _cerrarToast(toast), TOAST_DURATION_MS); });
-
-  toast.addEventListener('click', (e) => {
-    const t = e.target.closest('button');
-    if (!t) return;
-    const act = t.dataset.act;
-    if (act === 'rellenar') {
-      _cerrarToast(toast);
-      _irACatalogo(a.doc_id);
-    } else {
-      _cerrarToast(toast);
-    }
+  mostrarToast({
+    tono,
+    etiqueta: tier,
+    icono,
+    titulo: a.nombre,
+    detalleHtml: detalle,
+    chips: a.es_top ? [{ texto: 'Top ventas', tono: 'rojo' }] : [],
+    acciones: [
+      { id: 'rellenar', texto: urgente ? 'Reponer ahora' : 'Rellenar', principal: true },
+      { id: 'cerrar', texto: 'Cerrar' },
+    ],
+    // Lo urgente queda hasta que alguien lo cierra: si se desvanece mientras se
+    // está cobrando, el producto se agota sin que nadie se entere.
+    duracion: urgente ? 0 : TOAST_DURATION_MS,
+    prioritario: urgente,
+    onAccion: (id, api) => {
+      api.cerrar();
+      if (id === 'rellenar') _irACatalogo(a.doc_id);
+    },
   });
-
-  root.appendChild(toast);
-  // Animar entrada
-  requestAnimationFrame(() => {
-    toast.style.transform = 'translateY(0)';
-    toast.style.opacity = '1';
-  });
-}
-
-function _cerrarToast(toast) {
-  if (!toast || !toast.parentNode) return;
-  toast.style.transform = 'translateY(-12px)';
-  toast.style.opacity = '0';
-  setTimeout(() => { toast.remove(); }, 250);
 }
 
 // Toast resumen: una sola tarjeta con cuántos productos hay y un botón a la
 // página de notificaciones. Se usa al cargar la app, sin spam-ear con uno
 // por producto.
 function _mostrarToastResumen(alertas, urgentesRitmo = []) {
-  const root = _ensureToastRoot();
-  const toast = document.createElement('div');
-  toast.setAttribute('role', 'alert');
   const hayUrgentes = urgentesRitmo.length > 0;
-  const acento = hayUrgentes ? '#b00020' : '#7b3fa6';
-  toast.style.cssText = [
-    'pointer-events:auto',
-    'background:var(--surface)',
-    `border-left:${hayUrgentes ? '5px' : '4px'} solid ${acento}`,
-    'border-radius:12px',
-    'box-shadow:0 6px 24px rgba(0,0,0,0.18)',
-    'padding:12px 14px',
-    'display:flex',
-    'align-items:center',
-    'gap:10px',
-    'font-family:Inter,system-ui,sans-serif',
-    'color:var(--text)',
-    'transform:translateY(-12px)',
-    'opacity:0',
-    'transition:transform 0.25s ease, opacity 0.25s ease',
-  ].join(';');
   const criticas = alertas.filter(a => a.critico).length;
   const titulo = hayUrgentes
     ? `${urgentesRitmo.length} de tus más vendidos sin stock`
     : `${alertas.length} ${alertas.length === 1 ? 'producto' : 'productos'} con stock bajo`;
-  const sub = hayUrgentes
-    ? `Reponer urgente${alertas.length > 0 ? ` · ${alertas.length} con mínimo configurado` : ''}.`
-    : `${criticas > 0 ? `<b style="color:var(--tint-red-fg)">${criticas} sin stock</b> · ` : ''}revisá la lista para rellenar.`;
-  toast.innerHTML = `
-    <span class="material-icons" style="color:${acento};font-size:24px;flex-shrink:0">${hayUrgentes ? 'priority_high' : 'inventory_2'}</span>
-    <div style="flex:1;min-width:0">
-      <div style="font-size:13px;font-weight:700;color:var(--text)">${titulo}</div>
-      <div style="font-size:11.5px;color:var(--text-muted);margin-top:2px">
-        ${sub}
-      </div>
-    </div>
-    <button data-act="ver" style="background:#7b3fa6;color:#fff;border:none;border-radius:8px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">Ver</button>
-    <button data-act="x" aria-label="Cerrar" style="background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px;line-height:1;flex-shrink:0">
-      <span class="material-icons" style="font-size:18px">close</span>
-    </button>
-  `;
-  let timer = setTimeout(() => _cerrarToast(toast), TOAST_DURATION_MS + 3000);
-  toast.addEventListener('mouseenter', () => clearTimeout(timer));
-  toast.addEventListener('mouseleave', () => { timer = setTimeout(() => _cerrarToast(toast), TOAST_DURATION_MS); });
-  toast.addEventListener('click', (e) => {
-    const t = e.target.closest('button');
-    if (!t) return;
-    if (t.dataset.act === 'ver') { _cerrarToast(toast); _irANotificaciones(); }
-    else _cerrarToast(toast);
-  });
-  root.appendChild(toast);
-  requestAnimationFrame(() => {
-    toast.style.transform = 'translateY(0)';
-    toast.style.opacity = '1';
+  const detalle = hayUrgentes
+    ? `Reponer urgente${alertas.length > 0 ? ` <span class="ll-toast-sep">·</span>${alertas.length} con mínimo configurado` : ''}.`
+    : `${criticas > 0 ? `<b>${criticas} sin stock</b><span class="ll-toast-sep">·</span>` : ''}revisá la lista para rellenar.`;
+
+  mostrarToast({
+    tono: hayUrgentes ? 'rojo' : 'violeta',
+    etiqueta: hayUrgentes ? 'Reponer urgente' : 'Stock',
+    icono: hayUrgentes ? 'priority_high' : 'inventory_2',
+    titulo,
+    detalleHtml: detalle,
+    acciones: [{ id: 'ver', texto: 'Ver la lista', principal: true }],
+    duracion: hayUrgentes ? 0 : TOAST_DURATION_MS + 3000,
+    prioritario: hayUrgentes,
+    onAccion: (id, api) => {
+      api.cerrar();
+      if (id === 'ver') _irANotificaciones();
+    },
   });
 }
 

@@ -928,12 +928,12 @@ function initApp(session) {
     // estructurales (#app, #login, #sidebarOverlay) y los no-visuales.
     for (const c of document.body.children) {
       const id = c.id || '';
-      // notifToastRoot = contenedor de toasts in-app (notifications.js). Vive fuera
-      // de #app, así que un re-render de la página no lo destruye → no debe contar
-      // como "ocupado", o un toast visible (ej. "Stock bajo") bloquearía los
+      // llToastStack = pila de avisos flotantes (stock y pedidos). Vive fuera
+      // de #app, así que un re-render de la página no la destruye → no debe contar
+      // como "ocupado", o un aviso visible (ej. "Stock bajo") bloquearía los
       // refrescos en vivo del store hasta que se cierre.
       if (id === 'app' || id === 'login' || id === 'sidebarOverlay' ||
-          id === 'notifToastRoot' ||
+          id === 'llToastStack' ||
           c.tagName === 'SCRIPT' || c.tagName === 'STYLE' ||
           c.tagName === 'NOSCRIPT' || c.tagName === 'LINK' ||
           c.tagName === 'META') continue;

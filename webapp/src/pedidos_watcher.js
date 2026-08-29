@@ -16,13 +16,13 @@
  * resumen y desde ahí sí, cada pedido nuevo avisa solo.
  */
 import { collection, query, orderBy, limit, onSnapshot, doc, updateDoc } from 'firebase/firestore';
+import { mostrarToast } from './components/toasts.js';
 
 let _db = null;
 let _initialized = false;
 let _unsub = null;
 let _baselineDone = false;
 let _avisados = new Set();     // ids ya avisados en esta sesión
-let _toastRoot = null;
 let _audioCtx = null;
 
 const LS_SONIDO = 'pedidos:sonido';
@@ -85,134 +85,56 @@ function _pesos(n) {
   return '$' + Math.round(Number(n) || 0).toLocaleString('es-AR');
 }
 
-function _ensureToastRoot() {
-  if (_toastRoot && document.body.contains(_toastRoot)) return _toastRoot;
-  _toastRoot = document.createElement('div');
-  _toastRoot.id = 'pedidosToastRoot';
-  _toastRoot.style.cssText = [
-    'position:fixed',
-    'top:14px',
-    'right:14px',
-    'z-index:9100',   // por encima de los toasts de stock: un pedido manda más
-    'display:flex',
-    'flex-direction:column',
-    'gap:10px',
-    'pointer-events:none',
-    'width:min(380px, calc(100vw - 28px))',
-  ].join(';');
-  document.body.appendChild(_toastRoot);
-  return _toastRoot;
-}
-
-function _cerrarToast(toast) {
-  toast.style.transform = 'translateX(16px)';
-  toast.style.opacity = '0';
-  setTimeout(() => toast.remove(), 250);
-}
-
 /**
  * Toast de pedido nuevo. No se va solo: un pedido es plata esperando, y que el
  * aviso desaparezca mientras se atiende a otra persona es exactamente el caso
- * que este módulo existe para evitar.
+ * que este módulo existe para evitar. Por eso además va arriba de la pila,
+ * encima de cualquier aviso de stock.
  */
 function _mostrarToast(p) {
-  const root = _ensureToastRoot();
-  const toast = document.createElement('div');
-  toast.setAttribute('role', 'alert');
-
   const modo = p?.entrega?.modo === 'delivery' ? 'Envío a domicilio' : 'Retiro en el local';
   const cuantos = (p.items || []).length;
+  const tel = p?.cliente?.telefono || '';
 
-  toast.style.cssText = [
-    'pointer-events:auto',
-    'background:var(--surface)',
-    'border-left:5px solid #2f7a3d',
-    'border-radius:12px',
-    'box-shadow:0 8px 28px rgba(0,0,0,0.26)',
-    'padding:12px 14px',
-    'display:flex',
-    'align-items:flex-start',
-    'gap:10px',
-    'font-family:Inter,system-ui,sans-serif',
-    'color:var(--text)',
-    'transform:translateX(16px)',
-    'opacity:0',
-    'transition:transform 0.25s ease, opacity 0.25s ease',
-  ].join(';');
-
-  toast.innerHTML = `
-    <span class="material-icons" style="color:#2f7a3d;font-size:22px;flex-shrink:0">shopping_bag</span>
-    <div style="flex:1;min-width:0">
-      <div style="font-size:11px;font-weight:800;text-transform:uppercase;letter-spacing:0.5px;color:#2f7a3d;margin-bottom:2px">
-        Pedido nuevo de la tienda
-      </div>
-      <div style="font-size:14px;font-weight:700;line-height:1.3;word-wrap:break-word">
-        ${_escape(p?.cliente?.nombre || 'Sin nombre')} · ${_escape(p.codigo || '')}
-      </div>
-      <div style="font-size:12px;color:var(--text-muted);margin-top:3px">
-        ${cuantos} ${cuantos === 1 ? 'producto' : 'productos'} · <b>${_pesos(p.total)}</b><br>
-        ${_escape(modo)} · tel ${_escape(p?.cliente?.telefono || '')}
-      </div>
-      <div style="display:flex;gap:8px;margin-top:8px">
-        <button data-act="ver" style="background:#2f7a3d;color:#fff;border:none;border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">
-          Ver el pedido
-        </button>
-        <button data-act="visto" style="background:transparent;color:var(--text-muted);border:1px solid var(--border);border-radius:8px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;font-family:inherit">
-          Marcar visto
-        </button>
-      </div>
-    </div>`;
-
-  toast.addEventListener('click', ev => {
-    const act = ev.target.closest('[data-act]')?.dataset.act;
-    if (!act) return;
-    // El aviso tiene que terminar en la pantalla donde se trabaja el pedido. Un
-    // toast que solo dice que entro algo obliga a buscarlo a mano despues.
-    if (act === 'ver') window.navigateToPage?.('pedidos_tienda');
-    if (act === 'visto') marcarVisto(p.id);
-    _cerrarToast(toast);
-  });
-
-  root.appendChild(toast);
-  requestAnimationFrame(() => {
-    toast.style.transform = 'none';
-    toast.style.opacity = '1';
+  mostrarToast({
+    tono: 'verde',
+    etiqueta: 'Pedido nuevo de la tienda',
+    icono: 'shopping_bag',
+    titulo: `${p?.cliente?.nombre || 'Sin nombre'} · ${p.codigo || ''}`.trim(),
+    detalleHtml: `
+      ${cuantos} ${cuantos === 1 ? 'producto' : 'productos'}<span class="ll-toast-sep">·</span><b>${_pesos(p.total)}</b>
+      <div class="ll-toast-nota"><span class="material-icons">${p?.entrega?.modo === 'delivery' ? 'local_shipping' : 'storefront'}</span>${_escape(modo)}${tel ? ` · tel ${_escape(tel)}` : ''}</div>
+    `,
+    acciones: [
+      { id: 'ver', texto: 'Ver el pedido', principal: true },
+      { id: 'visto', texto: 'Marcar visto' },
+    ],
+    duracion: 0,
+    prioritario: true,
+    onAccion: (id, api) => {
+      // El aviso tiene que terminar en la pantalla donde se trabaja el pedido.
+      // Uno que solo dice que entró algo obliga a buscarlo a mano después.
+      if (id === 'ver') window.navigateToPage?.('pedidos_tienda');
+      if (id === 'visto') marcarVisto(p.id);
+      api.cerrar();
+    },
   });
 }
 
 function _mostrarResumen(cantidad) {
-  const root = _ensureToastRoot();
-  const toast = document.createElement('div');
-  toast.setAttribute('role', 'status');
-  toast.style.cssText = [
-    'pointer-events:auto',
-    'background:var(--surface)',
-    'border-left:5px solid #f57c00',
-    'border-radius:12px',
-    'box-shadow:0 6px 24px rgba(0,0,0,0.18)',
-    'padding:12px 14px',
-    'display:flex',
-    'align-items:center',
-    'gap:10px',
-    'font-family:Inter,system-ui,sans-serif',
-    'color:var(--text)',
-    'transform:translateX(16px)',
-    'opacity:0',
-    'transition:transform 0.25s ease, opacity 0.25s ease',
-  ].join(';');
-  toast.innerHTML = `
-    <span class="material-icons" style="color:#f57c00;font-size:22px">inbox</span>
-    <div style="flex:1;font-size:13px;line-height:1.4">
-      <b>${cantidad} ${cantidad === 1 ? 'pedido' : 'pedidos'} de la tienda sin ver.</b>
-    </div>
-    <button data-act="x" aria-label="Cerrar" style="background:none;border:none;color:var(--text-muted);cursor:pointer;padding:2px;line-height:1">
-      <span class="material-icons" style="font-size:18px">close</span>
-    </button>`;
-  toast.addEventListener('click', () => _cerrarToast(toast));
-  root.appendChild(toast);
-  requestAnimationFrame(() => {
-    toast.style.transform = 'none';
-    toast.style.opacity = '1';
+  mostrarToast({
+    tono: 'naranja',
+    etiqueta: 'Tienda',
+    icono: 'inbox',
+    titulo: `${cantidad} ${cantidad === 1 ? 'pedido' : 'pedidos'} sin ver`,
+    detalleHtml: 'Entraron mientras la página estaba cerrada.',
+    acciones: [{ id: 'ver', texto: 'Ver los pedidos', principal: true }],
+    duracion: 0,
+    prioritario: true,
+    onAccion: (id, api) => {
+      if (id === 'ver') window.navigateToPage?.('pedidos_tienda');
+      api.cerrar();
+    },
   });
 }
 

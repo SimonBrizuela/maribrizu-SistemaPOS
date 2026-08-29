@@ -102,7 +102,8 @@ describe('la primera carga no avisa de a uno', () => {
   it('cuatro pedidos viejos son UN resumen, no cuatro avisos', () => {
     initPedidosWatcher({});
     estado.emitir([pedido('a'), pedido('b'), pedido('c'), pedido('d')]);
-    const avisos = document.querySelectorAll('.pedido-toast, [class*="toast"]');
+    // Los avisos viven en una sola pila compartida con los de stock.
+    const avisos = document.querySelectorAll('#llToastStack > .ll-toast');
     expect(avisos.length).toBeLessThanOrEqual(1);
     expect(document.body.textContent).toMatch(/4/);
   });

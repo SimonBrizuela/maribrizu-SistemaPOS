@@ -1060,7 +1060,7 @@ export async function renderCatalogo(container, db) {
         <div id="invBanner"></div>
 
         <!-- STATS -->
-        <div class="cards-grid" id="statsGrid" style="margin-bottom:4px"></div>
+        <div class="cards-grid cat-stats" id="statsGrid"></div>
 
         <!-- TABS NAVEGACIÓN -->
         <div style="display:flex;gap:0;overflow-x:auto;-webkit-overflow-scrolling:touch;scrollbar-width:none;background:var(--surface);border-radius:10px;border:1px solid var(--border);padding:3px;">
@@ -1389,37 +1389,39 @@ export async function renderCatalogo(container, db) {
     const marcas= [...new Set(base.map(p => p.marca).filter(Boolean))].sort();
 
     tc.innerHTML = `
-      <div class="filter-bar" style="flex-wrap:wrap;gap:8px">
-        <div style="position:relative;flex:2;min-width:280px;display:flex;align-items:center">
-          <span class="material-icons" style="position:absolute;left:12px;font-size:24px;color:var(--text-muted);pointer-events:none">search</span>
-          <input type="text" id="buscar" placeholder="Buscar por nombre, código o barra..." style="width:100%;padding:10px 14px 10px 44px;font-size:14px;box-sizing:border-box" />
+      <div class="cat-toolbar">
+        <div class="filter-bar" style="flex-wrap:wrap;gap:8px">
+          <div style="position:relative;flex:2;min-width:280px;display:flex;align-items:center">
+            <span class="material-icons" style="position:absolute;left:12px;font-size:24px;color:var(--text-muted);pointer-events:none">search</span>
+            <input type="text" id="buscar" placeholder="Buscar por nombre, código o barra..." style="width:100%;padding:10px 14px 10px 44px;font-size:14px;box-sizing:border-box" />
+          </div>
+          <select id="filtroCat"><option value="">Todas las categorías</option>${cats.map(c=>`<option value="${c}">${c}</option>`).join('')}</select>
+          <select id="filtroProv"><option value="">Todos los proveedores</option>${provs.map(p=>`<option value="${p}">${p}</option>`).join('')}</select>
+          <select id="filtroMarca"><option value="">Todas las marcas</option>${marcas.map(m=>`<option value="${m}">${m}</option>`).join('')}</select>
+          <select id="filtroEstado">
+            <option value="">Todos los estados</option>
+            <option value="con_stock">Con Stock</option>
+            <option value="activo">Activo (todos)</option>
+            <option value="sin_precio">Sin Precio</option>
+            <option value="duplicado">Duplicado</option>
+            <option value="agotado">Agotado</option>
+            <option value="decimales">Precio Decimal</option>
+          </select>
+          <button id="btnLimpiar" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:none;cursor:pointer;color:var(--text-muted);font-size:13px">Limpiar</button>
         </div>
-        <select id="filtroCat"><option value="">Todas las categorías</option>${cats.map(c=>`<option value="${c}">${c}</option>`).join('')}</select>
-        <select id="filtroProv"><option value="">Todos los proveedores</option>${provs.map(p=>`<option value="${p}">${p}</option>`).join('')}</select>
-        <select id="filtroMarca"><option value="">Todas las marcas</option>${marcas.map(m=>`<option value="${m}">${m}</option>`).join('')}</select>
-        <select id="filtroEstado">
-          <option value="">Todos los estados</option>
-          <option value="con_stock">Con Stock</option>
-          <option value="activo">Activo (todos)</option>
-          <option value="sin_precio">Sin Precio</option>
-          <option value="duplicado">Duplicado</option>
-          <option value="agotado">Agotado</option>
-          <option value="decimales">Precio Decimal</option>
-        </select>
-        <button id="btnLimpiar" style="padding:8px 14px;border-radius:8px;border:1px solid var(--border);background:none;cursor:pointer;color:var(--text-muted);font-size:13px">Limpiar</button>
-      </div>
 
-      <!-- ABC FILTER (temporal) -->
-      <div id="abcBar" style="display:flex;flex-wrap:wrap;gap:4px;margin:8px 0 14px 0;align-items:center">
-        <button data-letra="" class="abc-btn" style="padding:6px 12px;border-radius:6px;border:1px solid var(--border);background:#7c3aed;color:#fff;cursor:pointer;font-size:12px;font-weight:700">Todas</button>
-        ${ABC_FILTER.map(l => {
-          const n = base.filter(p => primeraLetraNombre(p.nombre) === l).length;
-          const dis = (n === 0 && letraActiva !== l);
-          const dim = dis ? 'opacity:0.35;' : '';
-          return `<button data-letra="${l}" class="abc-btn" ${dis?'disabled':''} style="${dim}padding:6px 10px;border-radius:6px;border:1px solid var(--border);background:none;cursor:${dis?'not-allowed':'pointer'};font-size:12px;font-weight:700;min-width:34px">${l}<span style="font-size:10px;color:var(--text-muted);font-weight:400;margin-left:3px">${n}</span></button>`;
-        }).join('')}
+        <!-- ABC FILTER (temporal) -->
+        <div id="abcBar">
+          <span class="abc-lbl">Inicial</span>
+          <button data-letra="" class="abc-btn abc-btn--todas on">Todas</button>
+          ${ABC_FILTER.map(l => {
+            const n = base.filter(p => primeraLetraNombre(p.nombre) === l).length;
+            const dis = (n === 0 && letraActiva !== l);
+            return `<button data-letra="${l}" class="abc-btn" ${dis?'disabled':''}>${l}<span class="abc-n">${n}</span></button>`;
+          }).join('')}
+        </div>
+        <!-- /ABC FILTER -->
       </div>
-      <!-- /ABC FILTER -->
 
       <div class="table-card">
         <div class="table-card-header">
@@ -1571,8 +1573,7 @@ export async function renderCatalogo(container, db) {
     document.querySelectorAll('#abcBar .abc-btn').forEach(b => {
       const l = b.dataset.letra || '';
       const activo = (l === letraActiva) || (l === '' && !letraActiva);
-      b.style.background = activo ? '#7c3aed' : 'none';
-      b.style.color      = activo ? '#fff' : 'var(--text)';
+      b.classList.toggle('on', activo);
     });
   }
 
