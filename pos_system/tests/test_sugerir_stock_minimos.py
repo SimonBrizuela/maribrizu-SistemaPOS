@@ -24,6 +24,7 @@ normalizar = _mod.normalizar
 parsear_renglon = _mod.parsear_renglon
 proponer_umbrales = _mod.proponer_umbrales
 tiene_umbral = _mod.tiene_umbral
+umbrales_producto = _mod.umbrales_producto
 umbrales_variedad = _mod.umbrales_variedad
 velocidad = _mod.velocidad
 
@@ -166,11 +167,32 @@ def test_variedad_de_mucha_venta_va_en_packs():
     assert fila == {'stock_min': 2, 'stock_max': 6, 'stock_min_um': 'pack'}
 
 
-def test_variedad_lenta_va_en_unidades_explicitas():
-    # 0.5 por dia en cajas de 50: minimo 4 unidades, ni un pack. La unidad va
-    # explicita porque sin ella las alertas la leerian como packs.
+def test_variedad_lenta_tambien_va_en_packs():
+    # 0.5 por dia en cajas de 50: la demanda pide 4 unidades, pero no se
+    # compran 4 boligrafos de una caja de 50: el minimo real es 1 caja.
     fila = umbrales_variedad(0.5, 50)
+    assert fila == {'stock_min': 1, 'stock_max': 2, 'stock_min_um': 'pack'}
+
+
+def test_variedad_cinta_redondea_al_rollo():
+    # 0.4 m por dia en rollos de 10: la demanda pide 3 m -> 1 rollo cerrado.
+    fila = umbrales_variedad(0.4, 10)
+    assert fila == {'stock_min': 1, 'stock_max': 2, 'stock_min_um': 'pack'}
+
+
+def test_variedad_con_pack_unitario_va_en_unidades():
+    fila = umbrales_variedad(0.5, 1)
     assert fila == {'stock_min': 4, 'stock_max': 14, 'stock_min_um': 'unidad'}
+
+
+def test_producto_conjunto_redondea_al_pack_en_unidades():
+    # A nivel producto no hay stock_min_um: mismos umbrales que la variedad
+    # pero expresados en unidades (1 rollo de 10 -> minimo 10).
+    assert umbrales_producto(0.4, 10) == {'stock_min': 10, 'stock_max': 20}
+
+
+def test_producto_sin_pack_queda_en_unidades_tal_cual():
+    assert umbrales_producto(0.5, 0) == {'stock_min': 4, 'stock_max': 14}
 
 
 # --------------------------------------------------------------------------

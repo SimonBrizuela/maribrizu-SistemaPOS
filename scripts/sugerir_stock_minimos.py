@@ -34,9 +34,11 @@ Que toca y que no:
     se actualiza, y si el producto perdio la señal se QUITA (mejor sin alerta
     que con una alerta inventada).
   - Producto sin variedades: `stock_min` / `stock_max` a nivel producto, en
-    unidades. Con variedades: por fila de `conjunto_colores`, con
-    `stock_min_um` explicito ('pack' cuando el minimo llega a un pack entero,
-    'unidad' si no). Servicios / ilimitados / sin ventas: no se tocan.
+    unidades; si es conjunto con pack de mas de una unidad, redondeados para
+    arriba al pack cerrado (no se compran 3 metros de un rollo de 10). Con
+    variedades: por fila de `conjunto_colores`, con `stock_min_um` explicito
+    ('pack' siempre que el pack traiga mas de una unidad, 'unidad' cuando el
+    pack ES la unidad). Servicios / ilimitados / sin ventas: no se tocan.
   - Cada aplicacion deja un minmax_rollback_<ts>.json con lo escrito y lo que
     habia antes; las corridas siguientes lo usan para reconocer lo suyo.
 """
@@ -199,19 +201,45 @@ def proponer_umbrales(vel):
 
 
 def umbrales_variedad(vel, contenido):
-    """Umbrales de una variedad con su unidad: en packs cuando el minimo llega
-    a un pack entero (asi el numero queda chico y se compra por envase), en
-    unidades si no. Devuelve dict listo para la fila o None."""
+    """Umbrales de una variedad con su unidad: en packs siempre que el pack
+    traiga mas de una unidad, porque la reposicion se compra por envase
+    cerrado: un minimo de 3 metros no existe si la cinta viene en rollos de
+    10, el minimo real es 1 rollo. En unidades solo cuando el pack ES la
+    unidad. Devuelve dict listo para la fila o None."""
     prop = proponer_umbrales(vel)
     if not prop:
         return None
     minimo, maximo = prop
     cont = num(contenido)
-    if cont > 1 and minimo >= cont:
+    if cont > 1:
         min_p = math.ceil(minimo / cont)
         max_p = max(math.ceil(maximo / cont), min_p * 2)
         return {'stock_min': min_p, 'stock_max': max_p, 'stock_min_um': 'pack'}
     return {'stock_min': minimo, 'stock_max': maximo, 'stock_min_um': 'unidad'}
+
+
+def _entero_si_da(x):
+    x = round(x, 4)
+    return int(x) if float(x).is_integer() else x
+
+
+def umbrales_producto(vel, contenido):
+    """Umbrales a nivel producto, siempre en unidades (a este nivel no existe
+    `stock_min_um` y las alertas comparan contra el stock plano). Si el
+    producto se compra por pack (contenido > 1), los dos umbrales suben al
+    multiplo de pack cerrado: mismo criterio que la variedad, expresado en
+    unidades."""
+    prop = proponer_umbrales(vel)
+    if not prop:
+        return None
+    minimo, maximo = prop
+    cont = num(contenido)
+    if cont > 1:
+        min_p = math.ceil(minimo / cont)
+        max_p = max(math.ceil(maximo / cont), min_p * 2)
+        minimo = _entero_si_da(min_p * cont)
+        maximo = _entero_si_da(max_p * cont)
+    return {'stock_min': minimo, 'stock_max': maximo}
 
 
 def tiene_umbral(d):
@@ -419,9 +447,9 @@ def main():
             senal = con_senal_para_mantener if propio else con_senal
             propuesta = None
             if (d and senal(d)) or vinc > 0:
-                prop = proponer_umbrales(velocidad(d or Demanda(), vinc))
-                if prop:
-                    propuesta = {'stock_min': prop[0], 'stock_max': prop[1]}
+                cont = (num(p.get('conjunto_contenido'))
+                        if p.get('es_conjunto') in (True, 1) else 0)
+                propuesta = umbrales_producto(velocidad(d or Demanda(), vinc), cont)
             accion = decidir(p, propios_prod.get(did), propuesta)
             if accion is None:
                 if tiene_umbral(p) and not es_propio(p, propios_prod.get(did)):
