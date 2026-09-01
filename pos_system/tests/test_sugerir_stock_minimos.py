@@ -198,19 +198,17 @@ def test_variedad_que_mueve_un_pack_semanal_va_en_packs():
     assert fila == {'stock_min': 2, 'stock_max': 5, 'stock_min_um': 'pack'}
 
 
-def test_variedad_lenta_avisa_en_unidades_y_pide_un_pack():
-    # 0.5 por dia en cajas de 50: la demanda pide 4 unidades. El aviso salta
-    # con 4 sueltas — "1 caja de minimo" seria plata parada — y el maximo es
-    # la caja cerrada que conviene pedir cuando toca.
+def test_variedad_lenta_tambien_va_en_packs():
+    # 0.5 por dia en cajas de 50: la demanda pide 4 unidades, pero no se
+    # compran 4 boligrafos de una caja de 50: el minimo real es 1 caja.
     fila = umbrales_variedad(0.5, 50)
-    assert fila == {'stock_min': 4, 'stock_max': 50, 'stock_min_um': 'unidad'}
+    assert fila == {'stock_min': 1, 'stock_max': 2, 'stock_min_um': 'pack'}
 
 
-def test_variedad_cinta_lenta_avisa_por_metro():
-    # 0.4 m por dia en rollos de 10: avisa con 3 m sueltos y el maximo son
-    # rollos cerrados (12 m de demanda -> 2 rollos).
+def test_variedad_cinta_redondea_al_rollo():
+    # 0.4 m por dia en rollos de 10: la demanda pide 3 m -> 1 rollo cerrado.
     fila = umbrales_variedad(0.4, 10)
-    assert fila == {'stock_min': 3, 'stock_max': 20, 'stock_min_um': 'unidad'}
+    assert fila == {'stock_min': 1, 'stock_max': 2, 'stock_min_um': 'pack'}
 
 
 def test_variedad_con_pack_unitario_va_en_unidades():
@@ -218,10 +216,10 @@ def test_variedad_con_pack_unitario_va_en_unidades():
     assert fila == {'stock_min': 4, 'stock_max': 14, 'stock_min_um': 'unidad'}
 
 
-def test_producto_conjunto_lento_avisa_en_unidades():
-    # A nivel producto no hay stock_min_um: minimo chico en unidades y
-    # maximo al rollo cerrado.
-    assert umbrales_producto(0.4, 10) == {'stock_min': 3, 'stock_max': 20}
+def test_producto_conjunto_redondea_al_pack_en_unidades():
+    # A nivel producto no hay stock_min_um: mismos umbrales que la variedad
+    # pero expresados en unidades (1 rollo de 10 -> minimo 10).
+    assert umbrales_producto(0.4, 10) == {'stock_min': 10, 'stock_max': 20}
 
 
 def test_producto_conjunto_rapido_redondea_al_pack_en_unidades():

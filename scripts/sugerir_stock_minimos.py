@@ -41,17 +41,12 @@ Que toca y que no:
     se actualiza, y si el producto perdio la señal se QUITA (mejor sin alerta
     que con una alerta inventada).
   - Producto sin variedades: `stock_min` / `stock_max` a nivel producto, en
-    unidades. Con variedades: por fila de `conjunto_colores`, con
-    `stock_min_um` explicito. Si el producto viene en pack de mas de una
-    unidad hay dos casos:
-      * VENDE mas de un pack por semana (minimo >= contenido): umbrales en
-        packs cerrados ('pack' en la variedad; multiplos del pack, en
-        unidades, a nivel producto).
-      * Vende MENOS que eso: el minimo queda en unidades, chico, para avisar
-        cerca del agotamiento — un minimo de "1 caja de 500 sobres" para algo
-        que vende 9 por semestre es plata parada. El maximo si se redondea al
-        pack cerrado (al menos 1): es lo que conviene PEDIR cuando toca.
-    Servicios / ilimitados / sin ventas: no se tocan.
+    unidades; si es conjunto con pack de mas de una unidad, redondeados para
+    arriba al pack cerrado, porque se piensa y se PIDE por envase (rollos,
+    cajas, packs): no se compran 3 metros de un rollo de 10. Con variedades:
+    por fila de `conjunto_colores`, con `stock_min_um` explicito ('pack'
+    siempre que el pack traiga mas de una unidad, 'unidad' cuando el pack ES
+    la unidad). Servicios / ilimitados / sin ventas: no se tocan.
   - Cada aplicacion deja un minmax_rollback_<ts>.json con lo escrito y lo que
     habia antes; las corridas siguientes lo usan para reconocer lo suyo.
 """
@@ -254,52 +249,39 @@ def _entero_si_da(x):
 
 
 def umbrales_variedad(vel, contenido):
-    """Umbrales de una variedad con su unidad. Dos casos cuando el pack trae
-    mas de una unidad:
-
-      * MUEVE mas de un pack por semana (minimo >= contenido): en packs
-        cerrados, que es como se piensa y se compra ("2 cajas minimo").
-      * Mueve MENOS: el minimo queda en unidades, chico, para avisar cerca
-        del agotamiento — "1 caja de 500 sobres de minimo" para algo que
-        vende 9 por semestre es plata parada, no una alerta. El maximo si
-        sube al pack cerrado (al menos 1): es lo que conviene pedir.
-
-    Cuando el pack ES la unidad, todo en unidades. Devuelve dict para la
-    fila o None."""
+    """Umbrales de una variedad con su unidad: en packs siempre que el pack
+    traiga mas de una unidad, porque la reposicion se piensa y se pide por
+    envase cerrado: un minimo de 3 metros no existe si la cinta viene en
+    rollos de 10, el minimo real es 1 rollo. En unidades solo cuando el pack
+    ES la unidad. Devuelve dict listo para la fila o None."""
     prop = proponer_umbrales(vel)
     if not prop:
         return None
     minimo, maximo = prop
     cont = num(contenido)
     if cont > 1:
-        if minimo >= cont:
-            min_p = math.ceil(minimo / cont)
-            max_p = max(math.ceil(maximo / cont), min_p * 2)
-            return {'stock_min': min_p, 'stock_max': max_p, 'stock_min_um': 'pack'}
-        maximo = _entero_si_da(math.ceil(maximo / cont) * cont)
-        return {'stock_min': minimo, 'stock_max': maximo, 'stock_min_um': 'unidad'}
+        min_p = math.ceil(minimo / cont)
+        max_p = max(math.ceil(maximo / cont), min_p * 2)
+        return {'stock_min': min_p, 'stock_max': max_p, 'stock_min_um': 'pack'}
     return {'stock_min': minimo, 'stock_max': maximo, 'stock_min_um': 'unidad'}
 
 
 def umbrales_producto(vel, contenido):
     """Umbrales a nivel producto, siempre en unidades (a este nivel no existe
-    `stock_min_um` y las alertas comparan contra el stock plano). Mismo
-    criterio que la variedad, expresado en unidades: en multiplos de pack
-    cerrado solo si mueve mas de un pack por semana; si no, minimo chico en
-    unidades y maximo de un pack cerrado."""
+    `stock_min_um` y las alertas comparan contra el stock plano). Si el
+    producto se compra por pack (contenido > 1), los dos umbrales suben al
+    multiplo de pack cerrado: mismo criterio que la variedad, expresado en
+    unidades."""
     prop = proponer_umbrales(vel)
     if not prop:
         return None
     minimo, maximo = prop
     cont = num(contenido)
     if cont > 1:
-        if minimo >= cont:
-            min_p = math.ceil(minimo / cont)
-            max_p = max(math.ceil(maximo / cont), min_p * 2)
-            minimo = _entero_si_da(min_p * cont)
-            maximo = _entero_si_da(max_p * cont)
-        else:
-            maximo = _entero_si_da(math.ceil(maximo / cont) * cont)
+        min_p = math.ceil(minimo / cont)
+        max_p = max(math.ceil(maximo / cont), min_p * 2)
+        minimo = _entero_si_da(min_p * cont)
+        maximo = _entero_si_da(max_p * cont)
     return {'stock_min': minimo, 'stock_max': maximo}
 
 
