@@ -29,6 +29,7 @@ import { loadBalanceConfig, loadDiasMes, saveDiasMes, loadComprasConfig, saveCom
 import { refrescarAlertas, obtenerCandidatosCompra } from '../notifications.js';
 import { sugerirCantidad } from '../inventario_resumen.js';
 import { confirmDialog, alertDialog } from '../components/dialogs.js';
+import { listaCuadernoHtml } from '../lista_cuaderno.js';
 
 const MEDIOS = [
   { k: 'efectivo', label: 'Efectivo' },
@@ -1016,12 +1017,55 @@ function paintResumen() {
        title="${filtroOn ? 'Mostrando solo lo del cuaderno. Click para ver la lista completa.' : 'Click para ver solo lo que ya está en el cuaderno'}">
        En el cuaderno <span>${anotados}</span>
        <span class="material-icons">${filtroOn ? 'filter_alt_off' : 'filter_alt'}</span></button>`;
+  // Con el filtro del cuaderno puesto aparece la impresión: la hoja para llevar
+  // al mayorista y anotar a mano cuánto se compró y se pagó de cada cosa.
+  const btnImprimir = (anotados === 0 || !filtroOn) ? '' :
+    `<button type="button" class="cc-tier-pill cc-tier-print" data-action="imprimir-cuaderno"
+       title="La lista del cuaderno en una hoja para imprimir o guardar como PDF, con columnas para anotar a mano lo comprado y lo pagado">
+       <span class="material-icons">print</span> Imprimir lista</button>`;
 
   el.innerHTML = pill('cc-tier-sisi', 'Sí o sí', sisi)
     + pill('cc-tier-imp', 'Importante', imp)
     + pill('cc-tier-opc', 'Puede esperar', opc)
     + pillAnotados
+    + btnImprimir
     + warnCosto;
+}
+
+// ── Imprimir la lista del cuaderno ────────────────────────────────────────────
+// La hoja A4 para llevar al mayorista: lo anotado agrupado por rubro, con las
+// cantidades y costos del plan, y columnas en blanco para tildar y anotar a
+// mano cuánto se compró y cuánto se pagó. El armado del HTML es lógica pura
+// (lista_cuaderno.js); acá solo se juntan los renglones y se abre la ventana.
+function imprimirCuaderno() {
+  const items = _state.rows
+    .filter(r => r.anotado && !r.registrado)
+    .map(r => {
+      const stk = stockRealDe(r);
+      return {
+        nombre: r.esVariedad && r.producto?.nombre ? r.producto.nombre : r.nombre,
+        variedad: r.variedad,
+        esVariedad: !!r.esVariedad,
+        rubro: r.rubro,
+        tier: r.tier,
+        qty: r.qty,
+        cost: r.cost,
+        sinCosto: !!r.sinCosto,
+        packSize: r.packSize,
+        stockTexto: stk.texto,
+        ritmo: r.vel_semana >= 1 ? `~${fmt(Math.round(r.vel_semana), 0)}/sem` : '',
+      };
+    });
+  if (!items.length) return;
+  const html = listaCuadernoHtml({ items, fecha: hoyAR() });
+  const w = window.open('', '_blank');
+  if (!w) {
+    alertDialog({ title: 'Popups bloqueados', message: 'No se pudo abrir la hoja de impresión. Habilitá los popups para este sitio.', type: 'warning' });
+    return;
+  }
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
 }
 
 // ── Avisos: tope manual + presupuesto corto para lo SÍ O SÍ ───────────────────
@@ -1122,6 +1166,9 @@ function onClick(e) {
       s.filtroAnotados = !s.filtroAnotados;
       paintTable();
       paintResumen();
+      break;
+    case 'imprimir-cuaderno':
+      imprimirCuaderno();
       break;
     case 'buscar-clear': {
       s.busqueda = '';

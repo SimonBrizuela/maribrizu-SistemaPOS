@@ -4517,6 +4517,12 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
   color: var(--tint-green-fg);
 }
 .cc-tier-anotado.is-on span, .cc-tier-anotado.is-on .material-icons { color: var(--tint-green-fg); }
+/* Botón "Imprimir lista": aparece solo con el filtro del cuaderno puesto. */
+.cc-tier-print { cursor: pointer; font-family: inherit; gap: 5px; }
+.cc-tier-print::before { display: none; }
+.cc-tier-print .material-icons { font-size: 15px !important; }
+.cc-tier-print:hover { border-color: var(--primary); color: var(--primary); }
+.cc-tier-print:hover .material-icons { color: var(--primary); }
 
 /* Barra de registro */
 .cc-registrar {
