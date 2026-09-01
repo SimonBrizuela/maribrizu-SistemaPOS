@@ -3980,8 +3980,10 @@ export async function renderCatalogo(container, db) {
         const btn = row.querySelector('.ed_color_stock_um');
         if (!btn) return;
         if (_contenidoFila(row) <= 1) {
+          // Con pack de 1 la unidad no aplica, pero la elección guardada se
+          // conserva: borrarla acá hacía que guardar la ficha perdiera el
+          // stock_min_um de la fila (visto 01-09 con el BRETEL ELASTICO).
           btn.style.display = 'none';
-          btn.dataset.um = '';
           return;
         }
         btn.style.display = 'inline-flex';
