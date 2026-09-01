@@ -46,10 +46,20 @@ vi.mock('firebase/firestore', async () => {
       return { exists: () => d != null, data: () => d, id: ref?.id || 'x' };
     },
     getDocFromCache: async () => { throw new Error('sin cache local'); },
+    // El merge de Firestore es recursivo para mapas: guardar el día 03 no
+    // pisa los días 01 y 02 del mismo doc. El mock lo replica.
     setDoc: async (ref, valores, opciones) => {
       datos.escrituras.push({ tipo: 'set', ref, datos: valores, opciones });
       const clave = `${ref?._col}/${ref?.id}`;
-      datos.docs[clave] = { ...(datos.docs[clave] || {}), ...valores };
+      const esMapa = v => v && typeof v === 'object' && !Array.isArray(v);
+      const fusionar = (base, patch) => {
+        const out = { ...(base || {}) };
+        Object.entries(patch || {}).forEach(([k, v]) => {
+          out[k] = (esMapa(v) && esMapa(out[k])) ? fusionar(out[k], v) : v;
+        });
+        return out;
+      };
+      datos.docs[clave] = opciones?.merge ? fusionar(datos.docs[clave], valores) : { ...valores };
     },
     onSnapshot: (q, cb) => {
       try { cb?.(snapshot(q?._col || q?.col?._col)); } catch (_) {}
@@ -391,6 +401,122 @@ describe('la caja por cuenta (tocar la banda)', () => {
     const cierre = datos.escrituras.find(e => e.datos?.meses?.['2026-08']?.saldos);
     expect(cierre, 'el cierre igual se fijó').toBeTruthy();
     expect(cierre.datos.meses['2026-08'].saldosMp).toBeUndefined();
+  });
+});
+
+describe('cargar plata y gastos como un usuario', () => {
+  // El circuito completo del Día por día, tipeando como en la pantalla real:
+  // ingresos por cada cuenta (efectivo, MP JOSE, MP AGUSTIN, Lapos), compras
+  // que descuentan del medio correcto, una fila cargada por error y borrada, y
+  // al final la banda y el detalle por cuenta tienen que dar el mismo número
+  // que la cuenta a mano.
+  const escribir = (inp, valor) => {
+    inp.value = valor;
+    inp.dispatchEvent(new Event('change'));
+  };
+  const fila = (tipo, i) => document.querySelector(`.bal-mov-row[data-mov="${tipo}"][data-i="${i}"]`);
+  const campo = (tipo, i, f) => fila(tipo, i).querySelector(`[data-f="${f}"]`);
+  const posar = async () => { await asentar(); await vi.advanceTimersByTimeAsync(80); await asentar(); };
+
+  it('todo suma y resta bien: banda, día y detalle por cuenta', async () => {
+    // Julio cerró con el desglose MP y agosto arranca alineado a ese cierre.
+    datos.docs['control_config/balance'].meses['2026-07'].saldosMp =
+      { 'MP JOSE': 3000000, 'MP AGUSTIN': 1707364 };
+    datos.docs['control_config/dias_2026-08'].apertura.mp = 4707364;
+    // Hoy (03/08) arranca sin nada cargado, como un día nuevo de verdad.
+    delete datos.docs['control_config/dias_2026-08'].dias['03'];
+
+    await montar('dia');
+
+    // ── Ingresos: la plantilla replica el último día (Caja hoy + Lapos) ──
+    expect(campo('ingresos', 0, 'motivo').value).toBe('Caja hoy');
+    escribir(campo('ingresos', 0, 'monto'), '150000');
+    await posar();
+    escribir(campo('ingresos', 1, 'monto'), '30000');       // Lapos
+    await posar();
+
+    // ── Los dos Mercado Pago se agregan a mano, como hace ella ──
+    document.querySelector('[data-add="ingresos"]').click();
+    escribir(campo('ingresos', 2, 'motivo'), 'MP JOSE');
+    escribir(campo('ingresos', 2, 'medio'), 'mp');
+    escribir(campo('ingresos', 2, 'monto'), '80000');
+    await posar();
+    document.querySelector('[data-add="ingresos"]').click();
+    escribir(campo('ingresos', 3, 'motivo'), 'MP AGUSTIN');
+    escribir(campo('ingresos', 3, 'medio'), 'mp');
+    escribir(campo('ingresos', 3, 'monto'), '50000');
+    await posar();
+
+    // ── Compras: cada una descuenta de su medio (la MP, de la cuenta elegida) ──
+    document.querySelector('[data-add="compras"]').click();
+    escribir(campo('compras', 0, 'proveedor'), 'PAPELERA CBA');
+    escribir(campo('compras', 0, 'rubro'), 'Mercadería');
+    escribir(campo('compras', 0, 'monto'), '40000');        // efectivo
+    await posar();
+    document.querySelector('[data-add="compras"]').click();
+    escribir(campo('compras', 1, 'proveedor'), 'EPEC');
+    escribir(campo('compras', 1, 'rubro'), 'Gastos fijos');
+    escribir(campo('compras', 1, 'medio'), 'mp:MP JOSE');
+    escribir(campo('compras', 1, 'monto'), '20000');
+    await posar();
+    document.querySelector('[data-add="compras"]').click();
+    escribir(campo('compras', 2, 'proveedor'), 'ANITA');
+    escribir(campo('compras', 2, 'rubro'), 'Sueldos');
+    escribir(campo('compras', 2, 'medio'), 'lapos');
+    escribir(campo('compras', 2, 'monto'), '10000');
+    await posar();
+
+    // ── Una fila cargada por error se borra y la plata vuelve ──
+    document.querySelector('[data-add="ingresos"]').click();
+    escribir(campo('ingresos', 4, 'monto'), '999999');
+    await posar();
+    // El efectivo salta a 625.000 + 999.999 = 1.624.999...
+    expect(plano(document.querySelector('.bal-caja-band'))).toContain('1624999');
+    fila('ingresos', 4).querySelector('[data-del]').click();
+    await posar();
+
+    // ── La banda: apertura + los tres días, medio por medio ──
+    const banda = plano(document.querySelector('.bal-caja-band'));
+    // ...y al borrar la fila vuelve a su lugar.
+    expect(banda).not.toContain('1624999');
+    expect(banda).toContain('al 03/08');
+    // Efectivo: 300.000 + (185.000−60.000) + (210.000−120.000) + (150.000−40.000) = 625.000
+    expect(banda).toContain('625000');
+    // MP: 4.707.364 + 92.000 + 80.000 + 50.000 − 20.000 = 4.909.364
+    expect(banda).toContain('4909364');
+    // Lapos: 50.000 + 44.000 + 30.000 − 10.000 = 114.000
+    expect(banda).toContain('114000');
+    // Total: 5.648.364
+    expect(banda).toContain('5648364');
+
+    // ── Los totales del día ──
+    const cuerpo = plano(document.getElementById('bal-body'));
+    expect(cuerpo).toContain('310000');    // ingresos del 03
+    expect(cuerpo).toContain('70000');     // compras del 03
+
+    // ── El detalle por cuenta: cada MP con su base más lo del día ──
+    document.querySelector('.bal-caja-band').click();
+    await posar();
+    const dlg = document.querySelector('.app-dialog-overlay');
+    const t = plano(dlg);
+    expect(t).toContain('3152000');        // MP JOSE: 3.000.000 + 92.000 + 80.000 − 20.000
+    expect(t).toContain('1757364');        // MP AGUSTIN: 1.707.364 + 50.000
+    expect(t).toContain('4909364');        // MP total = suma de las cuentas
+    expect(t).toContain('5648364');        // Total = la banda
+    expect(t).not.toContain('difiere');    // sin descuadre
+    expect(t.toLowerCase()).not.toContain('sin asignar');
+    dlg.querySelector('.ad-ok').click();
+
+    // ── Lo guardado: el día 03 completo y sin pisar los días 01 y 02 ──
+    const doc = datos.docs['control_config/dias_2026-08'];
+    expect(Object.keys(doc.dias).sort()).toEqual(['01', '02', '03']);
+    expect(doc.dias['03'].ingresos.map(x => [x.motivo, x.medio, x.monto])).toEqual([
+      ['Caja hoy', 'efectivo', 150000], ['Lapos', 'lapos', 30000],
+      ['MP JOSE', 'mp', 80000], ['MP AGUSTIN', 'mp', 50000],
+    ]);
+    expect(doc.dias['03'].compras[1]).toMatchObject(
+      { proveedor: 'EPEC', rubro: 'Gastos fijos', medio: 'mp', cuenta: 'MP JOSE', monto: 20000 });
+    expect(doc.dias['03'].compras).toHaveLength(3);
   });
 });
 
