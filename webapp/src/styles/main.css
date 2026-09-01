@@ -4509,14 +4509,14 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
 .cc-tier-opc  { --cc-dot: var(--border-strong); }
 .cc-tier-nocost { --cc-dot: var(--warning); }
 /* Píldora "En el cuaderno": es un botón que filtra la tabla a solo lo anotado. */
-.cc-tier-anotado { --cc-dot: var(--tint-yellow-fg); cursor: pointer; font-family: inherit; }
+.cc-tier-anotado { --cc-dot: var(--tint-green-fg); cursor: pointer; font-family: inherit; }
 .cc-tier-anotado .material-icons { font-size: 15px !important; color: var(--text-muted); }
-.cc-tier-anotado:hover { border-color: var(--tint-yellow-fg); }
+.cc-tier-anotado:hover { border-color: var(--tint-green-fg); }
 .cc-tier-anotado.is-on {
-  background: var(--tint-yellow-bg); border-color: var(--tint-yellow-fg);
-  color: var(--tint-yellow-fg);
+  background: var(--tint-green-bg); border-color: var(--tint-green-fg);
+  color: var(--tint-green-fg);
 }
-.cc-tier-anotado.is-on span, .cc-tier-anotado.is-on .material-icons { color: var(--tint-yellow-fg); }
+.cc-tier-anotado.is-on span, .cc-tier-anotado.is-on .material-icons { color: var(--tint-green-fg); }
 
 /* Barra de registro */
 .cc-registrar {
@@ -4598,13 +4598,18 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
 .cc-chip-ok  { background: var(--tint-green-bg); color: var(--tint-green-fg); }
 .cc-chip-sisi { background: var(--danger); color: #fff; }
 
-/* "Ya lo anoté en el cuaderno": la fila queda pintada de amarillo cuaderno con
-   un chip que dice desde cuándo, y la lapicera de la fila prende o saca la
-   marca. Así se ve de un vistazo qué falta repasar y qué ya está en el papel. */
-.cc-row-anotado { background: var(--tint-yellow-bg) !important; }
+/* "Ya lo anoté en el cuaderno": la fila queda verde con el contorno marcado y
+   un chip que dice desde cuándo; la lapicera de la fila prende o saca la marca.
+   Más plantado que el lavado verde de "registrado": fondo un punto más
+   saturado, contorno de 1px y canto izquierdo de 3px, para encontrar de un
+   vistazo qué ya está en el papel. */
+.cc-row-anotado { background: color-mix(in srgb, var(--tint-green-fg) 10%, var(--card-bg)) !important; }
+.cc-row-anotado td { border-top: 1px solid var(--tint-green-fg); border-bottom: 1px solid var(--tint-green-fg); }
+.cc-row-anotado td:first-child { border-left: 3px solid var(--tint-green-fg); }
+.cc-row-anotado td:last-child { border-right: 1px solid var(--tint-green-fg); }
 .cc-chip-anotado {
-  background: var(--card-bg); color: var(--tint-yellow-fg);
-  border: 1px solid var(--tint-yellow-fg); text-transform: none;
+  background: var(--card-bg); color: var(--tint-green-fg);
+  border: 1px solid var(--tint-green-fg); text-transform: none;
 }
 .cc-anotar {
   display: inline-flex; align-items: center; justify-content: center;
@@ -4614,8 +4619,8 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
 .cc-anotar .material-icons { font-size: 19px !important; }
 .cc-anotar:hover { border-color: var(--border-strong); color: var(--text); }
 .cc-anotar.is-on {
-  background: var(--tint-yellow-bg); border-color: var(--tint-yellow-fg);
-  color: var(--tint-yellow-fg);
+  background: var(--tint-green-bg); border-color: var(--tint-green-fg);
+  color: var(--tint-green-fg);
 }
 .cc-row-anotado .cc-anotar.is-on { background: var(--card-bg); }
 
