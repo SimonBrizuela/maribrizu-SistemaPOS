@@ -22,10 +22,17 @@ La cuenta, por producto y por variedad:
     divide por meses que no vivio). La velocidad es la MEDIANA de las tres:
     un pico del ultimo mes no infla el minimo, y la temporada que ya paso no
     lo mantiene alto.
+  - Producto SALTEADO (vende menos de un dia por semana de su vida, o menos
+    de 8 dias en total): la velocidad de volumen miente, porque una escuela
+    que llevo 50 metros una vez no es "6 metros por dia". Ahi manda la mirada
+    por eventos: lo que vende un dia TIPICO (mediana de los dias con venta)
+    por la frecuencia real (dias con venta / edad, con piso de 28 dias para
+    no extrapolar de una semana). Se toma la menor de las dos miradas.
   - minimo = 7 dias de venta, redondeado para arriba (al menos 1).
   - maximo = 28 dias de venta, y nunca menos que 2 veces el minimo.
   - Sin señal suficiente no se propone nada: hacen falta >= 3 unidades en la
-    ventana y una venta en los ultimos 45 dias (o consumo por vinculo).
+    ventana, ventas en >= 3 DIAS DISTINTOS (una sola compra grande no es
+    demanda) y una venta en los ultimos 45 dias (o consumo por vinculo).
 
 Que toca y que no:
   - Umbral cargado a mano (no figura en ningun minmax_rollback_*.json de este
@@ -34,11 +41,17 @@ Que toca y que no:
     se actualiza, y si el producto perdio la señal se QUITA (mejor sin alerta
     que con una alerta inventada).
   - Producto sin variedades: `stock_min` / `stock_max` a nivel producto, en
-    unidades; si es conjunto con pack de mas de una unidad, redondeados para
-    arriba al pack cerrado (no se compran 3 metros de un rollo de 10). Con
-    variedades: por fila de `conjunto_colores`, con `stock_min_um` explicito
-    ('pack' siempre que el pack traiga mas de una unidad, 'unidad' cuando el
-    pack ES la unidad). Servicios / ilimitados / sin ventas: no se tocan.
+    unidades. Con variedades: por fila de `conjunto_colores`, con
+    `stock_min_um` explicito. Si el producto viene en pack de mas de una
+    unidad hay dos casos:
+      * VENDE mas de un pack por semana (minimo >= contenido): umbrales en
+        packs cerrados ('pack' en la variedad; multiplos del pack, en
+        unidades, a nivel producto).
+      * Vende MENOS que eso: el minimo queda en unidades, chico, para avisar
+        cerca del agotamiento — un minimo de "1 caja de 500 sobres" para algo
+        que vende 9 por semestre es plata parada. El maximo si se redondea al
+        pack cerrado (al menos 1): es lo que conviene PEDIR cuando toca.
+    Servicios / ilimitados / sin ventas: no se tocan.
   - Cada aplicacion deja un minmax_rollback_<ts>.json con lo escrito y lo que
     habia antes; las corridas siguientes lo usan para reconocer lo suyo.
 """
@@ -70,7 +83,11 @@ DIAS_PARA_QUITAR = 90     # para QUITAR uno propio, 90 dias sin ventas: un
 DIAS_MINIMO = 7
 DIAS_MAXIMO = 28
 SENAL_MINIMA = 3
-EDAD_PISO = 7  # dias: un producto de dos dias no define velocidad
+DIAS_DISTINTOS_MINIMOS = 3   # para AGREGAR: ventas en al menos 3 dias distintos
+DIAS_DISTINTOS_MANTENER = 2  # para CONSERVAR uno propio alcanza con 2
+EDAD_PISO = 7                # dias: un producto de dos dias no define velocidad
+DIAS_FRECUENCIA = 28         # piso de ventana para extrapolar una frecuencia
+VENTAS_REGULARES = 8         # menos dias con venta que esto = salteado seguro
 
 # Unidades de medida que ya vienen en unidad de MEDIDA en el renglon de venta:
 # "1.5 m" son metros, no packs. Todo lo demas (caja, rollo, pack, bolsa...)
@@ -147,12 +164,13 @@ def parsear_renglon(producto, cantidad, contenido, base='u'):
 class Demanda:
     """Ventas acumuladas de un producto o una variedad, por antiguedad."""
 
-    __slots__ = ('t30', 't90', 'total', 'primera', 'ultima')
+    __slots__ = ('t30', 't90', 'total', 'primera', 'ultima', 'por_dia')
 
     def __init__(self):
         self.t30 = self.t90 = self.total = 0.0
         self.primera = 0    # dias atras de la venta mas vieja
         self.ultima = 10 ** 6
+        self.por_dia = defaultdict(float)   # dias_atras -> unidades del dia
 
     def sumar(self, unidades, dias_atras):
         self.total += unidades
@@ -162,6 +180,15 @@ class Demanda:
             self.t90 += unidades
         self.primera = max(self.primera, dias_atras)
         self.ultima = min(self.ultima, dias_atras)
+        self.por_dia[dias_atras] += unidades
+
+    def dias_con_venta(self):
+        return sum(1 for u in self.por_dia.values() if u > 0)
+
+
+def edad_de(d):
+    """Dias de vida del producto dentro de la ventana, con piso."""
+    return max(EDAD_PISO, min(DIAS_VENTAS, d.primera + 1))
 
 
 def velocidad(d, vel_vinculos=0.0):
@@ -169,26 +196,47 @@ def velocidad(d, vel_vinculos=0.0):
 
     Las ventanas se acortan a la edad del producto (dias desde su primera
     venta): uno que arranco hace 20 dias no divide por 90.
+
+    Para un producto SALTEADO (vende menos de un dia por semana de su vida,
+    o menos de VENTAS_REGULARES dias en total) la mirada por volumen se
+    dispara con una sola compra grande: 50 metros de una escuela hace una
+    semana no son "6 metros por dia". Ahi entra la mirada por eventos — lo
+    que vende un dia tipico (mediana de los dias con venta) por la frecuencia
+    real de esos dias, extrapolando sobre al menos DIAS_FRECUENCIA dias — y
+    manda la MENOR de las dos.
     """
-    edad = max(EDAD_PISO, min(DIAS_VENTAS, d.primera + 1))
+    edad = edad_de(d)
     tasas = [
         d.t30 / min(DIAS_RECIENTE, edad),
         d.t90 / min(DIAS_MEDIO, edad),
         d.total / edad,
     ]
-    return statistics.median(tasas) + max(0.0, vel_vinculos)
+    vel = statistics.median(tasas)
+    dias = [u for u in d.por_dia.values() if u > 0]
+    salteado = len(dias) < max(VENTAS_REGULARES, edad / 7)
+    if dias and salteado:
+        tipico = statistics.median(dias)
+        vel_eventos = tipico * len(dias) / max(edad, DIAS_FRECUENCIA)
+        vel = min(vel, vel_eventos)
+    return vel + max(0.0, vel_vinculos)
 
 
 def con_senal(d):
-    """Señal para AGREGAR un umbral nuevo: volumen y venta reciente."""
-    return d.total >= SENAL_MINIMA and d.ultima <= DIAS_SIN_VENTA_MAX
+    """Señal para AGREGAR un umbral nuevo: volumen, dias distintos y venta
+    reciente. Una sola compra grande (la escuela que llevo 50 metros) no es
+    demanda: hacen falta ventas en varios dias."""
+    return (d.total >= SENAL_MINIMA
+            and d.dias_con_venta() >= DIAS_DISTINTOS_MINIMOS
+            and d.ultima <= DIAS_SIN_VENTA_MAX)
 
 
 def con_senal_para_mantener(d):
     """Señal para CONSERVAR un umbral propio: mas tolerante. Un producto lento
     (el hilo encerado que vendio su ultimo rollo hace 46 dias) mantiene su
     alerta; recien a los 90 dias sin ventas se la saca."""
-    return d.total >= SENAL_MINIMA and d.ultima <= DIAS_PARA_QUITAR
+    return (d.total >= SENAL_MINIMA
+            and d.dias_con_venta() >= DIAS_DISTINTOS_MANTENER
+            and d.ultima <= DIAS_PARA_QUITAR)
 
 
 def proponer_umbrales(vel):
@@ -200,45 +248,58 @@ def proponer_umbrales(vel):
     return minimo, maximo
 
 
-def umbrales_variedad(vel, contenido):
-    """Umbrales de una variedad con su unidad: en packs siempre que el pack
-    traiga mas de una unidad, porque la reposicion se compra por envase
-    cerrado: un minimo de 3 metros no existe si la cinta viene en rollos de
-    10, el minimo real es 1 rollo. En unidades solo cuando el pack ES la
-    unidad. Devuelve dict listo para la fila o None."""
-    prop = proponer_umbrales(vel)
-    if not prop:
-        return None
-    minimo, maximo = prop
-    cont = num(contenido)
-    if cont > 1:
-        min_p = math.ceil(minimo / cont)
-        max_p = max(math.ceil(maximo / cont), min_p * 2)
-        return {'stock_min': min_p, 'stock_max': max_p, 'stock_min_um': 'pack'}
-    return {'stock_min': minimo, 'stock_max': maximo, 'stock_min_um': 'unidad'}
-
-
 def _entero_si_da(x):
     x = round(x, 4)
     return int(x) if float(x).is_integer() else x
 
 
-def umbrales_producto(vel, contenido):
-    """Umbrales a nivel producto, siempre en unidades (a este nivel no existe
-    `stock_min_um` y las alertas comparan contra el stock plano). Si el
-    producto se compra por pack (contenido > 1), los dos umbrales suben al
-    multiplo de pack cerrado: mismo criterio que la variedad, expresado en
-    unidades."""
+def umbrales_variedad(vel, contenido):
+    """Umbrales de una variedad con su unidad. Dos casos cuando el pack trae
+    mas de una unidad:
+
+      * MUEVE mas de un pack por semana (minimo >= contenido): en packs
+        cerrados, que es como se piensa y se compra ("2 cajas minimo").
+      * Mueve MENOS: el minimo queda en unidades, chico, para avisar cerca
+        del agotamiento — "1 caja de 500 sobres de minimo" para algo que
+        vende 9 por semestre es plata parada, no una alerta. El maximo si
+        sube al pack cerrado (al menos 1): es lo que conviene pedir.
+
+    Cuando el pack ES la unidad, todo en unidades. Devuelve dict para la
+    fila o None."""
     prop = proponer_umbrales(vel)
     if not prop:
         return None
     minimo, maximo = prop
     cont = num(contenido)
     if cont > 1:
-        min_p = math.ceil(minimo / cont)
-        max_p = max(math.ceil(maximo / cont), min_p * 2)
-        minimo = _entero_si_da(min_p * cont)
-        maximo = _entero_si_da(max_p * cont)
+        if minimo >= cont:
+            min_p = math.ceil(minimo / cont)
+            max_p = max(math.ceil(maximo / cont), min_p * 2)
+            return {'stock_min': min_p, 'stock_max': max_p, 'stock_min_um': 'pack'}
+        maximo = _entero_si_da(math.ceil(maximo / cont) * cont)
+        return {'stock_min': minimo, 'stock_max': maximo, 'stock_min_um': 'unidad'}
+    return {'stock_min': minimo, 'stock_max': maximo, 'stock_min_um': 'unidad'}
+
+
+def umbrales_producto(vel, contenido):
+    """Umbrales a nivel producto, siempre en unidades (a este nivel no existe
+    `stock_min_um` y las alertas comparan contra el stock plano). Mismo
+    criterio que la variedad, expresado en unidades: en multiplos de pack
+    cerrado solo si mueve mas de un pack por semana; si no, minimo chico en
+    unidades y maximo de un pack cerrado."""
+    prop = proponer_umbrales(vel)
+    if not prop:
+        return None
+    minimo, maximo = prop
+    cont = num(contenido)
+    if cont > 1:
+        if minimo >= cont:
+            min_p = math.ceil(minimo / cont)
+            max_p = max(math.ceil(maximo / cont), min_p * 2)
+            minimo = _entero_si_da(min_p * cont)
+            maximo = _entero_si_da(max_p * cont)
+        else:
+            maximo = _entero_si_da(math.ceil(maximo / cont) * cont)
     return {'stock_min': minimo, 'stock_max': maximo}
 
 
@@ -336,12 +397,24 @@ def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--aplicar', action='store_true', help='escribir; sin esto solo muestra')
+    ap.add_argument('--cache', help='JSON con catalogo+ventas+vinculos ya bajados: '
+                                    'vista previa sin leer Firestore (no vale con --aplicar)')
     args = ap.parse_args()
+    if args.cache and args.aplicar:
+        ap.error('--cache es solo para vista previa: aplicar exige datos frescos')
 
-    db = conectar()
-    print('Leyendo el catalogo...')
-    docs = {d.id: (d.to_dict() or {}) for d in db.collection('catalogo').stream()}
-    print(f'{len(docs)} productos')
+    cache = None
+    if args.cache:
+        with open(args.cache, encoding='utf-8') as f:
+            cache = json.load(f)
+        db = None
+        docs = cache['productos']
+        print(f"{len(docs)} productos (cache {cache.get('ts', '')})")
+    else:
+        db = conectar()
+        print('Leyendo el catalogo...')
+        docs = {d.id: (d.to_dict() or {}) for d in db.collection('catalogo').stream()}
+        print(f'{len(docs)} productos')
 
     propios_prod, propios_fila = cargar_propios(RAIZ)
     print(f'Umbrales propios de corridas anteriores: {len(propios_prod)} productos, {len(propios_fila)} variedades')
@@ -362,21 +435,35 @@ def main():
 
     hoy = datetime.now(timezone.utc)
     print(f'Leyendo ventas de los ultimos {DIAS_VENTAS} dias...')
-    filas = leer_ventas(db, hoy)
+    if cache is not None:
+        filas = [tuple(f) for f in cache['ventas']]
+    else:
+        filas = leer_ventas(db, hoy)
     print(f'{len(filas)} renglones')
 
     print('Leyendo consumo por vinculos (papel de impresiones)...')
-    desde = hoy - timedelta(days=DIAS_RECIENTE)
     consumo = defaultdict(float)
     ts_min = hoy
-    for m in db.collection('stock_movimientos').where('ts', '>=', desde).stream():
-        d = m.to_dict() or {}
-        if d.get('motivo') in ('vinculacion', 'venta_vinculada') and num(d.get('cantidad')) < 0:
-            fid = d.get('firebase_id')
-            if fid:
-                consumo[fid] += -num(d.get('cantidad'))
-                if d.get('ts') and d['ts'] < ts_min:
-                    ts_min = d['ts']
+    if cache is not None:
+        for mov in cache.get('vinculos', []):
+            fid = mov.get('firebase_id')
+            cant = num(mov.get('cantidad'))
+            if fid and cant < 0:
+                consumo[fid] += -cant
+                if mov.get('ts'):
+                    ts = datetime.fromisoformat(mov['ts'])
+                    if ts < ts_min:
+                        ts_min = ts
+    else:
+        desde = hoy - timedelta(days=DIAS_RECIENTE)
+        for m in db.collection('stock_movimientos').where('ts', '>=', desde).stream():
+            d = m.to_dict() or {}
+            if d.get('motivo') in ('vinculacion', 'venta_vinculada') and num(d.get('cantidad')) < 0:
+                fid = d.get('firebase_id')
+                if fid:
+                    consumo[fid] += -num(d.get('cantidad'))
+                    if d.get('ts') and d['ts'] < ts_min:
+                        ts_min = d['ts']
     dias_ledger = max(7.0, (hoy - ts_min).total_seconds() / 86400)
     vel_vinc = {fid: total / dias_ledger for fid, total in consumo.items()}
     print(f'{len(vel_vinc)} productos con consumo por vinculo (ventana {dias_ledger:.0f} dias)')
@@ -474,19 +561,21 @@ def main():
                 and num(docs[did].get('stock')) <= num(campos.get('stock_min')):
             en_alerta += 1
     print(f'   productos que quedarian EN ALERTA ya mismo: {en_alerta}')
-    print('\n   Los 20 de mas movimiento:')
-    for total, nombre, color, antes, campos in sorted(detalle, key=lambda t: -t[0])[:20]:
+    print('\n   Todos los umbrales nuevos y corregidos, de mas a menos movimiento:')
+    for total, nombre, color, antes, campos in sorted(detalle, key=lambda t: -t[0]):
+        if campos == QUITAR:
+            continue
         um = campos.get('stock_min_um') or 'unidad'
         antes_txt = (f"{antes['stock_min']:g}/{antes['stock_max']:g}"
                      if num(antes.get('stock_min')) or num(antes.get('stock_max')) else 'nada')
-        ahora_txt = ('QUITADO' if campos == QUITAR
-                     else f"min {campos['stock_min']} max {campos['stock_max']} {um}")
         print(f"   {str(nombre)[:40]:<40} {('[' + str(color) + ']') if color else '':<16} "
-              f"{antes_txt:>10} -> {ahora_txt}  ({total:.0f} en {DIAS_VENTAS}d)")
+              f"{antes_txt:>10} -> min {campos['stock_min']} max {campos['stock_max']} {um}"
+              f"  ({total:.0f} en {DIAS_VENTAS}d)")
 
     quitados = [(t, n, c, a) for t, n, c, a, campos in detalle if campos == QUITAR]
     if quitados:
-        print('\n   Umbrales propios que se quitan (90+ dias sin ventas):')
+        print('\n   Umbrales propios que se quitan (perdieron la señal: 90+ dias '
+              'sin ventas, o todo lo vendido fue una sola compra):')
         for total, nombre, color, antes in sorted(quitados, key=lambda t: -t[0]):
             print(f"   {str(nombre)[:44]:<44} {('[' + str(color) + ']') if color else '':<16} "
                   f"tenia {antes.get('stock_min'):g}/{antes.get('stock_max'):g} · vendio {total:.0f} en {DIAS_VENTAS}d")

@@ -121,15 +121,39 @@ def test_un_producto_nuevo_no_divide_por_meses_que_no_vivio():
     assert abs(velocidad(d) - 2.0) < 0.01
 
 
+def test_producto_salteado_manda_el_dia_tipico():
+    # Vende 3 dias en cuatro meses: dos ventas chicas y una escuela que llevo
+    # 50. Por volumen daria ~0.45/dia (minimo 4); el dia tipico (2 u) por la
+    # frecuencia real (3 dias en 120) lo deja en centesimas: minimo 1.
+    d = demanda([(2, 10), (50, 40), (2, 119)])
+    assert velocidad(d) < 0.1
+
+
+def test_una_venta_grande_reciente_no_inventa_velocidad():
+    # El caso Pañolenci: una unica venta de 50 m hace 7 dias daba vel 6.25 y
+    # minimo 44. La mirada por eventos la deja abajo de 2 m/dia.
+    d = demanda([(50, 7)])
+    assert velocidad(d) < 2.0
+
+
+def test_vender_todas_las_semanas_no_es_salteado():
+    # 5 unidades un dia por semana durante medio año: la mirada por volumen
+    # sigue mandando (~0.74/dia).
+    d = demanda([(5, i * 7) for i in range(26)])
+    assert velocidad(d) > 0.6
+
+
 def test_el_consumo_por_vinculo_suma():
     d = demanda([(1, i) for i in range(90)])
     assert velocidad(d, vel_vinculos=2.0) == velocidad(d) + 2.0
 
 
-def test_senal_pide_volumen_y_venta_reciente():
-    assert con_senal(demanda([(2, 5), (2, 40)]))
-    assert not con_senal(demanda([(1, 5)]))            # poco volumen
-    assert not con_senal(demanda([(9, 60), (9, 80)]))  # nada en 45 dias
+def test_senal_pide_volumen_dias_distintos_y_venta_reciente():
+    assert con_senal(demanda([(2, 5), (1, 20), (1, 40)]))
+    assert not con_senal(demanda([(1, 5)]))                     # poco volumen
+    assert not con_senal(demanda([(2, 5), (2, 40)]))            # solo 2 dias
+    assert not con_senal(demanda([(50, 7)]))                    # una sola compra grande
+    assert not con_senal(demanda([(9, 60), (9, 80), (9, 90)]))  # nada en 45 dias
 
 
 def test_quitar_es_mas_conservador_que_agregar():
@@ -167,17 +191,26 @@ def test_variedad_de_mucha_venta_va_en_packs():
     assert fila == {'stock_min': 2, 'stock_max': 6, 'stock_min_um': 'pack'}
 
 
-def test_variedad_lenta_tambien_va_en_packs():
-    # 0.5 por dia en cajas de 50: la demanda pide 4 unidades, pero no se
-    # compran 4 boligrafos de una caja de 50: el minimo real es 1 caja.
+def test_variedad_que_mueve_un_pack_semanal_va_en_packs():
+    # 1.5 por dia en cajas de 10: la semana pide 11 unidades, mas de una
+    # caja: se piensa y se compra en cajas.
+    fila = umbrales_variedad(1.5, 10)
+    assert fila == {'stock_min': 2, 'stock_max': 5, 'stock_min_um': 'pack'}
+
+
+def test_variedad_lenta_avisa_en_unidades_y_pide_un_pack():
+    # 0.5 por dia en cajas de 50: la demanda pide 4 unidades. El aviso salta
+    # con 4 sueltas — "1 caja de minimo" seria plata parada — y el maximo es
+    # la caja cerrada que conviene pedir cuando toca.
     fila = umbrales_variedad(0.5, 50)
-    assert fila == {'stock_min': 1, 'stock_max': 2, 'stock_min_um': 'pack'}
+    assert fila == {'stock_min': 4, 'stock_max': 50, 'stock_min_um': 'unidad'}
 
 
-def test_variedad_cinta_redondea_al_rollo():
-    # 0.4 m por dia en rollos de 10: la demanda pide 3 m -> 1 rollo cerrado.
+def test_variedad_cinta_lenta_avisa_por_metro():
+    # 0.4 m por dia en rollos de 10: avisa con 3 m sueltos y el maximo son
+    # rollos cerrados (12 m de demanda -> 2 rollos).
     fila = umbrales_variedad(0.4, 10)
-    assert fila == {'stock_min': 1, 'stock_max': 2, 'stock_min_um': 'pack'}
+    assert fila == {'stock_min': 3, 'stock_max': 20, 'stock_min_um': 'unidad'}
 
 
 def test_variedad_con_pack_unitario_va_en_unidades():
@@ -185,10 +218,14 @@ def test_variedad_con_pack_unitario_va_en_unidades():
     assert fila == {'stock_min': 4, 'stock_max': 14, 'stock_min_um': 'unidad'}
 
 
-def test_producto_conjunto_redondea_al_pack_en_unidades():
-    # A nivel producto no hay stock_min_um: mismos umbrales que la variedad
-    # pero expresados en unidades (1 rollo de 10 -> minimo 10).
-    assert umbrales_producto(0.4, 10) == {'stock_min': 10, 'stock_max': 20}
+def test_producto_conjunto_lento_avisa_en_unidades():
+    # A nivel producto no hay stock_min_um: minimo chico en unidades y
+    # maximo al rollo cerrado.
+    assert umbrales_producto(0.4, 10) == {'stock_min': 3, 'stock_max': 20}
+
+
+def test_producto_conjunto_rapido_redondea_al_pack_en_unidades():
+    assert umbrales_producto(1.5, 10) == {'stock_min': 20, 'stock_max': 50}
 
 
 def test_producto_sin_pack_queda_en_unidades_tal_cual():
