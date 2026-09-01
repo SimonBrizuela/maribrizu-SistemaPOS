@@ -15,6 +15,7 @@ import uuid as _uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Callable
 
+from pos_system.models.conjunto import total_conjunto
 from pos_system.utils import stock_links as _stock_links
 from pos_system.utils import medios_de_pago
 
@@ -76,6 +77,46 @@ def _retry_on_429(fn, *, attempts: int = 4, base_delay: float = 1.5,
             delay *= 2
     if last_e is not None:
         raise last_e
+
+
+def merge_colores_con_nube(nube, locales, colores_vendidos):
+    """Fusiona el stock local post-venta con las filas de colores de la nube.
+
+    La fila de un color guarda cosas que NO son de esta PC: el stock minimo
+    que cargo el panel, la foto de la variedad, el contenido propio. Subir el
+    array local entero las pisaba: una PC recien prendida, con el catalogo de
+    ayer en SQLite, borraba lo que el panel habia escrito a la noche (visto
+    el 01-09: dos ventas de la mañana limpiaron los minimos de 14 variedades).
+
+    Esta venta solo es dueña de los colores que vendio: de esos toma
+    `unidades` y `restante` locales; todo lo demas queda como este en la
+    nube. Colores que solo estan en la nube se conservan; los que solo tiene
+    la PC viajan tal cual. Sin nube a mano, devuelve lo local (como antes).
+    """
+    if not isinstance(nube, list) or not nube:
+        return locales
+    vendidos = {str(c or '').strip() for c in (colores_vendidos or ())}
+    vendidos.discard('')
+    locales_por_color = {}
+    for c in locales:
+        if isinstance(c, dict):
+            locales_por_color[str(c.get('color', '')).strip()] = c
+    out, en_nube = [], set()
+    for c in nube:
+        if not isinstance(c, dict):
+            continue
+        clave = str(c.get('color', '')).strip()
+        en_nube.add(clave)
+        fila = dict(c)
+        local = locales_por_color.get(clave)
+        if local is not None and clave in vendidos:
+            fila['unidades'] = local.get('unidades')
+            fila['restante'] = local.get('restante')
+        out.append(fila)
+    for c in locales:
+        if isinstance(c, dict) and str(c.get('color', '')).strip() not in en_nube:
+            out.append(dict(c))
+    return out
 
 
 def _fmt_qty(q):
@@ -2135,6 +2176,18 @@ class FirebaseSync:
                 updated = 0
                 tienda = []          # (firebase_id, stock que quedó) para la web
 
+                # Que color de que producto vendio ESTA venta: el merge contra
+                # la nube solo pisa unidades/restante de esos colores.
+                vendidos_por_pid = {}
+                for it in items:
+                    try:
+                        pid_it = int(it.get('product_id') or 0)
+                    except (TypeError, ValueError):
+                        continue
+                    color_it = str(it.get('conjunto_color') or '').strip()
+                    if pid_it and color_it:
+                        vendidos_por_pid.setdefault(pid_it, set()).add(color_it)
+
                 for it in items:
                     pid = it.get('product_id')
                     # Negativa = devolución: Increment(-qty) termina sumando.
@@ -2145,7 +2198,8 @@ class FirebaseSync:
                         rows = db_manager.execute_query(
                             "SELECT id, firebase_id, stock, es_conjunto, "
                             "       conjunto_unidades, conjunto_restante, conjunto_total, "
-                            "       conjunto_colores, COALESCE(stock_ilimitado, 0) AS stock_ilimitado, "
+                            "       conjunto_contenido, conjunto_colores, "
+                            "       COALESCE(stock_ilimitado, 0) AS stock_ilimitado, "
                             "       vinculaciones, vinculado_a, vinculado_cantidad "
                             "FROM products WHERE id = ?",
                             (int(pid),)
@@ -2180,9 +2234,35 @@ class FirebaseSync:
                         if colores_json:
                             try:
                                 import json as _json
-                                payload_conj['conjunto_colores'] = _json.loads(colores_json)
+                                colores = _json.loads(colores_json)
                             except Exception:
-                                pass
+                                colores = None
+                            if isinstance(colores, list) and colores:
+                                vendidos = vendidos_por_pid.get(int(pid))
+                                if firebase_id and vendidos:
+                                    # Merge contra la nube: la fila de un color
+                                    # guarda cosas que no son de esta PC y una
+                                    # copia local vieja las pisaba. Si la nube
+                                    # no responde, viaja lo local como siempre.
+                                    try:
+                                        snap = self.db.collection('catalogo') \
+                                            .document(firebase_id).get()
+                                        nube = (snap.to_dict() or {}).get('conjunto_colores')
+                                        colores = merge_colores_con_nube(
+                                            nube, colores, vendidos)
+                                        payload_conj['conjunto_unidades'] = sum(
+                                            float(c.get('unidades') or 0)
+                                            for c in colores if isinstance(c, dict))
+                                        payload_conj['conjunto_restante'] = sum(
+                                            float(c.get('restante') or 0)
+                                            for c in colores if isinstance(c, dict))
+                                        payload_conj['conjunto_total'] = total_conjunto(
+                                            colores, float(row.get('conjunto_contenido') or 0))
+                                    except Exception as e:
+                                        logger.warning(
+                                            f"sync_stock_after_sale: sin merge de colores "
+                                            f"para {firebase_id} ({e}); sube lo local")
+                                payload_conj['conjunto_colores'] = colores
                         inv_ref = self.db.collection('inventario').document(str(pid))
                         batch.set(inv_ref, payload_conj, merge=True)
                         if firebase_id:
@@ -2192,7 +2272,7 @@ class FirebaseSync:
                             # sueltas, no los packs cerrados: la tienda mira
                             # `conjunto_total`, igual que el sync.
                             tienda.append((firebase_id,
-                                           float(row.get('conjunto_total') or 0)))
+                                           float(payload_conj['conjunto_total'])))
                         updated += 1
                         continue
 
