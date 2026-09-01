@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest';
 import {
   cadenaMeses, cajaAlDia, netoDia, netoMes, rangoMeses, diaCargado,
   cuentasDelPeriodo, cuentaDeIngreso, cuentaDeCompra, etiquetaCuenta, cuentasMpDe,
+  mpPorCuentaAlDia, mesSiguiente,
 } from '../../webapp/src/balance_cadena.js';
 
 const dia = (ingresos, compras = []) => ({ ingresos, compras });
@@ -79,10 +80,24 @@ describe('la cadena de meses', () => {
   it('si el mes en curso no tiene días, la caja es el cierre del mes anterior', () => {
     const c2 = cadenaMeses({ meses: ['2026-06', '2026-07', '2026-08'], tipeados, docs: { ...docs, '2026-08': null }, hoy: HOY });
     const caja = cajaAlDia(c2, HOY);
-    // Agosto sin días hereda el cierre de julio como apertura y como cierre (nada se movió).
+    // Agosto sin días ni saldos propios pasa de largo: la caja se nombra por el
+    // mes que tiene los datos (antes decía "al cierre de Agosto" con 0 días).
+    expect(caja.ym).toBe('2026-07');
+    expect(caja.dd).toBe(null);
+    expect(caja.esApertura).toBe(false);
+    expect(caja.saldos.mp).toBe(4707864.02);
+  });
+  it('el mes en curso con apertura contada a mano y sin días es la caja, marcada como apertura', () => {
+    const docsAp = { ...docs, '2026-08': { apertura: { efectivo: 2779000, mp: 979627, lapos: 1085218 }, dias: {} } };
+    const caja = cajaAlDia(cadenaMeses({ meses: ['2026-06', '2026-07', '2026-08'], tipeados, docs: docsAp, hoy: HOY }), HOY);
     expect(caja.ym).toBe('2026-08');
     expect(caja.dd).toBe(null);
-    expect(caja.saldos.mp).toBe(4707864.02);
+    expect(caja.esApertura).toBe(true);
+    expect(caja.saldos).toEqual({ efectivo: 2779000, mp: 979627, lapos: 1085218, sin: 0 });
+  });
+  it('con días cargados en el mes en curso, la caja vuelve a ser el acumulado y no la apertura', () => {
+    const caja = cajaAlDia(cad, HOY);
+    expect(caja.esApertura).toBe(false);
   });
   it('sin nada de dónde arrancar, el mes queda sin cierre y no rompe los que siguen', () => {
     const c3 = cadenaMeses({ meses: ['2026-07', '2026-08'], tipeados: {}, docs: { '2026-07': { dias: docs['2026-07'].dias }, '2026-08': docs['2026-08'] }, hoy: HOY });
@@ -141,5 +156,49 @@ describe('la plata por cuenta', () => {
   });
   it('las cuentas MP conocidas salen de los ingresos', () => {
     expect(cuentasMpDe(docs)).toEqual(['MP AGUSTIN', 'MP JOSE']);
+  });
+});
+
+describe('la plata de cada Mercado Pago hoy (mpPorCuentaAlDia)', () => {
+  // El caso real del 01-09: cierre de agosto contado a mano con el desglose,
+  // y septiembre va sumando lo que se carga en el Día por día.
+  const baseYm = '2026-08';
+  const baseMp = { 'MP JOSE': 622594, 'MP AGUSTIN': 357033 };
+  const docs = {
+    '2026-08': { dias: { '31': dia([ing('MP JOSE', 'mp', 99999)]) } },   // anterior al cierre: no cuenta
+    '2026-09': { dias: {
+      '01': dia([ing('MP JOSE', 'mp', 1000), ing('MP AGUSTIN', 'mp', 500), ing('Caja hoy', 'efectivo', 777)],
+                [com('Luz', 'Gastos fijos', 'mp', 200, 'MP JOSE')]),
+      '02': dia([ing('mp jose', 'mp', 100)], [com('Papelera', 'Papelera', 'mp', 50)]),
+    } },
+  };
+
+  it('mesSiguiente cruza el año', () => {
+    expect(mesSiguiente('2026-08')).toBe('2026-09');
+    expect(mesSiguiente('2026-12')).toBe('2027-01');
+  });
+  it('cada cuenta arranca del cierre fijado y suma solo lo posterior', () => {
+    const r = mpPorCuentaAlDia({ baseYm, baseMp, docs, hoy: '2026-09-02' });
+    const por = Object.fromEntries(r.cuentas.map(c => [c.clave, c]));
+    expect(r.desde).toBe('2026-09-01');
+    expect(por['mp:MP JOSE']).toEqual({ clave: 'mp:MP JOSE', nombre: 'MP JOSE', base: 622594, ingresos: 1100, egresos: 200, saldo: 623494 });
+    expect(por['mp:MP AGUSTIN'].saldo).toBe(357533);
+    // La compra MP sin cuenta va a su propio renglón, no desaparece.
+    expect(por['mp:'].saldo).toBe(-50);
+    expect(r.total).toBe(623494 + 357533 - 50);
+  });
+  it('una cuenta del cierre sin movimientos igual aparece, con su base', () => {
+    const r = mpPorCuentaAlDia({ baseYm, baseMp, docs: {}, hoy: '2026-09-02' });
+    expect(r.cuentas.map(c => [c.nombre, c.saldo])).toEqual([['MP JOSE', 622594], ['MP AGUSTIN', 357033]]);
+  });
+  it('el efectivo y lapos no se cuelan en el desglose MP', () => {
+    const r = mpPorCuentaAlDia({ baseYm, baseMp, docs, hoy: '2026-09-02' });
+    expect(r.cuentas.every(c => c.clave.startsWith('mp:'))).toBe(true);
+  });
+  it('sin base suma solo el período (reparto, no plata total)', () => {
+    const r = mpPorCuentaAlDia({ baseYm: null, baseMp: {}, docs, hoy: '2026-09-02' });
+    const por = Object.fromEntries(r.cuentas.map(c => [c.clave, c]));
+    expect(r.desde).toBe(null);
+    expect(por['mp:MP JOSE'].saldo).toBe(99999 + 1100 - 200);
   });
 });

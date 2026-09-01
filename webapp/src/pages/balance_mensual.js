@@ -16,7 +16,7 @@ import { collection, getDocs, getDoc, query, orderBy, limit, doc, setDoc, update
 import { cssVar } from '../theme.js';
 import { confirmDialog, alertDialog, promptDialog } from '../components/dialogs.js';
 import { refreshVencimientos, setPagosMesFromDias } from './calendario_core.js';
-import { cadenaMeses, cajaAlDia, aperturaDe, hayMontos, rangoMeses, cuentasDelPeriodo, cuentasMpDe, normCuenta } from '../balance_cadena.js';
+import { cadenaMeses, cajaAlDia, aperturaDe, hayMontos, rangoMeses, cuentasDelPeriodo, cuentasMpDe, normCuenta, mpPorCuentaAlDia, mesSiguiente } from '../balance_cadena.js';
 // Cuánto de cada venta entró en mano y cuánto por transferencia. Gemelo de
 // `pos_system/utils/medios_de_pago.py`; existe por el Pago Mixto.
 import { partesDeVenta } from '../medios_de_pago.js';
@@ -194,30 +194,43 @@ function cajaActual() {
   }
   return null;
 }
+// "al 22/08" (último día cargado), "apertura de Septiembre 26" (recuento a mano
+// sin días todavía) o "al cierre de Agosto 26" (el último mes con datos).
+function cuandoCaja(c) {
+  if (c.dd) return `al ${c.dd}/${c.ym.slice(5, 7)}`;
+  if (c.esApertura) return `apertura de ${esc(mesLabel(c.ym))}`;
+  return `al cierre de ${esc(mesLabel(c.ym))}`;
+}
 function cajaActualHtml() {
   const c = cajaActual();
   if (!c) return '';
   const s = c.saldos;
   const ef = Number(s.efectivo) || 0, mp = Number(s.mp) || 0, lp = Number(s.lapos) || 0, sin = Number(s.sin) || 0;
   const tot = ef + mp + lp + sin;
-  const cuando = c.dd ? `al ${c.dd}/${c.ym.slice(5, 7)}` : `al cierre de ${esc(mesLabel(c.ym))}`;
   const como = c.origen === 'calculado'
     ? (c.aperturaOrigen === 'cierre_anterior' ? 'sigue del cierre del mes anterior más los días cargados' : 'apertura del mes más los días cargados')
     : 'saldos tipeados en el Resumen';
   return `
-    <div class="bal-caja-band">
+    <div class="bal-caja-band is-click" role="button" tabindex="0" title="Ver el detalle por cuenta (Mercado Pago abierto por nombre)">
       <div class="bal-caja-head">
         <span class="material-icons">account_balance_wallet</span>
         <span class="bal-caja-title">Caja actual</span>
-        <small title="${esc(como)}">${cuando}</small>
+        <small title="${esc(como)}">${cuandoCaja(c)}</small>
       </div>
       <div class="bal-caja-medios">
         <div class="bal-caja-item is-efectivo"><span>Efectivo</span><b class="${negCls(ef).trim()}">${money(ef)}</b></div>
         <div class="bal-caja-item"><span>Mercado Pago</span><b class="${negCls(mp).trim()}">${money(mp)}</b></div>
         <div class="bal-caja-item"><span>Lapos</span><b class="${negCls(lp).trim()}">${money(lp)}</b></div>
         <div class="bal-caja-item is-total"><span>Total</span><b class="${negCls(tot).trim()}">${money(tot)}</b></div>
+        <span class="material-icons bal-caja-more" aria-hidden="true">unfold_more</span>
       </div>
     </div>`;
+}
+function bindCajaBand() {
+  const band = mountEl && mountEl.querySelector('.bal-caja-band');
+  if (!band) return;
+  band.addEventListener('click', openCajaDetalle);
+  band.addEventListener('keydown', e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openCajaDetalle(); } });
 }
 // Refresca la banda en el lugar (tras editar un saldo o fijar un cierre).
 function refreshCajaBand() {
@@ -227,6 +240,81 @@ function refreshCajaBand() {
   const html = cajaActualHtml();
   if (band) { if (html) band.outerHTML = html; else band.remove(); }
   else if (html) { const head = wrap.querySelector('.bal-head'); if (head) head.insertAdjacentHTML('afterend', html); }
+  bindCajaBand();
+}
+
+// ── Detalle por cuenta de la Caja actual ──────────────────────────────────────
+// El último cierre del Resumen que tenga el desglose de Mercado Pago por cuenta
+// (saldosMp): de ahí arranca la cuenta corriente de cada MP.
+function baseCierreMp(ymTope, estricto = false) {
+  for (const ym of mesesOrdenados('desc')) {
+    if (ymTope && (estricto ? ym >= ymTope : ym > ymTope)) continue;
+    const det = cfg.meses?.[ym]?.saldosMp;
+    if (det && Object.values(det).some(v => v != null && v !== '')) return { ym, mp: det };
+  }
+  return null;
+}
+// Docs de días desde un mes (inclusive) hasta hoy; loadDiasMes está cacheado.
+async function docsDiasDesde(ymDesde) {
+  const ymHoy = hoyAR().slice(0, 7);
+  const meses = ymDesde && ymDesde <= ymHoy ? rangoMeses(ymDesde, ymHoy) : mesesDeLaCadena();
+  const docs = {};
+  await Promise.all(meses.map(async ym => { docs[ym] = await loadDiasMes(db, ym); }));
+  return docs;
+}
+// Al tocar la banda: cuánto hay en cada cuenta hoy — Efectivo, cada Mercado
+// Pago por nombre (MP JOSE, MP AGUSTIN...) y Lapos — siguiendo lo que se carga
+// en el Día por día desde el último cierre con desglose.
+async function openCajaDetalle() {
+  const caja = cajaActual();
+  if (!caja) return;
+  const s = caja.saldos;
+  const base = baseCierreMp(hoyAR().slice(0, 7));
+  const docs = await docsDiasDesde(base ? mesSiguiente(base.ym) : null);
+  const det = mpPorCuentaAlDia({ baseYm: base ? base.ym : null, baseMp: base ? base.mp : {}, docs, hoy: hoyAR() });
+
+  const fila = (label, saldo, extra = '', cls = '') => `
+    <tr class="${cls}">
+      <td>${label}</td>
+      <td class="bal-cta-det-mov">${extra}</td>
+      <td class="bal-cta-det-monto${saldo == null ? '' : negCls(saldo)}">${saldo == null ? '—' : money(saldo)}</td>
+    </tr>`;
+  const movTxt = c => (c.ingresos || c.egresos)
+    ? `<span class="mas">+${fmt(c.ingresos)}</span> <span class="menos">−${fmt(c.egresos)}</span>`
+    : '';
+  // Sin un cierre con desglose no hay saldo por cuenta que mostrar: solo el
+  // movimiento (un saldo inventado contradiría el total de arriba).
+  const mpFilas = det.cuentas.map(c => fila(esc(c.nombre), base ? c.saldo : null, movTxt(c), 'is-mp')).join('');
+  const mpSuma = det.cuentas.reduce((t, c) => t + c.saldo, 0);
+  const mpTotal = Number(s.mp) || 0;
+  const descuadre = Math.round((mpTotal - mpSuma) * 100) / 100;
+
+  const desdeTxt = base
+    ? `Mercado Pago arranca del cierre fijado de <b>${esc(mesLabel(base.ym))}</b> y suma lo cargado desde el ${det.desde.slice(8, 10)}/${det.desde.slice(5, 7)} (ingresos por nombre, compras por la cuenta elegida).`
+    : `Todavía no hay un cierre con el desglose de Mercado Pago por cuenta: por eso cada MP muestra solo lo que se movió, sin saldo. Fijá un cierre con el desglose y de ahí en más se sigue solo.`;
+  const avisoDescuadre = (base && Math.abs(descuadre) >= 0.01)
+    ? `<div class="bal-cta-det-warn"><span class="material-icons">error_outline</span>
+         El desglose difiere del total de Mercado Pago por ${money(descuadre)}: hay movimientos MP sin cuenta asignada o un saldo tipeado distinto en el Resumen.</div>`
+    : '';
+
+  await alertDialog({
+    title: 'Caja por cuenta',
+    confirmText: 'Cerrar',
+    message: `
+      <div class="bal-cta-det-cuando">${cuandoCaja(caja)}</div>
+      <table class="bal-cta-det">
+        <tbody>
+          ${fila('Efectivo', Number(s.efectivo) || 0)}
+          ${mpFilas}
+          ${fila('Mercado Pago · total', base && mpFilas ? mpSuma : mpTotal, '', 'is-sub')}
+          ${fila('Lapos', Number(s.lapos) || 0)}
+          ${Number(s.sin) ? fila('Sin medio', Number(s.sin) || 0) : ''}
+          ${fila('Total', caja.total, '', 'is-total')}
+        </tbody>
+      </table>
+      ${avisoDescuadre}
+      <div class="bal-cta-det-nota">${desdeTxt}</div>`,
+  });
 }
 
 // Garantiza la ruta cfg.meses[ym] mutable en memoria.
@@ -688,6 +776,7 @@ function render() {
   }));
   mountEl.querySelector('#bal-reimport')?.addEventListener('click', () => importarHistorico(false));
   mountEl.querySelector('#bal-import-dias')?.addEventListener('click', () => importarDiasExcel(false));
+  bindCajaBand();
   mountEl.querySelector('#bal-undo')?.addEventListener('click', histUndo);
   mountEl.querySelector('#bal-redo')?.addEventListener('click', histRedoFn);
   mountEl.querySelector('#bal-hist')?.addEventListener('click', openHistPanel);
@@ -2129,7 +2218,7 @@ async function renderCuentas(body) {
   }
 
   // Tarjetas por medio: saldo de hoy (cadena) + lo que se movió en el período.
-  const cuando = caja ? (caja.dd ? `al ${caja.dd}/${caja.ym.slice(5, 7)}` : `al cierre de ${esc(mesLabel(caja.ym))}`) : '';
+  const cuando = caja ? cuandoCaja(caja) : '';
   const card = (k, label, cls) => {
     const pm = r.porMedio[k] || { ingresos: 0, egresos: 0, neto: 0 };
     const saldo = caja && caja.saldos && caja.saldos[k] != null ? Number(caja.saldos[k]) : null;
@@ -3225,6 +3314,9 @@ function bindDia(body, dia) {
 
   // Fijar cierre del mes: usa el saldo acumulado (todos los días) como saldo de
   // cierre del mes en el Resumen — igual que el último "SALDO DIARIO ACUMULADO".
+  // Si hay un cierre anterior con desglose MP por cuenta y las cuentas cuadran
+  // con el total, el desglose (saldosMp) se arrastra también: así "Caja por
+  // cuenta" sigue mes a mes sin recontar.
   body.querySelector('[data-fijar-cierre]')?.addEventListener('click', async () => {
     const dias = curDiasDoc.dias || {};
     const apertura = aperturaEfectiva(ymAtBind, curDiasDoc);
@@ -3240,11 +3332,27 @@ function bindDia(body, dia) {
       confirmText: 'Fijar cierre',
     });
     if (!ok) return;
+    let saldosMp = null;
+    try {
+      const base = baseCierreMp(ymAtBind, true);
+      if (base && base.ym < ymAtBind) {
+        const docsMp = await docsDiasDesde(mesSiguiente(base.ym));
+        docsMp[ymAtBind] = { dias: work };
+        const det = mpPorCuentaAlDia({ baseYm: base.ym, baseMp: base.mp, docs: docsMp, hoy: `${ymAtBind}-31` });
+        const sinAsignar = det.cuentas.find(c => c.clave === 'mp:');
+        if (Math.abs(det.total - close.mp) < 0.01 && !(sinAsignar && Math.abs(sinAsignar.saldo) >= 0.01)) {
+          saldosMp = Object.fromEntries(det.cuentas.map(c => [c.nombre, c.saldo]));
+        }
+      }
+    } catch (err) { console.error('[balance] desglose MP del cierre', err); }
     const mes = ensureMes(ymAtBind);
     mes.saldos = close;
+    if (saldosMp) mes.saldosMp = saldosMp;
     if (mes.origen === 'excel') mes.origen = 'manual';
     refreshCajaBand();
-    await persistMes(ymAtBind, { saldos: close, origen: mes.origen });
+    const patch = { saldos: close, origen: mes.origen };
+    if (saldosMp) patch.saldosMp = saldosMp;
+    await persistMes(ymAtBind, patch);
     alertDialog({ title: 'Cierre fijado', message: `El saldo de cierre de ${esc(mesLabel(ymAtBind))} se guardó en el Resumen.`, type: 'success' });
   });
 

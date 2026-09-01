@@ -288,6 +288,97 @@ describe('buscar dentro del balance', () => {
   });
 });
 
+describe('la caja por cuenta (tocar la banda)', () => {
+  // Julio cerró con el desglose de MP por cuenta y agosto arranca de ahí:
+  // la apertura tipeada de agosto coincide con ese cierre en MP.
+  const conDesglose = () => {
+    datos.docs['control_config/balance'].meses['2026-07'].saldosMp =
+      { 'MP JOSE': 3000000, 'MP AGUSTIN': 1707364 };
+    datos.docs['control_config/dias_2026-08'].apertura.mp = 4707364;
+  };
+  const abrirDetalle = async () => {
+    document.querySelector('.bal-caja-band').click();
+    await asentar();
+    await vi.advanceTimersByTimeAsync(300);
+    await asentar();
+    const dlg = document.querySelector('.app-dialog-overlay');
+    expect(dlg, 'no abrió el detalle de la caja').toBeTruthy();
+    return dlg;
+  };
+
+  it('la banda dice hasta qué día llega la caja', async () => {
+    const c = await montar('dia');
+    expect(c.querySelector('.bal-caja-band small').textContent).toContain('al 03/08');
+  });
+
+  it('con un click muestra cada Mercado Pago por nombre, sumando lo cargado', async () => {
+    conDesglose();
+    await montar('dia');
+    const t = plano(await abrirDetalle());
+    expect(t).toContain('MP JOSE');
+    expect(t).toContain('MP AGUSTIN');
+    expect(t).toContain('3092000');   // 3.000.000 del cierre de julio + 92.000 cargados en agosto
+    expect(t).toContain('1707364');   // Agustín sin movimientos: queda en su base
+    // La compra MP sin cuenta asignada queda a la vista, no desaparece.
+    expect(t.toLowerCase()).toContain('sin asignar');
+    expect(t).toContain('38000');
+  });
+
+  it('si el desglose no cuadra con el total MP, lo avisa', async () => {
+    // Sin alinear la apertura: agosto arranca con 1.200.000 tipeados y el
+    // desglose de julio queda desfasado. Mejor un aviso que dos números
+    // contando distinto sin explicación.
+    datos.docs['control_config/balance'].meses['2026-07'].saldosMp =
+      { 'MP JOSE': 3000000, 'MP AGUSTIN': 1707364 };
+    await montar('dia');
+    expect(plano(await abrirDetalle())).toContain('difiere');
+  });
+
+  it('sin ningún cierre con desglose no inventa saldos por cuenta', async () => {
+    await montar('dia');
+    const dlg = await abrirDetalle();
+    const t = dlg.textContent;
+    expect(t).toContain('MP JOSE');   // el movimiento sí se ve
+    expect(t).toContain('—');         // pero sin un saldo inventado
+    expect(t.toLowerCase()).toContain('todavía no hay un cierre');
+  });
+
+  it('Fijar cierre del mes guarda también el desglose por cuenta cuando cuadra', async () => {
+    conDesglose();
+    // Con la compra MP del 03 asignada a una cuenta, todo el MP queda repartido.
+    datos.docs['control_config/dias_2026-08'].dias['03'].compras[0].cuenta = 'MP JOSE';
+    await montar('dia');
+    document.querySelector('[data-fijar-cierre]').click();
+    await asentar();
+    document.querySelector('.app-dialog-overlay .ad-ok').click();   // confirmar
+    await asentar();
+    await vi.advanceTimersByTimeAsync(300);
+    await asentar();
+    const esc = datos.escrituras.find(e => e.datos?.meses?.['2026-08']?.saldosMp);
+    expect(esc, 'no se guardó el desglose del cierre').toBeTruthy();
+    expect(esc.datos.meses['2026-08'].saldosMp).toEqual({
+      'MP JOSE': 3054000,      // 3.000.000 + 92.000 − 38.000
+      'MP AGUSTIN': 1707364,
+    });
+    expect(esc.datos.meses['2026-08'].saldos.mp).toBe(3054000 + 1707364);
+  });
+
+  it('Fijar cierre NO guarda el desglose si queda plata MP sin cuenta', async () => {
+    conDesglose();
+    // La compra MP del 03 sigue sin cuenta: repartirla a ojo sería inventar.
+    await montar('dia');
+    document.querySelector('[data-fijar-cierre]').click();
+    await asentar();
+    document.querySelector('.app-dialog-overlay .ad-ok').click();
+    await asentar();
+    await vi.advanceTimersByTimeAsync(300);
+    await asentar();
+    const cierre = datos.escrituras.find(e => e.datos?.meses?.['2026-08']?.saldos);
+    expect(cierre, 'el cierre igual se fijó').toBeTruthy();
+    expect(cierre.datos.meses['2026-08'].saldosMp).toBeUndefined();
+  });
+});
+
 describe('los gastos fijos del mes', () => {
   it('se muestran con su monto de referencia', async () => {
     // Cada fijo es una fila editable: el motivo y el importe viven en campos,

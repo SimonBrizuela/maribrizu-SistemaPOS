@@ -128,7 +128,10 @@ export function cadenaMeses({ meses, tipeados = {}, docs = {}, hoy }) {
 
 /**
  * La plata de hoy: el cierre del último mes que tenga uno, con el día al que
- * llega. Para el mes en curso es el acumulado al último día cargado.
+ * llega. Para el mes en curso es el acumulado al último día cargado. Un mes sin
+ * días ni saldos propios (su cierre es el del anterior pasado de largo) no
+ * cuenta: se baja hasta el mes que tiene los datos de verdad, así la etiqueta
+ * dice "al cierre de Agosto" y no el mes en curso recién arrancado.
  */
 export function cajaAlDia(cadena, hoy) {
   const ymHoy = String(hoy || '').slice(0, 7);
@@ -136,6 +139,7 @@ export function cajaAlDia(cadena, hoy) {
   for (let i = yms.length - 1; i >= 0; i--) {
     const m = cadena[yms[i]];
     if (!m.cierre) continue;
+    if (i > 0 && !m.cargados && m.cierreOrigen === 'calculado' && m.aperturaOrigen === 'cierre_anterior') continue;
     const enCurso = m.ym === ymHoy && m.cierreOrigen === 'calculado';
     const total = r2(m.cierre.efectivo + m.cierre.mp + m.cierre.lapos + num(m.cierre.sin));
     return {
@@ -145,6 +149,9 @@ export function cajaAlDia(cadena, hoy) {
       total,
       origen: m.cierreOrigen,
       aperturaOrigen: m.aperturaOrigen,
+      // Sin días cargados pero con apertura contada a mano: la caja es esa
+      // apertura, no un "cierre" (cambia cómo se etiqueta).
+      esApertura: m.cierreOrigen === 'calculado' && !m.cargados && m.aperturaOrigen === 'tipeada',
     };
   }
   return null;
@@ -284,4 +291,47 @@ export function cuentasDelPeriodo({ docs, desde, hasta }) {
     porMedio[k].neto = r2(porMedio[k].ingresos - porMedio[k].egresos);
   });
   return { cuentas: out, porMedio, dias };
+}
+
+/** '2026-08' → '2026-09' (para arrancar a contar después de un cierre). */
+export function mesSiguiente(ym) {
+  let [y, m] = String(ym).split('-').map(Number);
+  m++; if (m > 12) { m = 1; y++; }
+  return `${y}-${String(m).padStart(2, '0')}`;
+}
+
+/**
+ * La plata de cada cuenta de Mercado Pago hoy: el desglose fijado en el último
+ * cierre (`saldosMp` del Resumen) más lo que se movió por cuenta desde entonces
+ * (ingresos por el nombre del motivo, compras por la `cuenta` elegida).
+ *   baseYm: mes del cierre con desglose ('2026-08') o null si no hay ninguno
+ *   baseMp: { 'MP JOSE': 622594, 'MP AGUSTIN': 357033 } (saldos de ese cierre)
+ *   docs:   ym → doc de días (alcanza con los meses posteriores a baseYm)
+ *   hoy:    'YYYY-MM-DD'
+ * Devuelve { cuentas: [{clave, nombre, base, ingresos, egresos, saldo}], total, desde }
+ * con las compras MP sin cuenta asignada en su propio renglón. Sin base, los
+ * saldos son solo el neto del período (sirven de reparto, no de plata total).
+ */
+export function mpPorCuentaAlDia({ baseYm, baseMp = {}, docs, hoy }) {
+  const desde = baseYm ? `${mesSiguiente(baseYm)}-01` : '0000-01-01';
+  const r = cuentasDelPeriodo({ docs, desde, hasta: hoy });
+  const filas = new Map();
+  Object.entries(baseMp || {}).forEach(([nombre, v]) => {
+    if (normCuenta(nombre)) filas.set('mp:' + normCuenta(nombre), { base: num(v), ingresos: 0, egresos: 0 });
+  });
+  r.cuentas.filter(c => c.medio === 'mp').forEach(c => {
+    const f = filas.get(c.clave) || { base: 0, ingresos: 0, egresos: 0 };
+    f.ingresos = c.ingresos; f.egresos = c.egresos;
+    filas.set(c.clave, f);
+  });
+  const cuentas = [...filas.entries()].map(([clave, f]) => ({
+    clave,
+    nombre: etiquetaCuenta(clave),
+    base: r2(f.base),
+    ingresos: r2(f.ingresos),
+    egresos: r2(f.egresos),
+    saldo: r2(f.base + f.ingresos - f.egresos),
+  })).sort((a, b) => b.saldo - a.saldo);
+  const total = r2(cuentas.reduce((s, c) => s + c.saldo, 0));
+  return { cuentas, total, desde: baseYm ? desde : null };
 }

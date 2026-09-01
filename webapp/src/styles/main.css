@@ -4097,10 +4097,28 @@ html[data-theme="dark"] { --bal-green: #3f7d63; --bal-green-soft: rgba(63,125,99
 .bal-caja-item.is-efectivo b { font-size: 20px; color: var(--bal-green); }
 .bal-caja-item.is-total { padding-left: 20px; border-left: 1px solid var(--border); }
 .bal-caja-item.is-total b { font-size: 18px; }
+.bal-caja-band.is-click { cursor: pointer; }
+.bal-caja-band.is-click:hover { border-color: var(--bal-green); }
+.bal-caja-more { color: var(--text-muted); font-size: 18px; align-self: center; margin-left: 4px; }
 @media (max-width: 620px) {
   .bal-caja-medios { margin-left: 0; width: 100%; justify-content: space-between; gap: 10px; }
   .bal-caja-item.is-total { padding-left: 0; border-left: none; }
 }
+
+/* Detalle "Caja por cuenta" (al tocar la banda): Mercado Pago abierto por nombre */
+.bal-cta-det-cuando { color: var(--text-muted); font-size: 12px; margin-bottom: 8px; }
+.bal-cta-det { width: 100%; border-collapse: collapse; font-size: 13.5px; }
+.bal-cta-det td { padding: 7px 4px; border-bottom: 1px solid var(--border); }
+.bal-cta-det tr.is-mp td:first-child { padding-left: 16px; }
+.bal-cta-det tr.is-sub td { color: var(--text-muted); font-size: 12.5px; border-bottom-width: 2px; }
+.bal-cta-det tr.is-total td { font-weight: 800; color: var(--text-strong); border-bottom: none; }
+.bal-cta-det-mov { text-align: right; font-size: 12px; white-space: nowrap; }
+.bal-cta-det-mov .mas { color: var(--tint-green-fg); font-weight: 600; }
+.bal-cta-det-mov .menos { color: var(--tint-red-fg); }
+.bal-cta-det-monto { text-align: right; font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+.bal-cta-det-warn { display: flex; gap: 6px; align-items: flex-start; margin-top: 10px; font-size: 12.5px; color: var(--tint-red-fg); }
+.bal-cta-det-warn .material-icons { font-size: 16px; margin-top: 1px; }
+.bal-cta-det-nota { margin-top: 10px; font-size: 12px; color: var(--text-muted); }
 
 /* ── Resumen del período (tabla de días, 100% desde el balance) ── */
 .bal-gdia-row { cursor: pointer; }
