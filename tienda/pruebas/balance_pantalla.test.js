@@ -226,6 +226,21 @@ describe('los números del mes en curso', () => {
     expect(plano(c)).toContain('690000');
   });
 
+  it('si otro equipo cargó plata, la banda se corrige sola al volver a entrar', async () => {
+    // Primer montaje: deja el cache en memoria con los números de siempre.
+    await montar('dia');
+    // Otro equipo carga un ingreso grande en el servidor.
+    datos.docs['control_config/dias_2026-08'].dias['01'].ingresos[0].monto = 999185;
+    // Al volver a la página, el cache viejo pinta primero, pero la
+    // revalidación contra el server tiene que corregir la banda sola.
+    contenedor.remove();
+    contenedor = document.createElement('div');
+    document.body.appendChild(contenedor);
+    const c = await montar('dia');
+    // 300.000 + 999.185 + 210.000 + 175.000 − 60.000 − 120.000 = 1.504.185
+    expect(plano(c.querySelector('.bal-caja-band'))).toContain('1504185');
+  });
+
   it('el Resumen vivo lista los meses cargados', async () => {
     await montar();
     const body = await irA('resumen');

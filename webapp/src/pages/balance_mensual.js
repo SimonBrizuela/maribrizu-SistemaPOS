@@ -723,6 +723,40 @@ export async function mountBalanceMensual(paneEl, _db) {
   histReset();
   attachHistKeyboard();
   render();
+  revalidarDesdeServer();
+}
+
+// La primera pintada sale del cache local (rápida, pero puede estar vieja:
+// otro equipo pudo cargar días o fijar un cierre, y el botón de refresh de la
+// página no toca las keys `control_config:*`). Acá se relee del server en
+// segundo plano el balance y los últimos meses de días; si algo cambió se
+// recalcula la cadena y se repinta la banda — y el cuerpo solo si el usuario
+// no está escribiendo en él (pisar un formulario es peor que un dato viejo).
+async function revalidarDesdeServer() {
+  const pane = mountEl;
+  const meses = mesesDeLaCadena().slice(-3);
+  let antes;
+  try {
+    antes = JSON.stringify([cfg, ...await Promise.all(meses.map(ym => loadDiasMes(db, ym)))]);
+    // El getDoc al server también refresca el cache local del SDK: la
+    // relectura cache-first de abajo ya trae lo fresco.
+    await Promise.all([
+      getDoc(doc(db, 'control_config', 'balance')),
+      ...meses.map(ym => getDoc(doc(db, 'control_config', `dias_${ym}`))),
+    ]);
+  } catch (err) { console.error('[balance] revalidación contra el server', err); return; }
+  if (mountEl !== pane || !pane.isConnected) return;   // se navegó a otra página
+  invalidateBalanceConfig();
+  meses.forEach(ym => invalidateDiasMes(ym));
+  const fresh = await loadBalanceConfig(db);
+  const dias = await Promise.all(meses.map(ym => loadDiasMes(db, ym)));
+  if (mountEl !== pane || !pane.isConnected) return;
+  if (JSON.stringify([fresh, ...dias]) === antes) return;   // no cambió nada
+  if (fresh) cfg = fresh;
+  try { await recalcularCadena(); } catch (err) { console.error('[balance] cadena de saldos', err); return; }
+  refreshCajaBand();
+  const body = pane.querySelector('#bal-body');
+  if (body && !body.contains(document.activeElement)) renderBody();
 }
 
 function tieneDatos() {
