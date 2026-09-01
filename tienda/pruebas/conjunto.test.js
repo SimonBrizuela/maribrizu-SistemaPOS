@@ -10,34 +10,17 @@ import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import {
-  packsAGuardar, packsAMostrar, repartirTotal, totalConjunto, totalVariedad,
+  repartirTotal, totalConjunto, totalVariedad,
   guardaCerrados, descontarDeTotal,
 } from '../../webapp/src/conjunto.js';
 
 const AQUI = dirname(fileURLToPath(import.meta.url));
 const CASOS = JSON.parse(readFileSync(join(AQUI, 'casos_conjunto.json'), 'utf-8'));
 
-describe('packs a guardar: lo que tipea el personal pasa a packs cerrados', () => {
-  for (const caso of CASOS.packs_a_guardar) {
-    it(caso.nombre, () => {
-      expect(packsAGuardar(caso.packs, caso.sueltos)).toBe(caso.esperado);
-    });
-  }
-});
-
-describe('packs a mostrar: los cerrados vuelven a verse con el abierto', () => {
-  for (const caso of CASOS.packs_a_mostrar) {
-    it(caso.nombre, () => {
-      expect(packsAMostrar(caso.cerrados, caso.sueltos)).toBe(caso.esperado);
-    });
-  }
-  for (const caso of CASOS.ida_y_vuelta) {
-    it(caso.nombre, () => {
-      const cerrados = packsAGuardar(caso.packs, caso.sueltos);
-      expect(packsAMostrar(cerrados, caso.sueltos)).toBe(caso.packs);
-    });
-  }
-});
+// La traducción del estante (`packs_a_guardar` / `packs_a_mostrar`) quedó solo
+// del lado Python, para la migración histórica del 31-08: el panel guarda y
+// muestra literal desde esa fecha. Sus casos del JSON los corre
+// `pos_system/tests/test_conjunto.py`.
 
 describe('repartir un total en cerrados y sueltos', () => {
   for (const caso of CASOS.repartir_total) {
@@ -76,14 +59,14 @@ describe('total de un conjunto con variedades', () => {
   }
 });
 
-describe('el pack fantasma del papel', () => {
-  it('3 packs y 36 sueltas de 250 son 536 hojas, no 786', () => {
-    const cerrados = packsAGuardar(3, 36);
-    expect(totalVariedad({ unidades: cerrados, restante: 36 }, 250)).toBe(536);
+describe('la carga literal del formulario', () => {
+  it('2 packs cerrados y 36 sueltas de 250 son 536 hojas, tal cual se tipea', () => {
+    expect(totalVariedad({ unidades: 2, restante: 36 }, 250)).toBe(536);
   });
-  it('al vender una hoja el formulario sigue mostrando 3 packs', () => {
+  it('al vender una hoja quedan 2 packs cerrados y 35 sueltas', () => {
     const r = repartirTotal(535, 250);
-    expect(packsAMostrar(r.unidades, r.restante)).toBe(3);
+    expect(r.unidades).toBe(2);
+    expect(r.restante).toBe(35);
   });
   it('solo los productos migrados llevan la marca', () => {
     expect(guardaCerrados({ conjunto_packs_cerrados: true })).toBe(true);

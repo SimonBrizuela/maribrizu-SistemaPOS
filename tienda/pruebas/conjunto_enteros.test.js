@@ -13,7 +13,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  repartirTotal, descontarDeTotal, packsAGuardar, packsAMostrar, totalVariedad,
+  repartirTotal, descontarDeTotal, totalVariedad,
 } from '../../webapp/src/conjunto.js';
 
 // Presentaciones reales del catalogo: 50 es la caja de boligrafos donde
@@ -119,25 +119,7 @@ describe('los valores rotos que quedaron en el catalogo', () => {
   });
 });
 
-describe('lo que tipea el personal tampoco queda fraccionario', () => {
-  it('packsAGuardar con enteros devuelve enteros', () => {
-    for (let vistos = 0; vistos < 30; vistos++) {
-      for (const sueltos of [0, 1, 7, 49]) {
-        expect(esEntero(packsAGuardar(vistos, sueltos))).toBe(true);
-      }
-    }
-  });
-
-  it('packsAMostrar con enteros devuelve enteros', () => {
-    for (let cerrados = 0; cerrados < 30; cerrados++) {
-      for (const sueltos of [0, 1, 7, 49]) {
-        expect(esEntero(packsAMostrar(cerrados, sueltos))).toBe(true);
-      }
-    }
-  });
-
-  it('packsAGuardar nunca es negativo', () => {
-    expect(packsAGuardar(0, 36)).toBe(0);
-    expect(packsAGuardar(-5, 36)).toBe(0);
-  });
-});
+// La traducción del estante (`packsAGuardar` / `packsAMostrar`) se retiró del
+// panel el 31-08: lo tipeado es literal. Su invariante de enteros sigue
+// cubierto del lado Python en `test_conjunto_enteros.py`, donde las funciones
+// quedaron para la migración histórica.

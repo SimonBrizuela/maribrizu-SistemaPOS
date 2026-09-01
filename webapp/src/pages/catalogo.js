@@ -8,7 +8,7 @@ import { ensureCollections, onStoreChange } from '../store.js';
 import { initCatalogoHistory, fieldLabel } from '../catalogo_history.js';
 import { registrarMovimiento, movimientosDe, MOTIVOS } from '../stock_ledger.js';
 import { avisarStockALaTienda, reflejarSiPublicado } from '../tienda_espejo.js';
-import { packsAGuardar, packsAMostrar, guardaCerrados, formularioIncluyeAbierto, packsCerradosTipeados, camposStockRapido, num as numConj } from '../conjunto.js';
+import { camposStockRapido, num as numConj } from '../conjunto.js';
 import {
   recomputarResumenInventario, resumenEstaVencido, computarResumen,
   sugerirCantidad, valorizarStock, validarInventario,
@@ -2628,8 +2628,8 @@ export async function renderCatalogo(container, db) {
                 </select>
               </div>
               <div>
-                <label id="lbl_titulo_unidades" style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:0.5px;display:block;margin-bottom:4px">ROLLOS ENTEROS</label>
-                <input id="ed_conj_unidades" type="number" min="0" step="1" value="${prod.conjunto_unidades == null ? '' : (guardaCerrados(prod) ? packsAMostrar(prod.conjunto_unidades, prod.conjunto_restante) : prod.conjunto_unidades)}" placeholder="Ej: 5" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
+                <label id="lbl_titulo_unidades" style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:0.5px;display:block;margin-bottom:4px">ROLLOS ENTEROS <span style="font-weight:500">(sin contar el abierto)</span></label>
+                <input id="ed_conj_unidades" type="number" min="0" step="1" value="${prod.conjunto_unidades ?? ''}" placeholder="Ej: 5" style="width:100%;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
               </div>
               <div>
                 <label id="lbl_titulo_contenido" style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:0.5px;display:block;margin-bottom:4px">METROS POR ROLLO</label>
@@ -2977,8 +2977,9 @@ export async function renderCatalogo(container, db) {
       const enteros = gen === 'f' ? 'ENTERAS' : 'ENTEROS';
       const abierto = gen === 'f' ? 'ABIERTA' : 'ABIERTO';
       const sueltos = gen === 'f' ? 'SUELTAS' : 'SUELTOS';
+      const elAbierto = gen === 'f' ? 'la abierta' : 'el abierto';
       // Labels del bloque de inputs ("CAJAS ENTERAS", "UNIDADES POR CAJA", etc.)
-      lblTitU.textContent  = `${pl} ${enteros}`;
+      lblTitU.innerHTML    = `${pl} ${enteros} <span style="font-weight:500">(sin contar ${elAbierto})</span>`;
       lblTitC.textContent  = `${um.toUpperCase()} POR ${sg}`;
       lblTitR.innerHTML    = `${um.toUpperCase()} ${sueltos} EN ${sg} ${abierto} <span style="color:var(--text-muted);font-weight:500">(opcional)</span>`;
       lblTitPU.innerHTML   = `PRECIO POR ${umSg.toUpperCase()} <span style="color:var(--text-muted);font-weight:500">(auto)</span>`;
@@ -3005,10 +3006,6 @@ export async function renderCatalogo(container, db) {
         variedadesUI = [];
       }
       const hayVariedades = variedadesUI.length > 0;
-      // En productos viejos (sin la marca `conjunto_packs_cerrados`) los inputs
-      // muestran los cerrados tal cual vende el POS: restar el pack abierto acá
-      // mostraba una caja menos de la que hay (caso ALFILER ERIZO: 64 vs 112).
-      const tipeadoConAbierto = formularioIncluyeAbierto(prod, esNuevo);
 
       if (hayVariedades) {
         let total = 0;
@@ -3016,7 +3013,7 @@ export async function renderCatalogo(container, db) {
           const vu = Number(v.unidades) || 0;
           const vr = Number(v.restante) || 0;
           const vc = (Number(v.contenido) > 0) ? Number(v.contenido) : c;
-          const cerr = packsCerradosTipeados(vu, vr, tipeadoConAbierto);
+          const cerr = Math.max(0, vu);
           const t = cerr * vc + vr;
           total += t;
           return { nombre: v.color, cerr, vc, vr, t };
@@ -3030,7 +3027,7 @@ export async function renderCatalogo(container, db) {
           `<div style="font-size:18px;font-weight:800;color:var(--text-strong)">${total.toLocaleString('es-AR')} ${um}</div>` +
           (detalleHtml ? `<div style="margin-top:6px;display:flex;flex-direction:column;gap:2px">${detalleHtml}</div>` : '');
       } else if (u > 0 && c > 0) {
-        const cerrados = packsCerradosTipeados(u, r, tipeadoConAbierto);
+        const cerrados = Math.max(0, u);
         const totalCerrados = cerrados * c;
         const total = totalCerrados + r;
         const detalleR = r > 0 ? ` + ${r} ${um} ${sueltos.toLowerCase()} en ${sg.toLowerCase()} ${abierto.toLowerCase()}` : '';
@@ -4170,9 +4167,7 @@ export async function renderCatalogo(container, db) {
       }
       _addColorRow(
         c && c.color ? c.color : '',
-        // Guardados como packs cerrados: se muestran con el abierto, como los
-        // cuenta el personal. Los viejos siguen mostrando lo que tienen.
-        c && c.unidades != null ? (guardaCerrados(prod) ? packsAMostrar(c.unidades, c.restante) : c.unidades) : '',
+        c && c.unidades != null ? c.unidades : '',
         c && c.restante != null ? c.restante : '',
         c && c.precio != null ? c.precio : '',
         c && c.contenido != null ? c.contenido : '',
@@ -4476,29 +4471,20 @@ export async function renderCatalogo(container, db) {
           }
         }
 
-        // Lo que tipea el personal son los packs que ve en el estante, incluido
-        // el abierto, y aparte los sueltos. Se guardan packs CERRADOS: con
-        // sueltos, uno de los packs vistos es el abierto y se descuenta. Hasta
-        // el 22-08 se guardaban todos como cerrados y cada papel quedaba con un
-        // pack fantasma. Ver webapp/src/conjunto.js.
-        //
-        // Los productos viejos (sin `conjunto_packs_cerrados`) siguen con la
-        // lectura anterior hasta que los migre scripts/corregir_pack_abierto.py:
-        // convertirlos acá a ciegas le sacaría un pack a los que el POS ya dejó
-        // en cerrados.
-        const convertirPacks = formularioIncluyeAbierto(prod, esNuevo);
+        // Lo tipeado es LITERAL (regla del 31-08): `unidades` son los packs
+        // cerrados tal cual, y los sueltos van aparte — el abierto no se cuenta
+        // como pack. La resta automática del abierto (regla del estante, vigente
+        // del 22-08 al 31-08) se retiró a pedido del dueño: lo que se carga es
+        // lo que queda guardado, sin traducciones. Los labels del formulario lo
+        // aclaran ("sin contar el abierto"). Ver webapp/src/conjunto.js.
         let cU, cR;
         if (tieneColores) {
-          if (convertirPacks) {
-            coloresArr.forEach(c => { c.unidades = packsAGuardar(c.unidades, c.restante); });
-          }
           cU = coloresArr.reduce((a, c) => a + (c.unidades || 0), 0);
           cR = coloresArr.reduce((a, c) => a + (c.restante || 0), 0);
         } else {
-          const packsVistos = parseFloat(overlay.querySelector('#ed_conj_unidades').value) || 0;
           const cRraw = overlay.querySelector('#ed_conj_restante').value.trim();
           cR = cRraw === '' ? null : (parseFloat(cRraw) || 0);
-          cU = convertirPacks ? packsAGuardar(packsVistos, cR || 0) : packsVistos;
+          cU = Math.max(0, parseFloat(overlay.querySelector('#ed_conj_unidades').value) || 0);
         }
 
         // Total = packs cerrados × contenido + unidades sueltas.
@@ -4526,7 +4512,7 @@ export async function renderCatalogo(container, db) {
 
         conjuntoFields = {
           es_conjunto:           true,
-          ...(convertirPacks ? { conjunto_packs_cerrados: true } : {}),
+          conjunto_packs_cerrados: true,
           conjunto_tipo:         cTipo,
           conjunto_unidad_medida: cUM,
           conjunto_unidades:     cU,
@@ -6611,9 +6597,6 @@ export async function renderCatalogo(container, db) {
       const desglose = _variedadesDesgloseInv(p);
       const globalCont = Number(p.conjunto_contenido || 0);
       const tipoLabel = (p.conjunto_tipo || 'pack');
-      // Migrado a packs cerrados: se muestran y se leen con el abierto, como
-      // los cuenta el personal (ver webapp/src/conjunto.js).
-      const cerradosGuardados = guardaCerrados(p);
 
       overlay.innerHTML = `
         <div style="background:var(--surface);border-radius:18px;max-width:640px;width:100%;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 12px 48px rgba(0,0,0,0.22);overflow:hidden">
@@ -6629,7 +6612,7 @@ export async function renderCatalogo(container, db) {
           </div>
           <div style="padding:16px 22px;flex:1;overflow-y:auto">
             <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;background:var(--surface-2);border-radius:8px;padding:10px 12px;line-height:1.4">
-              Editá la cantidad actual de cada variedad. ${globalCont > 0 ? `Cada ${tipoLabel} = ${globalCont} ${u.pl}.` : ''} Los valores que dejes <b>reemplazan</b> al stock actual.
+              Editá la cantidad actual de cada variedad. ${globalCont > 0 ? `Cada ${tipoLabel} = ${globalCont} ${u.pl}.` : ''} Los ${tipoLabel}s van <b>sin contar el abierto</b>: lo del abierto va en sueltos. Los valores que dejes <b>reemplazan</b> al stock actual.
             </div>
             <div id="rellInv_lista" style="display:flex;flex-direction:column;gap:6px"></div>
             <button id="rellInv_add" type="button" style="margin-top:10px;background:none;border:1.5px dashed var(--border);color:var(--tint-purple-fg);padding:8px 12px;border-radius:8px;cursor:pointer;font-size:12px;font-weight:600;display:flex;align-items:center;gap:4px;font-family:inherit">
@@ -6653,8 +6636,7 @@ export async function renderCatalogo(container, db) {
         row.dataset.varRow = '1';
         row.dataset.esNueva = esNueva ? '1' : '0';
         const origSuelt = existente ? (Number(existente.r) || 0) : 0;
-        const origPacks = !existente ? 0
-          : (cerradosGuardados ? packsAMostrar(existente.u, origSuelt) : (Number(existente.u) || 0));
+        const origPacks = existente ? (Number(existente.u) || 0) : 0;
         row.dataset.origPacks = String(origPacks);
         row.dataset.origSueltos = String(origSuelt);
         row.style.cssText = 'display:grid;grid-template-columns:1fr 90px 90px;gap:8px;align-items:center;background:var(--surface);border:1.5px solid var(--border);border-radius:10px;padding:8px 10px';
@@ -6669,7 +6651,7 @@ export async function renderCatalogo(container, db) {
                  <div style="font-size:10px;color:var(--text-muted)">Actual: ${stkExistente}</div>`}
           </div>
           <div>
-            <div style="font-size:9px;font-weight:700;color:var(--text-muted);letter-spacing:0.5px;text-align:center">${tipoLabel.toUpperCase()}S</div>
+            <div style="font-size:9px;font-weight:700;color:var(--text-muted);letter-spacing:0.5px;text-align:center">${tipoLabel.toUpperCase()}S CERRADOS</div>
             <input class="r_packs" type="number" min="0" step="1" placeholder="0" value="${valPacks}" style="width:100%;padding:6px;border:1.5px solid var(--border);border-radius:6px;font-size:14px;text-align:center;box-sizing:border-box;font-family:inherit;font-weight:700" />
           </div>
           <div>
@@ -6693,7 +6675,7 @@ export async function renderCatalogo(container, db) {
           if (packs !== oP || sueltos !== oS) hayCambio = true;
           if (r.dataset.esNueva === '1' && (packs > 0 || sueltos > 0)) nuevas += 1;
           totP += packs; totS += sueltos;
-          totCerrados += cerradosGuardados ? packsAGuardar(packs, sueltos) : packs;
+          totCerrados += packs;
         });
         const totalUn = (totCerrados * (globalCont || 1)) + totS;
         if (!hayCambio) {
@@ -6733,7 +6715,7 @@ export async function renderCatalogo(container, db) {
               huboCambios = true;
               nuevasACrear.push({
                 color: nombre,
-                unidades: cerradosGuardados ? packsAGuardar(packs, sueltos) : packs,
+                unidades: packs,
                 restante: sueltos,
               });
             }
@@ -6745,7 +6727,7 @@ export async function renderCatalogo(container, db) {
           if (packs !== oP || sueltos !== oS) huboCambios = true;
           existentesActualizadas.push({
             ...orig,
-            unidades: cerradosGuardados ? packsAGuardar(packs, sueltos) : packs,
+            unidades: packs,
             restante: sueltos,
           });
         });
@@ -6777,6 +6759,10 @@ export async function renderCatalogo(container, db) {
             // tienda leen el total, pero un número viejo acá confunde al que mira.
             conjunto_unidades: nuevoConjunto.reduce((acc, c) => acc + (Number(c.unidades) || 0), 0),
             conjunto_restante: nuevoConjunto.reduce((acc, c) => acc + (Number(c.restante) || 0), 0),
+            conjunto_packs_cerrados: true,
+            // El stock plano acompaña al total del conjunto, como en la ficha:
+            // dejarlo atrás hacía dudar de los dos números.
+            stock: Math.max(0, Math.round(totalNuevo)),
             ultima_actualizacion: serverTimestamp(),
           });
           registrarMovimiento(db, {
@@ -6799,6 +6785,7 @@ export async function renderCatalogo(container, db) {
           if (idx2 !== -1) {
             allProductos[idx2].conjunto_colores = nuevoConjunto;
             allProductos[idx2].conjunto_total = Math.round(totalNuevo);
+            allProductos[idx2].stock = Math.max(0, Math.round(totalNuevo));
           }
           hist.recordUpdate(_docId, _before, _after, { label: `Variantes de ${p.nombre || p.name || _docId}` });
           cerrar();

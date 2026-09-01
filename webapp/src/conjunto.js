@@ -11,13 +11,15 @@
  * abierto. Cuando se abre un pack baja de `unidades` y su contenido pasa a
  * `restante`, así que nunca se cuentan dos veces.
  *
- * Lo que carga el personal es otra cosa: cuenta los packs que ve en el estante,
- * incluido el abierto, y aparte los sueltos. "3 packs y 36 sueltos" quiere decir
- * 2 cerrados + 1 abierto con 36. Hasta el 2026-08-22 el formulario guardaba los
- * 3 como cerrados y cada papel quedaba con un pack fantasma: la góndola se
- * vaciaba mientras el sistema todavía mostraba 250 hojas. `packsAGuardar` y
- * `packsAMostrar` hacen la traducción entre las dos lecturas; el producto lleva
- * `conjunto_packs_cerrados: true` cuando ya está guardado con la regla nueva.
+ * Lo que se tipea en el formulario es LITERAL desde el 2026-08-31: packs
+ * CERRADOS por un lado y sueltos por el otro; el abierto no se cuenta como
+ * pack. Entre el 22-08 y el 31-08 rigió la "regla del estante" (lo tipeado
+ * incluía el abierto y el guardado le restaba uno); se retiró a pedido del
+ * dueño y la traducción histórica vive solo en `pos_system/models/conjunto.py`
+ * (`packs_a_guardar` / `packs_a_mostrar`), que la migración
+ * `scripts/corregir_pack_abierto.py` usó para dejar todo el catálogo en
+ * cerrados el 31-08. `conjunto_packs_cerrados: true` marca los docs cuyo
+ * `unidades` ya son packs cerrados.
  */
 
 export function num(v, porDefecto = 0) {
@@ -73,53 +75,9 @@ export function descontarDeTotal(total, delta, contenido) {
   return repartirTotal(Math.max(0, num(total) - num(delta)), contenido);
 }
 
-/**
- * Packs cerrados a guardar a partir de lo que tipeó el personal: los packs que
- * ve (incluido el abierto) y los sueltos. Con sueltos, uno de esos packs es el
- * abierto y no se cuenta entero.
- */
-export function packsAGuardar(packsVistos, sueltos) {
-  const p = Math.max(0, num(packsVistos));
-  return num(sueltos) > 0 ? Math.max(0, p - 1) : p;
-}
-
-/**
- * Packs a mostrar en el formulario a partir de lo guardado: los cerrados más
- * el abierto, si hay sueltos. Es la inversa de `packsAGuardar` siempre que
- * haya al menos un pack.
- */
-export function packsAMostrar(cerrados, sueltos) {
-  const c = Math.max(0, num(cerrados));
-  return num(sueltos) > 0 ? c + 1 : c;
-}
-
 /** Si el producto ya está guardado con `unidades` = packs cerrados. */
 export function guardaCerrados(producto) {
   return producto?.conjunto_packs_cerrados === true;
-}
-
-/**
- * Si lo que muestra y tipea el formulario incluye el pack abierto (regla
- * nueva). En productos nuevos o ya migrados sí; en los viejos los inputs
- * muestran `unidades` tal cual está guardado, que es lo que el POS vende como
- * cerrados — restarles uno en pantalla muestra un pack menos del que hay.
- * Misma condición que decide `convertirPacks` al guardar.
- */
-export function formularioIncluyeAbierto(producto, esNuevo) {
-  if (esNuevo) return true;
-  const eraConjunto = producto?.es_conjunto === true || producto?.es_conjunto === 1;
-  return !eraConjunto || guardaCerrados(producto);
-}
-
-/**
- * Packs cerrados a partir de lo tipeado en el formulario, respetando la
- * convención del producto: con la regla nueva lo tipeado incluye el abierto y
- * se descuenta; con la vieja ya son los cerrados y van tal cual.
- */
-export function packsCerradosTipeados(packsTipeados, sueltos, incluyeAbierto) {
-  return incluyeAbierto
-    ? packsAGuardar(packsTipeados, sueltos)
-    : Math.max(0, num(packsTipeados));
 }
 
 /**

@@ -143,18 +143,18 @@ def descontar_de_total(total, delta, contenido):
 
 def packs_a_guardar(packs_vistos, sueltos):
     """
-    Packs cerrados a guardar a partir de lo que carga el personal.
-
-    En el estante se cuentan los packs que se ven, incluido el abierto, y aparte
-    los sueltos: "3 packs y 36 sueltos" son 2 cerrados mas uno abierto con 36.
-    Con sueltos, uno de los packs vistos es el abierto y no se cuenta entero.
-    El panel hace la misma traduccion en `webapp/src/conjunto.js`.
+    Traduccion HISTORICA de la "regla del estante" (vigente 22-08 a 31-08):
+    los packs tipeados incluian el abierto, y con sueltos uno de ellos no se
+    contaba entero ("3 packs y 36 sueltos" eran 2 cerrados mas uno abierto
+    con 36). Desde el 31-08 el panel guarda literal y ya no traduce; esto
+    queda solo para `scripts/corregir_pack_abierto.py`, la migracion que
+    dejo el catalogo entero en packs cerrados.
     """
     p = max(0.0, _num(packs_vistos))
     return max(0.0, p - 1) if _num(sueltos) > 0 else p
 
 
 def packs_a_mostrar(cerrados, sueltos):
-    """Inversa de `packs_a_guardar`: los cerrados mas el abierto, si hay sueltos."""
+    """Inversa de `packs_a_guardar`, historica igual que ella."""
     c = max(0.0, _num(cerrados))
     return c + 1 if _num(sueltos) > 0 else c
