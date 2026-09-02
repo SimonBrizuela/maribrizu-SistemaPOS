@@ -29,6 +29,10 @@ import { getFechaInicioDate } from './config.js';
 // Listeners activos (uno por colección). Idempotencia: si ya está arrancado,
 // ensureCollections no duplica.
 const _unsubs = new Map();
+// Reintentos por colección de un listener que falló, y una época que sube en
+// cada teardown para que un reintento programado no reviva listeners viejos.
+const _reintentos = new Map();
+let _epoca = 0;
 
 // db handle guardado en prewarmStore. ensureCollections / prewarmRest lo usan.
 let _db = null;
@@ -329,9 +333,26 @@ async function _startListener(spec) {
       // son el primer pintado y la página ya se renderiza con ellos — EXCEPTO
       // si la página pintó antes con datos hidratados de la sesión anterior:
       // ahí el primer snapshot (fromCache o no) es más fresco → re-render.
+      if (!snap.metadata.fromCache) _reintentos.delete(spec.name);
       if (!snap.metadata.fromCache || veniaHidratado) _notify(spec.name);
     },
-    (err) => console.warn('[store] listener error en', spec.name, err)
+    (err) => {
+      // Un listener que falla no vuelve a avisar nunca: la pestaña seguía
+      // mostrando el catálogo de cuando se abrió, sin saberlo. Se vuelve a
+      // enganchar con espera creciente (5 s, 10 s, 20 s… tope 2 min) mientras
+      // el store siga vivo (teardownStore lo apaga).
+      console.warn('[store] listener error en', spec.name, err);
+      if (_unsubs.get(spec.name) !== unsub) return;
+      _unsubs.delete(spec.name);
+      const epoca = _epoca;
+      const intento = (_reintentos.get(spec.name) || 0) + 1;
+      _reintentos.set(spec.name, intento);
+      const espera = Math.min(5000 * 2 ** (intento - 1), 120000);
+      console.warn(`[store] ${spec.name}: reintento ${intento} en ${Math.round(espera / 1000)} s`);
+      setTimeout(() => {
+        if (epoca === _epoca && _db && !_unsubs.has(spec.name)) _startListener(spec).catch(() => {});
+      }, espera);
+    }
   );
   _unsubs.set(spec.name, unsub);
 }
@@ -460,6 +481,8 @@ export function prewarmRest() {
  * Detiene todos los listeners. Para logout.
  */
 export function teardownStore() {
+  _epoca += 1;
+  _reintentos.clear();
   _unsubs.forEach(u => { try { u(); } catch (_) {} });
   _unsubs.clear();
 }
