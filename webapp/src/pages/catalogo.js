@@ -378,27 +378,40 @@ function parseCatalogoCSV(text) {
 }
 
 // ── Subir a Firebase en batches ───────────────────────────────────────────────
+// Devuelve los que NO se subieron porque su código ya era de otro producto en
+// la nube (la lista de "nuevos" se arma contra la memoria, que puede estar
+// vieja): un batch.set los habría pisado enteros.
 async function subirCatalogoFirebase(db, productos, onProgress) {
   const BATCH_SIZE = 400;
   let count = 0;
+  const salteados = [];
   for (let i = 0; i < productos.length; i += BATCH_SIZE) {
     const batch = writeBatch(db);
     const chunk = productos.slice(i, i + BATCH_SIZE);
     const idsSubidos = [];
     for (const p of chunk) {
       const id = p.codigo || slugify(p.nombre) || `prod-${i}-${count}`;
+      let existente = null;
+      try { existente = await productoEnNube(db, id); } catch (_) {}
+      if (existente) {
+        salteados.push({ codigo: id, nombre: p.nombre || '', existente: existente.nombre || '' });
+        continue;
+      }
       const ref = doc(collection(db, 'catalogo'), id);
       batch.set(ref, { ...p, doc_id: id });
       idsSubidos.push(id);
     }
-    await batch.commit();
-    // Si alguno de estos códigos ya tuvo lápida, el POS borraría el producto
-    // recién subido en cuanto lo baje.
-    await levantarLapidas(db, idsSubidos);
+    if (idsSubidos.length) {
+      await batch.commit();
+      // Si alguno de estos códigos ya tuvo lápida, el POS borraría el producto
+      // recién subido en cuanto lo baje.
+      await levantarLapidas(db, idsSubidos);
+    }
     count += chunk.length;
     if (onProgress) onProgress(count, productos.length);
   }
   _touchCatalogoMeta(db).catch(() => {});
+  return salteados;
 }
 
 // ── Limpia códigos: quita espacios internos y caracteres invisibles ───────────
@@ -455,6 +468,30 @@ function generarCodigosUnicos(productosExistentes, pendientesNuevos = []) {
   }
   const codigo = String(cand);
   return { codigo, cod_barra: codigo };
+}
+
+// El catálogo en memoria puede estar viejo: pestaña dormida, listener caído o
+// hidratada con la foto de la sesión anterior. El 01-09 tres altas seguidas
+// del panel reusaron los códigos 988066/67/68, que ya eran de tres productos
+// creados la noche anterior, y los pisaron enteros. Antes de crear se le
+// pregunta a la nube: devuelve el producto que ya tiene ese código, o null.
+async function productoEnNube(db, codigo) {
+  const c = limpiarCodigo(codigo);
+  if (!c) return null;
+  const snap = await getDoc(doc(db, 'catalogo', c));
+  return snap.exists() ? { doc_id: snap.id, ...snap.data() } : null;
+}
+
+// Código de 6 dígitos libre en memoria Y en la nube. Si el candidato ya está
+// tomado, lo suma al pool y vuelve a generar.
+async function generarCodigoLibreEnNube(db, productosExistentes, pendientesNuevos = []) {
+  const tomados = [];
+  for (let i = 0; i < 25; i++) {
+    const { codigo } = generarCodigosUnicos(productosExistentes, [...pendientesNuevos, ...tomados]);
+    if (!(await productoEnNube(db, codigo))) return { codigo, cod_barra: codigo };
+    tomados.push({ codigo, cod_barra: codigo });
+  }
+  throw new Error('No se encontró un código libre en la nube');
 }
 
 // ── Parser flexible de CSV de proveedor ───────────────────────────────────────
@@ -4342,13 +4379,26 @@ export async function renderCatalogo(container, db) {
     overlay.querySelector('#ed_cancelar').addEventListener('click', cerrar);
 
     // Botón Generar (sólo en modo crear). Llena código interno + barras con
-    // el mismo número de 6 dígitos, único contra todo el catálogo.
-    overlay.querySelector('#ed_gen_codes')?.addEventListener('click', () => {
-      const { codigo, cod_barra } = generarCodigosUnicos(allProductos);
+    // el mismo número de 6 dígitos, único contra todo el catálogo y contra la
+    // nube (la memoria puede estar vieja, ver productoEnNube). Se recuerda el
+    // último generado para distinguirlo de un código tipeado a mano al crear.
+    let _codigoAutogenerado = '';
+    overlay.querySelector('#ed_gen_codes')?.addEventListener('click', async () => {
+      const genBtn = overlay.querySelector('#ed_gen_codes');
+      if (genBtn) genBtn.disabled = true;
+      let par;
+      try {
+        par = await generarCodigoLibreEnNube(db, allProductos);
+      } catch (e) {
+        console.warn('Generar: sin respuesta de la nube, uso la memoria:', e?.message || e);
+        par = generarCodigosUnicos(allProductos);
+      }
+      if (genBtn) genBtn.disabled = false;
       const inpCod = overlay.querySelector('#ed_codigo');
       const inpBar = overlay.querySelector('#ed_barra');
-      if (inpCod) inpCod.value = codigo;
-      if (inpBar) inpBar.value = cod_barra;
+      if (inpCod) inpCod.value = par.codigo;
+      if (inpBar) inpBar.value = par.cod_barra;
+      _codigoAutogenerado = par.codigo;
     });
     // Cerrar al click fuera, pero sólo si el mousedown también fue en el fondo
     // (evita cierres accidentales al drag-select texto desde el modal hacia afuera).
@@ -4618,6 +4668,38 @@ export async function renderCatalogo(container, db) {
           );
           if (yaExiste) {
             alertDialog({ title: 'Código repetido', message: `Ya existe un producto con el código <b>"${_escHtml(nuevoCodigo)}"</b>. Tocá "Generar" para obtener uno nuevo.`, type: 'warning' });
+            btn.disabled = false; btn.innerHTML = _btnLabel; return;
+          }
+
+          // La memoria no alcanza: si la pestaña quedó con el catálogo viejo,
+          // setDoc pisa entero un producto que ya existe en la nube (pasó el
+          // 01-09 con tres altas seguidas). Se pregunta a Firestore y, si el
+          // código está tomado, no se crea nada. Un código generado se
+          // reemplaza solo; uno tipeado a mano es de un producto que ya está.
+          let enNube = null;
+          try {
+            enNube = await productoEnNube(db, nuevoCodigo);
+          } catch (e3) {
+            console.warn('No se pudo consultar la nube antes de crear:', e3?.message || e3);
+          }
+          if (enNube) {
+            let msg = `En la nube ya hay un producto con el código <b>"${_escHtml(nuevoCodigo)}"</b>: <b>${_escHtml(enNube.nombre || '')}</b>. No se creó nada.`;
+            if (nuevoCodigo === _codigoAutogenerado) {
+              try {
+                const libre = await generarCodigoLibreEnNube(db, [...allProductos, enNube]);
+                const inpCod = overlay.querySelector('#ed_codigo');
+                const inpBar = overlay.querySelector('#ed_barra');
+                if (inpCod) inpCod.value = libre.codigo;
+                if (inpBar) inpBar.value = libre.cod_barra;
+                _codigoAutogenerado = libre.codigo;
+                msg += ` Ya quedó cargado uno libre (<b>${_escHtml(libre.codigo)}</b>): tocá "Crear producto" de nuevo.`;
+              } catch (_) {
+                msg += ' Tocá "Generar" para obtener uno nuevo.';
+              }
+            } else {
+              msg += ' Buscalo en el catálogo y editalo desde su ficha.';
+            }
+            alertDialog({ title: 'Código repetido en la nube', message: msg, type: 'warning' });
             btn.disabled = false; btn.innerHTML = _btnLabel; return;
           }
 
@@ -7715,13 +7797,20 @@ export async function renderCatalogo(container, db) {
               poolPend.push(p);
             });
             const total = pendientes.nuevos.length;
-            await subirCatalogoFirebase(db, pendientes.nuevos, (done) => {
+            const salteados = await subirCatalogoFirebase(db, pendientes.nuevos, (done) => {
               btn.textContent = `Agregando ${done}/${total}...`;
             });
             invalidateCache('catalogo:all');
             await cargarDatos({ silent: true });
             renderStats();
-            if (applyMsg) applyMsg.innerHTML = `<div style="padding:10px;background:var(--tint-green-bg);border-radius:8px;color:var(--tint-green-fg)">${total} productos nuevos agregados al catálogo.</div>`;
+            const agregados = total - salteados.length;
+            let aviso = `<div style="padding:10px;background:var(--tint-green-bg);border-radius:8px;color:var(--tint-green-fg)">${agregados} productos nuevos agregados al catálogo.</div>`;
+            if (salteados.length) {
+              const lista = salteados.slice(0, 15).map(s =>
+                `<li><b>${_escHtml(s.codigo)}</b> ya es de <b>${_escHtml(s.existente)}</b> (no se subió ${_escHtml(s.nombre)})</li>`).join('');
+              aviso += `<div style="margin-top:8px;padding:10px;background:var(--tint-yellow-bg);border-radius:8px;color:var(--tint-yellow-fg)">${salteados.length} no se subieron porque su código ya está en la nube:<ul style="margin:6px 0 0 18px;padding:0">${lista}</ul></div>`;
+            }
+            if (applyMsg) applyMsg.innerHTML = aviso;
             btn.textContent = '✓ Hecho';
           } catch(err) {
             console.error('Error agregando productos:', err);
