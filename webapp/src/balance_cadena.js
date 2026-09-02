@@ -23,24 +23,56 @@ export function num(v) {
 }
 export function r2(v) { return Math.round(num(v) * 100) / 100; }
 
-/** Ingresos y compras de un día por medio (efectivo/mp/lapos + 'sin' para el medio vacío). */
+// ── Cambios entre cuentas ─────────────────────────────────────────────────────
+// Un cambio mueve plata de una cuenta a otra sin que entre ni salga del
+// negocio: le dieron 150.000 en efectivo y los devolvió por transferencia, o
+// sacó de Mercado Pago para tener cambio en el cajón. No es ingreso ni compra
+// —el total no se mueve— pero cada cuenta sí: `de` la paga y `a` la recibe.
+//   { de: 'mp', de_cuenta: 'MP JOSE', a: 'efectivo', a_cuenta: '', monto, nota }
+// (mismo par medio/cuenta que usan las compras).
+
+function _medioDeCambio(x, lado) {
+  const m = x?.[lado];
+  return m === 'efectivo' || m === 'mp' || m === 'lapos' ? m : 'sin';
+}
+
+/** Lo que cada medio pierde (`de`) y recibe (`a`) por los cambios de un día. */
+export function cambiosPorMedio(dia) {
+  const cam = { efectivo: 0, mp: 0, lapos: 0, sin: 0 };
+  (dia?.cambios || []).forEach(x => {
+    const v = num(x.monto);
+    if (!(v > 0)) return;
+    cam[_medioDeCambio(x, 'de')] -= v;
+    cam[_medioDeCambio(x, 'a')] += v;
+  });
+  return cam;
+}
+
+/** Ingresos, compras y cambios de un día por medio (efectivo/mp/lapos + 'sin' para el medio vacío). */
 export function diaPorMedio(dia) {
   const ing = { efectivo: 0, mp: 0, lapos: 0, sin: 0 };
   const com = { efectivo: 0, mp: 0, lapos: 0, sin: 0 };
   (dia?.ingresos || []).forEach(x => { const m = x.medio && ing[x.medio] != null ? x.medio : 'sin'; ing[m] += num(x.monto); });
   (dia?.compras || []).forEach(x => { const m = x.medio && com[x.medio] != null ? x.medio : 'sin'; com[m] += num(x.monto); });
-  return { ing, com };
+  return { ing, com, cam: cambiosPorMedio(dia) };
 }
 
-/** Neto de un día por medio (ingresos − compras). */
+/** Neto de un día por medio (ingresos − compras ± cambios entre cuentas). */
 export function netoDia(dia) {
-  const { ing, com } = diaPorMedio(dia);
-  return { efectivo: ing.efectivo - com.efectivo, mp: ing.mp - com.mp, lapos: ing.lapos - com.lapos, sin: ing.sin - com.sin };
+  const { ing, com, cam } = diaPorMedio(dia);
+  return {
+    efectivo: ing.efectivo - com.efectivo + cam.efectivo,
+    mp:       ing.mp - com.mp + cam.mp,
+    lapos:    ing.lapos - com.lapos + cam.lapos,
+    sin:      ing.sin - com.sin + cam.sin,
+  };
 }
 
-/** Un día cuenta como cargado si tiene algún ingreso con monto o alguna compra. */
+/** Un día cuenta como cargado si tiene algún ingreso con monto, alguna compra o un cambio con monto. */
 export function diaCargado(dia) {
-  return !!(dia && ((dia.ingresos || []).some(x => num(x.monto) > 0) || (dia.compras || []).length));
+  return !!(dia && ((dia.ingresos || []).some(x => num(x.monto) > 0)
+    || (dia.compras || []).length
+    || (dia.cambios || []).some(x => num(x.monto) > 0)));
 }
 
 /** Si hay algún medio tipeado (null/undefined en los tres = nada). */
@@ -188,6 +220,14 @@ export function cuentaDeCompra(x) {
   return 'sin';
 }
 
+/** Clave de cuenta de un lado ('de' | 'a') de un cambio: el medio, y para MP la cuenta. */
+export function cuentaDeCambio(x, lado) {
+  const m = x?.[lado];
+  if (m === 'mp') return 'mp:' + normCuenta(x[lado + '_cuenta']);
+  if (m === 'efectivo' || m === 'lapos') return m;
+  return 'sin';
+}
+
 export function etiquetaCuenta(clave) {
   if (clave === 'efectivo') return 'Efectivo';
   if (clave === 'lapos') return 'Lapos';
@@ -228,8 +268,8 @@ export function cuentasMpDe(docs) {
 export function cuentasDelPeriodo({ docs, desde, hasta }) {
   const cuentas = new Map();
   const porMedio = {
-    efectivo: { ingresos: 0, egresos: 0 }, mp: { ingresos: 0, egresos: 0 },
-    lapos: { ingresos: 0, egresos: 0 }, sin: { ingresos: 0, egresos: 0 },
+    efectivo: { ingresos: 0, egresos: 0, cambios: 0 }, mp: { ingresos: 0, egresos: 0, cambios: 0 },
+    lapos: { ingresos: 0, egresos: 0, cambios: 0 }, sin: { ingresos: 0, egresos: 0, cambios: 0 },
   };
   let dias = 0;
 
@@ -237,7 +277,7 @@ export function cuentasDelPeriodo({ docs, desde, hasta }) {
     if (!cuentas.has(clave)) {
       cuentas.set(clave, {
         clave, label: etiquetaCuenta(clave), medio: medioDeCuenta(clave),
-        ingresos: 0, egresos: 0, neto: 0,
+        ingresos: 0, egresos: 0, cambios: 0, neto: 0,
         _mot: new Map(), _rub: new Map(), _prov: new Map(), movimientos: [],
       });
     }
@@ -269,6 +309,18 @@ export function cuentasDelPeriodo({ docs, desde, hasta }) {
         suma(c._prov, String(x.proveedor || '').trim() || '(sin proveedor)', v);
         c.movimientos.push({ iso, tipo: 'egreso', proveedor: String(x.proveedor || ''), rubro: String(x.rubro || ''), monto: v });
       });
+      // Un cambio es un movimiento en las DOS cuentas: sale de una y entra en
+      // la otra. No suma ingresos ni egresos; va aparte, en `cambios`.
+      (dd[d].cambios || []).forEach(x => {
+        const v = num(x.monto); if (!(v > 0)) return;
+        const sale = get(cuentaDeCambio(x, 'de'));
+        const entra = get(cuentaDeCambio(x, 'a'));
+        const nota = String(x.nota || '');
+        sale.cambios -= v; porMedio[sale.medio].cambios -= v;
+        entra.cambios += v; porMedio[entra.medio].cambios += v;
+        sale.movimientos.push({ iso, tipo: 'cambio', monto: -v, contra: entra.label, nota });
+        entra.movimientos.push({ iso, tipo: 'cambio', monto: v, contra: sale.label, nota });
+      });
     });
   });
 
@@ -278,7 +330,8 @@ export function cuentasDelPeriodo({ docs, desde, hasta }) {
   const orden = { efectivo: 0, mp: 1, lapos: 2, sin: 3 };
   const out = [...cuentas.values()].map(c => ({
     clave: c.clave, label: c.label, medio: c.medio,
-    ingresos: r2(c.ingresos), egresos: r2(c.egresos), neto: r2(c.ingresos - c.egresos),
+    ingresos: r2(c.ingresos), egresos: r2(c.egresos), cambios: r2(c.cambios),
+    neto: r2(c.ingresos - c.egresos + c.cambios),
     ingPorMotivo: lista(c._mot, 'motivo'),
     egrPorRubro: lista(c._rub, 'rubro'),
     egrPorProveedor: lista(c._prov, 'proveedor'),
@@ -288,7 +341,8 @@ export function cuentasDelPeriodo({ docs, desde, hasta }) {
   Object.keys(porMedio).forEach(k => {
     porMedio[k].ingresos = r2(porMedio[k].ingresos);
     porMedio[k].egresos = r2(porMedio[k].egresos);
-    porMedio[k].neto = r2(porMedio[k].ingresos - porMedio[k].egresos);
+    porMedio[k].cambios = r2(porMedio[k].cambios);
+    porMedio[k].neto = r2(porMedio[k].ingresos - porMedio[k].egresos + porMedio[k].cambios);
   });
   return { cuentas: out, porMedio, dias };
 }
@@ -317,11 +371,11 @@ export function mpPorCuentaAlDia({ baseYm, baseMp = {}, docs, hoy }) {
   const r = cuentasDelPeriodo({ docs, desde, hasta: hoy });
   const filas = new Map();
   Object.entries(baseMp || {}).forEach(([nombre, v]) => {
-    if (normCuenta(nombre)) filas.set('mp:' + normCuenta(nombre), { base: num(v), ingresos: 0, egresos: 0 });
+    if (normCuenta(nombre)) filas.set('mp:' + normCuenta(nombre), { base: num(v), ingresos: 0, egresos: 0, cambios: 0 });
   });
   r.cuentas.filter(c => c.medio === 'mp').forEach(c => {
-    const f = filas.get(c.clave) || { base: 0, ingresos: 0, egresos: 0 };
-    f.ingresos = c.ingresos; f.egresos = c.egresos;
+    const f = filas.get(c.clave) || { base: 0, ingresos: 0, egresos: 0, cambios: 0 };
+    f.ingresos = c.ingresos; f.egresos = c.egresos; f.cambios = c.cambios;
     filas.set(c.clave, f);
   });
   const cuentas = [...filas.entries()].map(([clave, f]) => ({
@@ -330,7 +384,8 @@ export function mpPorCuentaAlDia({ baseYm, baseMp = {}, docs, hoy }) {
     base: r2(f.base),
     ingresos: r2(f.ingresos),
     egresos: r2(f.egresos),
-    saldo: r2(f.base + f.ingresos - f.egresos),
+    cambios: r2(f.cambios),
+    saldo: r2(f.base + f.ingresos - f.egresos + f.cambios),
   })).sort((a, b) => b.saldo - a.saldo);
   const total = r2(cuentas.reduce((s, c) => s + c.saldo, 0));
   return { cuentas, total, desde: baseYm ? desde : null };

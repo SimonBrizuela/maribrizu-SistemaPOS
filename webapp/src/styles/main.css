@@ -4041,6 +4041,24 @@ html[data-theme="dark"] { --bal-green: #3f7d63; --bal-green-soft: rgba(63,125,99
 }
 .bal-mov-ing { grid-template-columns: 1fr 120px 130px 30px; }
 .bal-mov-com { grid-template-columns: 1.2fr 1fr 120px 130px 30px; }
+/* Cambio entre cuentas: monto · sale de · flecha · entra a · nota · quitar */
+.bal-mov-cam { grid-template-columns: 120px 1fr 34px 1fr 1.1fr 30px; }
+.bal-cam-lado { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.bal-cam-lado small { font-size: 10px; text-transform: uppercase; letter-spacing: .4px; color: var(--text-muted); font-weight: 700; }
+.bal-mov-swap {
+  width: 30px; height: 30px; border-radius: 50%; border: 1px solid var(--border); padding: 0;
+  background: var(--surface); color: var(--bal-green); cursor: pointer; justify-self: center; align-self: end; margin-bottom: 2px;
+  display: inline-flex; align-items: center; justify-content: center; transition: background .15s, border-color .15s;
+}
+.bal-mov-swap:hover { border-color: var(--bal-green); background: var(--bal-green-soft); }
+.bal-mov-swap .material-icons { font-size: 18px !important; }
+.bal-dia-cambios { margin-top: 16px; }
+.bal-dia-cambios .bal-card-title .bal-cta-sub { margin-left: 4px; }
+.bal-cta-card small .cam, .bal-cta-det-mov .cam { color: var(--tint-blue-fg); font-weight: 600; }
+@media (max-width: 760px) {
+  .bal-mov-cam { grid-template-columns: 100px 1fr 34px 1fr 30px; }
+  .bal-mov-cam [data-f="nota"] { grid-column: 1 / -1; }
+}
 .bal-mov-row:last-of-type { border-bottom: none; }
 .bal-mov-row input, .bal-mov-row select {
   padding: 7px 10px; border: 1.5px solid var(--border); border-radius: 7px;

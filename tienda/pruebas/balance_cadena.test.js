@@ -152,7 +152,7 @@ describe('la plata por cuenta', () => {
     expect(ef.movimientos[0].iso).toBe('2026-08-02');   // del más nuevo al más viejo
   });
   it('los totales por medio juntan todas las cuentas MP', () => {
-    expect(r.porMedio.mp).toEqual({ ingresos: 1300, egresos: 150, neto: 1150 });
+    expect(r.porMedio.mp).toEqual({ ingresos: 1300, egresos: 150, cambios: 0, neto: 1150 });
   });
   it('las cuentas MP conocidas salen de los ingresos', () => {
     expect(cuentasMpDe(docs)).toEqual(['MP AGUSTIN', 'MP JOSE']);
@@ -181,7 +181,7 @@ describe('la plata de cada Mercado Pago hoy (mpPorCuentaAlDia)', () => {
     const r = mpPorCuentaAlDia({ baseYm, baseMp, docs, hoy: '2026-09-02' });
     const por = Object.fromEntries(r.cuentas.map(c => [c.clave, c]));
     expect(r.desde).toBe('2026-09-01');
-    expect(por['mp:MP JOSE']).toEqual({ clave: 'mp:MP JOSE', nombre: 'MP JOSE', base: 622594, ingresos: 1100, egresos: 200, saldo: 623494 });
+    expect(por['mp:MP JOSE']).toEqual({ clave: 'mp:MP JOSE', nombre: 'MP JOSE', base: 622594, ingresos: 1100, egresos: 200, cambios: 0, saldo: 623494 });
     expect(por['mp:MP AGUSTIN'].saldo).toBe(357533);
     // La compra MP sin cuenta va a su propio renglón, no desaparece.
     expect(por['mp:'].saldo).toBe(-50);
@@ -200,5 +200,61 @@ describe('la plata de cada Mercado Pago hoy (mpPorCuentaAlDia)', () => {
     const por = Object.fromEntries(r.cuentas.map(c => [c.clave, c]));
     expect(r.desde).toBe(null);
     expect(por['mp:MP JOSE'].saldo).toBe(99999 + 1100 - 200);
+  });
+});
+
+describe('cambios entre cuentas', () => {
+  // Le dieron 150.000 en efectivo y los devolvió por transferencia desde
+  // MP JOSE: el efectivo sube, MP JOSE baja y el total queda igual.
+  const cambio = (de, a, monto, extra = {}) => ({ de, a, monto, ...extra });
+  const conCambio = {
+    ingresos: [ing('Caja hoy', 'efectivo', 100000), ing('MP JOSE', 'mp', 40000)],
+    compras: [com('Luz', 'Gastos fijos', 'mp', 10000, 'MP JOSE')],
+    cambios: [cambio('mp', 'efectivo', 150000, { de_cuenta: 'MP JOSE', nota: 'cambio a Pedro' })],
+  };
+
+  it('mueve la plata de un medio al otro sin tocar el total', () => {
+    const n = netoDia(conCambio);
+    expect(n).toEqual({ efectivo: 250000, mp: -120000, lapos: 0, sin: 0 });
+    expect(n.efectivo + n.mp + n.lapos + n.sin).toBe(130000);   // 140.000 − 10.000
+  });
+  it('un día con solo un cambio cuenta como cargado; con monto cero, no', () => {
+    expect(diaCargado({ ingresos: [], compras: [], cambios: [cambio('efectivo', 'lapos', 500)] })).toBe(true);
+    expect(diaCargado({ ingresos: [], compras: [], cambios: [cambio('efectivo', 'lapos', 0)] })).toBe(false);
+  });
+  it('en la cadena el cierre del mes lo refleja y el total no cambia', () => {
+    const docs = { '2026-09': { apertura: { efectivo: 1000, mp: 5000, lapos: 0 }, dias: { '02': conCambio } } };
+    const c = cadenaMeses({ meses: ['2026-09'], docs, hoy: '2026-09-02' })['2026-09'];
+    expect(c.cierre).toEqual({ efectivo: 251000, mp: -115000, lapos: 0, sin: 0 });
+  });
+  it('por cuenta: sale de MP JOSE y entra en Efectivo, sin sumar ingresos ni egresos', () => {
+    const r = cuentasDelPeriodo({ docs: { '2026-09': { dias: { '02': conCambio } } }, desde: '2026-09-01', hasta: '2026-09-30' });
+    const ef = r.cuentas.find(c => c.clave === 'efectivo');
+    const jose = r.cuentas.find(c => c.clave === 'mp:MP JOSE');
+    expect(ef).toMatchObject({ ingresos: 100000, egresos: 0, cambios: 150000, neto: 250000 });
+    expect(jose).toMatchObject({ ingresos: 40000, egresos: 10000, cambios: -150000, neto: -120000 });
+    expect(r.porMedio.efectivo).toEqual({ ingresos: 100000, egresos: 0, cambios: 150000, neto: 250000 });
+    expect(r.porMedio.mp).toEqual({ ingresos: 40000, egresos: 10000, cambios: -150000, neto: -120000 });
+    // Cada cuenta ve el movimiento con la otra punta y la nota.
+    expect(ef.movimientos.find(m => m.tipo === 'cambio')).toMatchObject({ iso: '2026-09-02', monto: 150000, contra: 'MP JOSE', nota: 'cambio a Pedro' });
+    expect(jose.movimientos.find(m => m.tipo === 'cambio')).toMatchObject({ monto: -150000, contra: 'Efectivo' });
+  });
+  it('la caja por cuenta de Mercado Pago descuenta lo que salió por cambio', () => {
+    const det = mpPorCuentaAlDia({
+      baseYm: '2026-08', baseMp: { 'MP JOSE': 622594, 'MP AGUSTIN': 357033 },
+      docs: { '2026-09': { dias: { '02': conCambio } } }, hoy: '2026-09-02',
+    });
+    const jose = det.cuentas.find(c => c.clave === 'mp:MP JOSE');
+    expect(jose).toMatchObject({ base: 622594, ingresos: 40000, egresos: 10000, cambios: -150000, saldo: 502594 });
+    expect(det.cuentas.find(c => c.clave === 'mp:MP AGUSTIN').saldo).toBe(357033);
+    expect(det.total).toBe(859627);
+  });
+  it('un cambio entre dos cuentas de Mercado Pago no mueve el medio, solo las cuentas', () => {
+    const d = { ingresos: [], compras: [], cambios: [cambio('mp', 'mp', 20000, { de_cuenta: 'MP JOSE', a_cuenta: 'MP AGUSTIN' })] };
+    expect(netoDia(d)).toEqual({ efectivo: 0, mp: 0, lapos: 0, sin: 0 });
+    const r = cuentasDelPeriodo({ docs: { '2026-09': { dias: { '02': d } } }, desde: '2026-09-01', hasta: '2026-09-30' });
+    expect(r.cuentas.find(c => c.clave === 'mp:MP JOSE').cambios).toBe(-20000);
+    expect(r.cuentas.find(c => c.clave === 'mp:MP AGUSTIN').cambios).toBe(20000);
+    expect(r.porMedio.mp.cambios).toBe(0);
   });
 });

@@ -16,7 +16,7 @@ import { collection, getDocs, getDoc, query, orderBy, limit, doc, setDoc, update
 import { cssVar } from '../theme.js';
 import { confirmDialog, alertDialog, promptDialog } from '../components/dialogs.js';
 import { refreshVencimientos, setPagosMesFromDias } from './calendario_core.js';
-import { cadenaMeses, cajaAlDia, aperturaDe, hayMontos, rangoMeses, cuentasDelPeriodo, cuentasMpDe, normCuenta, mpPorCuentaAlDia, mesSiguiente } from '../balance_cadena.js';
+import { cadenaMeses, cajaAlDia, aperturaDe, hayMontos, rangoMeses, cuentasDelPeriodo, cuentasMpDe, normCuenta, mpPorCuentaAlDia, mesSiguiente, diaPorMedio, netoDia, cuentaDeCambio, etiquetaCuenta } from '../balance_cadena.js';
 // Cuánto de cada venta entró en mano y cuánto por transferencia. Gemelo de
 // `pos_system/utils/medios_de_pago.py`; existe por el Pago Mixto.
 import { partesDeVenta } from '../medios_de_pago.js';
@@ -279,8 +279,10 @@ async function openCajaDetalle() {
       <td class="bal-cta-det-mov">${extra}</td>
       <td class="bal-cta-det-monto${saldo == null ? '' : negCls(saldo)}">${saldo == null ? '—' : money(saldo)}</td>
     </tr>`;
-  const movTxt = c => (c.ingresos || c.egresos)
-    ? `<span class="mas">+${fmt(c.ingresos)}</span> <span class="menos">−${fmt(c.egresos)}</span>`
+  // Lo que se movió desde el cierre: entró, salió y lo que pasó de/a otra cuenta.
+  const camTxt = v => v ? ` <span class="cam" title="Cambios con otras cuentas">⇄ ${v > 0 ? '+' : '−'}${fmt(Math.abs(v))}</span>` : '';
+  const movTxt = c => (c.ingresos || c.egresos || c.cambios)
+    ? `<span class="mas">+${fmt(c.ingresos)}</span> <span class="menos">−${fmt(c.egresos)}</span>${camTxt(c.cambios)}`
     : '';
   // Sin un cierre con desglose no hay saldo por cuenta que mostrar: solo el
   // movimiento (un saldo inventado contradiría el total de arriba).
@@ -2260,7 +2262,7 @@ async function renderCuentas(body) {
       <div class="bal-cta-card ${cls}">
         <span>${label} <span class="bal-cta-sub">${saldo != null ? 'hoy ' + cuando : ''}</span></span>
         <b class="${saldo != null ? negCls(saldo).trim() : ''}">${saldo != null ? money(saldo) : '—'}</b>
-        <small><span class="mas">+${fmt(pm.ingresos)}</span><span class="menos">−${fmt(pm.egresos)}</span><span class="igual${negCls(pm.neto)}">= ${money(pm.neto)}</span></small>
+        <small><span class="mas">+${fmt(pm.ingresos)}</span><span class="menos">−${fmt(pm.egresos)}</span>${pm.cambios ? `<span class="cam" title="Cambios con otras cuentas">⇄ ${pm.cambios > 0 ? '+' : '−'}${fmt(Math.abs(pm.cambios))}</span>` : ''}<span class="igual${negCls(pm.neto)}">= ${money(pm.neto)}</span></small>
       </div>`;
   };
   const totalPeriodo = ['efectivo', 'mp', 'lapos', 'sin'].reduce((s, k) => s + (r.porMedio[k]?.neto || 0), 0);
@@ -2282,11 +2284,34 @@ async function renderCuentas(body) {
         <td class="bal-td-lbl">${esc(c.label)}${c.medio === 'mp' ? `<span class="bal-cta-sub">${medioLbl[c.medio]}</span>` : ''}</td>
         <td>${c.ingresos ? money(c.ingresos) : '—'}</td>
         <td>${c.egresos ? money(c.egresos) : '—'}</td>
+        <td class="${negCls(c.cambios).trim()}">${c.cambios ? (c.cambios > 0 ? '+' : '−') + fmt(Math.abs(c.cambios)) : '—'}</td>
         <td class="bal-td-total${negCls(c.neto)}">${money(c.neto)}</td>
         <td><div style="display:flex;align-items:center;gap:8px"><div class="bal-cta-bar" style="flex:1"><i style="width:${pct}%"></i></div><span class="bal-cta-sub">${pct}%</span></div></td>
       </tr>`;
   }).join('');
   const sinAsignar = r.cuentas.find(c => c.clave === 'mp:' && c.egresos > 0);
+  // Los cambios suman cero entre cuentas (salvo una punta sin medio).
+  const totCam = r.cuentas.reduce((s, c) => s + c.cambios, 0);
+
+  // Lista de cambios del período, cada uno una sola vez (la punta que recibe):
+  // fecha, de dónde salió, a dónde entró, nota y monto. Click: abre el día.
+  const cambiosLista = [];
+  r.cuentas.forEach(c => c.movimientos.forEach(m => {
+    if (m.tipo === 'cambio' && m.monto > 0) cambiosLista.push({ iso: m.iso, de: m.contra, a: c.label, nota: m.nota || '', monto: m.monto });
+  }));
+  cambiosLista.sort((x, y) => x.iso < y.iso ? 1 : x.iso > y.iso ? -1 : 0);
+  const cambiosHtml = cambiosLista.length ? `
+    <div class="bal-card bal-xls" style="margin-bottom:16px">
+      <div class="bal-card-title"><span class="material-icons">swap_horiz</span> Cambios entre cuentas
+        <span class="bal-cta-sub">plata que pasó de una cuenta a otra, sin entrar ni salir del negocio</span></div>
+      <div class="bal-table-wrap"><table class="bal-table">
+        <thead><tr><th class="bal-th-lbl">Fecha</th><th class="bal-th-lbl">Sale de</th><th class="bal-th-lbl">Entra a</th><th class="bal-th-lbl">Nota</th><th class="bal-th-total">Monto</th></tr></thead>
+        <tbody>${cambiosLista.map(x => `
+          <tr data-ir="${x.iso}" title="Abrir el día">
+            <td class="bal-td-lbl">${ddmm(x.iso)}/${x.iso.slice(2, 4)}</td><td>${esc(x.de)}</td><td>${esc(x.a)}</td><td>${esc(x.nota || '—')}</td>
+            <td class="bal-td-total">${money(x.monto)}</td></tr>`).join('')}
+        </tbody></table></div>
+    </div>` : '';
 
   // Detalle de ingresos: por cuenta, qué motivos y cuántas veces.
   const ingresosHtml = r.cuentas.filter(c => c.ingresos > 0).map(c => `
@@ -2341,11 +2366,12 @@ async function renderCuentas(body) {
       <div class="bal-card-title"><span class="material-icons">compare_arrows</span> Por cuenta en el período</div>
       <div class="bal-table-wrap">
         <table class="bal-table bal-xls-table">
-          <thead><tr><th class="bal-th-lbl">Cuenta</th><th>Ingresos</th><th>Egresos</th><th class="bal-th-total">Neto</th><th>Parte de los ingresos</th></tr></thead>
+          <thead><tr><th class="bal-th-lbl">Cuenta</th><th>Ingresos</th><th>Egresos</th><th title="Plata que pasó de una cuenta a otra">Cambios</th><th class="bal-th-total">Neto</th><th>Parte de los ingresos</th></tr></thead>
           <tbody>${filas}</tbody>
           <tfoot><tr class="bal-row-total">
             <td class="bal-td-lbl">Total</td><td>${money(r2(totIng))}</td><td>${money(r2(totEgr))}</td>
-            <td class="bal-td-total${negCls(totIng - totEgr)}">${money(r2(totIng - totEgr))}</td><td></td>
+            <td class="${negCls(totCam).trim()}">${Math.abs(totCam) >= 0.01 ? money(r2(totCam)) : '—'}</td>
+            <td class="bal-td-total${negCls(totIng - totEgr + totCam)}">${money(r2(totIng - totEgr + totCam))}</td><td></td>
           </tr></tfoot>
         </table>
       </div>
@@ -2354,6 +2380,7 @@ async function renderCuentas(body) {
         <b>${mpCuentas.join('</b> o <b>') || 'la cuenta'}</b> como medio para que entre en su cuenta.</div>` : ''}
     </div>
 
+    ${cambiosHtml}
     <div class="bal-cta-grid2">
       <div class="bal-card bal-xls">
         <div class="bal-card-title"><span class="material-icons">south_east</span> Ingresos por cuenta</div>
@@ -2551,20 +2578,9 @@ function diaTotales(dia) {
 }
 
 // ── Cierre por medio de pago / saldo acumulado (réplica del Excel) ─────────────
-// Ingresos y compras del día desglosados por medio (efectivo/mp/lapos + 'sin').
-function diaPorMedio(dia) {
-  const ing = { efectivo: 0, mp: 0, lapos: 0, sin: 0 };
-  const com = { efectivo: 0, mp: 0, lapos: 0, sin: 0 };
-  (dia.ingresos || []).forEach(x => { const m = x.medio && ing[x.medio] != null ? x.medio : 'sin'; ing[m] += Number(x.monto) || 0; });
-  (dia.compras || []).forEach(x => { const m = x.medio && com[x.medio] != null ? x.medio : 'sin'; com[m] += Number(x.monto) || 0; });
-  return { ing, com };
-}
-// Neto de un día por medio (ingresos − compras). Incluye 'sin' (medio vacío) para
-// que el total del acumulado cierre con el saldo del día (que también lo suma).
-function netoDiaPorMedio(dia) {
-  const { ing, com } = diaPorMedio(dia);
-  return { efectivo: ing.efectivo - com.efectivo, mp: ing.mp - com.mp, lapos: ing.lapos - com.lapos, sin: ing.sin - com.sin };
-}
+// El desglose del día por medio (ingresos, compras y cambios entre cuentas) y
+// el neto vienen de balance_cadena.js: la misma cuenta que mueve la banda
+// "Caja actual", así el acumulado de acá y la caja de arriba no se contradicen.
 // Saldo acumulado por medio desde la apertura del mes hasta ddHasta (inclusive).
 // Es el "SALDO DIARIO ACUMULADO" del Excel: apertura + suma de netos diarios.
 // Redondea a 2 decimales (como cierreMes) para evitar arrastre de coma flotante.
@@ -2572,7 +2588,7 @@ function acumuladoHasta(dias, apertura, ddHasta) {
   const o = { efectivo: Number(apertura?.efectivo) || 0, mp: Number(apertura?.mp) || 0, lapos: Number(apertura?.lapos) || 0, sin: 0 };
   Object.keys(dias || {}).sort().forEach(dd => {
     if (dd > ddHasta) return;
-    const n = netoDiaPorMedio(dias[dd]);
+    const n = netoDia(dias[dd]);
     o.efectivo += n.efectivo; o.mp += n.mp; o.lapos += n.lapos; o.sin += n.sin;
   });
   const r2 = v => Math.round(v * 100) / 100;
@@ -2581,7 +2597,7 @@ function acumuladoHasta(dias, apertura, ddHasta) {
 // Cierre del mes completo = apertura + neto de todos los días.
 function cierreMes(mesSeed) {
   const o = { efectivo: Number(mesSeed.apertura?.efectivo) || 0, mp: Number(mesSeed.apertura?.mp) || 0, lapos: Number(mesSeed.apertura?.lapos) || 0 };
-  Object.values(mesSeed.dias || {}).forEach(d => { const n = netoDiaPorMedio(d); o.efectivo += n.efectivo; o.mp += n.mp; o.lapos += n.lapos; });
+  Object.values(mesSeed.dias || {}).forEach(d => { const n = netoDia(d); o.efectivo += n.efectivo; o.mp += n.mp; o.lapos += n.lapos; });
   const r2 = v => Math.round(v * 100) / 100;
   return { efectivo: r2(o.efectivo), mp: r2(o.mp), lapos: r2(o.lapos) };
 }
@@ -2642,7 +2658,8 @@ function defaultIngresos(dias) {
 // Opciones del medio de pago. En las compras, Mercado Pago se abre en las cuentas
 // vistas en los ingresos (MP JOSE, MP AGUSTIN...) para saber de cuál salió la
 // plata: se guarda medio 'mp' + `cuenta`. El valor de esas opciones es 'mp:NOMBRE'.
-function medioOptions(sel, cuenta = null, conCuentasMp = false) {
+// `sinVacio`: sin la opción "—" (un cambio entre cuentas siempre tiene dos puntas).
+function medioOptions(sel, cuenta = null, conCuentasMp = false, sinVacio = false) {
   const selMp = sel === 'mp' && normCuenta(cuenta) ? 'mp:' + normCuenta(cuenta) : null;
   const nombres = conCuentasMp ? [...mpCuentas] : [];
   if (selMp && !nombres.includes(selMp.slice(3))) nombres.push(selMp.slice(3));
@@ -2653,12 +2670,25 @@ function medioOptions(sel, cuenta = null, conCuentasMp = false) {
         `<option value="mp:${esc(n)}" ${selMp === 'mp:' + n ? 'selected' : ''}>&nbsp;&nbsp;${esc(n)}</option>`).join('');
     }
     return opts;
-  }).join('') + `<option value="" ${!sel ? 'selected' : ''}>—</option>`;
+  }).join('') + (sinVacio ? '' : `<option value="" ${!sel ? 'selected' : ''}>—</option>`);
 }
 
 // HTML de una fila de movimiento (ingreso o compra). Se usa tanto en el render
 // inicial como al agregar/borrar una fila en el lugar (sin re-render del día).
 function movRowHtml(x, i, tipo) {
+  if (tipo === 'cambios') {
+    // Un cambio entre cuentas: cuánto, de qué cuenta sale y a cuál entra
+    // (Mercado Pago abierto por nombre), con la flecha para darlo vuelta.
+    return `
+    <div class="bal-mov-row bal-mov-cam" data-mov="cambios" data-i="${i}">
+      <input data-f="monto" inputmode="decimal" value="${fmt(Number(x.monto) || 0)}" style="text-align:right" title="Cuánto se cambió">
+      <label class="bal-cam-lado"><small>Sale de</small><select data-f="de" title="De qué cuenta sale la plata">${medioOptions(x.de, x.de_cuenta, true, true)}</select></label>
+      <button class="bal-mov-swap" type="button" data-swap title="Dar vuelta: la plata va para el otro lado"><span class="material-icons">swap_horiz</span></button>
+      <label class="bal-cam-lado"><small>Entra a</small><select data-f="a" title="A qué cuenta entra la plata">${medioOptions(x.a, x.a_cuenta, true, true)}</select></label>
+      <input data-f="nota" value="${esc(x.nota || '')}" placeholder="Nota (ej: cambio a un cliente)">
+      <button class="bal-fijo-del" data-del title="Quitar"><span class="material-icons">close</span></button>
+    </div>`;
+  }
   if (tipo === 'ingresos') {
     return `
     <div class="bal-mov-row bal-mov-ing" data-mov="ingresos" data-i="${i}">
@@ -2996,6 +3026,8 @@ async function renderDia(body) {
   const apertura = aperturaEfectiva(curDiaYm, curDiasDoc);
   const workDias = Object.assign({}, dias, { [curDiaDD]: dia });
   const pm = diaPorMedio(dia);
+  // Los cambios entre cuentas suman cero entre los medios (salvo uno sin medio).
+  const camTot = pm.cam.efectivo + pm.cam.mp + pm.cam.lapos + pm.cam.sin;
   const accum = acumuladoHasta(workDias, apertura, curDiaDD);
   const esHoy = iso === hoyAR();
   // Estado: respeta el flag explícito; si no hay flag, un día pasado se considera
@@ -3014,7 +3046,8 @@ async function renderDia(body) {
   const diaState = (d) => {
     const fiso = `${curDiaYm}-${d}`;
     const dd2 = dias[d];
-    const hasData = !!(dd2 && (((dd2.ingresos || []).some(x => Number(x.monto) > 0)) || (dd2.compras || []).length));
+    const hasData = !!(dd2 && (((dd2.ingresos || []).some(x => Number(x.monto) > 0)) || (dd2.compras || []).length
+      || (dd2.cambios || []).some(x => Number(x.monto) > 0)));
     if (fiso > today) return 'is-futuro';
     const cerr = dd2 ? (dd2.cerrado === true || (dd2.cerrado == null && fiso < today)) : false;
     if (hasData && cerr) return 'is-cerrado';
@@ -3039,11 +3072,12 @@ async function renderDia(body) {
     if (`${curDiaYm}-${k}` > today) return;   // no contar futuro
     const tt = diaTotales(dias[k]);
     mesIng += tt.ing.total; mesCom += tt.com.total;
-    if (tt.ing.total > 0 || (dias[k].compras || []).length) cargados++;
+    if (tt.ing.total > 0 || (dias[k].compras || []).length || (dias[k].cambios || []).some(x => Number(x.monto) > 0)) cargados++;
   });
 
   const ingRows = (dia.ingresos || []).map((x, i) => movRowHtml(x, i, 'ingresos')).join('');
   const comRows = (dia.compras || []).map((x, i) => movRowHtml(x, i, 'compras')).join('');
+  const camRows = (dia.cambios || []).map((x, i) => movRowHtml(x, i, 'cambios')).join('');
 
   body.innerHTML = `
     <div class="bal-caption"><span class="material-icons">today</span>
@@ -3094,6 +3128,14 @@ async function renderDia(body) {
       </div>
     </div>
 
+    <div class="bal-card bal-xls bal-dia-cambios">
+      <div class="bal-card-title"><span class="material-icons">swap_horiz</span> Cambios entre cuentas
+        <span class="bal-cta-sub">plata que pasa de una cuenta a otra: no es ingreso ni gasto</span>
+        <button class="bal-add-btn" data-add="cambios" style="margin-left:auto"><span class="material-icons">swap_horiz</span> Cambiar plata de cuenta</button>
+      </div>
+      <div id="bal-cam-list">${camRows || '<div class="bal-mov-empty">Sin cambios cargados. Si te dieron efectivo y lo devolviste por transferencia (o al revés), cargalo acá: sale de una cuenta y entra en la otra, el total no cambia.</div>'}</div>
+    </div>
+
     <div class="bal-dia-resumen">
       <div class="bal-dia-stat"><span>Ingresos</span><b>${money(t.ing.total)}</b></div>
       <div class="bal-dia-op">−</div>
@@ -3116,16 +3158,17 @@ async function renderDia(body) {
       <div class="bal-table-wrap">
         <table class="bal-table bal-xls-table bal-medios-table">
           <thead><tr>
-            <th class="bal-th-lbl">Medio</th><th>Ingresos</th><th>Compras</th>
+            <th class="bal-th-lbl">Medio</th><th>Ingresos</th><th>Compras</th><th title="Plata que pasó de una cuenta a otra">Cambios</th>
             <th>Saldo del día</th><th class="bal-th-total">Acumulado</th>
           </tr></thead>
           <tbody>
             ${MEDIOS.map(m => {
-              const i = pm.ing[m.k] || 0, c = pm.com[m.k] || 0, sd = i - c, ac = accum[m.k] || 0;
+              const i = pm.ing[m.k] || 0, c = pm.com[m.k] || 0, cm = pm.cam[m.k] || 0, sd = i - c + cm, ac = accum[m.k] || 0;
               return `<tr>
                 <td class="bal-td-lbl">${esc(m.label)}</td>
                 <td data-med-ing="${m.k}">${money(i)}</td>
                 <td data-med-com="${m.k}">${money(c)}</td>
+                <td class="${negCls(cm).trim()}" data-med-cam="${m.k}">${cm ? money(cm) : '—'}</td>
                 <td class="${negCls(sd).trim()}" data-med-saldo="${m.k}">${money(sd)}</td>
                 <td class="bal-td-total${negCls(ac)}" data-med-acum="${m.k}">${money(ac)}</td>
               </tr>`;
@@ -3135,7 +3178,8 @@ async function renderDia(body) {
             <td class="bal-td-lbl">Total</td>
             <td data-med-ing="total">${money(pm.ing.efectivo + pm.ing.mp + pm.ing.lapos + pm.ing.sin)}</td>
             <td data-med-com="total">${money(pm.com.efectivo + pm.com.mp + pm.com.lapos + pm.com.sin)}</td>
-            <td class="${negCls(t.saldo).trim()}" data-med-saldo="total">${money(t.saldo)}</td>
+            <td class="${negCls(camTot).trim()}" data-med-cam="total">${camTot ? money(camTot) : '—'}</td>
+            <td class="${negCls(t.saldo + camTot).trim()}" data-med-saldo="total">${money(t.saldo + camTot)}</td>
             <td class="bal-td-total${negCls(accum.efectivo + accum.mp + accum.lapos + accum.sin)}" data-med-acum="total">${money(accum.efectivo + accum.mp + accum.lapos + accum.sin)}</td>
           </tr></tfoot>
         </table>
@@ -3193,19 +3237,29 @@ function updateMedios(body, dia) {
     el.textContent = money(val);
     if (neg !== undefined) el.classList.toggle('bal-neg', Number(neg) < 0);
   };
+  // Cambios: en cero se muestra "—", igual que en el render inicial.
+  const setCam = (sel, val) => {
+    const el = body.querySelector(sel);
+    if (!el) return;
+    el.textContent = val ? money(val) : '—';
+    el.classList.toggle('bal-neg', Number(val) < 0);
+  };
   MEDIOS.forEach(m => {
-    const i = pm.ing[m.k] || 0, c = pm.com[m.k] || 0, sd = i - c, ac = accum[m.k] || 0;
+    const i = pm.ing[m.k] || 0, c = pm.com[m.k] || 0, cm = pm.cam[m.k] || 0, sd = i - c + cm, ac = accum[m.k] || 0;
     set(`[data-med-ing="${m.k}"]`, i);
     set(`[data-med-com="${m.k}"]`, c);
+    setCam(`[data-med-cam="${m.k}"]`, cm);
     set(`[data-med-saldo="${m.k}"]`, sd, sd);
     set(`[data-med-acum="${m.k}"]`, ac, ac);
   });
   const ti = pm.ing.efectivo + pm.ing.mp + pm.ing.lapos + pm.ing.sin;
   const tc = pm.com.efectivo + pm.com.mp + pm.com.lapos + pm.com.sin;
+  const tcm = pm.cam.efectivo + pm.cam.mp + pm.cam.lapos + pm.cam.sin;
   const ta = accum.efectivo + accum.mp + accum.lapos + accum.sin;
   set('[data-med-ing="total"]', ti);
   set('[data-med-com="total"]', tc);
-  set('[data-med-saldo="total"]', ti - tc, ti - tc);
+  setCam('[data-med-cam="total"]', tcm);
+  set('[data-med-saldo="total"]', ti - tc + tcm, ti - tc + tcm);
   set('[data-med-acum="total"]', ta, ta);
 }
 
@@ -3246,15 +3300,25 @@ function bindDia(body, dia) {
 
   // Reconstruye una lista (ingresos|compras) en el lugar tras un borrado, re-
   // indexando data-i. Evita el re-render del día entero (que se sentía como recarga).
+  const LISTAS = { ingresos: '#bal-ing-list', compras: '#bal-com-list', cambios: '#bal-cam-list' };
+  const VACIOS = { ingresos: 'Sin ingresos cargados', compras: 'Sin compras/gastos cargados', cambios: 'Sin cambios cargados' };
   const rebuildMovList = (tipo) => {
-    const list = body.querySelector(tipo === 'ingresos' ? '#bal-ing-list' : '#bal-com-list');
+    const list = body.querySelector(LISTAS[tipo]);
     if (!list) return;
     const rows = dia[tipo] || [];
     list.innerHTML = rows.length
       ? rows.map((x, i) => movRowHtml(x, i, tipo)).join('')
-      : `<div class="bal-mov-empty">${tipo === 'ingresos' ? 'Sin ingresos cargados' : 'Sin compras/gastos cargados'}</div>`;
+      : `<div class="bal-mov-empty">${VACIOS[tipo]}</div>`;
     list.querySelectorAll('.bal-mov-row').forEach(bindMovRow);
   };
+  // El select de una punta del cambio ('efectivo' | 'lapos' | 'mp' | 'mp:NOMBRE')
+  // se guarda como medio + cuenta, igual que en las compras.
+  const leerLado = (item, lado, valor) => {
+    if (valor.startsWith('mp:')) { item[lado] = 'mp'; item[lado + '_cuenta'] = valor.slice(3); }
+    else { item[lado] = valor || 'efectivo'; delete item[lado + '_cuenta']; }
+  };
+  const valorLado = (item, lado) =>
+    item[lado] === 'mp' && normCuenta(item[lado + '_cuenta']) ? 'mp:' + normCuenta(item[lado + '_cuenta']) : (item[lado] || '');
 
   const bindMovRow = (row) => {
     const tipo = row.dataset.mov;            // 'ingresos' | 'compras'
@@ -3271,6 +3335,7 @@ function bindDia(body, dia) {
           if (inp.value.startsWith('mp:')) { item.medio = 'mp'; item.cuenta = inp.value.slice(3); }
           else { item.medio = inp.value || null; delete item.cuenta; }
         }
+        else if (f === 'de' || f === 'a') leerLado(item, f, inp.value);
         else item[f] = inp.value.trim();
         patchDiaTotales(body, dia);
         if (tipo === 'compras') refreshFdiaPanel();
@@ -3282,6 +3347,17 @@ function bindDia(body, dia) {
       rebuildMovList(tipo);
       patchDiaTotales(body, dia);
       if (tipo === 'compras') refreshFdiaPanel();
+      save();
+    });
+    // La flecha del cambio: la plata va para el otro lado (se cruzan las puntas).
+    row.querySelector('[data-swap]')?.addEventListener('click', () => {
+      const de = valorLado(item, 'de'), a = valorLado(item, 'a');
+      leerLado(item, 'de', a);
+      leerLado(item, 'a', de);
+      const selDe = row.querySelector('[data-f="de"]'), selA = row.querySelector('[data-f="a"]');
+      if (selDe) selDe.value = valorLado(item, 'de');
+      if (selA) selA.value = valorLado(item, 'a');
+      patchDiaTotales(body, dia);
       save();
     });
     // Autocomplete propio en compras: proveedor y rubro sugieren lo ya usado.
@@ -3300,11 +3376,16 @@ function bindDia(body, dia) {
   body.querySelectorAll('[data-add]').forEach(b => b.addEventListener('click', () => {
     const tipo = b.dataset.add;
     if (!dia[tipo]) dia[tipo] = [];
+    // Un cambio nuevo arranca como el caso típico: le dieron efectivo y lo
+    // devolvió por Mercado Pago (la primera cuenta MP que se conozca); la
+    // flecha lo da vuelta.
     const item = tipo === 'ingresos'
       ? { motivo: '', medio: 'efectivo', monto: 0 }
-      : { proveedor: '', rubro: '', medio: 'efectivo', monto: 0 };
+      : tipo === 'cambios'
+        ? { monto: 0, de: 'mp', ...(mpCuentas[0] ? { de_cuenta: mpCuentas[0] } : {}), a: 'efectivo', nota: '' }
+        : { proveedor: '', rubro: '', medio: 'efectivo', monto: 0 };
     dia[tipo].push(item);
-    const list = body.querySelector(tipo === 'ingresos' ? '#bal-ing-list' : '#bal-com-list');
+    const list = body.querySelector(LISTAS[tipo]);
     if (!list) return;
     list.querySelector('.bal-mov-empty')?.remove();
     list.insertAdjacentHTML('beforeend', movRowHtml(item, dia[tipo].length - 1, tipo));

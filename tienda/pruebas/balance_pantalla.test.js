@@ -550,3 +550,115 @@ describe('los gastos fijos del mes', () => {
     expect(motivos).not.toContain('Contadora');
   });
 });
+
+describe('cambiar plata de una cuenta a otra', () => {
+  // Le dieron 150.000 en efectivo y los devolvió por transferencia desde
+  // MP JOSE: el efectivo sube, MP JOSE baja, el total no se mueve. Con la
+  // flecha se da vuelta, y se puede elegir de qué Mercado Pago sale o entra.
+  const escribir = (inp, valor) => {
+    inp.value = valor;
+    inp.dispatchEvent(new Event('change'));
+  };
+  const fila = (tipo, i) => document.querySelector(`.bal-mov-row[data-mov="${tipo}"][data-i="${i}"]`);
+  const campo = (tipo, i, f) => fila(tipo, i).querySelector(`[data-f="${f}"]`);
+  const posar = async () => { await asentar(); await vi.advanceTimersByTimeAsync(80); await asentar(); };
+  const banda = () => plano(document.querySelector('.bal-caja-band'));
+  const detalle = async () => {
+    document.querySelector('.bal-caja-band').click();
+    await posar();
+    const dlg = document.querySelector('.app-dialog-overlay');
+    const t = plano(dlg);
+    dlg.querySelector('.ad-ok').click();
+    await posar();
+    return t;
+  };
+
+  it('sale de una cuenta, entra en la otra y el total queda igual', async () => {
+    datos.docs['control_config/balance'].meses['2026-07'].saldosMp =
+      { 'MP JOSE': 3000000, 'MP AGUSTIN': 1707364 };
+    datos.docs['control_config/dias_2026-08'].apertura.mp = 4707364;
+    delete datos.docs['control_config/dias_2026-08'].dias['03'];
+
+    await montar('dia');
+    // Un ingreso de MP AGUSTIN para que la cuenta exista en los selectores.
+    document.querySelector('[data-add="ingresos"]').click();
+    escribir(campo('ingresos', 2, 'motivo'), 'MP AGUSTIN');
+    escribir(campo('ingresos', 2, 'medio'), 'mp');
+    escribir(campo('ingresos', 2, 'monto'), '50000');
+    await posar();
+    // Efectivo 515.000 · MP 4.849.364 · Lapos 94.000 · Total 5.458.364
+    expect(banda()).toContain('5458364');
+
+    // ── El cambio: 150.000 salen de MP JOSE y entran al efectivo ──
+    const btn = document.querySelector('[data-add="cambios"]');
+    expect(btn, 'falta el botón de cambio').toBeTruthy();
+    btn.click();
+    expect(fila('cambios', 0).querySelector('[data-swap]')).toBeTruthy();
+    escribir(campo('cambios', 0, 'de'), 'mp:MP JOSE');
+    escribir(campo('cambios', 0, 'a'), 'efectivo');
+    escribir(campo('cambios', 0, 'monto'), '150000');
+    escribir(campo('cambios', 0, 'nota'), 'cambio a un cliente');
+    await posar();
+
+    let b = banda();
+    expect(b).toContain('665000');      // efectivo 515.000 + 150.000
+    expect(b).toContain('4699364');     // MP 4.849.364 − 150.000
+    expect(b).toContain('5458364');     // el total no se mueve
+    // El cierre del día por medio lo muestra en su columna, y el día sigue sin ingresos ni gastos nuevos.
+    expect(plano(document.querySelector('[data-med-cam="efectivo"]'))).toContain('150000');
+    expect(plano(document.querySelector('[data-med-cam="mp"]'))).toContain('150000');
+    expect(plano(document.querySelector('[data-med-cam="total"]'))).toBe('—');
+    expect(plano(document.querySelector('[data-tot="com"]'))).toContain('0');
+
+    // ── La caja por cuenta: MP JOSE bajó, MP AGUSTIN no se enteró ──
+    let t = await detalle();
+    expect(t).toContain('2942000');     // MP JOSE 3.000.000 + 92.000 − 150.000
+    expect(t).toContain('1757364');     // MP AGUSTIN 1.707.364 + 50.000
+    expect(t).toContain('4699364');
+    expect(t).not.toContain('difiere');
+
+    // ── La flecha lo da vuelta: ahora sale del efectivo y entra a MP JOSE ──
+    fila('cambios', 0).querySelector('[data-swap]').click();
+    await posar();
+    b = banda();
+    expect(b).toContain('365000');      // efectivo 515.000 − 150.000
+    expect(b).toContain('4999364');     // MP 4.849.364 + 150.000
+    expect(b).toContain('5458364');
+    expect(campo('cambios', 0, 'de').value).toBe('efectivo');
+    expect(campo('cambios', 0, 'a').value).toBe('mp:MP JOSE');
+
+    // ── Y se elige la otra cuenta: entra a MP AGUSTIN ──
+    escribir(campo('cambios', 0, 'a'), 'mp:MP AGUSTIN');
+    await posar();
+    t = await detalle();
+    expect(t).toContain('1907364');     // MP AGUSTIN 1.757.364 + 150.000
+    expect(t).toContain('3092000');     // MP JOSE 3.000.000 + 92.000
+
+    // ── Lo guardado ──
+    const d3 = datos.docs['control_config/dias_2026-08'].dias['03'];
+    expect(d3.cambios).toHaveLength(1);
+    expect(d3.cambios[0]).toMatchObject({ monto: 150000, de: 'efectivo', a: 'mp', a_cuenta: 'MP AGUSTIN', nota: 'cambio a un cliente' });
+    expect(d3.cambios[0].de_cuenta).toBeUndefined();
+
+    // ── La pestaña Cuentas lo lista y lo cuenta por cuenta ──
+    const cuerpo = await irA('cuentas');
+    const c = plano(cuerpo);
+    expect(c).toContain('Cambios entre cuentas');
+    expect(c).toContain('cambio a un cliente');
+    expect(c).toContain('+150000');
+  });
+
+  it('un día con solo un cambio cuenta como cargado y la caja lo sigue', async () => {
+    delete datos.docs['control_config/dias_2026-08'].dias['03'];
+    await montar('dia');
+    document.querySelector('[data-add="cambios"]').click();
+    escribir(campo('cambios', 0, 'de'), 'lapos');
+    escribir(campo('cambios', 0, 'a'), 'efectivo');
+    escribir(campo('cambios', 0, 'monto'), '20000');
+    await posar();
+    const b = banda();
+    expect(b).toContain('al 03/08');
+    expect(b).toContain('535000');      // efectivo 515.000 + 20.000
+    expect(b).toContain('74000');       // lapos 94.000 − 20.000
+  });
+});
