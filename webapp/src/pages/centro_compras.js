@@ -30,6 +30,10 @@ import { refrescarAlertas, obtenerCandidatosCompra } from '../notifications.js';
 import { sugerirCantidad } from '../inventario_resumen.js';
 import { confirmDialog, alertDialog } from '../components/dialogs.js';
 import { listaCuadernoHtml } from '../lista_cuaderno.js';
+import {
+  CAMPOS_FILTRO, filtrosVacios, sanearFiltros, cantidadFiltros,
+  coincideCompra, opcionesCompras, campoTieneValores, textoBusquedaCompra,
+} from '../filtros_compras.js';
 
 const MEDIOS = [
   { k: 'efectivo', label: 'Efectivo' },
@@ -359,7 +363,13 @@ function buildRows(alertas, comprasCfg) {
     const row = {
       doc_id: a.doc_id,
       nombre: a.nombre || '(sin nombre)',
+      codigo: a.codigo || a.producto?.codigo || '',
       rubro: a.rubro || '',
+      // Subrubro, proveedor y marca: por lo que se filtra la lista (y se ven
+      // apagados debajo del rubro, así se sabe qué se está filtrando).
+      sub_rubro: a.sub_rubro || a.producto?.sub_rubro || '',
+      proveedor: a.producto?.proveedor || '',
+      marca: a.marca || a.producto?.marca || '',
       urgente: !!a.urgente,
       critico: !!a.critico,
       tier: tierDe(a),
@@ -376,10 +386,7 @@ function buildRows(alertas, comprasCfg) {
       perdidaSemana: velDia * 7 * precio,
       perdidaHorizonte,
       producto: a.producto || null,
-      // Texto por el que busca el buscador de la lista: nombre (base y de la
-      // alerta), variante y rubro, todo normalizado sin acentos.
-      busca: normRubro([a.nombre, a.producto?.nombre, esVariedad ? a.variedad : '', a.rubro]
-        .filter(Boolean).join(' ')),
+      busca: '',   // texto normalizado por el que busca la lupa (se arma abajo)
       qty,
       cost: costRow,
       subtotal: qty * costRow,
@@ -392,6 +399,7 @@ function buildRows(alertas, comprasCfg) {
       anotado: null,
     };
     row.anotado = anotados[keyAnotado(row)] || null;
+    row.busca = textoBusquedaCompra(row);
     rows.push(row);
   }
   rows.sort((a, b) => {
@@ -502,6 +510,9 @@ export async function renderCentroCompras(container, db) {
   comprasCfg = comprasCfg || {};
   const budget = computeBudget(balCfg || {}, diasDoc, comprasCfg, ym);
   const rows = buildRows(fuentesCompra(alertas, comprasCfg), comprasCfg);
+  // Filtros y búsqueda de la última visita en esta pestaña: al ir al Catálogo
+  // a corregir una ficha y volver, la lista sigue acotada a lo mismo.
+  const guardado = leerFiltrosGuardados();
 
   _state = {
     ym,
@@ -513,7 +524,8 @@ export async function renderCentroCompras(container, db) {
     rows,
     period: 'mes',        // 'mes' | 'semana'
     filtroAnotados: false,   // true = la tabla muestra solo lo marcado "en el cuaderno"
-    busqueda: '',            // texto del buscador de la lista (se filtra sin acentos)
+    busqueda: guardado.busqueda,   // texto del buscador de la lista (se filtra sin acentos)
+    filtros: guardado.filtros,     // rubro / subrubro / proveedor / marca / nivel elegidos
     topeManual: null,
     medio: fuenteValida(comprasCfg.medio_default),
     proveedor: comprasCfg.proveedor_default || '',
@@ -684,6 +696,15 @@ function pageHtml() {
         </div>
         <span class="cc-hint">Ordenada por prioridad y plata en riesgo · Registrar descuenta el presupuesto, no el stock · La lapicera marca lo que ya está en el cuaderno.</span>
       </div>
+      <div class="cc-filtros" id="cc-filtros">
+        <span class="material-icons cc-filtros-ico" title="Los filtros se combinan entre sí y con la lupa">filter_list</span>
+        ${CAMPOS_FILTRO.map(c => `<select class="cc-filtro" data-campo="${c.k}" title="${esc(c.label)}" aria-label="${esc(c.label)}"></select>`).join('')}
+        <button type="button" class="cc-filtros-clear" data-action="filtros-clear" hidden
+                title="Sacar todos los filtros (la búsqueda queda)">
+          <span class="material-icons">filter_alt_off</span> Limpiar filtros
+        </button>
+        <span class="cc-filtros-count" id="cc-filtros-count"></span>
+      </div>
       <div class="table-wrap">
         <table class="cc-table">
           <thead><tr>
@@ -803,11 +824,76 @@ function tieneIngresosHoy(diasDoc) {
 }
 
 // ── Pintado: tabla ────────────────────────────────────────────────────────────
+// ── Filtros de la lista (rubro / subrubro / proveedor / marca / nivel) ────────
+// La lógica de qué pasa y qué opciones tiene cada select vive en
+// filtros_compras.js; acá solo se pintan los selects y se guarda lo elegido.
+const FILTROS_STORAGE_KEY = 'cc_filtros_lista';
+
+function criteriosLista() {
+  const s = _state;
+  return { filtros: s.filtros, busqueda: s.busqueda, soloAnotados: s.filtroAnotados };
+}
+
+function leerFiltrosGuardados() {
+  let raw = null;
+  try { raw = JSON.parse(sessionStorage.getItem(FILTROS_STORAGE_KEY) || 'null'); } catch (_) { raw = null; }
+  return {
+    filtros: sanearFiltros(raw?.filtros),
+    busqueda: typeof raw?.busqueda === 'string' ? raw.busqueda.trim() : '',
+  };
+}
+
+function guardarFiltros() {
+  const s = _state;
+  try {
+    if (!cantidadFiltros(s.filtros) && !s.busqueda) sessionStorage.removeItem(FILTROS_STORAGE_KEY);
+    else sessionStorage.setItem(FILTROS_STORAGE_KEY, JSON.stringify({ filtros: s.filtros, busqueda: s.busqueda }));
+  } catch (_) { /* sin storage (modo privado): los filtros viven solo en memoria */ }
+}
+
+// Rellena cada select con sus opciones y la cuenta de renglones que quedarían
+// al elegirla (calculada con los demás criterios puestos: si ya filtraste por
+// proveedor, el de rubro muestra solo los rubros de ese proveedor). Los
+// selects de campos que nadie tiene cargado (sin marcas en toda la lista) no
+// se muestran. Al final, "N de M" para saber cuánto quedó afuera.
+function paintFiltros(visibles) {
+  const s = _state;
+  const host = document.getElementById('cc-filtros');
+  if (!host) return;
+  const crit = criteriosLista();
+  for (const sel of host.querySelectorAll('select.cc-filtro')) {
+    const campo = sel.dataset.campo;
+    const def = CAMPOS_FILTRO.find(c => c.k === campo);
+    if (!def) continue;
+    const mostrar = campoTieneValores(s.rows, campo);
+    sel.hidden = !mostrar;
+    if (!mostrar) { sel.innerHTML = ''; continue; }
+    const opts = opcionesCompras(s.rows, crit, campo);
+    const elegido = s.filtros[campo] || '';
+    sel.innerHTML = `<option value="">${esc(def.todos)}</option>`
+      + opts.map(o => `<option value="${esc(o.valor)}">${esc(o.label)} (${o.n})</option>`).join('');
+    sel.value = elegido;
+    if (sel.value !== elegido) { s.filtros[campo] = ''; sel.value = ''; }
+    sel.classList.toggle('is-on', !!s.filtros[campo]);
+  }
+  const nFiltros = cantidadFiltros(s.filtros);
+  const btn = host.querySelector('[data-action="filtros-clear"]');
+  if (btn) btn.hidden = nFiltros === 0;
+  const cnt = document.getElementById('cc-filtros-count');
+  if (cnt) {
+    const total = s.rows.length;
+    const acotada = nFiltros > 0 || !!s.busqueda || s.filtroAnotados;
+    cnt.textContent = !total ? '' : (acotada ? `${visibles} de ${total}` : `${total} en la lista`);
+    cnt.classList.toggle('is-on', acotada && visibles < total);
+  }
+}
+
 function paintTable() {
   const s = _state;
   const tbody = document.getElementById('cc-tbody');
   if (!tbody) return;
   if (!s.rows.length) {
+    paintFiltros(0);
     tbody.innerHTML = `<tr><td colspan="9" class="cc-empty">
       <span class="material-icons">check_circle</span> No hay faltantes que reponer ahora mismo.</td></tr>`;
     return;
@@ -817,11 +903,10 @@ function paintTable() {
   // solo lo anotado. Si no queda nada anotado, el filtro se apaga solo (la
   // píldora desaparece y no habría forma de sacarlo).
   if (s.filtroAnotados && !s.rows.some(r => r.anotado && !r.registrado)) s.filtroAnotados = false;
-  // Buscador: filtra en vivo por nombre, variante o rubro, sin acentos. Se
-  // combina con el filtro del cuaderno (los dos a la vez achican la lista).
-  const q = normRubro(s.busqueda || '');
-  const visible = r => (!s.filtroAnotados || (r.anotado && !r.registrado))
-    && (!q || r.busca.includes(q));
+  // Selects (rubro, subrubro, proveedor, marca, nivel), lupa y cuaderno se
+  // combinan en Y: cada uno achica lo que dejó el anterior.
+  const crit = criteriosLista();
+  const visible = r => coincideCompra(r, crit);
   // El plan (lo que entra en la plata + lo ya registrado) va arriba; después la
   // línea de corte y abajo SOLO lo que no entra (o no tiene costo). data-idx
   // siempre apunta al índice real en s.rows, así los handlers no dependen del
@@ -829,9 +914,18 @@ function paintTable() {
   // "continuación" para que se vea que van juntas.
   const arriba = [], abajo = [];
   s.rows.forEach((r, i) => { if (visible(r)) ((r.registrado || r.fits) ? arriba : abajo).push(i); });
+  paintFiltros(arriba.length + abajo.length);
   if (!arriba.length && !abajo.length) {
+    const nFiltros = cantidadFiltros(s.filtros);
+    const que = [
+      s.busqueda ? `la búsqueda "${esc(s.busqueda)}"` : '',
+      nFiltros ? (nFiltros === 1 ? 'el filtro puesto' : 'los filtros puestos') : '',
+      s.filtroAnotados ? 'lo del cuaderno' : '',
+    ].filter(Boolean).join(' y ');
     tbody.innerHTML = `<tr><td colspan="9" class="cc-empty">
-      <span class="material-icons">search_off</span> Nada en la lista coincide con "${esc(s.busqueda)}".</td></tr>`;
+      <span class="material-icons">search_off</span> Nada en la lista coincide con ${que}.
+      ${(nFiltros || s.busqueda) ? `<button type="button" class="cc-btn-ghost cc-empty-btn" data-action="filtros-clear-todo">Ver la lista completa</button>` : ''}
+    </td></tr>`;
     return;
   }
   const parts = [];
@@ -928,7 +1022,10 @@ function rowHtml(r, i, esContinuacion) {
       </div>
       ${detalles.length ? `<div class="cc-cob">${detalles.join(' · ')}</div>` : ''}
     </td>
-    <td><span class="badge badge-gray">${esc(r.rubro || 'Sin rubro')}</span></td>
+    <td>
+      <span class="badge badge-gray"${r.marca ? ` title="Marca: ${esc(r.marca)}"` : ''}>${esc(r.rubro || 'Sin rubro')}</span>
+      ${(r.sub_rubro || r.proveedor) ? `<div class="cc-rubro-sub">${[r.sub_rubro, r.proveedor].filter(Boolean).map(esc).join(' · ')}</div>` : ''}
+    </td>
     <td class="cc-stock${stk.total <= 0 ? ' is-cero' : ''}" title="${esc(stockTitle)}">${esc(stk.texto)}</td>
     <td style="text-align:right">${ritmo}</td>
     <td style="text-align:center">
@@ -1174,6 +1271,22 @@ function onClick(e) {
       s.busqueda = '';
       const inp = document.getElementById('cc-buscar');
       if (inp) { inp.value = ''; inp.focus(); }
+      guardarFiltros();
+      paintTable();
+      break;
+    }
+    case 'filtros-clear':
+      s.filtros = filtrosVacios();
+      guardarFiltros();
+      paintTable();
+      break;
+    case 'filtros-clear-todo': {
+      // Desde el "nada coincide": saca los selects Y la búsqueda de una.
+      s.filtros = filtrosVacios();
+      s.busqueda = '';
+      const inp = document.getElementById('cc-buscar');
+      if (inp) inp.value = '';
+      guardarFiltros();
       paintTable();
       break;
     }
@@ -1187,6 +1300,13 @@ function onClick(e) {
 
 function onChange(e) {
   const s = _state;
+  if (e.target.classList.contains('cc-filtro')) {
+    const campo = e.target.dataset.campo;
+    if (campo in s.filtros) s.filtros[campo] = e.target.value || '';
+    guardarFiltros();
+    paintTable();
+    return;
+  }
   if (e.target.classList.contains('cc-check')) {
     const i = Number(e.target.dataset.idx);
     if (s.rows[i]) s.rows[i].checked = e.target.checked;
@@ -1245,6 +1365,7 @@ function onInput(e) {
     clearTimeout(_buscarTimer);
     _buscarTimer = setTimeout(() => {
       s.busqueda = e.target.value.trim();
+      guardarFiltros();
       paintTable();
     }, 150);
     return;

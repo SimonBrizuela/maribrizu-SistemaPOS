@@ -339,6 +339,126 @@ describe('Centro de Compras', () => {
   });
 });
 
+describe('Centro de Compras: filtros de la lista', () => {
+  // En la lista: RESMA (PAPELERIA · PAPELERA CBA), TIJERA (LIBRERIA · DISTRI
+  // SUR, sin marca) y GOMA (LIBRERIA · ESCRITURA · PAPELERA CBA · MAPED).
+  beforeEach(() => {
+    sessionStorage.clear();
+    datos.porColeccion.catalogo = [
+      ...CATALOGO.map(p => ({ ...p })),
+      { __id: 'p4', doc_id: 'p4', id: 4, nombre: 'TIJERA ESCOLAR', codigo: 'C004',
+        rubro: 'LIBRERIA', proveedor: 'DISTRI SUR',
+        precio_venta: 2500, costo: 1500, stock: 0, stock_min: 5, estado: 'activo' },
+      { __id: 'p5', doc_id: 'p5', id: 5, nombre: 'GOMA DE BORRAR', codigo: 'C005',
+        rubro: 'LIBRERÍA', sub_rubro: 'ESCRITURA', marca: 'MAPED', proveedor: 'PAPELERA CBA',
+        precio_venta: 800, costo: 400, stock: 0, stock_min: 3, estado: 'activo' },
+    ];
+  });
+
+  const select = (campo) => document.querySelector(`select.cc-filtro[data-campo="${campo}"]`);
+  const opciones = (campo) => [...select(campo).options].map(o => o.textContent);
+  const elegir = (campo, valor) => {
+    const sel = select(campo);
+    sel.value = valor;
+    sel.dispatchEvent(new Event('change', { bubbles: true }));
+  };
+  const cuerpo = () => document.getElementById('cc-tbody').textContent;
+
+  it('los selects listan lo que hay en la lista con la cuenta de cada uno', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    expect(opciones('rubro')).toEqual(['Todos los rubros', 'LIBRERIA (2)', 'PAPELERIA (1)']);
+    expect(opciones('proveedor')).toEqual(['Todos los proveedores', 'DISTRI SUR (1)', 'PAPELERA CBA (2)']);
+    expect(opciones('sub_rubro')).toEqual(['Todos los subrubros', 'ESCRITURA (1)', 'Sin subrubro (2)']);
+    expect(select('nivel').options.length).toBeGreaterThan(1);
+    expect(document.getElementById('cc-filtros-count').textContent).toBe('3 en la lista');
+  });
+
+  it('elegir un rubro deja solo ese rubro, con y sin tilde', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    elegir('rubro', 'libreria');
+    const t = cuerpo();
+    expect(t).toContain('TIJERA');
+    expect(t).toContain('GOMA');
+    expect(t).not.toContain('RESMA');
+    expect(document.getElementById('cc-filtros-count').textContent).toBe('2 de 3');
+    expect(select('rubro').classList.contains('is-on')).toBe(true);
+  });
+
+  it('los filtros se combinan entre sí y la lupa busca adentro', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    elegir('rubro', 'libreria');
+    elegir('proveedor', 'papelera cba');
+    expect(cuerpo()).toContain('GOMA');
+    expect(cuerpo()).not.toContain('TIJERA');
+    expect(cuerpo()).not.toContain('RESMA');
+
+    // La lupa busca adentro de lo filtrado: "tijera" existe, pero no en este cruce.
+    tipear(document.getElementById('cc-buscar'), 'tijera');
+    await esperar(200);
+    expect(cuerpo()).toContain('Nada en la lista coincide');
+    expect(cuerpo()).not.toContain('TIJERA ESCOLAR');
+
+    // "Ver la lista completa" saca selects y búsqueda de una.
+    document.querySelector('[data-action="filtros-clear-todo"]').click();
+    expect(cuerpo()).toContain('TIJERA');
+    expect(cuerpo()).toContain('RESMA');
+    expect(cuerpo()).toContain('GOMA');
+    expect(select('rubro').value).toBe('');
+    expect(document.getElementById('cc-buscar').value).toBe('');
+  });
+
+  it('cada select ofrece solo lo que queda con los demás puestos', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    elegir('rubro', 'papeleria');
+    expect(opciones('proveedor')).toEqual(['Todos los proveedores', 'PAPELERA CBA (1)']);
+    // Y el propio rubro sigue ofreciendo los otros rubros para cambiar de uno a otro.
+    expect(opciones('rubro')).toEqual(['Todos los rubros', 'LIBRERIA (2)', 'PAPELERIA (1)']);
+  });
+
+  it('limpiar filtros deja la búsqueda', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    elegir('proveedor', 'papelera cba');
+    tipear(document.getElementById('cc-buscar'), 'goma');
+    await esperar(200);
+    const btn = document.querySelector('[data-action="filtros-clear"]');
+    expect(btn.hidden).toBe(false);
+    btn.click();
+    expect(select('proveedor').value).toBe('');
+    expect(document.getElementById('cc-buscar').value).toBe('goma');
+    expect(cuerpo()).toContain('GOMA');
+    expect(cuerpo()).not.toContain('RESMA');
+    expect(btn.hidden).toBe(true);
+  });
+
+  it('al volver a entrar en la misma pestaña, los filtros siguen puestos', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    elegir('rubro', 'papeleria');
+    contenedor.innerHTML = '';
+    await montar('centro_compras', 'renderCentroCompras');
+    expect(select('rubro').value).toBe('papeleria');
+    expect(cuerpo()).toContain('RESMA');
+    expect(cuerpo()).not.toContain('TIJERA');
+  });
+
+  it('un campo que nadie tiene cargado no muestra su select', async () => {
+    datos.porColeccion.catalogo = [
+      { __id: 'p4', doc_id: 'p4', id: 4, nombre: 'TIJERA ESCOLAR', rubro: 'LIBRERIA',
+        precio_venta: 2500, costo: 1500, stock: 0, stock_min: 5, estado: 'activo' },
+    ];
+    await montar('centro_compras', 'renderCentroCompras');
+    expect(select('marca').hidden).toBe(true);
+    expect(select('proveedor').hidden).toBe(true);
+    expect(select('rubro').hidden).toBe(false);
+  });
+
+  it('debajo del rubro se ve el subrubro y el proveedor', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    const sub = [...document.querySelectorAll('.cc-rubro-sub')].map(e => e.textContent);
+    expect(sub).toContain('ESCRITURA · PAPELERA CBA');
+    expect(sub).toContain('DISTRI SUR');
+  });
+});
+
 describe('Promociones', () => {
   beforeEach(() => {
     datos.porColeccion.promociones = [

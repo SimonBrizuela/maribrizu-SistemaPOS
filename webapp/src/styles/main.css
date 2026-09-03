@@ -4598,6 +4598,52 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
 }
 .cc-buscar-x:hover { background: var(--surface-3); color: var(--text); }
 .cc-buscar-x .material-icons { font-size: 16px !important; }
+
+/* Filtros de la lista: rubro / subrubro / proveedor / marca / nivel. Se
+   combinan entre sí y con la lupa. Un select con algo elegido se marca con el
+   borde y el texto del color de marca; a la derecha, "N de M" dice cuánto
+   quedó afuera. */
+.cc-filtros {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--surface-2);
+}
+.cc-filtros-ico { font-size: 18px !important; color: var(--text-muted); flex: none; }
+.cc-filtro {
+  max-width: 220px; min-width: 0;
+  border: 1px solid var(--border); background: var(--surface); border-radius: 8px;
+  padding: 6px 28px 6px 10px; font-family: inherit; font-size: 13px; color: var(--text);
+  outline: none; cursor: pointer;
+  appearance: none; -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path d='M1 1l5 5 5-5' fill='none' stroke='%23888' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
+  background-repeat: no-repeat; background-position: right 10px center;
+  text-overflow: ellipsis; white-space: nowrap; overflow: hidden;
+}
+.cc-filtro:hover { border-color: var(--border-strong); }
+.cc-filtro:focus { border-color: var(--primary); }
+.cc-filtro.is-on { border-color: var(--primary); color: var(--primary); font-weight: 600; }
+.cc-filtro[hidden] { display: none; }
+.cc-filtros-clear {
+  display: inline-flex; align-items: center; gap: 4px;
+  border: 1px solid var(--border); background: var(--surface); border-radius: 8px;
+  padding: 5px 10px; font-family: inherit; font-size: 12px; font-weight: 600;
+  color: var(--text-muted); cursor: pointer;
+}
+.cc-filtros-clear:hover { color: var(--primary); border-color: var(--primary); }
+.cc-filtros-clear .material-icons { font-size: 15px !important; }
+.cc-filtros-clear[hidden] { display: none; }
+.cc-filtros-count {
+  margin-left: auto; font-size: 12px; font-weight: 600; color: var(--text-muted);
+  font-variant-numeric: tabular-nums; white-space: nowrap;
+}
+.cc-filtros-count.is-on { color: var(--primary); }
+/* Subrubro · proveedor apagados debajo del rubro: lo que se está filtrando. */
+.cc-rubro-sub { font-size: 11px; color: var(--text-muted); margin-top: 3px; white-space: nowrap; }
+.cc-empty-btn { display: inline-flex; margin-left: 10px; padding: 6px 12px; font-size: 13px; }
+@media (max-width: 700px) {
+  .cc-filtros { padding: 10px 14px; }
+  .cc-filtro { flex: 1 1 calc(50% - 8px); max-width: none; }
+  .cc-filtros-count { width: 100%; margin-left: 0; text-align: right; }
+}
 .cc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .cc-table th {
   text-align: left; padding: 10px 12px; font-size: 11px; font-weight: 600; color: var(--text-muted);
