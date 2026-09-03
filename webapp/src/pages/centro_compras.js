@@ -965,7 +965,7 @@ function elegirOpcionDd(campo, valor) {
   guardarFiltros();
   paintTable();
   const btn = ddDe(campo)?.querySelector('.cc-dd-btn');
-  if (btn) btn.focus();
+  if (btn) btn.focus({ preventScroll: true });
 }
 
 // Teclado adentro del panel: Escape cierra y vuelve al botón; flechas
@@ -1044,7 +1044,27 @@ function paintFiltros(visibles) {
   }
 }
 
+// El scroll no salta cuando la lista se achica. Al filtrar, la tabla puede
+// pasar de cientos de filas a tres: el documento se acorta, el navegador
+// recorta la posición de scroll y la página entera pega un salto. Se mide
+// dónde quedó la fila de filtros antes y después de repintar; si se movió,
+// se reserva justo esa altura debajo de la tabla y se vuelve al mismo lugar.
+// La reserva se recalcula en cada pintado, así nunca sobra más de lo que
+// hace falta para el scroll actual.
 function paintTable() {
+  const fila = document.getElementById('cc-filtros');
+  const wrap = fila?.parentElement?.querySelector('.table-wrap') || null;
+  const antes = fila ? fila.getBoundingClientRect().top : 0;
+  if (wrap) wrap.style.minHeight = '';
+  pintarFilas();
+  if (!fila || !wrap || !fila.isConnected) return;
+  const delta = fila.getBoundingClientRect().top - antes;
+  if (delta <= 1) return;
+  wrap.style.minHeight = `${Math.ceil(wrap.getBoundingClientRect().height + delta)}px`;
+  window.scrollBy(0, delta);
+}
+
+function pintarFilas() {
   const s = _state;
   const tbody = document.getElementById('cc-tbody');
   if (!tbody) return;

@@ -515,6 +515,33 @@ describe('Centro de Compras: filtros de la lista', () => {
     expect(dd('rubro').hidden).toBe(false);
   });
 
+  it('al achicarse la lista, la página no pega el salto: reserva altura y vuelve al mismo lugar', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    const fila = document.getElementById('cc-filtros');
+    const wrap = fila.parentElement.querySelector('.table-wrap');
+    // jsdom no hace layout: se simula que la fila de filtros estaba a 120px del
+    // borde y, con la lista corta y el scroll recortado, quedó a 420px.
+    const tops = [120, 420];
+    fila.getBoundingClientRect = () => ({ top: tops.length > 1 ? tops.shift() : tops[0] });
+    wrap.getBoundingClientRect = () => ({ height: 200 });
+    const scrollBy = vi.fn();
+    window.scrollBy = scrollBy;
+
+    elegir('rubro', 'papeleria');
+    expect(wrap.style.minHeight).toBe('500px');          // 200 de tabla + 300 que se corrió
+    expect(scrollBy).toHaveBeenCalledWith(0, 300);       // y se vuelve a donde estaba
+  });
+
+  it('si nada se movió, no reserva ni scrollea', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    const wrap = document.getElementById('cc-filtros').parentElement.querySelector('.table-wrap');
+    const scrollBy = vi.fn();
+    window.scrollBy = scrollBy;
+    elegir('rubro', 'papeleria');
+    expect(wrap.style.minHeight).toBe('');
+    expect(scrollBy).not.toHaveBeenCalled();
+  });
+
   it('debajo del rubro se ve el subrubro y el proveedor', async () => {
     await montar('centro_compras', 'renderCentroCompras');
     const sub = [...document.querySelectorAll('.cc-rubro-sub')].map(e => e.textContent);
