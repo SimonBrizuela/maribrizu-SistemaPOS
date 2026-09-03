@@ -48,9 +48,20 @@ export function sanearFiltros(raw) {
   if (!raw || typeof raw !== 'object') return out;
   for (const c of CAMPOS_FILTRO) {
     const v = raw[c.k];
-    if (typeof v === 'string' && v.trim()) out[c.k] = v.trim();
+    if (typeof v === 'string' && v.trim()) out[c.k] = claveFiltro(v);
   }
   return out;
+}
+
+// Lupa adentro del desplegable: deja las opciones cuya etiqueta tiene todas
+// las palabras tipeadas, en cualquier orden y sin acentos.
+export function filtrarOpciones(opciones, texto) {
+  const toks = tokensBusqueda(texto);
+  if (!toks.length) return opciones || [];
+  return (opciones || []).filter(o => {
+    const t = claveFiltro(o.label);
+    return toks.every(x => t.includes(x));
+  });
 }
 
 export function cantidadFiltros(filtros) {

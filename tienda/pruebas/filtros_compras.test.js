@@ -11,7 +11,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   SIN_VALOR, claveFiltro, filtrosVacios, sanearFiltros, cantidadFiltros,
-  coincideCompra, opcionesCompras, campoTieneValores, textoBusquedaCompra,
+  coincideCompra, opcionesCompras, filtrarOpciones, campoTieneValores, textoBusquedaCompra,
 } from '../../webapp/src/filtros_compras.js';
 
 const fila = (over = {}) => {
@@ -140,10 +140,26 @@ describe('las opciones de cada select', () => {
   });
 });
 
+describe('la lupa adentro del desplegable', () => {
+  const ops = opcionesCompras(LISTA, crit(), 'proveedor');
+
+  it('deja las opciones con todas las palabras, en cualquier orden y sin acentos', () => {
+    expect(filtrarOpciones(ops, 'cba papelera').map(o => o.valor)).toEqual(['papelera cba']);
+    expect(filtrarOpciones(ops, 'PAPELÉRA').map(o => o.valor)).toEqual(['papelera cba']);
+    expect(filtrarOpciones(ops, 'sin').map(o => o.valor)).toEqual([SIN_VALOR]);
+  });
+
+  it('sin texto devuelve todo; sin coincidencia, nada', () => {
+    expect(filtrarOpciones(ops, '  ')).toBe(ops);
+    expect(filtrarOpciones(ops, 'zzz')).toEqual([]);
+  });
+});
+
 describe('lo que vuelve del storage', () => {
-  it('se limpia a los campos conocidos', () => {
-    expect(sanearFiltros({ rubro: ' libreria ', nivel: 'sisi', otro: 'x', marca: 3 }))
+  it('se limpia a los campos conocidos y se normaliza como clave', () => {
+    expect(sanearFiltros({ rubro: ' LIBRERÍA ', nivel: 'sisi', otro: 'x', marca: 3 }))
       .toEqual({ rubro: 'libreria', sub_rubro: '', proveedor: '', marca: '', nivel: 'sisi' });
+    expect(sanearFiltros({ proveedor: SIN_VALOR }).proveedor).toBe(SIN_VALOR);
     expect(sanearFiltros('basura')).toEqual(filtrosVacios());
     expect(cantidadFiltros({ rubro: 'a', marca: '' })).toBe(1);
   });

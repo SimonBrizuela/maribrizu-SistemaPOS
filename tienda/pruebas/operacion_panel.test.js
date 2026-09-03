@@ -355,22 +355,52 @@ describe('Centro de Compras: filtros de la lista', () => {
     ];
   });
 
-  const select = (campo) => document.querySelector(`select.cc-filtro[data-campo="${campo}"]`);
-  const opciones = (campo) => [...select(campo).options].map(o => o.textContent);
-  const elegir = (campo, valor) => {
-    const sel = select(campo);
-    sel.value = valor;
-    sel.dispatchEvent(new Event('change', { bubbles: true }));
+  // Cada filtro es un botón que abre un panel propio con lupa y opciones.
+  const dd = (campo) => document.querySelector(`.cc-dd[data-campo="${campo}"]`);
+  const panel = (campo) => dd(campo).querySelector('.cc-dd-panel');
+  const abiertoAhora = () => document.querySelector('.cc-dd.is-open')?.dataset.campo || null;
+  const abrir = (campo) => { if (abiertoAhora() !== campo) dd(campo).querySelector('[data-action="dd-toggle"]').click(); };
+  const cerrar = () => { const c = abiertoAhora(); if (c) dd(c).querySelector('[data-action="dd-toggle"]').click(); };
+  const opciones = (campo) => {
+    abrir(campo);
+    const t = [...dd(campo).querySelectorAll('.cc-dd-opt')]
+      .map(b => `${b.querySelector('.cc-dd-txt').textContent} (${b.querySelector('.cc-dd-n').textContent})`);
+    cerrar();
+    return t;
   };
+  const elegir = (campo, valor) => {
+    abrir(campo);
+    dd(campo).querySelector(`.cc-dd-opt[data-valor="${valor}"]`).click();
+  };
+  const valor = (campo) => dd(campo).querySelector('.cc-dd-value').textContent;
   const cuerpo = () => document.getElementById('cc-tbody').textContent;
+  const tecla = (el, key) => el.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, cancelable: true }));
 
-  it('los selects listan lo que hay en la lista con la cuenta de cada uno', async () => {
+  it('los desplegables listan lo que hay en la lista con la cuenta de cada uno', async () => {
     await montar('centro_compras', 'renderCentroCompras');
-    expect(opciones('rubro')).toEqual(['Todos los rubros', 'LIBRERIA (2)', 'PAPELERIA (1)']);
-    expect(opciones('proveedor')).toEqual(['Todos los proveedores', 'DISTRI SUR (1)', 'PAPELERA CBA (2)']);
-    expect(opciones('sub_rubro')).toEqual(['Todos los subrubros', 'ESCRITURA (1)', 'Sin subrubro (2)']);
-    expect(select('nivel').options.length).toBeGreaterThan(1);
+    expect(opciones('rubro')).toEqual(['Todos los rubros (3)', 'LIBRERIA (2)', 'PAPELERIA (1)']);
+    expect(opciones('proveedor')).toEqual(['Todos los proveedores (3)', 'DISTRI SUR (1)', 'PAPELERA CBA (2)']);
+    expect(opciones('sub_rubro')).toEqual(['Todos los subrubros (3)', 'ESCRITURA (1)', 'Sin subrubro (2)']);
+    expect(opciones('nivel').length).toBeGreaterThan(1);
+    expect(valor('rubro')).toBe('Todos');
+    expect(valor('marca')).toBe('Todas');
     expect(document.getElementById('cc-filtros-count').textContent).toBe('3 en la lista');
+  });
+
+  it('el panel se abre al apretar el botón, uno solo a la vez, y se cierra al elegir', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    expect(panel('rubro').hidden).toBe(true);
+    abrir('rubro');
+    expect(panel('rubro').hidden).toBe(false);
+    expect(document.activeElement).toBe(dd('rubro').querySelector('.cc-dd-input'));
+    abrir('proveedor');
+    expect(panel('rubro').hidden).toBe(true);
+    expect(panel('proveedor').hidden).toBe(false);
+    dd('proveedor').querySelector('.cc-dd-opt[data-valor="distri sur"]').click();
+    expect(panel('proveedor').hidden).toBe(true);
+    expect(valor('proveedor')).toBe('DISTRI SUR');
+    expect(cuerpo()).toContain('TIJERA');
+    expect(cuerpo()).not.toContain('GOMA');
   });
 
   it('elegir un rubro deja solo ese rubro, con y sin tilde', async () => {
@@ -381,7 +411,40 @@ describe('Centro de Compras: filtros de la lista', () => {
     expect(t).toContain('GOMA');
     expect(t).not.toContain('RESMA');
     expect(document.getElementById('cc-filtros-count').textContent).toBe('2 de 3');
-    expect(select('rubro').classList.contains('is-on')).toBe(true);
+    expect(dd('rubro').classList.contains('is-on')).toBe(true);
+    expect(valor('rubro')).toBe('LIBRERIA');
+    // Al reabrir, la elegida lleva el tilde.
+    abrir('rubro');
+    expect(dd('rubro').querySelector('.cc-dd-opt.is-sel .cc-dd-txt').textContent).toBe('LIBRERIA');
+  });
+
+  it('la lupa adentro del desplegable filtra las opciones y Enter elige la primera', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    abrir('proveedor');
+    const input = dd('proveedor').querySelector('.cc-dd-input');
+    tipear(input, 'pape');
+    const textos = [...dd('proveedor').querySelectorAll('.cc-dd-opt .cc-dd-txt')].map(e => e.textContent);
+    expect(textos).toEqual(['PAPELERA CBA']);   // sin "Todos" mientras se busca
+    tipear(input, 'zzz');
+    expect(dd('proveedor').querySelector('.cc-dd-vacio').textContent).toContain('Nada coincide');
+    tipear(input, 'cba');
+    tecla(input, 'Enter');
+    expect(panel('proveedor').hidden).toBe(true);
+    expect(valor('proveedor')).toBe('PAPELERA CBA');
+    expect(cuerpo()).not.toContain('TIJERA');
+  });
+
+  it('Escape y el click afuera cierran el panel sin cambiar nada', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    abrir('rubro');
+    tecla(dd('rubro').querySelector('.cc-dd-input'), 'Escape');
+    expect(panel('rubro').hidden).toBe(true);
+    expect(document.activeElement).toBe(dd('rubro').querySelector('.cc-dd-btn'));
+    abrir('rubro');
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }));
+    expect(panel('rubro').hidden).toBe(true);
+    expect(valor('rubro')).toBe('Todos');
+    expect(cuerpo()).toContain('RESMA');
   });
 
   it('los filtros se combinan entre sí y la lupa busca adentro', async () => {
@@ -398,21 +461,22 @@ describe('Centro de Compras: filtros de la lista', () => {
     expect(cuerpo()).toContain('Nada en la lista coincide');
     expect(cuerpo()).not.toContain('TIJERA ESCOLAR');
 
-    // "Ver la lista completa" saca selects y búsqueda de una.
+    // "Ver la lista completa" saca filtros y búsqueda de una.
     document.querySelector('[data-action="filtros-clear-todo"]').click();
     expect(cuerpo()).toContain('TIJERA');
     expect(cuerpo()).toContain('RESMA');
     expect(cuerpo()).toContain('GOMA');
-    expect(select('rubro').value).toBe('');
+    expect(valor('rubro')).toBe('Todos');
+    expect(dd('rubro').classList.contains('is-on')).toBe(false);
     expect(document.getElementById('cc-buscar').value).toBe('');
   });
 
-  it('cada select ofrece solo lo que queda con los demás puestos', async () => {
+  it('cada desplegable ofrece solo lo que queda con los demás puestos', async () => {
     await montar('centro_compras', 'renderCentroCompras');
     elegir('rubro', 'papeleria');
-    expect(opciones('proveedor')).toEqual(['Todos los proveedores', 'PAPELERA CBA (1)']);
+    expect(opciones('proveedor')).toEqual(['Todos los proveedores (1)', 'PAPELERA CBA (1)']);
     // Y el propio rubro sigue ofreciendo los otros rubros para cambiar de uno a otro.
-    expect(opciones('rubro')).toEqual(['Todos los rubros', 'LIBRERIA (2)', 'PAPELERIA (1)']);
+    expect(opciones('rubro')).toEqual(['Todos los rubros (3)', 'LIBRERIA (2)', 'PAPELERIA (1)']);
   });
 
   it('limpiar filtros deja la búsqueda', async () => {
@@ -423,7 +487,7 @@ describe('Centro de Compras: filtros de la lista', () => {
     const btn = document.querySelector('[data-action="filtros-clear"]');
     expect(btn.hidden).toBe(false);
     btn.click();
-    expect(select('proveedor').value).toBe('');
+    expect(valor('proveedor')).toBe('Todos');
     expect(document.getElementById('cc-buscar').value).toBe('goma');
     expect(cuerpo()).toContain('GOMA');
     expect(cuerpo()).not.toContain('RESMA');
@@ -435,20 +499,20 @@ describe('Centro de Compras: filtros de la lista', () => {
     elegir('rubro', 'papeleria');
     contenedor.innerHTML = '';
     await montar('centro_compras', 'renderCentroCompras');
-    expect(select('rubro').value).toBe('papeleria');
+    expect(valor('rubro')).toBe('PAPELERIA');
     expect(cuerpo()).toContain('RESMA');
     expect(cuerpo()).not.toContain('TIJERA');
   });
 
-  it('un campo que nadie tiene cargado no muestra su select', async () => {
+  it('un campo que nadie tiene cargado no muestra su desplegable', async () => {
     datos.porColeccion.catalogo = [
       { __id: 'p4', doc_id: 'p4', id: 4, nombre: 'TIJERA ESCOLAR', rubro: 'LIBRERIA',
         precio_venta: 2500, costo: 1500, stock: 0, stock_min: 5, estado: 'activo' },
     ];
     await montar('centro_compras', 'renderCentroCompras');
-    expect(select('marca').hidden).toBe(true);
-    expect(select('proveedor').hidden).toBe(true);
-    expect(select('rubro').hidden).toBe(false);
+    expect(dd('marca').hidden).toBe(true);
+    expect(dd('proveedor').hidden).toBe(true);
+    expect(dd('rubro').hidden).toBe(false);
   });
 
   it('debajo del rubro se ve el subrubro y el proveedor', async () => {

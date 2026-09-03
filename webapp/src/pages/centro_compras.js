@@ -31,8 +31,8 @@ import { sugerirCantidad } from '../inventario_resumen.js';
 import { confirmDialog, alertDialog } from '../components/dialogs.js';
 import { listaCuadernoHtml } from '../lista_cuaderno.js';
 import {
-  CAMPOS_FILTRO, filtrosVacios, sanearFiltros, cantidadFiltros,
-  coincideCompra, opcionesCompras, campoTieneValores, textoBusquedaCompra,
+  CAMPOS_FILTRO, SIN_VALOR, filtrosVacios, sanearFiltros, cantidadFiltros,
+  coincideCompra, opcionesCompras, filtrarOpciones, campoTieneValores, textoBusquedaCompra,
 } from '../filtros_compras.js';
 
 const MEDIOS = [
@@ -485,6 +485,7 @@ let _state = null;
 
 export async function renderCentroCompras(container, db) {
   _db = db;
+  cerrarDropdown();   // un panel abierto de la visita anterior no puede quedar colgado
   // Shell sincrónico (cancela el skeleton diferido de main.js y da feedback ya).
   container.innerHTML = shellHtml();
 
@@ -698,7 +699,7 @@ function pageHtml() {
       </div>
       <div class="cc-filtros" id="cc-filtros">
         <span class="material-icons cc-filtros-ico" title="Los filtros se combinan entre sí y con la lupa">filter_list</span>
-        ${CAMPOS_FILTRO.map(c => `<select class="cc-filtro" data-campo="${c.k}" title="${esc(c.label)}" aria-label="${esc(c.label)}"></select>`).join('')}
+        ${CAMPOS_FILTRO.map(ddHtml).join('')}
         <button type="button" class="cc-filtros-clear" data-action="filtros-clear" hidden
                 title="Sacar todos los filtros (la búsqueda queda)">
           <span class="material-icons">filter_alt_off</span> Limpiar filtros
@@ -851,30 +852,185 @@ function guardarFiltros() {
   } catch (_) { /* sin storage (modo privado): los filtros viven solo en memoria */ }
 }
 
-// Rellena cada select con sus opciones y la cuenta de renglones que quedarían
-// al elegirla (calculada con los demás criterios puestos: si ya filtraste por
-// proveedor, el de rubro muestra solo los rubros de ese proveedor). Los
-// selects de campos que nadie tiene cargado (sin marcas en toda la lista) no
-// se muestran. Al final, "N de M" para saber cuánto quedó afuera.
+// ── Desplegables de los filtros ───────────────────────────────────────────────
+// El <select> nativo no se puede estilar ni buscar adentro, así que cada
+// filtro es un botón (campo + lo elegido) que abre un panel propio: lupa
+// arriba, la lista con la cuenta de cada opción y el tilde en la elegida.
+// Uno solo abierto a la vez; se cierra al elegir, con Escape o clickeando
+// afuera. Enter en la lupa elige la primera opción que quedó.
+const _dd = { abierto: null };
+
+function ddHtml(c) {
+  return `<div class="cc-dd" data-campo="${c.k}">
+    <button type="button" class="cc-dd-btn" data-action="dd-toggle" data-campo="${c.k}"
+            aria-haspopup="listbox" aria-expanded="false">
+      <span class="cc-dd-label">${esc(c.label)}</span>
+      <span class="cc-dd-value"></span>
+      <span class="material-icons">expand_more</span>
+    </button>
+    <div class="cc-dd-panel" hidden>
+      <div class="cc-dd-buscar">
+        <span class="material-icons">search</span>
+        <input type="text" class="cc-dd-input" data-campo="${c.k}" autocomplete="off"
+               placeholder="Buscar ${esc(c.label.toLowerCase())}…" aria-label="Buscar ${esc(c.label.toLowerCase())}" />
+      </div>
+      <div class="cc-dd-lista" role="listbox" aria-label="${esc(c.label)}"></div>
+    </div>
+  </div>`;
+}
+
+function ddDe(campo) {
+  return campo ? document.querySelector(`.cc-dd[data-campo="${campo}"]`) : null;
+}
+
+// La lista del panel: "Todos" arriba (con el total de lo que pasa los demás
+// criterios), las opciones que coinciden con la lupa, y "Sin proveedor" al
+// final separado. Con texto en la lupa, "Todos" no se muestra.
+function pintarListaDd(dd, campo, opts, elegido, texto) {
+  const def = CAMPOS_FILTRO.find(c => c.k === campo);
+  const lista = dd.querySelector('.cc-dd-lista');
+  if (!def || !lista) return;
+  const item = (valor, label, n, extra = '') => {
+    const sel = valor === elegido;
+    return `<button type="button" class="cc-dd-opt${sel ? ' is-sel' : ''}${extra}" role="option" aria-selected="${sel}"
+              data-action="dd-opt" data-campo="${campo}" data-valor="${esc(valor)}">
+      <span class="material-icons">${sel ? 'check' : ''}</span>
+      <span class="cc-dd-txt">${esc(label)}</span><span class="cc-dd-n">${n}</span></button>`;
+  };
+  const visibles = filtrarOpciones(opts, texto);
+  const parts = [];
+  if (!tokensDd(texto)) parts.push(item('', def.todos, opts.reduce((t, o) => t + o.n, 0)));
+  parts.push(...visibles.filter(o => o.valor !== SIN_VALOR).map(o => item(o.valor, o.label, o.n)));
+  const sin = visibles.find(o => o.valor === SIN_VALOR);
+  if (sin) parts.push('<div class="cc-dd-sep"></div>', item(sin.valor, sin.label, sin.n, ' cc-dd-sin'));
+  if (!visibles.length) parts.push(`<div class="cc-dd-vacio">Nada coincide con "${esc(texto)}"</div>`);
+  lista.innerHTML = parts.join('');
+}
+function tokensDd(texto) { return String(texto || '').trim().length > 0; }
+
+function repintarListaDd(campo) {
+  const dd = ddDe(campo);
+  if (!dd) return;
+  const opts = opcionesCompras(_state.rows, criteriosLista(), campo);
+  const input = dd.querySelector('.cc-dd-input');
+  pintarListaDd(dd, campo, opts, _state.filtros[campo] || '', input ? input.value : '');
+}
+
+function abrirDropdown(campo) {
+  if (_dd.abierto === campo) return;
+  cerrarDropdown();
+  const dd = ddDe(campo);
+  if (!dd || dd.hidden) return;
+  _dd.abierto = campo;
+  dd.classList.add('is-open');
+  const panel = dd.querySelector('.cc-dd-panel');
+  panel.hidden = false;
+  dd.querySelector('.cc-dd-btn').setAttribute('aria-expanded', 'true');
+  repintarListaDd(campo);
+  // Si el panel se sale por la derecha de la pantalla, se cuelga del borde
+  // derecho del botón.
+  const r = panel.getBoundingClientRect();
+  const ancho = window.innerWidth || document.documentElement.clientWidth || 0;
+  panel.classList.toggle('is-right', ancho > 0 && r.right > ancho - 8);
+  const input = dd.querySelector('.cc-dd-input');
+  if (input) input.focus();
+  document.addEventListener('mousedown', onDocMouseDown);
+}
+
+function cerrarDropdown() {
+  document.removeEventListener('mousedown', onDocMouseDown);
+  const campo = _dd.abierto;
+  _dd.abierto = null;
+  const dd = ddDe(campo);
+  if (!dd) return;
+  dd.classList.remove('is-open');
+  const panel = dd.querySelector('.cc-dd-panel');
+  if (panel) panel.hidden = true;
+  const btn = dd.querySelector('.cc-dd-btn');
+  if (btn) btn.setAttribute('aria-expanded', 'false');
+  const input = dd.querySelector('.cc-dd-input');
+  if (input) input.value = '';
+}
+
+function onDocMouseDown(e) {
+  const dd = ddDe(_dd.abierto);
+  if (!dd || !dd.contains(e.target)) cerrarDropdown();
+}
+
+function elegirOpcionDd(campo, valor) {
+  const s = _state;
+  if (!(campo in s.filtros)) return;
+  s.filtros[campo] = valor || '';
+  cerrarDropdown();
+  guardarFiltros();
+  paintTable();
+  const btn = ddDe(campo)?.querySelector('.cc-dd-btn');
+  if (btn) btn.focus();
+}
+
+// Teclado adentro del panel: Escape cierra y vuelve al botón; flechas
+// recorren las opciones; Enter en la lupa elige la primera que quedó.
+function onKeydown(e) {
+  const campo = _dd.abierto;
+  if (!campo) return;
+  const dd = ddDe(campo);
+  if (!dd || !dd.contains(e.target)) return;
+  const opciones = [...dd.querySelectorAll('.cc-dd-opt')];
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    cerrarDropdown();
+    dd.querySelector('.cc-dd-btn')?.focus();
+    return;
+  }
+  if (e.key === 'Enter' && e.target.classList.contains('cc-dd-input')) {
+    e.preventDefault();
+    const primera = opciones.find(o => !o.classList.contains('is-sel')) || opciones[0];
+    if (primera) elegirOpcionDd(campo, primera.dataset.valor || '');
+    return;
+  }
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    if (!opciones.length) return;
+    e.preventDefault();
+    const i = opciones.indexOf(e.target);
+    let sig;
+    if (i < 0) sig = e.key === 'ArrowDown' ? opciones[0] : opciones[opciones.length - 1];
+    else sig = opciones[(i + (e.key === 'ArrowDown' ? 1 : opciones.length - 1)) % opciones.length];
+    sig.focus();
+  }
+}
+
+// Pinta el botón de cada filtro (campo + lo elegido) y, si está abierto, su
+// panel. La cuenta de cada opción se calcula con los demás criterios puestos:
+// si ya filtraste por proveedor, en rubro se ven solo los rubros de ese
+// proveedor. Los campos que nadie tiene cargado (sin marcas en toda la lista)
+// no se muestran. Al final, "N de M" para saber cuánto quedó afuera.
 function paintFiltros(visibles) {
   const s = _state;
   const host = document.getElementById('cc-filtros');
   if (!host) return;
   const crit = criteriosLista();
-  for (const sel of host.querySelectorAll('select.cc-filtro')) {
-    const campo = sel.dataset.campo;
+  for (const dd of host.querySelectorAll('.cc-dd[data-campo]')) {
+    const campo = dd.dataset.campo;
     const def = CAMPOS_FILTRO.find(c => c.k === campo);
     if (!def) continue;
     const mostrar = campoTieneValores(s.rows, campo);
-    sel.hidden = !mostrar;
-    if (!mostrar) { sel.innerHTML = ''; continue; }
+    dd.hidden = !mostrar;
+    if (!mostrar) {
+      if (_dd.abierto === campo) cerrarDropdown();
+      if (s.filtros[campo]) s.filtros[campo] = '';
+      continue;
+    }
     const opts = opcionesCompras(s.rows, crit, campo);
     const elegido = s.filtros[campo] || '';
-    sel.innerHTML = `<option value="">${esc(def.todos)}</option>`
-      + opts.map(o => `<option value="${esc(o.valor)}">${esc(o.label)} (${o.n})</option>`).join('');
-    sel.value = elegido;
-    if (sel.value !== elegido) { s.filtros[campo] = ''; sel.value = ''; }
-    sel.classList.toggle('is-on', !!s.filtros[campo]);
+    const sel = elegido ? opts.find(o => o.valor === elegido) : null;
+    if (elegido && !sel) s.filtros[campo] = '';
+    dd.classList.toggle('is-on', !!sel);
+    dd.querySelector('.cc-dd-value').textContent = sel ? sel.label : def.todos.split(' ')[0];
+    dd.querySelector('.cc-dd-btn').title = sel ? `${def.label}: ${sel.label} (${sel.n})` : def.todos;
+    if (_dd.abierto === campo) {
+      const input = dd.querySelector('.cc-dd-input');
+      pintarListaDd(dd, campo, opts, sel ? elegido : '', input ? input.value : '');
+    }
   }
   const nFiltros = cantidadFiltros(s.filtros);
   const btn = host.querySelector('[data-action="filtros-clear"]');
@@ -1195,6 +1351,7 @@ function bindEvents(root) {
   root.addEventListener('click', onClick);
   root.addEventListener('change', onChange);
   root.addEventListener('input', onInput);
+  root.addEventListener('keydown', onKeydown);
 }
 
 function onClick(e) {
@@ -1275,7 +1432,15 @@ function onClick(e) {
       paintTable();
       break;
     }
+    case 'dd-toggle':
+      if (_dd.abierto === btn.dataset.campo) cerrarDropdown();
+      else abrirDropdown(btn.dataset.campo);
+      break;
+    case 'dd-opt':
+      elegirOpcionDd(btn.dataset.campo, btn.dataset.valor || '');
+      break;
     case 'filtros-clear':
+      cerrarDropdown();
       s.filtros = filtrosVacios();
       guardarFiltros();
       paintTable();
@@ -1300,13 +1465,6 @@ function onClick(e) {
 
 function onChange(e) {
   const s = _state;
-  if (e.target.classList.contains('cc-filtro')) {
-    const campo = e.target.dataset.campo;
-    if (campo in s.filtros) s.filtros[campo] = e.target.value || '';
-    guardarFiltros();
-    paintTable();
-    return;
-  }
   if (e.target.classList.contains('cc-check')) {
     const i = Number(e.target.dataset.idx);
     if (s.rows[i]) s.rows[i].checked = e.target.checked;
@@ -1370,7 +1528,11 @@ function onInput(e) {
     }, 150);
     return;
   }
-  if (e.target.id === 'cc-prov') { s.proveedor = e.target.value; }
+  if (e.target.id === 'cc-prov') { s.proveedor = e.target.value; return; }
+  // Lupa adentro del desplegable: filtra las opciones del panel abierto.
+  if (e.target.classList.contains('cc-dd-input')) {
+    if (_dd.abierto === e.target.dataset.campo) repintarListaDd(e.target.dataset.campo);
+  }
 }
 
 // ── Actualizar (re-fetch stock/ritmo + Balance) ───────────────────────────────

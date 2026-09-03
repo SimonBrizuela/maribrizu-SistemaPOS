@@ -4608,20 +4608,76 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
   padding: 10px 20px; border-bottom: 1px solid var(--border); background: var(--surface-2);
 }
 .cc-filtros-ico { font-size: 18px !important; color: var(--text-muted); flex: none; }
-.cc-filtro {
-  max-width: 220px; min-width: 0;
+/* La tarjeta recorta lo que se sale (overflow hidden): el panel del
+   desplegable cuelga por debajo de la fila, así que acá se destapa y el
+   redondeo de abajo pasa al contenedor de la tabla. */
+.cc-table-card { overflow: visible; }
+.cc-table-card .table-wrap { border-radius: 0 0 var(--radius) var(--radius); }
+
+/* Desplegable de un filtro: botón "Campo · elegido" y un panel propio abajo
+   (el <select> nativo no se puede estilar ni buscar adentro): lupa arriba,
+   opciones con la cuenta a la derecha, tilde en la elegida, "Sin ..." al
+   final separado. Con algo elegido, el botón se tiñe del color de marca. */
+.cc-dd { position: relative; }
+.cc-dd[hidden] { display: none; }
+.cc-dd-btn {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 260px;
   border: 1px solid var(--border); background: var(--surface); border-radius: 8px;
-  padding: 6px 28px 6px 10px; font-family: inherit; font-size: 13px; color: var(--text);
-  outline: none; cursor: pointer;
-  appearance: none; -webkit-appearance: none;
-  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='8' viewBox='0 0 12 8'><path d='M1 1l5 5 5-5' fill='none' stroke='%23888' stroke-width='1.6' stroke-linecap='round' stroke-linejoin='round'/></svg>");
-  background-repeat: no-repeat; background-position: right 10px center;
-  text-overflow: ellipsis; white-space: nowrap; overflow: hidden;
+  padding: 5px 6px 5px 10px; font-family: inherit; font-size: 13px; color: var(--text);
+  cursor: pointer; transition: border-color .15s, box-shadow .15s, background .15s;
 }
-.cc-filtro:hover { border-color: var(--border-strong); }
-.cc-filtro:focus { border-color: var(--primary); }
-.cc-filtro.is-on { border-color: var(--primary); color: var(--primary); font-weight: 600; }
-.cc-filtro[hidden] { display: none; }
+.cc-dd-btn:hover { border-color: var(--border-strong); }
+.cc-dd-btn:focus-visible {
+  outline: none; border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+.cc-dd-label { color: var(--text-muted); font-weight: 500; flex: none; }
+.cc-dd-label::after { content: ':'; }
+.cc-dd-value { font-weight: 600; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-dd-btn > .material-icons { font-size: 18px !important; color: var(--text-muted); flex: none; transition: transform .15s; }
+.cc-dd.is-open .cc-dd-btn { border-color: var(--primary); }
+.cc-dd.is-open .cc-dd-btn > .material-icons { transform: rotate(180deg); }
+.cc-dd.is-on .cc-dd-btn {
+  border-color: var(--primary);
+  background: color-mix(in srgb, var(--primary) 8%, var(--surface));
+}
+.cc-dd.is-on .cc-dd-value, .cc-dd.is-on .cc-dd-btn > .material-icons { color: var(--primary); }
+.cc-dd-panel {
+  position: absolute; top: calc(100% + 6px); left: 0; z-index: 30;
+  width: max-content; min-width: 240px; max-width: min(380px, calc(100vw - 32px));
+  background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .18); padding: 6px;
+}
+.cc-dd-panel[hidden] { display: none; }
+.cc-dd-panel.is-right { left: auto; right: 0; }
+.cc-dd-buscar {
+  display: flex; align-items: center; gap: 6px; padding: 3px 8px; margin-bottom: 4px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface);
+}
+.cc-dd-buscar:focus-within { border-color: var(--primary); }
+.cc-dd-buscar .material-icons { font-size: 17px !important; color: var(--text-muted); flex: none; }
+.cc-dd-input {
+  flex: 1; min-width: 0; border: none; background: none; outline: none;
+  font-family: inherit; font-size: 13px; color: var(--text); padding: 5px 0;
+}
+.cc-dd-lista { max-height: 300px; overflow-y: auto; display: flex; flex-direction: column; gap: 1px; }
+.cc-dd-opt {
+  display: flex; align-items: center; gap: 8px; width: 100%; text-align: left;
+  border: none; background: none; border-radius: 8px; padding: 7px 8px;
+  font-family: inherit; font-size: 13px; color: var(--text); cursor: pointer;
+}
+.cc-dd-opt:hover, .cc-dd-opt:focus-visible { background: var(--surface-hover); outline: none; }
+.cc-dd-opt > .material-icons { font-size: 16px !important; width: 16px; color: var(--primary); flex: none; }
+.cc-dd-txt { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cc-dd-n {
+  font-size: 12px; font-weight: 600; color: var(--text-muted); flex: none;
+  font-variant-numeric: tabular-nums; min-width: 20px; text-align: right;
+}
+.cc-dd-opt.is-sel { background: color-mix(in srgb, var(--primary) 10%, transparent); font-weight: 600; }
+.cc-dd-opt.is-sel .cc-dd-txt { color: var(--primary); }
+.cc-dd-sep { height: 1px; background: var(--border); margin: 4px 6px; }
+.cc-dd-sin .cc-dd-txt { color: var(--text-muted); font-style: italic; }
+.cc-dd-vacio { padding: 12px 8px; font-size: 12px; color: var(--text-muted); text-align: center; }
 .cc-filtros-clear {
   display: inline-flex; align-items: center; gap: 4px;
   border: 1px solid var(--border); background: var(--surface); border-radius: 8px;
@@ -4641,7 +4697,9 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
 .cc-empty-btn { display: inline-flex; margin-left: 10px; padding: 6px 12px; font-size: 13px; }
 @media (max-width: 700px) {
   .cc-filtros { padding: 10px 14px; }
-  .cc-filtro { flex: 1 1 calc(50% - 8px); max-width: none; }
+  .cc-dd { flex: 1 1 calc(50% - 8px); min-width: 0; }
+  .cc-dd-btn { width: 100%; max-width: none; }
+  .cc-dd-panel { left: 0; right: 0; width: auto; min-width: 0; max-width: none; }
   .cc-filtros-count { width: 100%; margin-left: 0; text-align: right; }
 }
 .cc-table { width: 100%; border-collapse: collapse; font-size: 13px; }
