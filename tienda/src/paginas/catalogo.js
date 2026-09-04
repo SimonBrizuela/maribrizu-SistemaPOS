@@ -1,6 +1,7 @@
 import { cargarConfig, cargarRubros, subrubrosDe, traerProductos, buscar, POR_PAGINA }
   from '../datos.js';
 import { plegarGrupos } from '../grupos.js';
+import { ordenarAz, filaDeSubrubros } from '../filtros.js';
 import { grilla, grillaCargando, pie, vacio } from '../componentes.js';
 import { esc, nombreBonito } from '../formato.js';
 import { icono } from '../iconos.js';
@@ -29,10 +30,12 @@ export async function catalogo({ montar, params, query }) {
     ? `${titulo} · Librería Liceo`
     : 'Catálogo · Librería Liceo');
 
+  // Los rubros llegan del sync en el orden de la portada (por lo que venden);
+  // como filtro van de la A a la Z, que es como se busca uno con el ojo.
   const fichas = [
     `<button class="ficha-filtro ficha-filtro--sin-punto" style="--rubro:var(--ink)"
              data-rubro-filtro="" aria-pressed="${!rubro}">Todo</button>`,
-    ...rubros.map(r => `
+    ...ordenarAz(rubros).map(r => `
       <button class="ficha-filtro" data-rubro="${esc(r.clave)}"
               data-rubro-filtro="${esc(r.clave)}"
               aria-pressed="${rubro === r.clave}">${esc(r.nombre)}</button>`),
@@ -41,13 +44,13 @@ export async function catalogo({ montar, params, query }) {
   // Librería tiene 150 subrubros. Sueltos son dieciséis filas de pastillas antes
   // del primer producto: la vidriera tapada por su propio índice.
   //
-  // A la vista quedan los 14 primeros, que por venir ordenados por cantidad son
-  // los que cubren casi todo el rubro. El resto vive en un panel con buscador y
-  // scroll propio: abrirlo no empuja la página ni obliga a barrer 150 nombres
-  // con el ojo — se tipea "cuaderno" y aparece.
-  const A_LA_VISTA = 14;
-  const hayPanel = rubro && subrubros.length > A_LA_VISTA;
-  const visibles = hayPanel ? subrubros.slice(0, A_LA_VISTA) : subrubros;
+  // A la vista quedan los 14 con más productos, que son los que cubren casi
+  // todo el rubro, pero de la A a la Z. El resto vive en un panel con buscador
+  // y scroll propio: abrirlo no empuja la página ni obliga a barrer 150 nombres
+  // con el ojo — se tipea "cuaderno" y aparece. El elegido siempre está en la
+  // fila, aunque esté en el fondo de la lista.
+  const { visibles, todos, hayPanel } =
+    filaDeSubrubros(subrubros, { elegido: sub, aLaVista: 14 });
 
   const pastilla = s => `
     <button class="ficha-sub" data-sub-filtro="${esc(s.nombre)}"
@@ -55,18 +58,11 @@ export async function catalogo({ montar, params, query }) {
       <span class="ficha-sub__n">${s.cantidad}</span>
     </button>`;
 
-  // El elegido siempre a la vista, aunque esté en el fondo de la lista: si no,
-  // el filtro activo no se ve por ningún lado.
-  const elegidoOculto = sub && !visibles.some(s => s.nombre === sub)
-    ? subrubros.find(s => s.nombre === sub)
-    : null;
-
   // Segunda fila: los subrubros del rubro que se está mirando. Con uno solo no
   // se muestra nada — un filtro que no filtra es ruido.
   const fichasSub = (rubro && subrubros.length > 1) ? [
     `<button class="ficha-sub" data-sub-filtro="" aria-pressed="${!sub}">Todo</button>`,
     ...visibles.map(pastilla),
-    elegidoOculto ? pastilla(elegidoOculto) : '',
     hayPanel ? `
       <button class="ficha-sub ficha-sub--mas" data-abrir-subs aria-expanded="false">
         Ver todos <span class="ficha-sub__n">${subrubros.length}</span>
@@ -86,7 +82,7 @@ export async function catalogo({ montar, params, query }) {
         </button>
       </div>
       <div class="panel-subs__lista" data-lista-subs>
-        ${subrubros.map(s => `
+        ${todos.map(s => `
           <button class="panel-subs__item" data-sub-filtro="${esc(s.nombre)}"
                   data-nombre="${esc(s.nombre.toLowerCase())}"
                   aria-pressed="${sub === s.nombre}">
