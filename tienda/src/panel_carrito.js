@@ -5,6 +5,7 @@
  * pedido no deberia sacar al cliente de donde estaba comprando.
  */
 import * as carrito from './carrito.js';
+import { configEnCache } from './datos.js';
 import { pesos, esc } from './formato.js';
 import { icono } from './iconos.js';
 import { avisar } from './avisos.js';
@@ -261,6 +262,7 @@ function pintar(renglones) {
   panel.innerHTML = cabecera + `
     <div class="panel__cuerpo">${renglones.map(renglon).join('')}</div>
     <div class="panel__pie">
+      ${faltaParaElMinimo(total)}
       <div class="totales" style="margin-bottom:var(--e-4)">
         <div class="totales__fila">
           <span>Productos (${cuantos})</span>
@@ -278,5 +280,45 @@ function pintar(renglones) {
       <button class="boton boton--primario boton--grande boton--bloque" data-checkout>
         Continuar ${icono('derecha', { tam: 18, grosor: 2.5 })}
       </button>
+    </div>`;
+}
+
+/**
+ * Cuánto falta para el pedido mínimo, acá y no recién en el checkout.
+ *
+ * Enterarse de que faltan $6.000 después de cargar el pedido, elegir cómo lo
+ * recibís y escribir la dirección es la forma más cara de perder una venta: el
+ * cliente ya invirtió cinco minutos y se va enojado. Acá todavía está comprando
+ * y agregar algo más es un toque.
+ *
+ * El envío también suma para el mínimo (así está el checkout), pero acá todavía
+ * no se sabe cómo lo va a recibir, así que se cuenta solo lo que hay: es la
+ * cuenta pesimista, y prometer menos y cobrar menos es el único error que no
+ * duele.
+ */
+function faltaParaElMinimo(total) {
+  const minimo = Number(configEnCache()?.entrega?.pedido_minimo) || 0;
+  if (minimo <= 0) return '';
+
+  const falta = minimo - total;
+  if (falta <= 0) {
+    return `
+      <p class="panel__minimo panel__minimo--listo">
+        ${icono('tilde', { tam: 16, grosor: 2.5 })}
+        <span>Llegaste al pedido mínimo de ${pesos(minimo)}</span>
+      </p>`;
+  }
+
+  const porcentaje = Math.max(4, Math.min(100, Math.round((total / minimo) * 100)));
+  return `
+    <div class="panel__minimo">
+      <p class="panel__minimo__texto">
+        ${icono('atencion', { tam: 16 })}
+        <span>Te faltan <strong class="cifra">${pesos(falta)}</strong> para el pedido
+              mínimo de <strong class="cifra">${pesos(minimo)}</strong></span>
+      </p>
+      <span class="panel__minimo__barra">
+        <span style="width:${porcentaje}%"></span>
+      </span>
     </div>`;
 }

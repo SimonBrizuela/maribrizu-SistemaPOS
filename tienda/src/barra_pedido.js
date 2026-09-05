@@ -20,6 +20,7 @@
  * el final de la página.
  */
 import * as carrito from './carrito.js';
+import { configEnCache } from './datos.js';
 import { pesos, esc } from './formato.js';
 import { icono } from './iconos.js';
 import { abrir as abrirCarrito, estaAbierto } from './panel_carrito.js';
@@ -87,7 +88,17 @@ function pintar(renglones) {
   // Las últimas primero: lo recién agregado se ve sin tener que buscarlo.
   const visibles = renglones.slice(-FOTOS_VISIBLES).reverse();
 
+  // Lo que falta para el mínimo, en el renglón que ya está mirando mientras
+  // compra. El checkout lo dice también, pero ahí ya es tarde: el cliente cargó
+  // todo, eligió cómo lo recibe y recién entonces se entera de que no llega.
+  const minimo = Number(configEnCache()?.entrega?.pedido_minimo) || 0;
+  const falta = minimo > 0 ? minimo - total : 0;
+
   barra.innerHTML = `
+    ${falta > 0 ? `
+      <p class="barra-pedido__minimo">
+        Te faltan <strong class="cifra">${pesos(falta)}</strong> para el pedido mínimo
+      </p>` : ''}
     <button class="barra-pedido__cuerpo" data-abrir-pedido
             aria-label="Ver tu pedido: ${cosas} producto${cosas === 1 ? '' : 's'}, ${pesos(total)}">
       <span class="barra-pedido__fotos">

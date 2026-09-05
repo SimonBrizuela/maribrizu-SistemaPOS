@@ -792,6 +792,25 @@
   color: var(--text-2);
 }
 
+/* Falta elegir el color. Se marca el bloque entero y no solo el renglón de
+   texto: con treinta cápsulas a la vista, un renglón chico abajo se pierde. */
+.variedades--falta {
+  border-left: 3px solid var(--alerta);
+  padding-left: var(--e-3);
+  margin-left: calc(var(--e-3) * -1);
+}
+.variedades--falta .campo__label { color: var(--alerta); }
+
+.variedades__falta {
+  display: flex;
+  align-items: center;
+  gap: var(--e-2);
+  font-size: var(--t-sm);
+  font-weight: var(--peso-semi);
+  color: var(--alerta);
+}
+.variedades__falta svg { flex: none; }
+
 .variedades__marco { position: relative; }
 
 .variedades__lista--pista {
@@ -1155,6 +1174,22 @@
               opacity .2s ease;
 }
 .barra-pedido--visible { opacity: 1; transform: translateY(0); pointer-events: auto; }
+
+/* Cuánto falta para el pedido mínimo. Renglón fino arriba de la barra: tiene
+   que leerse mientras se sigue comprando, no ocupar lugar. */
+.barra-pedido__minimo {
+  margin: 0 auto var(--e-1);
+  width: fit-content;
+  max-width: 100%;
+  padding: 2px var(--e-3);
+  border-radius: var(--r-full);
+  background: var(--alerta-bg);
+  color: var(--alerta);
+  font-size: var(--t-xs);
+  font-weight: var(--peso-semi);
+  text-align: center;
+  pointer-events: none;
+}
 
 .barra-pedido__cuerpo {
   display: flex;
@@ -1908,6 +1943,15 @@
   padding: var(--e-1);
 }
 
+/* Cuando la búsqueda se salió del rubro sola. Va en el color de aviso y no en
+   el gris del encabezado normal: es un cambio de lo que se está mirando, y si
+   pasa desapercibido el cliente cree que el filtro del rubro no anda. */
+.sugerencias__ambito--global {
+  background: var(--alerta-bg);
+  color: var(--alerta);
+}
+.sugerencias__ambito--global strong { color: inherit; }
+
 .sugerencias__todo {
   display: block;
   width: 100%;
@@ -2103,6 +2147,51 @@
   color: inherit;
   font-weight: var(--peso-semi);
 }
+
+/* Lo mismo, pero en el panel del pedido: es donde el cliente todavía está
+   comprando y agregar algo más le cuesta un toque. La barrita muestra cuánto
+   falta sin obligar a leer el número. */
+.panel__minimo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-2);
+  padding: var(--e-3) var(--e-4);
+  border-radius: var(--r-sm);
+  margin-bottom: var(--e-3);
+  background: var(--alerta-bg);
+  color: var(--alerta);
+  font-size: var(--t-sm);
+  line-height: 1.5;
+}
+.panel__minimo__texto {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--e-2);
+  margin: 0;
+}
+.panel__minimo__texto svg { flex: none; margin-top: 2px; }
+.panel__minimo__barra {
+  display: block;
+  height: 4px;
+  border-radius: var(--r-full);
+  background: color-mix(in srgb, currentColor 20%, transparent);
+  overflow: hidden;
+}
+.panel__minimo__barra > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: currentColor;
+  transition: width var(--m-normal) var(--curva);
+}
+.panel__minimo--listo {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  background: var(--exito-bg);
+  color: var(--exito);
+}
+.panel__minimo--listo svg { flex: none; }
 
 .checkout__legal {
   font-size: var(--t-xs);
@@ -2796,6 +2885,8 @@
    El botón vive fuera de `.principal`, pegado al viewport, y en el celular se
    levanta por encima de la barra inferior: apoyado sobre ella tapa el carrito,
    que es justo el botón que no se puede tapar en una tienda. */
+
+.asistente[hidden] { display: none; }
 
 .asistente {
   position: fixed;

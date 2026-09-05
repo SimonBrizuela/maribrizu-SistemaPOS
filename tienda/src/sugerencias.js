@@ -95,7 +95,7 @@ function cerrar() {
   document.querySelector('.buscador__input')?.setAttribute('aria-expanded', 'false');
 }
 
-function pintar(productos, texto) {
+function pintar(productos, texto, { global: salioDelRubro = false } = {}) {
   const form = document.querySelector('[data-buscador]');
   if (!form) return;
 
@@ -107,16 +107,25 @@ function pintar(productos, texto) {
     form.appendChild(caja);
   }
 
-  const cabecera = ambito ? `
+  // Cuando la respuesta salió del rubro no se ofrece "Buscar en todo": ya se
+  // está mirando todo. Se avisa por qué cambió, que si no parece que el filtro
+  // del rubro se soltó solo.
+  const cabecera = !ambito ? '' : salioDelRubro ? `
+    <div class="sugerencias__ambito sugerencias__ambito--global">
+      No hay nada en <strong>${esc(nombreBonito(ambito))}</strong>, te mostramos todo el catálogo
+    </div>` : `
     <div class="sugerencias__ambito">
       Buscando en <strong>${esc(nombreBonito(ambito))}</strong>
       <button type="button" data-todo-el-catalogo>Buscar en todo</button>
-    </div>` : '';
+    </div>`;
 
   if (!productos.length) {
-    caja.innerHTML = cabecera + `
+    // Sin resultados ya se buscó en todo el catálogo, así que el encabezado del
+    // rubro sobra: decir "en este rubro" sería mandar a mirar a otro lado algo
+    // que no está en ninguno.
+    caja.innerHTML = `
       <p class="sugerencias__vacio">
-        Nada con «${esc(texto)}»${ambito ? ' en este rubro' : ''}.
+        Nada con «${esc(texto)}» en el catálogo.
       </p>`;
     return;
   }
@@ -144,13 +153,30 @@ function mover(paso) {
   filas[indice].scrollIntoView?.({ block: 'nearest' });
 }
 
-async function consultar(texto) {
+async function consultar(texto, { forzarGlobal = false } = {}) {
   const mio = ++pedido;
-  const productos = await sugerir(texto, { rubro: ambito });
+  const rubro = forzarGlobal ? null : ambito;
+  let productos = await sugerir(texto, { rubro });
   // Llegó tarde: ya se escribió algo más. Pintarla haría parpadear resultados
   // viejos encima de los nuevos.
   if (mio !== pedido) return;
-  pintar(productos, texto);
+
+  // Nada en el rubro: se vuelve a preguntar sobre todo el catálogo antes de
+  // decir que no hay. Parado en Papelera, "bolígrafo" contestaba "nada en este
+  // rubro" con doscientos bolígrafos en Librería, y eso se lee como que la
+  // tienda no lo tiene. El botón "Buscar en todo" ya estaba, pero pedirle un
+  // clic a alguien que acaba de leer "no hay" es pedirle que no nos crea.
+  let salioDelRubro = forzarGlobal;
+  if (!productos.length && rubro) {
+    const enTodo = await sugerir(texto, { rubro: null });
+    if (mio !== pedido) return;
+    if (enTodo.length) {
+      productos = enTodo;
+      salioDelRubro = true;
+    }
+  }
+
+  pintar(productos, texto, { global: salioDelRubro });
 }
 
 /**
@@ -204,9 +230,11 @@ export function iniciarSugerencias() {
   document.addEventListener('click', ev => {
     if (desde(ev, '[data-todo-el-catalogo]')) {
       ev.preventDefault();
-      ambito = null;
+      // El ámbito no se borra: se ignora para esta consulta. Borrarlo dejaba el
+      // placeholder diciendo "Buscar en Papelera…" sobre resultados de todo el
+      // catálogo, y al volver a escribir no había forma de acotar de nuevo.
       const campo = document.querySelector('.buscador__input');
-      if (campo?.value.trim()) consultar(campo.value.trim());
+      if (campo?.value.trim()) consultar(campo.value.trim(), { forzarGlobal: true });
       return;
     }
     // Un clic en una sugerencia navega por el enlace; el resto de la página

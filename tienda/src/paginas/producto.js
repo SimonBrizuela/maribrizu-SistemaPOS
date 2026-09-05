@@ -1,6 +1,6 @@
 import { cargarConfig, cargarAvisos, avisoDe, traerProducto, traerProductos, traerGrupo }
   from '../datos.js';
-import { ordenarPorTamano, plegarGrupos } from '../grupos.js';
+import { ordenarPorTamano, plegarGrupos, etiquetasDeTamano } from '../grupos.js';
 import { grilla, pie, vacio, conArticulo } from '../componentes.js';
 import { pesos, esc, nombreBonito, colorDeVariedad } from '../formato.js';
 import { icono } from '../iconos.js';
@@ -93,12 +93,16 @@ const MUCHAS_VARIEDADES = 12;
 export function listaDeTamanos(tamanos, actualId) {
   if (tamanos.length < 2) return '';
 
-  const botones = tamanos.map(t => `
+  // Dos botones con el mismo texto no se pueden elegir: el tamaño lo escribe
+  // una persona en el panel y hay grupos con dos "200 gr" de marcas distintas.
+  const etiquetas = etiquetasDeTamano(tamanos);
+
+  const botones = tamanos.map((t, i) => `
     <button class="variedad" data-tamano="${esc(t.id)}"
             aria-pressed="${String(t.id === actualId)}"
             ${t.stock <= 0 ? 'disabled' : ''}
-            title="${esc(t.tamano || t.nombre)}${t.stock <= 0 ? ' · sin stock' : ''}">
-      <span class="variedad__nombre">${esc(t.tamano || t.nombre)}</span>
+            title="${esc(etiquetas[i])}${t.stock <= 0 ? ' · sin stock' : ''}">
+      <span class="variedad__nombre">${esc(etiquetas[i])}</span>
     </button>`).join('');
 
   return `
@@ -153,14 +157,22 @@ function listaDeVariedades(variedades) {
       ${icono('derecha', { tam: 16, grosor: 2.5 })}
     </button>`;
 
+  // El renglón de abajo nace escondido y aparece cuando se toca "Agregar" sin
+  // haber elegido. Antes el único aviso era el flotante, que se va a los cuatro
+  // segundos: quien no llegó a leerlo veía un botón que no hace nada, y eso se
+  // lee como que la página está rota.
   return `
-    <div class="variedades">
+    <div class="variedades" data-variedades>
       <span class="campo__label" id="tit-variedades">
         Elegí el color o modelo
         <em data-elegida class="variedades__elegida">${
           enPista ? `· ${disponibles} ${comoSeLlaman(variedades)}` : ''}</em>
       </span>
       ${enPista ? `<div class="variedades__marco">${lista}${flechas}</div>` : lista}
+      <p class="variedades__falta" data-falta-variedad role="alert" hidden>
+        ${icono('atencion', { tam: 15 })}
+        <span>Elegí el color o modelo para poder agregarlo</span>
+      </p>
     </div>`;
 }
 
@@ -405,11 +417,39 @@ export async function producto({ montar, params }) {
   const enPista = variedades.length > MUCHAS_VARIEDADES;
   const resumen = enPista ? `· ${cuantasHay} ${comoSeLlaman(variedades)}` : '';
 
+  // Sin animación si el aparato pidió quietud. Se usa para llevar el selector a
+  // la vista y para las flechas de la pista. Con `?.` porque no todos los
+  // entornos traen matchMedia y esto corre antes que cualquier scroll.
+  const suave = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches
+    ? 'auto' : 'smooth';
+
+  /* ── Cuando falta elegir ────────────────────────────────────────────────
+     Tocar "Agregar" sin color elegido no agrega nada, y eso tiene que verse en
+     el selector y quedarse ahí: el aviso flotante solo no alcanza. */
+  const cajaVariedades = document.querySelector('[data-variedades]');
+  const avisoFalta = document.querySelector('[data-falta-variedad]');
+
+  function pedirVariedad() {
+    cajaVariedades?.classList.add('variedades--falta');
+    if (avisoFalta) avisoFalta.hidden = false;
+    avisar('Elegí primero el color o modelo', { tipo: 'error' });
+    // Lleva el selector a la vista y el foco al primer botón disponible: sin
+    // esto el cliente lee el aviso y no sabe qué tiene que tocar.
+    cajaVariedades?.scrollIntoView({ block: 'center', behavior: suave });
+    document.querySelector('[data-variedad]:not([disabled])')?.focus();
+  }
+
+  function limpiarFalta() {
+    cajaVariedades?.classList.remove('variedades--falta');
+    if (avisoFalta) avisoFalta.hidden = true;
+  }
+
   document.querySelectorAll('[data-variedad]').forEach(boton => {
     boton.addEventListener('click', () => {
       const nombre = boton.dataset.variedad;
       const yaEstaba = elegida === nombre;
       elegida = yaEstaba ? null : nombre;
+      if (elegida) limpiarFalta();
 
       document.querySelectorAll('[data-variedad]').forEach(otro => {
         otro.setAttribute('aria-pressed', String(otro.dataset.variedad === elegida));
@@ -461,9 +501,7 @@ export async function producto({ montar, params }) {
     }, { passive: false });
 
     // Las flechas saltan de a pantalla, dejando un botón de solape como
-    // referencia. Sin animación si el aparato pidió quietud.
-    const suave = matchMedia('(prefers-reduced-motion: reduce)').matches
-      ? 'auto' : 'smooth';
+    // referencia.
     const salto = () => Math.max(pista.clientWidth * 0.8, 160);
     document.querySelector('[data-pista-atras]')?.addEventListener('click',
       () => pista.scrollBy({ left: -salto(), behavior: suave }));
@@ -555,22 +593,12 @@ export async function producto({ montar, params }) {
   pintarCantidad();
 
   document.querySelector('[data-pack]')?.addEventListener('click', () => {
-    if (hayVariedades && !elegida) {
-      avisar('Elegí primero el color o modelo', { tipo: 'error' });
-      document.querySelector('[data-variedad]:not([disabled])')?.focus();
-      return;
-    }
+    if (hayVariedades && !elegida) { pedirVariedad(); return; }
     carrito.agregar(p, { esPack: true, variedad: elegida });
   });
 
   botonAgregar?.addEventListener('click', () => {
-    if (hayVariedades && !elegida) {
-      avisar('Elegí primero el color o modelo', { tipo: 'error' });
-      // Lleva el foco al primer botón disponible: sin esto el cliente lee el
-      // aviso y no sabe qué tiene que tocar.
-      document.querySelector('[data-variedad]:not([disabled])')?.focus();
-      return;
-    }
+    if (hayVariedades && !elegida) { pedirVariedad(); return; }
     carrito.agregar(p, {
       variedad: elegida,
       cantidad: porMetro && !soloRollo ? metros : cuantos,
