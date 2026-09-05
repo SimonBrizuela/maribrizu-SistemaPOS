@@ -7,6 +7,13 @@
  * par, se entera acá y no en el celular de un cliente.
  *
  *   node design/contraste.mjs
+ *
+ * OJO CON HASTA DONDE LLEGA: verifica los PARES DE TOKENS, no cómo termina
+ * dibujada la pantalla. Si una regla más específica pisa el color, esto sigue
+ * diciendo que está todo bien. Pasó el 05-09-2026: `.marco-oscuro a` le ganaba a
+ * `.rubro-ficha` y las ocho fichas de la portada salían con texto claro sobre
+ * los rellenos claros de marca — blanco sobre el verde lima, 1,88:1 — con este
+ * verificador en verde. Lo que se mide de verdad se mide en el navegador.
  */
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
@@ -93,8 +100,14 @@ const PARES = [
   ['--liceo-naranja-txt',  '--liceo-naranja-bg',   'ficha Juguetería',             4.5],
   ['--liceo-cyan-txt',     '--liceo-cyan-bg',      'ficha Papelera',               4.5],
   ['--liceo-rojo-txt',     '--liceo-rojo-bg',      'ficha Regalería',              4.5],
-  ['--liceo-rosa-txt',     '--liceo-rosa-bg',      'ficha Perfumería',             4.5],
-  ['--liceo-rosa-txt',     '--surface',            'rubro Perfumería en card',     4.5],
+  ['--liceo-rosa-txt',     '--liceo-rosa-bg',      'ficha Lencería',               4.5],
+  ['--liceo-azul-txt',     '--liceo-azul-bg',      'ficha Accesorios',             4.5],
+  ['--liceo-coral-txt',    '--liceo-coral-bg',     'ficha Perfumería',             4.5],
+  ['--liceo-agua-txt',     '--liceo-agua-bg',      'ficha Cotillón',               4.5],
+  ['--liceo-rosa-txt',     '--surface',            'rubro Lencería en card',       4.5],
+  ['--liceo-azul-txt',     '--surface',            'rubro Accesorios en card',     4.5],
+  ['--liceo-coral-txt',    '--surface',            'rubro Perfumería en card',     4.5],
+  ['--liceo-agua-txt',     '--surface',            'rubro Cotillón en card',       4.5],
   ['--liceo-verde-txt',    '--surface',            'rubro Mercería en card',       4.5],
   ['--liceo-naranja-txt',  '--surface',            'rubro Juguetería en card',     4.5],
   ['--liceo-cyan-txt',     '--surface',            'rubro Papelera en card',       4.5],
@@ -116,7 +129,10 @@ const SOBRE_COLOR = [
   ['--liceo-naranja-tinta',  '--liceo-naranja', 'ficha de filtro activa Juguetería', 4.5],
   ['--liceo-cyan-tinta',     '--liceo-cyan',    'ficha de filtro activa Papelera',   4.5],
   ['--liceo-rojo-tinta',     '--liceo-rojo',    'ficha de filtro activa Regalería',  4.5],
-  ['--liceo-rosa-tinta',     '--liceo-rosa',    'ficha de filtro activa Perfumería', 4.5],
+  ['--liceo-rosa-tinta',     '--liceo-rosa',    'ficha de filtro activa Lencería',   4.5],
+  ['--liceo-azul-tinta',     '--liceo-azul',    'ficha de filtro activa Accesorios', 4.5],
+  ['--liceo-coral-tinta',    '--liceo-coral',   'ficha de filtro activa Perfumería', 4.5],
+  ['--liceo-agua-tinta',     '--liceo-agua',    'ficha de filtro activa Cotillón',   4.5],
   ['--exito-tinta',          '--exito-solido',  'tilde de paso cumplido',            4.5],
   ['--alerta-tinta',         '--alerta-solido', 'icono de aviso fuera de zona',      4.5],
   ['--error-tinta',          '--error-solido',  'icono de error',                    4.5],

@@ -55,11 +55,39 @@
   --liceo-rosa-txt: #A32C68;
   --liceo-rosa-bg:  #FBEBF3;
 
+  /* Del septimo al noveno, por la misma razon y con la misma regla: los rubros
+     publicados son ocho y las fichas del logo cinco, asi que Accesorios repetia
+     el cyan de Papelera, Perfumeria el rosa de Lenceria y Cotillon el violeta de
+     Libreria. Tres pares del mismo color en un bloque de ocho se leen como un
+     error de carga.
+
+     Ninguno se invento: cada uno es el punto medio entre dos colores del logo,
+     igual que el rosa. El azul esta entre el violeta y el cyan, el coral entre
+     el rojo y el naranja, y el agua entre el cyan y el verde. Se distinguen a
+     simple vista y siguen siendo de la misma familia.
+
+     Queda libre el punto medio verde-naranja (una mostaza) para el dia que
+     Jugueteria o Navidad vuelvan a publicarse. */
+  --liceo-azul:     #5275B8;
+  --liceo-azul-txt: #3A5C99;
+  --liceo-azul-bg:  #EAF0FA;
+
+  --liceo-coral:     #EC6A2C;
+  --liceo-coral-txt: #B2440E;
+  --liceo-coral-bg:  #FDEDE3;
+
+  --liceo-agua:     #5BB884;
+  --liceo-agua-txt: #1F7A52;
+  --liceo-agua-bg:  #E6F5EC;
+
   --liceo-violeta-tinta: #FFFFFF;   /* 6,77:1 */
   --liceo-verde-tinta:   var(--ink); /* 9,62:1 */
   --liceo-naranja-tinta: var(--ink); /* 8,78:1 */
   --liceo-cyan-tinta:    var(--ink); /* 7,14:1 */
   --liceo-rojo-tinta:    var(--ink); /* 4,62:1 */
+  --liceo-azul-tinta:    #FFFFFF;   /* 4,61:1 */
+  --liceo-coral-tinta:   var(--ink); /* 6,72:1 */
+  --liceo-agua-tinta:    var(--ink); /* 8,77:1 */
   --liceo-rosa-tinta:    #FFFFFF;   /* 6,05:1 */
 
   /* ── Neutros ──────────────────────────────────────────────────────────────
@@ -210,6 +238,9 @@
   --liceo-cyan-txt:    #6DCBE2;
   --liceo-rojo-txt:    #F2818B;
   --liceo-rosa-txt:    #EE93BE;
+  --liceo-azul-txt:    #93B2E8;
+  --liceo-coral-txt:   #F2996B;
+  --liceo-agua-txt:    #7FD2A6;
 
   --liceo-violeta-bg: #2A1B36;
   --liceo-verde-bg:   #23301A;
@@ -217,6 +248,9 @@
   --liceo-cyan-bg:    #142C33;
   --liceo-rojo-bg:    #35191C;
   --liceo-rosa-bg:    #331726;
+  --liceo-azul-bg:    #172033;
+  --liceo-coral-bg:   #33200F;
+  --liceo-agua-bg:    #16301F;
 
   --bg:        #0E0D10;
   --surface:   #17151C;
@@ -279,14 +313,21 @@
   --rubro: var(--liceo-naranja); --rubro-txt: var(--liceo-naranja-txt);
   --rubro-bg: var(--liceo-naranja-bg); --rubro-tinta: var(--liceo-naranja-tinta);
 }
-[data-rubro="PERFUMERÍA"], [data-rubro="PERFUMERIA"],
 [data-rubro="LENCERÍA"], [data-rubro="LENCERIA"] {
   --rubro: var(--liceo-rosa);    --rubro-txt: var(--liceo-rosa-txt);
   --rubro-bg: var(--liceo-rosa-bg);    --rubro-tinta: var(--liceo-rosa-tinta);
 }
+[data-rubro="PERFUMERÍA"], [data-rubro="PERFUMERIA"] {
+  --rubro: var(--liceo-coral);   --rubro-txt: var(--liceo-coral-txt);
+  --rubro-bg: var(--liceo-coral-bg);   --rubro-tinta: var(--liceo-coral-tinta);
+}
 [data-rubro="ACCESORIOS"] {
-  --rubro: var(--liceo-cyan);    --rubro-txt: var(--liceo-cyan-txt);
-  --rubro-bg: var(--liceo-cyan-bg);    --rubro-tinta: var(--liceo-cyan-tinta);
+  --rubro: var(--liceo-azul);    --rubro-txt: var(--liceo-azul-txt);
+  --rubro-bg: var(--liceo-azul-bg);    --rubro-tinta: var(--liceo-azul-tinta);
+}
+[data-rubro="COTILLÓN"], [data-rubro="COTILLON"] {
+  --rubro: var(--liceo-agua);    --rubro-txt: var(--liceo-agua-txt);
+  --rubro-bg: var(--liceo-agua-bg);    --rubro-tinta: var(--liceo-agua-tinta);
 }
 [data-rubro="NAVIDAD"], [data-rubro="SELLOS"] {
   --rubro: var(--liceo-verde);   --rubro-txt: var(--liceo-verde-txt);

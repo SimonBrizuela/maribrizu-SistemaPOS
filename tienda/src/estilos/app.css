@@ -414,6 +414,14 @@
     box-shadow var(--m-normal) var(--curva),
     filter var(--m-normal) var(--curva);
 }
+/* La tinta de la ficha le tiene que ganar a la del marco negro.
+   `.marco-oscuro a { color: var(--ink-texto) }` es más específica que
+   `.rubro-ficha`, así que las ocho fichas salían con texto claro sin importar lo
+   que dijeran los tokens: blanco sobre el verde lima daba 1,88:1, ilegible.
+   El verificador de contraste no lo veía porque mide los tokens, no cómo queda
+   dibujada la pantalla. */
+.marco-oscuro .rubro-ficha { color: var(--rubro-tinta); }
+
 .rubro-ficha:hover {
   transform: translateY(-3px);
   filter: brightness(1.06);
