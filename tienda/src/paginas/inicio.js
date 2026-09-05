@@ -3,6 +3,7 @@ import { plegarGrupos } from '../grupos.js';
 import { cardProducto, grilla, grillaCargando, pie } from '../componentes.js';
 import { franjaMarca, icono, iconoDeRubro, resplandores } from '../iconos.js';
 import { esc } from '../formato.js';
+import { fijarNegocio } from '../seo.js';
 
 // Hasta dónde puede saltar una tira de la portada dentro de su rubro. El sync
 // ordena por lo que se vende, así que los primeros treinta son los que valen
@@ -87,6 +88,12 @@ function tira(rubro, productos) {
 
 export async function inicio({ montar }) {
   const cfg = await cargarConfig();
+
+  // Direccion, telefono y horario, en la forma que Google entiende. Es lo que
+  // hace la diferencia entre aparecer en una lista de resultados y aparecer en
+  // el panel de la derecha con el mapa al lado, que para una libreria de barrio
+  // es la busqueda que mas vende.
+  fijarNegocio(cfg);
 
   // La portada se pinta antes de tener productos: no depende de ninguna consulta,
   // así que aparece de inmediato y la primera pantalla nunca está en blanco.

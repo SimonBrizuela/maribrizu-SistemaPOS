@@ -1890,7 +1890,11 @@
 }
 
 .sugerencia__datos { flex: 1; min-width: 0; }
+/* En bloque, si no el recorte no existe: `overflow` y `text-overflow` no hacen
+   nada sobre un elemento en línea, y el nombre largo se salía del renglón hasta
+   pisar el precio de la derecha. */
 .sugerencia__nombre {
+  display: block;
   font-size: var(--t-sm);
   font-weight: var(--peso-semi);
   line-height: 1.3;
@@ -1902,6 +1906,7 @@
    qué apareció ese resultado. */
 .sugerencia__nombre b { color: var(--primary-txt); }
 .sugerencia__meta {
+  display: block;
   font-size: var(--t-xs);
   color: var(--text-2);
   overflow: hidden;

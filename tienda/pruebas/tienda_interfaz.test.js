@@ -356,3 +356,72 @@ describe('el panel del carrito', () => {
     panel.cerrar();
   });
 });
+
+describe('los datos del local para Google', () => {
+  const CFG = {
+    nombre: 'Libreria Liceo',
+    direccion: 'Av. Alfonsina Storni 168, X5019 Cordoba',
+    telefono: '3517046684',
+    email: 'libreria.liceo@hotmail.com',
+    instagram: 'https://www.instagram.com/libreria.liceo/',
+    origen: { lat: -31.3540169, lng: -64.1734488 },
+    horarios: [
+      [{ desde: '09:00', hasta: '13:00' }, { desde: '17:00', hasta: '20:30' }],
+      [], [], [], [],
+      [{ desde: '09:00', hasta: '13:00' }],
+      [],
+    ],
+  };
+
+  const leer = () => JSON.parse(
+    document.head.querySelector('script[data-seo-negocio]').textContent);
+
+  beforeEach(() => {
+    Object.defineProperty(window, 'location', {
+      value: new URL('https://liceolibreria.com/'), configurable: true,
+    });
+  });
+
+  // Es lo que hace la diferencia entre aparecer en una lista de resultados y
+  // aparecer en el panel de la derecha con el mapa al lado. Para una libreria de
+  // barrio, "libreria cerca mio" es la busqueda que mas vende.
+  it('publica direccion, telefono y coordenadas', () => {
+    seo.fijarNegocio(CFG);
+    const d = leer();
+    expect(d['@type']).toBe('Store');
+    expect(d.address.streetAddress).toBe('Av. Alfonsina Storni 168');
+    expect(d.address.postalCode).toBe('X5019');
+    expect(d.address.addressLocality).toBe('Cordoba');
+    expect(d.telephone).toBe('+543517046684');
+    expect(d.geo.latitude).toBe(-31.3540169);
+  });
+
+  it('el horario va estructurado, no como el texto del cartel', () => {
+    seo.fijarNegocio(CFG);
+    const horas = leer().openingHoursSpecification;
+    expect(horas).toHaveLength(3);
+    expect(horas[0]).toMatchObject({
+      dayOfWeek: 'https://schema.org/Monday', opens: '09:00', closes: '13:00',
+    });
+    expect(horas.at(-1).dayOfWeek).toBe('https://schema.org/Saturday');
+  });
+
+  it('una direccion sin coma no se inventa un codigo postal', () => {
+    expect(seo.partirDireccion('Alfonsina Storni 168')).toEqual({
+      streetAddress: 'Alfonsina Storni 168', addressLocality: 'Córdoba',
+    });
+  });
+
+  it('sin horario cargado el bloque sale igual, sin la clave vacia', () => {
+    seo.fijarNegocio({ ...CFG, horarios: null });
+    expect(leer().openingHoursSpecification).toBeUndefined();
+  });
+
+  // Los datos del local son de la portada. En una ficha el que manda es el
+  // Product; declarar tambien el negocio en cada una es ruido.
+  it('al cambiar de pantalla se va', () => {
+    seo.fijarNegocio(CFG);
+    seo.fijarPantalla();
+    expect(document.head.querySelector('script[data-seo-negocio]')).toBeNull();
+  });
+});

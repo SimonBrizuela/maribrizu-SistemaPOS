@@ -413,3 +413,34 @@ describe('la ficha, cuando falta elegir el color', () => {
     carrito.vaciar();
   });
 });
+
+describe('una busqueda sin resultados', () => {
+  // Los nombres del catalogo salen del POS ("Abrojo 100MM X Mt"), asi que "no
+  // tenemos nada con esas palabras" muchas veces quiere decir "lo tenemos con
+  // otro nombre". El chat busca por lo que la cosa ES, y a esa altura el
+  // cliente ya se estaba yendo.
+  it('ofrece preguntarle al chat con lo que se busco', async () => {
+    const c = await abrir('catalogo', { query: new URLSearchParams('q=zzzz') });
+    const boton = c.querySelector('[data-preguntar]');
+    expect(boton).not.toBeNull();
+    expect(boton.dataset.preguntar).toBe('zzzz');
+    expect(boton.textContent).toContain('zzzz');
+  });
+
+  it('el boton abre el chat con la pregunta ya escrita', async () => {
+    window.matchMedia = () => ({ matches: false, addEventListener() {}, removeEventListener() {} });
+    const c = await abrir('catalogo', { query: new URLSearchParams('q=zzzz') });
+    c.querySelector('[data-preguntar]').click();
+
+    const panel = document.querySelector('.asistente-panel');
+    expect(panel).not.toBeNull();
+    expect(panel.textContent).toContain('zzzz');
+    panel.remove();
+    document.body.style.overflow = '';
+  });
+
+  it('el WhatsApp sigue estando', async () => {
+    const c = await abrir('catalogo', { query: new URLSearchParams('q=zzzz') });
+    expect(c.querySelector('a[href*="wa.me"]')).not.toBeNull();
+  });
+});

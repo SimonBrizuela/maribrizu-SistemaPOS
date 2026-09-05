@@ -7,6 +7,7 @@ import { esc, nombreBonito } from '../formato.js';
 import { icono } from '../iconos.js';
 import { ir } from '../router.js';
 import { fijarTitulo } from '../seo.js';
+import { abrirAsistente, asistenteApagado } from '../asistente.js';
 
 export async function catalogo({ montar, params, query }) {
   const rubro = params.rubro ? decodeURIComponent(params.rubro) : null;
@@ -201,15 +202,33 @@ export async function catalogo({ montar, params, query }) {
     const encontrados = await buscar(texto);
     if (!encontrados.length) {
       cuenta.textContent = '';
+
+      // El chat va primero, y no por moderno: busca por lo que la cosa ES y no
+      // por cómo se escribe. Los nombres del catálogo salen del POS ("Abrojo
+      // 100MM X Mt"), así que "no tenemos nada con esas palabras" muchas veces
+      // quiere decir "lo tenemos con otro nombre", y el cliente ya se estaba
+      // yendo. Si el chat no está disponible, el WhatsApp queda de primero
+      // igual que antes.
+      const conChat = !asistenteApagado();
       lista.innerHTML = vacio({
         titulo: `No tenemos nada que coincida con <em>«${esc(texto)}»</em>`,
-        texto: 'Puede ser un error de tipeo. Probá escribiendo menos letras, o escribinos y te decimos si lo tenemos en el local.',
+        texto: 'Puede ser un error de tipeo, o que lo tengamos con otro nombre. '
+             + 'Preguntanos y te decimos si está en el local.',
         acciones: `
-          <a class="boton boton--primario" href="https://wa.me/${esc(cfg.whatsapp)}?text=${
+          ${conChat ? `
+            <button class="boton boton--primario" data-preguntar="${esc(texto)}">
+              ${icono('chat', { tam: 16 })} Preguntar por «${esc(texto)}»
+            </button>` : ''}
+          <a class="boton boton--${conChat ? 'secundario' : 'primario'}"
+             href="https://wa.me/${esc(cfg.whatsapp)}?text=${
             encodeURIComponent(`Hola, busco: ${texto}`)}" target="_blank" rel="noopener">
             ${icono('whatsapp', { tam: 16 })} Escribinos por WhatsApp
           </a>
           <a class="boton boton--secundario" href="/catalogo">Ver todo el catálogo</a>`,
+      });
+
+      lista.querySelector('[data-preguntar]')?.addEventListener('click', ev => {
+        abrirAsistente(ev.currentTarget.dataset.preguntar);
       });
       return;
     }

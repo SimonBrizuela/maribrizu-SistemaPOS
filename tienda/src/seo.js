@@ -78,12 +78,109 @@ export function fijarPantalla({ privada = false } = {}) {
   meta('og:description', DESCRIPCION_BASE, { propiedad: true });
   meta('robots', privada || esHostDePrueba() ? 'noindex, nofollow' : null);
   quitarDatosDeProducto();
+  // Los datos del local son de la portada. Dejarlos puestos al navegar haría
+  // que cada ficha de producto se declare también el negocio.
+  quitarNegocio();
 }
 
 /** El titulo cambia despues de fijarPantalla en varias pantallas: se vuelve a copiar. */
 export function fijarTitulo(titulo) {
   document.title = titulo;
   meta('og:title', titulo, { propiedad: true });
+}
+
+/* ── El local ─────────────────────────────────────────────────────────────── */
+
+const DIAS_SCHEMA = ['Monday', 'Tuesday', 'Wednesday', 'Thursday',
+                     'Friday', 'Saturday', 'Sunday'];
+
+/**
+ * Parte la dirección de una línea en lo que espera schema.org.
+ *
+ * `tienda_config` la guarda como la escribiría una persona ("Av. Alfonsina
+ * Storni 168, X5019 Córdoba") porque es la que se muestra en el pie y en el
+ * checkout. Acá se corta por la coma, y si no viene con esa forma se manda
+ * entera como calle: una dirección completa en `streetAddress` es correcta,
+ * inventarle un código postal no.
+ */
+export function partirDireccion(texto) {
+  const entera = String(texto || '').trim();
+  const [calle, resto] = entera.split(',').map(t => t.trim());
+  if (!resto) {
+    return { streetAddress: entera, addressLocality: 'Córdoba' };
+  }
+  const cp = resto.match(/^([A-Z]\d{4}[A-Z]{0,3})\s+(.*)$/);
+  return {
+    streetAddress: calle,
+    ...(cp ? { postalCode: cp[1], addressLocality: cp[2] }
+           : { addressLocality: resto }),
+  };
+}
+
+/** El horario estructurado, en la forma que entiende Google. */
+function horarioSchema(horarios) {
+  if (!Array.isArray(horarios) || horarios.length !== 7) return [];
+  const salida = [];
+  horarios.forEach((tramos, dia) => {
+    for (const t of tramos || []) {
+      if (!t?.desde || !t?.hasta) continue;
+      salida.push({
+        '@type': 'OpeningHoursSpecification',
+        dayOfWeek: `https://schema.org/${DIAS_SCHEMA[dia]}`,
+        opens: t.desde,
+        closes: t.hasta,
+      });
+    }
+  });
+  return salida;
+}
+
+/**
+ * Los datos del local, en la portada.
+ *
+ * Es lo que le dice a Google que esto es un negocio con dirección, teléfono y
+ * horario, y no una página cualquiera: es la diferencia entre aparecer en una
+ * lista de resultados y aparecer en el panel de la derecha con el mapa al lado.
+ * En una librería de barrio, la búsqueda que más vende es "librería cerca mío".
+ *
+ * Se pone solo en la portada. Repetirlo en cada ficha de producto no suma nada
+ * y ensucia: ahí el que manda es el `Product`.
+ */
+export function fijarNegocio(cfg) {
+  quitarNegocio();
+  if (!cfg) return;
+
+  const datos = {
+    '@context': 'https://schema.org',
+    '@type': 'Store',
+    name: cfg.nombre || 'Librería Liceo',
+    description: DESCRIPCION_BASE,
+    url: `${location.origin}/`,
+    image: `${location.origin}/portada.webp`,
+    address: { '@type': 'PostalAddress', addressCountry: 'AR',
+               addressRegion: 'Córdoba', ...partirDireccion(cfg.direccion) },
+    ...(cfg.telefono ? { telephone: `+54${String(cfg.telefono).replace(/\D/g, '')}` } : {}),
+    ...(cfg.email ? { email: cfg.email } : {}),
+    ...(cfg.instagram ? { sameAs: [cfg.instagram] } : {}),
+    ...(cfg.origen?.lat && cfg.origen?.lng
+      ? { geo: { '@type': 'GeoCoordinates',
+                 latitude: cfg.origen.lat, longitude: cfg.origen.lng } }
+      : {}),
+    ...(horarioSchema(cfg.horarios).length
+      ? { openingHoursSpecification: horarioSchema(cfg.horarios) }
+      : {}),
+    currenciesAccepted: 'ARS',
+  };
+
+  const script = document.createElement('script');
+  script.type = 'application/ld+json';
+  script.dataset.seoNegocio = '1';
+  script.textContent = JSON.stringify(datos);
+  document.head.appendChild(script);
+}
+
+function quitarNegocio() {
+  document.head.querySelector('script[data-seo-negocio]')?.remove();
 }
 
 /* ── La ficha del producto ────────────────────────────────────────────────── */

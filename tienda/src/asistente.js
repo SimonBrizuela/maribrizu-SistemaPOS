@@ -339,3 +339,21 @@ function renglon(p) {
 export function asistenteApagado() {
   return apagado;
 }
+
+/**
+ * Abre el chat, y si le pasan una pregunta la manda ya escrita.
+ *
+ * Lo usa el catálogo cuando una búsqueda no encuentra nada. El nombre interno
+ * de un producto del POS es impredecible ("Abrojo 100MM X Mt"), así que "no
+ * tenemos nada con esas palabras" muchas veces significa "lo tenemos con otro
+ * nombre". El chat busca por lo que la cosa ES y no por cómo se escribe, y a
+ * esa altura el cliente ya estaba por irse.
+ *
+ * @returns {boolean} si se pudo abrir
+ */
+export function abrirAsistente(pregunta = '') {
+  if (apagado) return false;
+  abrir();
+  if (pregunta) preguntar(String(pregunta));
+  return true;
+}
