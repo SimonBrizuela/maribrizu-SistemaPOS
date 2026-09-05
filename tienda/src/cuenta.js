@@ -90,6 +90,24 @@ export function sesion() {
   return usuario ? { uid: usuario.uid, email: usuario.email } : null;
 }
 
+/**
+ * El token de la sesión, para que el servidor pueda comprobar quién es.
+ *
+ * El pedido se firma con la cuenta para que después aparezca en "Mis pedidos"
+ * desde cualquier teléfono. Mandar el `uid` pelado no serviría: cualquiera
+ * escribiría el de otro y le metería pedidos en el historial.
+ */
+export async function tokenDeSesion() {
+  if (!usuario) return null;
+  try {
+    return await usuario.getIdToken();
+  } catch (err) {
+    // Sin token el pedido entra igual, sin firmar: firmar es un extra.
+    console.warn('[cuenta] no se pudo obtener el token:', err);
+    return null;
+  }
+}
+
 export function alCambiarSesion(fn) {
   oyentes.add(fn);
   fn(sesion());

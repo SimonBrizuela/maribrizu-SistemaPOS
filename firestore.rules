@@ -320,6 +320,32 @@ service cloud.firestore {
     //   · El estado inicial y los flags operativos se fuerzan acá: un pedido
     //     no puede nacer 'entregado' ni marcado como impreso.
     //   · El total tiene que cerrar contra subtotal + envío.
+    //
+    // LO QUE ESTO NO PUEDE VALIDAR, Y POR ESO NO ALCANZA
+    //
+    // Los precios. Un pedido puede entrar con `precio: 1` en una resma de
+    // $18.000 y esta función lo acepta: la forma está bien, el total cierra
+    // contra el subtotal declarado, y las reglas no pueden leer los cien
+    // productos del carrito para comparar (hay un tope de diez `get()` por
+    // evaluación). El envío ya se calculaba en el servidor por esta misma
+    // razón; los productos, no.
+    //
+    // Por eso el pedido lo escribe `netlify/functions/crear-pedido`, que
+    // relee `tienda_productos`, rehace el total y guarda con la cuenta de
+    // servicio, que pasa por encima de estas reglas.
+    //
+    // PARA CERRAR LA PUERTA (en este orden, y no en otro):
+    //
+    //   1. Cargar `FIREBASE_SERVICE_ACCOUNT` en el sitio de Netlify de la
+    //      tienda (el JSON completo de la cuenta de servicio).
+    //   2. Publicar la tienda y confirmar un pedido de prueba.
+    //   3. Ver en el pedido que el precio salió de la base.
+    //   4. Recién ahí, cambiar `allow create: if pedidoValido()` por
+    //      `allow create: if false` y desplegar estas reglas.
+    //
+    // Invertido, el paso 4 deja la tienda sin poder tomar pedidos: la función
+    // contesta 501 mientras le falte la variable y el cliente cae al camino
+    // viejo, que es justo el que la regla acaba de cerrar.
     function pedidoValido() {
       let d = request.resource.data;
       return d.keys().hasAll(['estado', 'creado', 'cliente', 'entrega',

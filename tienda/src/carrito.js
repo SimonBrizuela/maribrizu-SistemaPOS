@@ -6,6 +6,16 @@
  * de barrio solo sirven para perder pedidos.
  */
 import { traerProducto } from './datos.js';
+import {
+  pasoDe, minimoDe, soloPack, ahorroDePack, redondearCantidad,
+  precioDeRenglon, stockDeRenglon, variedadDe,
+} from './precios.js';
+
+// Las reglas de precio y de cuanto se vende viven en `precios.js`: las usa
+// tambien la funcion que crea el pedido en el servidor, y escritas dos veces se
+// despegan el dia que el panel cambie un minimo. Se reexportan para que quien
+// ya pedia `carrito.minimoDe` no tenga que enterarse.
+export { pasoDe, minimoDe, soloPack, ahorroDePack };
 
 // v2: los renglones ahora guardan la unidad de medida y el paso. Cambiar la
 // clave descarta los carritos viejos en vez de intentar migrarlos: un carrito
@@ -13,85 +23,10 @@ import { traerProducto } from './datos.js';
 const CLAVE = 'liceo.carrito.v2';
 const MAX_UNIDADES = 99;
 
-/**
- * Cuanto suma o resta un toque.
- *
- * Se acepta el producto entero o solo su unidad: el panel puede fijar un paso
- * propio por producto ("de a 6"), y cuando no lo hizo vale el natural — medio
- * metro para lo que se corta del rollo, uno para el resto.
- */
-export function pasoDe(productoOUnidad) {
-  if (typeof productoOUnidad === 'object' && productoOUnidad) {
-    const propio = Number(productoOUnidad.paso);
-    if (propio > 0) return propio;
-    return productoOUnidad.unidad === 'metro' ? 0.5 : 1;
-  }
-  return productoOUnidad === 'metro' ? 0.5 : 1;
-}
-
-/**
- * Lo minimo que se puede llevar de este producto.
- *
- * Un pedido online cuesta trabajo aunque sea de $100: hay que leerlo, buscar la
- * cosa entre dos mil cuatrocientas, contarla, embalarla. Por eso hay productos
- * que en el mostrador se venden de a uno y por la web no: medido, un mapa de
- * $100 deja $40 y eso no paga ni el minuto de ir a buscarlo.
- *
- * Sin configurar es un paso, o sea como estaba siempre.
- */
-export function minimoDe(producto) {
-  const propio = Number(producto?.minimo);
-  const paso = pasoDe(producto);
-  return propio > 0 ? Math.max(propio, paso) : paso;
-}
-
-/**
- * Si el producto se vende únicamente por pack entero (el rollo, la caja).
- *
- * La señal la da el panel sin campo nuevo: un mínimo igual o mayor al
- * contenido del pack dice que lo suelto no se ofrece — pedir 100 metros de
- * una tanza de 100 es pedir el rollo. La ficha y las cards pasan a ofrecer
- * solo el pack, al precio del pack; el precio por metro deja de mostrarse.
- */
-export function soloPack(producto) {
-  const contenido = Number(producto?.pack_contenido);
-  return Number(producto?.precio_pack) > 0 && contenido > 0
-    && Number(producto?.minimo) >= contenido;
-}
-
 /** 2.5 -> "2,5 m"  ·  3 -> "3" */
 export function formatearCantidad(cantidad, unidad) {
   if (unidad === 'metro') return `${cantidad.toFixed(1).replace('.', ',')} m`;
   return String(Math.round(cantidad));
-}
-
-/**
- * Arriba de este porcentaje el ahorro no se muestra.
- *
- * Una resma de 500 hojas a $7.800 contra la hoja suelta a $50 da "Ahorrás
- * 69%", y es cierto: la hoja de a una se cobra como se cobra en el mostrador.
- * Pero dicho asi suena a que lo suelto esta caro, no a que el pack conviene.
- * De ahi para arriba se muestra el precio del pack y listo.
- */
-const TOPE_AHORRO_PACK = 50;
-
-/**
- * Cuanto se ahorra llevando el pack en vez de lo mismo suelto.
- *
- * Una sola cuenta para la ficha, el carrito y el checkout: si en la ficha dice
- * 12%, en el resumen del pedido no puede decir otra cosa. Devuelve null cuando
- * no hay ahorro que mostrar (no conviene, o conviene tanto que no se dice).
- *
- * @returns {{ pesos: number, porcentaje: number } | null}
- */
-export function ahorroDePack({ precioSuelto, precioPack, contenido, cantidad = 1 }) {
-  const suelto = Number(precioSuelto) * Number(contenido) * Number(cantidad);
-  const pack = Number(precioPack) * Number(cantidad);
-  if (!(suelto > 0) || !(pack > 0)) return null;
-  const pesos = suelto - pack;
-  const porcentaje = Math.round((pesos / suelto) * 100);
-  if (pesos <= 0 || porcentaje <= 0 || porcentaje > TOPE_AHORRO_PACK) return null;
-  return { pesos, porcentaje };
 }
 
 /**
@@ -225,9 +160,7 @@ export function cantidadDe(id, variedad = null, esPack = false) {
  * llamada incomoda al cliente.
  */
 export function agregar(producto, { variedad = null, cantidad = null, esPack = false } = {}) {
-  const variante = variedad
-    ? (producto.variedades || []).find(v => v.nombre === variedad)
-    : null;
+  const variante = variedadDe(producto, variedad);
 
   // El pack entero se lleva de a uno: el minimo y el paso del producto son de
   // la unidad suelta (medio metro de cinta), no del rollo.
@@ -238,23 +171,20 @@ export function agregar(producto, { variedad = null, cantidad = null, esPack = f
 
   // Llevar el rollo entero es otro producto a efectos del carrito: otro precio,
   // otra unidad, y descuenta del stock tantas unidades como trae el pack.
-  const precio = esPack
-    ? Number(producto.precio_pack || 0)
-    : (variante && variante.precio ? Number(variante.precio) : producto.precio);
+  const precio = precioDeRenglon(producto, { variedad, esPack });
 
   // Precio de a uno del mismo producto: es contra lo que se compara el pack
   // para mostrar cuánto se ahorra, misma cuenta que en la ficha.
   const precioSuelto = esPack ? Number(producto.precio || 0) : null;
 
-  const stockUnidades = variante ? Number(variante.stock ?? 0) : producto.stock;
   const contenido = Number(producto.pack_contenido) || 1;
-  const stock = esPack ? Math.floor(stockUnidades / contenido) : stockUnidades;
+  const stock = stockDeRenglon(producto, { variedad, esPack });
 
   const tope = stock > 0 ? Math.min(stock, MAX_UNIDADES) : MAX_UNIDADES;
 
   const existente = renglones.find(r => mismaLinea(r, producto.id, variedad, esPack));
   if (existente) {
-    existente.cantidad = redondear(Math.min(tope, existente.cantidad + cuanto));
+    existente.cantidad = redondearCantidad(Math.min(tope, existente.cantidad + cuanto));
     existente.precio = precio;
     existente.precio_suelto = precioSuelto;
     existente.stock = stock;
@@ -273,7 +203,7 @@ export function agregar(producto, { variedad = null, cantidad = null, esPack = f
     variedad,
     nombre: producto.nombre,
     precio,
-    cantidad: redondear(Math.min(tope, inicial)),
+    cantidad: redondearCantidad(Math.min(tope, inicial)),
     unidad,
     paso,
     minimo,
@@ -296,16 +226,7 @@ export function agregar(producto, { variedad = null, cantidad = null, esPack = f
     stock,
   });
   guardar();
-  return redondear(Math.min(tope, inicial));
-}
-
-/**
- * Los flotantes dejan restos tipo 2.4000000000000004 al sumar de a 0,5. Un
- * decimal alcanza para medio metro y evita que el total salga con centavos
- * fantasma.
- */
-function redondear(n) {
-  return Math.round(n * 10) / 10;
+  return redondearCantidad(Math.min(tope, inicial));
 }
 
 export function cambiarCantidad(id, variedad, cantidad, esPack = false) {
@@ -313,7 +234,7 @@ export function cambiarCantidad(id, variedad, cantidad, esPack = false) {
   if (!r) return;
   const piso = r.minimo || pasoDe(r.unidad);
   const tope = r.stock > 0 ? Math.min(r.stock, MAX_UNIDADES) : MAX_UNIDADES;
-  r.cantidad = redondear(Math.max(piso, Math.min(tope, cantidad)));
+  r.cantidad = redondearCantidad(Math.max(piso, Math.min(tope, cantidad)));
   guardar();
 }
 
@@ -365,17 +286,13 @@ export async function revalidar() {
       continue;
     }
 
-    const variante = r.variedad
-      ? (producto.variedades || []).find(v => v.nombre === r.variedad)
-      : null;
+    const variante = variedadDe(producto, r.variedad);
 
     if (r.variedad && !variante) {
       cambios.push({ tipo: 'baja', nombre: `${r.nombre} (${r.variedad})` });
       continue;
     }
 
-    const contenido = Number(producto.pack_contenido) || 1;
-    const stockUnidades = variante ? Number(variante.stock ?? 0) : producto.stock;
 
     // El local puede dejar de vender el rollo entero: el panel tiene un
     // interruptor por producto y el espejo publica `precio_pack: null`. El
@@ -387,10 +304,8 @@ export async function revalidar() {
       continue;
     }
 
-    const stock = r.es_pack ? Math.floor(stockUnidades / contenido) : stockUnidades;
-    const precio = r.es_pack
-      ? Number(producto.precio_pack || 0)
-      : (variante && variante.precio ? Number(variante.precio) : producto.precio);
+    const stock = stockDeRenglon(producto, { variedad: r.variedad, esPack: r.es_pack });
+    const precio = precioDeRenglon(producto, { variedad: r.variedad, esPack: r.es_pack });
 
     // Red de seguridad: nada sale del carrito a cero. Un producto sin precio no
     // se puede cobrar, y avisar "cambio de $600 a $0" no es avisar nada.

@@ -20,7 +20,7 @@ import { ir } from '../router.js';
 import { crearPedido, nuevoIdDePedido } from '../pedidos.js';
 import { esComprobanteValido } from '../comprobante.js';
 import { estadoDelLocal } from '../horarios.js';
-import { datosParaCompletar, recordarDelPedido, sesion } from '../cuenta.js';
+import { datosParaCompletar, recordarDelPedido, sesion, tokenDeSesion } from '../cuenta.js';
 import { olvidar } from '../cliente.js';
 import { cotizar, rangoDeTramos, llegaAEnvioGratis } from '../envio.js';
 import { montarDirecciones } from '../direcciones.js';
@@ -45,6 +45,9 @@ function despertarFunciones() {
   fetch('/.netlify/functions/direcciones', aviso).catch(() => {});
   fetch('/.netlify/functions/envio', aviso).catch(() => {});
   fetch('/.netlify/functions/mapa?warmup=1').catch(() => {});
+  // La que guarda el pedido es la que menos puede llegar fría: es el último
+  // toque, con el cliente mirando el botón.
+  fetch('/.netlify/functions/crear-pedido', aviso).catch(() => {});
 }
 
 export async function checkout({ montar }) {
@@ -649,8 +652,13 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
       const envio = modo === 'delivery' && !gratis ? cotizacion.precio : 0;
 
       const cuentaActual = sesion();
+      // El servidor comprueba el token contra Google antes de firmar el pedido
+      // con la cuenta. El `uid` sigue yendo para el camino viejo, donde son las
+      // reglas las que exigen que sea el de quien escribe.
+      const idToken = cuentaActual ? await tokenDeSesion() : null;
 
       const payload = {
+        ...(idToken ? { idToken } : {}),
         cliente: { nombre: valores.nombre, telefono: valores.telefono },
         // Firmado con la cuenta cuando hay una: es lo que después deja pedir
         // "mis pedidos" desde cualquier aparato. Sin cuenta no va el campo, y
@@ -730,8 +738,26 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
     } catch (err) {
       console.error('[checkout] no se pudo crear el pedido:', err);
       pintarResumen();
-      avisar('No pudimos enviar el pedido. Probá de nuevo o escribinos por WhatsApp.',
-             { tipo: 'error', duracion: 7000 });
+
+      // El servidor rehace los precios contra la base antes de guardar. Cuando
+      // no coinciden con lo que el cliente tenía a la vista no se corrige en
+      // silencio: se muestra qué cambió, arriba de todo, y se le deja confirmar
+      // de nuevo. Cobrar otra cosa sin avisar es la peor salida posible.
+      if (err?.motivo === 'cambios' && err.cambios?.length) {
+        await carrito.revalidar();
+        if (carrito.estaVacio()) { montar(pantallaSinStock(cfg)); return; }
+        pintarResumen();
+        document.querySelector('[data-cambios]')?.remove();
+        document.querySelector('.checkout__titulo')
+          ?.insertAdjacentHTML('afterend', avisoDeCambios(err.cambios));
+        avisar(err.message, { tipo: 'error', duracion: 7000 });
+        return;
+      }
+
+      avisar(err?.motivo
+        ? err.message
+        : 'No pudimos enviar el pedido. Probá de nuevo o escribinos por WhatsApp.',
+        { tipo: 'error', duracion: 7000 });
     }
   }
 

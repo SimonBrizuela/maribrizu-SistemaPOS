@@ -76,8 +76,145 @@ export function nuevoIdDePedido() {
   return doc(collection(db, 'tienda_pedidos')).id;
 }
 
+const FUNCION_CREAR = '/.netlify/functions/crear-pedido';
+
+/**
+ * Por qué el servidor no aceptó el pedido, dicho para el cliente.
+ *
+ * El texto sale de acá y no del checkout porque la pantalla de la transferencia
+ * también muestra este mensaje: ahí el pedido nace después de subir el
+ * comprobante y no hay resumen donde pintar el detalle.
+ */
+const MOTIVOS = {
+  cambios: 'Cambió algo de tu pedido. Revisalo antes de confirmar.',
+  minimo: 'El pedido no llega al mínimo. Agregá algo más.',
+  cerrada: 'Ahora no estamos tomando pedidos. Tu carrito queda guardado.',
+  sin_efectivo: 'Ya no estamos tomando efectivo. Elegí transferencia.',
+  sin_delivery: 'El envío a domicilio no está disponible. Podés retirarlo del local.',
+  sin_retiro: 'El retiro en el local no está disponible por ahora.',
+  fuera_de_radio: 'Tu dirección queda fuera del radio de reparto.',
+  vacio: 'Se agotó todo lo que tenías en el pedido.',
+  ya_existe: 'Este pedido ya lo teníamos cargado.',
+};
+
+/**
+ * Guarda el pedido.
+ *
+ * Primero por el servidor, que relee los precios de la base y rehace el total:
+ * escribiendo desde acá, el precio de cada renglón sale de la memoria del
+ * navegador del que paga, y cambiarlo es abrir la consola.
+ *
+ * Mientras la función no esté configurada (le falta la cuenta de servicio)
+ * contesta 501 y se escribe como siempre. Es lo que permite desplegar el
+ * cambio sin cortar las ventas: se prende la variable, se comprueba que los
+ * pedidos entran por el servidor, y recién ahí las reglas cierran esta puerta.
+ *
+ * El id se reserva siempre de este lado. Así, si la respuesta se pierde en el
+ * camino y se reintenta, el segundo intento escribe en el mismo lugar en vez de
+ * dejar el pedido duplicado.
+ */
 export async function crearPedido({ cliente, entrega, pago, items, subtotal, envio,
-                                   nota = '', uid = null, id = null }) {
+                                   nota = '', uid = null, id = null,
+                                   idToken = null }) {
+  const referenciaId = id || nuevoIdDePedido();
+
+  const porServidor = await crearEnElServidor({
+    id: referenciaId, cliente, entrega, pago, items, nota, idToken,
+  });
+  if (porServidor) {
+    recordar({
+      id: porServidor.id,
+      codigo: porServidor.codigo,
+      total: porServidor.total,
+      cuando: Date.now(),
+      modo: entrega.modo,
+    });
+    avisarAlLocal(porServidor.id);
+    return { id: porServidor.id, codigo: porServidor.codigo };
+  }
+
+  return crearDesdeElNavegador({
+    cliente, entrega, pago, items, subtotal, envio, nota, uid, id: referenciaId,
+  });
+}
+
+/**
+ * @returns {Promise<{id, codigo, total}|null>} null si la función todavía no
+ *   está configurada y hay que escribir desde el navegador.
+ * @throws {Error & {cambios?: Array, motivo?: string}}
+ */
+async function crearEnElServidor({ id, cliente, entrega, pago, items, nota, idToken }) {
+  let respuesta;
+  try {
+    respuesta = await fetch(FUNCION_CREAR, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        id,
+        cliente,
+        entrega,
+        pago,
+        // Va el QUÉ, no el cuánto sale: el precio lo pone el servidor. El que
+        // se manda es solo el que el cliente tenía a la vista, para que la
+        // función pueda avisar si cambió en vez de cobrar otra cosa.
+        items: items.map(i => ({
+          id: i.id,
+          nombre: i.nombre,
+          variedad: i.variedad,
+          cantidad: i.cantidad,
+          es_pack: i.es_pack,
+          precio: i.precio,
+        })),
+        nota,
+        ...(idToken ? { idToken } : {}),
+      }),
+    });
+  } catch (err) {
+    // Sin internet, o la función no existe todavía en este entorno. Se sigue
+    // por el camino viejo, que ante las reglas cerradas va a fallar solo.
+    console.warn('[pedidos] no se pudo llamar a la función:', err);
+    return null;
+  }
+
+  if (respuesta.ok) {
+    let datos = null;
+    try { datos = await respuesta.json(); } catch { /* cuerpo ilegible */ }
+    // Un 200 sin id no es un pedido guardado: es un proxy contestando cualquier
+    // cosa. Dar el pedido por hecho ahí sería mandar al cliente a una pantalla
+    // de seguimiento que no existe.
+    if (datos?.id && datos?.codigo) return datos;
+    console.warn('[pedidos] la función contestó 200 sin pedido, se escribe desde el navegador');
+    return null;
+  }
+
+  // 409 son respuestas, no tropiezos: cambió un precio, se agotó algo, no llega
+  // al mínimo. Repetirlo desde el navegador daría un pedido que el local no
+  // puede cumplir, así que sube para que el checkout lo muestre.
+  if (respuesta.status === 409) {
+    let datos = {};
+    try { datos = await respuesta.json(); } catch { /* cuerpo vacío */ }
+    const motivo = datos.error || 'cambios';
+    const err = new Error(MOTIVOS[motivo] || MOTIVOS.cambios);
+    err.motivo = motivo;
+    err.cambios = datos.cambios || [];
+    err.datos = datos;
+    throw err;
+  }
+
+  if (respuesta.status !== 501) {
+    console.warn('[pedidos] la función falló, se escribe desde el navegador:',
+                 respuesta.status);
+  }
+  return null;
+}
+
+/**
+ * El camino viejo: el navegador escribe el pedido y las reglas validan su
+ * forma. Queda como red mientras la función no esté configurada; con las reglas
+ * cerradas esto falla, que es exactamente lo que tiene que pasar.
+ */
+async function crearDesdeElNavegador({ cliente, entrega, pago, items, subtotal, envio,
+                                       nota = '', uid = null, id = null }) {
   const codigo = generarCodigo();
 
   const documento = {

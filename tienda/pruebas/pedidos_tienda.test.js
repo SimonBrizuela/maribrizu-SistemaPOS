@@ -54,6 +54,8 @@ const cliente = await import('../src/cliente.js');
 const comprobante = await import('../src/comprobante.js');
 const router = await import('../src/router.js');
 
+let respuestaDeLaFuncion;
+
 beforeEach(() => {
   localStorage.clear();
   estado.escrituras.length = 0;
@@ -64,7 +66,15 @@ beforeEach(() => {
   if (!globalThis.crypto?.getRandomValues) {
     globalThis.crypto = { getRandomValues: (a) => { a.forEach((_, i) => { a[i] = i * 37; }); return a; } };
   }
-  globalThis.fetch = vi.fn(() => Promise.resolve({ ok: true, json: async () => ({}) }));
+  // Por defecto la funcion que crea el pedido contesta 501 (todavia sin cuenta
+  // de servicio), que es el caso en el que la tienda escribe desde el navegador.
+  // Lo demas que se llame por fetch es el aviso al local, al que no se le espera
+  // respuesta.
+  respuestaDeLaFuncion = { ok: false, status: 501, json: async () => ({ error: 'sin_credenciales' }) };
+  globalThis.fetch = vi.fn((url) => Promise.resolve(
+    String(url).includes('crear-pedido')
+      ? respuestaDeLaFuncion
+      : { ok: true, json: async () => ({}) }));
 });
 
 const PEDIDO = {
@@ -438,5 +448,83 @@ describe('las direcciones de la tienda', () => {
     router.ir('/gracias', { reemplazar: true });
     expect(window.location.pathname).toBe('/gracias');
     expect(window.history.length).toBe(antes);
+  });
+});
+
+describe('el pedido lo guarda el servidor', () => {
+  // El precio de cada renglon salia de la memoria del navegador del que paga.
+  // Ahora el pedido se manda a una funcion que lo relee de la base; escribir
+  // desde el navegador queda solo como red mientras la funcion no este
+  // configurada.
+  const ok = (extra = {}) => ({
+    ok: true,
+    status: 200,
+    json: async () => ({ id: 'srv1', codigo: 'K7M2', subtotal: 7000, envio: 0, total: 7000, ...extra }),
+  });
+
+  it('cuando contesta, el navegador no escribe nada en la base', async () => {
+    respuestaDeLaFuncion = ok();
+    const r = await pedidos.crearPedido(PEDIDO);
+
+    expect(r).toEqual({ id: 'srv1', codigo: 'K7M2' });
+    expect(estado.escrituras).toHaveLength(0);
+  });
+
+  it('manda que quiere y cuanto, no cuanto sale', async () => {
+    respuestaDeLaFuncion = ok();
+    await pedidos.crearPedido(PEDIDO);
+
+    const llamada = globalThis.fetch.mock.calls.find(c => String(c[0]).includes('crear-pedido'));
+    const cuerpo = JSON.parse(llamada[1].body);
+    expect(cuerpo.items[0]).toMatchObject({ id: 'p1', cantidad: 2 });
+    // El total y el subtotal ni se mandan: los rehace el servidor.
+    expect(cuerpo.subtotal).toBeUndefined();
+    expect(cuerpo.total).toBeUndefined();
+    // El id se reserva de este lado, asi que un reintento no duplica el pedido.
+    expect(typeof cuerpo.id).toBe('string');
+  });
+
+  it('el pedido guardado por el servidor queda anotado en este telefono', async () => {
+    respuestaDeLaFuncion = ok();
+    await pedidos.crearPedido(PEDIDO);
+
+    expect(pedidos.misPedidos()[0]).toMatchObject({ id: 'srv1', codigo: 'K7M2', total: 7000 });
+  });
+
+  it('un 200 sin pedido adentro no se da por hecho', async () => {
+    respuestaDeLaFuncion = { ok: true, status: 200, json: async () => ({}) };
+    const r = await pedidos.crearPedido(PEDIDO);
+
+    // Cae al camino viejo en vez de mandar al cliente a un pedido que no existe.
+    expect(estado.escrituras).toHaveLength(1);
+    expect(r.id).toBeTruthy();
+  });
+
+  it('si cambio un precio, el motivo sube para poder mostrarlo', async () => {
+    respuestaDeLaFuncion = {
+      ok: false,
+      status: 409,
+      json: async () => ({
+        error: 'cambios',
+        cambios: [{ tipo: 'precio', nombre: 'Resma Pampa A4', antes: 1, ahora: 18000 }],
+      }),
+    };
+
+    await expect(pedidos.crearPedido(PEDIDO)).rejects.toMatchObject({
+      motivo: 'cambios',
+      cambios: [expect.objectContaining({ tipo: 'precio' })],
+    });
+    // Y no se escribe por el costado: un 409 es una respuesta, no un tropiezo.
+    expect(estado.escrituras).toHaveLength(0);
+  });
+
+  it('sin red se sigue por el camino viejo', async () => {
+    globalThis.fetch = vi.fn((url) => (String(url).includes('crear-pedido')
+      ? Promise.reject(new Error('sin red'))
+      : Promise.resolve({ ok: true, json: async () => ({}) })));
+
+    const r = await pedidos.crearPedido(PEDIDO);
+    expect(estado.escrituras).toHaveLength(1);
+    expect(r.codigo).toMatch(/^[A-HJ-NP-Z2-9]{4}$/);
   });
 });
