@@ -80,3 +80,22 @@ entrar por la puerta la semana que viene.
   ilustraciones de cajas volando. Compró un cuaderno.
 - **Los grandes marketplaces.** Densidad extrema, badges de urgencia, contadores
   regresivos, "quedan 2". No es el negocio.
+
+## CORS del bucket de fotos
+
+Las fotos del catálogo se sirven desde Firebase Storage con `<img src>` pelado,
+que no pasa por CORS: hoy no hay nada roto. Lo que el bucket no tiene es
+`Access-Control-Allow-Origin` en el GET (medido: la respuesta viene sin la
+cabecera; el preflight OPTIONS sí contesta `*`, que es por lo que el SDK sube
+comprobantes sin problema).
+
+Conviene ponerlo igual, porque el día que algo lea los bytes de una foto —un
+canvas, un `fetch`, un service worker— va a fallar sin ninguna pista:
+
+    gcloud storage buckets update gs://mari-d7c71.firebasestorage.app \
+      --cors-file=tienda/storage-cors.json
+
+Con la cuenta `programacion@brizuela.org`, que es la que tiene permisos sobre el
+proyecto. Los orígenes están en `tienda/storage-cors.json`; si aparece un
+dominio nuevo hay que agregarlo ahí y volver a correr el comando, que pisa la
+lista entera.

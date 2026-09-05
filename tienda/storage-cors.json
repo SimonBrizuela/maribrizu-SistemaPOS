@@ -1,0 +1,14 @@
+[
+  {
+    "origin": [
+      "https://liceolibreria.com",
+      "https://www.liceolibreria.com",
+      "https://beta.liceolibreria.com",
+      "https://admin.liceolibreria.com",
+      "http://localhost:5180"
+    ],
+    "method": ["GET", "HEAD"],
+    "responseHeader": ["Content-Type", "Content-Length", "Cache-Control", "ETag"],
+    "maxAgeSeconds": 3600
+  }
+]

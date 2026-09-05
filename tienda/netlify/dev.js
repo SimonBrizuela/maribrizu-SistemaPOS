@@ -72,6 +72,11 @@ export function funcionesEnDesarrollo() {
       const faltan = [
         process.env.GOOGLE_PLACES_KEY ? null : 'GOOGLE_PLACES_KEY (direcciones, envío, mapa)',
         process.env.GEMINI_API_KEY ? null : 'GEMINI_API_KEY (el chat del catálogo)',
+        // Sin esto `crear-pedido` contesta 501 y el pedido se escribe desde el
+        // navegador, que es el camino viejo. Va en una sola línea, el JSON
+        // entero de la cuenta de servicio.
+        process.env.FIREBASE_SERVICE_ACCOUNT
+          ? null : 'FIREBASE_SERVICE_ACCOUNT (guardar el pedido desde el servidor)',
       ].filter(Boolean);
 
       servidor.config.logger.info(
