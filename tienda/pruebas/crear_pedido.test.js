@@ -53,9 +53,22 @@ const base = () => ({
         { nombre: 'Celeste', stock: 2, precio: 950 },
       ],
     },
+    cinta: {
+      nombre: 'Cinta Raso 10mm', precio: 300, stock: 60, unidad: 'metro',
+      precio_pack: 4500, pack_tipo: 'rollo', pack_contenido: 25,
+      rubro: 'MERCERIA', imagenes: [], variedades: [],
+    },
   },
   metros: 2500,
   guardados: [],
+  // Pedidos abiertos que ya estaban en la base antes de este, con su estado.
+  abiertos: [],
+  borrados: [],
+  // Qué consultas hizo la función (`estado`, `codigo`), en orden.
+  consultas: [],
+  // Cuántas veces el código que se pregunta va a estar ocupado.
+  codigoOcupadoVeces: 0,
+  consultasFallan: false,
 });
 
 let mundo = base();
@@ -66,6 +79,39 @@ function fetchFalso(url, opciones = {}) {
 
   if (u.startsWith('https://oauth2.googleapis.com/token')) {
     return respuesta({ access_token: 'token-de-prueba', expires_in: 3600 });
+  }
+
+  // Las consultas con la cuenta de servicio: los pedidos abiertos (por estado)
+  // y si un código ya existe. Los pedidos guardados en esta prueba cuentan
+  // como abiertos, que es lo que pasa en la base de verdad.
+  if (u.endsWith(':runQuery')) {
+    const consulta = JSON.parse(opciones.body).structuredQuery;
+    const filtro = consulta.where?.fieldFilter;
+    const campo = filtro?.field?.fieldPath;
+    mundo.consultas.push(campo);
+    if (mundo.consultasFallan) return respuesta({ error: 'sin índice' }, 400);
+
+    let docs = [];
+    if (campo === 'estado') {
+      const estados = (filtro.value.arrayValue?.values || []).map(v => v.stringValue);
+      docs = [...mundo.abiertos, ...mundo.guardados.map(g => ({ id: g.id, ...desplanar(g.cuerpo.fields) }))]
+        .filter(d => estados.includes(d.estado))
+        .map(d => ({ items: d.items }));
+    } else if (campo === 'codigo' && mundo.codigoOcupadoVeces > 0) {
+      mundo.codigoOcupadoVeces--;
+      docs = [{ codigo: filtro.value.stringValue }];
+    }
+    // Sin resultados la API no devuelve una lista vacía: devuelve solo readTime.
+    return respuesta(docs.length
+      ? docs.map((d, i) => ({ document: { name: `projects/x/databases/(default)/documents/tienda_pedidos/abierto${i}`, fields: aCampos(d) } }))
+      : [{ readTime: '2026-09-05T00:00:00Z' }]);
+  }
+
+  if (opciones.method === 'DELETE') {
+    const id = u.split('/').pop();
+    mundo.borrados.push(id);
+    mundo.guardados = mundo.guardados.filter(g => g.id !== id);
+    return respuesta({});
   }
 
   if (u.includes('/tienda_config/settings')) {
@@ -84,6 +130,13 @@ function fetchFalso(url, opciones = {}) {
     if (mundo.guardados.some(g => g.id === id)) return respuesta({}, 409);
     mundo.guardados.push({ id, cuerpo: JSON.parse(opciones.body) });
     return respuesta({ name: `.../${id}` });
+  }
+
+  // La lectura pública de un pedido por id, que es lo que hace un reintento.
+  const pedidoPorId = u.match(/\/tienda_pedidos\/([^/?]+)$/);
+  if (pedidoPorId && !opciones.method) {
+    const g = mundo.guardados.find(x => x.id === pedidoPorId[1]);
+    return g ? respuesta({ name: u, fields: g.cuerpo.fields }) : respuesta({}, 404);
   }
 
   if (u.startsWith('https://routes.googleapis.com')) {
@@ -423,5 +476,286 @@ describe('la forma del pedido', () => {
     await crear(pedir({ ...retiro([{ id: 'resma', cantidad: 1 }]), uid: 'uid-de-otro' }));
 
     expect(guardado().uid).toBeUndefined();
+  });
+});
+
+/* ── Lo que ya está prometido en otros pedidos ────────────────────────────── */
+
+describe('lo que ya está prometido en otros pedidos', () => {
+  it('un pedido abierto descuenta del stock que ve el siguiente', async () => {
+    // Hay 4 resmas y un pedido nuevo se llevó 3: para el próximo queda una.
+    const crear = await cargar();
+    await crear(pedir(retiro([{ id: 'resma', cantidad: 3 }])));
+    const res = await crear(pedir(retiro([{ id: 'resma', cantidad: 2 }])));
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).cambios).toContainEqual(
+      expect.objectContaining({ tipo: 'menos_stock', antes: 2, ahora: 1, id: 'resma', es_pack: false }));
+    expect(mundo.guardados).toHaveLength(1);
+  });
+
+  it('la última unidad no se vende dos veces, ni con minutos de diferencia', async () => {
+    const crear = await cargar();
+    mundo.productos.resma.stock = 1;
+    const primero = await crear(pedir(retiro([{ id: 'resma', cantidad: 1 }])));
+    const segundo = await crear(pedir(retiro([{ id: 'resma', cantidad: 1 }])));
+
+    expect(primero.status).toBe(200);
+    expect(segundo.status).toBe(409);
+    expect((await segundo.json()).cambios[0]).toMatchObject({ tipo: 'sin_stock', id: 'resma' });
+    expect(mundo.guardados).toHaveLength(1);
+  });
+
+  it('dos pedidos en el mismo instante por la última unidad: entra a lo sumo uno', async () => {
+    const crear = await cargar();
+    mundo.productos.resma.stock = 1;
+    const respuestas = await Promise.all([
+      crear(pedir(retiro([{ id: 'resma', cantidad: 1 }]))),
+      crear(pedir(retiro([{ id: 'resma', cantidad: 1 }]))),
+    ]);
+
+    const aceptados = respuestas.filter(r => r.status === 200).length;
+    expect(aceptados).toBeLessThanOrEqual(1);
+    // El que se retiró no dejó rastro en la base.
+    expect(mundo.guardados).toHaveLength(aceptados);
+    for (const r of respuestas.filter(r => r.status !== 200)) {
+      expect(r.status).toBe(409);
+      expect((await r.json()).cambios[0]).toMatchObject({ tipo: 'sin_stock', id: 'resma' });
+    }
+  });
+
+  it('el reintento del que se llevó la última unidad contesta "ya existe", no "sin stock"', async () => {
+    // La respuesta del primer intento se perdió y el cliente repite el mismo
+    // POST con el mismo id. Ese primer pedido ya cuenta como prometido: sin
+    // mirar el id antes, el reintento vería la resma agotada y el cliente
+    // sacaría del carrito algo que ya tiene pedido.
+    const crear = await cargar();
+    mundo.productos.resma.stock = 1;
+    const id = 'bbbbbbbbbbbbbbbbbbbb';
+    const primero = await crear(pedir({ ...retiro([{ id: 'resma', cantidad: 1 }]), id }));
+    const reintento = await crear(pedir({ ...retiro([{ id: 'resma', cantidad: 1 }]), id }));
+
+    expect(primero.status).toBe(200);
+    expect(reintento.status).toBe(409);
+    expect((await reintento.json()).error).toBe('ya_existe');
+    expect(mundo.guardados).toHaveLength(1);
+  });
+
+  it('un pedido entregado o cancelado ya no aparta nada', async () => {
+    const crear = await cargar();
+    mundo.abiertos.push(
+      { id: 'viejo1', estado: 'entregado', items: [{ id: 'resma', cantidad: 4 }] },
+      { id: 'viejo2', estado: 'cancelado', items: [{ id: 'resma', cantidad: 4 }] },
+    );
+    const res = await crear(pedir(retiro([{ id: 'resma', cantidad: 4 }])));
+    expect(res.status).toBe(200);
+  });
+
+  it('un pack en otro pedido cuenta por su contenido', async () => {
+    // 60 m de cinta; en un pedido en preparación van dos rollos de 25.
+    const crear = await cargar();
+    mundo.abiertos.push({
+      id: 'p', estado: 'preparando',
+      items: [{ id: 'cinta', cantidad: 2, es_pack: true, pack_contenido: 25 }],
+    });
+    const res = await crear(pedir(retiro([{ id: 'cinta', cantidad: 20 }])));
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).cambios).toContainEqual(
+      expect.objectContaining({ tipo: 'menos_stock', antes: 20, ahora: 10 }));
+  });
+
+  it('lo prometido de un color no toca a los otros colores', async () => {
+    mundo.config.entrega.pedido_minimo = 0;
+    const crear = await cargar();
+    mundo.abiertos.push({
+      id: 'p', estado: 'listo',
+      items: [{ id: 'cartulina', variedad: 'Rojo', cantidad: 8 }],
+    });
+    const rojo = await crear(pedir(retiro([{ id: 'cartulina', variedad: 'Rojo', cantidad: 5 }])));
+    const celeste = await crear(pedir(retiro([{ id: 'cartulina', variedad: 'Celeste', cantidad: 2 }])));
+
+    expect(rojo.status).toBe(409);
+    expect((await rojo.json()).cambios[0]).toMatchObject({ tipo: 'menos_stock', ahora: 2, variedad: 'Rojo' });
+    expect(celeste.status).toBe(200);
+  });
+
+  it('si no se pueden leer los pedidos abiertos, el pedido entra igual', async () => {
+    mundo.consultasFallan = true;
+    const crear = await cargar();
+    const res = await crear(pedir(retiro([{ id: 'resma', cantidad: 1 }])));
+    expect(res.status).toBe(200);
+  });
+});
+
+/* ── Renglones repetidos ──────────────────────────────────────────────────── */
+
+describe('el mismo producto más de una vez en el pedido', () => {
+  it('se junta en un renglón y se controla contra el stock una sola vez', async () => {
+    const crear = await cargar();
+    const res = await crear(pedir(retiro([
+      { id: 'resma', cantidad: 3 },
+      { id: 'resma', cantidad: 3 },
+    ])));
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).cambios).toContainEqual(
+      expect.objectContaining({ tipo: 'menos_stock', antes: 6, ahora: 4 }));
+  });
+
+  it('dentro del stock entra como un solo renglón con la suma', async () => {
+    const crear = await cargar();
+    const res = await crear(pedir(retiro([
+      { id: 'resma', cantidad: 1 },
+      { id: 'resma', cantidad: 2 },
+    ])));
+
+    expect(res.status).toBe(200);
+    expect(guardado().items).toHaveLength(1);
+    expect(guardado().items[0].cantidad).toBe(3);
+    expect(guardado().total).toBe(18000 * 3);
+  });
+
+  it('el rollo entero y los metros sueltos salen del mismo stock', async () => {
+    // 60 m: dos rollos de 25 son 50, y quedan 10 sueltos, no 20.
+    const crear = await cargar();
+    const res = await crear(pedir(retiro([
+      { id: 'cinta', cantidad: 2, es_pack: true },
+      { id: 'cinta', cantidad: 20 },
+    ])));
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).cambios).toContainEqual(
+      expect.objectContaining({ tipo: 'menos_stock', antes: 20, ahora: 10, es_pack: false }));
+  });
+
+  it('cien renglones del mismo producto son una sola lectura de la base', async () => {
+    const crear = await cargar();
+    const res = await crear(pedir(retiro(
+      Array.from({ length: 100 }, () => ({ id: 'cartulina', cantidad: 1 })))));
+
+    expect(res.status).toBe(409);   // 100 pedidas, hay 100 pero el tope es 99
+    const lecturas = vi.mocked(fetch).mock.calls
+      .filter(c => String(c[0]).includes('/tienda_productos/'));
+    expect(lecturas).toHaveLength(1);
+  });
+});
+
+/* ── El código corto ──────────────────────────────────────────────────────── */
+
+describe('el código corto', () => {
+  it('no se repite: si ya existe se genera otro', async () => {
+    mundo.codigoOcupadoVeces = 1;
+    const crear = await cargar();
+    const res = await crear(pedir(retiro([{ id: 'resma', cantidad: 1 }])));
+
+    expect(res.status).toBe(200);
+    expect(mundo.consultas.filter(c => c === 'codigo')).toHaveLength(2);
+    expect(guardado().codigo).toMatch(/^[A-HJ-NP-Z2-9]{4}$/);
+  });
+
+  it('si la comprobación falla, el pedido entra igual', async () => {
+    mundo.consultasFallan = true;
+    const crear = await cargar();
+    const res = await crear(pedir(retiro([{ id: 'resma', cantidad: 1 }])));
+    expect(res.status).toBe(200);
+    expect(guardado().codigo).toHaveLength(4);
+  });
+});
+
+/* ── Cantidades y textos raros ────────────────────────────────────────────── */
+
+describe('cantidades y textos raros', () => {
+  it('una cantidad enorme se baja al tope y se avisa, no en silencio', async () => {
+    const crear = await cargar();
+    const res = await crear(pedir(retiro([{ id: 'cartulina', cantidad: 1_000_000 }])));
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).cambios).toContainEqual(
+      expect.objectContaining({ tipo: 'menos_stock', antes: 1_000_000, ahora: 99 }));
+  });
+
+  it('el mínimo que fijó el panel le gana al tope de 99', async () => {
+    mundo.productos.cartulina.minimo = 120;
+    mundo.productos.cartulina.stock = 500;
+    const crear = await cargar();
+    const res = await crear(pedir(retiro([{ id: 'cartulina', cantidad: 120 }])));
+
+    expect(res.status).toBe(200);
+    expect(guardado().items[0].cantidad).toBe(120);
+  });
+
+  it('un nombre que no es texto no entra', async () => {
+    const crear = await cargar();
+    for (const nombre of [{ a: 1 }, 12345678, ['Marta'], true]) {
+      const res = await crear(pedir(retiro([{ id: 'resma', cantidad: 1 }],
+        { cliente: { nombre, telefono: '3515550001' } })));
+      expect(res.status, JSON.stringify(nombre)).toBe(400);
+      expect((await res.json()).detalle).toBe('nombre');
+    }
+    expect(mundo.guardados).toHaveLength(0);
+  });
+
+  it('una cantidad que no es un número tampoco', async () => {
+    const crear = await cargar();
+    for (const cantidad of [[5], { n: 1 }, true, '1e400', 'dos']) {
+      const res = await crear(pedir(retiro([{ id: 'resma', cantidad }])));
+      expect(res.status, JSON.stringify(cantidad)).toBe(400);
+    }
+  });
+
+  it('la nota, si viene, es texto', async () => {
+    const crear = await cargar();
+    const res = await crear(pedir(retiro([{ id: 'resma', cantidad: 1 }], { nota: { x: 1 } })));
+    expect(res.status).toBe(400);
+    expect((await res.json()).detalle).toBe('nota');
+  });
+
+  it('la variedad se toma sin espacios alrededor', async () => {
+    mundo.config.entrega.pedido_minimo = 0;
+    const crear = await cargar();
+    const res = await crear(pedir(retiro([{ id: 'cartulina', variedad: ' Rojo ', cantidad: 1 }])));
+    expect(res.status).toBe(200);
+    expect(guardado().items[0].variedad).toBe('Rojo');
+  });
+});
+
+/* ── El horario ───────────────────────────────────────────────────────────── */
+
+describe('el horario del local', () => {
+  const horario = () => Array.from({ length: 7 }, () => ({
+    tramos: [{ desde: '09:00', hasta: '13:00' }, { desde: '17:00', hasta: '20:30' }],
+  }));
+
+  it('fuera de horario el servidor no toma el pedido, y dice cuándo abre', async () => {
+    mundo.config.horarios = horario();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-01T02:00:00Z'));   // 23:00 en Argentina
+    try {
+      const crear = await cargar();
+      const res = await crear(pedir(retiro([{ id: 'resma', cantidad: 1 }])));
+
+      expect(res.status).toBe(409);
+      const datos = await res.json();
+      expect(datos.error).toBe('cerrada');
+      expect(datos.motivo).toBe('fuera_de_horario');
+      expect(datos.abre).toBeTruthy();
+      expect(mundo.guardados).toHaveLength(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('dentro del horario entra', async () => {
+    mundo.config.horarios = horario();
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-09-01T14:00:00Z'));   // 11:00 en Argentina
+    try {
+      const crear = await cargar();
+      const res = await crear(pedir(retiro([{ id: 'resma', cantidad: 1 }])));
+      expect(res.status).toBe(200);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

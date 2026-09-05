@@ -123,10 +123,19 @@ export function hayCredenciales() {
 // en que el cliente está esperando la confirmación.
 let _token = null;
 let _tokenVence = 0;
+// Varias lecturas arrancan a la vez dentro de un mismo pedido (los pedidos
+// abiertos, el código libre): sin esto cada una pedía su propio token.
+let _tokenEnCurso = null;
 
 async function accessToken() {
   if (_token && Date.now() < _tokenVence - 60_000) return _token;
+  if (!_tokenEnCurso) {
+    _tokenEnCurso = pedirToken().finally(() => { _tokenEnCurso = null; });
+  }
+  return _tokenEnCurso;
+}
 
+async function pedirToken() {
   const crudo = process.env.FIREBASE_SERVICE_ACCOUNT;
   if (!crudo) throw new Error('falta FIREBASE_SERVICE_ACCOUNT');
 
@@ -217,6 +226,70 @@ export async function crearDoc(coleccion, id, datos) {
   }
 
   return respuesta.json();
+}
+
+/**
+ * Borra un documento. Lo usa el pedido que se retira solo al descubrir, ya
+ * escrito, que otro entró en el mismo instante por la misma última unidad.
+ */
+export async function borrarDoc(coleccion, id) {
+  const token = await accessToken();
+  const respuesta = await fetch(`${BASE}/${coleccion}/${encodeURIComponent(id)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (!respuesta.ok && respuesta.status !== 404) {
+    throw new Error(`Firestore devolvió ${respuesta.status} borrando ${coleccion}/${id}`);
+  }
+}
+
+/**
+ * Una consulta sobre una colección cerrada al público, con la cuenta de
+ * servicio.
+ *
+ * `tienda_pedidos` no se puede listar sin sesión —es lo que impide que un
+ * cliente vea los pedidos de otro—, así que "los pedidos abiertos" o "un
+ * pedido con este código" solo se pueden buscar desde acá.
+ *
+ * Los filtros van como ternas `[campo, operador, valor]` con los operadores de
+ * la API (`EQUAL`, `IN`, ...). Con `campos` se piden solo esos, que para
+ * contar lo prometido en cien pedidos evita bajar cien pedidos enteros.
+ *
+ * @returns {Promise<Array<{id: string} & Record<string, any>>>}
+ */
+export async function consultar(coleccion, { where = [], limite = 100, campos = null } = {}) {
+  const token = await accessToken();
+
+  const filtros = where.map(([campo, op, valor]) => ({
+    fieldFilter: { field: { fieldPath: campo }, op, value: aValor(valor) },
+  }));
+  const structuredQuery = {
+    from: [{ collectionId: coleccion }],
+    limit: limite,
+    ...(filtros.length === 1 ? { where: filtros[0] } : {}),
+    ...(filtros.length > 1 ? { where: { compositeFilter: { op: 'AND', filters: filtros } } } : {}),
+    ...(campos ? { select: { fields: campos.map(c => ({ fieldPath: c })) } } : {}),
+  };
+
+  const respuesta = await fetch(`${BASE}:runQuery`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ structuredQuery }),
+  });
+
+  if (!respuesta.ok) {
+    throw new Error(`Firestore devolvió ${respuesta.status} consultando ${coleccion}: ${(await respuesta.text()).slice(0, 300)}`);
+  }
+
+  // Una consulta sin resultados no devuelve una lista vacía: devuelve una fila
+  // con solo `readTime`.
+  const filas = await respuesta.json();
+  return (Array.isArray(filas) ? filas : [])
+    .filter(f => f.document)
+    .map(f => ({ id: f.document.name.split('/').pop(), ...aplanar(f.document.fields || {}) }));
 }
 
 /**
