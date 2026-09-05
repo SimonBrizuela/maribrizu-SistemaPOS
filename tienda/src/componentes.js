@@ -213,12 +213,15 @@ export function navInferior(rutaActual = '/', unidades = 0) {
     <nav class="nav-inferior" aria-label="Navegación principal">
       ${item('/', 'casa', 'Inicio')}
       ${item('/catalogo', 'grilla', 'Catálogo')}
+      <!-- "Carrito" y "Mis pedidos", no "Pedido" y "Mi pedido": son dos cosas
+           distintas —lo que estás armando y lo que ya compraste— y con esos dos
+           nombres, uno al lado del otro, no había forma de saber cuál era cuál. -->
       <button class="nav-inferior__item" data-abrir-carrito
               aria-label="Ver tu pedido${unidades ? `, ${unidades} producto${unidades === 1 ? '' : 's'}` : ', vacío'}">
         ${icono('carrito', { tam: 22 })}
-        <span>Pedido${unidades ? ` (${unidades})` : ''}</span>
+        <span>Carrito${unidades ? ` (${unidades})` : ''}</span>
       </button>
-      ${item('/seguimiento', 'bolsa', 'Mi pedido')}
+      ${item('/seguimiento', 'bolsa', 'Mis pedidos')}
     </nav>`;
 }
 

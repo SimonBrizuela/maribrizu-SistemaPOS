@@ -57,7 +57,12 @@ export async function seguimiento({ montar }) {
 
   // Si la cuenta no agregó nada solo se apaga el cartelito de "buscando": no
   // hay por qué repintar una lista que ya está bien.
-  if (todos.length === locales.length) {
+  //
+  // Salvo que no haya ninguno: ahí el primer pintado fue el cartelito y nada
+  // más, así que sacarlo dejaba la pantalla en blanco —título y una lista
+  // vacía— y el estado vacío no llegaba a aparecer nunca. Era el caso de
+  // cualquiera que entra a "Mis pedidos" sin haber comprado todavía.
+  if (todos.length === locales.length && locales.length > 0) {
     document.querySelector('[data-buscando]')?.remove();
     actualizarBajada(cuenta);
     return;

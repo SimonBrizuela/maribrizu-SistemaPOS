@@ -7,7 +7,7 @@ import * as carrito from './carrito.js';
 import { abrir as abrirCarrito, estaAbierto } from './panel_carrito.js';
 import { avisar } from './avisos.js';
 import { iniciarSugerencias, fijarAmbito, cerrarSugerencias } from './sugerencias.js';
-import { iniciarAsistente } from './asistente.js';
+import { iniciarAsistente, refrescarAsistente } from './asistente.js';
 import { iniciarBarraPedido, refrescarBarraPedido } from './barra_pedido.js';
 import { iniciarCuenta } from './cuenta.js';
 import { estadoDelLocal, textoDeCerrado } from './horarios.js';
@@ -132,9 +132,11 @@ async function dibujar() {
 alNavegar(async () => {
   cerrarSugerencias();
   await dibujar();
-  // La barra del pedido no va en todas las pantallas: en el checkout tapa las
-  // opciones de entrega y repite lo que ya está arriba.
+  // Ni la barra del pedido ni el botón del chat van en todas las pantallas: en
+  // el checkout una tapa las opciones de entrega y el otro se apoya sobre
+  // "Confirmar el pedido".
   refrescarBarraPedido();
+  refrescarAsistente();
   // Cada pantalla nueva arranca arriba, y el foco va al contenido para que un
   // lector de pantalla no siga leyendo desde el encabezado anterior.
   window.scrollTo({ top: 0, behavior: 'instant' });

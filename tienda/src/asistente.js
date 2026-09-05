@@ -38,6 +38,22 @@ const EJEMPLOS = [
 
 /* ── Armado ───────────────────────────────────────────────────────────────── */
 
+/**
+ * Dónde no va el botón flotante.
+ *
+ * En el checkout se apoya en la esquina de abajo a la derecha, que es
+ * exactamente donde cae "Confirmar el pedido" en el celular: el único botón de
+ * la tienda que no se puede tapar. En la pantalla del pedido confirmado pasa lo
+ * mismo con subir el comprobante. En las dos, además, ya no hay nada que
+ * preguntar sobre el catálogo.
+ */
+const RUTAS_SIN_ASISTENTE = ['/checkout', '/pedido'];
+
+function rutaLoEsconde() {
+  const camino = location.pathname;
+  return RUTAS_SIN_ASISTENTE.some(r => camino === r || camino.startsWith(`${r}/`));
+}
+
 export function iniciarAsistente() {
   if (document.querySelector('.asistente')) return;
 
@@ -52,6 +68,16 @@ export function iniciarAsistente() {
   document.body.appendChild(raiz);
 
   raiz.querySelector('[data-abrir-asistente]').addEventListener('click', abrir);
+  refrescarAsistente();
+}
+
+/** Lo llama el router en cada cambio de pantalla. */
+export function refrescarAsistente() {
+  const raiz = document.querySelector('.asistente');
+  if (!raiz) return;
+  const esconder = rutaLoEsconde();
+  raiz.hidden = esconder;
+  if (esconder) cerrar();
 }
 
 function abrir() {
@@ -79,9 +105,12 @@ function abrir() {
       </div>
 
       <form class="asistente-panel__pie" data-form-asistente>
+        <!-- enterkeyhint: en el celular la tecla del teclado dice "enviar" en
+             vez de "intro". El Enter ya enviaba solo, por ser un form con botón
+             de submit; lo que faltaba era que la tecla lo dijera. -->
         <input class="asistente-panel__campo" type="text" name="texto"
                placeholder="Escribí qué estás buscando" autocomplete="off"
-               maxlength="500" aria-label="Tu consulta">
+               enterkeyhint="send" maxlength="500" aria-label="Tu consulta">
         <button class="asistente-panel__enviar" type="submit" aria-label="Enviar">
           ${icono('derecha', { tam: 18, grosor: 2.5 })}
         </button>

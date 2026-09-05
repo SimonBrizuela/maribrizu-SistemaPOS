@@ -41,6 +41,47 @@ export function ordenarPorTamano(productos) {
 }
 
 /**
+ * Cómo se llama cada botón del selector de tamaños, sin dos iguales.
+ *
+ * El tamaño lo escribe una persona en el panel, así que en Papel Obra hay dos
+ * miembros del grupo etiquetados "200 gr" (son de marcas distintas). El selector
+ * mostraba dos botones idénticos y no había forma de saber cuál era cuál: se
+ * elegía a ver qué salía.
+ *
+ * Se desempata con lo primero que los distinga: la marca, después el nombre
+ * completo del producto y, si ni eso los separa —dos fichas realmente gemelas en
+ * el catálogo—, un número, que es feo pero no miente.
+ *
+ * @param {Array} tamanos miembros del grupo, ya ordenados
+ * @returns {string[]} una etiqueta por miembro, en el mismo orden
+ */
+export function etiquetasDeTamano(tamanos) {
+  const base = tamanos.map(t => String(t.tamano || t.nombre || '').trim() || '—');
+  const repetidas = new Set(base.filter((e, i) => base.indexOf(e) !== i));
+
+  const usadas = new Set();
+  return base.map((etiqueta, i) => {
+    if (!repetidas.has(etiqueta)) { usadas.add(etiqueta); return etiqueta; }
+
+    const t = tamanos[i];
+    const marca = String(t.marca || '').trim();
+    const nombre = String(t.nombre || '').trim();
+
+    let elegida = [marca ? `${etiqueta} · ${marca}` : null, nombre || null]
+      .find(c => c && !usadas.has(c));
+
+    if (!elegida) {
+      let n = 2;
+      while (usadas.has(`${etiqueta} (${n})`)) n += 1;
+      elegida = `${etiqueta} (${n})`;
+    }
+
+    usadas.add(elegida);
+    return elegida;
+  });
+}
+
+/**
  * La card que representa al grupo entero.
  *
  * Sale del primer miembro que apareció en la lista —que por el orden del sync

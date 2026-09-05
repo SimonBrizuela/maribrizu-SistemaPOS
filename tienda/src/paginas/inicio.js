@@ -67,12 +67,16 @@ function ilustracionMovil() {
 
 /** Una tira de productos de un rubro. */
 function tira(rubro, productos) {
+  // El mismo número que la ficha de arriba: lo que se puede comprar hoy. Con
+  // `cantidad` acá y `con_stock` allá, la misma pantalla decía 4.163 y 1.024 del
+  // mismo rubro, y eso hace dudar de los dos.
+  const hay = rubro.con_stock ?? rubro.cantidad;
   return `
     <section class="tira" data-rubro="${esc(rubro.clave)}">
       <div class="tira__cabecera">
         <span class="tira__marca"></span>
         <h2 class="tira__titulo">${esc(rubro.nombre)}</h2>
-        <span class="tira__cuenta">${rubro.cantidad.toLocaleString('es-AR')}</span>
+        <span class="tira__cuenta">${hay.toLocaleString('es-AR')}</span>
         <a class="tira__ver" href="/catalogo/${encodeURIComponent(rubro.clave)}">Ver todo</a>
       </div>
       <div class="tira__productos">
@@ -167,6 +171,13 @@ export async function inicio({ montar }) {
   const vidriera = (lista => lista.length ? lista : rubros)(
     rubros.filter(r => conStock(r) >= CORTE_PORTADA));
 
+  // Las fichas son el menú, no la vidriera: van todos los rubros que existen en
+  // el catálogo. Antes se les aplicaba el mismo corte que a las tiras y la
+  // portada ofrecía seis rubros contra los ocho del catálogo — Cotillón y
+  // Mercería no estaban por ningún lado, y desde la portada no había forma de
+  // saber que existían.
+  const CUENTA_DESDE = 40;
+
   const cajaRubros = document.querySelector('[data-rubros]');
   if (cajaRubros) {
     // Las fichas entran escalonadas igual que el texto de arriba, pero el
@@ -174,20 +185,27 @@ export async function inicio({ montar }) {
     // portada: llegan después de consultar los rubros y encadenarlas al
     // retraso original las dejaría apareciendo de a una con la consulta ya
     // resuelta.
-    cajaRubros.innerHTML = vidriera.map((r, i) => `
+    cajaRubros.innerHTML = rubros.map((r, i) => {
+      // Se muestra lo que se puede comprar hoy, no el total publicado. De los
+      // 4.163 de Librería hay stock de 1.024: prometer 4.163 y que el cliente
+      // entre a ver una pantalla de agotados es peor que decir 1.024.
+      //
+      // Y solo cuando el número juega a favor. "Perfumería · 6" al lado de
+      // "Librería · 888" no informa, avisa que ahí no hay nada; el rubro sigue
+      // estando, sin el cartelito que lo hunde.
+      const hay = conStock(r);
+      return `
       <a class="rubro-ficha entra" style="--entra-orden:${i}"
          data-rubro="${esc(r.clave)}" href="/catalogo/${encodeURIComponent(r.clave)}">
         <span class="rubro-ficha__icono">${icono(iconoDeRubro(r.clave), { tam: 20 })}</span>
         <span class="rubro-ficha__texto">
           <span class="rubro-ficha__nombre">${esc(r.nombre)}</span>
-          <span class="rubro-ficha__cuenta">${(r.con_stock ?? r.cantidad).toLocaleString('es-AR')} disponible${
-            (r.con_stock ?? r.cantidad) === 1 ? '' : 's'}</span>
+          ${hay >= CUENTA_DESDE
+            ? `<span class="rubro-ficha__cuenta">${hay.toLocaleString('es-AR')} disponibles</span>`
+            : ''}
         </span>
-      </a>`).join('');
-
-  // Se muestra lo que se puede comprar hoy, no el total publicado. De los 4.163
-  // de Libreria hay stock de 1.024: prometer 4.163 y que el cliente entre a ver
-  // una pantalla de agotados es peor que decir 1.024 de entrada.
+      </a>`;
+    }).join('');
   }
 
   const cajaTiras = document.querySelector('[data-tiras]');
@@ -238,9 +256,18 @@ export async function inicio({ montar }) {
       </section>`);
   }
 
-  partes.push(...conProductos
-    .filter(x => x.productos.length)
-    .map(x => tira(x.rubro, plegarGrupos(x.productos))));
+  // Una tira con una sola card se lee como un rubro vacío, que es peor que no
+  // mostrarlo: "Papelera" con un producto suelto dice que ahí no hay nada. El
+  // rubro sigue en las fichas de arriba y en el catálogo entero. Si ninguna
+  // llega al corte —catálogo recién cargado— se muestran las que haya, que una
+  // portada sin productos es peor.
+  const MINIMO_TIRA = 3;
+  const conCards = conProductos
+    .map(x => ({ rubro: x.rubro, cards: plegarGrupos(x.productos) }))
+    .filter(x => x.cards.length);
+  const llenas = conCards.filter(x => x.cards.length >= MINIMO_TIRA);
+
+  partes.push(...(llenas.length ? llenas : conCards).map(x => tira(x.rubro, x.cards)));
 
   cajaTiras.innerHTML = partes.length
     ? partes.join('')

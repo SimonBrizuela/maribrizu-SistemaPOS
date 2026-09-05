@@ -7,7 +7,7 @@
  * qué dice la card del grupo y cómo se pliega una lista paginada.
  */
 import { describe, it, expect } from 'vitest';
-import { valorDeTamano, ordenarPorTamano, cardDeGrupo, plegarGrupos }
+import { valorDeTamano, ordenarPorTamano, cardDeGrupo, plegarGrupos, etiquetasDeTamano }
   from '../src/grupos.js';
 
 const cierre = (tamano, extra = {}) => ({
@@ -181,5 +181,49 @@ describe('el selector de tamaños de la ficha', () => {
   it('con un solo tamaño publicado no hay nada que elegir', async () => {
     const { listaDeTamanos } = await import('../src/paginas/producto.js');
     expect(listaDeTamanos([cierre('10 cm')], 'c-10 cm')).toBe('');
+  });
+});
+
+describe('las etiquetas del selector de tamaños', () => {
+  // El tamaño lo escribe una persona en el panel. En Papel Obra quedaron dos
+  // miembros del grupo etiquetados "200 gr", de marcas distintas: el selector
+  // mostraba dos botones idénticos y elegir era tocar a ver qué salía.
+  const papel = (tamano, marca, nombre) => ({
+    id: `p-${marca}-${tamano}`, nombre, marca, tamano, stock: 5,
+  });
+
+  it('deja los tamaños distintos tal cual', () => {
+    expect(etiquetasDeTamano([cierre('10 cm'), cierre('12 cm')]))
+      .toEqual(['10 cm', '12 cm']);
+  });
+
+  it('dos tamaños con el mismo nombre se separan por la marca', () => {
+    expect(etiquetasDeTamano([
+      papel('200 gr', 'Ledesma', 'Papel Obra Ledesma 200 gr'),
+      papel('200 gr', 'Boreal', 'Papel Obra Boreal 200 gr'),
+    ])).toEqual(['200 gr · Ledesma', '200 gr · Boreal']);
+  });
+
+  it('sin marca cae al nombre completo del producto', () => {
+    expect(etiquetasDeTamano([
+      { id: 'a', nombre: 'Papel Obra Blanco 200 gr', tamano: '200 gr', stock: 1 },
+      { id: 'b', nombre: 'Papel Obra Color 200 gr', tamano: '200 gr', stock: 1 },
+    ])).toEqual(['Papel Obra Blanco 200 gr', 'Papel Obra Color 200 gr']);
+  });
+
+  it('dos fichas realmente gemelas se numeran antes que repetirse', () => {
+    const gemelo = id => ({ id, nombre: 'Papel Obra 200 gr', marca: 'Ledesma', tamano: '200 gr', stock: 1 });
+    const salida = etiquetasDeTamano([gemelo('a'), gemelo('b')]);
+    expect(new Set(salida).size).toBe(2);
+  });
+
+  it('el selector dibuja la etiqueta desempatada, no dos botones iguales', async () => {
+    const { listaDeTamanos } = await import('../src/paginas/producto.js');
+    const html = listaDeTamanos([
+      papel('200 gr', 'Ledesma', 'Papel Obra Ledesma 200 gr'),
+      papel('200 gr', 'Boreal', 'Papel Obra Boreal 200 gr'),
+    ], 'p-Ledesma-200 gr');
+    expect(html).toContain('200 gr · Ledesma');
+    expect(html).toContain('200 gr · Boreal');
   });
 });

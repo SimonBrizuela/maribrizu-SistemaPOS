@@ -239,6 +239,22 @@ describe('mis pedidos', () => {
     expect(c.textContent.toLowerCase()).toMatch(/pedido/);
   });
 
+  // Con cero pedidos el primer pintado es el cartelito de "buscando los de tu
+  // cuenta". Despues se lo sacaba y se cortaba antes de repintar, asi que el
+  // estado vacio no llegaba a aparecer nunca: quedaba el titulo y una lista
+  // vacia. Es lo que ve cualquiera que entra a "Mis pedidos" sin haber comprado.
+  it('sin ninguno muestra el estado vacio de verdad, no el esqueleto', async () => {
+    // La pantalla descarta lo que llega tarde comparando la ruta, asi que el
+    // segundo pintado solo ocurre estando parado en ella.
+    window.history.replaceState({}, '', '/seguimiento');
+    const c = await abrir('seguimiento');
+    expect(c.textContent).toContain('Todavía no hiciste ningún pedido');
+    expect(c.querySelector('.vacio')).not.toBeNull();
+    expect(c.querySelector('[data-buscando]')).toBeNull();
+    // Y una salida: sin esto el estado vacio es un cartel y nada mas.
+    expect(c.querySelector('a[href="/catalogo"]')).not.toBeNull();
+  });
+
   it('lista los que hizo este teléfono', async () => {
     // Se guardan al confirmar: es lo que permite volver a mirar el estado sin
     // tener cuenta.
@@ -315,5 +331,85 @@ describe('las direcciones que no se indexan', () => {
     fijarPantalla({ privada: true });
     expect(document.head.querySelector('meta[name="robots"]').content)
       .toContain('noindex');
+  });
+});
+
+describe('la portada', () => {
+  // Las fichas de rubro son el menu, no la vidriera. Antes se les aplicaba el
+  // mismo corte que a las tiras y la portada ofrecia seis rubros contra los
+  // ocho del catalogo: Cotillon y Merceria no estaban por ningun lado.
+  it('las fichas listan todos los rubros del catalogo', async () => {
+    datos.rubros = [
+      { clave: 'LIBRERIA', nombre: 'Libreria', cantidad: 880, con_stock: 880 },
+      { clave: 'PAPELERIA', nombre: 'Papeleria', cantidad: 120, con_stock: 120 },
+      { clave: 'MERCERIA', nombre: 'Merceria', cantidad: 30, con_stock: 2 },
+      { clave: 'COTILLON', nombre: 'Cotillon', cantidad: 8, con_stock: 1 },
+    ];
+    const c = await abrir('inicio');
+    const fichas = [...c.querySelectorAll('.rubro-ficha')];
+    expect(fichas).toHaveLength(4);
+    expect([...c.querySelectorAll('.rubro-ficha__nombre')].map(n => n.textContent))
+      .toEqual(['Libreria', 'Papeleria', 'Merceria', 'Cotillon']);
+  });
+
+  // "Perfumeria - 6" al lado de "Libreria - 888" no informa: avisa que ahi no
+  // hay nada. El rubro sigue estando, sin el cartelito que lo hunde.
+  it('el contador solo sale cuando el numero juega a favor', async () => {
+    datos.rubros = [
+      { clave: 'LIBRERIA', nombre: 'Libreria', cantidad: 880, con_stock: 880 },
+      { clave: 'PERFUMERIA', nombre: 'Perfumeria', cantidad: 9, con_stock: 6 },
+    ];
+    const c = await abrir('inicio');
+    const cuentas = [...c.querySelectorAll('.rubro-ficha__cuenta')].map(n => n.textContent);
+    expect(cuentas).toHaveLength(1);
+    expect(cuentas[0]).toContain('880');
+  });
+});
+
+describe('la ficha, cuando falta elegir el color', () => {
+  const conColores = {
+    id: 'v1', nombre: 'Cartulina Luma', precio: 800, stock: 30,
+    rubro: 'LIBRERIA', categoria: 'Papeles', marca: 'LUMA', imagenes: ['a.webp'],
+    variedades: [
+      { nombre: 'Rojo', stock: 10 },
+      { nombre: 'Celeste', stock: 12 },
+    ],
+  };
+
+  // Tocar "Agregar" sin color elegido no agrega nada. El aviso flotante dura
+  // cuatro segundos y era la unica senal: quien no llegaba a leerlo veia un
+  // boton que no hace nada, que se lee como que la pagina esta rota.
+  it('el selector queda marcado y el motivo se queda a la vista', async () => {
+    datos.productos = [conColores];
+    const c = await abrir('producto', { params: { id: 'v1' } });
+
+    const falta = c.querySelector('[data-falta-variedad]');
+    expect(falta.hidden).toBe(true);
+
+    c.querySelector('[data-agregar]').click();
+    expect(falta.hidden).toBe(false);
+    expect(c.querySelector('[data-variedades]').className).toContain('variedades--falta');
+    expect(falta.textContent).toContain('Eleg');
+  });
+
+  it('elegir el color lo limpia', async () => {
+    datos.productos = [conColores];
+    const c = await abrir('producto', { params: { id: 'v1' } });
+
+    c.querySelector('[data-agregar]').click();
+    expect(c.querySelector('[data-falta-variedad]').hidden).toBe(false);
+
+    c.querySelector('[data-variedad="Celeste"]').click();
+    expect(c.querySelector('[data-falta-variedad]').hidden).toBe(true);
+    expect(c.querySelector('[data-variedades]').className).not.toContain('variedades--falta');
+  });
+
+  it('sin variedades el boton agrega y no marca nada', async () => {
+    const c = await abrir('producto', { params: { id: 'p1' } });
+    expect(c.querySelector('[data-falta-variedad]')).toBeNull();
+    c.querySelector('[data-agregar]').click();
+    const carrito = await import('../src/carrito.js');
+    expect(carrito.items().map(r => r.id)).toContain('p1');
+    carrito.vaciar();
   });
 });
