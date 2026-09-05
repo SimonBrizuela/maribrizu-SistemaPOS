@@ -528,3 +528,64 @@ describe('el pedido lo guarda el servidor', () => {
     expect(r.codigo).toMatch(/^[A-HJ-NP-Z2-9]{4}$/);
   });
 });
+
+describe('cuando la funcion tropieza', () => {
+  // Con las reglas cerradas ya no hay camino viejo: si la funcion contesta 502
+  // porque se estaba levantando, el pedido se pierde. Le pasa al primer cliente
+  // del dia, que es el peor momento posible.
+  const ok = {
+    ok: true, status: 200,
+    json: async () => ({ id: 'srv1', codigo: 'K7M2', subtotal: 7000, envio: 0, total: 7000 }),
+  };
+  const caida = { ok: false, status: 502, json: async () => ({}) };
+
+  it('un 502 se reintenta una vez y el pedido entra', async () => {
+    let n = 0;
+    globalThis.fetch = vi.fn((url) => {
+      if (!String(url).includes('crear-pedido')) return Promise.resolve({ ok: true, json: async () => ({}) });
+      n += 1;
+      return Promise.resolve(n === 1 ? caida : ok);
+    });
+
+    const r = await pedidos.crearPedido(PEDIDO);
+    expect(n).toBe(2);
+    expect(r).toEqual({ id: 'srv1', codigo: 'K7M2' });
+  });
+
+  it('un 400 no se reintenta: es una respuesta, no un tropiezo', async () => {
+    let n = 0;
+    globalThis.fetch = vi.fn((url) => {
+      if (!String(url).includes('crear-pedido')) return Promise.resolve({ ok: true, json: async () => ({}) });
+      n += 1;
+      return Promise.resolve({ ok: false, status: 400, json: async () => ({}) });
+    });
+
+    await pedidos.crearPedido(PEDIDO);
+    expect(n).toBe(1);
+  });
+
+  // El reintento puede encontrarse con su propio pedido: el primero entro pero
+  // la respuesta se perdio. Decirle "algo fallo" a alguien que ya tiene el
+  // pedido cargado lo deja mandando otro.
+  it('"ya existe" es el reintento encontrando su pedido, no un error', async () => {
+    estado.docs['tienda_pedidos/reservado-9'] = { codigo: 'W4KD', total: 7000 };
+    globalThis.fetch = vi.fn((url) => Promise.resolve(
+      String(url).includes('crear-pedido')
+        ? { ok: false, status: 409, json: async () => ({ error: 'ya_existe' }) }
+        : { ok: true, json: async () => ({}) }));
+
+    const r = await pedidos.crearPedido({ ...PEDIDO, id: 'reservado-9' });
+    expect(r).toEqual({ id: 'reservado-9', codigo: 'W4KD' });
+    expect(pedidos.misPedidos()[0]).toMatchObject({ id: 'reservado-9', codigo: 'W4KD' });
+  });
+
+  it('si "ya existe" pero el pedido no esta, sube el error', async () => {
+    globalThis.fetch = vi.fn((url) => Promise.resolve(
+      String(url).includes('crear-pedido')
+        ? { ok: false, status: 409, json: async () => ({ error: 'ya_existe' }) }
+        : { ok: true, json: async () => ({}) }));
+
+    await expect(pedidos.crearPedido({ ...PEDIDO, id: 'no-esta' }))
+      .rejects.toMatchObject({ motivo: 'ya_existe' });
+  });
+});

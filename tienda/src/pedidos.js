@@ -1,10 +1,13 @@
 /**
  * Pedidos.
  *
- * Se crean sin sesion: las reglas de `tienda_pedidos` validan la forma del
- * documento en vez de pedir un usuario. Un pedido se puede leer sabiendo su id
- * (veinte caracteres al azar, no se adivina) pero nadie puede listar la
- * coleccion, asi que un cliente no ve los pedidos de otro.
+ * Se crean sin sesion, pero no desde acá: desde el 05-09-2026 las reglas no
+ * dejan que ningún navegador escriba en `tienda_pedidos`, y el pedido lo guarda
+ * `netlify/functions/crear-pedido`, que relee los precios de la base. Escrito
+ * desde el navegador, el precio de cada renglón salía de la memoria del que
+ * paga. Un pedido se puede leer sabiendo su id (veinte caracteres al azar, no
+ * se adivina) pero nadie puede listar la coleccion, asi que un cliente no ve
+ * los pedidos de otro.
  *
  * Esa misma regla es la razon por la que el seguimiento guarda los pedidos
  * hechos desde este navegador en localStorage: sin permiso de listado no hay
@@ -144,34 +147,52 @@ export async function crearPedido({ cliente, entrega, pago, items, subtotal, env
  * @throws {Error & {cambios?: Array, motivo?: string}}
  */
 async function crearEnElServidor({ id, cliente, entrega, pago, items, nota, idToken }) {
+  const cuerpo = JSON.stringify({
+    id,
+    cliente,
+    entrega,
+    pago,
+    // Va el QUÉ, no el cuánto sale: el precio lo pone el servidor. El que se
+    // manda es solo el que el cliente tenía a la vista, para que la función
+    // pueda avisar si cambió en vez de cobrar otra cosa.
+    items: items.map(i => ({
+      id: i.id,
+      nombre: i.nombre,
+      variedad: i.variedad,
+      cantidad: i.cantidad,
+      es_pack: i.es_pack,
+      precio: i.precio,
+    })),
+    nota,
+    ...(idToken ? { idToken } : {}),
+  });
+
+  const llamar = () => fetch(FUNCION_CREAR, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: cuerpo,
+  });
+
   let respuesta;
   try {
-    respuesta = await fetch(FUNCION_CREAR, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        id,
-        cliente,
-        entrega,
-        pago,
-        // Va el QUÉ, no el cuánto sale: el precio lo pone el servidor. El que
-        // se manda es solo el que el cliente tenía a la vista, para que la
-        // función pueda avisar si cambió en vez de cobrar otra cosa.
-        items: items.map(i => ({
-          id: i.id,
-          nombre: i.nombre,
-          variedad: i.variedad,
-          cantidad: i.cantidad,
-          es_pack: i.es_pack,
-          precio: i.precio,
-        })),
-        nota,
-        ...(idToken ? { idToken } : {}),
-      }),
-    });
+    respuesta = await llamar();
+
+    // Arranque en frío. La función vive dormida y el primer pedido del día se
+    // la encuentra levantándose: medido en el chat, los dos primeros intentos
+    // devolvían 502. Antes ese 502 caía al camino viejo y el pedido entraba
+    // igual; con las reglas cerradas ya no hay camino viejo, así que un
+    // tropiezo del servidor le costaría la compra al primer cliente del día.
+    //
+    // Se reintenta una sola vez y solo ante un error del servidor: un 400, un
+    // 409 o un 501 son respuestas, no tropiezos.
+    if (respuesta.status >= 500 && respuesta.status !== 501) {
+      console.warn('[pedidos] la función tropezó, reintentando:', respuesta.status);
+      await new Promise(listo => setTimeout(listo, 900));
+      respuesta = await llamar();
+    }
   } catch (err) {
-    // Sin internet, o la función no existe todavía en este entorno. Se sigue
-    // por el camino viejo, que ante las reglas cerradas va a fallar solo.
+    // Sin internet, o la función no existe en este entorno. Un reintento acá
+    // vale lo mismo que el primero: la red no vuelve en 900 ms.
     console.warn('[pedidos] no se pudo llamar a la función:', err);
     return null;
   }
@@ -194,6 +215,19 @@ async function crearEnElServidor({ id, cliente, entrega, pago, items, nota, idTo
     let datos = {};
     try { datos = await respuesta.json(); } catch { /* cuerpo vacío */ }
     const motivo = datos.error || 'cambios';
+
+    // "Ya existe" es el reintento encontrando el pedido que hizo el primer
+    // intento: la respuesta se perdió en el camino, pero el pedido está. Se
+    // lee de la base y se sigue como si hubiera salido bien; decirle al
+    // cliente que algo falló cuando su pedido ya está cargado lo deja
+    // mandando otro.
+    if (motivo === 'ya_existe') {
+      const guardado = await traerPedido(id).catch(() => null);
+      if (guardado?.codigo) {
+        return { id, codigo: guardado.codigo, total: guardado.total };
+      }
+    }
+
     const err = new Error(MOTIVOS[motivo] || MOTIVOS.cambios);
     err.motivo = motivo;
     err.cambios = datos.cambios || [];
