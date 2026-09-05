@@ -23,16 +23,34 @@
   --liceo-cyan:    #29ABCA;
   --liceo-rojo:    #E63946;
 
+  /* Los mismos colores, hondos.
+     Son la marca bajada de brillo hasta que el blanco encima se lee. Sirven
+     para dos cosas distintas: como relleno de las fichas de rubro (que llevan
+     texto adentro) y como color de texto sobre fondo claro. No cambian con el
+     tema, porque el marco negro de la portada es negro siempre. */
+  /* El blanco pelado, con nombre, para que el verificador pueda medirlo. */
+  --blanco: #FFFFFF;
+
+  --liceo-violeta-hondo: #6B2F96;
+  --liceo-verde-hondo:   #4C7A12;
+  --liceo-naranja-hondo: #9A5B00;
+  --liceo-cyan-hondo:    #0C7590;
+  --liceo-rojo-hondo:    #C1121F;
+  --liceo-rosa-hondo:    #A32C68;
+  --liceo-azul-hondo:    #3A5C99;
+  --liceo-coral-hondo:   #B2440E;
+  --liceo-agua-hondo:    #0E6F6A;
+
   /* Variantes para TEXTO sobre fondo claro.
      Los colores del logo son luminosos: el verde lima da 1,9:1 sobre blanco y
      el naranja 2,1:1, muy por debajo del 4,5:1 que hace falta para leer. Estas
      versiones oscurecidas mantienen el tono de marca y sí se leen. Nunca poner
      texto con las variables de arriba sobre fondo claro. */
-  --liceo-violeta-txt: #6B2F96;
-  --liceo-verde-txt:   #4C7A12;
-  --liceo-naranja-txt: #9A5B00;
-  --liceo-cyan-txt:    #0C7590;
-  --liceo-rojo-txt:    #C1121F;
+  --liceo-violeta-txt: var(--liceo-violeta-hondo);
+  --liceo-verde-txt:   var(--liceo-verde-hondo);
+  --liceo-naranja-txt: var(--liceo-naranja-hondo);
+  --liceo-cyan-txt:    var(--liceo-cyan-hondo);
+  --liceo-rojo-txt:    var(--liceo-rojo-hondo);
 
   /* Tintes suaves: fondo de fichas, badges y estados. */
   --liceo-violeta-bg: #F3EDF9;
@@ -52,7 +70,7 @@
      Este rosa no se invento: es el punto medio entre el rojo y el violeta del
      logo, asi que pertenece a la familia sin desentonar. */
   --liceo-rosa:     #B93A78;
-  --liceo-rosa-txt: #A32C68;
+  --liceo-rosa-txt: var(--liceo-rosa-hondo);
   --liceo-rosa-bg:  #FBEBF3;
 
   /* Del septimo al noveno, por la misma razon y con la misma regla: los rubros
@@ -69,15 +87,15 @@
      Queda libre el punto medio verde-naranja (una mostaza) para el dia que
      Jugueteria o Navidad vuelvan a publicarse. */
   --liceo-azul:     #5275B8;
-  --liceo-azul-txt: #3A5C99;
+  --liceo-azul-txt: var(--liceo-azul-hondo);
   --liceo-azul-bg:  #EAF0FA;
 
   --liceo-coral:     #EC6A2C;
-  --liceo-coral-txt: #B2440E;
+  --liceo-coral-txt: var(--liceo-coral-hondo);
   --liceo-coral-bg:  #FDEDE3;
 
   --liceo-agua:     #5BB884;
-  --liceo-agua-txt: #1F7A52;
+  --liceo-agua-txt: var(--liceo-agua-hondo);
   --liceo-agua-bg:  #E6F5EC;
 
   --liceo-violeta-tinta: #FFFFFF;   /* 6,77:1 */
@@ -292,46 +310,57 @@
   --rubro-txt:   var(--liceo-violeta-txt);
   --rubro-bg:    var(--liceo-violeta-bg);
   --rubro-tinta: var(--liceo-violeta-tinta);
+  --rubro-hondo: var(--liceo-violeta-hondo);
 }
 [data-rubro="LIBRERÍA"], [data-rubro="LIBRERIA"] {
   --rubro: var(--liceo-violeta); --rubro-txt: var(--liceo-violeta-txt);
   --rubro-bg: var(--liceo-violeta-bg); --rubro-tinta: var(--liceo-violeta-tinta);
+  --rubro-hondo: var(--liceo-violeta-hondo);
 }
 [data-rubro="PAPELERA"] {
   --rubro: var(--liceo-cyan);    --rubro-txt: var(--liceo-cyan-txt);
   --rubro-bg: var(--liceo-cyan-bg);    --rubro-tinta: var(--liceo-cyan-tinta);
+  --rubro-hondo: var(--liceo-cyan-hondo);
 }
 [data-rubro="MERCERÍA"], [data-rubro="MERCERIA"] {
   --rubro: var(--liceo-verde);   --rubro-txt: var(--liceo-verde-txt);
   --rubro-bg: var(--liceo-verde-bg);   --rubro-tinta: var(--liceo-verde-tinta);
+  --rubro-hondo: var(--liceo-verde-hondo);
 }
 [data-rubro="REGALERÍA"], [data-rubro="REGALERIA"] {
   --rubro: var(--liceo-rojo);    --rubro-txt: var(--liceo-rojo-txt);
   --rubro-bg: var(--liceo-rojo-bg);    --rubro-tinta: var(--liceo-rojo-tinta);
+  --rubro-hondo: var(--liceo-rojo-hondo);
 }
 [data-rubro="JUGUETERÍA"], [data-rubro="JUGUETERIA"] {
   --rubro: var(--liceo-naranja); --rubro-txt: var(--liceo-naranja-txt);
   --rubro-bg: var(--liceo-naranja-bg); --rubro-tinta: var(--liceo-naranja-tinta);
+  --rubro-hondo: var(--liceo-naranja-hondo);
 }
 [data-rubro="LENCERÍA"], [data-rubro="LENCERIA"] {
   --rubro: var(--liceo-rosa);    --rubro-txt: var(--liceo-rosa-txt);
   --rubro-bg: var(--liceo-rosa-bg);    --rubro-tinta: var(--liceo-rosa-tinta);
+  --rubro-hondo: var(--liceo-rosa-hondo);
 }
 [data-rubro="PERFUMERÍA"], [data-rubro="PERFUMERIA"] {
   --rubro: var(--liceo-coral);   --rubro-txt: var(--liceo-coral-txt);
   --rubro-bg: var(--liceo-coral-bg);   --rubro-tinta: var(--liceo-coral-tinta);
+  --rubro-hondo: var(--liceo-coral-hondo);
 }
 [data-rubro="ACCESORIOS"] {
   --rubro: var(--liceo-azul);    --rubro-txt: var(--liceo-azul-txt);
   --rubro-bg: var(--liceo-azul-bg);    --rubro-tinta: var(--liceo-azul-tinta);
+  --rubro-hondo: var(--liceo-azul-hondo);
 }
 [data-rubro="COTILLÓN"], [data-rubro="COTILLON"] {
   --rubro: var(--liceo-agua);    --rubro-txt: var(--liceo-agua-txt);
   --rubro-bg: var(--liceo-agua-bg);    --rubro-tinta: var(--liceo-agua-tinta);
+  --rubro-hondo: var(--liceo-agua-hondo);
 }
 [data-rubro="NAVIDAD"], [data-rubro="SELLOS"] {
   --rubro: var(--liceo-verde);   --rubro-txt: var(--liceo-verde-txt);
   --rubro-bg: var(--liceo-verde-bg);   --rubro-tinta: var(--liceo-verde-tinta);
+  --rubro-hondo: var(--liceo-verde-hondo);
 }
 
 /* ── Accesibilidad de movimiento ────────────────────────────────────────────

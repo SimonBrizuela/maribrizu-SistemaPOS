@@ -403,8 +403,14 @@
   gap: var(--e-3);
   padding: var(--e-3) var(--e-4);
   border-radius: var(--r-md);
-  background: var(--rubro);
-  color: var(--rubro-tinta);
+  /* El relleno va en el tono hondo del rubro y la letra siempre en blanco.
+     Con los colores plenos, la mitad de las fichas pedía letra oscura para
+     leerse (el verde lima, el cyan, el naranja) y la otra mitad clara: ocho
+     fichas iguales con la letra de dos colores distintos se ven como un error.
+     El color pleno sigue estando donde no hay texto encima: la barrita de cada
+     tira y la sombra de la propia ficha. */
+  background: var(--rubro-hondo, var(--rubro));
+  color: #FFFFFF;
   text-decoration: none;
   /* La sombra lleva el color del propio rubro en vez de negro: sobre fondo
      oscuro una sombra negra no se ve, y esta hace que la ficha se despegue. */
@@ -414,13 +420,11 @@
     box-shadow var(--m-normal) var(--curva),
     filter var(--m-normal) var(--curva);
 }
-/* La tinta de la ficha le tiene que ganar a la del marco negro.
+/* La tinta de la ficha le tiene que ganar a la del marco negro:
    `.marco-oscuro a { color: var(--ink-texto) }` es más específica que
-   `.rubro-ficha`, así que las ocho fichas salían con texto claro sin importar lo
-   que dijeran los tokens: blanco sobre el verde lima daba 1,88:1, ilegible.
-   El verificador de contraste no lo veía porque mide los tokens, no cómo queda
-   dibujada la pantalla. */
-.marco-oscuro .rubro-ficha { color: var(--rubro-tinta); }
+   `.rubro-ficha`. Da lo mismo el valor, pero sin esto el color de la ficha lo
+   decide el marco y no la ficha. */
+.marco-oscuro .rubro-ficha { color: #FFFFFF; }
 
 .rubro-ficha:hover {
   transform: translateY(-3px);

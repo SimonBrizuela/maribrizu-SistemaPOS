@@ -124,6 +124,17 @@ const PARES = [
 const SOBRE_COLOR = [
   ['--primary-ink',          '--primary',       'texto del botón primario',          4.5],
   ['--primary-ink',          '--primary-dark',  'botón primario en hover',           4.5],
+  // El relleno de las fichas de rubro de la portada, siempre con letra blanca.
+  ['--blanco', '--liceo-violeta-hondo', 'ficha de rubro Librería',   4.5],
+  ['--blanco', '--liceo-cyan-hondo',    'ficha de rubro Papelera',   4.5],
+  ['--blanco', '--liceo-rosa-hondo',    'ficha de rubro Lencería',   4.5],
+  ['--blanco', '--liceo-rojo-hondo',    'ficha de rubro Regalería',  4.5],
+  ['--blanco', '--liceo-azul-hondo',    'ficha de rubro Accesorios', 4.5],
+  ['--blanco', '--liceo-verde-hondo',   'ficha de rubro Mercería',   4.5],
+  ['--blanco', '--liceo-coral-hondo',   'ficha de rubro Perfumería', 4.5],
+  ['--blanco', '--liceo-agua-hondo',    'ficha de rubro Cotillón',   4.5],
+  ['--blanco', '--liceo-naranja-hondo', 'ficha de rubro Juguetería', 4.5],
+
   ['--liceo-violeta-tinta',  '--liceo-violeta', 'ficha de filtro activa Librería',   4.5],
   ['--liceo-verde-tinta',    '--liceo-verde',   'ficha de filtro activa Mercería',   4.5],
   ['--liceo-naranja-tinta',  '--liceo-naranja', 'ficha de filtro activa Juguetería', 4.5],
