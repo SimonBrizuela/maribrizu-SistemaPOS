@@ -384,6 +384,15 @@
   grid-template-columns: repeat(auto-fit, minmax(172px, 1fr));
   gap: var(--e-3);
 }
+/* De acá para arriba manda el reparto que calcula la portada, así la última
+   fila no queda a medio llenar: con ocho rubros entraban seis arriba y dos
+   abajo, con medio bloque vacío al lado. Abajo de 700 px sigue el auto-fit, que
+   ahí entran de a una o dos y cierran solas. */
+@media (min-width: 700px) {
+  .rubros {
+    grid-template-columns: repeat(var(--columnas-rubros, auto-fit), minmax(172px, 1fr));
+  }
+}
 /* Bloque de color con el icono del rubro adentro.
    El icono no es adorno: seis rectangulos de colores con una palabra cada uno se
    leen todos igual y hay que ir palabra por palabra. Con el objeto al lado, la
@@ -440,17 +449,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.rubro-ficha__cuenta {
-  font-size: var(--t-xs);
-  font-weight: var(--peso-semi);
-  font-variant-numeric: tabular-nums;
-  opacity: .85;
-  margin-top: 1px;
-  /* "1.023 disponibles" partido en dos lineas estiraba la ficha y desalineaba
-     toda la fila. */
-  white-space: nowrap;
-}
-
 /* ── Barra de filtros del catálogo ───────────────────────────────────────── */
 
 /* Se desplaza en horizontal en el celular, sin barra visible. El desbordamiento

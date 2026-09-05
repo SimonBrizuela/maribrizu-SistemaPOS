@@ -5,6 +5,31 @@ import { franjaMarca, icono, iconoDeRubro, resplandores } from '../iconos.js';
 import { esc } from '../formato.js';
 import { fijarNegocio } from '../seo.js';
 
+/**
+ * En cuántas columnas se reparten las fichas de rubro.
+ *
+ * Dejar que entren las que quepan parte la fila donde cae: con ocho rubros en
+ * una pantalla de PC entraban seis arriba y quedaban dos abajo con medio bloque
+ * vacío al lado. En el celular no se notaba porque entran de a una o dos y
+ * siempre cierran.
+ *
+ * Se elige el ancho que deja menos lugares vacíos en la última fila, y entre dos
+ * que empatan gana el que hace menos filas. Ocho da cuatro columnas: dos filas
+ * llenas. Nueve da tres, que son tres filas de tres.
+ *
+ * @param {number} cantidad  cuántos rubros hay que acomodar
+ */
+export function columnasParaRubros(cantidad, { min = 3, max = 6 } = {}) {
+  if (cantidad <= min) return Math.max(1, cantidad);
+  let mejor = max;
+  let vacios = Infinity;
+  for (let columnas = max; columnas >= min; columnas -= 1) {
+    const sobran = (columnas - (cantidad % columnas)) % columnas;
+    if (sobran < vacios) { vacios = sobran; mejor = columnas; }
+  }
+  return mejor;
+}
+
 // Hasta dónde puede saltar una tira de la portada dentro de su rubro. El sync
 // ordena por lo que se vende, así que los primeros treinta son los que valen
 // mostrar; más allá empieza la cola larga.
@@ -183,36 +208,32 @@ export async function inicio({ montar }) {
   // portada ofrecía seis rubros contra los ocho del catálogo — Cotillón y
   // Mercería no estaban por ningún lado, y desde la portada no había forma de
   // saber que existían.
-  const CUENTA_DESDE = 40;
 
   const cajaRubros = document.querySelector('[data-rubros]');
   if (cajaRubros) {
+    // El ancho de la grilla sale de cuántos rubros hay, para que la última fila
+    // no quede a medio llenar. El CSS lo usa solo de 700 px para arriba: en el
+    // celular las fichas entran de a una o dos y ya cierran solas.
+    cajaRubros.style.setProperty('--columnas-rubros', columnasParaRubros(rubros.length));
+
     // Las fichas entran escalonadas igual que el texto de arriba, pero el
     // reloj les arranca acá, cuando se insertan, y no cuando se pintó la
     // portada: llegan después de consultar los rubros y encadenarlas al
     // retraso original las dejaría apareciendo de a una con la consulta ya
     // resuelta.
-    cajaRubros.innerHTML = rubros.map((r, i) => {
-      // Se muestra lo que se puede comprar hoy, no el total publicado. De los
-      // 4.163 de Librería hay stock de 1.024: prometer 4.163 y que el cliente
-      // entre a ver una pantalla de agotados es peor que decir 1.024.
-      //
-      // Y solo cuando el número juega a favor. "Perfumería · 6" al lado de
-      // "Librería · 888" no informa, avisa que ahí no hay nada; el rubro sigue
-      // estando, sin el cartelito que lo hunde.
-      const hay = conStock(r);
-      return `
+    // Sin contador. Un número al lado del nombre no ayuda a elegir a dónde
+    // entrar: "888" no dice nada y "6" avisa que ahí no hay nada, y con los dos
+    // en la misma fila la tienda entera se lee flaca. Lo que hay de cada rubro
+    // se ve entrando, que es lo que el menú tiene que conseguir.
+    cajaRubros.innerHTML = rubros.map((r, i) => `
       <a class="rubro-ficha entra" style="--entra-orden:${i}"
          data-rubro="${esc(r.clave)}" href="/catalogo/${encodeURIComponent(r.clave)}">
         <span class="rubro-ficha__icono">${icono(iconoDeRubro(r.clave), { tam: 20 })}</span>
         <span class="rubro-ficha__texto">
           <span class="rubro-ficha__nombre">${esc(r.nombre)}</span>
-          ${hay >= CUENTA_DESDE
-            ? `<span class="rubro-ficha__cuenta">${hay.toLocaleString('es-AR')} disponibles</span>`
-            : ''}
         </span>
-      </a>`;
-    }).join('');
+      </a>`).join('');
+
   }
 
   const cajaTiras = document.querySelector('[data-tiras]');

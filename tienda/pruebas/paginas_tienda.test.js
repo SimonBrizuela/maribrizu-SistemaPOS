@@ -352,17 +352,20 @@ describe('la portada', () => {
       .toEqual(['Libreria', 'Papeleria', 'Merceria', 'Cotillon']);
   });
 
-  // "Perfumeria - 6" al lado de "Libreria - 888" no informa: avisa que ahi no
-  // hay nada. El rubro sigue estando, sin el cartelito que lo hunde.
-  it('el contador solo sale cuando el numero juega a favor', async () => {
+  // Sin contador, ninguno. Un numero al lado del nombre no ayuda a elegir a
+  // donde entrar: "888" no dice nada y "6" avisa que ahi no hay nada, y con los
+  // dos en la misma fila la tienda entera se lee flaca.
+  it('las fichas no llevan contador', async () => {
     datos.rubros = [
       { clave: 'LIBRERIA', nombre: 'Libreria', cantidad: 880, con_stock: 880 },
       { clave: 'PERFUMERIA', nombre: 'Perfumeria', cantidad: 9, con_stock: 6 },
     ];
     const c = await abrir('inicio');
-    const cuentas = [...c.querySelectorAll('.rubro-ficha__cuenta')].map(n => n.textContent);
-    expect(cuentas).toHaveLength(1);
-    expect(cuentas[0]).toContain('880');
+    expect(c.querySelectorAll('.rubro-ficha')).toHaveLength(2);
+    expect(c.querySelector('.rubro-ficha__cuenta')).toBeNull();
+    const fichas = c.querySelector('.rubros').textContent;
+    expect(fichas).toContain('Libreria');
+    expect(fichas).not.toMatch(/880|disponibles/);
   });
 });
 
@@ -442,5 +445,39 @@ describe('una busqueda sin resultados', () => {
   it('el WhatsApp sigue estando', async () => {
     const c = await abrir('catalogo', { query: new URLSearchParams('q=zzzz') });
     expect(c.querySelector('a[href*="wa.me"]')).not.toBeNull();
+  });
+});
+
+describe('el reparto de las fichas de rubro', () => {
+  // Con ocho rubros entraban seis arriba y quedaban dos abajo, con medio bloque
+  // vacio al lado. En el celular no se notaba porque entran de a una o dos.
+  it('elige el ancho que deja la ultima fila llena', async () => {
+    const { columnasParaRubros } = await import('../src/paginas/inicio.js');
+    expect(columnasParaRubros(8)).toBe(4);    // dos filas de cuatro
+    expect(columnasParaRubros(9)).toBe(3);    // tres filas de tres
+    expect(columnasParaRubros(10)).toBe(5);
+    expect(columnasParaRubros(12)).toBe(6);
+  });
+
+  it('con pocos rubros van todos en una fila', async () => {
+    const { columnasParaRubros } = await import('../src/paginas/inicio.js');
+    expect(columnasParaRubros(2)).toBe(2);
+    expect(columnasParaRubros(5)).toBe(5);
+    expect(columnasParaRubros(0)).toBe(1);
+  });
+
+  // Cuando no hay reparto exacto se elige el que menos lugares deja sueltos.
+  it('sin reparto exacto deja el hueco mas chico', async () => {
+    const { columnasParaRubros } = await import('../src/paginas/inicio.js');
+    expect(columnasParaRubros(7)).toBe(4);    // 4+3, un lugar
+    expect(columnasParaRubros(11)).toBe(6);   // 6+5, un lugar
+  });
+
+  it('la portada se lo pasa al CSS', async () => {
+    datos.rubros = Array.from({ length: 8 }, (_, i) => ({
+      clave: `R${i}`, nombre: `Rubro ${i}`, cantidad: 50, con_stock: 50,
+    }));
+    const c = await abrir('inicio');
+    expect(c.querySelector('.rubros').style.getPropertyValue('--columnas-rubros')).toBe('4');
   });
 });
