@@ -744,6 +744,9 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
       // silencio: se muestra qué cambió, arriba de todo, y se le deja confirmar
       // de nuevo. Cobrar otra cosa sin avisar es la peor salida posible.
       if (err?.motivo === 'cambios' && err.cambios?.length) {
+        // Primero lo que dijo el servidor, que descuenta lo prometido en otros
+        // pedidos y ve más que el espejo; después la revalidación de siempre.
+        carrito.aplicarCambios(err.cambios);
         await carrito.revalidar();
         if (carrito.estaVacio()) { montar(pantallaSinStock(cfg)); return; }
         pintarResumen();

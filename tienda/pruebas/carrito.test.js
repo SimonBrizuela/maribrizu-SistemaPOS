@@ -338,3 +338,43 @@ describe('ahorro por llevar el pack', () => {
     expect(carrito.describirPack(r)).toBe('Rollo de 25 m');
   });
 });
+
+describe('aplicar lo que dijo el servidor', () => {
+  it('saca lo agotado y ajusta lo que quedó corto, aunque el espejo diga otra cosa', () => {
+    carrito.agregar(CINTA, { cantidad: 10 });
+    carrito.agregar(CARTULINA, { variedad: 'Celeste', cantidad: 5 });
+    carrito.agregar(CARTULINA, { variedad: 'Dorada', cantidad: 2 });
+
+    const aplicados = carrito.aplicarCambios([
+      { tipo: 'sin_stock', nombre: 'Cinta', id: 'c1', variedad: null, es_pack: false },
+      { tipo: 'menos_stock', nombre: 'Cartulina', id: 'c2', variedad: 'Celeste', es_pack: false, antes: 5, ahora: 2 },
+      { tipo: 'precio', nombre: 'Cartulina', id: 'c2', variedad: 'Dorada', es_pack: false, antes: 900, ahora: 950 },
+      { tipo: 'baja', nombre: 'Otra cosa' },   // sin renglón: solo se muestra
+    ]);
+
+    expect(aplicados).toBe(3);
+    expect(carrito.items().map(r => [r.id, r.variedad, r.cantidad, r.precio])).toEqual([
+      ['c2', 'Celeste', 2, 600],
+      ['c2', 'Dorada', 2, 950],
+    ]);
+  });
+
+  it('el rollo entero y lo suelto del mismo producto son renglones distintos', () => {
+    carrito.agregar(CINTA, { esPack: true, cantidad: 2 });
+    carrito.agregar(CINTA, { cantidad: 5 });
+
+    carrito.aplicarCambios([
+      { tipo: 'sin_stock', nombre: 'Cinta', id: 'c1', variedad: null, es_pack: true },
+    ]);
+
+    expect(carrito.items().map(r => [r.es_pack, r.cantidad])).toEqual([[false, 5]]);
+  });
+
+  it('un cambio para un renglón que ya no está no rompe nada', () => {
+    carrito.agregar(CINTA, { cantidad: 5 });
+    expect(carrito.aplicarCambios([
+      { tipo: 'menos_stock', nombre: 'X', id: 'no-esta', variedad: null, es_pack: false, ahora: 1 },
+    ])).toBe(0);
+    expect(carrito.items()).toHaveLength(1);
+  });
+});

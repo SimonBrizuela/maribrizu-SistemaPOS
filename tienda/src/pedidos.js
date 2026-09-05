@@ -228,7 +228,12 @@ async function crearEnElServidor({ id, cliente, entrega, pago, items, nota, idTo
       }
     }
 
-    const err = new Error(MOTIVOS[motivo] || MOTIVOS.cambios);
+    // Cerrado por horario: el servidor dice cuándo vuelve a abrir, y es lo que
+    // el cliente quiere saber.
+    const mensaje = motivo === 'cerrada' && datos.abre
+      ? `Ahora está cerrado. Abrimos ${datos.abre} y tu carrito queda guardado.`
+      : (MOTIVOS[motivo] || MOTIVOS.cambios);
+    const err = new Error(mensaje);
     err.motivo = motivo;
     err.cambios = datos.cambios || [];
     err.datos = datos;

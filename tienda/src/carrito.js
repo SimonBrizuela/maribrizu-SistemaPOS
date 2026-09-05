@@ -247,6 +247,44 @@ export function sacar(id, variedad = null, esPack = false) {
   return fuera;
 }
 
+/**
+ * Aplica al carrito lo que el servidor no aceptó.
+ *
+ * El servidor descuenta lo que ya está prometido en otros pedidos, y eso el
+ * espejo no lo sabe: `revalidar()` puede seguir viendo un Poxipol en stock que
+ * la función acaba de rechazar porque otro cliente lo pidió hace una hora. Sin
+ * corregir el carrito con lo que dijo el servidor, el cliente confirma de
+ * nuevo y recibe el mismo rechazo, sin salida.
+ *
+ * Solo se aplican los cambios que dicen a qué renglón van; los que traen solo
+ * el nombre se muestran y nada más. Devuelve cuántos se aplicaron.
+ */
+export function aplicarCambios(cambios) {
+  let aplicados = 0;
+  for (const c of cambios || []) {
+    if (!c || typeof c.id !== 'string') continue;
+    const variedad = c.variedad || null;
+    const esPack = c.es_pack === true;
+    if (c.tipo === 'baja' || c.tipo === 'sin_stock') {
+      if (sacar(c.id, variedad, esPack)) aplicados++;
+    } else if ((c.tipo === 'menos_stock' || c.tipo === 'minimo') && Number(c.ahora) > 0) {
+      const r = renglones.find(x => mismaLinea(x, c.id, variedad, esPack));
+      if (!r) continue;
+      // Directo, sin el tope del stock que tiene el carrito: el servidor ya
+      // sabe mejor que el espejo cuánto queda.
+      r.cantidad = redondearCantidad(Number(c.ahora));
+      aplicados++;
+    } else if (c.tipo === 'precio' && Number(c.ahora) > 0) {
+      const r = renglones.find(x => mismaLinea(x, c.id, variedad, esPack));
+      if (!r) continue;
+      r.precio = Number(c.ahora);
+      aplicados++;
+    }
+  }
+  if (aplicados) guardar();
+  return aplicados;
+}
+
 /** Vuelve a poner un renglon en su lugar original (deshacer). */
 export function restaurar(renglon, posicion = null) {
   if (!renglon) return;

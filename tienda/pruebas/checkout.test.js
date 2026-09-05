@@ -442,6 +442,36 @@ describe('lo que cambió mientras el cliente decidía', () => {
       espia.mockRestore();
     }
   });
+
+  it('lo que el servidor rechaza se saca del carrito y se avisa', async () => {
+    // El espejo todavía muestra el cuaderno en stock, pero el servidor
+    // descontó lo prometido en otro pedido y lo dio por agotado. Si el carrito
+    // no lo saca, confirmar de nuevo da el mismo rechazo para siempre.
+    estado.catalogo.p2 = { ...PRODUCTO, id: 'p2', nombre: 'Lápiz Faber' };
+    carrito.agregar(PRODUCTO, { cantidad: 3 });
+    carrito.agregar(estado.catalogo.p2, { cantidad: 1 });
+    await abrir();
+    llenar('nombre', 'Marta Gómez');
+    llenar('telefono', '3515550001');
+    apretar('[data-modo="retiro"]');
+    await esperar();
+
+    globalThis.fetch = vi.fn(() => Promise.resolve({
+      ok: false,
+      status: 409,
+      json: async () => ({
+        error: 'cambios',
+        cambios: [{ tipo: 'sin_stock', nombre: 'Cuaderno Rivadavia 48 hojas',
+                    id: 'p1', variedad: null, es_pack: false }],
+      }),
+    }));
+    apretar('[data-confirmar]');
+    for (let i = 0; i < 12; i++) await esperar();
+
+    expect(estado.escrituras).toHaveLength(0);
+    expect(carrito.items().map(r => r.id)).toEqual(['p2']);
+    expect(document.querySelector('[data-cambios]')?.textContent).toContain('se quedó sin stock');
+  });
 });
 
 describe('lo que queda recordado en el teléfono', () => {
