@@ -31,7 +31,7 @@ vi.mock('../src/router.js', async (original) => ({
   ir: () => {},
 }));
 
-const { iniciarSugerencias, fijarAmbito, cerrarSugerencias } =
+const { iniciarSugerencias, fijarAmbito, reponerAmbito, cerrarSugerencias } =
   await import('../src/sugerencias.js');
 
 const boligrafo = {
@@ -113,5 +113,31 @@ describe('buscando dentro de un rubro', () => {
 
     expect(llamadas).toHaveLength(1);
     expect(llamadas[0].rubro).toBeNull();
+  });
+});
+
+describe('el cartel de en que rubro se busca', () => {
+  // El encabezado se repinta despues de dibujar cada pantalla y se lleva puesto
+  // el campo: quedaba "Buscar cuadernos, hilos, juguetes..." estando adentro de
+  // un rubro, o sea que la unica senal de que la busqueda estaba acotada no se
+  // veia nunca.
+  it('sobrevive al repintado del encabezado', () => {
+    fijarAmbito('PAPELERA');
+    expect(document.querySelector('.buscador__input').placeholder).toContain('Papelera');
+
+    document.body.innerHTML = `
+      <form data-buscador>
+        <input class="buscador__input" id="q" type="search">
+      </form>`;
+    expect(document.querySelector('.buscador__input').placeholder).toBe('');
+
+    reponerAmbito();
+    expect(document.querySelector('.buscador__input').placeholder).toContain('Papelera');
+  });
+
+  it('fuera de un rubro vuelve el de siempre', () => {
+    fijarAmbito('PAPELERA');
+    fijarAmbito(null);
+    expect(document.querySelector('.buscador__input').placeholder).toContain('cuadernos');
   });
 });

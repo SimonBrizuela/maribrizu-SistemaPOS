@@ -365,13 +365,24 @@ describe('los datos del local para Google', () => {
     email: 'libreria.liceo@hotmail.com',
     instagram: 'https://www.instagram.com/libreria.liceo/',
     origen: { lat: -31.3540169, lng: -64.1734488 },
+    // La forma de Firestore: un mapa por dia con `tramos` adentro. Firestore no
+    // admite arreglos anidados, asi que el arreglo de arreglos que se usa en
+    // memoria NO es lo que llega de la base. Escribir la prueba con la forma
+    // comoda y no con la real es lo que dejo pasar el bug que tiro la portada.
     horarios: [
-      [{ desde: '09:00', hasta: '13:00' }, { desde: '17:00', hasta: '20:30' }],
-      [], [], [], [],
-      [{ desde: '09:00', hasta: '13:00' }],
-      [],
+      { tramos: [{ desde: '09:00', hasta: '13:00' }, { desde: '17:00', hasta: '20:30' }] },
+      { tramos: [] }, { tramos: [] }, { tramos: [] }, { tramos: [] },
+      { tramos: [{ desde: '09:00', hasta: '13:00' }] },
+      { tramos: [] },
     ],
   };
+
+  const EN_MEMORIA = [
+    [{ desde: '09:00', hasta: '13:00' }, { desde: '17:00', hasta: '20:30' }],
+    [], [], [], [],
+    [{ desde: '09:00', hasta: '13:00' }],
+    [],
+  ];
 
   const leer = () => JSON.parse(
     document.head.querySelector('script[data-seo-negocio]').textContent);
@@ -415,6 +426,22 @@ describe('los datos del local para Google', () => {
   it('sin horario cargado el bloque sale igual, sin la clave vacia', () => {
     seo.fijarNegocio({ ...CFG, horarios: null });
     expect(leer().openingHoursSpecification).toBeUndefined();
+  });
+
+  // Las dos formas tienen que dar lo mismo: la de la base y la que se arma en
+  // memoria al editar el horario desde el panel.
+  it('lee igual el horario de Firestore y el de memoria', () => {
+    seo.fijarNegocio(CFG);
+    const deLaBase = leer().openingHoursSpecification;
+    seo.fijarNegocio({ ...CFG, horarios: EN_MEMORIA });
+    expect(leer().openingHoursSpecification).toEqual(deLaBase);
+  });
+
+  // Un dato raro no puede tirar la portada: esto es un extra para Google.
+  it('un horario con basura adentro no rompe la pantalla', () => {
+    expect(() => seo.fijarNegocio({ ...CFG, horarios: [1, 2, 3, 4, 5, 6, 7] })).not.toThrow();
+    expect(leer().name).toBe('Libreria Liceo');
+    expect(() => seo.fijarNegocio({ ...CFG, origen: 'cualquier cosa' })).not.toThrow();
   });
 
   // Los datos del local son de la portada. En una ficha el que manda es el

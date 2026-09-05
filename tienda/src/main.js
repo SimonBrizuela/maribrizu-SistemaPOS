@@ -6,7 +6,7 @@ import { cargarConfig, traerProducto } from './datos.js';
 import * as carrito from './carrito.js';
 import { abrir as abrirCarrito, estaAbierto } from './panel_carrito.js';
 import { avisar } from './avisos.js';
-import { iniciarSugerencias, fijarAmbito, cerrarSugerencias } from './sugerencias.js';
+import { iniciarSugerencias, fijarAmbito, reponerAmbito, cerrarSugerencias } from './sugerencias.js';
 import { iniciarAsistente, refrescarAsistente } from './asistente.js';
 import { iniciarBarraPedido, refrescarBarraPedido } from './barra_pedido.js';
 import { iniciarCuenta } from './cuenta.js';
@@ -67,6 +67,9 @@ function refrescarChrome() {
   if (navNodo) {
     navNodo.innerHTML = navInferior(location.pathname, unidades);
   }
+  // El repintado del encabezado rehace el campo de búsqueda, así que hay que
+  // volver a decirle en qué rubro está parada la persona.
+  reponerAmbito();
   reponerCompacta();
 }
 

@@ -253,12 +253,23 @@ export function iniciarSugerencias() {
  */
 export function fijarAmbito(rubro) {
   ambito = rubro || null;
+  reponerAmbito();
+}
+
+/**
+ * Vuelve a escribir el placeholder del buscador.
+ *
+ * El encabezado se repinta entero después de dibujar cada pantalla, y ese
+ * repintado se lleva puesto el campo con su placeholder: quedaba "Buscar
+ * cuadernos, hilos, juguetes…" estando parado adentro de un rubro, o sea que la
+ * única señal de que la búsqueda estaba acotada no se veía nunca.
+ */
+export function reponerAmbito() {
   const campo = document.querySelector('.buscador__input');
-  if (campo) {
-    campo.placeholder = ambito
-      ? `Buscar en ${nombreBonito(ambito)}…`
-      : 'Buscar cuadernos, hilos, juguetes…';
-  }
+  if (!campo) return;
+  campo.placeholder = ambito
+    ? `Buscar en ${nombreBonito(ambito)}…`
+    : 'Buscar cuadernos, hilos, juguetes…';
 }
 
 export { cerrar as cerrarSugerencias };

@@ -65,11 +65,22 @@ function comoHora(minutos) {
  * con `tramos` adentro, porque **Firestore no admite arreglos anidados** y
  * guardar el otro formato falla con "Nested arrays are not supported".
  */
-function tramosDe(horario, dia) {
+/**
+ * Los tramos de un día tal como están guardados: `{desde:'09:00', hasta:'13:00'}`.
+ *
+ * Se exporta porque hay más de un lugar que necesita leer el horario y ninguno
+ * tiene por qué saber que existen dos formas. Escribirlo de nuevo del otro lado
+ * ya rompió la portada una vez: `seo.js` recorría los días como si fueran
+ * arreglos y con la forma de Firestore reventaba con "is not iterable".
+ */
+export function tramosDelDia(horario, dia) {
   const bruto = horario?.[dia];
-  const lista = Array.isArray(bruto) ? bruto
-              : (Array.isArray(bruto?.tramos) ? bruto.tramos : []);
-  return lista
+  return Array.isArray(bruto) ? bruto
+       : (Array.isArray(bruto?.tramos) ? bruto.tramos : []);
+}
+
+function tramosDe(horario, dia) {
+  return tramosDelDia(horario, dia)
     .map(t => ({ desde: aMinutos(t?.desde), hasta: aMinutos(t?.hasta) }))
     .filter(t => t.desde !== null && t.hasta !== null && t.hasta > t.desde)
     .sort((a, b) => a.desde - b.desde);

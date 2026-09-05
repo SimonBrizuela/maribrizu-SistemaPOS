@@ -16,6 +16,15 @@
    componentes viven en design/components.css.
    ═══════════════════════════════════════════════════════════════════════════ */
 
+/* El atributo `hidden` esconde de verdad.
+   El navegador lo aplica con `display: none`, pero desde su hoja de estilos por
+   defecto: cualquier clase nuestra que ponga `display: flex` le gana, y el
+   elemento queda a la vista con el atributo puesto. Es silencioso y no se ve en
+   una prueba de jsdom, que mira el atributo y no cómo queda dibujado.
+   Ya mordió dos veces: el aviso de "elegí el color" salía siempre en la ficha, y
+   el buscador del panel de filtros no ocultaba lo que no coincidía. */
+[hidden] { display: none !important; }
+
 /* El enlace de salto aparece solo al llegar con el teclado. */
 .saltar {
   position: absolute;
@@ -1952,6 +1961,10 @@
    el gris del encabezado normal: es un cambio de lo que se está mirando, y si
    pasa desapercibido el cliente cree que el filtro del rubro no anda. */
 .sugerencias__ambito--global {
+  /* En bloque y no en flex: el encabezado normal es flex porque tiene el botón
+     "Buscar en todo" empujado a la derecha, y ese `gap` acá abría un hueco
+     entre el nombre del rubro y la coma que sigue ("Papelera , te mostramos"). */
+  display: block;
   background: var(--alerta-bg);
   color: var(--alerta);
 }

@@ -12,6 +12,7 @@
  * no hay que tocar nada.
  */
 import { pesos, nombreBonito } from './formato.js';
+import { tramosDelDia } from './horarios.js';
 
 const DESCRIPCION_BASE = 'Comprá online en Librería Liceo. Cuadernos, mercería, juguetería y '
   + 'regalería con envío a domicilio en Córdoba o retiro en Av. Alfonsina Storni 168.';
@@ -117,12 +118,19 @@ export function partirDireccion(texto) {
   };
 }
 
-/** El horario estructurado, en la forma que entiende Google. */
+/**
+ * El horario estructurado, en la forma que entiende Google.
+ *
+ * Los tramos se piden por `tramosDelDia` y no se recorren a mano: en memoria el
+ * horario es un arreglo de arreglos y en Firestore es un arreglo de mapas con
+ * `tramos` adentro, porque Firestore no admite arreglos anidados. Leerlo de una
+ * sola de las dos formas es lo que tiró la portada entera.
+ */
 function horarioSchema(horarios) {
   if (!Array.isArray(horarios) || horarios.length !== 7) return [];
   const salida = [];
-  horarios.forEach((tramos, dia) => {
-    for (const t of tramos || []) {
+  for (let dia = 0; dia < 7; dia += 1) {
+    for (const t of tramosDelDia(horarios, dia)) {
       if (!t?.desde || !t?.hasta) continue;
       salida.push({
         '@type': 'OpeningHoursSpecification',
@@ -131,7 +139,7 @@ function horarioSchema(horarios) {
         closes: t.hasta,
       });
     }
-  });
+  }
   return salida;
 }
 
@@ -149,7 +157,18 @@ function horarioSchema(horarios) {
 export function fijarNegocio(cfg) {
   quitarNegocio();
   if (!cfg) return;
+  // Esto es un extra para Google: si se rompe, se pierde el resultado
+  // enriquecido, no la portada. Sin el try la primera línea equivocada dejó la
+  // tienda entera en "Algo se rompió de nuestro lado", porque el error sube
+  // hasta el `catch` que pinta la pantalla de falla.
+  try {
+    ponerNegocio(cfg);
+  } catch (err) {
+    console.error('[seo] no se pudieron publicar los datos del local:', err);
+  }
+}
 
+function ponerNegocio(cfg) {
   const datos = {
     '@context': 'https://schema.org',
     '@type': 'Store',
