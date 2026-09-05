@@ -334,18 +334,23 @@ service cloud.firestore {
     // relee `tienda_productos`, rehace el total y guarda con la cuenta de
     // servicio, que pasa por encima de estas reglas.
     //
-    // PARA CERRAR LA PUERTA (en este orden, y no en otro):
+    // La puerta se cerró el 05-09-2026: `create` está en false. Un pedido no
+    // se puede crear desde ningún navegador, con o sin sesión; solo entra por
+    // la función, que escribe con la cuenta de servicio y no pasa por acá.
+    // `pedidoValido()` se deja porque describe la forma que tiene que tener un
+    // pedido y es lo que hay que leer antes de tocar el documento.
     //
-    //   1. Cargar `FIREBASE_SERVICE_ACCOUNT` en el sitio de Netlify de la
-    //      tienda (el JSON completo de la cuenta de servicio).
-    //   2. Publicar la tienda y confirmar un pedido de prueba.
-    //   3. Ver en el pedido que el precio salió de la base.
-    //   4. Recién ahí, cambiar `allow create: if pedidoValido()` por
-    //      `allow create: if false` y desplegar estas reglas.
+    // SI ALGÚN DÍA HAY QUE VOLVER ATRÁS (por ejemplo, si se cae la función),
+    // `allow create: if pedidoValido()` reabre el camino viejo. Vuelve el
+    // agujero de los precios, así que es un parche de una tarde, no una
+    // solución.
     //
-    // Invertido, el paso 4 deja la tienda sin poder tomar pedidos: la función
-    // contesta 501 mientras le falte la variable y el cliente cae al camino
-    // viejo, que es justo el que la regla acaba de cerrar.
+    // Y AL REVÉS, PARA VOLVER A CERRARLA DESPUÉS: primero la variable
+    // `FIREBASE_SERVICE_ACCOUNT` en Netlify, después publicar la tienda,
+    // después ver un pedido entrando por la función, y recién ahí la regla.
+    // Invertido, la tienda se queda sin poder tomar pedidos: sin la variable
+    // la función contesta 501 y el cliente cae al camino viejo, que es
+    // justamente el que la regla acaba de cerrar.
     function pedidoValido() {
       let d = request.resource.data;
       return d.keys().hasAll(['estado', 'creado', 'cliente', 'entrega',
@@ -379,7 +384,9 @@ service cloud.firestore {
       // documento devuelto, así que una consulta sin ese filtro no pasa.
       allow list:   if authorized()
                     || (request.auth != null && resource.data.uid == request.auth.uid);
-      allow create: if pedidoValido();
+      // Cerrado a propósito: los pedidos nacen en la función `crear-pedido`,
+      // que escribe con la cuenta de servicio y no pasa por estas reglas.
+      allow create: if false;
       allow update, delete: if authorized();
     }
 

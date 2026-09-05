@@ -130,11 +130,21 @@ async function accessToken() {
   const crudo = process.env.FIREBASE_SERVICE_ACCOUNT;
   if (!crudo) throw new Error('falta FIREBASE_SERVICE_ACCOUNT');
 
+  // Se acepta el JSON crudo o en base64, igual que `provision.js` del panel: el
+  // base64 evita que las comillas y los saltos de línea de la private_key se
+  // rompan al pegarlo por consola. Las dos formas están en uso.
   let cuenta;
   try {
-    cuenta = JSON.parse(crudo);
+    const texto = crudo.trim().startsWith('{')
+      ? crudo
+      : Buffer.from(crudo, 'base64').toString('utf-8');
+    cuenta = JSON.parse(texto);
   } catch {
-    throw new Error('FIREBASE_SERVICE_ACCOUNT no es un JSON válido');
+    throw new Error('FIREBASE_SERVICE_ACCOUNT no es un JSON ni un base64 válido');
+  }
+
+  if (!cuenta.client_email || !cuenta.private_key) {
+    throw new Error('la cuenta de servicio no tiene client_email/private_key');
   }
 
   const ahora = Math.floor(Date.now() / 1000);
