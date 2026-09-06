@@ -2257,6 +2257,68 @@
   color: var(--text);
 }
 
+/* ── Cupón ────────────────────────────────────────────────────────────────
+   Va adentro de la caja del resumen, arriba de los totales: es donde se ve lo
+   que descuenta. Sin caja propia (sería una card dentro de otra). El campo es
+   chico y el código se escribe en mayúsculas con la fuente de los códigos,
+   igual que el código del pedido. */
+.cupon { display: flex; flex-direction: column; gap: var(--e-2); }
+.cupon__form { display: flex; gap: var(--e-2); }
+.cupon__form .campo__control {
+  flex: 1;
+  min-width: 0;
+  min-height: 44px;
+  padding-block: var(--e-2);
+  font-family: var(--font-titulo);
+  letter-spacing: .04em;
+  text-transform: uppercase;
+}
+.cupon__form .campo__control::placeholder {
+  font-family: var(--font-texto);
+  letter-spacing: 0;
+  text-transform: none;
+}
+.cupon__form .boton { flex: none; min-height: 44px; padding-inline: var(--e-4); }
+.cupon__puesto {
+  display: flex;
+  align-items: center;
+  gap: var(--e-3);
+  padding: var(--e-3) var(--e-4);
+  border-radius: var(--r-sm);
+  background: var(--exito-bg);
+  color: var(--exito);
+  font-size: var(--t-sm);
+  line-height: 1.4;
+}
+.cupon__puesto svg { flex: none; }
+.cupon__texto { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.cupon__texto b { font-family: var(--font-titulo); letter-spacing: .04em; }
+.cupon__texto span { font-size: var(--t-xs); }
+.cupon__quitar {
+  flex: none;
+  background: none;
+  border: 0;
+  padding: var(--e-1) 0;
+  color: inherit;
+  font: inherit;
+  font-size: var(--t-xs);
+  font-weight: var(--peso-semi);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.cupon__error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--e-1);
+  font-size: var(--t-xs);
+  font-weight: var(--peso-semi);
+  color: var(--error);
+  line-height: 1.4;
+}
+.cupon__error svg { flex: none; margin-top: 1px; }
+.totales__fila--descuento strong { color: var(--exito); }
+.totales__gratis s { color: var(--text-3); font-weight: var(--peso-normal); margin-right: var(--e-1); }
+
 /* ═══════════════════════════════════════════════════════════════════════════
    Pedido confirmado y seguimiento
    ═══════════════════════════════════════════════════════════════════════════ */

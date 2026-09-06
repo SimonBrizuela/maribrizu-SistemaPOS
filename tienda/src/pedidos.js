@@ -19,6 +19,7 @@ import {
   orderBy, query, serverTimestamp, setDoc, where,
 } from 'firebase/firestore';
 import { db } from './firebase.js';
+import { mensajeDeCupon } from './cupones.js';
 
 const CLAVE = 'liceo.pedidos.v1';
 
@@ -118,11 +119,11 @@ const MOTIVOS = {
  */
 export async function crearPedido({ cliente, entrega, pago, items, subtotal, envio,
                                    nota = '', uid = null, id = null,
-                                   idToken = null }) {
+                                   idToken = null, cupon = null }) {
   const referenciaId = id || nuevoIdDePedido();
 
   const porServidor = await crearEnElServidor({
-    id: referenciaId, cliente, entrega, pago, items, nota, idToken,
+    id: referenciaId, cliente, entrega, pago, items, nota, idToken, cupon,
   });
   if (porServidor) {
     recordar({
@@ -146,12 +147,14 @@ export async function crearPedido({ cliente, entrega, pago, items, subtotal, env
  *   está configurada y hay que escribir desde el navegador.
  * @throws {Error & {cambios?: Array, motivo?: string}}
  */
-async function crearEnElServidor({ id, cliente, entrega, pago, items, nota, idToken }) {
+async function crearEnElServidor({ id, cliente, entrega, pago, items, nota, idToken, cupon }) {
   const cuerpo = JSON.stringify({
     id,
     cliente,
     entrega,
     pago,
+    // El código y nada más: cuánto descuenta lo decide el servidor.
+    ...(cupon ? { cupon } : {}),
     // Va el QUÉ, no el cuánto sale: el precio lo pone el servidor. El que se
     // manda es solo el que el cliente tenía a la vista, para que la función
     // pueda avisar si cambió en vez de cobrar otra cosa.
@@ -232,7 +235,9 @@ async function crearEnElServidor({ id, cliente, entrega, pago, items, nota, idTo
     // el cliente quiere saber.
     const mensaje = motivo === 'cerrada' && datos.abre
       ? `Ahora está cerrado. Abrimos ${datos.abre} y tu carrito queda guardado.`
-      : (MOTIVOS[motivo] || MOTIVOS.cambios);
+      : motivo === 'cupon'
+        ? mensajeDeCupon(datos)
+        : (MOTIVOS[motivo] || MOTIVOS.cambios);
     const err = new Error(mensaje);
     err.motivo = motivo;
     err.cambios = datos.cambios || [];

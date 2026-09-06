@@ -475,10 +475,17 @@ function detalleDelPedido(p, modo) {
         <span>Envío</span>
         ${modo === 'retiro'
           ? '<strong style="color:var(--exito)">Sin cargo</strong>'
+          : p.entrega?.envio_gratis
+            ? `<strong class="totales__gratis">${Number(p.envio) > 0 ? `<s class="cifra">${pesos(p.envio)}</s> ` : ''}Sin cargo · cupón</strong>`
           : p.entrega?.envio_a_confirmar
             ? '<strong style="color:var(--text-2)">A confirmar</strong>'
             : `<strong class="cifra">${pesos(p.envio || 0)}</strong>`}
       </div>
+      ${Number(p.descuento) > 0 && !p.entrega?.envio_gratis ? `
+      <div class="totales__fila totales__fila--descuento">
+        <span>Descuento${p.cupon?.codigo ? ` · ${esc(p.cupon.codigo)}` : ''}</span>
+        <strong class="cifra">−${pesos(p.descuento)}</strong>
+      </div>` : ''}
       <div class="totales__fila totales__fila--total">
         <span>Total</span>
         <strong class="cifra">${pesos(p.total || 0)}</strong>

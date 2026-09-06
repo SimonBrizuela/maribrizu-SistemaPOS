@@ -514,3 +514,169 @@ describe('lo que queda recordado en el teléfono', () => {
     expect((document.getElementById('nombre')?.value || '')).toBe('');
   });
 });
+
+describe('con un cupón', () => {
+  const CUPON_OK = {
+    ok: true,
+    cupon: { codigo: 'BIENVENIDA', nombre: 'Cupón de bienvenida', tipo: 'porcentaje', valor: 10 },
+    descuento: 1050, envio_gratis: false, aplicable: 10500,
+    renglones: [{ id: 'p1', variedad: null, es_pack: false, descuento: 1050 }],
+  };
+
+  /** Un fetch que contesta según la función a la que se le pega. */
+  function fetchPorUrl(rutas) {
+    globalThis.fetch = vi.fn((url, opciones = {}) => {
+      const u = String(url);
+      const clave = Object.keys(rutas).find(k => u.includes(k));
+      const r = clave ? rutas[clave](opciones) : { status: 200, cuerpo: {} };
+      return Promise.resolve({
+        ok: r.status >= 200 && r.status < 300, status: r.status, json: async () => r.cuerpo,
+      });
+    });
+  }
+
+  async function aplicar(codigo) {
+    llenar('cupon', codigo);
+    document.querySelector('[data-form-cupon]')
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    for (let i = 0; i < 8; i++) await esperar();
+  }
+
+  beforeEach(() => {
+    carrito.agregar(PRODUCTO, { cantidad: 3 });   // 3 × 3.500 = 10.500
+  });
+
+  it('el campo está en el resumen, arriba de los totales', async () => {
+    await abrir();
+    expect(document.getElementById('cupon')).toBeTruthy();
+    expect(document.querySelector('[data-aplicar-cupon]')?.textContent).toContain('Aplicar');
+  });
+
+  it('aplicado, muestra cuál es, cuánto saca y el total nuevo', async () => {
+    fetchPorUrl({ 'validar-cupon': () => ({ status: 200, cuerpo: CUPON_OK }) });
+    await abrir();
+    apretar('[data-modo="retiro"]');
+    await esperar();
+
+    await aplicar('bienvenida');
+
+    const texto = plano();
+    expect(texto).toContain('BIENVENIDA');
+    expect(texto).toContain('10% de descuento');
+    expect(texto).toContain('−$1050');
+    expect(document.querySelector('.totales__fila--total').textContent.replace(/\./g, '')).toContain('$9450');
+    expect(document.querySelector('[data-quitar-cupon]')).toBeTruthy();
+    // Va el código, el carrito y cómo se entrega; ningún precio.
+    const enviado = JSON.parse(vi.mocked(fetch).mock.calls.find(c => String(c[0]).includes('validar-cupon'))[1].body);
+    expect(enviado).toMatchObject({ codigo: 'BIENVENIDA', entrega: { modo: 'retiro' } });
+    expect(enviado.items[0]).toEqual({ id: 'p1', variedad: null, cantidad: 3, es_pack: false });
+    expect(enviado.items[0].precio).toBeUndefined();
+  });
+
+  it('que no vale: dice por qué y no queda puesto', async () => {
+    fetchPorUrl({ 'validar-cupon': () => ({ status: 409, cuerpo: { error: 'cupon', motivo: 'minimo', falta: 4500, minimo: 15000 } }) });
+    await abrir();
+    await esperar();
+
+    await aplicar('GRANDE');
+
+    expect(plano()).toContain('Te faltan $4500 para usar este cupón');
+    expect(document.querySelector('[data-quitar-cupon]')).toBeNull();
+    expect(document.querySelector('.totales__fila--descuento')).toBeNull();
+  });
+
+  it('vacío no llama a nadie', async () => {
+    fetchPorUrl({ 'validar-cupon': () => { throw new Error('no tendría que llamar'); } });
+    await abrir();
+    await aplicar('   ');
+    expect(plano()).toContain('Escribí el código del cupón');
+  });
+
+  it('se puede quitar, y vuelve el campo', async () => {
+    fetchPorUrl({ 'validar-cupon': () => ({ status: 200, cuerpo: CUPON_OK }) });
+    await abrir();
+    await aplicar('BIENVENIDA');
+    apretar('[data-quitar-cupon]');
+    await esperar();
+
+    expect(document.getElementById('cupon')).toBeTruthy();
+    expect(document.querySelector('.totales__fila--descuento')).toBeNull();
+    expect(localStorage.getItem('liceo.cupon.v1')).toBeNull();
+  });
+
+  it('al confirmar viaja solo el código, y el pedido entra por el servidor', async () => {
+    const cuerpos = [];
+    fetchPorUrl({
+      'validar-cupon': () => ({ status: 200, cuerpo: CUPON_OK }),
+      'crear-pedido': (op) => {
+        cuerpos.push(JSON.parse(op.body || '{}'));
+        return { status: 200, cuerpo: { id: 'ped1', codigo: 'ABCD', total: 9450 } };
+      },
+    });
+    await abrir();
+    llenar('nombre', 'Marta Gómez');
+    llenar('telefono', '3515550001');
+    apretar('[data-modo="retiro"]');
+    apretar('[data-pago="efectivo"]');
+    await esperar();
+    await aplicar('BIENVENIDA');
+
+    apretar('[data-confirmar]');
+    for (let i = 0; i < 12; i++) await esperar();
+
+    const pedido = cuerpos.findLast(c => c.items);
+    expect(pedido.cupon).toBe('BIENVENIDA');
+    expect(pedido.descuento).toBeUndefined();
+    expect(estado.escrituras).toHaveLength(0);
+  });
+
+  it('si el servidor lo rechaza al confirmar, se saca y se dice por qué', async () => {
+    fetchPorUrl({
+      'validar-cupon': () => ({ status: 200, cuerpo: CUPON_OK }),
+      'crear-pedido': (op) => (String(op.body).includes('warmup')
+        ? { status: 204, cuerpo: null }
+        : { status: 409, cuerpo: { error: 'cupon', motivo: 'ya_usado', veces: 1 } }),
+    });
+    await abrir();
+    llenar('nombre', 'Marta Gómez');
+    llenar('telefono', '3515550001');
+    apretar('[data-modo="retiro"]');
+    apretar('[data-pago="efectivo"]');
+    await esperar();
+    await aplicar('BIENVENIDA');
+
+    apretar('[data-confirmar]');
+    for (let i = 0; i < 12; i++) await esperar();
+
+    expect(plano()).toContain('ya lo usaste');
+    expect(document.querySelector('[data-quitar-cupon]')).toBeNull();
+    expect(estado.escrituras).toHaveLength(0);
+  });
+
+  it('el cupón que quedó de la otra vez se vuelve a comprobar al abrir', async () => {
+    localStorage.setItem('liceo.cupon.v1', JSON.stringify(CUPON_OK));
+    fetchPorUrl({ 'validar-cupon': () => ({ status: 409, cuerpo: { error: 'cupon', motivo: 'vencido' } }) });
+    await abrir();
+    for (let i = 0; i < 6; i++) await esperar();
+
+    expect(document.querySelector('[data-quitar-cupon]')).toBeNull();
+    expect(plano()).toContain('ya no está vigente');
+  });
+
+  it('con envío gratis, el envío queda sin cargo y no hay renglón de descuento aparte', async () => {
+    fetchPorUrl({
+      'validar-cupon': () => ({ status: 200, cuerpo: {
+        ok: true, cupon: { codigo: 'ENVIO', nombre: 'Envío sin cargo', tipo: 'envio_gratis', valor: null },
+        descuento: 2500, envio_gratis: true, aplicable: 0, renglones: [],
+      } }),
+    });
+    await abrir();
+    apretar('[data-modo="delivery"]');
+    for (let i = 0; i < 6; i++) await esperar();
+    await aplicar('ENVIO');
+
+    expect(document.querySelector('.totales__fila--descuento')).toBeNull();
+    expect(plano()).toContain('Sin cargo');
+    expect(document.querySelector('.totales__fila--total').textContent.replace(/\./g, '')).toContain('$10500');
+  });
+});

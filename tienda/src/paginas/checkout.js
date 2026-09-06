@@ -25,6 +25,8 @@ import { olvidar } from '../cliente.js';
 import { cotizar, rangoDeTramos, llegaAEnvioGratis } from '../envio.js';
 import { montarDirecciones } from '../direcciones.js';
 import { montarMapa } from '../mapa.js';
+import { cuponGuardado, guardarCupon, quitarCupon, validarCupon } from '../cupon.js';
+import { normalizarCodigo, describirCupon } from '../cupones.js';
 
 /**
  * Despierta las tres funciones del checkout apenas se abre la pantalla.
@@ -162,6 +164,15 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
   let soltarMapa = null;
 
   const rango = rangoDeTramos(entrega);
+
+  // El cupón puesto, con lo último que contestó el servidor (cuánto
+  // descuenta). Se vuelve a comprobar con cada cambio del pedido, porque lo
+  // que descuenta depende de lo que hay en el carrito y de cómo se entrega.
+  let cupon = cuponGuardado();
+  let cuponError = null;
+  let cuponTexto = '';
+  let cuponCargando = false;
+  const descuentoActual = () => (cupon ? Math.max(0, Number(cupon.descuento) || 0) : 0);
 
   montar(`
     <div class="contenedor checkout">
@@ -328,12 +339,20 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
     // El mínimo se mide contra el total, con el envío adentro: es lo que entra
     // por el pedido. Con retiro en el local, o mientras el envío está a
     // confirmar, el envío es cero y queda medido contra los productos solos.
+    // El cupón no cuenta para el mínimo: se compró lo que había que comprar.
     const falta = Math.max(0, pedidoMinimo - (subtotal + envio));
+
+    // Un cupón de envío gratis se muestra en el renglón del envío y no como
+    // descuento aparte: es el envío el que queda sin cargo.
+    const envioGratis = Boolean(cupon?.envio_gratis) && modo === 'delivery' && !gratis;
+    const descuento = envioGratis ? envio : Math.min(descuentoActual(), subtotal + envio);
 
     const lineaEnvio = modo === 'retiro'
       ? '<strong style="color:var(--exito)">Sin cargo</strong>'
       : gratis
         ? '<strong class="totales__gratis">Sin cargo</strong>'
+        : envioGratis
+          ? `<strong class="totales__gratis">${envio > 0 ? `<s class="cifra">${pesos(envio)}</s> ` : ''}Sin cargo</strong>`
         : cotizacion.estado === 'ok'
           ? `<strong class="cifra">${pesos(envio)}</strong>`
           : cotizacion.estado === 'fuera_de_radio'
@@ -408,6 +427,8 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
           }).join('')}
         </ul>
 
+        ${bloqueCupon()}
+
         <div class="totales">
           <div class="totales__fila">
             <span>Productos (${renglones.length})</span>
@@ -417,9 +438,14 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
             <span>Envío</span>
             ${lineaEnvio}
           </div>
+          ${descuento > 0 && !envioGratis ? `
+          <div class="totales__fila totales__fila--descuento">
+            <span>Descuento · ${esc(cupon.cupon.codigo)}</span>
+            <strong class="cifra">−${pesos(descuento)}</strong>
+          </div>` : ''}
           <div class="totales__fila totales__fila--total">
             <span>Total</span>
-            <strong class="cifra">${pesos(subtotal + envio)}</strong>
+            <strong class="cifra">${pesos(subtotal + envio - descuento)}</strong>
           </div>
           ${ahorroTotal > 0 ? `
           <div class="totales__ahorro">
@@ -459,6 +485,123 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
       </div>`;
   }
 
+  /* ── Cupón ──────────────────────────────────────────────────────────────── */
+
+  /**
+   * El cupón dentro del resumen: puesto, muestra cuál es y cuánto saca y deja
+   * quitarlo; si no, un campo para escribirlo. Va arriba de los totales, que
+   * es donde se ve el efecto.
+   */
+  function bloqueCupon() {
+    if (cupon) {
+      return `
+        <div class="cupon">
+          <div class="cupon__puesto" role="status">
+            ${icono('tilde', { tam: 16 })}
+            <span class="cupon__texto">
+              <b>${esc(cupon.cupon.codigo)}</b>
+              <span>${esc(describirCupon(cupon.cupon))}${
+                cupon.cupon.nombre && cupon.cupon.nombre !== cupon.cupon.codigo
+                  ? ` · ${esc(cupon.cupon.nombre)}` : ''}</span>
+            </span>
+            <button type="button" class="cupon__quitar" data-quitar-cupon>Quitar</button>
+          </div>
+        </div>`;
+    }
+    return `
+      <div class="cupon">
+        <form class="cupon__form" data-form-cupon novalidate>
+          <label class="solo-lectores" for="cupon">Código del cupón</label>
+          <input type="text" id="cupon" class="campo__control" data-cupon-campo
+                 value="${esc(cuponTexto)}" placeholder="¿Tenés un cupón?"
+                 autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="20"
+                 ${cuponCargando ? 'disabled' : ''}>
+          <button type="submit" class="boton boton--secundario${cuponCargando ? ' boton--cargando' : ''}"
+                  data-aplicar-cupon ${cuponCargando ? 'disabled' : ''}>
+            ${cuponCargando ? 'Comprobando…' : 'Aplicar'}
+          </button>
+        </form>
+        ${cuponError ? `
+          <p class="cupon__error" role="alert">
+            ${icono('atencion', { tam: 14 })}<span>${esc(cuponError)}</span>
+          </p>` : ''}
+      </div>`;
+  }
+
+  /** Lo que se le manda al servidor para que diga si vale y cuánto saca. */
+  async function consultarCupon(codigo) {
+    return validarCupon({
+      codigo,
+      items: carrito.items(),
+      modo,
+      envio: modo === 'delivery' && cotizacion.estado === 'ok' ? cotizacion.precio : 0,
+      telefono: valor('telefono'),
+      idToken: sesion() ? await tokenDeSesion().catch(() => null) : null,
+    });
+  }
+
+  async function aplicarCupon(texto) {
+    cuponTexto = String(texto || '');
+    const codigo = normalizarCodigo(cuponTexto);
+    if (!codigo) {
+      cuponError = 'Escribí el código del cupón.';
+      pintarResumen();
+      return;
+    }
+    cuponError = null;
+    cuponCargando = true;
+    pintarResumen();
+
+    const resultado = await consultarCupon(codigo);
+
+    cuponCargando = false;
+    if (resultado.ok) {
+      cupon = resultado;
+      cuponTexto = '';
+      guardarCupon(resultado);
+      avisar(`Cupón aplicado: ${describirCupon(resultado.cupon)}`);
+    } else {
+      cupon = null;
+      cuponError = resultado.mensaje;
+      quitarCupon();
+    }
+    pintarResumen();
+  }
+
+  function sacarCupon() {
+    cupon = null;
+    cuponError = null;
+    cuponTexto = '';
+    quitarCupon();
+    pintarResumen();
+  }
+
+  // Cada consulta lleva su número: si el cliente cambia de retiro a envío y
+  // vuelve antes de que conteste la primera, gana la última que salió.
+  let consultaDeCupon = 0;
+
+  /**
+   * Vuelve a preguntar por el cupón puesto cuando cambia algo del pedido. Lo
+   * que descuenta depende del carrito y de la entrega, y un cupón de envío
+   * gratis deja de valer si se pasa a retiro.
+   */
+  async function revalidarCupon() {
+    if (!cupon) return;
+    const marca = ++consultaDeCupon;
+    const resultado = await consultarCupon(cupon.cupon.codigo);
+    if (marca !== consultaDeCupon || !cupon) return;
+    if (resultado.ok) {
+      cupon = resultado;
+      guardarCupon(resultado);
+    } else {
+      cupon = null;
+      cuponError = resultado.mensaje;
+      quitarCupon();
+      avisar(resultado.mensaje, { tipo: 'error', duracion: 6000 });
+    }
+    pintarResumen();
+  }
+
   /* ── Entrega ────────────────────────────────────────────────────────────── */
 
   function cambiarModo(nuevo) {
@@ -473,8 +616,12 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
       detalle.textContent = modo === 'retiro' ? 'Al retirarlo en el local.' : 'Al recibirlo en tu casa.';
     }
 
-    if (modo === 'delivery') recotizar();
-    else pintarResumen();
+    if (modo === 'delivery') {
+      recotizar();
+    } else {
+      pintarResumen();
+      revalidarCupon();
+    }
   }
 
   async function recotizar() {
@@ -482,6 +629,7 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
     cotizacion = await cotizar(destino, entrega, subtotal);
     pintarResumen();
     pintarDomicilio();
+    revalidarCupon();
   }
 
   document.querySelectorAll('[data-modo]').forEach(boton => {
@@ -568,6 +716,16 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
 
   cajaResumen.addEventListener('click', ev => {
     if (ev.target.closest('[data-confirmar]')) confirmar();
+    else if (ev.target.closest('[data-quitar-cupon]')) sacarCupon();
+  });
+  cajaResumen.addEventListener('submit', ev => {
+    if (!ev.target.closest('[data-form-cupon]')) return;
+    ev.preventDefault();
+    aplicarCupon(cajaResumen.querySelector('[data-cupon-campo]')?.value);
+  });
+  // Lo tipeado sobrevive a los repintados del resumen.
+  cajaResumen.addEventListener('input', ev => {
+    if (ev.target.closest('[data-cupon-campo]')) cuponTexto = ev.target.value;
   });
 
   document.querySelector('[data-no-soy-yo]')?.addEventListener('click', () => {
@@ -700,6 +858,8 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
         subtotal,
         envio,
         nota: valores.nota,
+        // Solo el código: cuánto descuenta lo decide el servidor.
+        cupon: cupon?.cupon?.codigo || null,
       };
 
       /** Lo que pasa una vez que el pedido ya se puede crear. */
@@ -726,9 +886,27 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
       // local no recibe pedidos a la espera de un pago que quizá no llegue, y
       // el cliente ve el alias en el momento en que lo necesita.
       if (formaPago === 'transferencia') {
+        // Con cupón se pregunta una vez más antes de mostrar cuánto
+        // transferir: el número que ve es el que va a pagar, y si el cupón
+        // dejó de valer mientras completaba los datos, mejor enterarse acá.
+        if (cupon) {
+          const fresco = await consultarCupon(cupon.cupon.codigo);
+          if (fresco.ok) {
+            cupon = fresco;
+            guardarCupon(fresco);
+          } else {
+            cupon = null;
+            cuponError = fresco.mensaje;
+            quitarCupon();
+            pintarResumen();
+            avisar(fresco.mensaje, { tipo: 'error', duracion: 7000 });
+            return;
+          }
+        }
+        const envioGratis = Boolean(cupon?.envio_gratis) && !gratis;
         pantallaTransferencia({
           cfg,
-          total: subtotal + envio,
+          total: subtotal + envio - (envioGratis ? envio : Math.min(descuentoActual(), subtotal + envio)),
           alCrear: cerrarPedido,
         });
         return;
@@ -753,6 +931,18 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
         document.querySelector('[data-cambios]')?.remove();
         document.querySelector('.checkout__titulo')
           ?.insertAdjacentHTML('afterend', avisoDeCambios(err.cambios));
+        avisar(err.message, { tipo: 'error', duracion: 7000 });
+        return;
+      }
+
+      // El cupón dejó de valer entre la vista previa y el pedido (lo usó otro,
+      // se agotó). Se saca y se dice por qué; el pedido queda armado para
+      // confirmarlo sin cupón.
+      if (err?.motivo === 'cupon') {
+        cupon = null;
+        cuponError = err.message;
+        quitarCupon();
+        pintarResumen();
         avisar(err.message, { tipo: 'error', duracion: 7000 });
         return;
       }
