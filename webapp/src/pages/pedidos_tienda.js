@@ -369,10 +369,15 @@ function tarjeta(p) {
         <div style="font-size:13px;color:var(--text-muted)">
           Productos ${pesos(p.subtotal)} ·
           ${esDelivery
-            ? (entrega.envio_a_confirmar
-                ? '<b style="color:#9a5b00">envío a confirmar</b>'
-                : `envío ${pesos(p.envio)}`)
+            ? (entrega.envio_gratis
+                ? '<b style="color:#2f7a3d">envío sin cargo (cupón)</b>'
+                : entrega.envio_a_confirmar
+                  ? '<b style="color:#9a5b00">envío a confirmar</b>'
+                  : `envío ${pesos(p.envio)}`)
             : 'sin envío'}
+          ${Number(p.descuento) > 0 && !entrega.envio_gratis
+            ? ` · <b style="color:#2f7a3d">cupón ${esc(p.cupon?.codigo || '')} −${pesos(p.descuento)}</b>`
+            : ''}
         </div>
         <div style="margin-left:auto;font-size:19px;font-weight:800">${pesos(p.total)}</div>
       </div>

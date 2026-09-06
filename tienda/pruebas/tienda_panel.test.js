@@ -86,7 +86,7 @@ beforeEach(() => {
     ventas_por_dia: [], ventas: [], inventario: [], inventario_resumen: [],
     control_config: [], config: [], rubros: [], gastos: [],
     tienda_config: [{ __id: 'publicacion', rubros: ['LIBRERIA', 'PAPELERIA'] }],
-    tienda_pedidos: [], tienda_descuentos: [],
+    tienda_pedidos: [], tienda_descuentos: [], tienda_cupones: [],
     tienda_fotos_pedidas: [], pcs: [], facturas: [], perfiles_facturacion: [],
     clientes_facturacion: [],
   };
@@ -104,6 +104,7 @@ const esperar = (ms = 0) => new Promise(r => setTimeout(r, ms));
 const CARGAR = {
   tienda_catalogo: () => import('../../webapp/src/pages/tienda_catalogo.js'),
   tienda_descuentos: () => import('../../webapp/src/pages/tienda_descuentos.js'),
+  tienda_cupones: () => import('../../webapp/src/pages/tienda_cupones.js'),
   tienda_ajustes: () => import('../../webapp/src/pages/tienda_ajustes.js'),
   pedidos_tienda: () => import('../../webapp/src/pages/pedidos_tienda.js'),
   pcs: () => import('../../webapp/src/pages/pcs.js'),
@@ -394,6 +395,153 @@ describe('Facturación AFIP', () => {
   it('sin facturas emitidas no rompe el historial', async () => {
     datos.porColeccion.facturas = [];
     const c = await montar('facturas', 'renderFacturas');
+    expect(plano(c)).not.toContain('NaN');
+  });
+});
+
+describe('Cupones de la Tienda', () => {
+  const CUPON = {
+    __id: 'BIENVENIDA', codigo: 'BIENVENIDA', nombre: 'Cupón de bienvenida', tipo: 'porcentaje',
+    valor: 10, tope: 3000, minimo_compra: 15000, aplica: { modo: 'rubros', rubros: ['LIBRERIA'], etiqueta: 'Librería' },
+    usos_por_persona: 1, usos_totales: null, desde: null, hasta: null,
+    solo_primera_compra: false, entrega: 'cualquiera', activo: true,
+  };
+  const PEDIDO = {
+    __id: 'ped1', codigo: 'K7M2', estado: 'entregado', total: 16200, creado: '2026-09-05T15:00:00Z',
+    cliente: { nombre: 'Marta Gómez', telefono: '3515550001' },
+    cupon: { codigo: 'BIENVENIDA', descuento: 1800, renglones: [{ id: 'p1', variedad: null, es_pack: false, descuento: 1800 }] },
+    items: [{ id: 'p1', nombre: 'Cuaderno Rivadavia 48 hojas', cantidad: 2 }],
+  };
+
+  beforeEach(() => {
+    datos.porColeccion.tienda_cupones = [{ ...CUPON }, {
+      __id: 'VIEJO', codigo: 'VIEJO', nombre: 'Promo vieja', tipo: 'monto', valor: 2000,
+      aplica: { modo: 'todo' }, activo: false,
+    }];
+    datos.porColeccion.tienda_pedidos = [{ ...PEDIDO }];
+  });
+
+  it('lista los cupones con lo que descuentan, las condiciones y los usos', async () => {
+    const c = await montar('tienda_cupones', 'renderTiendaCupones');
+    const t = plano(c);
+    expect(t).toContain('BIENVENIDA');
+    expect(t).toContain('10% de descuento (hasta $3000)');
+    expect(t).toContain('compras desde $15000');
+    expect(t).toContain('una vez por persona');
+    expect(t).toContain('1 pedido · 1 persona · $1800 descontados');
+    expect(t).toContain('Promo vieja');
+    expect(t).toContain('Apagado');
+    expect(t).not.toContain('NaN');
+  });
+
+  it('el botón de nuevo abre el formulario con todos los campos', async () => {
+    await montar('tienda_cupones', 'renderTiendaCupones');
+    document.getElementById('cupNuevo')?.click();
+    await esperar(50);
+    for (const id of ['cuCodigo', 'cuNombre', 'cuTipo', 'cuValor', 'cuTope', 'cuMinimo', 'cuAlcance',
+                      'cuPorPersona', 'cuTotales', 'cuDesde', 'cuHasta', 'cuEntrega', 'cuPrimera', 'cuNota']) {
+      expect(document.getElementById(id), id).toBeTruthy();
+    }
+  });
+
+  it('"Generar" arma un código que se puede dictar', async () => {
+    await montar('tienda_cupones', 'renderTiendaCupones');
+    document.getElementById('cupNuevo')?.click();
+    await esperar(50);
+    document.getElementById('cuGenerar').click();
+    expect(document.getElementById('cuCodigo').value).toMatch(/^[A-HJ-NP-Z2-9]{6}$/);
+  });
+
+  it('guarda el cupón con el código como id y todo lo elegido', async () => {
+    await montar('tienda_cupones', 'renderTiendaCupones');
+    document.getElementById('cupNuevo')?.click();
+    await esperar(50);
+    tipear(document.getElementById('cuCodigo'), 'primavera 25');
+    tipear(document.getElementById('cuNombre'), 'Primavera');
+    document.getElementById('cuTipo').value = 'porcentaje';
+    document.getElementById('cuTipo').dispatchEvent(new Event('change', { bubbles: true }));
+    tipear(document.getElementById('cuValor'), '25');
+    tipear(document.getElementById('cuTope'), '5000');
+    tipear(document.getElementById('cuMinimo'), '20000');
+    tipear(document.getElementById('cuPorPersona'), '2');
+    document.getElementById('cuAlcance').value = 'rubros';
+    document.getElementById('cuAlcance').dispatchEvent(new Event('change', { bubbles: true }));
+    const rubro = document.querySelector('#cuCajaRubros input[value="LIBRERIA"]');
+    rubro.checked = true;
+    rubro.dispatchEvent(new Event('change', { bubbles: true }));
+
+    expect(plano(document.body)).toContain('25% de descuento (hasta $5000)');
+
+    document.querySelector('.cup-guardar').click();
+    for (let i = 0; i < 6; i++) await esperar();
+
+    const escritura = datos.escrituras.find(e => e.ref?._col === 'tienda_cupones');
+    expect(escritura).toBeTruthy();
+    expect(escritura.ref.id).toBe('PRIMAVERA25');
+    expect(escritura.datos).toMatchObject({
+      codigo: 'PRIMAVERA25', nombre: 'Primavera', tipo: 'porcentaje', valor: 25, tope: 5000,
+      minimo_compra: 20000, usos_por_persona: 2, usos_totales: null, activo: true,
+      aplica: { modo: 'rubros', rubros: ['LIBRERIA'], etiqueta: 'Librería' },
+    });
+    expect(plano(document.body)).toContain('PRIMAVERA25');
+  });
+
+  it('no deja guardar un porcentaje imposible ni un código repetido', async () => {
+    await montar('tienda_cupones', 'renderTiendaCupones');
+    document.getElementById('cupNuevo')?.click();
+    await esperar(50);
+    tipear(document.getElementById('cuCodigo'), 'NUEVO1');
+    tipear(document.getElementById('cuNombre'), 'Nuevo');
+    tipear(document.getElementById('cuValor'), '150');
+    expect(plano(document.body)).toContain('El porcentaje va de 1 a 100');
+
+    tipear(document.getElementById('cuValor'), '10');
+    tipear(document.getElementById('cuCodigo'), 'bienvenida');
+    expect(plano(document.body)).toContain('Ya hay un cupón con ese código');
+
+    document.querySelector('.cup-guardar').click();
+    for (let i = 0; i < 4; i++) await esperar();
+    expect(datos.escrituras.some(e => e.ref?._col === 'tienda_cupones')).toBe(false);
+  });
+
+  it('un cupón de plata fija más grande que la compra mínima no se guarda', async () => {
+    await montar('tienda_cupones', 'renderTiendaCupones');
+    document.getElementById('cupNuevo')?.click();
+    await esperar(50);
+    tipear(document.getElementById('cuCodigo'), 'REGALO');
+    tipear(document.getElementById('cuNombre'), 'Regalo');
+    document.getElementById('cuTipo').value = 'monto';
+    document.getElementById('cuTipo').dispatchEvent(new Event('change', { bubbles: true }));
+    tipear(document.getElementById('cuValor'), '5000');
+    tipear(document.getElementById('cuMinimo'), '4000');
+    expect(plano(document.body)).toContain('menor que la compra mínima');
+  });
+
+  it('apagar escribe el cambio y la tarjeta lo muestra', async () => {
+    const c = await montar('tienda_cupones', 'renderTiendaCupones');
+    c.querySelector('[data-accion="alternar"][data-id="BIENVENIDA"]').click();
+    for (let i = 0; i < 4; i++) await esperar();
+    const escritura = datos.escrituras.find(e => e.ref?._col === 'tienda_cupones' && e.ref.id === 'BIENVENIDA');
+    expect(escritura?.datos?.activo).toBe(false);
+    expect(c.querySelector('[data-accion="alternar"][data-id="BIENVENIDA"]').textContent).toContain('Activar');
+  });
+
+  it('"Ver usos" muestra quién lo usó y en qué', async () => {
+    const c = await montar('tienda_cupones', 'renderTiendaCupones');
+    c.querySelector('[data-accion="usos"][data-id="BIENVENIDA"]').click();
+    for (let i = 0; i < 8; i++) await esperar();
+    const t = plano(document.body);
+    expect(t).toContain('Marta Gómez');
+    expect(t).toContain('K7M2');
+    expect(t).toContain('Cuaderno Rivadavia 48 hojas');
+    expect(t).toContain('Entregado');
+    expect(t).toContain('$1800');
+  });
+
+  it('sin cupones muestra el vacío sin NaN', async () => {
+    datos.porColeccion.tienda_cupones = [];
+    const c = await montar('tienda_cupones', 'renderTiendaCupones');
+    expect(plano(c)).toContain('Todavía no hay cupones');
     expect(plano(c)).not.toContain('NaN');
   });
 });

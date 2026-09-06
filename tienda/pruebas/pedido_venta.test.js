@@ -158,3 +158,70 @@ describe('la venta que se escribe', () => {
     expect(r.lineas[0].datos.tipo_pago).toBe('Efectivo');
   });
 });
+
+describe('la venta de un pedido con cupón', () => {
+  const cat = {
+    R: { nombre: 'RESMA PAMPA A4', categoria: 'PAPELERA', stock: 10 },
+    L: { nombre: 'LAPIZ FABER', categoria: 'LIBRERIA', stock: 50 },
+  };
+  const ahora = new Date('2026-09-05T18:00:00-03:00');
+  const pedido = {
+    codigo: 'CU01', subtotal: 20400, envio: 1500, descuento: 2040, total: 19860,
+    pago: { modo: 'transferencia' }, cliente: { nombre: 'Marta' },
+    cupon: {
+      codigo: 'BIENVENIDA', nombre: 'Bienvenida', tipo: 'porcentaje', valor: 10, descuento: 2040, envio_gratis: false,
+      renglones: [
+        { id: 'R', variedad: null, es_pack: false, descuento: 1800 },
+        { id: 'L', variedad: null, es_pack: false, descuento: 240 },
+      ],
+    },
+    items: [
+      { id: 'R', nombre: 'Resma', cantidad: 1, precio: 18000, subtotal: 18000, unidad: 'unidad' },
+      { id: 'L', nombre: 'Lápiz', cantidad: 3, precio: 800, subtotal: 2400, unidad: 'unidad' },
+    ],
+  };
+
+  it('el descuento va adentro de las líneas y la venta cierra al peso', () => {
+    const { venta, lineas } = documentosDeVenta(pedido, 'doc2', cat, ahora);
+    expect(venta.total_amount).toBe(19860);
+    expect(venta.transfer_amount).toBe(19860);
+    expect(venta.discount).toBe(2040);
+    expect(venta.cupon).toBe('BIENVENIDA');
+
+    const [resma, lapiz, envio] = lineas.map(l => l.datos);
+    expect(resma.precio_unitario).toBe(18000);
+    expect(resma.subtotal).toBe(16200);
+    expect(resma).toMatchObject({ descuento_tipo: 'cupon', descuento_valor: 10, descuento_monto: 1800, descuento_nombre: 'BIENVENIDA' });
+    expect(lapiz.subtotal).toBe(2160);
+    expect(lapiz.descuento_monto).toBe(240);
+    expect(envio.subtotal).toBe(1500);
+    expect(envio.descuento_monto).toBe(0);
+    expect(lineas.reduce((t, l) => t + l.datos.subtotal, 0)).toBe(19860);
+  });
+
+  it('con envío gratis la línea del envío queda en cero y dice por qué', () => {
+    const conEnvio = {
+      ...pedido, descuento: 1500, total: 20400,
+      entrega: { modo: 'delivery', envio_gratis: true },
+      cupon: { codigo: 'ENVIO', tipo: 'envio_gratis', valor: null, descuento: 1500, envio_gratis: true, renglones: [] },
+    };
+    const { venta, lineas } = documentosDeVenta(conEnvio, 'doc3', cat, ahora);
+    expect(venta.total_amount).toBe(20400);
+    expect(venta.discount).toBe(1500);
+    const envio = lineas.at(-1).datos;
+    expect(envio.producto).toBe('ENVIO A DOMICILIO');
+    expect(envio.precio_unitario).toBe(1500);
+    expect(envio.subtotal).toBe(0);
+    expect(envio).toMatchObject({ descuento_tipo: 'cupon', descuento_monto: 1500, descuento_nombre: 'ENVIO' });
+    expect(lineas[0].datos.descuento_monto).toBe(0);
+    expect(lineas.reduce((t, l) => t + l.datos.subtotal, 0)).toBe(20400);
+  });
+
+  it('sin cupón nada cambia', () => {
+    const { venta, lineas } = documentosDeVenta({ ...pedido, cupon: null, descuento: 0, total: 21900 }, 'doc4', cat, ahora);
+    expect(venta.discount).toBe(0);
+    expect(venta.cupon).toBeUndefined();
+    expect(lineas[0].datos.subtotal).toBe(18000);
+    expect(lineas[0].datos.descuento_tipo).toBe('');
+  });
+});

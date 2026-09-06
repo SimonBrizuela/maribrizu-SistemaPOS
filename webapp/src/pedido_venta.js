@@ -174,7 +174,18 @@ export function documentosDeVenta(pedido, pedidoId, catalogoPorId, ahora) {
   const { fecha, hora } = fechaHoraAR(ahora);
   const items = pedido?.items || [];
   const envio = num(pedido?.envio);
-  const total = num(pedido?.total) || (items.reduce((s, i) => s + num(i.subtotal), 0) + envio);
+  // El cupón, si lo hubo: cuánto sacó en total y cuánto en cada renglón. La
+  // venta se registra con el descuento adentro de las líneas, como hace el
+  // POS con el descuento con nombre, así el historial y el balance ven lo
+  // que de verdad se cobró.
+  const cupon = pedido?.cupon && typeof pedido.cupon === 'object' ? pedido.cupon : null;
+  const descuento = Math.max(0, num(pedido?.descuento) || num(cupon?.descuento));
+  const envioGratis = descuento > 0 && (cupon?.envio_gratis === true || pedido?.entrega?.envio_gratis === true);
+  const descuentoPorRenglon = new Map((cupon?.renglones || []).map(r =>
+    [`${r.id}|${r.variedad || ''}|${r.es_pack ? 'p' : 's'}`, num(r.descuento)]));
+  const valorCupon = cupon ? num(cupon.valor) : 0;
+  const total = num(pedido?.total)
+    || Math.max(0, items.reduce((s, i) => s + num(i.subtotal), 0) + envio - descuento);
   const cliente = pedido?.cliente?.nombre ? String(pedido.cliente.nombre) : '';
 
   const linea = (idx, datos) => ({
@@ -200,13 +211,19 @@ export function documentosDeVenta(pedido, pedidoId, catalogoPorId, ahora) {
     const d = catalogoPorId?.[String(it.id)] || null;
     const v = d ? variedadDelCatalogo(d, it.variedad) : null;
     const precio = num(it.precio);
+    const bruto = num(it.subtotal) || precio * num(it.cantidad);
+    const rebaja = Math.min(bruto, descuentoPorRenglon.get(`${it.id}|${it.variedad || ''}|${it.es_pack ? 'p' : 's'}`) || 0);
     return linea(idx, {
       producto: String(d?.nombre || it.nombre || '').toUpperCase(),
       categoria: String(d?.categoria || 'Sin categoría'),
       cantidad: num(it.cantidad),
       precio_unitario: precio,
       precio_original: precio,
-      subtotal: num(it.subtotal) || precio * num(it.cantidad),
+      subtotal: bruto - rebaja,
+      ...(rebaja > 0 ? {
+        descuento_tipo: 'cupon', descuento_valor: valorCupon, descuento_monto: rebaja,
+        descuento_nombre: String(cupon?.codigo || ''),
+      } : {}),
       conjunto_color: v ? String(v.color) : (it.variedad ? String(it.variedad) : ''),
       es_pack: !!it.es_pack,
       pack_contenido: it.es_pack ? num(it.pack_contenido) : null,
@@ -218,7 +235,12 @@ export function documentosDeVenta(pedido, pedidoId, catalogoPorId, ahora) {
     lineas.push(linea(items.length, {
       producto: 'ENVIO A DOMICILIO',
       categoria: 'SERVICIOS',
-      cantidad: 1, precio_unitario: envio, precio_original: envio, subtotal: envio,
+      cantidad: 1, precio_unitario: envio, precio_original: envio,
+      subtotal: envioGratis ? 0 : envio,
+      ...(envioGratis ? {
+        descuento_tipo: 'cupon', descuento_valor: 0, descuento_monto: envio,
+        descuento_nombre: String(cupon?.codigo || ''),
+      } : {}),
       conjunto_color: '', es_pack: false, pack_contenido: null, unidad: 'unidad', producto_id: '',
     }));
   }
@@ -239,7 +261,8 @@ export function documentosDeVenta(pedido, pedidoId, catalogoPorId, ahora) {
     productos: productosStr,
     username: 'Tienda online',
     cajero: 'Tienda online',
-    discount: 0,
+    discount: descuento,
+    ...(cupon?.codigo ? { cupon: String(cupon.codigo) } : {}),
     cash_register_id: null,
     es_fiado: false, fiado_tipo: '', fiado_cliente: '', fiado_cliente_fid: '',
     origen: 'tienda',

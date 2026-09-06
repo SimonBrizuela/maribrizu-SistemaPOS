@@ -182,9 +182,13 @@ function papel(p, cfg) {
     <div>
       <span>Envío</span>
       <span>${esDelivery
-        ? (entrega.envio_a_confirmar ? 'a confirmar' : pesos(p.envio))
+        ? (entrega.envio_gratis ? 'sin cargo (cupón)'
+          : entrega.envio_a_confirmar ? 'a confirmar' : pesos(p.envio))
         : 'sin cargo'}</span>
     </div>
+    ${Number(p.descuento) > 0 && !entrega.envio_gratis
+      ? `<div><span>Cupón ${esc(p.cupon?.codigo || '')}</span><span>-${pesos(p.descuento)}</span></div>`
+      : ''}
     <div class="total"><span>TOTAL</span><span>${pesos(p.total)}</span></div>
     <div><span>Paga con</span><span>${p?.pago?.modo === 'transferencia' ? 'transferencia' : 'efectivo'}</span></div>
   </div>
