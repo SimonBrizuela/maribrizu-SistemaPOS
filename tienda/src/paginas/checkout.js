@@ -172,6 +172,9 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
   let cuponError = null;
   let cuponTexto = '';
   let cuponCargando = false;
+  // El campo aparece recién cuando se toca "¿Tenés un cupón?": un formulario
+  // abierto en medio del resumen se lee como un paso obligatorio, y no lo es.
+  let cuponAbierto = false;
   const descuentoActual = () => (cupon ? Math.max(0, Number(cupon.descuento) || 0) : 0);
 
   montar(`
@@ -508,12 +511,20 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
           </div>
         </div>`;
     }
+    if (!cuponAbierto && !cuponError && !cuponTexto) {
+      return `
+        <div class="cupon">
+          <button type="button" class="cupon__abrir" data-abrir-cupon>
+            ${icono('regalo', { tam: 16 })}<span>¿Tenés un cupón?</span>
+          </button>
+        </div>`;
+    }
     return `
       <div class="cupon">
         <form class="cupon__form" data-form-cupon novalidate>
           <label class="solo-lectores" for="cupon">Código del cupón</label>
           <input type="text" id="cupon" class="campo__control" data-cupon-campo
-                 value="${esc(cuponTexto)}" placeholder="¿Tenés un cupón?"
+                 value="${esc(cuponTexto)}" placeholder="Código del cupón"
                  autocomplete="off" autocapitalize="characters" spellcheck="false" maxlength="20"
                  ${cuponCargando ? 'disabled' : ''}>
           <button type="submit" class="boton boton--secundario${cuponCargando ? ' boton--cargando' : ''}"
@@ -526,6 +537,12 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
             ${icono('atencion', { tam: 14 })}<span>${esc(cuponError)}</span>
           </p>` : ''}
       </div>`;
+  }
+
+  function abrirCupon() {
+    cuponAbierto = true;
+    pintarResumen();
+    cajaResumen.querySelector('[data-cupon-campo]')?.focus();
   }
 
   /** Lo que se le manda al servidor para que diga si vale y cuánto saca. */
@@ -572,6 +589,7 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
     cupon = null;
     cuponError = null;
     cuponTexto = '';
+    cuponAbierto = false;
     quitarCupon();
     pintarResumen();
   }
@@ -717,6 +735,7 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
   cajaResumen.addEventListener('click', ev => {
     if (ev.target.closest('[data-confirmar]')) confirmar();
     else if (ev.target.closest('[data-quitar-cupon]')) sacarCupon();
+    else if (ev.target.closest('[data-abrir-cupon]')) abrirCupon();
   });
   cajaResumen.addEventListener('submit', ev => {
     if (!ev.target.closest('[data-form-cupon]')) return;

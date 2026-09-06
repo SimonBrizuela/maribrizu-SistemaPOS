@@ -536,6 +536,9 @@ describe('con un cupón', () => {
   }
 
   async function aplicar(codigo) {
+    // El campo aparece recién al tocar "¿Tenés un cupón?".
+    document.querySelector('[data-abrir-cupon]')?.click();
+    await esperar();
     llenar('cupon', codigo);
     document.querySelector('[data-form-cupon]')
       .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
@@ -546,8 +549,12 @@ describe('con un cupón', () => {
     carrito.agregar(PRODUCTO, { cantidad: 3 });   // 3 × 3.500 = 10.500
   });
 
-  it('el campo está en el resumen, arriba de los totales', async () => {
+  it('cerrado es un renglón del resumen; el campo aparece al tocarlo', async () => {
     await abrir();
+    expect(document.getElementById('cupon')).toBeNull();
+    expect(document.querySelector('[data-abrir-cupon]')?.textContent).toContain('¿Tenés un cupón?');
+    apretar('[data-abrir-cupon]');
+    await esperar();
     expect(document.getElementById('cupon')).toBeTruthy();
     expect(document.querySelector('[data-aplicar-cupon]')?.textContent).toContain('Aplicar');
   });
@@ -592,14 +599,15 @@ describe('con un cupón', () => {
     expect(plano()).toContain('Escribí el código del cupón');
   });
 
-  it('se puede quitar, y vuelve el campo', async () => {
+  it('se puede quitar, y vuelve el renglón cerrado', async () => {
     fetchPorUrl({ 'validar-cupon': () => ({ status: 200, cuerpo: CUPON_OK }) });
     await abrir();
     await aplicar('BIENVENIDA');
     apretar('[data-quitar-cupon]');
     await esperar();
 
-    expect(document.getElementById('cupon')).toBeTruthy();
+    expect(document.querySelector('[data-abrir-cupon]')).toBeTruthy();
+    expect(document.querySelector('[data-quitar-cupon]')).toBeNull();
     expect(document.querySelector('.totales__fila--descuento')).toBeNull();
     expect(localStorage.getItem('liceo.cupon.v1')).toBeNull();
   });
