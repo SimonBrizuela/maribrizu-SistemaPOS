@@ -8,7 +8,10 @@
  * descuento mal cargado vende por debajo del costo; un horario mal puesto deja
  * la tienda tomando pedidos a las tres de la mañana.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import fs from 'node:fs';
+import { aCampos } from '../netlify/functions/lib/firestore.mjs';
+import { claveDeDia } from '../src/estadisticas.js';
 
 const { datos } = vi.hoisted(() => ({
   datos: { porColeccion: {}, escrituras: [] },
@@ -105,6 +108,7 @@ const CARGAR = {
   tienda_catalogo: () => import('../../webapp/src/pages/tienda_catalogo.js'),
   tienda_descuentos: () => import('../../webapp/src/pages/tienda_descuentos.js'),
   tienda_cupones: () => import('../../webapp/src/pages/tienda_cupones.js'),
+  tienda_estadisticas: () => import('../../webapp/src/pages/tienda_estadisticas.js'),
   tienda_ajustes: () => import('../../webapp/src/pages/tienda_ajustes.js'),
   pedidos_tienda: () => import('../../webapp/src/pages/pedidos_tienda.js'),
   pcs: () => import('../../webapp/src/pages/pcs.js'),
@@ -543,5 +547,186 @@ describe('Cupones de la Tienda', () => {
     const c = await montar('tienda_cupones', 'renderTiendaCupones');
     expect(plano(c)).toContain('Todavía no hay cupones');
     expect(plano(c)).not.toContain('NaN');
+  });
+});
+
+/* ── Estadísticas de la Tienda ────────────────────────────────────────────── */
+
+const DIA = 24 * 60 * 60 * 1000;
+const hoy = () => claveDeDia(Date.now());
+const hace = (dias) => claveDeDia(Date.now() - dias * DIA);
+
+/** Tres días de movimiento, como los escribe la función `medir`. */
+function diasDeMuestra() {
+  return [
+    { dia: hoy(), visitas: 6, visitantes_nuevos: 2, paginas: 20, busquedas: 4, busquedas_sin_resultado: 2,
+      fichas: 9, carrito: 3, checkouts: 1, chat: 1,
+      horas: { 10: 8, 18: 12 }, dispositivos: { movil: 5, escritorio: 1 },
+      origenes: { directo: 4, instagram: 2 },
+      rubros: { LIBRERIA: { vistas: 7 }, MERCERIA: { vistas: 2 } },
+      terminos: { cuaderno: { n: 2 }, mochila: { n: 2, sin: 2 } },
+      productos: { 1035115: { vistas: 6, carrito: 2, nombre: 'Goma Borrar Keyroad', rubro: 'LIBRERIA' },
+                   7: { vistas: 3, carrito: 1, nombre: 'Resma Pampa A4', rubro: 'PAPELERIA' } } },
+    { dia: hace(1), visitas: 8, paginas: 25, busquedas: 3, busquedas_sin_resultado: 0,
+      fichas: 10, carrito: 2, checkouts: 2,
+      horas: { 11: 25 }, dispositivos: { movil: 8 }, origenes: { directo: 8 },
+      rubros: { LIBRERIA: { vistas: 9 } },
+      terminos: { cuaderno: { n: 3 } },
+      productos: { 1035115: { vistas: 4, nombre: 'Goma Borrar Keyroad', rubro: 'LIBRERIA' } } },
+    // Fuera de "7 días" pero adentro de "30".
+    { dia: hace(12), visitas: 100, paginas: 300, busquedas: 50, fichas: 80, carrito: 10,
+      horas: { 9: 300 }, dispositivos: { escritorio: 100 }, origenes: { google: 100 },
+      terminos: { tijera: { n: 50 } },
+      productos: { 9: { vistas: 80, nombre: 'Tijera Maped', rubro: 'LIBRERIA' } } },
+  ];
+}
+
+function pedidosDeMuestra() {
+  return [
+    { estado: 'entregado', total: 12000, creado: new Date(Date.now() - 3600_000),
+      items: [{ id: '1035115', cantidad: 2 }, { id: '7', cantidad: 1 }] },
+    { estado: 'nuevo', total: 5000, creado: new Date(Date.now() - 2 * 3600_000),
+      items: [{ id: '1035115', cantidad: 1 }] },
+    { estado: 'cancelado', total: 90000, creado: new Date(Date.now() - 3 * 3600_000),
+      items: [{ id: '1035115', cantidad: 9 }] },
+  ];
+}
+
+/**
+ * Contesta las consultas por REST del panel con lo de arriba, respetando el
+ * filtro de `dia` para que se note cuando cambia el rango.
+ */
+function restDeEstadisticas({ dias = diasDeMuestra(), pedidos = pedidosDeMuestra(), registro = [] } = {}) {
+  return vi.fn(async (url, opciones = {}) => {
+    const consulta = JSON.parse(opciones.body || '{}').structuredQuery || {};
+    const coleccion = consulta.from?.[0]?.collectionId;
+    registro.push({ url: String(url), coleccion, consulta, token: opciones.headers?.Authorization });
+    const filtros = consulta.where?.compositeFilter?.filters
+      || (consulta.where ? [consulta.where] : []);
+    let docs = [];
+    if (coleccion === 'tienda_estadisticas') {
+      const desde = filtros.find(f => f.fieldFilter.op === 'GREATER_THAN_OR_EQUAL')?.fieldFilter.value.stringValue;
+      const hasta = filtros.find(f => f.fieldFilter.op === 'LESS_THAN_OR_EQUAL')?.fieldFilter.value.stringValue;
+      docs = dias.filter(d => (!desde || d.dia >= desde) && (!hasta || d.dia <= hasta))
+        .map(d => ({ id: d.dia, datos: d }));
+    } else if (coleccion === 'tienda_pedidos') {
+      const desde = filtros[0]?.fieldFilter.value.timestampValue;
+      docs = pedidos.filter(p => !desde || p.creado.toISOString() >= desde)
+        .map((p, i) => ({ id: `ped${i}`, datos: p }));
+    }
+    const filas = docs.length
+      ? docs.map(d => ({ document: { name: `projects/x/databases/(default)/documents/${coleccion}/${d.id}`, fields: aCampos(d.datos) } }))
+      : [{ readTime: 'x' }];
+    return { ok: true, status: 200, json: async () => filas };
+  });
+}
+
+describe('Estadísticas de la Tienda', () => {
+  const original = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = original; });
+
+  it('muestra los totales del período y los rankings', async () => {
+    globalThis.fetch = restDeEstadisticas();
+    const c = await montar('tienda_estadisticas', 'renderTiendaEstadisticas');
+    const texto = plano(c);
+
+    // Con "30 días" (el rango por defecto) entran los tres documentos.
+    expect(texto).toContain('114');                       // visitas: 6 + 8 + 100
+    expect(texto).toContain('Buscaron y no encontraron');
+    expect(texto).toContain('mochila');
+    expect(texto).toContain('Goma Borrar Keyroad');
+    expect(texto).toContain('Tijera Maped');
+    expect(texto).toContain('Instagram');
+    expect(texto).toContain('Celular');
+    expect(texto).toContain('Librería');
+    expect(texto).not.toContain('NaN');
+    expect(texto).not.toContain('undefined');
+    // La hoja de estilos tiene que sobrevivir al pintado con datos: si se va
+    // con el esqueleto, la pantalla se ve como texto suelto sin barras.
+    expect(c.querySelector('style')).toBeTruthy();
+    expect(c.querySelector('.est-fila__barra > span')).toBeTruthy();
+
+    if (process.env.CAPTURA_DIR) {
+      fs.writeFileSync(`${process.env.CAPTURA_DIR}/estadisticas.html`, c.innerHTML);
+    }
+  });
+
+  it('los pedidos salen de tienda_pedidos y los cancelados no cuentan', async () => {
+    globalThis.fetch = restDeEstadisticas();
+    const c = await montar('tienda_estadisticas', 'renderTiendaEstadisticas');
+    const tarjeta = [...c.querySelectorAll('.stat-card')].find(x => x.textContent.includes('Pedidos'));
+    expect(tarjeta.querySelector('.value').textContent).toBe('2');
+    expect(plano(tarjeta)).toContain('$17000');
+    // En la tabla de productos, la goma está en dos pedidos vivos, no en tres.
+    const filaGoma = [...c.querySelectorAll('.est-tabla tbody tr')].find(tr => tr.textContent.includes('Goma Borrar'));
+    const celdas = [...filaGoma.querySelectorAll('td')].map(td => td.textContent.trim());
+    expect(celdas[celdas.length - 1]).toBe('2');
+  });
+
+  it('cambiar el rango vuelve a leer desde otro día y lo recuerda', async () => {
+    const registro = [];
+    globalThis.fetch = restDeEstadisticas({ registro });
+    const c = await montar('tienda_estadisticas', 'renderTiendaEstadisticas');
+    expect(plano(c)).toContain('Tijera Maped');
+
+    c.querySelector('[data-rango="7"]').click();
+    for (let i = 0; i < 10; i++) await esperar();
+
+    expect(plano(c)).not.toContain('Tijera Maped');
+    expect(plano(c)).toContain('14');                     // visitas: 6 + 8
+    expect(c.querySelector('[data-rango="7"]').getAttribute('aria-pressed')).toBe('true');
+    expect(localStorage.getItem('tienda_estadisticas.rango')).toBe('7');
+
+    const lecturas = registro.filter(r => r.coleccion === 'tienda_estadisticas');
+    expect(lecturas).toHaveLength(2);
+    const desde = lecturas[1].consulta.where.compositeFilter.filters[0].fieldFilter.value.stringValue;
+    expect(desde).toBe(hace(6));
+    // Va con el token de la sesión: la colección no se lee sin él.
+    expect(lecturas[1].token).toBe('Bearer T');
+  });
+
+  it('con "Hoy" no dibuja el día por día, sí las horas', async () => {
+    localStorage.setItem('tienda_estadisticas.rango', 'hoy');
+    globalThis.fetch = restDeEstadisticas();
+    const c = await montar('tienda_estadisticas', 'renderTiendaEstadisticas');
+    expect(plano(c)).not.toContain('Visitas por día');
+    expect(plano(c)).toContain('A qué hora entran');
+    expect(plano(c)).toContain('Hoy,');
+  });
+
+  it('sin movimiento explica que la tienda cuenta sola', async () => {
+    globalThis.fetch = restDeEstadisticas({ dias: [], pedidos: [] });
+    const c = await montar('tienda_estadisticas', 'renderTiendaEstadisticas');
+    expect(plano(c)).toContain('Todavía no hay movimiento');
+    expect(c.querySelector('.stat-card')).toBeNull();
+  });
+
+  it('si la REST no responde, cae al SDK', async () => {
+    globalThis.fetch = vi.fn(() => Promise.reject(new Error('sin red')));
+    datos.porColeccion.tienda_estadisticas = diasDeMuestra().map(d => ({ __id: d.dia, ...d }));
+    datos.porColeccion.tienda_pedidos = [];
+    const silencio = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const c = await montar('tienda_estadisticas', 'renderTiendaEstadisticas');
+    silencio.mockRestore();
+    expect(plano(c)).toContain('Goma Borrar Keyroad');
+    expect(plano(c)).toContain('114');
+  });
+
+  it('un error de lectura se muestra con reintento, sin dejar el esqueleto', async () => {
+    globalThis.fetch = vi.fn(() => Promise.reject(new Error('sin red')));
+    const mod = await import('firebase/firestore');
+    const getDocsOriginal = mod.getDocs;
+    mod.getDocs = async () => { throw new Error('permiso denegado'); };
+    const silencio = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const silencioError = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const c = await montar('tienda_estadisticas', 'renderTiendaEstadisticas');
+      expect(plano(c)).toContain('No se pudieron leer las estadísticas');
+      expect(c.querySelector('[data-reintentar]')).toBeTruthy();
+    } finally {
+      mod.getDocs = getDocsOriginal;
+      silencio.mockRestore();
+      silencioError.mockRestore();
+    }
   });
 });
