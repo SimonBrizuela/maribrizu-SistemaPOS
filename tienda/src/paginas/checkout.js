@@ -448,8 +448,14 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
           </div>` : ''}
           <div class="totales__fila totales__fila--total">
             <span>Total</span>
-            <strong class="cifra">${pesos(subtotal + envio - descuento)}</strong>
+            <strong class="cifra">${descuento > 0
+              ? `<s class="totales__antes">${pesos(subtotal + envio)}</s>` : ''}${pesos(subtotal + envio - descuento)}</strong>
           </div>
+          ${descuento > 0 ? `
+          <div class="totales__ahorro">
+            <span>Ahorrás con el cupón</span>
+            <strong class="cifra">${pesos(descuento)}</strong>
+          </div>` : ''}
           ${ahorroTotal > 0 ? `
           <div class="totales__ahorro">
             <span>Ahorrás llevando en pack</span>

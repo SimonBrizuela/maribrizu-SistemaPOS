@@ -2349,6 +2349,15 @@
 }
 .cupon__error svg { flex: none; margin-top: 1px; }
 .totales__fila--descuento strong { color: var(--exito); }
+/* Lo que hubiera salido sin el cupón, tachado al lado del total: el ojo va
+   al total, y ahí tiene que estar la diferencia. */
+.totales__antes {
+  margin-right: var(--e-2);
+  font-family: var(--font-texto);
+  font-size: var(--t-sm);
+  font-weight: var(--peso-normal);
+  color: var(--text-3);
+}
 .totales__gratis s { color: var(--text-3); font-weight: var(--peso-normal); margin-right: var(--e-1); }
 
 /* ═══════════════════════════════════════════════════════════════════════════

@@ -572,6 +572,9 @@ describe('con un cupón', () => {
     expect(texto).toContain('10% de descuento');
     expect(texto).toContain('−$1050');
     expect(document.querySelector('.totales__fila--total').textContent.replace(/\./g, '')).toContain('$9450');
+    // El total de antes queda tachado al lado, y abajo cuánto se ahorra.
+    expect(document.querySelector('.totales__antes')?.textContent.replace(/\./g, '')).toBe('$10500');
+    expect(texto).toContain('Ahorrás con el cupón');
     expect(document.querySelector('[data-quitar-cupon]')).toBeTruthy();
     // Va el código, el carrito y cómo se entrega; ningún precio.
     const enviado = JSON.parse(vi.mocked(fetch).mock.calls.find(c => String(c[0]).includes('validar-cupon'))[1].body);

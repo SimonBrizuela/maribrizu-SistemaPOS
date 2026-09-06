@@ -488,8 +488,14 @@ function detalleDelPedido(p, modo) {
       </div>` : ''}
       <div class="totales__fila totales__fila--total">
         <span>Total</span>
-        <strong class="cifra">${pesos(p.total || 0)}</strong>
+        <strong class="cifra">${Number(p.descuento) > 0
+          ? `<s class="totales__antes">${pesos((p.subtotal || 0) + (p.envio || 0))}</s>` : ''}${pesos(p.total || 0)}</strong>
       </div>
+      ${Number(p.descuento) > 0 ? `
+      <div class="totales__ahorro">
+        <span>Ahorraste con el cupón</span>
+        <strong class="cifra">${pesos(p.descuento)}</strong>
+      </div>` : ''}
     </div>
 
     ${p.entrega?.envio_a_confirmar
