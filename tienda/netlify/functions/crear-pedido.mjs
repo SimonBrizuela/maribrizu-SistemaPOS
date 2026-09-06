@@ -17,7 +17,8 @@
  * Manda QUÉ quiere: id del producto, variedad, cantidad y si lleva el pack
  * entero. Nada de precios. El precio, el mínimo de venta, el stock, el envío y
  * el total salen de acá, leyendo `tienda_productos` y `tienda_config` igual que
- * los lee la tienda.
+ * los lee la tienda. Con un cupón manda el código y nada más: cuánto descuenta
+ * lo decide `lib/cupon_servidor.mjs` con las reglas de `src/cupones.js`.
  *
  * Si algo cambió mientras el cliente decidía —subió un precio, se agotó un
  * color— no se corrige en silencio: se devuelve 409 con la lista de cambios y
@@ -29,22 +30,14 @@
  * ## Lo que ya está prometido
  *
  * El stock del espejo no baja cuando entra un pedido: baja cuando el local lo
- * marca entregado. Entre una cosa y la otra pasan horas, y en esas horas el
- * último Poxipol se vendía tres veces: cada pedido miraba el espejo, veía uno,
- * y entraba. Acá se descuenta lo que ya está en pedidos abiertos antes de
- * comparar.
- *
- * Eso deja la ventana de dos pedidos en el mismo instante, que ninguno ve al
- * otro. Para esa, el pedido vuelve a mirar los pedidos abiertos DESPUÉS de
- * escribirse: si con él adentro se pasa el stock, se borra solo y contesta
- * "sin stock". Los dos pueden retirarse a la vez y la última unidad quedar sin
- * vender hasta que uno reintente; es el lado correcto para equivocarse. Las
- * consultas de Firestore son consistentes, así que el que escribió segundo
- * siempre ve al primero.
- *
- * Por lo mismo, dos renglones del mismo producto se cuentan juntos: el
- * carrito no los genera, pero un POST armado a mano con la Poxilina dos veces
- * entraba con el doble del stock.
+ * marca entregado. En esas horas el último Poxipol se vendía tres veces. Los
+ * renglones (`lib/renglones.mjs`) descuentan lo que ya está en pedidos
+ * abiertos antes de comparar, y para dos pedidos en el mismo instante el
+ * pedido vuelve a mirar DESPUÉS de escribirse: si con él adentro se pasa el
+ * stock, se borra solo y contesta "sin stock". Con los límites de un cupón
+ * pasa lo mismo. Los dos pueden retirarse a la vez; es el lado correcto para
+ * equivocarse. Las consultas de Firestore son consistentes, así que el que
+ * escribió segundo siempre ve al primero.
  *
  * ## El código corto
  *
@@ -68,19 +61,13 @@ import {
   leerDoc, leerConfigTienda, crearDoc, borrarDoc, consultar, hayCredenciales, uidDelToken,
 } from './lib/firestore.mjs';
 import { coordenadaValida, medirMetros, kmDeMetros } from './lib/rutas.mjs';
+import { armarRenglones, stockComprometido, excedidosTrasEscribir } from './lib/renglones.mjs';
+import { evaluarCuponDelPedido, cuponExcedidoTrasEscribir } from './lib/cupon_servidor.mjs';
 import { precioPorDistancia, llegaAEnvioGratis } from '../../src/envio.js';
 import { estadoDelLocal } from '../../src/horarios.js';
-import {
-  minimoDe, pasoDe, precioDeRenglon, stockDeRenglon, variedadDe,
-  subtotalDeRenglon, redondearCantidad,
-} from '../../src/precios.js';
+import { normalizarCodigo, telefonoClave } from '../../src/cupones.js';
 
 const MAX_RENGLONES = 100;
-const MAX_UNIDADES = 99;
-/** Cuántos productos se leen a la vez. Cien en fila eran seis segundos y medio. */
-const LECTURAS_A_LA_VEZ = 25;
-/** Un pedido en cualquiera de estos estados todavía tiene la mercadería apartada. */
-const ESTADOS_ABIERTOS = ['nuevo', 'preparando', 'listo', 'en_camino'];
 const INTENTOS_DE_CODIGO = 5;
 
 // La apiKey pública de la tienda, la misma que viaja en el bundle. Solo se usa
@@ -199,16 +186,45 @@ export default async (peticion) => {
   }
 
   const envio = envioCalculado.precio;
-  const total = subtotal + envio;
 
+  // El mínimo del pedido se mide antes del cupón: el cliente compró lo que hay
+  // que comprar, y el descuento es un regalo encima de eso.
   const minimo = Number(entrega.pedido_minimo) || 0;
-  if (minimo > 0 && total < minimo) {
-    return Response.json({ error: 'minimo', falta: minimo - total, minimo }, { status: 409 });
+  if (minimo > 0 && subtotal + envio < minimo) {
+    return Response.json({ error: 'minimo', falta: minimo - (subtotal + envio), minimo }, { status: 409 });
   }
+
+  const [codigo, uid] = await Promise.all([codigoPromesa, uidPromesa]);
+
+  /* ── El cupón ───────────────────────────────────────────────────────────── */
+
+  const codigoCupon = cuerpo.cupon ? normalizarCodigo(cuerpo.cupon) : '';
+  const persona = { telefono: cuerpo.cliente.telefono, uid };
+  let cupon = null;
+  let descuento = 0;
+  let envioGratis = false;
+
+  if (codigoCupon) {
+    const evaluacion = await evaluarCuponDelPedido({
+      codigo: codigoCupon, renglones: armado.renglones, envio, modo, persona,
+    });
+    if (!evaluacion.ok) {
+      return Response.json({ error: 'cupon', ...evaluacion }, { status: 409 });
+    }
+    descuento = evaluacion.descuento;
+    envioGratis = evaluacion.envio_gratis;
+    cupon = {
+      ...evaluacion.cupon,
+      descuento,
+      envio_gratis: envioGratis,
+      renglones: evaluacion.renglones,
+    };
+  }
+
+  const total = Math.max(0, subtotal + envio - descuento);
 
   /* ── A la base ──────────────────────────────────────────────────────────── */
 
-  const [codigo, uid] = await Promise.all([codigoPromesa, uidPromesa]);
   const id = idValido(cuerpo.id) ? cuerpo.id : nuevoId();
 
   const documento = {
@@ -222,6 +238,8 @@ export default async (peticion) => {
     cliente: {
       nombre: recortar(cuerpo.cliente.nombre, 80),
       telefono: recortar(cuerpo.cliente.telefono, 30),
+      // Los diez dígitos, para encontrar los pedidos de la misma persona.
+      telefono_clave: telefonoClave(cuerpo.cliente.telefono),
     },
     ...(uid ? { uid } : {}),
     entrega: {
@@ -236,6 +254,9 @@ export default async (peticion) => {
       // precio sale del centro de la calle y puede caer en otro tramo.
       envio_a_confirmar: Boolean(envioCalculado.a_confirmar
         || (modo === 'delivery' && cuerpo.entrega.envio_a_confirmar === true && envio > 0)),
+      // Con un cupón de envío gratis el local no cobra el envío aunque quede a
+      // confirmar.
+      envio_gratis: envioGratis,
       demora_texto: entrega.demora_texto || null,
     },
     pago: {
@@ -245,6 +266,8 @@ export default async (peticion) => {
     items: armado.renglones,
     subtotal,
     envio,
+    cupon,
+    descuento,
     total,
     nota: recortar(cuerpo.nota, 500),
   };
@@ -260,23 +283,30 @@ export default async (peticion) => {
   }
 
   // Segunda mirada, ya escrito: si otro pedido entró en el mismo instante y
-  // entre los dos pasan el stock, este se retira.
-  const excedidos = await excedidosTrasEscribir(armado);
-  if (excedidos.length) {
+  // entre los dos pasan el stock o el límite del cupón, este se retira.
+  const [excedidos, cuponExcedido] = await Promise.all([
+    excedidosTrasEscribir(armado),
+    codigoCupon ? cuponExcedidoTrasEscribir({ codigo: codigoCupon, persona }) : Promise.resolve(null),
+  ]);
+  if (excedidos.length || cuponExcedido) {
     try {
       await borrarDoc('tienda_pedidos', id);
     } catch (err) {
       // Quedó escrito y no se pudo sacar: se da por hecho. Decir "falló"
       // sobre un pedido que el local ya ve termina en dos pedidos.
       console.error('[crear-pedido] no se pudo retirar el pedido excedido:', err);
-      return Response.json({ id, codigo, subtotal, envio, total });
+      return Response.json({ id, codigo, subtotal, envio, descuento, total });
     }
-    console.warn('[crear-pedido] pedido retirado por sobreventa simultánea:',
-                 excedidos.map(c => c.nombre).join(', '));
-    return Response.json({ error: 'cambios', cambios: excedidos }, { status: 409 });
+    if (excedidos.length) {
+      console.warn('[crear-pedido] pedido retirado por sobreventa simultánea:',
+                   excedidos.map(c => c.nombre).join(', '));
+      return Response.json({ error: 'cambios', cambios: excedidos }, { status: 409 });
+    }
+    console.warn('[crear-pedido] pedido retirado por cupón excedido en simultáneo:', codigoCupon);
+    return Response.json({ error: 'cupon', motivo: cuponExcedido, veces: cupon?.usos_por_persona ?? null }, { status: 409 });
   }
 
-  return Response.json({ id, codigo, subtotal, envio, total });
+  return Response.json({ id, codigo, subtotal, envio, descuento, total });
 };
 
 /* ── Validación ───────────────────────────────────────────────────────────── */
@@ -304,6 +334,7 @@ function validarForma(c) {
   }
   if (!esTextoOpcional(c.entrega.referencia)) return 'referencia';
   if (!esTextoOpcional(c.nota)) return 'nota';
+  if (!esTextoOpcional(c.cupon)) return 'cupon';
 
   if (!Array.isArray(c.items) || !c.items.length || c.items.length > MAX_RENGLONES) {
     return 'items';
@@ -329,226 +360,6 @@ function idValido(id) {
 
 function recortar(texto, largo) {
   return String(texto ?? '').trim().slice(0, largo);
-}
-
-/* ── Renglones ────────────────────────────────────────────────────────────── */
-
-/**
- * Cada renglón, releído de la base.
- *
- * Devuelve los renglones armados y la lista de lo que no cerró. Los mismos
- * tipos de cambio que usa `carrito.revalidar()`, así la tienda los muestra con
- * el texto que ya tiene escrito, más el renglón al que van (id, variedad,
- * es_pack) para que `carrito.aplicarCambios()` los aplique.
- *
- * `comprometido` es lo que ya está prometido en pedidos abiertos, por producto
- * y variedad, en unidades sueltas.
- */
-async function armarRenglones(items, comprometido) {
-  const lineas = consolidar(items);
-
-  // Todos los productos de una vez y cada uno una sola vez.
-  const productos = await leerProductos([...new Set(lineas.map(l => l.id))]);
-
-  const renglones = [];
-  const cambios = [];
-  // Lo que este mismo pedido va consumiendo, encima de lo ya prometido: el
-  // rollo entero y los metros sueltos del mismo color salen del mismo stock.
-  const usado = new Map(comprometido);
-  // El stock del espejo de cada renglón que entró, para la segunda mirada.
-  const disponibles = new Map();
-
-  for (const linea of lineas) {
-    const { id, variedad, esPack, cantidad: pedida } = linea;
-    const producto = productos.get(id);
-    const marca = { id, variedad, es_pack: esPack };
-
-    if (!producto) {
-      cambios.push({ tipo: 'baja', nombre: linea.nombre || id, ...marca });
-      continue;
-    }
-
-    const nombre = String(producto.nombre || id);
-    const variante = variedadDe(producto, variedad);
-    if (variedad && !variante) {
-      cambios.push({ tipo: 'baja', nombre: `${nombre} (${variedad})`, ...marca });
-      continue;
-    }
-
-    // El local puede dejar de vender el rollo entero: el panel tiene un
-    // interruptor por producto y el espejo publica `precio_pack: null`.
-    if (esPack && !(Number(producto.precio_pack) > 0 && Number(producto.pack_contenido) > 0)) {
-      cambios.push({ tipo: 'baja', nombre, ...marca });
-      continue;
-    }
-
-    const precio = precioDeRenglon(producto, { variedad, esPack });
-    if (!(precio > 0)) {
-      // Nada sale a cero. Un producto sin precio no se puede cobrar.
-      cambios.push({ tipo: 'baja', nombre, ...marca });
-      continue;
-    }
-
-    // Unidades sueltas que quedan para este renglón, sacando lo prometido en
-    // otros pedidos y lo que ya tomó este. Por pack se cuentan packs enteros.
-    const contenido = esPack ? Number(producto.pack_contenido) : 1;
-    const disponible = redondearCantidad(
-      stockDeRenglon(producto, { variedad }) - (usado.get(clave(id, variedad)) || 0));
-    const stock = esPack ? Math.floor(disponible / contenido) : disponible;
-    const minimo = esPack ? 1 : minimoDe(producto);
-    const paso = esPack ? 1 : pasoDe(producto);
-
-    if (stock <= 0 || stock < minimo) {
-      cambios.push({ tipo: 'sin_stock', nombre, ...marca });
-      continue;
-    }
-
-    let cantidad = pedida;
-    if (cantidad < minimo) {
-      cambios.push({ tipo: 'minimo', nombre, antes: cantidad, ahora: minimo, ...marca });
-      cantidad = minimo;
-    }
-    // Nadie lleva más de 99 desde la pantalla; un POST armado a mano con un
-    // millón entraba con 99 y sin aviso. El mínimo que fijó el panel le gana al
-    // tope: si algo se vende desde 120, se llevan 120.
-    const tope = Math.min(stock, Math.max(MAX_UNIDADES, minimo));
-    if (cantidad > tope) {
-      cambios.push({ tipo: 'menos_stock', nombre, antes: cantidad, ahora: tope, ...marca });
-      cantidad = tope;
-    }
-    // Lo que se corta del rollo va de a medio metro: pedir 2,3 metros no es una
-    // cantidad que el local pueda despachar.
-    const enPasos = redondearCantidad(Math.round(cantidad / paso) * paso);
-    cantidad = Math.max(minimo, Math.min(tope, enPasos));
-
-    // El precio que el cliente tenía a la vista. Si no coincide se avisa: es el
-    // único número del pedido que no puede cambiar sin que lo vea.
-    if (linea.precio !== undefined && Number(linea.precio) !== precio) {
-      cambios.push({ tipo: 'precio', nombre, antes: Number(linea.precio), ahora: precio, ...marca });
-    }
-
-    consumir(usado, id, variedad, cantidad * contenido);
-    disponibles.set(clave(id, variedad), stockDeRenglon(producto, { variedad }));
-
-    renglones.push({
-      id,
-      nombre,
-      // La foto viaja adentro del pedido y no se busca después por id: el pedido
-      // es una foto de lo que se compró ese día, y el producto puede cambiar de
-      // imagen o dejar de publicarse.
-      foto: (variante && variante.imagen) || producto.imagenes?.[0] || null,
-      variedad,
-      unidad: esPack ? 'unidad' : (producto.unidad === 'metro' ? 'metro' : 'unidad'),
-      es_pack: esPack,
-      pack_contenido: esPack ? contenido : null,
-      pack_nombre: esPack ? (producto.pack_nombre || producto.pack_tipo || null) : null,
-      pack_unidad: producto.unidad === 'metro' ? 'metro' : 'unidad',
-      cantidad,
-      precio,
-      subtotal: subtotalDeRenglon(precio, cantidad),
-    });
-  }
-
-  return { renglones, cambios, disponibles };
-}
-
-/**
- * Los renglones de este pedido que, con todos los pedidos abiertos contados
- * (este incluido), pasan el stock del espejo. Vacío si no se pudo leer: ahí
- * el pedido queda, que es lo que hacía siempre.
- */
-async function excedidosTrasEscribir(armado) {
-  const usado = await stockComprometido();
-  if (!usado.size) return [];
-  return armado.renglones
-    .filter(r => {
-      const k = clave(r.id, r.variedad);
-      return (usado.get(k) || 0) > (armado.disponibles.get(k) ?? Infinity);
-    })
-    .map(r => ({ tipo: 'sin_stock', nombre: r.nombre, id: r.id, variedad: r.variedad, es_pack: r.es_pack }));
-}
-
-/**
- * Los renglones del pedido, uno por producto + variedad + pack.
- *
- * El carrito nunca manda dos veces la misma línea, pero un POST armado a mano
- * sí, y cada una se comparaba sola contra el stock. Juntas, la cantidad se
- * controla una vez.
- */
-function consolidar(items) {
-  const porClave = new Map();
-  for (const i of items) {
-    const variedad = i.variedad ? String(i.variedad).trim() || null : null;
-    const esPack = i.es_pack === true;
-    const k = `${i.id} ${variedad || ''} ${esPack ? 'pack' : 'suelto'}`;
-    const cantidad = redondearCantidad(Number(i.cantidad));
-    const previa = porClave.get(k);
-    if (previa) {
-      previa.cantidad = redondearCantidad(previa.cantidad + cantidad);
-    } else {
-      porClave.set(k, { id: i.id, variedad, esPack, cantidad, nombre: i.nombre, precio: i.precio });
-    }
-  }
-  return [...porClave.values()];
-}
-
-/** Los productos de la base, de a tandas en paralelo. */
-async function leerProductos(ids) {
-  const productos = new Map();
-  for (let i = 0; i < ids.length; i += LECTURAS_A_LA_VEZ) {
-    const tanda = ids.slice(i, i + LECTURAS_A_LA_VEZ);
-    const leidos = await Promise.all(tanda.map(id => leerDoc('tienda_productos', id)));
-    tanda.forEach((id, j) => productos.set(id, leidos[j]));
-  }
-  return productos;
-}
-
-/* ── Lo prometido en otros pedidos ────────────────────────────────────────── */
-
-/**
- * Unidades ya prometidas en pedidos abiertos, por producto y por variedad.
- *
- * Un pack cuenta por su contenido. Lo que sale de un color también sale del
- * producto: un renglón sin variedad se compara contra el total.
- *
- * Si la lectura falla, el pedido entra igual mirando solo el espejo, que es lo
- * que hacía siempre: perder una venta por no poder leer los pedidos abiertos
- * es peor que arriesgar una sobreventa.
- */
-async function stockComprometido() {
-  let abiertos;
-  try {
-    abiertos = await consultar('tienda_pedidos', {
-      where: [['estado', 'IN', ESTADOS_ABIERTOS]],
-      limite: 500,
-      campos: ['items'],
-    });
-  } catch (err) {
-    console.warn('[crear-pedido] no se pudieron leer los pedidos abiertos:', err);
-    return new Map();
-  }
-
-  const usado = new Map();
-  for (const pedido of abiertos) {
-    for (const r of pedido.items || []) {
-      if (!r || typeof r.id !== 'string') continue;
-      const contenido = r.es_pack ? Number(r.pack_contenido) || 1 : 1;
-      const unidades = Number(r.cantidad) * contenido;
-      if (unidades > 0) consumir(usado, r.id, r.variedad || null, unidades);
-    }
-  }
-  return usado;
-}
-
-const clave = (id, variedad) => `${id} ${variedad || ''}`;
-
-function consumir(usado, id, variedad, unidades) {
-  sumar(usado, clave(id, variedad), unidades);
-  if (variedad) sumar(usado, clave(id, null), unidades);
-}
-
-function sumar(mapa, k, n) {
-  mapa.set(k, redondearCantidad((mapa.get(k) || 0) + n));
 }
 
 /* ── Envío ────────────────────────────────────────────────────────────────── */

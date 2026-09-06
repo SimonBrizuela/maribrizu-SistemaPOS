@@ -11,155 +11,11 @@
  * necesitaría cien `get()` y el tope son diez.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import crypto from 'node:crypto';
-import { aCampos } from '../netlify/functions/lib/firestore.mjs';
-
-/* ── Una cuenta de servicio de mentira, pero con una clave RSA de verdad ──── */
-
-const { privateKey } = crypto.generateKeyPairSync('rsa', {
-  modulusLength: 2048,
-  privateKeyEncoding: { type: 'pkcs8', format: 'pem' },
-  publicKeyEncoding: { type: 'spki', format: 'pem' },
-});
-
-const CUENTA = JSON.stringify({
-  client_email: 'tienda@mari-d7c71.iam.gserviceaccount.com',
-  private_key: privateKey,
-});
+import { CUENTA, crearMundo, fetchFalso, desplanar } from './rest_falso.js';
 
 /* ── El estado que ve la función ──────────────────────────────────────────── */
 
-const base = () => ({
-  config: {
-    abierta: true,
-    origen: { lat: -31.354, lng: -64.173 },
-    entrega: {
-      retiro_habilitado: true, delivery_habilitado: true,
-      radio_max_km: 12, pedido_minimo: 6500, demora_texto: '24 a 48 hs',
-      tramos: [{ hasta_km: 3, precio: 1500 }, { hasta_km: 12, precio: 3500 }],
-    },
-    pago: { efectivo_habilitado: true },
-  },
-  productos: {
-    resma: {
-      nombre: 'Resma Pampa A4', precio: 18000, stock: 4, unidad: 'unidad',
-      rubro: 'PAPELERIA', imagenes: ['c.webp'], variedades: [],
-    },
-    cartulina: {
-      nombre: 'Cartulina Luma', precio: 800, stock: 100, unidad: 'unidad',
-      rubro: 'LIBRERIA', imagenes: ['a.webp'],
-      variedades: [
-        { nombre: 'Rojo', stock: 10 },
-        { nombre: 'Celeste', stock: 2, precio: 950 },
-      ],
-    },
-    cinta: {
-      nombre: 'Cinta Raso 10mm', precio: 300, stock: 60, unidad: 'metro',
-      precio_pack: 4500, pack_tipo: 'rollo', pack_contenido: 25,
-      rubro: 'MERCERIA', imagenes: [], variedades: [],
-    },
-  },
-  metros: 2500,
-  guardados: [],
-  // Pedidos abiertos que ya estaban en la base antes de este, con su estado.
-  abiertos: [],
-  borrados: [],
-  // Qué consultas hizo la función (`estado`, `codigo`), en orden.
-  consultas: [],
-  // Cuántas veces el código que se pregunta va a estar ocupado.
-  codigoOcupadoVeces: 0,
-  consultasFallan: false,
-});
-
-let mundo = base();
-
-/** Firestore REST y las demás APIs, contestadas de memoria. */
-function fetchFalso(url, opciones = {}) {
-  const u = String(url);
-
-  if (u.startsWith('https://oauth2.googleapis.com/token')) {
-    return respuesta({ access_token: 'token-de-prueba', expires_in: 3600 });
-  }
-
-  // Las consultas con la cuenta de servicio: los pedidos abiertos (por estado)
-  // y si un código ya existe. Los pedidos guardados en esta prueba cuentan
-  // como abiertos, que es lo que pasa en la base de verdad.
-  if (u.endsWith(':runQuery')) {
-    const consulta = JSON.parse(opciones.body).structuredQuery;
-    const filtro = consulta.where?.fieldFilter;
-    const campo = filtro?.field?.fieldPath;
-    mundo.consultas.push(campo);
-    if (mundo.consultasFallan) return respuesta({ error: 'sin índice' }, 400);
-
-    let docs = [];
-    if (campo === 'estado') {
-      const estados = (filtro.value.arrayValue?.values || []).map(v => v.stringValue);
-      docs = [...mundo.abiertos, ...mundo.guardados.map(g => ({ id: g.id, ...desplanar(g.cuerpo.fields) }))]
-        .filter(d => estados.includes(d.estado))
-        .map(d => ({ items: d.items }));
-    } else if (campo === 'codigo' && mundo.codigoOcupadoVeces > 0) {
-      mundo.codigoOcupadoVeces--;
-      docs = [{ codigo: filtro.value.stringValue }];
-    }
-    // Sin resultados la API no devuelve una lista vacía: devuelve solo readTime.
-    return respuesta(docs.length
-      ? docs.map((d, i) => ({ document: { name: `projects/x/databases/(default)/documents/tienda_pedidos/abierto${i}`, fields: aCampos(d) } }))
-      : [{ readTime: '2026-09-05T00:00:00Z' }]);
-  }
-
-  if (opciones.method === 'DELETE') {
-    const id = u.split('/').pop();
-    mundo.borrados.push(id);
-    mundo.guardados = mundo.guardados.filter(g => g.id !== id);
-    return respuesta({});
-  }
-
-  if (u.includes('/tienda_config/settings')) {
-    return respuesta({ fields: aCampos(mundo.config) });
-  }
-
-  const producto = u.match(/\/tienda_productos\/([^/?]+)/);
-  if (producto) {
-    const dato = mundo.productos[decodeURIComponent(producto[1])];
-    if (!dato) return respuesta({}, 404);
-    return respuesta({ fields: aCampos(dato) });
-  }
-
-  if (u.includes('/tienda_pedidos?documentId=')) {
-    const id = new URL(u).searchParams.get('documentId');
-    if (mundo.guardados.some(g => g.id === id)) return respuesta({}, 409);
-    mundo.guardados.push({ id, cuerpo: JSON.parse(opciones.body) });
-    return respuesta({ name: `.../${id}` });
-  }
-
-  // La lectura pública de un pedido por id, que es lo que hace un reintento.
-  const pedidoPorId = u.match(/\/tienda_pedidos\/([^/?]+)$/);
-  if (pedidoPorId && !opciones.method) {
-    const g = mundo.guardados.find(x => x.id === pedidoPorId[1]);
-    return g ? respuesta({ name: u, fields: g.cuerpo.fields }) : respuesta({}, 404);
-  }
-
-  if (u.startsWith('https://routes.googleapis.com')) {
-    return respuesta(mundo.metros === null
-      ? { routes: [] }
-      : { routes: [{ distanceMeters: mundo.metros }] });
-  }
-
-  if (u.includes('identitytoolkit')) {
-    return respuesta({ users: [{ localId: 'uid-de-la-cuenta' }] });
-  }
-
-  throw new Error(`fetch sin mockear: ${u}`);
-}
-
-function respuesta(cuerpo, status = 200) {
-  return Promise.resolve({
-    ok: status >= 200 && status < 300,
-    status,
-    json: async () => cuerpo,
-    text: async () => JSON.stringify(cuerpo),
-  });
-}
+let mundo = crearMundo();
 
 /** La función, recién importada: así las cachés de config y token nacen limpias. */
 async function cargar() {
@@ -194,29 +50,11 @@ function guardado(i = 0) {
   return desplanar(campos);
 }
 
-function desplanar(campos) {
-  const salida = {};
-  for (const [k, v] of Object.entries(campos)) salida[k] = valor(v);
-  return salida;
-}
-
-function valor(v) {
-  if ('stringValue' in v) return v.stringValue;
-  if ('integerValue' in v) return Number(v.integerValue);
-  if ('doubleValue' in v) return Number(v.doubleValue);
-  if ('booleanValue' in v) return v.booleanValue;
-  if ('timestampValue' in v) return v.timestampValue;
-  if ('nullValue' in v) return null;
-  if ('mapValue' in v) return desplanar(v.mapValue.fields || {});
-  if ('arrayValue' in v) return (v.arrayValue.values || []).map(valor);
-  return null;
-}
-
 beforeEach(() => {
-  mundo = base();
+  mundo = crearMundo();
   process.env.FIREBASE_SERVICE_ACCOUNT = CUENTA;
   process.env.GOOGLE_ROUTES_KEY = 'clave-de-prueba';
-  vi.stubGlobal('fetch', vi.fn(fetchFalso));
+  vi.stubGlobal('fetch', vi.fn(fetchFalso(mundo)));
 });
 
 /* ── Lo que motiva todo esto ──────────────────────────────────────────────── */
@@ -757,5 +595,259 @@ describe('el horario del local', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/* ── Cupones ──────────────────────────────────────────────────────────────── */
+
+describe('con cupón', () => {
+  const BIENVENIDA = {
+    codigo: 'BIENVENIDA', nombre: 'Cupón de bienvenida', tipo: 'porcentaje', valor: 10,
+    aplica: { modo: 'todo' }, activo: true,
+  };
+  const conCupon = (items, extra = {}) => retiro(items, { cupon: 'BIENVENIDA', ...extra });
+
+  beforeEach(() => { mundo.cupones.BIENVENIDA = { ...BIENVENIDA }; });
+
+  it('el descuento lo pone la base, y queda anotado en el pedido', async () => {
+    const crear = await cargar();
+    const res = await crear(pedir(retiro([{ id: 'resma', cantidad: 1 }], { cupon: ' bienvenida ' })));
+
+    expect(res.status).toBe(200);
+    const datos = await res.json();
+    expect(datos.descuento).toBe(1800);
+    expect(datos.total).toBe(16200);
+
+    const doc = guardado();
+    expect(doc.cupon).toMatchObject({
+      codigo: 'BIENVENIDA', nombre: 'Cupón de bienvenida', tipo: 'porcentaje', valor: 10, descuento: 1800,
+    });
+    expect(doc.cupon.renglones).toEqual([{ id: 'resma', variedad: null, es_pack: false, descuento: 1800 }]);
+    expect(doc.descuento).toBe(1800);
+    expect(doc.total).toBe(16200);
+    expect(doc.subtotal).toBe(18000);
+    expect(doc.cliente.telefono_clave).toBe('3515550001');
+  });
+
+  it('sin cupón el pedido sale como siempre', async () => {
+    const crear = await cargar();
+    await crear(pedir(retiro([{ id: 'resma', cantidad: 1 }])));
+    expect(guardado().cupon).toBeNull();
+    expect(guardado().descuento).toBe(0);
+  });
+
+  it('un cupón que no existe no entra, y no se guarda nada', async () => {
+    const crear = await cargar();
+    const res = await crear(pedir(conCupon([{ id: 'resma', cantidad: 1 }], { cupon: 'NADA' })));
+
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: 'cupon', motivo: 'no_existe' });
+    expect(mundo.guardados).toHaveLength(0);
+  });
+
+  it('un descuento mandado a mano se ignora: manda el cupón', async () => {
+    const crear = await cargar();
+    await crear(pedir({ ...conCupon([{ id: 'resma', cantidad: 1 }]), descuento: 17000, total: 1000 }));
+    expect(guardado().total).toBe(16200);
+  });
+
+  it('una sola vez por persona: el mismo teléfono, escrito distinto, no lo usa dos veces', async () => {
+    mundo.cupones.BIENVENIDA.usos_por_persona = 1;
+    const crear = await cargar();
+    const a = await crear(pedir(conCupon([{ id: 'resma', cantidad: 1 }])));
+    const b = await crear(pedir(conCupon([{ id: 'resma', cantidad: 1 }],
+      { cliente: { nombre: 'Marta', telefono: '+54 9 351 555-0001' } })));
+    const c = await crear(pedir(conCupon([{ id: 'resma', cantidad: 1 }],
+      { cliente: { nombre: 'Otra persona', telefono: '3519999999' } })));
+
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(409);
+    expect(await b.json()).toMatchObject({ error: 'cupon', motivo: 'ya_usado', veces: 1 });
+    expect(c.status).toBe(200);
+    expect(mundo.guardados).toHaveLength(2);
+  });
+
+  it('con cuenta, cambiar el teléfono no alcanza: la cuenta es la misma', async () => {
+    mundo.cupones.BIENVENIDA.usos_por_persona = 1;
+    const crear = await cargar();
+    const a = await crear(pedir(conCupon([{ id: 'resma', cantidad: 1 }], { idToken: 'tok' })));
+    const b = await crear(pedir(conCupon([{ id: 'resma', cantidad: 1 }],
+      { idToken: 'tok', cliente: { nombre: 'Marta', telefono: '3517777777' } })));
+
+    expect(a.status).toBe(200);
+    expect(b.status).toBe(409);
+    expect((await b.json()).motivo).toBe('ya_usado');
+  });
+
+  it('un pedido cancelado devuelve el uso', async () => {
+    mundo.cupones.BIENVENIDA.usos_por_persona = 1;
+    mundo.abiertos.push({
+      id: 'viejo', estado: 'cancelado', cliente: { telefono: '3515550001' },
+      cupon: { codigo: 'BIENVENIDA' }, items: [],
+    });
+    const crear = await cargar();
+    const res = await crear(pedir(conCupon([{ id: 'resma', cantidad: 1 }])));
+    expect(res.status).toBe(200);
+  });
+
+  it('los usos totales se agotan', async () => {
+    mundo.cupones.BIENVENIDA.usos_totales = 2;
+    mundo.abiertos.push(
+      { id: 'u1', estado: 'entregado', cliente: { telefono: '3510000001' }, cupon: { codigo: 'BIENVENIDA' }, items: [] },
+      { id: 'u2', estado: 'nuevo', cliente: { telefono: '3510000002' }, cupon: { codigo: 'BIENVENIDA' }, items: [] },
+    );
+    const crear = await cargar();
+    const res = await crear(pedir(conCupon([{ id: 'resma', cantidad: 1 }])));
+    expect(res.status).toBe(409);
+    expect((await res.json()).motivo).toBe('agotado');
+  });
+
+  it('dos pedidos en el mismo instante por el último uso: entra a lo sumo uno', async () => {
+    mundo.cupones.BIENVENIDA.usos_totales = 1;
+    const crear = await cargar();
+    const respuestas = await Promise.all([
+      crear(pedir(conCupon([{ id: 'resma', cantidad: 1 }]))),
+      crear(pedir(conCupon([{ id: 'resma', cantidad: 1 }], { cliente: { nombre: 'Otra', telefono: '3519999999' } }))),
+    ]);
+    const aceptados = respuestas.filter(r => r.status === 200).length;
+    expect(aceptados).toBeLessThanOrEqual(1);
+    expect(mundo.guardados).toHaveLength(aceptados);
+    for (const r of respuestas.filter(r => r.status !== 200)) {
+      expect((await r.json())).toMatchObject({ error: 'cupon', motivo: 'agotado' });
+    }
+  });
+
+  it('con mínimo de compra dice cuánto falta, y el pedido no se guarda', async () => {
+    mundo.cupones.BIENVENIDA.minimo_compra = 20000;
+    const crear = await cargar();
+    const res = await crear(pedir(conCupon([{ id: 'resma', cantidad: 1 }])));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: 'cupon', motivo: 'minimo', falta: 2000, minimo: 20000 });
+    expect(mundo.guardados).toHaveLength(0);
+  });
+
+  it('solo para unos productos: el descuento cae en esos y en nada más', async () => {
+    mundo.cupones.BIENVENIDA.aplica = { modo: 'productos', productos: ['cartulina'], etiqueta: 'Cartulina Luma' };
+    const crear = await cargar();
+    const res = await crear(pedir(conCupon([
+      { id: 'resma', cantidad: 1 },
+      { id: 'cartulina', variedad: 'Rojo', cantidad: 5 },
+    ])));
+
+    expect(res.status).toBe(200);
+    const doc = guardado();
+    expect(doc.descuento).toBe(400);   // 10 % de 4.000, no de 22.000
+    expect(doc.cupon.renglones).toEqual([{ id: 'cartulina', variedad: 'Rojo', es_pack: false, descuento: 400 }]);
+    expect(doc.total).toBe(22000 - 400);
+  });
+
+  it('sin nada de lo que cubre, avisa para qué es', async () => {
+    mundo.cupones.BIENVENIDA.aplica = { modo: 'rubros', rubros: ['MERCERIA'] };
+    const crear = await cargar();
+    const res = await crear(pedir(conCupon([{ id: 'resma', cantidad: 1 }])));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ motivo: 'sin_productos', alcance: 'Merceria' });
+  });
+
+  it('el rubro se toma del producto de la base, no del que mande el cliente', async () => {
+    mundo.cupones.BIENVENIDA.aplica = { modo: 'rubros', rubros: ['MERCERIA'] };
+    const crear = await cargar();
+    const res = await crear(pedir(conCupon([{ id: 'resma', cantidad: 1, rubro: 'MERCERIA' }])));
+    expect(res.status).toBe(409);
+  });
+
+  it('envío gratis: el envío queda descontado y el pedido marcado', async () => {
+    mundo.cupones.ENVIO = { codigo: 'ENVIO', nombre: 'Envío sin cargo', tipo: 'envio_gratis', aplica: { modo: 'todo' }, activo: true };
+    mundo.metros = 2500;
+    const crear = await cargar();
+    const res = await crear(pedir({
+      cliente: CLIENTE,
+      entrega: { modo: 'delivery', direccion: 'Av. Colón 1234', coordenadas: { lat: -31.4, lng: -64.19 } },
+      pago: { modo: 'transferencia' },
+      items: [{ id: 'resma', cantidad: 1 }],
+      nota: '',
+      cupon: 'envio',
+    }));
+
+    expect(res.status).toBe(200);
+    const doc = guardado();
+    expect(doc.envio).toBe(1500);
+    expect(doc.descuento).toBe(1500);
+    expect(doc.total).toBe(18000);
+    expect(doc.entrega.envio_gratis).toBe(true);
+    expect(doc.cupon.envio_gratis).toBe(true);
+  });
+
+  it('envío gratis retirando por el local no tiene sentido', async () => {
+    mundo.cupones.ENVIO = { codigo: 'ENVIO', tipo: 'envio_gratis', aplica: { modo: 'todo' }, activo: true };
+    const crear = await cargar();
+    const res = await crear(pedir(conCupon([{ id: 'resma', cantidad: 1 }], { cupon: 'ENVIO' })));
+    expect(res.status).toBe(409);
+    expect((await res.json()).motivo).toBe('solo_delivery');
+  });
+
+  it('el mínimo del pedido se mide antes del cupón', async () => {
+    // 8.000 de cartulinas pasan el mínimo de 6.500; con 5.000 de cupón el
+    // total queda en 3.000 y entra igual: compró lo que había que comprar.
+    mundo.cupones.BIENVENIDA.tipo = 'monto';
+    mundo.cupones.BIENVENIDA.valor = 5000;
+    const crear = await cargar();
+    const res = await crear(pedir(conCupon([{ id: 'cartulina', variedad: 'Rojo', cantidad: 10 }])));
+    expect(res.status).toBe(200);
+    expect(guardado().total).toBe(3000);
+  });
+
+  it('un monto mayor a lo elegible no deja el total en negativo', async () => {
+    mundo.cupones.BIENVENIDA.tipo = 'monto';
+    mundo.cupones.BIENVENIDA.valor = 50000;
+    mundo.config.entrega.pedido_minimo = 0;
+    const crear = await cargar();
+    const res = await crear(pedir(conCupon([{ id: 'cartulina', variedad: 'Rojo', cantidad: 5 }])));
+    expect(res.status).toBe(200);
+    expect(guardado().descuento).toBe(4000);
+    expect(guardado().total).toBe(0);
+  });
+
+  it('vencido no entra', async () => {
+    mundo.cupones.BIENVENIDA.hasta = '2020-01-01';
+    const crear = await cargar();
+    const res = await crear(pedir(conCupon([{ id: 'resma', cantidad: 1 }])));
+    expect(res.status).toBe(409);
+    expect((await res.json()).motivo).toBe('vencido');
+  });
+
+  it('solo primera compra: quien ya compró no lo puede usar', async () => {
+    mundo.cupones.BIENVENIDA.solo_primera_compra = true;
+    const crear = await cargar();
+    const primero = await crear(pedir(conCupon([{ id: 'resma', cantidad: 1 }])));
+    const segundo = await crear(pedir(conCupon([{ id: 'resma', cantidad: 1 }])));
+    expect(primero.status).toBe(200);
+    expect(segundo.status).toBe(409);
+    expect((await segundo.json()).motivo).toBe('primera_compra');
+  });
+
+  it('un cupón que no es texto: 400', async () => {
+    const crear = await cargar();
+    const res = await crear(pedir(retiro([{ id: 'resma', cantidad: 1 }], { cupon: { a: 1 } })));
+    expect(res.status).toBe(400);
+    expect((await res.json()).detalle).toBe('cupon');
+  });
+
+  it('si no se pueden contar los usos, el cupón no se aplica', async () => {
+    mundo.cupones.BIENVENIDA.usos_por_persona = 1;
+    mundo.consultasFallan = true;
+    const crear = await cargar();
+    const res = await crear(pedir(conCupon([{ id: 'resma', cantidad: 1 }])));
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({ error: 'cupon', motivo: 'error' });
+    expect(mundo.guardados).toHaveLength(0);
+  });
+
+  it('el cupón se lee con la cuenta de servicio, nunca a la vista de cualquiera', async () => {
+    const crear = await cargar();
+    await crear(pedir(conCupon([{ id: 'resma', cantidad: 1 }])));
+    const lecturas = vi.mocked(fetch).mock.calls.filter(c => String(c[0]).includes('/tienda_cupones/'));
+    expect(lecturas.length).toBeGreaterThan(0);
+    for (const [, opciones] of lecturas) expect(opciones.headers.Authorization).toMatch(/^Bearer /);
   });
 });

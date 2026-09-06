@@ -176,6 +176,16 @@ service cloud.firestore {
       allow write: if authorized();
     }
 
+    // ── CUPONES DE LA TIENDA ──────────────────────────────────────────────
+    // Los carga el panel. La tienda pública NO los lee: si cualquiera pudiera
+    // leer la colección, podría listar los códigos vigentes. El cliente manda
+    // el código a `validar-cupon` / `crear-pedido`, que lo leen con la cuenta
+    // de servicio y contestan si vale y cuánto descuenta.
+    match /tienda_cupones/{codigo} {
+      allow read:  if authorized();
+      allow write: if authorized();
+    }
+
     // ── BORRADORES DE LA TIENDA ───────────────────────────────────────────
     // Fichas armadas de productos que todavía NO salen a la vidriera (su rubro
     // está apagado). La tienda pública no lee esta colección: solo el panel,

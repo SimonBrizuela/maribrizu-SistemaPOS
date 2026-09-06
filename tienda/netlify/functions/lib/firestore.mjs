@@ -229,6 +229,24 @@ export async function crearDoc(coleccion, id, datos) {
 }
 
 /**
+ * Un documento de una colección cerrada al público, con la cuenta de
+ * servicio. Los cupones viven así: si cualquiera pudiera leer la colección,
+ * podría listar los códigos vigentes.
+ *
+ * @returns {Promise<object|null>}
+ */
+export async function leerDocPrivado(coleccion, id) {
+  const token = await accessToken();
+  const respuesta = await fetch(`${BASE}/${coleccion}/${encodeURIComponent(id)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (respuesta.status === 404) return null;
+  if (!respuesta.ok) throw new Error(`Firestore devolvió ${respuesta.status} leyendo ${coleccion}/${id}`);
+  const crudo = await respuesta.json();
+  return aplanar(crudo.fields || {});
+}
+
+/**
  * Borra un documento. Lo usa el pedido que se retira solo al descubrir, ya
  * escrito, que otro entró en el mismo instante por la misma última unidad.
  */
