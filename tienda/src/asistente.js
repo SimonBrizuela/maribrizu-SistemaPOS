@@ -19,6 +19,7 @@
  */
 import { pesos, esc } from './formato.js';
 import { icono } from './iconos.js';
+import { medir } from './medicion.js';
 
 const RUTA = '/.netlify/functions/asistente';
 
@@ -181,6 +182,8 @@ async function preguntar(texto) {
   panel?.querySelector('.asistente-bienvenida')?.remove();
 
   historial.push({ rol: 'cliente', texto });
+  // Se cuenta que hubo una pregunta, nunca qué decía: ahí va texto libre.
+  medir('chat');
   agregarBurbuja('cliente', texto);
   const pensando = agregarPensando();
 

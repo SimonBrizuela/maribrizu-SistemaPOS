@@ -115,6 +115,22 @@ function mismaLinea(r, id, variedad, esPack = false) {
       && r.es_pack === esPack;
 }
 
+// Quien quiere enterarse de cada alta, con qué producto y cuánto. Es distinto
+// de `suscribir`, que avisa de cualquier cambio sin decir cuál fue. Lo usa la
+// medición de uso; un oyente que falla no puede frenar la compra.
+const oyentesAgregar = new Set();
+
+export function alAgregar(fn) {
+  oyentesAgregar.add(fn);
+  return () => oyentesAgregar.delete(fn);
+}
+
+function avisarAgregado(producto, detalle) {
+  for (const fn of oyentesAgregar) {
+    try { fn(producto, detalle); } catch (err) { console.warn('[carrito] oyente de alta falló:', err); }
+  }
+}
+
 export function suscribir(fn) {
   suscriptores.add(fn);
   fn(renglones);
@@ -191,6 +207,7 @@ export function agregar(producto, { variedad = null, cantidad = null, esPack = f
     existente.minimo = minimo;
     existente.paso = paso;
     guardar();
+    avisarAgregado(producto, { variedad, cantidad: cuanto, esPack });
     return existente.cantidad;
   }
 
@@ -226,6 +243,7 @@ export function agregar(producto, { variedad = null, cantidad = null, esPack = f
     stock,
   });
   guardar();
+  avisarAgregado(producto, { variedad, cantidad: redondearCantidad(Math.min(tope, inicial)), esPack });
   return redondearCantidad(Math.min(tope, inicial));
 }
 

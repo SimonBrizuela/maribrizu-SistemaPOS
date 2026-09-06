@@ -13,6 +13,7 @@
 import { sugerir } from './datos.js';
 import { pesos, esc, normalizar, nombreBonito } from './formato.js';
 import { ir } from './router.js';
+import { medir } from './medicion.js';
 
 const ESPERA = 220;   // ms desde la última tecla hasta consultar
 
@@ -85,6 +86,16 @@ function fila(p, texto) {
         p.unidad === 'metro' ? '<small style="font-weight:600;color:var(--text-2)">/m</small>' : ''
       }</span>
     </a>`;
+}
+
+/**
+ * Cuenta lo que se escribió como una búsqueda. Elegir una sugerencia es haber
+ * buscado y encontrado; quedarse mirando "nada con «x»" es haber buscado y no.
+ * La medición descarta la misma palabra repetida en un minuto, así que apretar
+ * Enter después no la cuenta dos veces.
+ */
+function anotarBusqueda(texto, resultados) {
+  medir('busqueda', { texto, resultados });
 }
 
 function cerrar() {
@@ -177,6 +188,16 @@ async function consultar(texto, { forzarGlobal = false } = {}) {
   }
 
   pintar(productos, texto, { global: salioDelRubro });
+
+  // Sin nada que sugerir se cuenta como búsqueda sin resultado, pero recién
+  // si la persona dejó de escribir con eso puesto: a mitad de palabra el
+  // vacío es normal y no dice nada.
+  if (!productos.length) {
+    setTimeout(() => {
+      const campo = document.querySelector('.buscador__input');
+      if (campo && campo.value.trim() === texto) anotarBusqueda(texto, 0);
+    }, 1500);
+  }
 }
 
 /**
@@ -223,7 +244,10 @@ export function iniciarSugerencias() {
     else if (ev.key === 'Enter' && indice >= 0) {
       ev.preventDefault();
       const fila = caja.querySelectorAll('.sugerencia')[indice];
-      if (fila) { cerrar(); campo.blur(); ir(fila.getAttribute('href')); }
+      if (fila) {
+        anotarBusqueda(campo.value.trim(), actuales.length);
+        cerrar(); campo.blur(); ir(fila.getAttribute('href'));
+      }
     }
   });
 
@@ -239,7 +263,12 @@ export function iniciarSugerencias() {
     }
     // Un clic en una sugerencia navega por el enlace; el resto de la página
     // cierra el panel.
-    if (desde(ev, '.sugerencia')) { cerrar(); return; }
+    if (desde(ev, '.sugerencia')) {
+      const campo = document.querySelector('.buscador__input');
+      if (campo?.value.trim()) anotarBusqueda(campo.value.trim(), actuales.length);
+      cerrar();
+      return;
+    }
     if (!desde(ev, '[data-buscador]')) cerrar();
   });
 

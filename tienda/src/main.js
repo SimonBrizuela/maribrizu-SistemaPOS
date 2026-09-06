@@ -13,6 +13,7 @@ import { iniciarCuenta } from './cuenta.js';
 import { estadoDelLocal, textoDeCerrado } from './horarios.js';
 import { aplicarModoDesdeURL, engancharTildes, iniciarBarraFotos } from './fotos.js';
 import { fijarPantalla } from './seo.js';
+import { iniciarMedicion, medirPantalla } from './medicion.js';
 
 import { inicio } from './paginas/inicio.js';
 import { catalogo } from './paginas/catalogo.js';
@@ -112,6 +113,10 @@ async function dibujar() {
   // sugiere dentro de Papelera y lo dice, con la salida a todo el catálogo a un
   // toque. La ficha de un producto fija el suyo, que es el rubro del producto.
   if (camino !== '/p') fijarAmbito(params.rubro ? decodeURIComponent(params.rubro) : null);
+
+  // Qué pantalla se abrió, para las estadísticas del panel. Va antes de
+  // pintarla: si la pantalla falla, igual cuenta que alguien la quiso ver.
+  medirPantalla(camino, params);
 
   try {
     await vista({ montar, params, query });
@@ -264,6 +269,9 @@ async function arrancar() {
 
   pintarEstructura();
   iniciarRutas();
+  // La medición arranca antes del primer pintado, que ya es una pantalla que
+  // contar. Sin esto la portada nunca figuraría.
+  iniciarMedicion();
   reponerCompacta = seguirScroll();
   iniciarSugerencias();
   await dibujar();

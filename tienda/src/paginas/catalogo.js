@@ -8,6 +8,7 @@ import { icono } from '../iconos.js';
 import { ir } from '../router.js';
 import { fijarTitulo } from '../seo.js';
 import { abrirAsistente, asistenteApagado } from '../asistente.js';
+import { medir } from '../medicion.js';
 
 export async function catalogo({ montar, params, query }) {
   const rubro = params.rubro ? decodeURIComponent(params.rubro) : null;
@@ -200,6 +201,9 @@ export async function catalogo({ montar, params, query }) {
      resultados, y si no está ahí, afina la palabra. */
   if (texto) {
     const encontrados = await buscar(texto);
+    // Lo que la gente busca, y si lo encontró: es la lista de lo que falta en
+    // el catálogo, que el panel muestra aparte.
+    medir('busqueda', { texto, resultados: encontrados.length });
     if (!encontrados.length) {
       cuenta.textContent = '';
 

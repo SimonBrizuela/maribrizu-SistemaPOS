@@ -69,6 +69,9 @@ export const crearMundo = () => ({
   // Cuántas veces el código corto que se pregunta va a estar ocupado.
   codigoOcupadoVeces: 0,
   consultasFallan: false,
+  // Las escrituras con incrementos (`:commit`) que hizo la función, en orden.
+  commits: [],
+  commitsFallan: false,
 });
 
 /** Todos los pedidos que la base "tiene": los previos y los guardados en la prueba. */
@@ -87,6 +90,14 @@ export function fetchFalso(mundo) {
 
     if (u.startsWith('https://oauth2.googleapis.com/token')) {
       return respuesta({ access_token: 'token-de-prueba', expires_in: 3600 });
+    }
+
+    // Los incrementos atómicos de las estadísticas.
+    if (u.endsWith(':commit')) {
+      if (!opciones.headers?.Authorization) return respuesta({ error: 'PERMISSION_DENIED' }, 403);
+      if (mundo.commitsFallan) return respuesta({ error: 'boom' }, 500);
+      mundo.commits.push(JSON.parse(opciones.body));
+      return respuesta({ writeResults: [{}] });
     }
 
     // Las consultas con la cuenta de servicio.

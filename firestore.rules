@@ -460,6 +460,21 @@ service cloud.firestore {
           && d.pedido_en is timestamp;
     }
 
+    // ── ESTADÍSTICAS DE LA TIENDA ─────────────────────────────────────────
+    // Un documento por día con contadores: cuántas visitas, qué se buscó y
+    // cuántas veces, qué fichas se abrieron, qué entró al carrito. Sin
+    // identificadores de personas ni textos libres.
+    //
+    // Las escribe únicamente la función `medir` de la tienda, con la cuenta
+    // de servicio: el navegador manda los eventos ahí, la función los revisa
+    // y suma. Nadie escribe acá desde afuera, ni con sesión. El panel las lee.
+    // `tienda_estadisticas_pruebas` (lo que llega desde localhost) queda
+    // tapada por la regla de abajo: solo se lee con la cuenta de servicio.
+    match /tienda_estadisticas/{diaId} {
+      allow read:  if authorized();
+      allow write: if false;
+    }
+
     // ── BLOQUEAR TODO LO DEMÁS ────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;

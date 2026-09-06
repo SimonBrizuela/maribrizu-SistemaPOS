@@ -310,6 +310,80 @@ export async function consultar(coleccion, { where = [], limite = 100, campos = 
     .map(f => ({ id: f.document.name.split('/').pop(), ...aplanar(f.document.fields || {}) }));
 }
 
+/* ── Sumar contadores ─────────────────────────────────────────────────────── */
+
+const RE_SEGMENTO_SIMPLE = /^[A-Za-z_][A-Za-z_0-9]*$/;
+
+/**
+ * Una ruta de campo como la espera la API: los tramos que no son un
+ * identificador simple van entre acentos graves (`productos.\`1035115\`.vistas`).
+ */
+export function rutaDeCampo(segmentos) {
+  return segmentos.map(s => {
+    const texto = String(s);
+    if (RE_SEGMENTO_SIMPLE.test(texto)) return texto;
+    return '`' + texto.replace(/\\/g, '\\\\').replace(/`/g, '\\`') + '`';
+  }).join('.');
+}
+
+function hojasDe(objeto, fn, ruta = []) {
+  for (const [clave, valor] of Object.entries(objeto || {})) {
+    if (valor && typeof valor === 'object' && !(valor instanceof Date)) hojasDe(valor, fn, [...ruta, clave]);
+    else fn([...ruta, clave], valor);
+  }
+}
+
+/**
+ * Le suma contadores a un documento y le deja escritos algunos valores, en
+ * una sola operación y sin leerlo antes.
+ *
+ * Los `contadores` son un objeto anidado de números: cada hoja se convierte
+ * en un incremento atómico, así dos tandas que llegan en el mismo instante
+ * suman las dos en vez de pisarse. Los `valores` son hojas que se dejan como
+ * están (el nombre de un producto). Si el documento no existe, nace con esta
+ * escritura; los campos que ya tenía y no se nombran acá quedan intactos.
+ *
+ * Lo usan las estadísticas de la tienda: un documento por día, y cada visita
+ * le suma lo suyo sin importar cuántas lleguen a la vez.
+ */
+export async function sumarAlDoc(coleccion, id, { contadores = {}, valores = {} } = {}) {
+  const token = await accessToken();
+  const nombre = `projects/${PROYECTO}/databases/(default)/documents/${coleccion}/${id}`;
+
+  const transformaciones = [];
+  hojasDe(contadores, (ruta, cuanto) => {
+    const entero = Math.round(Number(cuanto));
+    if (!Number.isFinite(entero) || entero === 0) return;
+    transformaciones.push({ fieldPath: rutaDeCampo(ruta), increment: { integerValue: String(entero) } });
+  });
+  transformaciones.push({ fieldPath: 'actualizado', setToServerValue: 'REQUEST_TIME' });
+
+  // La máscara nombra exactamente lo que se escribe: sin ella `update`
+  // reemplaza el documento entero y se pierde todo lo sumado hasta ahora.
+  const rutas = [];
+  hojasDe(valores, ruta => rutas.push(rutaDeCampo(ruta)));
+
+  const escritura = {
+    update: { name: nombre, fields: aCampos(valores) },
+    updateMask: { fieldPaths: rutas },
+    updateTransforms: transformaciones,
+  };
+
+  const respuesta = await fetch(`${BASE}:commit`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${token}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ writes: [escritura] }),
+  });
+
+  if (!respuesta.ok) {
+    throw new Error(`Firestore devolvió ${respuesta.status} sumando en ${coleccion}/${id}: ${(await respuesta.text()).slice(0, 300)}`);
+  }
+  return respuesta.json();
+}
+
 /**
  * Quién es el dueño de un token de sesión, o null.
  *

@@ -18,6 +18,7 @@ import * as carrito from '../carrito.js';
 import { avisar } from '../avisos.js';
 import { ir } from '../router.js';
 import { crearPedido, nuevoIdDePedido } from '../pedidos.js';
+import { medir } from '../medicion.js';
 import { esComprobanteValido } from '../comprobante.js';
 import { estadoDelLocal } from '../horarios.js';
 import { datosParaCompletar, recordarDelPedido, sesion, tokenDeSesion } from '../cuenta.js';
@@ -80,6 +81,9 @@ export async function checkout({ montar }) {
     return;
   }
 
+  // Llegó al checkout con algo en el pedido. Contra los pedidos que entran,
+  // es la medida de cuántos se quedan a mitad de camino.
+  medir('checkout');
   pintarFormulario({ montar, cfg, cambios, avisos });
 }
 

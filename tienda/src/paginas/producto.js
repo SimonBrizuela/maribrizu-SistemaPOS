@@ -11,6 +11,7 @@ import { fijarAmbito } from '../sugerencias.js';
 import { fijarTitulo, fijarProducto } from '../seo.js';
 import { htmlGaleria, montarGaleria } from '../galeria.js';
 import { botonFotoFicha } from '../fotos.js';
+import { medir } from '../medicion.js';
 
 /**
  * Como se nombra el pack entero.
@@ -207,6 +208,7 @@ export async function producto({ montar, params }) {
   fijarProducto(p);
   // Quien esta mirando un abrojo probablemente busque otra cosa de merceria.
   fijarAmbito(p.rubro);
+  medir('ficha', { id: p.id, nombre: p.nombre, rubro: p.rubro });
 
   // Los demas tamaños del grupo, cuando este producto es parte de uno. Con un
   // solo tamaño publicado no hay nada que elegir y el selector no se muestra.

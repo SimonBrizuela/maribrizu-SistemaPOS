@@ -120,7 +120,8 @@ def main():
 
     print('\nLo que no se puede ver')
     for coleccion in ('catalogo', 'ventas', 'ventas_por_dia', 'perfiles_facturacion',
-                      'cierres_caja', 'gastos', 'clientes_facturacion', 'remote_terminal'):
+                      'cierres_caja', 'gastos', 'clientes_facturacion', 'remote_terminal',
+                      'tienda_estadisticas', 'tienda_estadisticas_pruebas'):
         codigo = se_lee(coleccion)
         revisar(f'{coleccion} da PERMISSION_DENIED', codigo == 403, f'devolvio {codigo}')
 
