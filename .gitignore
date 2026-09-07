@@ -155,6 +155,9 @@ extract_v4dialog.py
 backup_codigos_*.json
 backup_ts_strings_*.json
 backup_ventas_*.json
+# Vuelta atrás de los arreglos de datos: llevan ids y plata del local, y el
+# repo es público.
+*_rollback_*.json
 
 # Mockups HTML de diseño (no van al POS)
 "Libreria Liceo Login.html"
