@@ -10,6 +10,7 @@ import { initTheme, toggleTheme, getTheme } from './theme.js';
 import { initNotifications, obtenerAlertasActivas, onAlertasCambian, refrescarAlertas } from './notifications.js';
 import { initConsumiblesWatcher } from './consumibles_watcher.js';
 import { initPedidosWatcher, onPedidosCambian } from './pedidos_watcher.js';
+import { initCajaWatcher } from './caja_watcher.js';
 import { initCalendarioBadge, proximosEventos, textoSobre } from './pages/calendario_core.js';
 import { renderSkeleton } from './skeletons.js';
 import { initAutostart, getAutostart, setAutostart, isTauriApp } from './autostart.js';
@@ -908,6 +909,10 @@ function initApp(session) {
   // sobre la pantalla de login.
   initPedidosWatcher(db);
   onPedidosCambian(actualizarBadgePedidos);
+
+  // Si se está vendiendo sin caja abierta, avisarlo apenas pasa. Lee del store
+  // (caja_activa + ventas_por_dia), no agrega lecturas propias.
+  initCajaWatcher();
 
   // Cuando cualquier colección del store recibe cambios desde el server,
   // re-renderizar la página activa sin spinner (datos ya están en cache).

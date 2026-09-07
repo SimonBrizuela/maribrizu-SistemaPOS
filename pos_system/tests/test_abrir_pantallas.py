@@ -270,6 +270,106 @@ def test_la_ventana_principal_abre_con_todas_sus_pestanas(app, local, monkeypatc
         destruir(app, w)
 
 
+def test_el_cartel_de_caja_sale_y_se_lee(app, local, monkeypatch):
+    """El cartel rojo de "no hay caja abierta", dibujado de verdad.
+
+    Nace oculto —si apareciera siempre no lo miraría nadie— y cuando sale tiene
+    que decir qué pasa y qué hacer, con el botón para abrir la caja a mano.
+    """
+    import pos_system.ui.main_window as mw
+    from pos_system.ui.main_window import MainWindow
+    from pos_system.utils.caja_guard import estado_de_caja
+
+    monkeypatch.setattr(MainWindow, '_start_realtime_sync_listeners',
+                        lambda self: None, raising=True)
+    monkeypatch.setattr(MainWindow, '_prompt_turno', lambda self: None, raising=True)
+    monkeypatch.setattr(MainWindow, 'closeEvent',
+                        lambda self, ev: ev.accept(), raising=True)
+    # El aviso flotante se anota en una lista global de Qt que sobrevive a la
+    # prueba y después revienta la del archivo siguiente: acá sólo interesa que
+    # se dispare, no el widget.
+    sonaron = []
+    monkeypatch.setattr(mw, 'Toast',
+                        lambda *a, **k: sonaron.append(a[1] if len(a) > 1 else ''),
+                        raising=True)
+
+    w = MainWindow(current_user=local['admin'])
+    try:
+        w.show()
+        app.processEvents()
+        assert not w._caja_banner.isVisible(), 'el cartel no puede estar puesto siempre'
+
+        # El sábado: la PC tiene abierta la 123 y en Firebase no hay ninguna.
+        aviso = estado_de_caja({'id': 123, 'status': 'open'},
+                               {'id': 126, 'status': 'closed',
+                                'updated_at': '2026-09-04T20:29:00-03:00'})
+        w._on_caja_guard_slot(aviso)
+        app.processEvents()
+
+        assert w._caja_banner.isVisible()
+        texto = w._caja_banner_label.text()
+        assert 'No hay ninguna caja abierta' in texto
+        assert '123' in texto
+        assert w._caja_banner_btn.isVisible(), 'el admin tiene que poder ir a abrirla'
+        assert sonaron == ['No hay ninguna caja abierta'], 'el aviso nuevo también suena'
+
+        # El mismo problema en el siguiente tic no vuelve a sonar: el cartel ya está.
+        w._on_caja_guard_slot(aviso)
+        app.processEvents()
+        assert len(sonaron) == 1
+
+        # Abren la caja: el cartel se baja solo.
+        w._on_caja_guard_slot(None)
+        app.processEvents()
+        assert not w._caja_banner.isVisible()
+    finally:
+        destruir(app, w)
+
+
+def test_al_cajero_el_cartel_avisa_pero_no_le_ofrece_abrir_la_caja(app, local, monkeypatch):
+    """El cajero no tiene pestaña Caja: el botón sería un callejón sin salida.
+
+    Se le avisa igual —es el que está vendiendo— pero el cartel le dice que
+    avise al encargado en vez de mandarlo a abrir algo que no puede.
+    """
+    import pos_system.ui.main_window as mw
+    from pos_system.ui.main_window import MainWindow
+    from pos_system.utils.caja_guard import estado_de_caja
+
+    monkeypatch.setattr(MainWindow, '_start_realtime_sync_listeners',
+                        lambda self: None, raising=True)
+    monkeypatch.setattr(MainWindow, '_prompt_turno', lambda self: None, raising=True)
+    monkeypatch.setattr(MainWindow, 'closeEvent',
+                        lambda self, ev: ev.accept(), raising=True)
+    monkeypatch.setattr(mw, 'Toast', lambda *a, **k: None, raising=True)
+
+    cajero = dict(local['admin'], role='cajero')
+    w = MainWindow(current_user=cajero)
+    try:
+        w.show()
+        app.processEvents()
+        assert 'Caja' not in [w.tabs.tabText(i) for i in range(w.tabs.count())]
+        assert w._puede_abrir_caja is False
+
+        aviso = estado_de_caja({'id': 123, 'status': 'open'},
+                               {'id': 126, 'status': 'closed',
+                                'updated_at': '2026-09-04T20:29:00-03:00'},
+                               puede_abrir=w._puede_abrir_caja)
+        w._on_caja_guard_slot(aviso)
+        app.processEvents()
+
+        assert w._caja_banner.isVisible(), 'el que vende tiene que enterarse igual'
+        assert not w._caja_banner_btn.isVisible()
+        assert 'Avisale al encargado' in w._caja_banner_label.text()
+
+        # Y si igual se dispara la acción, no lo lleva a ninguna pestaña ajena.
+        antes = w.tabs.currentIndex()
+        w._ir_a_caja()
+        assert w.tabs.currentIndex() == antes
+    finally:
+        destruir(app, w)
+
+
 # ── El caso que motivó todo esto ──────────────────────────────────────────
 
 def test_editar_una_venta_mixta_no_le_cambia_el_medio_de_pago(app, local):

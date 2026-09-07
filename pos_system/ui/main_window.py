@@ -46,6 +46,8 @@ class MainWindow(QMainWindow):
     _sig_stock_refresh = pyqtSignal()
     # Señal thread-safe: listeners mp_* (productos madre) detectaron cambios
     _sig_mp_refresh = pyqtSignal()
+    # Señal thread-safe: la revisión de caja terminó (dict del aviso o None)
+    _sig_caja_guard = pyqtSignal(object)
 
     def __init__(self, current_user: dict = None):
         super().__init__()
@@ -58,6 +60,10 @@ class MainWindow(QMainWindow):
         # Se inicializa en _prompt_turno() si el usuario es admin
         if 'turno_nombre' not in self.current_user:
             self.current_user['turno_nombre'] = self.current_user.get('full_name') or self.current_user.get('username', '')
+        # Solo el admin tiene la pestaña Caja. El cajero no puede abrir una, así
+        # que a él se le avisa y nada más: ofrecerle un botón que no lo lleva a
+        # ningún lado es peor que no ofrecerle nada.
+        self._puede_abrir_caja = (self.current_user.get('role') == 'admin')
         self._listeners_started = False
         self.init_ui()
         # Después de construir la UI, preguntar quién está en el turno (solo admins)
@@ -96,6 +102,10 @@ class MainWindow(QMainWindow):
         # Header (full-width estilo Graphite)
         header = self.create_header()
         main_layout.addWidget(header)
+
+        # Cartel de caja: aparece solo cuando esta PC no está guardando las
+        # ventas donde va. Va pegado abajo del header, cruzando toda la pantalla.
+        main_layout.addWidget(self._create_caja_banner())
 
         # Tabs (con padding interno via QSS, el body queda al ras)
         self.tabs = QTabWidget()
@@ -167,6 +177,14 @@ class MainWindow(QMainWindow):
         self.stock_timer = QTimer()
         self.stock_timer.timeout.connect(self._check_low_stock_badge)
         self.stock_timer.start(300000)
+
+        # Revisión de caja: el caso "nadie abrió la caja" no genera ningún
+        # evento —no hay nada que escuchar— así que se pregunta cada 2 minutos.
+        self._sig_caja_guard.connect(self._on_caja_guard_slot)
+        self.caja_guard_timer = QTimer()
+        self.caja_guard_timer.timeout.connect(self._check_caja_guard)
+        self.caja_guard_timer.start(120000)
+        QTimer.singleShot(8000, self._check_caja_guard)
 
         # (sin timer de Google Sheets: la planilla se dio de baja)
 
@@ -408,6 +426,99 @@ class MainWindow(QMainWindow):
 
         # Refrescar subtítulo cada segundo (lo hace el timer existente vía update_status_bar)
         return header
+
+    # ══════════════════════════════════════════════════
+    #  Cartel: esta PC no está guardando las ventas donde va
+    # ══════════════════════════════════════════════════
+
+    def _create_caja_banner(self):
+        """La franja roja abajo del header. Nace oculta y solo aparece si hace falta."""
+        from pos_system.ui.theme import COLORS
+
+        self._caja_banner = QWidget()
+        self._caja_banner.setVisible(False)
+        self._caja_banner.setStyleSheet(
+            f'background:{COLORS["danger"]}; border-bottom:1px solid #7f1212;'
+        )
+        hl = QHBoxLayout(self._caja_banner)
+        hl.setContentsMargins(18, 10, 14, 10)
+        hl.setSpacing(14)
+
+        self._caja_banner_label = QLabel('')
+        self._caja_banner_label.setWordWrap(True)
+        self._caja_banner_label.setStyleSheet('color:#ffffff; background:transparent;')
+        self._caja_banner_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
+        hl.addWidget(self._caja_banner_label, 1)
+
+        # Al cajero este botón no se le muestra nunca: ver `_puede_abrir_caja`.
+        self._caja_banner_btn = QPushButton('Abrir la caja')
+        self._caja_banner_btn.setCursor(Qt.PointingHandCursor)
+        self._caja_banner_btn.setStyleSheet(
+            'QPushButton { background:#ffffff; color:#a01616; border:none; border-radius:6px;'
+            ' padding:7px 16px; font-weight:700; }'
+            'QPushButton:hover { background:#ffe9e9; }'
+        )
+        self._caja_banner_btn.clicked.connect(self._ir_a_caja)
+        self._caja_banner_btn.setVisible(False)
+        hl.addWidget(self._caja_banner_btn)
+        return self._caja_banner
+
+    def _ir_a_caja(self):
+        if not self._puede_abrir_caja or getattr(self, 'cash_view', None) is None:
+            return
+        idx = self.tabs.indexOf(self.cash_view)
+        if idx >= 0:
+            self.tabs.setCurrentIndex(idx)
+
+    def _check_caja_guard(self):
+        """Compara la caja local con `caja_activa/current`. Red en hilo de fondo."""
+        def _do():
+            aviso = None
+            try:
+                from pos_system.utils.caja_guard import estado_de_caja
+                from pos_system.utils.firebase_sync import get_firebase_sync
+                fb = get_firebase_sync()
+                if not fb or not fb.enabled:
+                    return   # sin Firebase no hay con qué comparar: no inventamos avisos
+                snap = fb.db.collection('caja_activa').document('current').get()
+                remoto = snap.to_dict() if snap.exists else None
+                aviso = estado_de_caja(self.cash_register.get_current(), remoto,
+                                       puede_abrir=self._puede_abrir_caja)
+            except Exception as e:
+                logger.debug(f"Revisión de caja: {e}")
+                return   # un corte de red no debe pintar un cartel falso
+            self._sig_caja_guard.emit(aviso)
+
+        threading.Thread(target=_do, daemon=True).start()
+
+    def _on_caja_guard_slot(self, aviso):
+        if not hasattr(self, '_caja_banner'):
+            return
+        anterior = getattr(self, '_caja_guard_estado', None)
+        self._caja_guard_estado = (aviso or {}).get('tipo')
+
+        if not aviso:
+            self._caja_banner.setVisible(False)
+            return
+
+        self._caja_banner_label.setText(
+            f'<span style="font-size:14px;font-weight:800">{aviso["titulo"]}</span>'
+            f'<br><span style="font-size:12px">{aviso["detalle"]}</span>'
+        )
+        # El botón solo aparece cuando de verdad se puede abrir una caja desde acá.
+        self._caja_banner_btn.setVisible(
+            aviso['tipo'] in ('sin_caja', 'fantasma') and self._puede_abrir_caja
+        )
+        self._caja_banner.setVisible(True)
+
+        # Un aviso nuevo también suena aparte: el cartel se vuelve paisaje
+        # después de un rato y el que recién llega no lo mira.
+        if self._caja_guard_estado != anterior:
+            logger.warning(f"Caja: {aviso['titulo']} — {aviso['detalle']}")
+            try:
+                Toast(self, aviso['titulo'], 'error', duration=9000)
+            except Exception:
+                pass
 
     def update_status_bar(self):
         now = now_ar()
@@ -1026,6 +1137,9 @@ class MainWindow(QMainWindow):
     def _on_caja_open_slot(self, reg_id):
         logger.info(f"Firebase: Caja #{reg_id} abierta remotamente → refrescando.")
         self.refresh_all_views()
+        # Recién abierta: revisar enseguida para que el cartel se baje solo en
+        # vez de quedarse hasta el próximo tic del timer.
+        QTimer.singleShot(1500, self._check_caja_guard)
 
     def _on_stock_refresh_slot(self):
         """Firebase reportó cambios de stock — refrescar vistas de productos/ventas."""
@@ -1099,6 +1213,7 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.error(f"Firebase: Error cerrando caja local: {e}")
         self.refresh_all_views()
+        QTimer.singleShot(1500, self._check_caja_guard)
 
     def refresh_all_views(self):
         for view in [self.products_view, self.sales_view, self.cash_view,
