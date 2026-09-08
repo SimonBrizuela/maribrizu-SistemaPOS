@@ -302,8 +302,11 @@ export default async (peticion) => {
                    excedidos.map(c => c.nombre).join(', '));
       return Response.json({ error: 'cambios', cambios: excedidos }, { status: 409 });
     }
+    // El motivo y las veces salen del documento del cupón, leído en la segunda
+    // mirada. Antes se buscaban en `cupon`, que es lo que se guarda en el
+    // pedido y no trae ese campo: el cliente leía "ya lo usaste null veces".
     console.warn('[crear-pedido] pedido retirado por cupón excedido en simultáneo:', codigoCupon);
-    return Response.json({ error: 'cupon', motivo: cuponExcedido, veces: cupon?.usos_por_persona ?? null }, { status: 409 });
+    return Response.json({ error: 'cupon', ...cuponExcedido }, { status: 409 });
   }
 
   return Response.json({ id, codigo, subtotal, envio, descuento, total });

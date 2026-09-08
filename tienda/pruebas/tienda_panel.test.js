@@ -130,6 +130,17 @@ function tipear(el, valor) {
 
 const plano = (el) => el.textContent.replace(/\./g, '');
 
+// Los dos lugares donde el Catálogo de la Tienda muestra números: la tarjeta de
+// arriba y el chip de cada filtro, uno pegado al otro.
+const delResumen = (etiqueta) => {
+  const dato = [...contenedor.querySelectorAll('#tiendaResumen .tienda-dato')]
+    .find(d => d.querySelector('span')?.textContent.trim() === etiqueta);
+  return Number(String(dato?.querySelector('b')?.textContent || '').replace(/\./g, ''));
+};
+const delChip = (clave) => Number(String(
+  contenedor.querySelector(`#tiendaFiltros [data-filtro="${clave}"] .pc-btn__n`)
+    ?.textContent || '').replace(/\./g, ''));
+
 describe('Catálogo de la Tienda', () => {
   it('muestra lo que sí está en la vidriera', async () => {
     const c = await montar('tienda_catalogo', 'renderTiendaCatalogo');
@@ -165,6 +176,60 @@ describe('Catálogo de la Tienda', () => {
     expect(c.innerHTML.length).toBeGreaterThan(0);
     expect(plano(c)).not.toContain('NaN');
     expect(plano(c)).not.toContain('undefined');
+  });
+
+  /*
+   * La tarjeta de arriba y los chips de abajo están pegados y usan las mismas
+   * palabras. Al elegir un rubro, la tarjeta contaba el catálogo entero y los
+   * chips el rubro: "en la tienda" decía 3 arriba y "En la tienda 1" abajo,
+   * sin nada que dijera cuál era cuál. Dos números que se contradicen en la
+   * misma pantalla hacen dudar de los dos.
+   */
+  it('el resumen cuenta lo mismo que los chips cuando se elige un rubro', async () => {
+    datos.porColeccion.catalogo.push(
+      // De otro rubro: suma a los números globales y no a los de Librería.
+      { __id: 'p6', doc_id: 'p6', id: 6, nombre: 'CARTULINA BLANCA', codigo: 'C006',
+        rubro: 'PAPELERIA', categoria: 'Papeles', marca: 'MURESCO', precio_venta: 700,
+        costo: 300, stock: 40, estado: 'activo', tienda_imagenes: ['f.webp'] },
+      // Forzado a mano y sin foto: el único "publicado sin foto" del catálogo.
+      { __id: 'p7', doc_id: 'p7', id: 7, nombre: 'SOBRE OFICIO', codigo: 'C007',
+        rubro: 'PAPELERIA', categoria: 'Sobres', marca: 'GENERICO', precio_venta: 200,
+        costo: 90, stock: 300, estado: 'activo', tienda_publicar: true },
+    );
+
+    await montar('tienda_catalogo', 'renderTiendaCatalogo');
+    // Sin rubro elegido ya tienen que coincidir.
+    expect(delResumen('en la tienda')).toBe(delChip('publicados'));
+    expect(delResumen('publicados sin foto')).toBe(delChip('sin_foto'));
+    expect(delResumen('con stock')).toBe(delChip('todos'));
+
+    tipear(document.getElementById('tiendaRubro'), 'LIBRERIA');
+    await esperar(30);
+
+    // Librería tiene dos con stock: el cuaderno publicado y el lápiz que
+    // sacaron a mano. La cartulina y el sobre son de Papelería.
+    expect(delResumen('en la tienda')).toBe(delChip('publicados'));
+    expect(delResumen('en la tienda')).toBe(1);
+    expect(delResumen('publicados sin foto')).toBe(delChip('sin_foto'));
+    expect(delResumen('publicados sin foto')).toBe(0);
+    expect(delResumen('destacados')).toBe(delChip('destacados'));
+    expect(delResumen('con stock')).toBe(delChip('todos'));
+    expect(delResumen('con stock')).toBe(2);
+    // Lo sacado a mano es parte de lo que está fuera de la tienda: nunca puede
+    // ser más.
+    expect(delResumen('sacados a mano')).toBeLessThanOrEqual(delChip('ocultos'));
+  });
+
+  it('buscar también acota la tarjeta de arriba, no solo la lista', async () => {
+    await montar('tienda_catalogo', 'renderTiendaCatalogo');
+    const buscador = document.getElementById('tiendaBuscar');
+    buscador.value = 'rivadavia';
+    buscador.dispatchEvent(new Event('input', { bubbles: true }));
+    await esperar(30);
+
+    expect(delResumen('con stock')).toBe(delChip('todos'));
+    expect(delResumen('con stock')).toBe(1);
+    expect(delResumen('en la tienda')).toBe(delChip('publicados'));
   });
 });
 
@@ -202,6 +267,66 @@ describe('Descuentos de la Tienda', () => {
     const c = await montar('tienda_descuentos', 'renderTiendaDescuentos');
     expect(c.innerHTML.length).toBeGreaterThan(0);
     expect(plano(c)).not.toContain('NaN');
+  });
+
+  /*
+   * Guardar un descuento tiene que rebajar el precio en la vidriera AHORA, no
+   * en la próxima corrida del sync: el cartel de la oferta ya está puesto y el
+   * cliente entra a mirar en el momento.
+   */
+  it('crear un descuento rebaja el precio en la tienda sin esperar al sync', async () => {
+    // Sin otros descuentos cargados: el que se crea es el único que manda.
+    datos.porColeccion.tienda_descuentos = [];
+    // El espejo, con los precios de lista.
+    datos.porColeccion.tienda_productos = [
+      { __id: 'p1', rubro: 'LIBRERIA', sub_rubro: 'Cuadernos', precio: 3500 },
+      { __id: 'p3', rubro: 'PAPELERIA', sub_rubro: 'Resmas', precio: 18000 },
+    ];
+    const original = globalThis.fetch;
+    globalThis.fetch = vi.fn(() => Promise.reject(new Error('sin red')));
+    try {
+      await montar('tienda_descuentos', 'renderTiendaDescuentos');
+      document.getElementById('descNuevo').click();
+      await esperar(20);
+      tipear(document.getElementById('dNombre'), 'Semana del cuaderno');
+      tipear(document.getElementById('dValor'), '20');
+      // El alcance arranca en "un rubro entero" con el primero de la lista
+      // elegido, que acá es Librería.
+      document.querySelector('.desc-guardar').click();
+      await esperar(120);
+    } finally {
+      globalThis.fetch = original;
+    }
+
+    const alEspejo = datos.escrituras.filter(e => e.ref?._col === 'tienda_productos');
+    expect(alEspejo.map(e => e.ref.id)).toEqual(['p1']);
+    expect(alEspejo[0].datos).toMatchObject({
+      precio: 2800, precio_anterior: 3500,
+      descuento: { nombre: 'Semana del cuaderno', porcentaje: 20 },
+    });
+    // La resma es de otro rubro: no se le toca el precio ni se paga la
+    // escritura.
+    expect(alEspejo.some(e => e.ref.id === 'p3')).toBe(false);
+  });
+
+  /*
+   * Un monto fijo más grande que el precio no rebaja: ese producto queda a
+   * precio de lista. Antes quedaba a $1, que se lee como error y deja pasar
+   * pedidos que después no se pueden cobrar. Se puede guardar igual, pero
+   * sabiéndolo antes de apretar.
+   */
+  it('avisa cuando el monto supera el precio del más barato del alcance', async () => {
+    await montar('tienda_descuentos', 'renderTiendaDescuentos');
+    document.getElementById('descNuevo').click();
+    await esperar(20);
+    tipear(document.getElementById('dTipo'), 'monto');
+    tipear(document.getElementById('dValor'), '5000');
+    await esperar(20);
+
+    const aviso = document.getElementById('dPreview').textContent;
+    expect(aviso).toContain('menos que el monto');
+    expect(aviso).toContain('Cuaderno Rivadavia');
+    expect(aviso).toContain('precio de lista');
   });
 });
 
@@ -241,6 +366,32 @@ describe('Configuración de la Tienda', () => {
     const c = await montar('tienda_ajustes', 'renderTiendaAjustes');
     expect(c.innerHTML.length).toBeGreaterThan(0);
     expect(plano(c)).not.toContain('NaN');
+  });
+
+  // 2026-09-08: la dueña destildó Cotillón y la tienda lo seguía mostrando,
+  // porque una bengala estaba marcada "Publicar siempre" desde su ficha. Se
+  // arregló donde tenía que arreglarse: el rubro apagado le gana a la marca
+  // por producto. Acá se comprueba que la pantalla no siga prometiendo lo
+  // contrario, y que el número que muestra sea el que entraría al prenderlo.
+  it('un rubro apagado no promete que nada salga igual, ni con "Publicar siempre"', async () => {
+    datos.porColeccion.tienda_config.push({ __id: 'publicacion', rubros: ['LIBRERIA', 'PAPELERIA'] });
+    datos.porColeccion.catalogo.push(
+      { __id: 'p4', doc_id: 'p4', id: 4, nombre: 'BENGALA FANTASIA', codigo: 'C004',
+        rubro: 'COTILLON', sub_rubro: 'BENGALAS', precio_venta: 1200, costo: 600, stock: 14,
+        estado: 'activo', tienda_publicar: true, tienda_imagenes: ['d.webp'] },
+      { __id: 'p5', doc_id: 'p5', id: 5, nombre: 'GLOBO LISO', codigo: 'C005',
+        rubro: 'COTILLON', sub_rubro: 'GLOBOS', precio_venta: 300, costo: 100, stock: 40,
+        estado: 'activo', tienda_imagenes: ['e.webp'] },
+    );
+    const c = await montar('tienda_ajustes', 'renderTiendaAjustes');
+    const cotillon = c.querySelector('[data-rubro="COTILLON"]')?.closest('.tienda-rubro-caja');
+    expect(cotillon).toBeTruthy();
+    expect(cotillon.querySelector('[data-rubro]').checked).toBe(false);
+    expect(cotillon.textContent).not.toMatch(/en la tienda igual/);
+    expect(cotillon.textContent).not.toMatch(/a mano/);
+    // Los dos entrarían si se prende el rubro: la bengala marcada a mano y el
+    // globo, que tiene foto y stock.
+    expect(cotillon.textContent).toMatch(/2 con stock de 2/);
   });
 });
 
@@ -313,6 +464,19 @@ describe('Pedidos de la Tienda', () => {
     const c = await montar('pedidos_tienda', 'renderPedidosTienda');
     expect(c.innerHTML.length).toBeGreaterThan(0);
     expect(plano(c)).not.toContain('NaN');
+  });
+
+  it('el teléfono y el botón de avisar arman el mismo número de WhatsApp', async () => {
+    // "+54 351 619 4411" copiado de un contacto: el enlace del teléfono lo
+    // mandaba sin el 9 (a un celular que no existe) y el de "Avisarle" con el
+    // 9. Dos reglas para el mismo número en la misma tarjeta.
+    datos.porColeccion.tienda_pedidos[1].cliente.telefono = '+54 351 619 4411';
+    const c = await montar('pedidos_tienda', 'renderPedidosTienda');
+    const tarjeta = c.querySelector('[data-id="k2"]');
+    const enlaces = [...tarjeta.querySelectorAll('a[href^="https://wa.me/"]')]
+      .map(a => a.getAttribute('href'));
+    expect(enlaces).toHaveLength(2);
+    for (const href of enlaces) expect(href.startsWith('https://wa.me/5493516194411?')).toBe(true);
   });
 });
 

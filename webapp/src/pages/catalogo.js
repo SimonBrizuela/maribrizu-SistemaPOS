@@ -7,7 +7,8 @@ import { getCached, invalidateCache, invalidateCacheByPrefix, peekCacheValue } f
 import { ensureCollections, onStoreChange } from '../store.js';
 import { initCatalogoHistory, fieldLabel } from '../catalogo_history.js';
 import { registrarMovimiento, movimientosDe, MOTIVOS } from '../stock_ledger.js';
-import { avisarStockALaTienda, reflejarSiPublicado } from '../tienda_espejo.js';
+import { avisarStockALaTienda, reflejarSiPublicado, sacarDeLaTienda, usarCatalogoParaRecontar }
+  from '../tienda_espejo.js';
 import { camposStockRapido, num as numConj } from '../conjunto.js';
 import {
   recomputarResumenInventario, resumenEstaVencido, computarResumen,
@@ -1943,6 +1944,7 @@ export async function renderCatalogo(container, db) {
         const netPromise = Promise.all([
           deleteDoc(doc(db, 'catalogo', id)),
           _registerCatalogoDeleted(db, id),
+          sacarDeLaTienda(db, id),
         ]);
 
         // Esperar animación corta y luego quitar de memoria + DOM sin re-render
@@ -6069,7 +6071,9 @@ export async function renderCatalogo(container, db) {
             motivo: 'conteo', antes: a.sis, despues: a.cont,
             detalle: 'Conteo físico',
           });
-          avisarStockALaTienda(db, _docId, a.cont);
+          // Con el producto entero: la vidriera saca lo que quedó por debajo
+          // de la venta mínima, no solo lo que quedó en cero.
+          avisarStockALaTienda(db, _docId, a.cont, { ...a.p, stock: a.cont });
           ok += 1;
         } catch (e) { console.warn('conteo: error en', _docId, e.message); }
       }
@@ -6973,7 +6977,7 @@ export async function renderCatalogo(container, db) {
           motivo: 'reposicion', antes: stockBase, despues: nuevoStock,
           detalle: 'Reposición desde el panel',
         });
-        avisarStockALaTienda(db, _docId, nuevoStock);
+        avisarStockALaTienda(db, _docId, nuevoStock, { ...p, stock: nuevoStock });
         cerrar();
         const tc = document.getElementById('tabContent');
         if (tc) renderTabInventario(tc);
@@ -7358,7 +7362,7 @@ export async function renderCatalogo(container, db) {
         antes: _stockPrev, despues: valor,
         detalle: 'Editado desde el panel',
       });
-      avisarStockALaTienda(db, docId, valor);
+      avisarStockALaTienda(db, docId, valor, { ...p, ...campos });
       renderTabInventario(document.getElementById('tabContent'));
       renderStats();
       renderBannerCriticos();
@@ -7886,6 +7890,7 @@ export async function renderCatalogo(container, db) {
                 const _full = allProductos.find(x => x.doc_id === p.doc_id);
                 await _registerCatalogoDeleted(db, p.doc_id);
                 await deleteDoc(doc(db, 'catalogo', p.doc_id));
+                sacarDeLaTienda(db, p.doc_id);
                 borrados++;
                 if (_full) _delChanges.push({ docId: p.doc_id, invId: _full.id || null, syncInv: false, before: { ..._full, doc_id: p.doc_id }, after: null });
               } catch (e) { console.error('Borrando', p.doc_id, e); }
@@ -9556,6 +9561,9 @@ export async function renderCatalogo(container, db) {
   // que es idempotente).
   renderShell();
   reRenderRubroBar();
+  // El catálogo entero en memoria se presta para rehacer el conteo de la
+  // portada de la tienda después de cada cambio suelto (ver tienda_espejo.js).
+  usarCatalogoParaRecontar(() => allProductos);
   const _tRubros = performance.now();
   cargarRubros()
     .then(() => {

@@ -240,6 +240,18 @@ describe('cómo se lee', () => {
     expect(describirCupon(cupon({ tipo: 'envio_gratis' }))).toBe('Envío sin cargo');
   });
 
+  it('"ya usado" dice las veces si las sabe, y nunca "null veces"', () => {
+    // El servidor no siempre manda el número: en la segunda mirada de
+    // crear-pedido llegaba null, y el cliente leía "ya lo usaste null veces".
+    expect(mensajeDeCupon({ motivo: 'ya_usado', veces: 1 })).toContain('una sola vez');
+    expect(mensajeDeCupon({ motivo: 'ya_usado', veces: 3 })).toContain('3 veces');
+    for (const veces of [null, undefined, 'x', 0]) {
+      const texto = mensajeDeCupon({ motivo: 'ya_usado', veces });
+      expect(texto).toMatch(/ya lo usaste/);
+      expect(texto).not.toMatch(/null|undefined|NaN|0 veces/);
+    }
+  });
+
   it('cada motivo tiene su frase, y lo desconocido no queda mudo', () => {
     for (const motivo of ['no_existe', 'inactivo', 'vencido', 'agotado', 'primera_compra', 'solo_retiro', 'solo_delivery']) {
       expect(mensajeDeCupon({ motivo }).length).toBeGreaterThan(10);

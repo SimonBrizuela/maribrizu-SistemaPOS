@@ -11,13 +11,13 @@
  * Es la única forma de que la duplicación sea segura.
  */
 import { describe, it, expect, beforeAll, vi } from 'vitest';
-import { execFileSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
+import { correrGuionDePython, GUION_ESPEJO } from './casos_del_sync.js';
+
 const AQUI = dirname(fileURLToPath(import.meta.url));
-const RAIZ = join(AQUI, '..', '..');
 
 // El módulo del panel no arranca Firebase al importarse: Storage se carga
 // recién al subir una foto, y Firestore acá solo se usa para armar el
@@ -34,33 +34,38 @@ beforeAll(async () => {
   ({ documentoEspejo, motivoDeNoPublicar } =
     await import('../../webapp/src/tienda_espejo.js'));
 
-  // Sin Python no se puede comparar. No se falla la prueba por eso: en una
-  // máquina sin Python el resto de la suite tiene que poder correr igual.
-  for (const python of ['python', 'python3', 'py']) {
-    try {
-      const salida = execFileSync(python, [join(RAIZ, 'scripts', 'casos_espejo.py')],
-        { encoding: 'utf-8', stdio: ['ignore', 'pipe', 'pipe'] });
-      const crudo = JSON.parse(salida);
-      delSync = crudo.documentos;
-      publicacionSync = crudo.publicacion;
-      break;
-    } catch (err) {
-      porQueNo = String(err?.stderr || err?.message || err).split('\n').slice(-6).join('\n');
-    }
-  }
+  const { casos: crudo, porQueNo: motivo } =
+    correrGuionDePython(GUION_ESPEJO, ['documentos', 'publicacion']);
+  delSync = crudo?.documentos ?? null;
+  publicacionSync = crudo?.publicacion ?? null;
+  porQueNo = motivo;
 });
+
+/**
+ * Los documentos del sync, o la prueba en rojo.
+ *
+ * Antes cada caso arrancaba con `if (!delSync) return;` y el aviso era un
+ * console.warn, que el reporter por defecto no muestra. El 08-09-2026 se probó
+ * poner `raise SystemExit` arriba de casos_espejo.py: la suite dio verde con
+ * las 26 comparaciones documento por documento sin ejecutarse. La prueba que se
+ * saltea sola no cuida nada, y el sync republicando lo que el panel sacó es
+ * justamente lo que existe para evitar.
+ */
+const exigirElSync = () => {
+  expect(delSync, 'no se pudo correr scripts/casos_espejo.py: el documento del panel '
+                  + `quedó sin comparar contra el del sync.\n${porQueNo}`).not.toBeNull();
+  return delSync;
+};
 
 describe('el documento del panel contra el del sync', () => {
   it('corre el sync para comparar', () => {
-    if (!delSync) console.warn(`\n  [espejo] sin comparación contra Python:\n${porQueNo}\n`);
+    expect(exigirElSync().length).toBeGreaterThan(0);
     expect(casos.length).toBeGreaterThan(0);
   });
 
   for (const caso of casos) {
     it(caso.que_prueba, () => {
-      if (!delSync) return;
-
-      const esperado = delSync.find(x => x.doc_id === caso.doc_id)?.documento;
+      const esperado = exigirElSync().find(x => x.doc_id === caso.doc_id)?.documento;
       expect(esperado, `el sync no devolvió ${caso.doc_id}`).toBeDefined();
 
       const obtenido = { ...documentoEspejo(caso.datos) };
@@ -210,12 +215,12 @@ describe('de a cuánto se vende', () => {
    a subir lo que el panel saco y el producto reaparece en la tienda. */
 describe('rubros y subrubros, panel contra sync', () => {
   it('corre el sync para comparar la regla', () => {
-    if (!publicacionSync) console.warn('  [espejo] sin comparación de la regla');
-    expect(true).toBe(true);
+    exigirElSync();
+    expect(publicacionSync.length).toBeGreaterThan(0);
   });
 
   it('las dos implementaciones deciden lo mismo', () => {
-    if (!publicacionSync) return;
+    exigirElSync();
 
     for (const caso of publicacionSync) {
       const delPanel = motivoDeNoPublicar(caso.datos, caso.rubros, caso.excluidos) === null;
@@ -247,7 +252,7 @@ describe('rubros y subrubros, panel contra sync', () => {
   };
 
   it('y las dos culpan a la misma regla', () => {
-    if (!publicacionSync) return;
+    exigirElSync();
 
     for (const caso of publicacionSync) {
       const motivo = motivoDeNoPublicar(caso.datos, caso.rubros, caso.excluidos);
@@ -284,10 +289,38 @@ describe('rubros y subrubros, panel contra sync', () => {
     expect(motivoDeNoPublicar(base, ['LIBRERIA'], {})).toBe(null);
     expect(motivoDeNoPublicar(base, ['LIBRERIA'], { LIBRERIA: ['ABROCHADORA'] }))
       .toBe('el subrubro está excluido');
+    // Con la lista de rubros puesta, el rubro apagado se mira antes que el
+    // subrubro: al que va a arreglarlo hay que mandarlo a prender el rubro.
     expect(motivoDeNoPublicar(base, ['PAPELERA'], { LIBRERIA: ['ABROCHADORA'] }))
+      .toBe('el rubro no está habilitado');
+    // Sin lista de rubros (la pregunta "¿por qué no está en la tienda?") el
+    // subrubro sigue siendo una razón válida.
+    expect(motivoDeNoPublicar(base, null, { LIBRERIA: ['ABROCHADORA'] }))
       .toBe('el subrubro está excluido');
     // El mismo subrubro colgando de otro rubro no se toca.
     expect(motivoDeNoPublicar({ ...base, rubro: 'PAPELERA' }, ['PAPELERA'],
                               { LIBRERIA: ['ABROCHADORA'] })).toBe(null);
+  });
+
+  /*
+   * "Publicar siempre" fuerza adentro de un rubro prendido, no contra la
+   * configuración: la dueña destildó Cotillón y Mercería en Configuración de
+   * la Tienda y tres productos marcados a mano siguieron en la vidriera. Un
+   * interruptor que no manda no sirve para nada.
+   */
+  it('publicar siempre no salva a un producto de un rubro apagado', () => {
+    const base = { nombre: 'Guirnalda', estado: 'activo', precio_venta: 100,
+                   stock: 5, rubro: 'COTILLON', sub_rubro: 'Guirnaldas',
+                   tienda_publicar: true, tienda_imagenes: ['https://x/foto.webp'] };
+
+    expect(motivoDeNoPublicar(base, ['LIBRERIA'], {})).toBe('el rubro no está habilitado');
+    expect(motivoDeNoPublicar(base, ['COTILLON'], {})).toBe(null);
+    // Adentro del rubro prendido sí fuerza: subrubro excluido y sin foto.
+    expect(motivoDeNoPublicar(base, ['COTILLON'], { COTILLON: ['GUIRNALDAS'] })).toBe(null);
+    const { tienda_imagenes: _, ...sinFoto } = base;
+    expect(motivoDeNoPublicar(sinFoto, ['COTILLON'], {})).toBe(null);
+    // Y "no publicar" le sigue ganando a todo, rubro prendido incluido.
+    expect(motivoDeNoPublicar({ ...base, tienda_publicar: false }, ['COTILLON'], {}))
+      .toBe('excluido a mano');
   });
 });

@@ -34,6 +34,11 @@ import {
 // en tienda_ajustes.js): una sola lista en JS, y la copia en Python de
 // sync_tienda.py comparada por tienda/pruebas/nombre_bonito.test.js.
 import { conTilde } from '../../tienda/src/formato.js';
+// Los descuentos de la tienda se aplican acá con la MISMA regla que el sync:
+// hasta el 2026-09-08 cualquier re-espejado (guardar la ficha, entregar un
+// pedido, tocar una foto) escribía el precio de lista y el producto perdía la
+// rebaja hasta la próxima corrida.
+import { aplicarDescuento, descuentosVigentes } from './tienda_descuentos_regla.js';
 
 /* ── Texto ────────────────────────────────────────────────────────────────
  * Copias de `normalizar`, `nombre_bonito` y `tokenizar` de sync_tienda.py.
@@ -116,6 +121,22 @@ function numero(datos, clave, porDefecto = 0) {
 }
 
 /**
+ * Redondea plata al peso entero: floor(x + 0.5), la misma cuenta que hace
+ * `a_peso()` en scripts/sync_tienda.py.
+ *
+ * Math.round() de JavaScript sube siempre (312,5 → 313) y round() de Python
+ * redondea al par (312,5 → 312). El panel escribe el espejo al guardar la ficha
+ * y el sync lo reescribe cada seis horas: con dos cuentas distintas el precio
+ * oscilaba un peso solo, para siempre. Pasa de verdad en el catálogo (Cartulina
+ * Rexon Glitter Celeste a 1.874,5; Mapa Rivadavia Grecia a 126,5).
+ * `tienda_descuentos_regla.js` ya redondeaba así por la misma razón.
+ */
+export function aPeso(valor) {
+  const n = Number(valor);
+  return Number.isFinite(n) ? Math.floor(n + 0.5) : 0;
+}
+
+/**
  * Las variedades (colores, medidas) como las ve el cliente.
  *
  * En el catálogo cada una trae `unidades` (packs cerrados) y `restante`
@@ -148,7 +169,7 @@ export function variedadesDe(datos) {
     salida.push({
       nombre: String(ajuste?.nombre || '').trim() || nombreBonito(nombre),
       stock: Math.max(0, Math.trunc(unidades * contenido + restante)),
-      precio: precio ? Math.round(precio) : null,
+      precio: precio ? aPeso(precio) : null,
       imagen: String(ajuste?.imagen ?? '').trim() || null,
     });
   }
@@ -181,7 +202,7 @@ export function medidasDe(datos) {
 
   if (!esConjunto) {
     return {
-      unidad, precio: Math.round(precioVenta), precio_pack: null,
+      unidad, precio: aPeso(precioVenta), precio_pack: null,
       pack_tipo: null, pack_nombre: null, pack_contenido: null,
       stock: Math.max(0, Math.trunc(numero(datos, 'stock'))), variedades: [],
       ...ventaMinima(datos, unidad),
@@ -205,8 +226,8 @@ export function medidasDe(datos) {
 
   return {
     unidad,
-    precio: Math.round(precioUnidad || precioVenta),
-    precio_pack: hayPack ? Math.round(precioVenta) : null,
+    precio: aPeso(precioUnidad || precioVenta),
+    precio_pack: hayPack ? aPeso(precioVenta) : null,
     pack_tipo: hayPack ? tipo : null,
     pack_nombre: hayPack
       ? (String(datos?.tienda_pack_nombre ?? '').trim() || nombreBonito(tipo))
@@ -305,6 +326,8 @@ export function documentoEspejo(datos) {
     marca,
     imagenes: imagenesDe(datos),
     variedades: m.variedades,
+    // Solo lo marcado a mano; lo que eligió el sync por ventas lo repone
+    // `destacadoQueQueda()` antes de escribir, que acá no se puede saber.
     destacado: datos?.tienda_destacado === true,
     grupo: grupo || null,
     // Normalizado para consultar por igualdad: el nombre visible del grupo
@@ -347,12 +370,14 @@ export function claveDeRubro(texto) {
  * @param {string[]|null} rubrosHabilitados   rubros que salen a la web
  * @param {object|null} subrubrosExcluidos    { RUBRO: ['SUBRUBRO', …] }
  *
- * El rubro manda: si está apagado no se publica nada de él. Prendido, sale todo
- * salvo los subrubros destildados. Así no hay forma de que las dos listas se
- * contradigan.
+ * El rubro manda: si está apagado no se publica nada de él, ni lo marcado a
+ * mano con "publicar siempre". Prendido, sale todo salvo los subrubros
+ * destildados. Así no hay forma de que las dos listas se contradigan.
  *
- * El interruptor por producto sigue ganándole a las dos: es lo más específico
- * que puede decir alguien, y por eso se evalúa antes.
+ * Adentro de un rubro prendido, el interruptor por producto le gana al
+ * subrubro excluido y a la falta de foto. Hasta el 2026-09-08 le ganaba
+ * también al rubro apagado: la dueña destildó Cotillón en la configuración y
+ * lo marcado a mano siguió saliendo.
  */
 export function motivoDeNoPublicar(datos, rubrosHabilitados = null,
                                    subrubrosExcluidos = null) {
@@ -375,9 +400,14 @@ export function motivoDeNoPublicar(datos, rubrosHabilitados = null,
   // stock". Mejor no ofrecerlos.
   if (medidas.minimo && medidas.stock < medidas.minimo) return 'sin stock';
 
-  if (datos?.tienda_publicar === true) return null;
-
   const rubro = claveDeRubro(datos?.rubro);
+
+  // El rubro apagado gana sobre la marca a mano y sobre el subrubro: con la
+  // lista de rubros puesta se mira ANTES que todo eso. Sin la lista (quien
+  // pregunta "¿por qué no está en la tienda?") se contesta por el resto.
+  if (rubrosHabilitados && !rubrosHabilitados.includes(rubro)) return 'el rubro no está habilitado';
+
+  if (datos?.tienda_publicar === true) return null;
 
   // Los subrubros se miran aunque no se haya pasado la lista de rubros: quien
   // llama para saber "¿por qué no está en la tienda?" pasa `null` como rubros
@@ -390,7 +420,6 @@ export function motivoDeNoPublicar(datos, rubrosHabilitados = null,
   }
 
   if (!rubrosHabilitados) return null;
-  if (!rubrosHabilitados.includes(rubro)) return 'el rubro no está habilitado';
 
   // La foto es lo ÚLTIMO que se mira, a propósito: así "sin foto" significa
   // "sale a la vidriera apenas le saquen una", y no se mezcla con lo que igual
@@ -497,9 +526,40 @@ export async function guardarYEspejar(db, docId, cambios, rubrosHabilitados = nu
   return resultado;
 }
 
-/** Escribe (o borra) el documento del espejo según corresponda. */
+/**
+ * Si este producto va destacado en la portada, respetando lo que ya hay puesto.
+ *
+ * `tienda_destacado` tiene tres estados a propósito: `true` lo fija a mano el
+ * panel, `false` lo saca a mano, y sin el campo decide el sync. Cuando nadie
+ * marcó ninguno a mano, el sync elige los doce más vendidos y les escribe
+ * `destacado` en el espejo SIN tocar el catálogo (scripts/sync_tienda.py), así
+ * que esa elección no se puede deducir del producto: solo está en el espejo.
+ *
+ * Hasta el 2026-09-08 el panel armaba el documento con `destacado: false` y lo
+ * escribía entero, igual que hacía con `orden`: cargarle una foto a uno de esos
+ * doce (o entregar un pedido, o guardar la ficha) lo bajaba de la tira
+ * "Destacados" de la portada, que quedaba en once hasta la corrida siguiente
+ * del sync, hasta seis horas después.
+ *
+ * @param {object} datos             el producto del catálogo
+ * @param {{destacado?: boolean}|null} anterior  lo que hoy tiene el espejo, o
+ *        `null` si el producto todavía no está publicado
+ */
+export function destacadoQueQueda(datos, anterior) {
+  const aMano = datos?.tienda_destacado;
+  if (aMano === true || aMano === false) return aMano;
+  return anterior ? anterior.destacado === true : false;
+}
+
+/**
+ * Escribe (o borra) el documento del espejo según corresponda.
+ *
+ * @param {{descuentos?: object[]|null}} [opciones]  los descuentos vigentes ya
+ *        leídos (`descuentosVigentes`); sin eso se leen acá, con un minuto de
+ *        memoria
+ */
 export async function espejar(db, docId, datos, rubrosHabilitados = null,
-                              subrubrosExcluidos = null) {
+                              subrubrosExcluidos = null, { descuentos = null } = {}) {
   const motivo = motivoDeNoPublicar(datos, rubrosHabilitados, subrubrosExcluidos);
 
   if (motivo) {
@@ -508,12 +568,15 @@ export async function espejar(db, docId, datos, rubrosHabilitados = null,
   }
 
   const documento = documentoEspejo(datos);
+  // Con el precio rebajado si le toca un descuento: el sync hace lo mismo con
+  // la misma regla, así no se pisan.
+  aplicarDescuento(docId, documento, descuentos ?? await leerDescuentosVigentes(db));
 
   // `orden` y `orden_rubro` los calcula el sync mirando el catálogo entero: son
   // la posición dentro de la lista completa y no se pueden deducir de un
   // producto solo. Lo recién publicado va al final hasta la próxima corrida,
   // que es honesto: no se cuela adelante de nada.
-  const anterior = await leerOrdenDelEspejo(db, docId);
+  const anterior = await leerEspejoAnterior(db, docId);
   if (anterior.existe) {
     documento.orden = anterior.orden ?? await proximoOrden(db);
     documento.orden_rubro = anterior.orden_rubro ?? 0;
@@ -521,6 +584,10 @@ export async function espejar(db, docId, datos, rubrosHabilitados = null,
     documento.orden = await proximoOrden(db);
     documento.orden_rubro = 999999;
   }
+
+  // El destacado que eligió el sync tampoco se puede deducir del producto: se
+  // conserva el del espejo salvo que el panel lo haya decidido a mano.
+  documento.destacado = destacadoQueQueda(datos, anterior.existe ? anterior : null);
 
   await reemplazarDoc(db, 'tienda_productos', docId, documento, { marcaTiempo: 'actualizado' });
   return { publicado: true, motivo: null };
@@ -545,6 +612,60 @@ export async function leerPublicacion(db) {
 }
 
 /**
+ * Tira ese minuto de memoria: Configuración acaba de cambiar los rubros.
+ *
+ * La pantalla de Configuración escribe `tienda_config/publicacion` por REST, así
+ * que ni el SDK ni este módulo se enteran. Prender JUGUETERÍA y pasar derecho a
+ * Tienda > Catálogo a cargarle fotos espejaba con la lista de hace un minuto:
+ * cada foto guardada borraba el producto del espejo por "el rubro no está
+ * habilitado" y desaparecía de la tienda hasta la corrida siguiente del sync.
+ * Apagando un rubro pasaba al revés: se lo seguía dando por publicado y
+ * cualquier guardado lo volvía a subir.
+ */
+export function olvidarPublicacion() {
+  _publicacion = null;
+  _publicacionAt = 0;
+}
+
+/**
+ * Los descuentos vigentes de la tienda (`tienda_descuentos`), con un minuto
+ * de memoria: se consultan en cada espejado y cambian una vez por semana.
+ *
+ * Por REST con el token de la sesión (la colección no es pública) y no por
+ * el SDK: una lectura suelta por el SDK queda encolada detrás de los
+ * listeners grandes del panel. Si la REST no está, el SDK; y si tampoco se
+ * pueden leer, se espeja a precio de lista y el sync lo arregla en la
+ * próxima corrida, que es lo que pasaba siempre hasta ahora.
+ *
+ * @returns {Promise<ReturnType<typeof descuentosVigentes>>}
+ */
+let _descuentos = null;
+let _descuentosAt = 0;
+export async function leerDescuentosVigentes(db) {
+  if (_descuentos && Date.now() - _descuentosAt < 60000) return _descuentos;
+  let filas = await consultarRest({ coleccion: 'tienda_descuentos', conSesion: true });
+  if (filas === null) {
+    try {
+      const snap = await getDocs(collection(db, 'tienda_descuentos'));
+      filas = snap.docs.map(x => ({ id: x.id, datos: x.data() }));
+    } catch (err) {
+      console.warn('[tienda] no se pudieron leer los descuentos, se espeja a precio de lista:',
+                   err?.message || err);
+      return [];
+    }
+  }
+  _descuentos = descuentosVigentes(filas, new Date());
+  _descuentosAt = Date.now();
+  return _descuentos;
+}
+
+/** El panel de descuentos acaba de cambiar uno: la próxima lectura va a la base. */
+export function olvidarDescuentosVigentes() {
+  _descuentos = null;
+  _descuentosAt = 0;
+}
+
+/**
  * Vuelve a escribir el espejo de un producto que YA está en la tienda, con
  * los datos que acaba de guardar el panel. Un producto que no está publicado
  * no se publica desde acá: eso lo decide el catálogo de la tienda.
@@ -559,36 +680,54 @@ export async function reflejarSiPublicado(db, docId, datos) {
   catch (_) { return { publicado: false, motivo: 'no se pudo leer el espejo' }; }
   if (!snap.exists()) return { publicado: false, motivo: 'no está en la tienda' };
   const { rubros, subrubrosExcluidos } = await leerPublicacion(db);
-  return espejar(db, docId, datos, rubros, subrubrosExcluidos);
+  const resultado = await espejar(db, docId, datos, rubros, subrubrosExcluidos);
+
+  // Cambió de rubro, de subrubro o de grupo, o se fue de la tienda: el conteo
+  // de la portada quedó viejo y se rehace en unos segundos.
+  const antes = snap.data() || {};
+  const cambioDeLugar = claveDeRubro(antes.rubro) !== claveDeRubro(datos?.rubro)
+    || claveDeRubro(antes.sub_rubro) !== claveDeRubro(datos?.sub_rubro)
+    || (antes.grupo_clave || null) !== (normalizar(datos?.tienda_grupo) || null);
+  if (!resultado.publicado || cambioDeLugar) programarRecuentoDeRubros(db);
+  return resultado;
 }
 
 /**
- * Si el producto ya está en el espejo, y con qué `orden`. Por REST primero
- * (lectura pública, sin pasar por la cola del SDK); si eso falla, por el SDK.
+ * Si el producto ya está en el espejo, y con qué `orden`, `orden_rubro` y
+ * `destacado`: los tres los decide el sync mirando el catálogo entero y hay que
+ * conservarlos. Por REST primero (lectura pública, sin pasar por la cola del
+ * SDK); si eso falla, por el SDK.
  */
-async function leerOrdenDelEspejo(db, docId) {
-  const porRest = await leerEspejoRest(docId);
+async function leerEspejoAnterior(db, docId) {
+  const porRest = await leerEspejoAnteriorRest(docId);
   if (porRest) return porRest;
 
   const snap = await getDoc(doc(db, 'tienda_productos', docId));
-  if (!snap.exists()) return { existe: false, orden: null, orden_rubro: null };
+  if (!snap.exists()) return SIN_ESPEJO;
   return {
     existe: true,
     orden: numeroONull(snap.get('orden')),
     orden_rubro: numeroONull(snap.get('orden_rubro')),
+    destacado: snap.get('destacado') === true,
   };
 }
 
-async function leerEspejoRest(docId) {
-  const leido = await leerDocEspejoRest(docId, ['orden', 'orden_rubro']);
+const SIN_ESPEJO = { existe: false, orden: null, orden_rubro: null, destacado: false };
+
+async function leerEspejoAnteriorRest(docId) {
+  const leido = await leerDocEspejoRest(docId, CAMPOS_QUE_SE_CONSERVAN);
   if (leido === null) return null;
-  if (!leido.existe) return { existe: false, orden: null, orden_rubro: null };
+  if (!leido.existe) return SIN_ESPEJO;
   return {
     existe: true,
     orden: numeroONull(leido.datos.orden),
     orden_rubro: numeroONull(leido.datos.orden_rubro),
+    destacado: leido.datos.destacado === true,
   };
 }
+
+// Lo que el panel no sabe calcular de un producto solo y le pide al espejo.
+const CAMPOS_QUE_SE_CONSERVAN = ['orden', 'orden_rubro', 'destacado'];
 
 async function maxOrdenRest() {
   const filas = await consultarEspejoRest({
@@ -604,16 +743,25 @@ async function maxOrdenRest() {
  * `tienda_productos` es de lectura pública: no hace falta credencial.
  */
 export async function leerDocEspejoRest(docId, campos = null) {
+  return leerDocRest('tienda_productos', docId, campos);
+}
+
+/**
+ * Lo mismo sobre cualquier colección de lectura pública (`tienda_productos`,
+ * `tienda_config`). Sin credencial y sin pasar por la cola del SDK.
+ */
+export async function leerDocRest(coleccion, docId, campos = null) {
   const mascara = campos?.length
     ? '?' + campos.map(c => `mask.fieldPaths=${encodeURIComponent(c)}`).join('&') : '';
   try {
-    const r = await conEspera(`${REST}/tienda_productos/${encodeURIComponent(docId)}${mascara}`);
+    const r = await conEspera(
+      `${REST}/${coleccion}/${encodeURIComponent(docId)}${mascara}`);
     if (r.status === 404) return { existe: false, datos: null };
     if (!r.ok) return null;
     const cuerpo = await r.json();
     return { existe: true, datos: decodificarCampos(cuerpo?.fields) };
   } catch (err) {
-    console.warn('[tienda] espejo por REST no respondió, se usa el SDK:', err?.message || err);
+    console.warn('[tienda] lectura por REST no respondió, se usa el SDK:', err?.message || err);
     return null;
   }
 }
@@ -623,10 +771,27 @@ export async function leerDocEspejoRest(docId, campos = null) {
  * respondió. Filtra por igualdad en `donde` ({campo: valor}); `campos` limita
  * lo que viaja (un rubro son cientos de documentos con tokens y variedades).
  */
-export async function consultarEspejoRest({
-  donde = null, campos = null, ordenarPor = null, descendente = false, limite = null,
+export function consultarEspejoRest(opciones = {}) {
+  return consultarRest({ ...opciones, coleccion: 'tienda_productos', conSesion: false });
+}
+
+/**
+ * Lo mismo sobre cualquier colección. Con `conSesion` va el token del usuario,
+ * que es lo que hace falta para las que no son de lectura pública
+ * (`tienda_descuentos`); sin sesión devuelve `null` para que se caiga al SDK.
+ */
+export async function consultarRest({
+  coleccion = 'tienda_productos', donde = null, campos = null, ordenarPor = null,
+  descendente = false, limite = null, conSesion = false,
 } = {}) {
-  const consulta = { from: [{ collectionId: 'tienda_productos' }] };
+  const headers = { 'Content-Type': 'application/json' };
+  if (conSesion) {
+    const token = await tokenDeSesion();
+    if (!token) return null;
+    headers.Authorization = `Bearer ${token}`;
+  }
+
+  const consulta = { from: [{ collectionId: coleccion }] };
   const filtros = Object.entries(donde || {}).map(([campo, valor]) => ({
     fieldFilter: { field: { fieldPath: campo }, op: 'EQUAL', value: codificarValor(valor) },
   }));
@@ -642,7 +807,7 @@ export async function consultarEspejoRest({
   try {
     const r = await conEspera(`${REST}:runQuery`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify({ structuredQuery: consulta }),
     });
     if (!r.ok) return null;
@@ -737,20 +902,47 @@ function numeroONull(n) {
 export async function espejarLote(db, productos, rubrosHabilitados, alProgreso = null,
                                   subrubrosExcluidos = null) {
   let orden = await proximoOrden(db);
+  // Una sola lectura para el lote entero: un rubro son cientos de productos.
+  const descuentos = await leerDescuentosVigentes(db);
+
+  // La decisión se calcula una sola vez: `motivoDeNoPublicar` arma las medidas
+  // del producto y el lote son miles.
+  const decisiones = productos.map(({ id, datos }) => ({
+    id, datos, motivo: motivoDeNoPublicar(datos, rubrosHabilitados, subrubrosExcluidos),
+  }));
+
+  // Qué lugar tiene hoy en la vidriera cada uno de los que se quedan, y si el
+  // sync lo había puesto entre los destacados de la portada.
+  const previos = await leerEspejosAnteriores(decisiones.filter(d => !d.motivo).map(d => d.id));
+
   let publicados = 0;
   let sacados = 0;
   let lote = [];
 
-  for (const [i, { id, datos }] of productos.entries()) {
-    if (motivoDeNoPublicar(datos, rubrosHabilitados, subrubrosExcluidos)) {
+  for (const [i, { id, datos, motivo }] of decisiones.entries()) {
+    if (motivo) {
       lote.push({ tipo: 'borrar', col: 'tienda_productos', id });
       sacados++;
     } else {
-      // `orden` real lo recalcula el sync sobre el catálogo completo; acá se
-      // numera correlativo al final para no dejar huecos en el paginado.
+      // El que YA está en la tienda conserva su lugar. Hasta el 2026-09-08 el
+      // lote renumeraba todo: destildar un subrubro de Librería reescribía los
+      // ~2.000 productos del rubro con `orden_rubro` 999999, y la tienda perdía
+      // el orden por destacado / stock / ventas hasta la próxima corrida del
+      // sync. Encima los grupos de tamaños dejaban de ser contiguos y una card
+      // se partía entre dos páginas. Lo nuevo sí se numera al final: no se
+      // cuela adelante de nada. Mismo criterio que `espejar()` de a uno.
+      const anterior = previos.get(id);
       lote.push({
         tipo: 'reemplazar', col: 'tienda_productos', id,
-        datos: { ...documentoEspejo(datos), orden: orden++, orden_rubro: 999999 },
+        datos: {
+          ...aplicarDescuento(id, documentoEspejo(datos), descuentos),
+          orden: anterior?.orden ?? orden++,
+          orden_rubro: anterior ? (anterior.orden_rubro ?? 0) : 999999,
+          // Mismo criterio que `espejar()` de a uno: los destacados que eligió
+          // el sync viven solo en el espejo y publicar un rubro entero no los
+          // puede borrar de la portada.
+          destacado: destacadoQueQueda(datos, anterior),
+        },
         marcaTiempo: 'actualizado',
       });
       publicados++;
@@ -759,13 +951,66 @@ export async function espejarLote(db, productos, rubrosHabilitados, alProgreso =
     if (lote.length >= 450) {
       await escribirLote(db, lote);
       lote = [];
-      alProgreso?.(i + 1, productos.length);
+      alProgreso?.(i + 1, decisiones.length);
     }
   }
 
   if (lote.length) await escribirLote(db, lote);
-  alProgreso?.(productos.length, productos.length);
+  alProgreso?.(decisiones.length, decisiones.length);
   return { publicados, sacados };
+}
+
+// Cuántos documentos se piden por tanda. `documents:batchGet` los devuelve en
+// una sola respuesta; 300 entran cómodos y un rubro grande son siete tandas.
+const TANDA_LECTURA = 300;
+
+/**
+ * `orden`, `orden_rubro` y `destacado` de muchos productos del espejo, en
+ * tandas por REST. Devuelve un Map id → {orden, orden_rubro, destacado}; el que
+ * no está en la tienda no aparece.
+ *
+ * Si la REST no contesta se devuelve lo que se haya podido leer y el resto se
+ * numera al final, como antes: leer dos mil documentos de a uno por el SDK
+ * tarda más que la corrida del sync que iba a arreglarlo igual.
+ */
+async function leerEspejosAnteriores(ids) {
+  const salida = new Map();
+
+  for (let i = 0; i < ids.length; i += TANDA_LECTURA) {
+    const tanda = ids.slice(i, i + TANDA_LECTURA);
+    let r;
+    try {
+      r = await conEspera(`${REST}:batchGet`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          documents: tanda.map(id => `${BASE}/tienda_productos/${id}`),
+          mask: { fieldPaths: CAMPOS_QUE_SE_CONSERVAN },
+        }),
+      });
+    } catch (err) {
+      console.warn('[tienda] no se pudo leer lo que la tienda ya tenía puesto:', err?.message || err);
+      return salida;
+    }
+    if (!r.ok) {
+      console.warn(`[tienda] no se pudo leer lo que la tienda ya tenía puesto: ${r.status}`);
+      return salida;
+    }
+
+    const filas = await r.json().catch(() => null);
+    for (const fila of Array.isArray(filas) ? filas : []) {
+      if (!fila?.found?.name) continue;   // `missing`: no está publicado
+      const id = String(fila.found.name).split('/').pop();
+      const campos = decodificarCampos(fila.found.fields);
+      salida.set(id, {
+        orden: numeroONull(campos.orden),
+        orden_rubro: numeroONull(campos.orden_rubro),
+        destacado: campos.destacado === true,
+      });
+    }
+  }
+
+  return salida;
 }
 
 /**
@@ -797,7 +1042,14 @@ export async function recomputarRubros(db, productos, rubrosHabilitados,
     // Los subrubros que de verdad quedaron publicados en ese rubro. Es lo que
     // la tienda usa para la segunda fila de filtros: listarlos desde el
     // catálogo entero mostraría filtros que no devuelven nada.
-    const sub = claveDeRubro(datos?.sub_rubro);
+    //
+    // Se agrupa por el subrubro YA PUBLICADO (`nombreBonito`), que es lo que
+    // hace contar_rubros() en el sync sobre el documento del espejo. Agrupar
+    // por el texto crudo del catálogo partía en dos el mismo cajón: los
+    // productos de "BOLIGRAFO" y los de "BOLÍGRAFO" salían como dos filtros
+    // distintos, con la mitad de los productos en cada uno, y la corrida
+    // siguiente del sync los volvía a juntar en uno solo.
+    const sub = claveDeRubro(nombreBonito(datos?.sub_rubro));
     if (sub && (!grupo || !gruposEnSub.has(`${rubro}|${sub}|${grupo}`))) {
       if (grupo) gruposEnSub.add(`${rubro}|${sub}|${grupo}`);
       actual.subrubros.set(sub, (actual.subrubros.get(sub) || 0) + 1);
@@ -813,6 +1065,10 @@ export async function recomputarRubros(db, productos, rubrosHabilitados,
     conteo.set(rubro, actual);
   }
 
+  // El orden de la portada NO se decide acá: se conserva el que ya tenía.
+  const previo = await ordenDeRubrosPrevio(db);
+  const posicion = (clave) => (previo.has(clave) ? previo.get(clave) : Infinity);
+
   const lista = [...conteo.entries()]
     .map(([clave, n]) => ({
       nombre: nombreBonito(clave),
@@ -825,10 +1081,103 @@ export async function recomputarRubros(db, productos, rubrosHabilitados,
         .map(([sub, cantidad]) => ({ nombre: nombreBonito(sub), clave: sub, cantidad }))
         .sort((a, b) => b.cantidad - a.cantidad),
     }))
-    .sort((a, b) => b.cantidad - a.cantidad);
+    .sort((a, b) => {
+      const pa = posicion(a.clave);
+      const pb = posicion(b.clave);
+      // Empatados solo pueden ser dos rubros nuevos (los dos en Infinity): esos
+      // van al final, y entre ellos por cantidad.
+      return pa === pb ? b.cantidad - a.cantidad : pa - pb;
+    });
 
   await reemplazarDoc(db, 'tienda_config', 'rubros', { lista }, { marcaTiempo: 'actualizado' });
   return lista;
+}
+
+/**
+ * En qué posición está hoy cada rubro en la portada (`tienda_config/rubros`).
+ *
+ * El sync ordena los rubros por lo que FACTURA cada uno, a propósito: quien
+ * entra tiene que ver primero lo que más se vende, no lo que más lugar ocupa en
+ * el depósito (Papelera vende $2,3 millones con 244 productos; Regalería $947
+ * mil con 594). Ese número sale de las ventas y el panel no lo tiene.
+ *
+ * Hasta el 2026-09-08 el recuento del panel ordenaba por cantidad de productos:
+ * cada guardado daba vuelta la portada y la corrida siguiente del sync la
+ * devolvía a su lugar. Ahora conserva el orden que ya estaba; los rubros nuevos
+ * (que el sync todavía no vio) quedan al final, entre ellos por cantidad, y el
+ * que desapareció se va con la lista.
+ */
+async function ordenDeRubrosPrevio(db) {
+  let lista = null;
+
+  const porRest = await leerDocRest('tienda_config', 'rubros', ['lista']);
+  if (porRest) {
+    lista = porRest.existe ? porRest.datos?.lista : [];
+  } else {
+    try {
+      const snap = await getDoc(doc(db, 'tienda_config', 'rubros'));
+      lista = snap.exists() ? snap.get('lista') : [];
+    } catch (err) {
+      // Sin el orden anterior se ordena por cantidad, como antes: es peor que
+      // conservarlo, pero mejor que dejar la portada sin recontar.
+      console.warn('[tienda] no se pudo leer el orden de la portada:', err?.message || err);
+    }
+  }
+
+  const posiciones = new Map();
+  (Array.isArray(lista) ? lista : []).forEach((rubro, i) => {
+    const clave = claveDeRubro(rubro?.clave || rubro?.nombre);
+    if (clave && !posiciones.has(clave)) posiciones.set(clave, i);
+  });
+  return posiciones;
+}
+
+/* ── Recuento de la portada tras un cambio suelto ───────────────────────── */
+
+// `tienda_config/rubros` lo rehace el sync cada seis horas. Entre medio, cada
+// cambio suelto del panel (mover un producto de subrubro, dejarlo sin stock,
+// borrarlo, publicarlo a mano) dejaba el conteo viejo: la tienda mostraba el
+// filtro "Aros 1" y adentro no había nada. Acá se programa rehacerlo unos
+// segundos después del último cambio, con el catálogo que el panel ya tiene
+// en memoria. Un conteo físico de veinte productos termina en UNA escritura.
+const ESPERA_RECUENTO_MS = 3000;
+let _fuenteCatalogo = null;
+let _recuentoTimer = null;
+let _recuentoEnCurso = null;
+
+/**
+ * La pantalla que tiene el catálogo entero en memoria lo presta para recontar.
+ * @param {() => object[]} dame  devuelve los productos del catálogo, crudos
+ */
+export function usarCatalogoParaRecontar(dame) {
+  _fuenteCatalogo = typeof dame === 'function' ? dame : null;
+}
+
+/** Programa rehacer el conteo por rubro y subrubro de la portada. */
+export function programarRecuentoDeRubros(db, { espera = ESPERA_RECUENTO_MS } = {}) {
+  if (!db || !_fuenteCatalogo) return;
+  if (_recuentoTimer) clearTimeout(_recuentoTimer);
+  _recuentoTimer = setTimeout(() => {
+    _recuentoTimer = null;
+    _recuentoEnCurso = recontarAhora(db)
+      .catch(err => console.warn('[tienda] recuento de rubros:', err?.message || err))
+      .finally(() => { _recuentoEnCurso = null; });
+  }, espera);
+}
+
+/** Espera el recuento en curso, si hay uno. Para las pruebas. */
+export async function esperarRecuento() {
+  if (_recuentoEnCurso) await _recuentoEnCurso;
+}
+
+async function recontarAhora(db) {
+  const catalogo = _fuenteCatalogo?.() || [];
+  if (!catalogo.length) return;
+  const { rubros, subrubrosExcluidos } = await leerPublicacion(db);
+  // Sin la lista de rubros no se sabe qué está publicado: contar "todo"
+  // pondría en la portada rubros que la tienda no muestra. Queda para el sync.
+  if (!Array.isArray(rubros)) return;
+  await recomputarRubros(db, catalogo.map(datos => ({ datos })), rubros, subrubrosExcluidos);
 }
 
 /* ── Escrituras ──────────────────────────────────────────────────────────
@@ -957,7 +1306,12 @@ async function escribirLoteSdk(db, escrituras) {
       for (const [clave, valor] of Object.entries(e.datos || {})) {
         datos[clave] = valor === undefined ? deleteField() : valor;
       }
-      if (e.crearSiFalta) lote.set(referencia, datos, { merge: true });
+      // `mergeFields` y no `{ merge: true }`: el merge del SDK es PROFUNDO y
+      // deja vivas las claves viejas de un mapa, mientras que la `updateMask`
+      // de la REST reemplaza el campo entero. Borrando un aviso de rubro con la
+      // REST caída, por una puerta el mapa quedaba sin la clave y por la otra
+      // el aviso borrado seguía ahí. Las dos tienen que hacer lo mismo.
+      if (e.crearSiFalta) lote.set(referencia, datos, { mergeFields: Object.keys(datos) });
       else lote.update(referencia, datos);
       continue;
     }
@@ -1082,32 +1436,97 @@ function aWebp(archivo) {
 }
 
 /**
+ * Las variedades como tienen que quedar en el espejo: con el precio propio de
+ * cada color ya rebajado, si al producto le toca un descuento.
+ *
+ * El que elige un color paga el precio de ESE color (`precioDeRenglon` en
+ * tienda/src/precios.js, y lo mismo el servidor al armar el pedido). Escribir
+ * las del catálogo, a precio de lista, dejaba la cinta "−20%" y el tachado
+ * puestos y el color cobrando el precio entero hasta la corrida siguiente del
+ * sync, hasta seis horas después.
+ *
+ * Si los descuentos no se pueden leer se escriben a precio de lista, que es lo
+ * que pasaba siempre: el sync lo corrige en la próxima corrida, y un stock que
+ * no llega a la vidriera se nota mucho antes.
+ */
+async function variedadesConSuRebaja(db, docId, datos, medidas) {
+  let descuentos = [];
+  try { descuentos = await leerDescuentosVigentes(db); } catch (_) { /* a precio de lista */ }
+  if (!descuentos.length) return medidas.variedades;
+  // El documento entero y no un objeto armado a mano: a qué descuento cae el
+  // producto se decide por el rubro y el subrubro tal como los publica el
+  // espejo, y esa traducción vive en un solo lugar.
+  return aplicarDescuento(String(docId), documentoEspejo(datos), descuentos).variedades;
+}
+
+/**
  * Le avisa a la tienda el stock nuevo de un producto, en el momento.
  *
  * El POS ya hace esto en cada venta. Esto cubre el otro lado: una reposición o
  * un conteo cargado desde el panel. Sin esto, la vidriera se enteraba recién en
  * la próxima corrida del sync.
  *
- * Misma regla que usa el POS y que usa el sync: si quedó en cero, el producto
- * sale de la vidriera. `updateDoc` falla si el producto no está publicado, que
- * es justo lo que queremos — no inventar fichas a medias para los 7.000
- * productos que no salen a la web.
+ * Se decide con `motivoDeNoPublicar()`, la MISMA regla que corre el sync, y no
+ * comparando contra cero a mano. Comparar contra cero dejaba ofrecido lo que no
+ * se puede comprar: un producto con venta mínima 50 y 42 en góndola seguía en
+ * la vidriera, entraba al pedido y desaparecía al confirmarlo. La regla ya
+ * contempla ese caso (y todos los demás), así que acá no se reimplementa nada.
+ * No se le pasa la lista de rubros a propósito: el rubro y el subrubro no
+ * cambiaron, lo único que cambió es el stock.
  *
- * Nunca tira error hacia arriba: que la vidriera no se entere no puede voltear
- * una edición de stock que ya se guardó.
+ * `updateDoc` falla si el producto no está publicado, que es justo lo que
+ * queremos: no inventar fichas a medias para los 7.000 productos que no salen a
+ * la web. Nunca tira error hacia arriba: que la vidriera no se entere no puede
+ * voltear una edición de stock que ya se guardó.
+ *
+ * @param {number} stock  el stock nuevo; alcanza solo si no viene `producto`
+ * @param {object|null} producto  el producto del catálogo YA con el stock nuevo
+ *        aplicado. Sin él no hay forma de saber la venta mínima ni el stock de
+ *        cada variedad, y se cae a la comparación contra cero de siempre.
  */
-export async function avisarStockALaTienda(db, docId, stock) {
+export async function avisarStockALaTienda(db, docId, stock, producto = null) {
   if (!db || !docId) return;
   const { doc, updateDoc, deleteDoc } = await import('firebase/firestore');
+
+  const datos = (producto && typeof producto === 'object') ? producto : null;
+  const medidas = datos ? medidasDe(datos) : null;
   const n = Number(stock);
+  const sigueEnLaTienda = datos
+    ? motivoDeNoPublicar(datos) === null
+    : (Number.isFinite(n) && n > 0);
+
   try {
     const ref = doc(db, 'tienda_productos', String(docId));
-    if (Number.isFinite(n) && n > 0) {
-      await updateDoc(ref, { stock: Math.round(n) });
+    if (sigueEnLaTienda) {
+      // Las variedades viajan con el total: un producto con colores guardaba el
+      // stock nuevo arriba y el de cada color viejo, así que el cliente elegía
+      // un color agotado y el pedido se caía al confirmarlo. Y con la rebaja
+      // puesta, o el color volvía al precio de lista abajo de la cinta.
+      await updateDoc(ref, medidas
+        ? { stock: medidas.stock,
+            variedades: await variedadesConSuRebaja(db, docId, datos, medidas) }
+        : { stock: Math.round(n) });
     } else {
       await deleteDoc(ref);
+      // Se fue de la tienda: el conteo de la portada se rehace en unos segundos.
+      programarRecuentoDeRubros(db);
     }
   } catch {
     // No está publicado (o ya no existe): no hay nada que avisar.
+  }
+}
+
+/**
+ * Un producto borrado del catálogo se va de la tienda en el momento. Antes
+ * quedaba en la vidriera hasta la próxima corrida del sync (hasta seis horas)
+ * y el cliente lo podía poner en el pedido.
+ */
+export async function sacarDeLaTienda(db, docId) {
+  if (!db || !docId) return;
+  try {
+    await borrarDoc(db, 'tienda_productos', String(docId));
+    programarRecuentoDeRubros(db);
+  } catch {
+    // El sync lo saca en la próxima corrida.
   }
 }

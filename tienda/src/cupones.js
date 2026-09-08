@@ -286,9 +286,13 @@ export function mensajeDeCupon(resultado) {
     case 'vencido':        return 'Ese cupón ya no está vigente.';
     case 'todavia_no':     return `Ese cupón vale a partir del ${fechaCorta(r.desde)}.`;
     case 'agotado':        return 'Ese cupón ya se usó todas las veces que se podía.';
+    // Sin el número (o con uno que no es tal) se dice sin él: "ya lo usaste
+    // null veces" es lo que se leía cuando el servidor no lo mandaba.
     case 'ya_usado':       return Number(r.veces) === 1
       ? 'Ese cupón ya lo usaste, y vale una sola vez por persona.'
-      : `Ese cupón ya lo usaste ${r.veces} veces, que es el máximo por persona.`;
+      : Number(r.veces) > 1
+        ? `Ese cupón ya lo usaste ${Number(r.veces)} veces, que es el máximo por persona.`
+        : 'Ese cupón ya lo usaste todas las veces que se podía por persona.';
     case 'primera_compra': return 'Ese cupón es solo para la primera compra.';
     case 'minimo':         return `Te faltan ${pesos(r.falta)} para usar este cupón: vale con compras desde ${pesos(r.minimo)}.`;
     case 'sin_productos':  return `Ese cupón es solo para ${r.alcance || 'algunos productos'} y no tenés nada de eso en el pedido.`;

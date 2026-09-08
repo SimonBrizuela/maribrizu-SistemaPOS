@@ -18,11 +18,12 @@
  * `tienda/src/datos.js`: si el documento no existe, la tienda igual funciona.
  */
 import { collection, doc, getDocs, orderBy, query } from 'firebase/firestore';
-import { getCached, invalidateCache } from '../cache.js';
+import { getCached, setCacheValue } from '../cache.js';
 import { leerDocRapido } from '../config.js';
 import { alertDialog, confirmDialog, escHtml } from '../components/dialogs.js';
 import { espejarLote, recomputarRubros, motivoDeNoPublicar, nombreBonito,
-         claveDeRubro, actualizarDoc, reemplazarDoc } from '../tienda_espejo.js';
+         claveDeRubro, actualizarDoc, reemplazarDoc,
+         olvidarPublicacion } from '../tienda_espejo.js';
 import { textoDeHorarios } from '../../../tienda/src/horarios.js';
 import '../styles/tienda.css';
 
@@ -231,6 +232,22 @@ function pintarHorarios() {
   }
 }
 
+/**
+ * La bajada de "Rubros en la tienda".
+ *
+ * Decía que un producto suelto se podía forzar o sacar desde el catálogo "sin
+ * tocar el rubro entero", y desde el 2026-09-08 la mitad de eso es mentira: con
+ * el rubro destildado la regla corta en "el rubro no está habilitado" antes de
+ * mirar la marca de la ficha, así que "Publicar siempre" no fuerza nada. La
+ * dueña destildó Cotillón, leyó esta bajada, fue al catálogo de la tienda a
+ * marcar las tres cosas que igual quería dejar, y siguieron sin salir mientras
+ * el editor de la ficha le decía justo lo contrario. Sacar tampoco necesita el
+ * catálogo: destildar el rubro ya se lleva todo.
+ */
+const PISTA_RUBROS = 'Lo tildado sale a la web y el rubro apagado no publica nada, '
+  + 'ni lo marcado con «Publicar siempre». Desde el catálogo de la tienda se puede '
+  + 'sacar un producto suelto, o forzarlo dentro de un rubro prendido.';
+
 function pintarRubros() {
   const caja = document.getElementById('cfgRubros');
   if (!caja) return;
@@ -250,6 +267,12 @@ function pintarRubros() {
     // Se pregunta como si el rubro estuviera habilitado: interesa cuántos
     // entrarían, no cuántos entran hoy. Y sin mirar los subrubros excluidos,
     // que son justamente lo que se está por decidir en esta pantalla.
+    //
+    // Hasta el 2026-09-08 acá se contaban aparte los marcados con "Publicar
+    // siempre", porque salían aunque el rubro estuviera apagado y había que
+    // avisarlo. Desde que el rubro destildado le gana a esa marca no hay nada
+    // que aclarar: apagado no sale nada, y el número de al lado es lo que
+    // entraría al prenderlo.
     const entra = !motivoDeNoPublicar(d, null);
     if (entra) actual.publicables++;
 
@@ -487,6 +510,8 @@ export async function renderTiendaAjustes(container, db) {
             <b id="cfgAbiertaTexto">${config.abierta !== false ? 'La tienda toma pedidos' : 'Tienda cerrada'}</b>
             <span style="display:block;font-size:11.5px;color:var(--text-muted)">
               Cerrada se puede mirar el catálogo, pero no se puede confirmar un pedido.
+              El cambio tarda unos minutos en llegar a la tienda; quien ya la tiene
+              abierta lo ve al recargar.
             </span>
           </span>
         </label>
@@ -551,8 +576,9 @@ export async function renderTiendaAjustes(container, db) {
         </label>
         <div class="tienda-pista" style="margin-bottom:16px">
           Apagado, el checkout ofrece solo transferencia y la portada deja de
-          prometer efectivo. Prenderlo lo vuelve a mostrar al instante, sin
-          publicar la tienda de nuevo.
+          prometer efectivo. Prenderlo lo vuelve a mostrar sin publicar la
+          tienda de nuevo: tarda unos minutos en llegar, y quien ya la tiene
+          abierta lo ve al recargar.
         </div>
 
         ${campo('cfgAlias', 'Alias', config.pago?.alias,
@@ -568,10 +594,7 @@ export async function renderTiendaAjustes(container, db) {
       <section class="tienda-bloque" style="background:var(--surface);border:1px solid var(--border);
                border-radius:12px;padding:18px 20px;margin:0">
         <h4>Rubros en la tienda</h4>
-        <div class="tienda-pista" style="margin-bottom:12px">
-          Lo tildado sale a la web. Un producto suelto se puede forzar o sacar
-          desde el catálogo de la tienda, sin tocar el rubro entero.
-        </div>
+        <div class="tienda-pista" style="margin-bottom:12px">${PISTA_RUBROS}</div>
 
         <div class="tienda-buscador">
           <span class="material-icons tienda-buscador__lupa">search</span>
@@ -815,6 +838,22 @@ async function guardarTodo(container) {
         subrubros_excluidos: excluidos,
       });
 
+      // La escritura fue por REST: el cache del SDK sigue con la lista de
+      // antes, nadie escucha este documento y ninguna otra pantalla se entera.
+      // Prender JUGUETERÍA y pasar derecho a Tienda > Catálogo a cargarle fotos
+      // arrancaba con la lista vieja: sus productos figuraban como "el rubro no
+      // está habilitado" y cada foto que se subía los borraba del espejo hasta
+      // la corrida siguiente del sync. Apagar un rubro daba el problema al
+      // revés. Se siembra lo recién guardado en los dos lugares que lo leen:
+      //   · el cache compartido, que es de donde sale la lista del catálogo de
+      //     la tienda (invalidar no alcanza: el fetcher siguiente vuelve a leer
+      //     el mismo cache viejo del SDK);
+      //   · el minuto de memoria del espejo, que es el que usa el guardado de
+      //     cada ficha.
+      setCacheValue('tienda:publicacion',
+                    { rubros: elegidos, subrubrosExcluidos: excluidos });
+      olvidarPublicacion();
+
       const tocados = [...new Set([...entraron, ...salieron, ...rubrosConSubsCambiados])];
       const afectados = _catalogo
         .filter(d => tocados.includes(claveDeRubro(d.rubro)))
@@ -831,7 +870,6 @@ async function guardarTodo(container) {
 
       _habilitados = elegidos;
       _subExcluidos = excluidos;
-      invalidateCache('tienda:publicacion');
       estado.textContent = `Guardado. ${publicados} productos en la tienda, ${sacados} afuera.`;
     } else {
       estado.textContent = 'Guardado.';

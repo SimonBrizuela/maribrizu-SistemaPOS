@@ -244,5 +244,26 @@
       "stock": 40,
       "imagen_url": "https://ejemplo/regla-vieja.jpg"
     }
+  },
+  {
+    "que_prueba": "Precios terminados en .5: los dos lados redondean igual",
+    "doc_id": "p14",
+    "datos": {
+      "nombre": "CARTULINA REXON GLITTER",
+      "codigo": "190500002314",
+      "marca": "REXON",
+      "rubro": "libreria",
+      "categoria": "PAPELES",
+      "estado": "activo",
+      "es_conjunto": true,
+      "conjunto_tipo": "pack",
+      "conjunto_contenido": 10,
+      "conjunto_precio_unidad": 312.5,
+      "precio_venta": 3125.5,
+      "conjunto_colores": [
+        { "color": "CELESTE", "unidades": 2, "restante": 0, "precio": 1874.5 },
+        { "color": "PLATEADO", "unidades": 1, "restante": 3, "precio": 126.5 }
+      ]
+    }
   }
 ]

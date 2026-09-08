@@ -16,7 +16,7 @@ import { marcarVisto } from '../pedidos_watcher.js';
 import { planDescuento, documentosDeVenta } from '../pedido_venta.js';
 import { registrarMovimiento } from '../stock_ledger.js';
 import { reflejarSiPublicado } from '../tienda_espejo.js';
-import { enlaceAviso } from '../avisos_pedido.js';
+import { enlaceAviso, whatsappDe } from '../avisos_pedido.js';
 import { imprimirPedido } from '../ticket_pedido.js';
 import { leerDocRapido } from '../config.js';
 // Los botones de esta pantalla son los mismos que los de las otras dos de la
@@ -189,14 +189,66 @@ async function marcarAvisado(id, estado) {
   }
 }
 
+/**
+ * Por qué un pedido, tal como está en la base, no puede pasar a `estado`.
+ * Null si se puede.
+ *
+ * La tarjeta que se toca puede ser vieja. Con dos PCs en el mostrador, una
+ * entrega el pedido y la otra —que todavía lo ve "listo"— lo cancela: quedaba
+ * cancelado con la venta registrada y el stock descontado, y el cupón
+ * recuperaba un uso. Al revés también: una cancela y la otra avanza el pedido
+ * desde la tarjeta vieja, y el pedido cancelado vuelve a la fila.
+ */
+function motivoParaNoMover(pedido, estado) {
+  if (pedido.venta_registrada) return 'ya se entregó y la venta está registrada';
+  if (pedido.estado === 'entregado') return 'ya se entregó';
+  if (pedido.estado === 'cancelado' && estado !== 'cancelado') return 'está cancelado';
+  return null;
+}
+
+/**
+ * La tarjeta con lo que hay de verdad en la base, sin esperar al próximo
+ * snapshot. Se usa después de un rechazo: lo que se tocó era una tarjeta
+ * vieja, y dejarla como estaba invita a tocarla de nuevo.
+ */
+function refrescarPedido(id, datos) {
+  const i = _pedidos.findIndex(p => p.id === id);
+  if (i === -1) return;
+  _pedidos[i] = { id, ...datos };
+  pintarContadores();
+  pintarLista();
+}
+
+/**
+ * Cambia el estado releyendo el pedido en la misma transacción, no con un
+ * `updateDoc` a ciegas: si desde otra PC ya lo entregaron o lo cancelaron, se
+ * avisa y no se toca. Devuelve si el cambio quedó hecho.
+ */
 async function cambiarEstado(id, estado) {
   if (estado === 'entregado') return entregarPedido(id);
+  const ref = doc(_db, 'tienda_pedidos', id);
+  let resultado;
   try {
-    await updateDoc(doc(_db, 'tienda_pedidos', id), { estado, visto: true });
+    resultado = await runTransaction(_db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists()) throw new Error('el pedido ya no existe');
+      const pedido = snap.data() || {};
+      const rechazo = motivoParaNoMover(pedido, estado);
+      if (rechazo) return { rechazo, pedido };
+      tx.update(ref, { estado, visto: true });
+      return {};
+    });
   } catch (e) {
     console.warn('[pedidos] no se pudo cambiar el estado:', e);
     alert('No se pudo cambiar el estado del pedido.');
+    return false;
   }
+  if (resultado.rechazo) {
+    alert(`No se ${estado === 'cancelado' ? 'canceló' : 'cambió'} el pedido: ${resultado.rechazo}.`);
+    refrescarPedido(id, resultado.pedido);
+    return false;
+  }
+  return true;
 }
 
 /**
@@ -217,6 +269,9 @@ async function entregarPedido(id) {
       const snap = await tx.get(ref);
       if (!snap.exists()) throw new Error('el pedido ya no existe');
       const pedido = snap.data() || {};
+      // La tarjeta puede ser vieja: si otra PC lo canceló mientras acá seguía
+      // en "listo", entregarlo es vender lo que el cliente ya no quiere.
+      if (pedido.estado === 'cancelado') return { rechazo: 'está cancelado', pedido };
       if (pedido.venta_registrada) {
         tx.update(ref, { estado: 'entregado', visto: true });
         return { yaEstaba: true };
@@ -249,9 +304,14 @@ async function entregarPedido(id) {
   } catch (e) {
     console.warn('[pedidos] no se pudo entregar el pedido:', e);
     alert('No se pudo marcar el pedido como entregado: ' + (e?.message || e) + '\nNo se descontó stock ni se registró la venta.');
-    return;
+    return false;
   }
-  if (resultado.yaEstaba) return;
+  if (resultado.rechazo) {
+    alert(`No se marcó como entregado: el pedido ${resultado.rechazo}.\nNo se descontó stock ni se registró la venta.`);
+    refrescarPedido(id, resultado.pedido);
+    return false;
+  }
+  if (resultado.yaEstaba) return true;
 
   const { pedido, plan, catalogo } = resultado;
   const referencia = `Pedido tienda ${pedido.codigo || id}`;
@@ -274,6 +334,7 @@ async function entregarPedido(id) {
   }
   // Semáforo del catálogo: las PCs bajan el stock nuevo en el próximo sync.
   setDoc(doc(_db, 'config', 'catalogo_meta'), { last_updated: serverTimestamp() }, { merge: true }).catch(() => {});
+  return true;
 }
 
 /* ── Pintado ─────────────────────────────────────────────────────────────── */
@@ -297,9 +358,18 @@ function tarjeta(p) {
   const esDelivery = entrega.modo === 'delivery';
   const aviso = enlaceAviso(p, { direccionLocal: 'Av. Alfonsina Storni 168' });
 
-  const whatsapp = String(p?.cliente?.telefono || '').replace(/\D/g, '');
+  // El mismo número que arma el botón "Avisarle": antes acá se agregaba el 549
+  // solo a los cortos, y "+54 351 619 4411" salía sin el 9, a un celular que
+  // no existe.
+  const whatsapp = whatsappDe(p);
   const mensaje = encodeURIComponent(
     `Hola ${p?.cliente?.nombre || ''}, te escribimos de Librería Liceo por tu pedido ${p.codigo || ''}.`);
+
+  // El teléfono se muestra siempre que haya uno, sirva o no para WhatsApp. El
+  // checkout lo acepta desde seis dígitos y `whatsappDe` devuelve null abajo de
+  // ocho: con un fijo de Córdoba —"4234567", siete dígitos— la tarjeta se
+  // quedaba sin ningún teléfono y el mostrador no tenía cómo llamar al cliente.
+  const telefono = String(p?.cliente?.telefono || '').trim();
 
   const destino = esDelivery
     ? (entrega.coordenadas
@@ -331,10 +401,14 @@ function tarjeta(p) {
       <div style="display:flex;flex-wrap:wrap;gap:8px 18px;font-size:13.5px">
         <span><span class="material-icons" style="font-size:16px;vertical-align:-3px;color:var(--text-muted)">person</span>
           <b>${esc(p?.cliente?.nombre || 'Sin nombre')}</b></span>
-        ${whatsapp ? `<a href="https://wa.me/${esc(whatsapp.length <= 10 ? '549' + whatsapp : whatsapp)}?text=${mensaje}"
-             target="_blank" rel="noopener" style="color:#2f7a3d;font-weight:600;text-decoration:none">
-            <span class="material-icons" style="font-size:16px;vertical-align:-3px">chat</span>
-            ${esc(p.cliente.telefono)}</a>` : ''}
+        ${!telefono ? '' : whatsapp
+          ? `<a href="https://wa.me/${esc(whatsapp)}?text=${mensaje}"
+                target="_blank" rel="noopener" style="color:#2f7a3d;font-weight:600;text-decoration:none">
+              <span class="material-icons" style="font-size:16px;vertical-align:-3px">chat</span>
+              ${esc(telefono)}</a>`
+          : `<span style="color:var(--text-muted)">
+              <span class="material-icons" style="font-size:16px;vertical-align:-3px">call</span>
+              ${esc(telefono)}</span>`}
       </div>
 
       <div style="background:var(--bg);border-radius:8px;padding:10px 12px;font-size:13px;display:flex;flex-direction:column;gap:4px">
@@ -525,9 +599,12 @@ export async function renderPedidosTienda(container, db) {
       return;
     }
 
+    // El botón se apaga mientras se escribe y, si no salió, se vuelve a
+    // prender: el snapshot solo repinta cuando algo cambió en la base, y con
+    // un fallo de red no cambió nada.
     if (boton.dataset.act === 'avanzar') {
       boton.disabled = true;
-      await cambiarEstado(id, boton.dataset.estado);
+      if (!await cambiarEstado(id, boton.dataset.estado)) boton.disabled = false;
       return;
     }
 
@@ -535,7 +612,7 @@ export async function renderPedidosTienda(container, db) {
       const p = _pedidos.find(x => x.id === id);
       if (!confirm(`¿Cancelar el pedido ${p?.codigo || ''} de ${p?.cliente?.nombre || ''}?`)) return;
       boton.disabled = true;
-      await cambiarEstado(id, 'cancelado');
+      if (!await cambiarEstado(id, 'cancelado')) boton.disabled = false;
     }
   });
 

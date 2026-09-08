@@ -8,8 +8,11 @@ unicamente lo que un cliente puede ver.
 
 Que publica:
   1. Todo producto de un rubro habilitado en tienda_config/publicacion.
-  2. Mas los productos sueltos marcados con tienda_publicar = True.
-  3. Menos los marcados con tienda_publicar = False, que gana sobre el rubro.
+  2. Dentro de un rubro habilitado, los marcados con tienda_publicar = True
+     salen aunque el subrubro este excluido o no tengan foto. Con el rubro
+     apagado no sale nada, ni con la marca: la dueña destildo Cotillon y
+     siguio saliendo lo marcado a mano.
+  3. Menos los marcados con tienda_publicar = False, que gana sobre todo.
 
 Corre con el Admin SDK, asi que salta las reglas. Pensado para el Programador de
 tareas de Windows en la PC del local, cada 15 minutos.
@@ -180,6 +183,24 @@ def tokenizar(*textos):
     return vistas[:25]
 
 
+def a_peso(valor):
+    """
+    Redondea plata al peso entero: floor(x + 0.5) y no round().
+
+    round() de Python redondea al par (312,5 -> 312) y Math.round() de
+    JavaScript sube siempre (312,5 -> 313). El panel arma el documento con la
+    version JS al guardar la ficha y el sync lo reescribe con esta cada seis
+    horas: con dos cuentas distintas el precio oscilaba un peso solo, para
+    siempre. Pasa de verdad en el catalogo (Cartulina Rexon Glitter Celeste a
+    1.874,5; Mapa Rivadavia Grecia a 126,5). Misma cuenta que ya usaba
+    aplicar_descuento() y que hace aPeso() en webapp/src/tienda_espejo.js.
+    """
+    try:
+        return math.floor(float(valor) + 0.5)
+    except (TypeError, ValueError):
+        return 0
+
+
 def medidas_de(datos):
     """
     Traduce el modelo de "conjunto" del POS a lo que necesita una tienda.
@@ -224,7 +245,7 @@ def medidas_de(datos):
 
     if not es_conjunto:
         return {
-            'unidad': unidad, 'precio': round(precio_venta), 'precio_pack': None,
+            'unidad': unidad, 'precio': a_peso(precio_venta), 'precio_pack': None,
             'pack_tipo': None, 'pack_nombre': None, 'pack_contenido': None,
             'stock': max(0, int(numero('stock'))), 'variedades': [],
             **venta_minima(datos, unidad),
@@ -254,8 +275,8 @@ def medidas_de(datos):
 
     return {
         'unidad': unidad,
-        'precio': round(precio_unidad or precio_venta),
-        'precio_pack': round(precio_venta) if hay_pack else None,
+        'precio': a_peso(precio_unidad or precio_venta),
+        'precio_pack': a_peso(precio_venta) if hay_pack else None,
         'pack_tipo': tipo if hay_pack else None,
         # Como se llama el pack en la tienda: "Rollo", "Caja de 12". El nombre
         # del POS es una clave interna y a veces no dice nada ("carton").
@@ -369,7 +390,7 @@ def variedades_de(datos):
         salida.append({
             'nombre': publico or nombre_bonito(nombre),
             'stock': max(0, stock),
-            'precio': round(float(precio)) if precio else None,
+            'precio': a_peso(precio) if precio else None,
             'imagen': imagen or None,
         })
     return salida
@@ -392,12 +413,17 @@ def imagenes_de(datos):
 
 
 def se_publica(datos, rubros_habilitados=None, subrubros_excluidos=None):
-    """Reglas de curado. El interruptor por producto gana sobre el rubro.
+    """Reglas de curado.
 
-    El rubro manda: apagado no sale nada de el; prendido sale todo menos los
-    subrubros que el panel dejo afuera en `subrubros_excluidos`. Gemelo de
+    El rubro manda: apagado no sale nada de el, ni lo marcado a mano con
+    "publicar siempre"; prendido sale todo menos los subrubros que el panel
+    dejo afuera en `subrubros_excluidos`. Adentro de un rubro prendido la marca
+    por producto le gana al subrubro excluido y a la falta de foto. Gemelo de
     motivoDeNoPublicar() en webapp/src/tienda_espejo.js: si una de las dos
     cambia sin la otra, el sync vuelve a subir lo que el panel saco.
+
+    Hasta el 2026-09-08 la marca a mano ganaba sobre el rubro apagado: la
+    dueña destildo Cotillon en la configuracion y lo marcado siguio saliendo.
 
     `rubros_habilitados=None` es "no filtres por rubro, contestame por el resto
     de las reglas": asi pregunta quien quiere saber por que un producto no esta
@@ -449,23 +475,26 @@ def se_publica(datos, rubros_habilitados=None, subrubros_excluidos=None):
     if medidas.get('minimo') and medidas['stock'] < medidas['minimo']:
         return False, 'sin stock'
 
+    rubro = str(datos.get('rubro') or '').strip().upper()
+
+    # El rubro apagado gana sobre la marca a mano y sobre el subrubro: con la
+    # lista de rubros puesta se mira ANTES que todo eso. Sin la lista (quien
+    # pregunta "por que no esta en la tienda") se contesta por el resto.
+    if rubros_habilitados is not None and rubro not in rubros_habilitados:
+        return False, 'rubro no habilitado'
+
     if marca_manual is True:
         return True, 'incluido a mano'
 
-    rubro = str(datos.get('rubro') or '').strip().upper()
-
-    # El subrubro se mira ANTES que el rubro, igual que en el panel: quien
-    # pregunta sin pasar la lista de rubros igual tiene derecho a que le digan
-    # que el subrubro esta excluido, y con las dos listas puestas las dos
-    # implementaciones nombran la misma regla en vez de contestar distinto.
+    # El subrubro se mira aunque no se haya pasado la lista de rubros, igual
+    # que en el panel: quien pregunta sin la lista igual tiene derecho a que le
+    # digan que el subrubro esta excluido.
     sub = str(datos.get('sub_rubro') or '').strip().upper()
     if sub and sub in (subrubros_excluidos or {}).get(rubro, set()):
         return False, 'subrubro excluido'
 
     if rubros_habilitados is None:
         return True, 'sin filtro de rubros'
-    if rubro not in rubros_habilitados:
-        return False, 'rubro no habilitado'
 
     # La foto es lo ULTIMO que se mira, a proposito: asi "sin foto" significa
     # "sale a la vidriera apenas le saquen una", y no se mezcla con lo que igual
@@ -547,57 +576,115 @@ def armar_documento(doc_id, datos):
     }
 
 
-def leer_descuentos(db):
-    """Los descuentos vigentes de la tienda, del mas general al mas puntual.
+# ── Descuentos ────────────────────────────────────────────────────────────
+# Viven en `tienda_descuentos` y son de la WEB: las promociones del POS son
+# del mostrador y no se mezclan. Cada uno dice sobre que cae (un rubro entero,
+# un subrubro o un articulo) y cuanto saca.
+#
+# Todo lo de este bloque es gemelo de webapp/src/tienda_descuentos_regla.js:
+# el panel lo corre cada vez que espeja un producto o toca un descuento, y el
+# sync en cada corrida. Si los dos no dan EXACTAMENTE lo mismo, el precio de la
+# vidriera cambia solo cada seis horas. Los compara
+# tienda/pruebas/descuentos_regla.test.js sobre los casos de casos_espejo.py.
 
-    Viven en `tienda_descuentos` y son de la WEB: las promociones del POS son
-    del mostrador y no se mezclan. Cada uno dice sobre que cae (un rubro entero,
-    un subrubro o un articulo) y cuanto saca.
+# Mas que esto no es un descuento, es un error de tipeo.
+TOPE_PORCENTAJE = 90.0
+
+
+def clave_de_objetivo(texto):
+    """Clave para comparar rubros, subrubros e ids de producto: sin tildes,
+    sin mayusculas, sin espacios de sobra. Es `normalizar()` con los espacios
+    interiores colapsados.
+
+    El objetivo se guarda desde el catalogo crudo ("LIBRERÍA|BOLIGRAFO") y el
+    espejo publica el subrubro bonito ("Bolígrafo"): comparados tal cual no
+    coincidian nunca, y el descuento no le tocaba el precio a nadie.
     """
-    ahora = datetime.now(timezone.utc)
+    return ' '.join(normalizar(texto).split())
+
+
+def _fecha(v):
+    """Una fecha como llega de Firestore (datetime) o de un caso de prueba
+    (texto ISO). Cualquier otra cosa es "sin fecha"."""
+    if isinstance(v, datetime):
+        return v if v.tzinfo else v.replace(tzinfo=timezone.utc)
+    if isinstance(v, str) and v.strip():
+        try:
+            return _fecha(datetime.fromisoformat(v.strip().replace('Z', '+00:00')))
+        except ValueError:
+            return None
+    return None
+
+
+def _numero(v):
+    """Un numero o 0. Entero cuando no tiene decimales, para que el espejo
+    guarde 18500 y no 18500.0."""
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return 0
+    if n != n or n in (float('inf'), float('-inf')):
+        return 0
+    return int(n) if n.is_integer() else n
+
+
+def descuentos_vigentes(docs, ahora):
+    """Los descuentos que rigen ahora, del mas general al mas puntual.
+
+    `docs` son pares (id, datos) tal como estan en `tienda_descuentos`.
+    """
     vigentes = []
-    for d in db.collection('tienda_descuentos').stream():
-        x = d.to_dict() or {}
+    for doc_id, x in docs:
+        x = x or {}
         if x.get('activo') is False:
             continue
-        desde, hasta = x.get('desde'), x.get('hasta')
-        if isinstance(desde, datetime) and ahora < desde:
+        desde, hasta = _fecha(x.get('desde')), _fecha(x.get('hasta'))
+        if desde and ahora < desde:
             continue
-        if isinstance(hasta, datetime) and ahora > hasta:
+        if hasta and ahora > hasta:
             continue
-        try:
-            valor = float(x.get('valor') or 0)
-        except (TypeError, ValueError):
-            continue
+        valor = _numero(x.get('valor'))
         if valor <= 0:
             continue
         vigentes.append({
-            'id': d.id,
+            'id': str(doc_id),
             'nombre': str(x.get('nombre') or 'Descuento'),
             'tipo': 'monto' if str(x.get('tipo')) == 'monto' else 'porcentaje',
             'valor': valor,
             'alcance': str(x.get('alcance') or 'rubro'),
-            'objetivo': str(x.get('objetivo') or '').strip().upper(),
+            'objetivo': clave_de_objetivo(x.get('objetivo')),
             'redondear': x.get('redondear') is True,
         })
     # El mas especifico manda: si hay uno del rubro y otro del articulo, gana el
-    # del articulo. Mismo criterio que los avisos.
+    # del articulo. Empatados en alcance decide el id, para que el panel y el
+    # sync elijan el mismo aunque lean la coleccion en otro orden.
     orden = {'rubro': 0, 'subrubro': 1, 'producto': 2}
-    vigentes.sort(key=lambda x: orden.get(x['alcance'], 0))
+    vigentes.sort(key=lambda x: (orden.get(x['alcance'], 0), x['id']))
     return vigentes
 
 
+def leer_descuentos(db):
+    """Los descuentos vigentes de la tienda, leidos de Firestore."""
+    return descuentos_vigentes(
+        ((d.id, d.to_dict()) for d in db.collection('tienda_descuentos').stream()),
+        datetime.now(timezone.utc))
+
+
 def descuento_para(doc_id, doc, descuentos):
-    """Cual de los descuentos le toca a este producto, si le toca alguno."""
-    rubro = str(doc.get('rubro') or '').strip().upper()
-    sub = str(doc.get('sub_rubro') or '').strip().upper()
+    """Cual de los descuentos le toca a este producto, si le toca alguno. Se
+    recorren de general a puntual y se queda el ultimo que coincide."""
+    rubro = clave_de_objetivo(doc.get('rubro'))
+    sub = clave_de_objetivo(doc.get('sub_rubro'))
+    id_ = clave_de_objetivo(doc_id)
     elegido = None
     for d in descuentos:
+        if not d['objetivo']:
+            continue
         if d['alcance'] == 'rubro' and d['objetivo'] == rubro:
             elegido = d
         elif d['alcance'] == 'subrubro' and d['objetivo'] == f'{rubro}|{sub}':
             elegido = d
-        elif d['alcance'] == 'producto' and d['objetivo'] == str(doc_id).upper():
+        elif d['alcance'] == 'producto' and d['objetivo'] == id_:
             elegido = d
     return elegido
 
@@ -605,73 +692,155 @@ def descuento_para(doc_id, doc, descuentos):
 def redondear_centena(v):
     """A la centena mas cercana, con caida a decena si el monto es chico.
 
-    Gemelo de `redondearCentena` en webapp/src/pages/catalogo.js y de la copia
-    del panel de descuentos. Es la regla con la que se manejan los precios del
-    local: un 20% que deja 6.327 desentona al lado del resto.
+    Gemelo de `redondearCentena` en webapp/src/tienda_descuentos_regla.js (y
+    misma regla que el ±100 de webapp/src/pages/catalogo.js). Es la regla con
+    la que se manejan los precios del local: un 20% que deja 6.327 desentona
+    al lado del resto.
     """
-    n = float(v or 0)
+    n = _numero(v)
     if n <= 0:
-        return 0.0
+        return 0
     r100 = math.floor(n / 100 + 0.5) * 100
     if r100 > 0:
-        return float(r100)
+        return r100
     r10 = math.floor(n / 10 + 0.5) * 10
-    return float(r10) if r10 > 0 else float(math.floor(n + 0.5))
+    return r10 if r10 > 0 else math.floor(n + 0.5)
+
+
+def _lista_de_variedad(v):
+    """El precio de lista de una variedad: el que tenia antes de la rebaja
+    cuando ya esta rebajada, y si no el que trae. Cero cuando no tiene precio
+    propio: esa variedad paga el del producto y no hay nada que reescalar."""
+    return _numero(v.get('precio_anterior')) or _numero(v.get('precio')) or 0
+
+
+def _variedades_con_rebaja(doc, nuevo, lista):
+    """Las variedades siguen la misma rebaja que el producto.
+
+    Cada color puede tener precio propio (`variedades[].precio`, que sale del
+    catalogo) y la tienda le cobra ESE precio al que elige el color: lo
+    prefiere `precioDeRenglon` en tienda/src/precios.js y lo mismo hace el
+    servidor al armar el pedido. Dejarlas a precio de lista mostraba la cinta
+    "-20%" y el tachado en la card, y al tocar el color el precio SUBIA al de
+    lista, que era ademas lo que terminaba cobrando `crear-pedido`.
+
+    Se reescala por la proporcion del producto (nuevo/lista) y no aplicando el
+    descuento otra vez: con un monto fijo, un color mas barato que el monto
+    quedaria en cero o con otro porcentaje que el anunciado en la cinta.
+
+    Gemelo de `variedadesConRebaja` en webapp/src/tienda_descuentos_regla.js.
+    """
+    variedades = doc.get('variedades')
+    if not isinstance(variedades, list) or not variedades:
+        return
+    salida = []
+    for v in variedades:
+        if not isinstance(v, dict):
+            salida.append(v)
+            continue
+        lista_v = _lista_de_variedad(v)
+        if lista_v <= 0:
+            salida.append(v)
+            continue
+        copia = dict(v)
+        copia['precio'] = max(1, math.floor(lista_v * nuevo / lista + 0.5))
+        copia['precio_anterior'] = lista_v
+        salida.append(copia)
+    doc['variedades'] = salida
+
+
+def _variedades_a_lista(doc):
+    """Las variedades de vuelta a precio de lista, sin rastro de la rebaja."""
+    variedades = doc.get('variedades')
+    if not isinstance(variedades, list) or not variedades:
+        return
+    salida = []
+    for v in variedades:
+        if not isinstance(v, dict):
+            salida.append(v)
+            continue
+        lista_v = _lista_de_variedad(v)
+        if lista_v <= 0:
+            salida.append(v)
+            continue
+        copia = dict(v)
+        copia.pop('precio_anterior', None)
+        copia['precio'] = lista_v
+        salida.append(copia)
+    doc['variedades'] = salida
 
 
 def aplicar_descuento(doc_id, doc, descuentos):
     """Deja el precio con descuento en el documento del espejo.
 
     `precio` pasa a ser lo que paga el cliente y `precio_anterior` guarda el de
-    lista, que es lo que la vidriera tacha. La cuenta SIEMPRE parte del precio de
-    lista: si se recalculara sobre el precio ya rebajado, cada corrida del sync
-    descontaria de nuevo sobre lo descontado y el precio se derrumbaria solo.
+    lista, que es lo que la vidriera tacha. El pack y el precio propio de cada
+    variedad siguen la misma rebaja. La cuenta SIEMPRE parte del precio
+    de lista (`precio_anterior` si ya hay uno puesto, y si no `precio`): si se
+    recalculara sobre el precio ya rebajado, cada corrida del sync descontaria
+    de nuevo sobre lo descontado y el precio se derrumbaria solo.
+
+    Un monto fijo que se come el precio entero no es una oferta: ese producto
+    queda a precio de lista y sin descuento. Antes quedaba a $1, y un precio en
+    un peso se lee como error, no como rebaja, y deja pasar pedidos que no se
+    pueden cobrar.
+
+    floor(x + 0.5) y no round(): round() de Python redondea al par (12,5 -> 12)
+    y Math.round() de JavaScript siempre para arriba (12,5 -> 13). El panel
+    aplica el descuento al instante con la version JS y el sync lo reafirma
+    con esta: si no redondean igual, el precio se mueve un peso solo, en cada
+    corrida, para siempre.
     """
-    d = descuento_para(doc_id, doc, descuentos)
-    lista = float(doc.get('precio') or 0)
-    if not d or lista <= 0:
+    lista = _numero(doc.get('precio_anterior')) or _numero(doc.get('precio')) or 0
+    pack_lista = _numero(doc.get('precio_pack_anterior')) or _numero(doc.get('precio_pack')) or 0
+
+    def sin_rebaja():
+        if lista > 0:
+            doc['precio'] = lista
         doc['precio_anterior'] = None
+        if pack_lista > 0:
+            doc['precio_pack'] = pack_lista
+        doc['precio_pack_anterior'] = None
         doc['descuento'] = None
+        _variedades_a_lista(doc)
         return doc
 
+    d = descuento_para(doc_id, doc, descuentos)
+    if not d or lista <= 0:
+        return sin_rebaja()
+
     if d['tipo'] == 'porcentaje':
-        nuevo = lista * (1 - min(d['valor'], 90.0) / 100.0)
+        nuevo = lista * (1 - min(d['valor'], TOPE_PORCENTAJE) / 100)
     else:
         nuevo = lista - d['valor']
     if d.get('redondear'):
         # Redondear a la centena mas cercana puede EMPUJAR el precio para
-        # arriba: 59 se va a 100. En un producto barato eso anulaba el
+        # arriba: 70 se va a 100. En un producto barato eso anulaba el
         # descuento entero (el precio "rebajado" quedaba arriba del de lista).
         # Se redondea solo si el resultado sigue siendo mas barato.
         r = redondear_centena(nuevo)
         if 0 < r < lista:
             nuevo = r
-    # Nunca por debajo de un peso: un precio en cero se lee como error, no como
-    # oferta, y deja pasar pedidos que no se pueden cobrar.
-    #
-    # floor(x + 0.5) y no round(): round() de Python redondea al par (2,5 -> 2)
-    # y Math.round() de JavaScript siempre para arriba (2,5 -> 3). El panel
-    # aplica el descuento al instante con la version JS y el sync lo reafirma
-    # con esta: si no redondean igual, el precio se mueve un peso solo, en cada
-    # corrida, para siempre.
-    nuevo = max(1.0, math.floor(nuevo + 0.5))
-    if nuevo >= lista:
-        doc['precio_anterior'] = None
-        doc['descuento'] = None
-        return doc
+    nuevo = math.floor(nuevo + 0.5)
+    if nuevo <= 0 or nuevo >= lista:
+        return sin_rebaja()
 
     doc['precio'] = nuevo
     doc['precio_anterior'] = lista
     doc['descuento'] = {
         'id': d['id'],
         'nombre': d['nombre'],
-        'porcentaje': int(round((1 - nuevo / lista) * 100)),
+        'porcentaje': math.floor((1 - nuevo / lista) * 100 + 0.5),
     }
     # El pack sigue la misma rebaja: si no, llevarse el rollo entero saldria mas
-    # caro por unidad que comprar suelto y el cliente lo nota.
-    if doc.get('precio_pack'):
-        doc['precio_pack'] = max(1.0, math.floor(
-            float(doc['precio_pack']) * nuevo / lista + 0.5))
+    # caro por unidad que comprar suelto y el cliente lo nota. El de lista
+    # queda guardado para que el panel pueda deshacer la cuenta.
+    if pack_lista > 0:
+        doc['precio_pack_anterior'] = pack_lista
+        doc['precio_pack'] = max(1, math.floor(pack_lista * nuevo / lista + 0.5))
+    else:
+        doc['precio_pack_anterior'] = None
+    _variedades_con_rebaja(doc, nuevo, lista)
     return doc
 
 

@@ -44,6 +44,14 @@ describe('el número para WhatsApp', () => {
       .toBe('5493516194411');
   });
 
+  it('el copiado de un contacto, con espacios y sin el 9', () => {
+    // Así llegó desde el tablero: "+54 351 619 4411". La tarjeta del pedido
+    // armaba el enlace del teléfono con otra regla y lo mandaba sin el 9,
+    // mientras el botón de avisar lo armaba bien. Ahora los dos salen de acá.
+    expect(whatsappDe(pedido({ cliente: { telefono: '+54 351 619 4411' } })))
+      .toBe('5493516194411');
+  });
+
   it('saca el 15 de las agendas viejas', () => {
     expect(whatsappDe(pedido({ cliente: { telefono: '0351 15 619-4411' } })))
       .toBe('5493516194411');

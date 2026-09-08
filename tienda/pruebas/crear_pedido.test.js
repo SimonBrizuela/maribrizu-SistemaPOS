@@ -717,6 +717,26 @@ describe('con cupón', () => {
     }
   });
 
+  it('la misma persona dos veces en el mismo instante: el que se retira dice cuántas veces valía', async () => {
+    // Los dos pasan la primera mirada con cero usos; es la segunda, ya con el
+    // pedido escrito, la que los retira. Esa respuesta mandaba `veces: null`
+    // —lo buscaba en lo que se guarda en el pedido, que no trae ese campo— y
+    // el cliente leía "ya lo usaste null veces".
+    mundo.cupones.BIENVENIDA.usos_por_persona = 1;
+    const crear = await cargar();
+    const respuestas = await Promise.all([
+      crear(pedir(conCupon([{ id: 'resma', cantidad: 1 }]))),
+      crear(pedir(conCupon([{ id: 'resma', cantidad: 1 }]))),
+    ]);
+
+    expect(mundo.borrados.length).toBeGreaterThan(0);
+    const rechazados = respuestas.filter(r => r.status !== 200);
+    expect(rechazados.length).toBeGreaterThan(0);
+    for (const r of rechazados) {
+      expect(await r.json()).toMatchObject({ error: 'cupon', motivo: 'ya_usado', veces: 1 });
+    }
+  });
+
   it('con mínimo de compra dice cuánto falta, y el pedido no se guarda', async () => {
     mundo.cupones.BIENVENIDA.minimo_compra = 20000;
     const crear = await cargar();

@@ -25,10 +25,10 @@
 import { collection, doc, getDoc, getDocs, onSnapshot, orderBy, query } from 'firebase/firestore';
 import { getCached } from '../cache.js';
 import { leerDocRapido } from '../config.js';
-import { confirmDialog, escHtml, verFotoGrande } from '../components/dialogs.js';
+import { alertDialog, confirmDialog, escHtml, verFotoGrande } from '../components/dialogs.js';
 import {
-  guardarYEspejar, imagenesDe, motivoDeNoPublicar, nombreBonito, subirFoto, borrarFoto,
-  borrarDoc,
+  actualizarDoc, espejar, imagenesDe, motivoDeNoPublicar, nombreBonito, subirFoto,
+  borrarFoto, borrarDoc,
 } from '../tienda_espejo.js';
 import {
   ponerDePortada, moverFoto, desvincularFoto, limpiarAjustes, fotosQuitadas,
@@ -58,13 +58,16 @@ export async function renderTiendaFotos(container, db) {
       <div style="min-width:260px;flex:1">
         <h2 style="margin:0">Fotos pedidas</h2>
         <p class="tienda-pista" style="margin:6px 0 0">
-          Todo lo que está en la vidriera sin foto entra solo a esta lista, más
-          lo que se haya marcado desde la tienda. Cargá la foto acá mismo: al
-          subirla, el producto sale de la lista y la tienda se actualiza.
+          Todo lo del catálogo al que le falta la foto entra solo a esta lista:
+          lo que ya se está mostrando en la vidriera con el cuadrito gris y lo
+          que sale apenas se le cargue una, más lo que se haya marcado desde la
+          tienda. Cargá la foto acá mismo: al subirla, el producto sale de la
+          lista y la tienda se actualiza.
         </p>
       </div>
       <div style="display:flex;gap:8px;align-items:center">
-        <button class="pc-btn" id="fotosImprimir">
+        <button class="pc-btn" id="fotosImprimir"
+                title="La hoja para recorrer el local, con lo pedido a mano">
           <span class="material-icons">print</span> Imprimir
         </button>
         <button class="pc-btn" id="fotosRefrescar">
@@ -102,29 +105,32 @@ async function cargar() {
         const snap = await getDocs(query(collection(_db, 'catalogo'), orderBy('nombre')));
         return snap.docs.map(d => ({ ...d.data(), doc_id: d.id }));
       }, { ttl: 10 * 60 * 1000, memOnly: true }),
-      leerDocRapido(doc(_db, 'tienda_config', 'publicacion'),
-                    { etiqueta: 'tienda_config/publicacion', vacio: {} }),
+      leerPublicacionDeLaTienda(),
     ]);
 
     _catalogo = new Map((catalogo || []).map(d => [String(d.doc_id), d]));
-    _habilitados = Array.isArray(publicacion?.rubros)
-      ? publicacion.rubros.map(r => String(r).trim().toUpperCase()) : [];
-    _subExcluidos = publicacion?.subrubros_excluidos || {};
+    _habilitados = publicacion?.rubros || [];
+    _subExcluidos = publicacion?.subrubrosExcluidos || {};
 
     _lista = ordenarPorFecha(docs.map(d => filaDePedido(d.id, d.data() || {})));
 
-    // Los que YA están en la vidriera sin foto entran solos a la lista. Antes
-    // dependían de que alguien los marcara desde la tienda: mientras tanto se
-    // veían igual, con el cuadrito gris, para cualquiera que entrara a comprar.
-    // No se pisan los pedidos a mano — esos ya están arriba con su fecha.
+    // Los que están sin foto entran solos a la lista. Antes dependían de que
+    // alguien los marcara desde la tienda: mientras tanto se veían igual, con
+    // el cuadrito gris, para cualquiera que entrara a comprar. No se pisan los
+    // pedidos a mano — esos ya están arriba con su fecha.
     const yaEstan = new Set(_lista.map(x => x.id));
     const automaticos = [];
     for (const [id, producto] of _catalogo) {
-      if (yaEstan.has(id)) continue;
       if (imagenesDe(producto).length) continue;
-      // Los frenados JUSTO por la foto: todo lo demás está en orden y salen a la
-      // vidriera en cuanto se les cargue una.
-      if (motivoDeNoPublicar(producto, _habilitados, _subExcluidos) !== 'sin foto') continue;
+      const motivo = motivoDeNoPublicar(producto, _habilitados, _subExcluidos);
+      // Dos casos, y los dos se resuelven con una foto: el frenado JUSTO por
+      // eso (todo lo demás está en orden y sale a la vidriera en cuanto se le
+      // cargue una) y el marcado "publicar siempre", que se saltea el control
+      // de la foto y YA se está mostrando con el cuadrito gris. Este segundo
+      // quedaba afuera de las dos tablas mientras Tienda > Catálogo lo contaba
+      // en rojo como publicado sin foto: se lo venía a buscar acá y no estaba.
+      if (motivo !== null && motivo !== 'sin foto') continue;
+      if (yaEstan.has(id)) continue;
       automaticos.push({
         id,
         nombre: producto.nombre || '(sin nombre)',
@@ -134,9 +140,14 @@ async function cargar() {
         fotos: [],
         enCatalogo: true,
         automatico: true,
+        enLaVidriera: motivo === null,
       });
     }
-    automaticos.sort((a, b) => String(a.nombre).localeCompare(String(b.nombre), 'es'));
+    // Primero los que el cliente ya está viendo con el cuadrito gris: son los
+    // urgentes, y ordenados solo por nombre quedaban perdidos entre doscientos
+    // que todavía no salieron.
+    automaticos.sort((a, b) => (Number(b.enLaVidriera) - Number(a.enLaVidriera))
+      || String(a.nombre).localeCompare(String(b.nombre), 'es'));
     // Separadas a propósito: una es la lista que armó el personal a mano y la
     // otra la que arma el sistema. Mezcladas, lo pedido puntualmente se perdía
     // entre doscientos renglones automáticos.
@@ -156,6 +167,37 @@ async function cargar() {
         No se pudo leer la lista: ${escHtml(err?.message || String(err))}
       </div>`;
   }
+}
+
+/**
+ * Qué rubros salen a la tienda y qué subrubros quedaron afuera.
+ *
+ * Por la memoria compartida del panel y no por el cache del SDK: Configuración
+ * escribe `tienda_config/publicacion` por REST, nadie escucha ese documento con
+ * `onSnapshot` y el SDK se queda con la lista de antes. Leyéndolo del SDK, la
+ * dueña prendía JUGUETERÍA en Configuración, pasaba derecho acá a cargarle la
+ * foto a uno de sus productos y al guardar el espejo lo BORRABA por "el rubro
+ * no está habilitado": el producto desaparecía de la tienda justo después de
+ * sacarle la foto, hasta la corrida siguiente del sync. Apagando un rubro
+ * pasaba al revés. Configuración siembra acá el valor recién guardado, así que
+ * esta pantalla arranca con la lista de verdad.
+ *
+ * Es la misma lectura, con la misma clave y la misma forma, que hace
+ * Tienda > Catálogo: las dos pantallas espejan con la misma lista.
+ */
+async function leerPublicacionDeLaTienda() {
+  return getCached('tienda:publicacion', async () => {
+    // Cache-first: un getDoc suelto al server queda encolado detrás de los
+    // listeners grandes del store y gatea el pintado de la pantalla.
+    const datos = await leerDocRapido(doc(_db, 'tienda_config', 'publicacion'),
+                                      { etiqueta: 'tienda_config/publicacion', vacio: {} });
+    const excluidos = datos?.subrubros_excluidos;
+    return {
+      rubros: Array.isArray(datos?.rubros)
+        ? datos.rubros.map(r => String(r).trim().toUpperCase()) : [],
+      subrubrosExcluidos: excluidos && typeof excluidos === 'object' ? excluidos : {},
+    };
+  }, { ttl: 60000, memOnly: true });
 }
 
 async function traerPedidas() {
@@ -179,6 +221,7 @@ async function traerPedidas() {
  */
 function filaDePedido(id, v) {
   const producto = _catalogo.get(id);
+  const fotos = imagenesDe(producto);
   return {
     id,
     nombre: v.nombre || producto?.nombre || '(sin nombre)',
@@ -187,9 +230,20 @@ function filaDePedido(id, v) {
     cuando: v.pedido_en?.toDate?.() || null,
     // Lo que hoy se ve en la tienda. Es lo que hay que reemplazar, así que
     // conviene tenerlo a la vista mientras se elige la nueva.
-    fotos: imagenesDe(producto),
+    fotos,
     enCatalogo: Boolean(producto),
+    enLaVidriera: estaEnLaVidrieraSinFoto(producto, fotos),
   };
+}
+
+/**
+ * Publicado y sin ninguna foto: es lo que el cliente está viendo AHORA con el
+ * cuadrito gris. Pasa con lo marcado "publicar siempre", que se saltea el
+ * control de la foto. Es el mismo número que Tienda > Catálogo marca en rojo.
+ */
+function estaEnLaVidrieraSinFoto(producto, fotos) {
+  if (!producto || fotos.length) return false;
+  return motivoDeNoPublicar(producto, _habilitados, _subExcluidos) === null;
 }
 
 function ordenarPorFecha(filas) {
@@ -284,12 +338,14 @@ async function completarDelCatalogo(ids) {
   _lista = _lista.map(f => {
     const producto = f.enCatalogo ? null : _catalogo.get(f.id);
     if (!producto) return f;
+    const fotos = imagenesDe(producto);
     return {
       ...f,
       nombre: f.nombre === '(sin nombre)' ? (producto.nombre || f.nombre) : f.nombre,
       rubro: f.rubro || producto.rubro || '',
-      fotos: imagenesDe(producto),
+      fotos,
       enCatalogo: true,
+      enLaVidriera: estaEnLaVidrieraSinFoto(producto, fotos),
     };
   });
 
@@ -331,6 +387,12 @@ function pintarLista() {
   }
 
   const sinFoto = _lista.filter(f => !f.fotos.length).length;
+  // Los que el cliente está viendo ahora mismo con el cuadrito gris, estén
+  // pedidos a mano o no: es el mismo número que Tienda > Catálogo marca en
+  // rojo, y si acá dijera otra cosa habría que dudar de los dos.
+  const enVidriera = _lista.filter(f => f.enLaVidriera).length
+                   + _esperando.filter(f => f.enLaVidriera).length;
+  const porSalir = _esperando.filter(f => !f.enLaVidriera).length;
 
   const tabla = (titulo, bajada, filas, id) => !filas.length ? '' : `
     <h3 style="margin:22px 0 8px;font-size:15px">${escHtml(titulo)}
@@ -355,9 +417,13 @@ function pintarLista() {
       <div class="tienda-dato">
         <b>${_lista.length}</b><span>pedidas a mano</span>
       </div>
-      <div class="tienda-dato${_esperando.length ? ' alerta' : ''}">
-        <b>${_esperando.length}</b><span>esperando foto para salir</span>
+      <div class="tienda-dato${porSalir ? ' alerta' : ''}">
+        <b>${porSalir}</b><span>esperando foto para salir</span>
       </div>
+      ${enVidriera ? `
+      <div class="tienda-dato alerta">
+        <b>${enVidriera}</b><span>en la vidriera sin foto</span>
+      </div>` : ''}
       <div class="tienda-dato">
         <b>${_lista.length - sinFoto}</b><span>con foto a reemplazar</span>
       </div>
@@ -367,9 +433,11 @@ function pintarLista() {
             'Lo que se marcó desde la tienda, con su fecha.',
             _lista, 'fotosTabla')}
 
-    ${tabla('Esperando foto para salir a la vidriera',
-            'Tienen stock y todo lo demás en orden: se publican solos apenas se '
-            + 'les carga una foto. Hasta entonces no se muestran en la tienda.',
+    ${tabla('Les falta la foto',
+            'Esta la arma el sistema mirando el catálogo. Los que están en '
+            + 'orden salen a la vidriera apenas se les carga una; los marcados '
+            + '"publicar siempre" ya se están mostrando, con el cuadrito gris. '
+            + 'En los dos casos salen de la lista al cargarla.',
             _esperando, 'fotosTablaEsperando')}`;
 
   // La señal de "recién marcado" dura lo que tarda en encontrarse: el fondo se
@@ -411,9 +479,7 @@ function filaHtml(f) {
             + 'Ya no está en el catálogo</div>'}
       </td>
       <td>${escHtml(nombreBonito(f.rubro))}</td>
-      <td style="color:var(--text-muted)">${f.cuando
-        ? fecha(f.cuando)
-        : '<span class="tienda-etiqueta sinfoto">En la vidriera</span>'}</td>
+      <td style="color:var(--text-muted)">${marcaDe(f)}</td>
       <td data-no-imprimir>
         <div style="display:flex;gap:6px;align-items:center;justify-content:flex-end">
           <span class="tienda-pista" data-estado="${escHtml(f.id)}" style="margin:0"></span>
@@ -423,13 +489,29 @@ function filaHtml(f) {
               <span class="material-icons">add_a_photo</span>
               ${f.fotos.length ? 'Cambiar' : 'Cargar'}
             </button>` : ''}
-          <button class="pc-btn" data-sacar="${escHtml(f.id)}" title="Sacar de la lista"
-                  style="padding:6px 8px">
-            <span class="material-icons" style="font-size:17px">close</span>
-          </button>
+          ${f.automatico ? '' : `
+            <button class="pc-btn" data-sacar="${escHtml(f.id)}" title="Sacar de la lista"
+                    style="padding:6px 8px">
+              <span class="material-icons" style="font-size:17px">close</span>
+            </button>`}
         </div>
       </td>
     </tr>`;
+}
+
+/**
+ * La columna "Marcado".
+ *
+ * Lo pedido a mano lleva su fecha. Lo que armó el sistema no tiene fecha, y ahí
+ * lo que importa es otra cosa: si el cliente lo está viendo con el cuadrito
+ * gris o si todavía no salió. Antes decía "En la vidriera" en los dos casos, y
+ * los doscientos que faltaban publicar parecían estar todos a la vista.
+ */
+function marcaDe(f) {
+  if (f.cuando) return fecha(f.cuando);
+  if (f.enLaVidriera) return '<span class="tienda-etiqueta oculto">En la vidriera</span>';
+  if (f.automatico) return '<span class="tienda-etiqueta sinfoto">Todavía no sale</span>';
+  return '';
 }
 
 function estado(id, texto, error = false) {
@@ -613,6 +695,9 @@ function abrirPanelFotos(id, f, archivosIniciales) {
     document.querySelectorAll('[data-cargar]').forEach(b => { b.disabled = true; });
 
     const subidas = [];
+    // Si el catálogo quedó escrito, las fotos recién subidas son las que el
+    // producto está mostrando: borrarlas ahí es dejar la ficha rota.
+    let catalogoGuardado = false;
     try {
       // 1. Se suben las nuevas, en el orden en que quedaron.
       const imagenes = [];
@@ -642,21 +727,39 @@ function abrirPanelFotos(id, f, archivosIniciales) {
       }
       if (hayDesvinculadas) cambios.tienda_variedades = limpiarAjustes(ajustes);
 
-      decir('Guardando…');
-      const resultado = await guardarYEspejar(_db, id, cambios, _habilitados, _subExcluidos,
-                                              { datos: producto || null });
+      // El botón de cargar no se ofrece para lo que ya no está en el catálogo;
+      // si igual se llegó hasta acá, mejor cortar que escribir una ficha a
+      // medias en la tienda.
+      if (!producto) throw new Error('El producto ya no está en el catálogo.');
 
-      // 3. El catálogo en memoria queda al día para que refrescar no la pierda.
-      if (producto) {
-        producto.tienda_imagenes = imagenes;
-        if (hayDesvinculadas) {
-          if (cambios.tienda_variedades === undefined) delete producto.tienda_variedades;
-          else producto.tienda_variedades = cambios.tienda_variedades;
-        }
+      decir('Guardando…');
+
+      // 3. El catálogo primero y el espejo después, en dos pasos y no con
+      //    `guardarYEspejar`: ese escribe el catálogo y espeja después, así que
+      //    un espejado que falla (la REST vuelve 4xx) tiraba el error con las
+      //    fotos YA guardadas en el producto y el `catch` de abajo borraba de
+      //    Storage justo esas: la ficha quedaba apuntando a archivos que no
+      //    existían más. Separados se sabe qué llegó a escribirse.
+      await actualizarDoc(_db, 'catalogo', id, cambios);
+      catalogoGuardado = true;
+
+      // 4. Lo que hay en pantalla acompaña a lo que quedó escrito, sin esperar
+      //    al espejo: si el espejado falla, la lista igual tiene que mostrar
+      //    las fotos nuevas.
+      producto.tienda_imagenes = imagenes;
+      if (hayDesvinculadas) {
+        if (cambios.tienda_variedades === undefined) delete producto.tienda_variedades;
+        else producto.tienda_variedades = cambios.tienda_variedades;
       }
       f.fotos = imagenes.slice();
+      // El renglón que se queda (se sacaron todas las fotos) tiene que decir si
+      // el cliente lo sigue viendo así: los "publicar siempre" salen a la
+      // vidriera igual, sin ninguna.
+      f.enLaVidriera = estaEnLaVidrieraSinFoto(producto, imagenes);
 
-      // 4. Con foto ya no está pendiente: sale de las dos listas. Se saca
+      const resultado = await espejar(_db, id, producto, _habilitados, _subExcluidos);
+
+      // 5. Con foto ya no está pendiente: sale de las dos listas. Se saca
       //    recién ahora: si el guardado hubiera fallado, tenía que seguir acá.
       //    Sin fotos (las sacó todas) sigue pendiente, con lo que quedó.
       if (imagenes.length) {
@@ -666,7 +769,7 @@ function abrirPanelFotos(id, f, archivosIniciales) {
       }
       pintarLista();
 
-      // 5. Recién ahora se borran de Storage las que se sacaron: al revés, un
+      // 6. Recién ahora se borran de Storage las que se sacaron: al revés, un
       //    fallo al guardar dejaba el producto apuntando a fotos que ya no
       //    existen.
       quitadas.forEach(url => borrarFoto(url));
@@ -680,8 +783,10 @@ function abrirPanelFotos(id, f, archivosIniciales) {
       estado(id, imagenes.length ? '' : 'Quedó sin fotos: sigue pendiente.');
     } catch (err) {
       console.error('[fotos] no se pudo guardar:', err);
-      // Lo que se alcanzó a subir y no quedó guardado no sirve para nada.
-      subidas.forEach(url => borrarFoto(url));
+      // Lo que se alcanzó a subir y no quedó guardado no sirve para nada. Si el
+      // catálogo sí se escribió (falló el espejo, o el sacar de la lista) esas
+      // fotos son las que el producto muestra: se quedan donde están.
+      if (!catalogoGuardado) subidas.forEach(url => borrarFoto(url));
       guardando = false;
       overlay.querySelectorAll('button').forEach(b => { b.disabled = false; });
       pintar();
@@ -737,12 +842,18 @@ function abrirPanelFotos(id, f, archivosIniciales) {
 
 /* ── Sacar de la lista ────────────────────────────────────────────────────── */
 
+/**
+ * Solo para lo pedido a mano. La tabla "Esperando foto" no ofrece este botón:
+ * esas filas se calculan del catálogo y no hay documento que borrar, así que
+ * "Sacar" las borraba de la pantalla hasta el próximo refresco y volvían.
+ * Salen solas cuando se les carga la foto.
+ */
 async function sacar(id) {
-  // Puede venir de cualquiera de las dos tablas.
-  const f = _lista.find(x => x.id === id) || _esperando.find(x => x.id === id);
+  const f = _lista.find(x => x.id === id);
+  if (!f) return;
   const ok = await confirmDialog({
     title: 'Sacar de la lista',
-    message: `"${f?.nombre || id}" deja de figurar como pendiente de foto.`,
+    message: `"${f.nombre || id}" deja de figurar como pendiente de foto.`,
     confirmText: 'Sacar',
   });
   if (!ok) return;
@@ -771,7 +882,17 @@ function fecha(d) {
  * tener que mantener una hoja de estilos de impresión para toda la aplicación.
  */
 function imprimir() {
-  if (!_lista.length) return;
+  // La hoja lleva lo pedido a mano y nada más: es la que alguien se lleva
+  // encima para ir sacando las fotos. Lo que espera foto para salir son
+  // cientos de renglones que se resuelven solos apenas se les carga una.
+  if (!_lista.length) {
+    alertDialog({
+      title: 'No hay nada para imprimir',
+      message: 'La hoja lleva lo que se marcó a mano desde la tienda, y ahora '
+             + 'mismo no hay nada marcado.',
+    });
+    return;
+  }
 
   const filas = _lista.map((f, i) => `
     <tr>

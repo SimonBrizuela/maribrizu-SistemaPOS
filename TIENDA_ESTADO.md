@@ -436,7 +436,7 @@ mismo que estar en falso.
 
 | Campo | Qué decide |
 |---|---|
-| `tienda_publicar` | `true` publica siempre, `false` nunca, ausente sigue al rubro |
+| `tienda_publicar` | `true` publica **dentro de un rubro prendido** aunque el subrubro esté excluido o falte la foto, `false` nunca, ausente sigue al rubro. Con el rubro apagado en Configuración de la Tienda no sale ni marcado (desde el 08-09-2026: la dueña destildó Cotillón y Mercería y tres productos seguían en la vidriera) |
 | `tienda_destacado` | aparece en la portada |
 | `tienda_nombre` | nombre público, **propio de la tienda**: la ficha del panel lo fija tal cual se ve, y renombrar en el catálogo general ya no lo pisa (`scripts/fijar_nombres_tienda.py` lo fija para todo lo publicado) |
 | `tienda_grupo` | grupo de tamaños: los productos con el mismo grupo salen como UNA publicación ("Cierre Común") y el cliente elige el tamaño adentro de la ficha |

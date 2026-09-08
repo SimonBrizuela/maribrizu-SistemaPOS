@@ -33,6 +33,7 @@ vi.mock('firebase/firestore', () => ({
 import {
   aplicarCambios, decodificarValor, decodificarCampos, codificarValor,
   leerDocEspejoRest, consultarEspejoRest, armarEscrituras, escribirLote,
+  espejar, espejarLote, destacadoQueQueda, olvidarDescuentosVigentes,
 } from '../../webapp/src/tienda_espejo.js';
 
 const BASE = 'projects/mari-d7c71/databases/(default)/documents';
@@ -255,11 +256,242 @@ describe('escribir: REST primero, SDK si la REST no está', () => {
     expect(lote.commit).toHaveBeenCalledTimes(1);
   });
 
+  /*
+   * El fallback por SDK tiene que borrar lo mismo que borra la REST. La
+   * `updateMask` reemplaza el campo entero; `{ merge: true }` hace merge
+   * PROFUNDO y deja viva la clave vieja de un mapa. Borrando un aviso de rubro
+   * con la REST caída, por una puerta el aviso se iba y por la otra seguía ahí.
+   */
+  it('crearSiFalta por el SDK pisa el mapa entero, igual que la máscara de la REST', async () => {
+    globalThis.fetch = vi.fn(() => Promise.reject(new Error('sin red')));
+    const avisos = { rubros: { LIBRERIA: 'Se corta a pedido' }, subrubros: {} };
+    await escribirLote({}, [{ tipo: 'actualizar', col: 'tienda_config', id: 'avisos',
+                              datos: avisos, crearSiFalta: true }]);
+    expect(lote.set).toHaveBeenCalledWith({ col: 'tienda_config', id: 'avisos' }, avisos,
+      { mergeFields: ['rubros', 'subrubros'] });
+    // Los mismos campos que viajan en la máscara de la REST.
+    const [w] = armarEscrituras([{ tipo: 'actualizar', col: 'tienda_config', id: 'avisos',
+                                   datos: avisos, crearSiFalta: true }]);
+    expect(w.updateMask.fieldPaths).toEqual(['rubros', 'subrubros']);
+  });
+
   it('sin sesión (sin token) va directo por el SDK', async () => {
     getIdToken.mockResolvedValueOnce(null);
     globalThis.fetch = vi.fn();
     await escribirLote({}, [{ tipo: 'borrar', col: 'c', id: 'i' }]);
     expect(globalThis.fetch).not.toHaveBeenCalled();
     expect(lote.commit).toHaveBeenCalledTimes(1);
+  });
+});
+
+/*
+ * Publicar o sacar un rubro entero desde Configuración de la Tienda.
+ *
+ * Hasta el 2026-09-08 el lote le ponía `orden` nuevo y `orden_rubro` 999999 a
+ * TODOS los publicables, aunque ya estuvieran en la tienda con su lugar hecho.
+ * Destildar un subrubro de Librería reescribía los ~2.000 productos del rubro:
+ * la vidriera perdía el orden por destacado / stock / ventas y salía por id
+ * hasta la próxima corrida del sync, y los grupos de tamaños dejaban de ser
+ * contiguos, así que una card se partía entre dos páginas.
+ */
+describe('publicar un rubro entero conservando la vidriera', () => {
+  const RESPUESTA = (status, cuerpo = {}) => Promise.resolve({
+    ok: status >= 200 && status < 300, status, json: () => Promise.resolve(cuerpo),
+  });
+  const original = globalThis.fetch;
+  const BASE_DOC = `${BASE}/tienda_productos`;
+
+  const producto = (extra = {}) => ({
+    nombre: 'CUADERNO', estado: 'activo', precio_venta: 100, stock: 5,
+    rubro: 'LIBRERIA', sub_rubro: 'CUADERNOS',
+    tienda_imagenes: ['https://x/foto.webp'], ...extra,
+  });
+
+  /** El fetch de mentira: el espejo tiene A con lugar propio y B no está. */
+  function conRed({ batchGet = null } = {}) {
+    const commits = [];
+    globalThis.fetch = vi.fn((url, opciones) => {
+      const u = String(url);
+      const cuerpo = opciones?.body ? JSON.parse(opciones.body) : {};
+      if (u.endsWith(':batchGet')) {
+        return batchGet ?? RESPUESTA(200, [
+          { found: { name: `${BASE_DOC}/A`,
+                     fields: { orden: { integerValue: '12' }, orden_rubro: { integerValue: '3' } } } },
+          { missing: `${BASE_DOC}/B` },
+        ]);
+      }
+      if (u.endsWith(':runQuery')) {
+        // El último `orden` de la tienda; los descuentos, ninguno.
+        return cuerpo.structuredQuery.from[0].collectionId === 'tienda_productos'
+          ? RESPUESTA(200, [{ document: { name: `${BASE_DOC}/Z`,
+                                          fields: { orden: { integerValue: '40' } } } }])
+          : RESPUESTA(200, []);
+      }
+      if (u.endsWith(':commit')) { commits.push(...cuerpo.writes); return RESPUESTA(200); }
+      return RESPUESTA(404, {});
+    });
+    return commits;
+  }
+
+  const escrituraDe = (writes, id) =>
+    writes.find(w => (w.update?.name || w.delete) === `${BASE_DOC}/${id}`);
+
+  beforeEach(() => { olvidarDescuentosVigentes(); });
+  afterEach(() => { globalThis.fetch = original; });
+
+  it('el que ya estaba conserva su lugar; solo se numera el que entra nuevo', async () => {
+    const writes = conRed();
+
+    const r = await espejarLote({}, [
+      { id: 'A', datos: producto() },
+      { id: 'B', datos: producto() },
+      { id: 'C', datos: producto({ tienda_publicar: false }) },
+    ], ['LIBRERIA'], null, {});
+
+    expect(r).toEqual({ publicados: 2, sacados: 1 });
+
+    const a = escrituraDe(writes, 'A').update.fields;
+    expect(a.orden).toEqual({ integerValue: '12' });
+    expect(a.orden_rubro).toEqual({ integerValue: '3' });
+
+    // El nuevo va al final (el último orden era 40) y sin lugar en su rubro
+    // hasta que el sync lo ubique.
+    const b = escrituraDe(writes, 'B').update.fields;
+    expect(b.orden).toEqual({ integerValue: '41' });
+    expect(b.orden_rubro).toEqual({ integerValue: '999999' });
+
+    expect(escrituraDe(writes, 'C')).toEqual({ delete: `${BASE_DOC}/C` });
+
+    // Se piden los dos que se quedan, no el que se saca.
+    const pedido = globalThis.fetch.mock.calls.find(([u]) => String(u).endsWith(':batchGet'));
+    expect(JSON.parse(pedido[1].body)).toEqual({
+      documents: [`${BASE_DOC}/A`, `${BASE_DOC}/B`],
+      mask: { fieldPaths: ['orden', 'orden_rubro', 'destacado'] },
+    });
+  });
+
+  it('si no se puede leer el orden de hoy, se numera al final como antes', async () => {
+    const writes = conRed({ batchGet: Promise.reject(new Error('sin red')) });
+
+    await espejarLote({}, [{ id: 'A', datos: producto() }], ['LIBRERIA'], null, {});
+
+    const a = escrituraDe(writes, 'A').update.fields;
+    expect(a.orden).toEqual({ integerValue: '41' });
+    expect(a.orden_rubro).toEqual({ integerValue: '999999' });
+  });
+});
+
+/*
+ * Los destacados de la portada.
+ *
+ * Cuando nadie marcó ninguno a mano, el sync elige los doce más vendidos y les
+ * escribe `destacado` en el espejo SIN tocar el catálogo. El panel arma el
+ * documento desde el catálogo y lo escribe entero, así que hasta el 2026-09-08
+ * cargarle una foto a uno de esos doce (o entregar un pedido, o guardar la
+ * ficha) lo escribía con `destacado: false`: la tira "Destacados" de la portada
+ * pasaba de doce a once hasta la corrida siguiente, hasta seis horas después.
+ */
+describe('el destacado que eligió el sync no se cae de la portada', () => {
+  const RESPUESTA = (status, cuerpo = {}) => Promise.resolve({
+    ok: status >= 200 && status < 300, status, json: () => Promise.resolve(cuerpo),
+  });
+  const original = globalThis.fetch;
+  const BASE_DOC = `${BASE}/tienda_productos`;
+
+  const producto = (extra = {}) => ({
+    nombre: 'CUADERNO', estado: 'activo', precio_venta: 100, stock: 5,
+    rubro: 'LIBRERIA', sub_rubro: 'CUADERNOS',
+    tienda_imagenes: ['https://x/foto.webp'], ...extra,
+  });
+
+  /**
+   * El fetch de mentira. `enElEspejo` es lo que hoy tiene publicado el producto
+   * A (null = todavía no está en la tienda); B nunca está.
+   */
+  function conRed(enElEspejo) {
+    const commits = [];
+    globalThis.fetch = vi.fn((url, opciones) => {
+      const u = String(url);
+      const cuerpo = opciones?.body ? JSON.parse(opciones.body) : {};
+      if (u.endsWith(':commit')) { commits.push(...cuerpo.writes); return RESPUESTA(200); }
+      if (u.endsWith(':batchGet')) {
+        return RESPUESTA(200, [
+          enElEspejo ? { found: { name: `${BASE_DOC}/A`, fields: enElEspejo } }
+                     : { missing: `${BASE_DOC}/A` },
+          { missing: `${BASE_DOC}/B` },
+        ]);
+      }
+      if (u.endsWith(':runQuery')) {
+        // El último `orden` de la tienda; descuentos vigentes, ninguno.
+        return cuerpo.structuredQuery.from[0].collectionId === 'tienda_productos'
+          ? RESPUESTA(200, [{ document: { name: `${BASE_DOC}/Z`,
+                                          fields: { orden: { integerValue: '40' } } } }])
+          : RESPUESTA(200, []);
+      }
+      // La lectura del documento del espejo, de a uno (GET con máscara).
+      if (u.includes('/tienda_productos/A')) {
+        return enElEspejo ? RESPUESTA(200, { fields: enElEspejo }) : RESPUESTA(404, {});
+      }
+      return RESPUESTA(404, {});
+    });
+    return commits;
+  }
+
+  const ELEGIDO_POR_EL_SYNC = {
+    orden: { integerValue: '12' }, orden_rubro: { integerValue: '3' },
+    destacado: { booleanValue: true },
+  };
+
+  const escrituraDe = (writes, id) =>
+    writes.find(w => (w.update?.name || w.delete) === `${BASE_DOC}/${id}`);
+
+  beforeEach(() => { olvidarDescuentosVigentes(); });
+  afterEach(() => { globalThis.fetch = original; });
+
+  it('la regla: a mano manda, y sin decidir nada se conserva lo del espejo', () => {
+    expect(destacadoQueQueda({ tienda_destacado: true }, null)).toBe(true);
+    expect(destacadoQueQueda({ tienda_destacado: false }, { destacado: true })).toBe(false);
+    expect(destacadoQueQueda({}, { destacado: true })).toBe(true);
+    expect(destacadoQueQueda({}, { destacado: false })).toBe(false);
+    // Todavía no está en la tienda: no hay nada que conservar.
+    expect(destacadoQueQueda({}, null)).toBe(false);
+  });
+
+  it('guardar la ficha o cargar una foto no lo baja de los destacados', async () => {
+    const commits = conRed(ELEGIDO_POR_EL_SYNC);
+
+    await espejar({}, 'A', producto(), ['LIBRERIA'], {});
+
+    const escrito = decodificarCampos(commits[0].update.fields);
+    expect(escrito.destacado).toBe(true);
+    expect(escrito.orden).toBe(12);
+  });
+
+  it('destildarlo en el panel lo saca ya, sin esperar al sync', async () => {
+    const commits = conRed(ELEGIDO_POR_EL_SYNC);
+
+    await espejar({}, 'A', producto({ tienda_destacado: false }), ['LIBRERIA'], {});
+
+    expect(decodificarCampos(commits[0].update.fields).destacado).toBe(false);
+  });
+
+  it('el que recién entra a la tienda no sale destacado de la nada', async () => {
+    const commits = conRed(null);
+
+    await espejar({}, 'A', producto(), ['LIBRERIA'], {});
+
+    expect(decodificarCampos(commits[0].update.fields).destacado).toBe(false);
+  });
+
+  it('publicar un rubro entero tampoco los baja', async () => {
+    const writes = conRed(ELEGIDO_POR_EL_SYNC);
+
+    await espejarLote({}, [
+      { id: 'A', datos: producto() },
+      { id: 'B', datos: producto() },
+    ], ['LIBRERIA'], null, {});
+
+    expect(escrituraDe(writes, 'A').update.fields.destacado).toEqual({ booleanValue: true });
+    expect(escrituraDe(writes, 'B').update.fields.destacado).toEqual({ booleanValue: false });
   });
 });

@@ -113,7 +113,8 @@ export async function evaluarCuponDelPedido({ codigo, renglones, envio, modo, pe
 /**
  * Segunda mirada, ya con el pedido escrito: si otro pedido con el mismo cupón
  * entró en el mismo instante y entre los dos pasan el límite —el total o el de
- * esta persona—, este se retira. Devuelve el motivo, o null si está bien.
+ * esta persona—, este se retira. Devuelve `{ motivo }` con lo que le hace
+ * falta al mensaje (`veces`, para "ya lo usaste N veces"), o null si está bien.
  */
 export async function cuponExcedidoTrasEscribir({ codigo, persona }) {
   let cupon;
@@ -125,8 +126,10 @@ export async function cuponExcedidoTrasEscribir({ codigo, persona }) {
     const porPersona = Number(cupon.usos_por_persona) || 0;
     if (!totales && !porPersona) return null;
     usos = await usosDelCupon(codigo);
-    if (totales > 0 && usos.filter(pedidoCuenta).length > totales) return 'agotado';
-    if (porPersona > 0 && usosDePersona(usos, persona || {}) > porPersona) return 'ya_usado';
+    if (totales > 0 && usos.filter(pedidoCuenta).length > totales) return { motivo: 'agotado' };
+    if (porPersona > 0 && usosDePersona(usos, persona || {}) > porPersona) {
+      return { motivo: 'ya_usado', veces: porPersona };
+    }
     return null;
   } catch (err) {
     // No se pudo mirar de nuevo: el pedido queda. Ya pasó el primer control.

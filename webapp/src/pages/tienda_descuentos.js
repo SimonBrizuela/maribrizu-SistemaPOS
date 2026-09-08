@@ -10,10 +10,15 @@
  * puntual— y cuánto saca. Gana el más específico: el del artículo le gana al del
  * subrubro y ése al del rubro.
  *
- * La cuenta la hace `scripts/sync_tienda.py` (`aplicar_descuento`) sobre el
- * precio de lista, nunca sobre el ya rebajado: si se acumulara, cada corrida
- * descontaría de nuevo sobre lo descontado. Guardar acá deja el descuento
- * cargado y aplicado en el momento; el sync lo reafirma en cada corrida.
+ * La cuenta vive en `webapp/src/tienda_descuentos_regla.js`, gemelo de
+ * `aplicar_descuento` en `scripts/sync_tienda.py`: parte del precio de lista,
+ * nunca del ya rebajado. Guardar acá deja el descuento cargado y aplicado en el
+ * momento; el sync lo reafirma en cada corrida con la misma regla.
+ *
+ * Al tocar un descuento (crear, editar, apagar, borrar) los productos de su
+ * alcance se recalculan contra TODOS los vigentes, no solo contra el que se
+ * tocó: apagar el del rubro tiene que dejar el del subrubro puesto, y prender
+ * uno del rubro no tiene que pisar al del artículo.
  */
 import {
   collection, doc, getDocs, getDoc, query, orderBy, where,
@@ -21,9 +26,12 @@ import {
 import { getCached } from '../cache.js';
 import { alertDialog, confirmDialog, escHtml } from '../components/dialogs.js';
 import {
-  nombreBonito, leerDocEspejoRest, consultarEspejoRest,
-  actualizarDoc, borrarDoc, escribirLote,
+  nombreBonito, medidasDe, motivoDeNoPublicar, leerDocEspejoRest, consultarEspejoRest,
+  actualizarDoc, borrarDoc, escribirLote, olvidarDescuentosVigentes,
 } from '../tienda_espejo.js';
+import {
+  descuentosVigentes, descuentoPara, aplicarDescuento, recalcularEspejo, claveDeObjetivo,
+} from '../tienda_descuentos_regla.js';
 // `.pc-btn` y las tarjetas de la seccion Tienda viven acá. Sin este import los
 // botones salen con el estilo crudo del navegador.
 import '../styles/tienda.css';
@@ -35,60 +43,50 @@ let _publicadosPorDescuento = new Map();
 
 const pesos = n => `$${Number(n || 0).toLocaleString('es-AR')}`;
 
-/* ── Cuenta: el gemelo de aplicar_descuento() en sync_tienda.py ────────────── */
+/* ── La regla, aplicada a lo que hay en memoria ───────────────────────────── */
+
+/** Los vigentes de la lista en memoria, en la forma que entiende la regla. */
+function vigentesAhora() {
+  return descuentosVigentes(_descuentos.map(d => ({ id: d._id, datos: d })), new Date());
+}
 
 /**
- * A la centena más cercana, con caída a decena cuando el monto es chico.
- * Misma regla que el ±100 del catálogo (`redondearCentena` en catalogo.js):
- * los precios de la tienda se manejan así, y un 20% que deja $6.327 desentona
- * al lado del resto.
+ * Un descuento (o un borrador del editor) como lo ve la regla, sin mirar si
+ * está activo ni vigente: es para saber a QUIÉN le tocaría.
  */
-function redondearCentena(v) {
-  const n = Number(v) || 0;
-  if (n <= 0) return 0;
-  const r100 = Math.round(n / 100) * 100;
-  if (r100 > 0) return r100;
-  const r10 = Math.round(n / 10) * 10;
-  return r10 > 0 ? r10 : Math.round(n);
+function reglaDe(d) {
+  return { alcance: String(d.alcance || 'rubro'), objetivo: claveDeObjetivo(d.objetivo) };
 }
 
-function precioConDescuento(lista, d) {
-  const base = Number(lista) || 0;
-  if (base <= 0) return base;
-  const valor = Number(d.valor) || 0;
-  let nuevo = d.tipo === 'monto'
-    ? base - valor
-    : base * (1 - Math.min(valor, 90) / 100);
-  if (d.redondear) {
-    // Redondear a la centena puede empujar el precio para arriba (59 -> 100) y
-    // en un producto barato eso anula el descuento entero. Solo se aplica si
-    // el resultado sigue siendo mas barato que el precio de lista.
-    const r = redondearCentena(nuevo);
-    if (r > 0 && r < base) nuevo = r;
-  }
-  // Nunca por debajo de un peso: un precio en cero se lee como error, no como
-  // oferta, y deja pasar pedidos que no se pueden cobrar.
-  return Math.max(1, Math.round(nuevo));
-}
+/** El precio que ve el cliente en la tienda: por unidad, no el del pack. */
+const precioTienda = p => medidasDe(p).precio;
 
 /**
  * Los productos del catálogo sobre los que cae un descuento.
  *
  * Ojo: el catálogo tiene mucho más de lo que sale a la web (sin stock, sin
  * foto, rubro apagado). Para lo que se muestra en pantalla interesa cuántos
- * están PUBLICADOS — ver `publicados()` —, porque son los únicos donde el
- * cliente va a ver el precio bajar.
+ * están PUBLICADOS — ver `contarPublicados()` —, porque son los únicos donde
+ * el cliente va a ver el precio bajar.
  */
 function alcanzados(d) {
-  const obj = String(d.objetivo || '').trim().toUpperCase();
-  if (!obj) return [];
-  return _catalogo.filter(p => {
-    const rubro = String(p.rubro || '').trim().toUpperCase();
-    const sub = String(p.sub_rubro || '').trim().toUpperCase();
-    if (d.alcance === 'rubro') return rubro === obj;
-    if (d.alcance === 'subrubro') return `${rubro}|${sub}` === obj;
-    return String(p.doc_id || '').toUpperCase() === obj;
-  });
+  const regla = reglaDe(d);
+  if (!regla.objetivo) return [];
+  return _catalogo.filter(p => descuentoPara(p.doc_id, p, [regla]) !== null);
+}
+
+/**
+ * Los productos del alcance a los que un monto fijo les comería el precio
+ * entero: esos quedan a precio de lista, sin descuento. Solo los que pueden
+ * llegar a estar en la tienda (activos, con precio y con stock): avisar por un
+ * producto dado de baja a $1 sería ruido.
+ */
+function masBaratosQueElMonto(d) {
+  if (d.tipo !== 'monto') return [];
+  const monto = Number(d.valor) || 0;
+  return alcanzados(d)
+    .filter(p => motivoDeNoPublicar(p) === null && precioTienda(p) <= monto)
+    .sort((a, b) => precioTienda(a) - precioTienda(b));
 }
 
 /* ── Pintado ──────────────────────────────────────────────────────────────── */
@@ -345,14 +343,18 @@ function abrirEditor(d = null) {
     previsualizar();
   }
 
-  function previsualizar() {
-    const borrador = {
+  function borradorActual() {
+    return {
       tipo: $('#dTipo').value,
       valor: Number($('#dValor').value) || 0,
       alcance: $('#dAlcance').value,
       objetivo: selObjetivo.value,
       redondear: $('#dRedondear').checked,
     };
+  }
+
+  function previsualizar() {
+    const borrador = borradorActual();
     const productos = alcanzados(borrador);
     const caja = $('#dPreview');
     if (!borrador.valor || !productos.length) {
@@ -364,13 +366,21 @@ function abrirEditor(d = null) {
       caja.innerHTML = `<span style="color:var(--text-muted)">${falta}</span>`;
       return;
     }
-    const ejemplo = productos.find(p => Number(p.precio_venta) > 0);
-    const antes = Number(ejemplo?.precio_venta) || 0;
-    const despues = precioConDescuento(antes, borrador);
+    // La misma cuenta que va a hacer el espejo, sobre el precio que ve el
+    // cliente (por unidad, no el del rollo).
+    const [vigente] = descuentosVigentes([{ id: 'borrador', datos: { ...borrador, activo: true } }]);
+    const ejemplo = productos.find(p => precioTienda(p) > 0);
+    const antes = ejemplo ? precioTienda(ejemplo) : 0;
+    const despues = ejemplo
+      ? aplicarDescuento(ejemplo.doc_id, { precio: antes, rubro: ejemplo.rubro, sub_rubro: ejemplo.sub_rubro },
+                         vigente ? [vigente] : []).precio
+      : 0;
+    const baratos = masBaratosQueElMonto(borrador);
     caja.innerHTML = `
       <b>${productos.length} producto${productos.length === 1 ? '' : 's'}</b> con descuento.
       ${ejemplo ? `<br>Ejemplo: ${escHtml(nombreBonito(ejemplo.nombre))} pasa de
-        <s>${pesos(antes)}</s> a <b style="color:var(--tint-green-fg)">${pesos(despues)}</b>.` : ''}`;
+        <s>${pesos(antes)}</s> a <b style="color:var(--tint-green-fg)">${pesos(despues)}</b>.` : ''}
+      ${baratos.length ? `<br><span style="color:var(--tint-red-fg)">${textoDeBaratos(baratos)}</span>` : ''}`;
   }
 
   $('#dAlcance').addEventListener('change', () => {
@@ -389,39 +399,54 @@ function abrirEditor(d = null) {
   $('.desc-guardar').addEventListener('click', async ev => {
     const nombre = $('#dNombre').value.trim();
     const valor = Number($('#dValor').value) || 0;
-    const objetivo = selObjetivo.value;
+    const objetivo = String(selObjetivo.value || '').trim();
     if (!nombre) { alertDialog({ title: 'Falta el nombre', message: 'Poné un nombre para reconocerlo después.', type: 'warning' }); return; }
     if (valor <= 0 || !objetivo) { alertDialog({ title: 'Faltan datos', message: 'Revisá cuánto descuenta y sobre qué se aplica.', type: 'warning' }); return; }
 
-    const boton = ev.currentTarget;
-    boton.disabled = true;
-    boton.textContent = 'Guardando…';
+    const alcance = $('#dAlcance').value;
     const datos = {
       nombre,
       tipo: $('#dTipo').value,
       valor,
-      alcance: $('#dAlcance').value,
-      objetivo: String(objetivo).toUpperCase(),
+      alcance,
+      // El id del artículo va tal cual está en el catálogo: hay ids con
+      // minúsculas (Craft1, Eco1) y guardado en mayúsculas después no se
+      // encontraba en el espejo. Rubro y subrubro sí van en mayúsculas, que
+      // es como los guarda el catálogo.
+      objetivo: alcance === 'producto' ? objetivo : objetivo.toUpperCase(),
       redondear: $('#dRedondear').checked,
       activo: d ? d.activo !== false : true,
     };
+
+    // Un monto más grande que el precio no rebaja: esos productos quedan a
+    // precio de lista. Se puede guardar igual, pero sabiéndolo.
+    const baratos = masBaratosQueElMonto(datos);
+    if (baratos.length) {
+      const seguir = await confirmDialog({
+        title: 'El monto supera el precio',
+        message: `${escHtml(textoDeBaratos(baratos))}<br><br>¿Guardar igual?`,
+        confirmText: 'Guardar igual',
+      });
+      if (!seguir) return;
+    }
+
+    const boton = ev.currentTarget;
+    boton.disabled = true;
+    boton.textContent = 'Guardando…';
     try {
       const id = d?._id || `${Date.now()}`;
-      // Si se le cambió el alcance —de un rubro a otro, o de rubro a artículo—
-      // primero hay que devolverle el precio al alcance VIEJO. Sin esto, los
-      // productos que ya no entran en el descuento se quedaban rebajados para
-      // siempre: pasó en producción con Perfumería cuando el descuento se mudó
-      // a Juguetería.
-      const cambioDeAlcance = d && (d.alcance !== datos.alcance || d.objetivo !== datos.objetivo);
-      if (cambioDeAlcance) await aplicarEnLaTienda({ ...d, activo: false });
-
       await actualizarDoc(_db, 'tienda_descuentos', id, datos, { crearSiFalta: true });
-      await aplicarEnLaTienda({ ...datos, _id: id });
-      cerrar();
+      const guardado = { _id: id, ...(d || {}), ...datos };
       // La lista se actualiza con lo que se acaba de guardar, sin releer la
       // colección: esa relectura pasaba por la cola del SDK y era lo que dejaba
       // el botón en "Guardando…" un rato largo.
-      reemplazarEnLista({ _id: id, ...(d || {}), ...datos });
+      reemplazarEnLista(guardado);
+      // Se recalcula el alcance nuevo Y el viejo: si se mudó —de un rubro a
+      // otro, o de rubro a artículo— lo que ya no entra vuelve a su precio.
+      // Sin esto quedaba rebajado para siempre: pasó en producción con
+      // Perfumería cuando el descuento se mudó a Juguetería.
+      await recalcularEnLaTienda(d ? [d, guardado] : [guardado]);
+      cerrar();
       await refrescarConteos();
     } catch (e) {
       boton.disabled = false;
@@ -431,10 +456,19 @@ function abrirEditor(d = null) {
   });
 }
 
+/** "3 productos salen menos que el monto (el más barato, Goma Pelikan a $400)…" */
+function textoDeBaratos(baratos) {
+  const n = baratos.length;
+  const barato = baratos[0];
+  return `${n} producto${n === 1 ? '' : 's'} del alcance ${n === 1 ? 'sale' : 'salen'} menos que el monto`
+    + ` (${n === 1 ? '' : 'el más barato, '}${nombreBonito(barato.nombre)} a ${pesos(precioTienda(barato))})`
+    + `: ${n === 1 ? 'queda' : 'quedan'} a precio de lista, sin descuento.`;
+}
+
 /* ── Aplicar en el espejo ─────────────────────────────────────────────────── */
 
 /**
- * Baja el precio en `tienda_productos` ahora mismo, sin esperar al sync.
+ * Rehace el precio en `tienda_productos` ahora mismo, sin esperar al sync.
  *
  * Trabaja SOBRE EL ESPEJO y no sobre el catálogo. Dos razones, las dos costaron
  * precios mal puestos:
@@ -446,80 +480,109 @@ function abrirEditor(d = null) {
  *     corrigió recién, los productos que todavía tienen el valor viejo no
  *     matchean y quedan sin descuento, que es justo lo que pasó al probarlo.
  *
- * El precio de lista es `precio_anterior` si ya hay un descuento puesto, y si
- * no el `precio` actual. Por eso aplicar dos veces da el mismo número en vez de
- * ir rebajando sobre lo rebajado.
+ * Se visitan los productos que caen bajo cada descuento de `tocados` (el que
+ * se acaba de crear, apagar o borrar, y el alcance viejo si se mudó) y a cada
+ * uno se le aplica lo que le corresponde entre TODOS los vigentes de la lista
+ * en memoria. La cuenta parte siempre del precio de lista (`precio_anterior`
+ * si ya había uno puesto), así que pasar dos veces da el mismo número.
+ *
+ * @returns {Promise<number>} cuántos productos cambiaron de precio
  */
-async function aplicarEnLaTienda(d, avance = null) {
-  const apagado = d.activo === false;
-  const obj = String(d.objetivo || '').trim().toUpperCase();
-  if (!obj) return 0;
+async function recalcularEnLaTienda(tocados, avance = null) {
+  const vigentes = vigentesAhora();
 
-  // Se le pregunta al espejo qué productos caen bajo el descuento, en vez de
-  // deducirlo de una copia del catálogo que puede estar vieja.
-  //
-  // Por REST y no por el SDK: en esta webapp una lectura suelta por el SDK
-  // queda encolada detrás de los listeners grandes y puede tardar más de un
-  // minuto, y esto corre en cada Guardar. El espejo es de lectura pública. Si
-  // la REST no responde se cae al SDK, que anda pero puede tardar.
-  const docs = await productosDelDescuento(d, obj);
+  // Se le pregunta al espejo qué productos caen bajo cada alcance, en vez de
+  // deducirlo de una copia del catálogo que puede estar vieja. Sin repetir:
+  // al mudar un descuento de un subrubro a otro del mismo rubro, los dos
+  // alcances traen productos en común.
+  const porId = new Map();
+  for (const d of tocados) {
+    for (const x of await productosDelDescuento(d)) porId.set(x.id, x);
+  }
+  const cambios = recalcularEspejo([...porId.values()], vigentes);
 
   // En lote y no de a uno: un rubro grande son cientos de productos, y con un
   // request por producto el boton se quedaba mudo varios segundos y parecia que
   // no habia pasado nada. Firestore admite 400 operaciones por lote.
   const TOPE = 400;
-  let tocados = 0;
-  for (let i = 0; i < docs.length; i += TOPE) {
-    const lote = [];
-    for (const x of docs.slice(i, i + TOPE)) {
-      const datos = x.datos || {};
-      const lista = Number(datos.precio_anterior) || Number(datos.precio) || 0;
-      if (lista <= 0) continue;
-      const nuevo = apagado ? lista : precioConDescuento(lista, d);
-      lote.push({
-        tipo: 'actualizar', col: 'tienda_productos', id: x.id,
-        datos: apagado || nuevo >= lista
-          ? { precio: lista, precio_anterior: null, descuento: null }
-          : {
-              precio: nuevo,
-              precio_anterior: lista,
-              descuento: {
-                id: d._id, nombre: d.nombre,
-                porcentaje: Math.round((1 - nuevo / lista) * 100),
-              },
-            },
-      });
-    }
-    if (!lote.length) continue;
+  let hechos = 0;
+  for (let i = 0; i < cambios.length; i += TOPE) {
+    const lote = cambios.slice(i, i + TOPE).map(c => ({
+      tipo: 'actualizar', col: 'tienda_productos', id: c.id, datos: c.datos,
+    }));
     await escribirLote(_db, lote);
-    tocados += lote.length;
-    if (typeof avance === 'function') avance(tocados, docs.length);
+    hechos += lote.length;
+    if (typeof avance === 'function') avance(hechos, cambios.length);
   }
-  return tocados;
+  // El espejado de la ficha lee los vigentes con un minuto de memoria: que la
+  // próxima lectura vea lo que se acaba de cambiar.
+  olvidarDescuentosVigentes();
+  return cambios.length;
 }
 
-/** Los productos publicados que caen bajo un descuento, como `[{id, datos}]`. */
-async function productosDelDescuento(d, obj) {
-  const CAMPOS = ['precio', 'precio_anterior', 'sub_rubro'];
+// Lo que hace falta para rehacer la cuenta: los precios (de lista y rebajados)
+// y por dónde cae cada descuento. `variedades` viene porque el precio propio de
+// cada color lleva la misma rebaja: sin leerlas, aplicar el descuento acá
+// dejaba los colores a precio de lista hasta la corrida siguiente del sync.
+const CAMPOS_DEL_ESPEJO = ['precio', 'precio_anterior', 'precio_pack', 'precio_pack_anterior',
+                          'descuento', 'rubro', 'sub_rubro', 'variedades'];
 
-  if (d.alcance === 'producto') {
-    const porRest = await leerDocEspejoRest(obj, CAMPOS);
-    if (porRest !== null) return porRest.existe ? [{ id: obj, datos: porRest.datos }] : [];
-    const uno = await getDoc(doc(_db, 'tienda_productos', obj));
-    return uno.exists() ? [{ id: uno.id, datos: uno.data() }] : [];
+/**
+ * Los productos publicados que caen bajo un descuento, como `[{id, datos}]`.
+ *
+ * Por REST y no por el SDK: en esta webapp una lectura suelta por el SDK
+ * queda encolada detrás de los listeners grandes y puede tardar más de un
+ * minuto, y esto corre en cada Guardar. El espejo es de lectura pública. Si
+ * la REST no responde se cae al SDK, que anda pero puede tardar.
+ */
+async function productosDelDescuento(d) {
+  const regla = reglaDe(d);
+  if (!regla.objetivo) return [];
+
+  if (regla.alcance === 'producto') {
+    // El id tal cual, y si no está, el del catálogo que coincide sin mirar
+    // mayúsculas: los descuentos cargados antes del 2026-09-08 guardaron el
+    // objetivo en mayúsculas y `Craft1` quedó como `CRAFT1`.
+    const ids = [...new Set([
+      String(d.objetivo || '').trim(),
+      ..._catalogo.filter(p => claveDeObjetivo(p.doc_id) === regla.objetivo).map(p => p.doc_id),
+    ])].filter(Boolean);
+    for (const id of ids) {
+      const uno = await leerUnoDelEspejo(id);
+      if (uno) return [uno];
+    }
+    return [];
   }
 
-  const rubro = obj.split('|')[0];
-  let docs = await consultarEspejoRest({ donde: { rubro }, campos: CAMPOS });
-  if (docs === null) {
-    const snap = await getDocs(query(collection(_db, 'tienda_productos'), where('rubro', '==', rubro)));
-    docs = snap.docs.map(x => ({ id: x.id, datos: x.data() }));
+  // El espejo guarda el rubro como está escrito en el catálogo, y el mismo
+  // rubro aparece con tilde y sin tilde ("MERCERÍA" y "MERCERIA"). Se pide
+  // cada forma que exista y después se filtra con la regla, que compara sin
+  // tildes.
+  const formas = new Set([String(d.objetivo || '').split('|')[0].trim().toUpperCase()]);
+  for (const p of _catalogo) {
+    const rubro = String(p.rubro || '').trim().toUpperCase();
+    if (rubro && claveDeObjetivo(rubro) === regla.objetivo.split('|')[0]) formas.add(rubro);
   }
-  if (d.alcance === 'subrubro') {
-    const sub = obj.split('|')[1] || '';
-    docs = docs.filter(x => String(x.datos?.sub_rubro || '').trim().toUpperCase() === sub);
+  const porId = new Map();
+  for (const rubro of formas) {
+    if (!rubro) continue;
+    for (const x of await leerRubroDelEspejo(rubro)) porId.set(x.id, x);
   }
-  return docs;
+  return [...porId.values()].filter(x => descuentoPara(x.id, x.datos, [regla]) !== null);
+}
+
+async function leerUnoDelEspejo(id) {
+  const porRest = await leerDocEspejoRest(id, CAMPOS_DEL_ESPEJO);
+  if (porRest !== null) return porRest.existe ? { id, datos: porRest.datos } : null;
+  const uno = await getDoc(doc(_db, 'tienda_productos', id));
+  return uno.exists() ? { id: uno.id, datos: uno.data() } : null;
+}
+
+async function leerRubroDelEspejo(rubro) {
+  const porRest = await consultarEspejoRest({ donde: { rubro }, campos: CAMPOS_DEL_ESPEJO });
+  if (porRest !== null) return porRest;
+  const snap = await getDocs(query(collection(_db, 'tienda_productos'), where('rubro', '==', rubro)));
+  return snap.docs.map(x => ({ id: x.id, datos: x.data() }));
 }
 
 /** Confirmación breve arriba de la lista: apretar y no ver nada da desconfianza. */
@@ -554,14 +617,10 @@ async function contarPublicados() {
     }));
   }, { ttl: 5 * 60 * 1000, memOnly: true });
   for (const d of _descuentos) {
-    const obj = String(d.objetivo || '').trim().toUpperCase();
-    _publicadosPorDescuento.set(d._id, publicados.filter(p => {
-      const rubro = String(p.rubro || '').trim().toUpperCase();
-      const sub = String(p.sub_rubro || '').trim().toUpperCase();
-      if (d.alcance === 'rubro') return rubro === obj;
-      if (d.alcance === 'subrubro') return `${rubro}|${sub}` === obj;
-      return String(p.doc_id).toUpperCase() === obj;
-    }).length);
+    const regla = reglaDe(d);
+    _publicadosPorDescuento.set(d._id, regla.objetivo
+      ? publicados.filter(p => descuentoPara(p.doc_id, p, [regla]) !== null).length
+      : 0);
   }
 }
 
@@ -660,7 +719,9 @@ export async function renderTiendaDescuentos(container, db) {
       if (btn) { btn.disabled = true; btn.textContent = 'Aplicando…'; }
       try {
         await actualizarDoc(_db, 'tienda_descuentos', d._id, { activo });
-        const n = await aplicarEnLaTienda({ ...d, activo }, (hechos, total) => {
+        // Contra todos los vigentes: si se apaga el del rubro y hay uno del
+        // subrubro, ese sigue puesto; no se vuelve a precio de lista a ciegas.
+        const n = await recalcularEnLaTienda([d], (hechos, total) => {
           if (btn) btn.textContent = `Aplicando… ${hechos}/${total}`;
         });
         pintar();
@@ -681,11 +742,22 @@ export async function renderTiendaDescuentos(container, db) {
         danger: true,
       });
       if (!ok) return;
-      // Primero se devuelven los precios y después se borra: al revés, queda un
-      // rubro entero rebajado y sin nada que explique por qué.
-      await aplicarEnLaTienda({ ...d, activo: false });
-      await borrarDoc(_db, 'tienda_descuentos', d._id);
-      _descuentos = _descuentos.filter(x => x._id !== d._id);
+      // Primero se rehacen los precios sin este descuento y después se borra:
+      // al revés, queda un rubro entero rebajado y sin nada que explique por
+      // qué. Si el recálculo falla a mitad, el descuento sigue en la base y el
+      // sync lo reafirma: nunca queda un precio que no se pueda explicar.
+      const sinEste = _descuentos.filter(x => x._id !== d._id);
+      const conEste = _descuentos;
+      _descuentos = sinEste;
+      try {
+        await recalcularEnLaTienda([d]);
+        await borrarDoc(_db, 'tienda_descuentos', d._id);
+      } catch (e) {
+        _descuentos = conEste;
+        pintar();
+        alertDialog({ title: 'No se pudo borrar', message: escHtml(e?.message || String(e)), type: 'error' });
+        return;
+      }
       _publicadosPorDescuento.delete(d._id);
       pintar();
     }

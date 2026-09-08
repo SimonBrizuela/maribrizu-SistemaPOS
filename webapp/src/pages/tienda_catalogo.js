@@ -18,13 +18,14 @@
  * se ve acá es lo que hay publicado.
  */
 import { collection, doc, getDocs, orderBy, query } from 'firebase/firestore';
-import { getCached, peekCacheValue } from '../cache.js';
+import { getCached, peekCacheValue, setCacheValue } from '../cache.js';
 import { onStoreChange } from '../store.js';
 import { leerDocRapido } from '../config.js';
 import { alertDialog, escHtml, verFotoGrande } from '../components/dialogs.js';
 import {
-  guardarYEspejar, motivoDeNoPublicar, medidasDe, nombreBonito, normalizar,
-  subirFoto, borrarFoto, actualizarDoc, leerPublicacion, recomputarRubros,
+  espejar, motivoDeNoPublicar, medidasDe, nombreBonito, normalizar,
+  subirFoto, borrarFoto, actualizarDoc,
+  programarRecuentoDeRubros, usarCatalogoParaRecontar,
 } from '../tienda_espejo.js';
 import { sugerirGrupo, restoDeNombre } from '../tienda_grupos.js';
 import {
@@ -59,6 +60,7 @@ const FILTROS = [
 let _db = null;
 let _productos = [];
 let _rubrosHabilitados = [];
+let _subExcluidos = {};
 let _filtro = 'todos';
 let _rubro = '';
 let _busqueda = '';
@@ -74,9 +76,9 @@ let _refrescoTimer = null;
  * Se calcula una vez y no en cada pintado: son casi ocho mil productos y
  * `medidasDe` recorre las variedades de cada uno.
  */
-function preparar(datos, rubrosHabilitados) {
+function preparar(datos, rubrosHabilitados, subExcluidos = null) {
   const medidas = medidasDe(datos);
-  const motivo = motivoDeNoPublicar(datos, rubrosHabilitados);
+  const motivo = motivoDeNoPublicar(datos, rubrosHabilitados, subExcluidos);
   const imagenes = Array.isArray(datos.tienda_imagenes) ? datos.tienda_imagenes.filter(Boolean) : [];
 
   return {
@@ -104,24 +106,36 @@ function preparar(datos, rubrosHabilitados) {
   };
 }
 
-function prepararTodos(catalogo, habilitados) {
+function prepararTodos(catalogo, habilitados, subExcluidos = null) {
   return (catalogo || [])
     .filter(d => d && d.doc_id)
     // Documentos viejos guardaron un `doc_id` numérico que pisa el de
     // Firestore; el resto del panel lo normaliza igual.
     .map(d => preparar(typeof d.doc_id === 'string' ? d : { ...d, doc_id: String(d.doc_id) },
-                       habilitados))
+                       habilitados, subExcluidos))
     .sort((a, b) => a.nombre.localeCompare(b.nombre, 'es'));
 }
 
-async function leerRubrosHabilitados(db) {
+/**
+ * Qué rubros salen a la tienda y qué subrubros quedaron afuera, como los
+ * guardó Configuración. Configuración pone acá el valor recién guardado
+ * (`setCacheValue`), así esta pantalla no arranca con la lista de antes.
+ */
+async function leerPublicacionDeLaTienda(db) {
   return getCached('tienda:publicacion', async () => {
     // Cache-first: un getDoc suelto al server queda encolado detrás de los
     // listeners grandes del store, y este doc gatea el pintado de la pantalla.
     const datos = await leerDocRapido(doc(db, 'tienda_config', 'publicacion'),
                                       { etiqueta: 'tienda_config/publicacion', vacio: {} });
     const lista = datos?.rubros;
-    return Array.isArray(lista) ? lista.map(r => String(r).trim().toUpperCase()) : [];
+    const excluidos = datos?.subrubros_excluidos;
+    return {
+      rubros: Array.isArray(lista) ? lista.map(r => String(r).trim().toUpperCase()) : [],
+      // Sin los subrubros excluidos esta pantalla daba por publicado lo que
+      // el sync saca, y cualquier guardado (una foto, un nombre) lo volvía a
+      // subir a la tienda hasta la corrida siguiente.
+      subrubrosExcluidos: excluidos && typeof excluidos === 'object' ? excluidos : {},
+    };
   }, { ttl: 60000, memOnly: true });
 }
 
@@ -129,6 +143,34 @@ async function leerRubrosHabilitados(db) {
 
 function pesos(n) {
   return '$' + Math.round(Number(n) || 0).toLocaleString('es-AR');
+}
+
+/**
+ * El rubro y la búsqueda elegidos, que valen para TODA la pantalla y no solo
+ * para la lista: la tarjeta del resumen, los chips de los filtros y los
+ * renglones cuentan siempre sobre el mismo recorte.
+ */
+function enElRecorte(p, texto) {
+  if (_rubro && p.rubro !== _rubro) return false;
+  if (texto && !p.buscable.includes(texto)) return false;
+  return true;
+}
+
+/**
+ * Lo que la pantalla tiene entre manos: lo que puede estar en la vidriera
+ * (tiene stock, o ya está publicado) dentro del rubro y la búsqueda elegidos,
+ * sin mirar el filtro.
+ *
+ * Es la base de los dos lugares que muestran números, y por eso es una sola.
+ * Eligiendo Mercería la tarjeta de arriba seguía diciendo "2.480 en la tienda"
+ * mientras el chip pegado abajo decía "En la tienda 96": la misma etiqueta con
+ * dos valores, uno encima del otro, sin nada que aclarara que uno era del
+ * catálogo entero.
+ */
+function enFoco() {
+  const texto = normalizar(_busqueda.trim());
+  return _productos.filter(p => (p.medidas.stock > 0 || p.publicado)
+                             && enElRecorte(p, texto));
 }
 
 function visibles() {
@@ -143,14 +185,13 @@ function visibles() {
     } else if (!conStock) {
       return false;
     }
-    if (_rubro && p.rubro !== _rubro) return false;
+    if (!enElRecorte(p, texto)) return false;
     if (_filtro === 'publicados' && !p.publicado) return false;
     if (_filtro === 'ocultos' && p.publicado) return false;
     if (_filtro === 'destacados' && !p.destacado) return false;
     // "Sin foto": los que ya están en la vidriera saliendo con el cuadrito
     // gris. Es la lista con la que alguien se sienta a sacar fotos.
     if (_filtro === 'sin_foto' && (p.imagenes.length || !p.publicado)) return false;
-    if (texto && !p.buscable.includes(texto)) return false;
     return true;
   });
 }
@@ -243,10 +284,21 @@ function pintarResumen() {
   const caja = document.getElementById('tiendaResumen');
   if (!caja) return;
 
-  const publicados = _productos.filter(p => p.publicado);
+  // Casi todos estos números tienen su gemelo en los chips de abajo, que están
+  // pegados y con la misma etiqueta: "en la tienda" con "En la tienda",
+  // "publicados sin foto" con "Sin foto", "destacados" con "Destacados", "con
+  // stock" con "Con stock". Se cuentan sobre la misma base para que digan lo
+  // mismo; contarlos distinto (acá el catálogo entero, abajo el rubro elegido)
+  // era la misma palabra con dos valores y ninguno de los dos creíble.
+  //
+  // Por eso los destacados salen de la base y no de los publicados: el chip los
+  // cuenta así, y un destacado que hoy no sale (le falta la foto) igual está
+  // marcado.
+  const base = enFoco();
+  const publicados = base.filter(p => p.publicado);
   const sinFoto = publicados.filter(p => !p.imagenes.length).length;
-  const destacados = publicados.filter(p => p.destacado).length;
-  const excluidos = _productos.filter(p => p.interruptor === 'no').length;
+  const destacados = base.filter(p => p.destacado).length;
+  const excluidos = base.filter(p => p.interruptor === 'no').length;
 
   const dato = (n, texto, alerta = false) => `
     <div class="tienda-dato ${alerta ? 'alerta' : ''}">
@@ -258,7 +310,7 @@ function pintarResumen() {
     dato(sinFoto, 'publicados sin foto', sinFoto > 0),
     dato(destacados, 'destacados', destacados === 0),
     dato(excluidos, 'sacados a mano'),
-    dato(_productos.filter(p => p.medidas.stock > 0 || p.publicado).length, 'con stock'),
+    dato(base.length, 'con stock'),
   ].join('');
 }
 
@@ -289,26 +341,93 @@ function pintarContadores() {
  *
  * No se recarga el catálogo entero: el store ya lo tiene y el snapshot va a
  * llegar solo. Se actualiza la fila para que el cambio se vea en el momento en
- * vez de esperar el rebote de Firestore.
+ * vez de esperar el rebote de Firestore. Con `p.datos` en la mano tampoco hace
+ * falta releer el producto para espejarlo: en esta webapp una lectura suelta
+ * por el SDK puede tardar más de un minuto.
+ *
+ * El catálogo y el espejo se escriben en dos pasos, y no con el atajo
+ * `guardarYEspejar`, a propósito: ese escribe el catálogo primero y espeja
+ * después, así que un espejado que falla (la REST vuelve 4xx) tiraba el error
+ * con el catálogo YA cambiado y esta pantalla se quedaba mostrando lo viejo.
+ * Con las fotos eso terminaba en un borrado de verdad: al cerrar el editor, la
+ * limpieza de huérfanas comparaba contra la lista de fotos vieja y sacaba de
+ * Storage una que el catálogo sí referencia, o sea un cuadrito roto en la
+ * ficha. Separados, la memoria refleja lo que quedó escrito y el error sigue
+ * subiendo igual para que quien llama lo muestre.
  */
 async function guardar(p, cambios) {
-  // Con `datos` no hace falta releer el catálogo después de escribir: en esta
-  // webapp una lectura suelta por el SDK puede tardar más de un minuto.
-  const resultado = await guardarYEspejar(_db, p.id, cambios, _rubrosHabilitados, null,
-                                          { datos: p.datos });
+  const estabaPublicado = p.publicado;
+  const t0 = performance.now();
 
-  Object.entries(cambios).forEach(([clave, valor]) => {
+  try {
+    if (Object.keys(cambios || {}).length) {
+      await actualizarDoc(_db, 'catalogo', p.id, cambios);
+    }
+  } catch (err) {
+    // Un error de escritura no dice si el documento quedó escrito o no: un
+    // corte después del commit llega igual que un rechazo. Queda marcado para
+    // que nadie borre fotos comparando contra un estado que no se puede
+    // afirmar.
+    p.sinConfirmar = true;
+    throw err;
+  }
+
+  // Desde acá el catálogo ya tiene los cambios: la fila y el editor abierto los
+  // toman pase lo que pase con el espejo.
+  Object.entries(cambios || {}).forEach(([clave, valor]) => {
     if (valor === undefined) delete p.datos[clave];
     else p.datos[clave] = valor;
   });
+  refrescarEnMemoria(p);
 
-  const i = _productos.findIndex(x => x.id === p.id);
-  if (i !== -1) _productos[i] = preparar(p.datos, _rubrosHabilitados);
+  const t1 = performance.now();
+  const resultado = await espejar(_db, p.id, p.datos, _rubrosHabilitados, _subExcluidos);
+  console.info(`[tienda] guardar ${p.id}: catálogo ${Math.round(t1 - t0)} ms`
+    + ` · espejo ${Math.round(performance.now() - t1)} ms`);
+
+  // Entró o salió de la tienda, o cambió de grupo: el conteo de la portada
+  // (rubros y subrubros con cuántos hay) se rehace en unos segundos.
+  if (resultado.publicado !== estabaPublicado || 'tienda_grupo' in cambios) {
+    programarRecuentoDeRubros(_db);
+  }
 
   return resultado;
 }
 
+/**
+ * Vuelve a masticar el producto con lo que quedó en `p.datos`, sobre el MISMO
+ * objeto en vez de reemplazarlo en la lista.
+ *
+ * La fila del listado, el editor abierto y el armador de grupos se quedan con
+ * esta referencia: cambiarla por una copia nueva los dejaba mirando el estado
+ * de antes de guardar (la lista de fotos vieja, el grupo viejo) hasta cerrar y
+ * volver a abrir.
+ */
+function refrescarEnMemoria(p) {
+  Object.assign(p, preparar(p.datos, _rubrosHabilitados, _subExcluidos));
+  const i = _productos.findIndex(x => x.id === p.id);
+  if (i !== -1) _productos[i] = p;
+}
+
 /* ── Avisos que ve el cliente ──────────────────────────────────────────────── */
+
+// Los avisos guardados pasan por la memoria compartida del panel, igual que la
+// lista de rubros publicados: el guardado siembra acá lo que acaba de escribir.
+const CLAVE_AVISOS = 'tienda:avisos';
+
+/** Lo que hay hoy en `tienda_config/avisos`, en la forma que usa el diálogo. */
+async function leerAvisosGuardados(db) {
+  return getCached(CLAVE_AVISOS, async () => {
+    // Cache primero y revalidación atrás: un getDoc directo acá dejaba el
+    // botón "Avisos" mudo hasta un minuto, encolado detrás de los listeners.
+    const d = await leerDocRapido(doc(db, 'tienda_config', 'avisos'),
+                                  { etiqueta: 'tienda_config/avisos', vacio: {} }) || {};
+    return {
+      rubros: d.rubros && typeof d.rubros === 'object' ? d.rubros : {},
+      subrubros: d.subrubros && typeof d.subrubros === 'object' ? d.subrubros : {},
+    };
+  }, { ttl: 60000, memOnly: true });
+}
 
 /**
  * Los avisos son lo que el local necesita que el cliente lea ANTES de comprar:
@@ -320,16 +439,9 @@ async function guardar(p, cambios) {
  * rubro: lo específico manda.
  */
 async function abrirAvisos(db, rubros) {
-  const ref = doc(db, 'tienda_config', 'avisos');
   let guardados = { rubros: {}, subrubros: {} };
   try {
-    // Cache primero y revalidación atrás: un getDoc directo acá dejaba el
-    // botón "Avisos" mudo hasta un minuto, encolado detrás de los listeners.
-    const d = await leerDocRapido(ref, { etiqueta: 'tienda_config/avisos', vacio: {} }) || {};
-    guardados = {
-      rubros: d.rubros && typeof d.rubros === 'object' ? d.rubros : {},
-      subrubros: d.subrubros && typeof d.subrubros === 'object' ? d.subrubros : {},
-    };
+    guardados = await leerAvisosGuardados(db);
   } catch (e) {
     console.warn('avisos: no se pudieron leer', e?.message || e);
   }
@@ -391,9 +503,14 @@ async function abrirAvisos(db, rubros) {
     try {
       // Los dos mapas se reemplazan enteros: así un aviso que se borró del
       // campo se va de verdad (con merge profundo quedaba la clave vieja).
-      await actualizarDoc(db, 'tienda_config', 'avisos',
-                          { rubros: nuevos, subrubros: guardados.subrubros || {} },
-                          { crearSiFalta: true });
+      const documento = { rubros: nuevos, subrubros: guardados.subrubros || {} };
+      await actualizarDoc(db, 'tienda_config', 'avisos', documento, { crearSiFalta: true });
+      // La escritura fue por REST y nadie escucha este documento: el cache del
+      // SDK sigue con la versión de antes. Sin sembrar lo recién guardado, la
+      // segunda vez que se abría el diálogo en la misma sesión mostraba los
+      // avisos previos al guardado, y si ahí se corregía uno y se guardaba, lo
+      // que no se retipeó volvía atrás.
+      setCacheValue(CLAVE_AVISOS, documento);
       cerrar();
       avisar(`${Object.keys(nuevos).length} rubro(s) con aviso`);
     } catch (e) {
@@ -631,14 +748,10 @@ function abrirGrupo(nombreGrupo = null, semilla = null, alGuardar = null) {
           await guardar(s, { tienda_grupo: undefined, tienda_tamano: undefined });
         }
 
-        // La portada cuenta cada grupo una vez: el conteo se rehace acá para
-        // no esperar a la próxima corrida del sync. Si falla, el sync lo deja
-        // bien igual.
-        leerPublicacion(_db)
-          .then(({ rubros, subrubrosExcluidos }) => recomputarRubros(
-            _db, _productos.map(x => ({ id: x.id, datos: x.datos })),
-            rubros, subrubrosExcluidos))
-          .catch(err => console.warn('[tienda] rubros tras el grupo:', err?.message || err));
+        // El conteo de la portada (un grupo cuenta UNA vez por rubro) ya lo
+        // programó cada `guardar`: se rehace solo unos segundos después del
+        // último producto y en una sola escritura. Pedirlo también acá eran
+        // dos conteos completos por cada grupo guardado.
 
         cerrarGrupoEditor();
         refrescar();
@@ -975,7 +1088,7 @@ function abrirEditor(p) {
       ...p.datos,
       tienda_publicar: interruptor === 'si' ? true : interruptor === 'no' ? false : undefined,
     };
-    const motivo = motivoDeNoPublicar(simulado, _rubrosHabilitados);
+    const motivo = motivoDeNoPublicar(simulado, _rubrosHabilitados, _subExcluidos);
     $('#edBanner').innerHTML = motivo
       ? `<div class="tienda-aviso freno">
            <span class="material-icons">visibility_off</span>
@@ -983,7 +1096,7 @@ function abrirEditor(p) {
            ${motivo === 'sin stock'
              ? ' Vuelve sola apenas entre mercadería.'
              : motivo === 'el rubro no está habilitado'
-               ? ' Se puede forzar con "Publicar siempre", o habilitar el rubro entero en la configuración.'
+               ? ' Se prende el rubro entero en Configuración de la Tienda; "Publicar siempre" no lo fuerza.'
                : ''}</div>
          </div>`
       : `<div class="tienda-aviso ok">
@@ -1160,7 +1273,6 @@ function abrirEditor(p) {
     $('#edFotosPista').textContent = 'Guardando…';
     try {
       await guardar(p, { tienda_imagenes: imagenes, ...extra });
-      p.imagenes = imagenes.slice();
       $('#edFotosPista').textContent = mensaje;
       refrescar();
       return true;
@@ -1549,6 +1661,13 @@ function abrirEditor(p) {
     // Lo subido para una variedad que al final no se guardó (se cerró sin
     // guardar, o se cambió por otra) queda huérfano en Storage: se borra acá.
     // Se compara contra lo GUARDADO, no contra lo que se estaba editando.
+    //
+    // Con un guardado que no se pudo confirmar no se borra nada: si el
+    // catálogo llegó a quedar con esa foto puesta y acá se compara contra una
+    // memoria que quedó atrás, se saca de Storage una foto que el producto
+    // sigue mostrando. Una imagen de más cuesta centavos; una rota en la
+    // vidriera la ve el cliente.
+    if (p.sinConfirmar) return;
     fotosHuerfanas(subidasEnSesion, p.imagenes, p.datos.tienda_variedades)
       .forEach(url => borrarFoto(url));
   };
@@ -1604,7 +1723,14 @@ function abrirEditor(p) {
     try {
       const { publicado, motivo } = await guardar(p, {
         tienda_publicar: interruptor === 'si' ? true : interruptor === 'no' ? false : undefined,
-        tienda_destacado: $('#edDestacado').checked ? true : undefined,
+        // Tres estados a propósito. Destildar lo que estaba marcado a mano
+        // guarda `false` y no borra el campo: sin el campo, el espejo conserva
+        // el destacado que había elegido el sync por ventas (destacadoQueQueda
+        // en tienda_espejo.js) y destildarlo no haría nada hasta la corrida
+        // siguiente. Y guardar la ficha con el casillero como estaba no escribe
+        // ninguna decisión: al que eligió el sync no lo baja de la portada
+        // quien entró a cambiar la descripción.
+        tienda_destacado: $('#edDestacado').checked ? true : (p.destacado ? false : undefined),
         tienda_nombre: nombre || undefined,
         tienda_descripcion: descripcion || undefined,
         tienda_aviso: ($('#edAvisoTexto').value || '').trim() || undefined,
@@ -1650,6 +1776,9 @@ function avisar(texto) {
 function refrescar() {
   pintarResumen();
   pintarLista();
+  // Los números de los filtros acompañan lo que se ve: sacar un producto con
+  // el interruptor mueve "Fuera de la tienda" en el momento.
+  pintarContadores();
 }
 
 /* ── Entrada ──────────────────────────────────────────────────────────────── */
@@ -1657,6 +1786,12 @@ function refrescar() {
 export async function renderTiendaCatalogo(container, db) {
   _db = db;
   _mostrando = POR_TANDA;
+  // Se entra con los filtros limpios. Quedaban en memoria de la visita
+  // anterior y la lista salía filtrada mientras el selector decía "Todos los
+  // rubros" y el buscador estaba vacío: parecía que faltaban productos.
+  _filtro = 'todos';
+  _rubro = '';
+  _busqueda = '';
 
   container.innerHTML = `
     <div class="tienda-resumen" id="tiendaResumen">
@@ -1687,16 +1822,20 @@ export async function renderTiendaCatalogo(container, db) {
 
   // `catalogo:all` lo mantiene vivo el store; el fetcher es el plan B para
   // cuando todavía no llegó el primer snapshot.
-  const [catalogo, habilitados] = await Promise.all([
+  const [catalogo, publicacion] = await Promise.all([
     getCached('catalogo:all', async () => {
       const snap = await getDocs(query(collection(db, 'catalogo'), orderBy('nombre')));
       return snap.docs.map(d => ({ ...d.data(), doc_id: d.id }));
     }, { ttl: 10 * 60 * 1000, memOnly: true }),
-    leerRubrosHabilitados(db),
+    leerPublicacionDeLaTienda(db),
   ]);
 
+  const habilitados = publicacion.rubros;
   _rubrosHabilitados = habilitados;
-  _productos = prepararTodos(catalogo, habilitados);
+  _subExcluidos = publicacion.subrubrosExcluidos;
+  _productos = prepararTodos(catalogo, habilitados, _subExcluidos);
+  // Presta el catálogo para rehacer el conteo de la portada tras cada cambio.
+  usarCatalogoParaRecontar(() => _productos.map(x => x.datos));
 
   // El rubro se elige de los que existen de verdad en el catálogo, no de una
   // lista fija: los rubros los inventa quien carga los productos en el POS.
@@ -1710,7 +1849,6 @@ export async function renderTiendaCatalogo(container, db) {
       }).join('');
 
   refrescar();
-  pintarContadores();
 
   /* ── El catálogo vivo ─────────────────────────────────────────────────
      La pantalla pinta primero con la foto guardada del catálogo, que puede
@@ -1740,9 +1878,8 @@ export async function renderTiendaCatalogo(container, db) {
       if (document.querySelector('.tienda-overlay')) return;
       const datos = peekCacheValue('catalogo:all');
       if (!Array.isArray(datos) || !datos.length) return;
-      _productos = prepararTodos(datos, _rubrosHabilitados);
+      _productos = prepararTodos(datos, _rubrosHabilitados, _subExcluidos);
       refrescar();
-      pintarContadores();
     }, 400);
   });
 
@@ -1759,7 +1896,10 @@ export async function renderTiendaCatalogo(container, db) {
   selector.addEventListener('change', () => {
     _rubro = selector.value;
     _mostrando = POR_TANDA;
-    pintarLista();
+    // Repinta también la tarjeta de arriba: el rubro acota toda la pantalla,
+    // no solo la lista. Quedaba con los números del catálogo entero al lado de
+    // los chips ya acotados al rubro.
+    refrescar();
   });
 
   document.getElementById('tiendaAvisos').addEventListener('click', () => {
@@ -1774,7 +1914,8 @@ export async function renderTiendaCatalogo(container, db) {
   buscador.addEventListener('input', () => {
     _busqueda = buscador.value;
     _mostrando = POR_TANDA;
-    pintarLista();
+    // Lo mismo que el rubro: buscar acota la pantalla entera.
+    refrescar();
   });
 
   document.getElementById('tiendaLista').addEventListener('click', async ev => {
@@ -1793,10 +1934,11 @@ export async function renderTiendaCatalogo(container, db) {
     if (!interruptor) { abrirEditor(p); return; }
 
     // El interruptor de la fila es el atajo: publicar o sacar sin abrir nada.
-    // Sacar algo que no está publicado por otro motivo (sin stock) no tiene
-    // sentido, así que ahí se abre el editor y se explica.
-    if (!p.publicado && p.motivo !== 'excluido a mano'
-        && p.motivo !== 'el rubro no está habilitado') {
+    // Sacar algo que no está publicado por otro motivo (sin stock, rubro
+    // apagado) no tiene sentido, así que ahí se abre el editor y se explica.
+    // El rubro apagado no se fuerza desde acá desde el 2026-09-08: manda
+    // Configuración de la Tienda.
+    if (!p.publicado && p.motivo !== 'excluido a mano') {
       abrirEditor(p);
       return;
     }

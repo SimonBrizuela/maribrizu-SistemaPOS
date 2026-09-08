@@ -321,6 +321,27 @@ describe('Fotos Pedidas', () => {
     expect(c.innerHTML.length).toBeGreaterThan(0);
     expect(plano(c)).not.toContain('NaN');
   });
+
+  it('lo que espera foto por el catálogo no tiene "Sacar": sale solo al cargarle la foto', async () => {
+    // Esa lista se calcula del catálogo, no de un pedido: "Sacar" borraba un
+    // documento que no existe y la fila volvía en el próximo refresco. Lo
+    // pedido a mano sí es un documento, y ahí el botón sigue.
+    datos.docs['tienda_config/publicacion'] = { rubros: ['LIBRERIA'] };
+    datos.porColeccion.catalogo = [
+      { __id: 'p9', doc_id: 'p9', id: 9, nombre: 'GOMA DOS BANDERAS', rubro: 'LIBRERIA',
+        precio_venta: 500, costo: 200, stock: 30, estado: 'activo' },
+    ];
+    const c = await montar('tienda_fotos', 'renderTiendaFotos');
+
+    const esperando = c.querySelector('#fotosTablaEsperando [data-fila="p9"]');
+    expect(esperando).toBeTruthy();
+    expect(esperando.querySelector('[data-cargar]')).toBeTruthy();
+    expect(esperando.querySelector('[data-sacar]')).toBeNull();
+
+    const aMano = c.querySelector('#fotosTabla [data-fila="f1"]');
+    expect(aMano?.querySelector('[data-sacar]')).toBeTruthy();
+    expect(c.textContent).toMatch(/salen de la lista al cargarla/);
+  });
 });
 
 describe('Notificaciones', () => {
