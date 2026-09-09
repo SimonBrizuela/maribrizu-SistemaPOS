@@ -267,84 +267,6 @@ def minimo_publicado(publicado):
         return 0
 
 
-def descontar_del_conteo(lista, bajas):
-    """Le resta al conteo de la portada los productos que se acaban de ir.
-
-    `tienda_config/rubros` es lo que dibuja los filtros: cuantos productos hay
-    en cada rubro y en cada subrubro. Lo rehace entero el sync cada seis horas y
-    el panel despues de cada cambio suyo. Entre medio, la ultima unidad vendida
-    en el mostrador sacaba el producto de la vidriera y el filtro seguia
-    prometiendo los de antes: "Aros 1" y adentro no hay nada.
-
-    Recontar de verdad implica leer el catalogo entero (8.312 productos) en cada
-    venta, que es justo lo que no se puede hacer en el mostrador. Restar uno es
-    una escritura chica y se corrige sola en la proxima corrida del sync.
-
-    `bajas` es una lista de (rubro, subrubro) tal como los publica el espejo.
-    Devuelve la lista nueva, o None si no hubo nada que restar.
-
-    Los numeros se clavan en cero y no bajan mas: la tienda no dibuja lo que
-    tiene cantidad 0 (cargarRubros() y subrubrosDe() en tienda/src/datos.js),
-    asi que con eso alcanza para que el filtro desaparezca, y dejar la entrada
-    conserva el orden de la portada, que sale de esta misma lista.
-    """
-    if not isinstance(lista, list) or not bajas:
-        return None
-
-    cuenta = {}
-    for baja in bajas:
-        rubro = str((baja[0] if len(baja) > 0 else '') or '').strip().upper()
-        if not rubro:
-            continue
-        sub = str((baja[1] if len(baja) > 1 else '') or '').strip().upper()
-        cuenta[(rubro, sub)] = cuenta.get((rubro, sub), 0) + 1
-    if not cuenta:
-        return None
-
-    def entero(v):
-        try:
-            return int(float(v or 0))
-        except (TypeError, ValueError):
-            return 0
-
-    nueva, toco = [], False
-    for entrada in lista:
-        if not isinstance(entrada, dict):
-            nueva.append(entrada)
-            continue
-        rubro = str(entrada.get('clave') or entrada.get('nombre') or '').strip().upper()
-        cuantos = sum(n for (r, _s), n in cuenta.items() if r == rubro)
-        if not cuantos:
-            nueva.append(entrada)
-            continue
-
-        toco = True
-        fila = dict(entrada)
-        fila['cantidad'] = max(0, entero(fila.get('cantidad')) - cuantos)
-        # Publicado implica stock, asi que el que se fue estaba contado en los
-        # dos numeros. `con_stock` es hasta donde puede saltar la portada al
-        # elegir un producto al azar: dejarlo alto la manda a un lugar vacio.
-        fila['con_stock'] = max(0, entero(fila.get('con_stock')) - cuantos)
-
-        subs = fila.get('subrubros')
-        if isinstance(subs, list):
-            renglones = []
-            for sub in subs:
-                if not isinstance(sub, dict):
-                    renglones.append(sub)
-                    continue
-                clave = str(sub.get('clave') or sub.get('nombre') or '').strip().upper()
-                cuantos_sub = cuenta.get((rubro, clave), 0)
-                if cuantos_sub:
-                    sub = dict(sub)
-                    sub['cantidad'] = max(0, entero(sub.get('cantidad')) - cuantos_sub)
-                renglones.append(sub)
-            fila['subrubros'] = renglones
-        nueva.append(fila)
-
-    return nueva if toco else None
-
-
 def _fmt_qty(q):
     """Formatea cantidades: 1.0 -> '1', 0.3 -> '0.3', 2.55 -> '2.55'."""
     q = float(q or 0)
@@ -2625,13 +2547,37 @@ class FirebaseSync:
         Es best-effort y va después del commit del stock: todo error queda acá
         adentro. Si algo falla, la venta ya está firme y el sync lo arregla en
         la próxima corrida.
+
+        **El conteo de la portada NO se toca desde acá, a propósito.** Cuando
+        una venta agota la última unidad, el filtro de la tienda sigue diciendo
+        que ese subrubro tiene un producto más hasta la próxima corrida del
+        sync. Se probó descontarlo en el momento y se sacó antes de publicarlo,
+        por tres razones:
+
+          · sería una TERCERA copia de la regla del conteo, que ya vive en
+            `contar_rubros()` del sync y en `recomputarRubros()` del panel, y
+            esas dos ya divergieron dos veces. Esta copia además es la que más
+            tarda en corregirse: vive en las PCs del local y solo cambia con un
+            release.
+          · el POS solo puede restar. Una reposición cargada acá no le devuelve
+            el número, así que entre corridas el conteo se iría siempre para
+            abajo: el filtro pasaría de prometer de más a prometer de menos, que
+            es igual de falso.
+          · dos PCs que dan de baja al mismo tiempo restan sobre la misma
+            versión del documento.
+
+        Lo que se gana es poco —un filtro dice tres cuando hay dos, por unas
+        horas, y el cliente entra y ve los dos que hay— y esto corre dentro del
+        camino de la venta, que es el peor lugar para agregar superficie de
+        falla. El recuento de verdad lo hacen el panel (que lo rehace solo
+        después de cada cambio) y el sync cada seis horas.
         """
         if not self.enabled or not cambios:
             return
         col = self.db.collection('tienda_productos')
         ahora = _time.time()
         vence = self._MINUTOS_DE_LA_ANOTACION * 60
-        tocados, bajas, sacados = 0, 0, []
+        tocados, bajas = 0, 0
 
         for cambio in cambios:
             firebase_id = cambio[0]
@@ -2678,58 +2624,13 @@ class FirebaseSync:
                     ref.delete()
                     self._fuera_de_la_tienda[firebase_id] = ahora
                     bajas += 1
-                    # Un producto que está dentro de un grupo de tamaños NO
-                    # descuenta: la tienda muestra el grupo como una sola card
-                    # y sigue ahí mientras quede otro tamaño. Averiguar si
-                    # quedan hermanos publicados es una consulta más por venta,
-                    # y equivocarse hacia abajo esconde un filtro que sí tiene
-                    # productos. Esos los recuenta el sync.
-                    if not publicado.get('grupo'):
-                        sacados.append((publicado.get('rubro'),
-                                        publicado.get('sub_rubro')))
             except Exception:
                 # No publicado, borrado en el medio, o la nube no contesta:
                 # anotarlo y seguir. La venta no se entera de nada.
                 self._fuera_de_la_tienda[firebase_id] = ahora
 
-        if sacados:
-            self._descontar_de_la_portada(sacados)
         if tocados or bajas:
             logger.info(f"Tienda: {tocados} con stock nuevo, {bajas} dados de baja.")
-
-    def _descontar_de_la_portada(self, sacados: list) -> None:
-        """Ajusta el conteo por rubro y subrubro de los que se acaban de ir.
-
-        Una escritura chica y condicionada, no un recuento: contar de verdad es
-        leer el catálogo entero, y eso no puede pasar en cada venta.
-
-        La condición es la versión que se acaba de leer. `tienda_config/rubros`
-        lo reescriben enteros el sync y el panel; sin la condición, esta PC
-        podía guardar encima una lista vieja y devolver la portada al estado
-        anterior. Si alguien escribió en el medio, la escritura se cae sola y el
-        conteo queda como estaba hasta la próxima corrida del sync.
-        """
-        try:
-            ref = self.db.collection('tienda_config').document('rubros')
-            snap = ref.get()
-            if not snap.exists:
-                return
-            nueva = descontar_del_conteo((snap.to_dict() or {}).get('lista'), sacados)
-            if not nueva:
-                return
-            try:
-                opcion = self.db.write_option(last_update_time=snap.update_time)
-            except Exception:
-                opcion = None
-            # `actualizado` no se toca a propósito: marca el último recuento de
-            # verdad, y esto es un ajuste de dos números, no un recuento.
-            if opcion is not None:
-                ref.update({'lista': nueva}, option=opcion)
-            else:
-                ref.update({'lista': nueva})
-        except Exception as e:
-            logger.info(f"Tienda: el conteo de la portada no se ajustó ({e}); "
-                        f"lo rehace el sync.")
 
     def push_stock_movimientos(self, db_manager, en_hilo: bool = True) -> None:
         """Sube a `stock_movimientos` las filas que todavía no viajaron.

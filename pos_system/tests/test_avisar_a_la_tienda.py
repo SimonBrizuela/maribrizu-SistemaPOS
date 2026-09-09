@@ -18,7 +18,6 @@ import pytest
 
 from pos_system.utils.firebase_sync import (
     FirebaseSync,
-    descontar_del_conteo,
     entero_de_tienda,
     minimo_publicado,
     variedades_con_stock_nuevo,
@@ -417,34 +416,36 @@ LISTA = [{'nombre': 'Regaleria', 'clave': 'REGALERIA', 'cantidad': 12,
           'con_stock': 30, 'subrubros': []}]
 
 
-def test_la_ultima_unidad_vendida_baja_el_filtro_de_la_portada():
-    """El "Aros 1" que promete un filtro y adentro no hay nada."""
+def test_el_pos_no_toca_el_conteo_de_la_portada_ni_al_dar_de_baja():
+    """Decision tomada el 09-09, con el codigo escrito y probado: se saco.
+
+    Vender la ultima unidad deja el filtro de la tienda prometiendo un producto
+    mas hasta la proxima corrida del sync, y esta bien que asi sea. Descontarlo
+    desde el POS era una TERCERA copia de la regla del conteo (ya vive en
+    `contar_rubros()` del sync y en `recomputarRubros()` del panel, y esas dos
+    ya divergieron dos veces), corria adentro del camino de la venta, y solo
+    sabia restar: una reposicion cargada desde el POS no devolvia el numero, asi
+    que el filtro pasaba de prometer de mas a prometer de menos.
+
+    Si alguien lo vuelve a agregar, esta prueba se pone en rojo y obliga a leer
+    el porque en `_avisar_a_la_tienda` antes de decidirlo de nuevo.
+    """
     sync, db = sync_con(
         {'p1': {'stock': 1, 'rubro': 'REGALERIA', 'sub_rubro': 'Aros'}},
         rubros=[dict(r, subrubros=[dict(s) for s in r['subrubros']]) for r in LISTA])
 
     sync._avisar_a_la_tienda([('p1', 0)])
 
+    # El producto si sale de la vidriera: eso es lo que evita vender lo que no hay.
+    assert 'p1' not in db.datos['tienda_productos']
+    # El conteo queda intacto, tal cual lo dejo el ultimo recuento de verdad.
     lista = db.datos['tienda_config']['rubros']['lista']
-    assert lista[0]['cantidad'] == 11
-    assert lista[0]['con_stock'] == 11
-    assert lista[0]['subrubros'][0]['cantidad'] == 0
-    assert lista[0]['subrubros'][1]['cantidad'] == 11
-    # El otro rubro no se toca.
+    assert lista[0]['cantidad'] == 12
+    assert lista[0]['con_stock'] == 12
+    assert lista[0]['subrubros'][0]['cantidad'] == 1
     assert lista[1]['cantidad'] == 30
-
-
-def test_un_producto_de_un_grupo_de_tamaños_no_descuenta():
-    """La tienda muestra el grupo como una sola card y sigue ahi mientras quede
-    otro tamaño: restarlo esconderia un filtro que si tiene productos."""
-    sync, db = sync_con(
-        {'p1': {'stock': 1, 'rubro': 'REGALERIA', 'sub_rubro': 'Aros',
-                'grupo': 'Aro Argolla'}},
-        rubros=[dict(r, subrubros=[dict(s) for s in r['subrubros']]) for r in LISTA])
-
-    sync._avisar_a_la_tienda([('p1', 0)])
-
-    assert db.datos['tienda_config']['rubros']['lista'][0]['cantidad'] == 12
+    # Y ni siquiera lo leyo: es una lectura menos en cada venta.
+    assert ('tienda_config', 'rubros') not in db.lecturas
 
 
 def test_el_conteo_no_se_toca_si_solo_cambio_el_stock():
@@ -455,61 +456,6 @@ def test_el_conteo_no_se_toca_si_solo_cambio_el_stock():
     sync._avisar_a_la_tienda([('p1', 4)])
 
     assert ('tienda_config', 'rubros') not in db.lecturas
-
-
-def test_si_alguien_reescribio_la_lista_en_el_medio_la_baja_no_pisa_nada():
-    """El sync y el panel rehacen `tienda_config/rubros` entero: sin la version
-    como condicion, esta PC devolvia la portada al conteo viejo."""
-    sync, db = sync_con(
-        {'p1': {'stock': 1, 'rubro': 'REGALERIA', 'sub_rubro': 'Aros'}},
-        rubros=[dict(r) for r in LISTA])
-    db.versiones[('tienda_config', 'rubros')] = 7
-
-    class DocQueCambia(DocFalso):
-        def update(self, datos, option=None):
-            if self.coleccion == 'tienda_config':
-                # El sync commiteo entre la lectura y la escritura.
-                self.db.versiones[('tienda_config', 'rubros')] = 8
-            return super().update(datos, option)
-
-    db.collection = lambda nombre: type(
-        'C', (), {'document': lambda _s, doc_id: DocQueCambia(db, nombre, doc_id)})()
-
-    # No revienta, el producto igual se dio de baja y la lista quedo como la
-    # dejo el que escribio ultimo.
-    sync._avisar_a_la_tienda([('p1', 0)])
-
-    assert 'p1' not in db.datos['tienda_productos']
-    assert db.datos['tienda_config']['rubros']['lista'][0]['cantidad'] == 12
-
-
-def test_descontar_del_conteo_no_baja_de_cero_ni_inventa_rubros():
-    lista = [{'clave': 'REGALERIA', 'cantidad': 1, 'con_stock': 1,
-              'subrubros': [{'clave': 'AROS', 'cantidad': 0}]}]
-
-    nueva = descontar_del_conteo(lista, [('REGALERIA', 'Aros'),
-                                         ('REGALERIA', 'Aros')])
-
-    assert nueva[0]['cantidad'] == 0
-    assert nueva[0]['con_stock'] == 0
-    assert nueva[0]['subrubros'][0]['cantidad'] == 0
-    # Sin coincidencias no hay escritura que hacer.
-    assert descontar_del_conteo(lista, [('LIBRERIA', 'Boligrafo')]) is None
-    assert descontar_del_conteo(None, [('REGALERIA', 'Aros')]) is None
-    assert descontar_del_conteo(lista, []) is None
-
-
-def test_descontar_del_conteo_no_le_pega_al_rubro_que_no_es():
-    lista = [dict(r, subrubros=[dict(s) for s in r['subrubros']]) for r in LISTA]
-
-    nueva = descontar_del_conteo(lista, [(' regaleria ', 'aros')])
-
-    assert nueva[0]['cantidad'] == 11
-    assert nueva[0]['subrubros'][0]['cantidad'] == 0
-
-
-# ── Nada de esto puede voltear una venta ───────────────────────────────────
-
 def test_si_la_nube_no_contesta_el_aviso_se_traga_solo():
     sync, db = sync_con({'p1': {'stock': 5}})
     db.explota_al_leer = True
