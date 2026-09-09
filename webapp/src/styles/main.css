@@ -4726,6 +4726,23 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
 .cc-chip-ok  { background: var(--tint-green-bg); color: var(--tint-green-fg); }
 .cc-chip-sisi { background: var(--danger); color: #fff; }
 
+/* Urgencia de compra (0–100): el número con el que se ordena la lista. Mismo
+   código de color que las píldoras de nivel de arriba —rojo sí o sí, naranja
+   importante, neutro puede esperar— así la columna y la cabecera dicen lo
+   mismo sin repetir la etiqueta en cada fila. El tooltip abre la cuenta. */
+.cc-urg {
+  display: inline-block; min-width: 32px; padding: 3px 7px; border-radius: 7px;
+  font-size: 12px; font-weight: 700; font-variant-numeric: tabular-nums;
+  border: 1px solid var(--border); background: var(--surface); color: var(--text-muted);
+  cursor: help;
+}
+.cc-urg-sisi { background: var(--tint-red-bg); border-color: var(--danger); color: var(--tint-red-fg); }
+.cc-urg-importante { background: var(--tint-orange-bg); border-color: var(--warning); color: var(--tint-orange-fg); }
+/* Tendencia del ritmo: la semana contra el promedio del mes. */
+.cc-tend { font-size: 15px !important; vertical-align: -3px; margin-left: 3px; }
+.cc-tend-up { color: var(--danger); }
+.cc-tend-down { color: var(--text-muted); }
+
 /* "Ya lo anoté en el cuaderno": la fila queda verde con el contorno marcado y
    un chip que dice desde cuándo; la lapicera de la fila prende o saca la marca.
    Más plantado que el lavado verde de "registrado": fondo un punto más

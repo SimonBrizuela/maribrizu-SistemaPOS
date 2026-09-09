@@ -12,11 +12,17 @@
 // control_config/dias_<ym>). Las alertas de reposición vienen de notifications.js.
 // A la lista entra: lo que está POR DEBAJO de su stock mínimo cargado, y lo que
 // no tiene mínimo pero se vende seguido y el stock no cubre el horizonte; lo que
-// tiene mínimo y está bien NO figura (ver fuentesCompra). Después se clasifica
-// en tres niveles: SÍ O SÍ (se agota o ya no hay Y rota),
-// IMPORTANTE (sin stock aunque venda poco, o top vendido bajo mínimo) y PUEDE
-// ESPERAR. Dentro de cada nivel se ordena por la plata que se deja de facturar
-// si falta (ritmo × precio de venta). El presupuesto se asigna en dos pasadas:
+// tiene mínimo y está bien NO figura (ver fuentesCompra).
+//
+// El ORDEN es lo que hace útil la página, y sale de un solo número: la urgencia
+// de compra (0–100), que conjuga las tres cosas que pidió el dueño —lo que más
+// se movió estos días, lo que más se vende en el mes y el stock mínimo cargado—
+// contra lo que le queda de stock. La cuenta vive en `urgencia_compra.js`. De
+// ese mismo número salen los tres niveles: SÍ O SÍ, IMPORTANTE y PUEDE ESPERAR,
+// así la lista ordenada los deja agrupados sin que haya que ordenar dos veces.
+// La plata que se deja de facturar (ritmo × precio) NO entra en el puntaje —si
+// entrara, las hojas quedarían siempre debajo de cualquier cosa cara que no
+// rota— pero se muestra y desempata. El presupuesto se asigna en dos pasadas:
 // primero lo SÍ O SÍ — si no entra completo a la cobertura objetivo, se achica
 // la cobertura hasta un piso de 7 días ANTES de dejar productos afuera — y con
 // lo que sobra se va marcando el resto en orden (lo que entra, entra, aunque
@@ -34,6 +40,10 @@ import {
   CAMPOS_FILTRO, SIN_VALOR, filtrosVacios, sanearFiltros, cantidadFiltros,
   coincideCompra, opcionesCompras, filtrarOpciones, campoTieneValores, textoBusquedaCompra,
 } from '../filtros_compras.js';
+import {
+  puntajeUrgencia, nivelPorPuntaje, compararUrgencia, motivosUrgencia, explicarUrgencia,
+  VENTANA_CORTA_DIAS,
+} from '../urgencia_compra.js';
 
 const MEDIOS = [
   { k: 'efectivo', label: 'Efectivo' },
@@ -46,7 +56,6 @@ const RUBROS_FIJOS_DEFAULT = ['sueldos', 'gastos fijos'];
 const COBERTURA_DEFAULT = 30;    // días de venta a cubrir al sugerir cantidad
 const MIN_COBERTURA_DIAS = 7;    // piso al achicar cantidades de lo SÍ O SÍ cuando la plata no alcanza
 const MIN_ROTACION = 3;          // unidades vendidas en la ventana para considerar que "rota"
-const TIER_RANK = { sisi: 0, importante: 1, opcional: 2 };
 // Marca "ya lo anoté en el cuaderno": si el producto salió de la lista (se repuso
 // o dejó de rotar) la marca vieja se limpia sola pasados estos días. Mientras el
 // producto siga figurando, la marca no caduca nunca (hay cosas que tardan meses
@@ -180,17 +189,29 @@ function computeBudget(balCfg, diasDoc, comprasCfg, ym) {
 }
 
 // ── Filas priorizadas ─────────────────────────────────────────────────────────
-// Nivel de una alerta:
-//   sisi       → se agota ya (o ya no hay) Y el producto rota → no comprarlo es
-//                perder ventas seguro.
-//   importante → sin stock (aunque venda poco), o top vendido bajo mínimo.
-//   opcional   → stock bajo configurado, variantes auto, etc. Puede esperar.
-function tierDe(a) {
-  const rota = (Number(a.unidades_ventana) || 0) >= MIN_ROTACION;
-  if (!a.auto && rota && (a.urgente || a.critico)) return 'sisi';
-  if (a.critico || a.es_top || a.urgente) return 'importante';
-  if (rota && a.dias_cobertura <= 14) return 'importante';   // rota y le quedan ~2 semanas
-  return 'opcional';
+// Urgencia de una alerta (0–100) y, de ahí, su nivel:
+//   sisi       → o el puntaje es alto, o ya no hay nada de algo que rota.
+//   importante → puntaje medio, o sin stock aunque casi no rote.
+//   opcional   → puede esperar.
+// Los dos casos de "ya no hay nada" son pisos del puntaje, no reglas aparte:
+// así el nivel y el orden nunca se contradicen (ver `urgencia_compra.js`).
+function urgenciaDe(a, coberturaObj) {
+  const auto = !!a.auto;
+  const stockUnidades = Number.isFinite(Number(a.stock_total_unidades))
+    ? Number(a.stock_total_unidades)
+    : (Number(a.stock) || 0);
+  return puntajeUrgencia({
+    diasCobertura: a.dias_cobertura,
+    coberturaObjetivo: coberturaObj,
+    stock: Number(a.stock) || 0,
+    // Las variedades auto-detectadas no tienen mínimo cargado: el 2 que traen
+    // es el umbral con el que se las detecta, no una decisión del dueño.
+    stockMin: auto ? 0 : (Number(a.stock_min) || 0),
+    sinStock: stockUnidades <= 0,
+    rankMes: Number(a.rank_mes) || 0,
+    rankReciente: Number(a.rank_reciente) || 0,
+    unidadesMes: Number(a.unidades_ventana) || 0,
+  });
 }
 
 // Fuentes de la lista: alertas activas (bajo mínimo / por agotarse) + candidatos
@@ -359,6 +380,7 @@ function buildRows(alertas, comprasCfg) {
     // pierde solo los 5 del final.
     const diasCob = Number.isFinite(a.dias_cobertura) ? Math.max(0, a.dias_cobertura) : Infinity;
     const perdidaHorizonte = velDia * precio * Math.max(0, cobertura - Math.min(diasCob, cobertura));
+    const urg = urgenciaDe(a, cobertura);
 
     const row = {
       doc_id: a.doc_id,
@@ -372,7 +394,14 @@ function buildRows(alertas, comprasCfg) {
       marca: a.marca || a.producto?.marca || '',
       urgente: !!a.urgente,
       critico: !!a.critico,
-      tier: tierDe(a),
+      // El puntaje y su cuenta abierta: el orden de la lista y el tooltip que
+      // lo explica salen de acá.
+      urgencia: urg.score,
+      riesgo: urg.riesgo,
+      importancia: urg.importancia,
+      rank_mes: urg.rank_mes,
+      rank_reciente: urg.rank_reciente,
+      tier: nivelPorPuntaje(urg.score),
       cobertura_texto: a.cobertura_texto || '',
       stock: Number(a.stock) || 0,
       stock_min: Number(a.stock_min) || 0,
@@ -382,6 +411,13 @@ function buildRows(alertas, comprasCfg) {
       stockUnits,
       vel_dia: velDia,
       vel_semana: Number(a.vel_semana) || 0,
+      // Las dos ventanas por separado, para explicar por qué está donde está.
+      unidades_ventana: Number(a.unidades_ventana) || 0,
+      ritmo_dias: Number(a.ritmo_dias) || 0,
+      unidades_7: Number(a.unidades_7) || 0,
+      dias_con_mov_7: Number(a.dias_con_mov_7) || 0,
+      vel_dia_30: Number(a.vel_dia_30) || 0,
+      vel_dia_7: Number(a.vel_dia_7) || 0,
       dias_cobertura: diasCob,
       perdidaSemana: velDia * 7 * precio,
       perdidaHorizonte,
@@ -402,13 +438,9 @@ function buildRows(alertas, comprasCfg) {
     row.busca = textoBusquedaCompra(row);
     rows.push(row);
   }
-  rows.sort((a, b) => {
-    if (TIER_RANK[a.tier] !== TIER_RANK[b.tier]) return TIER_RANK[a.tier] - TIER_RANK[b.tier];
-    if ((b.perdidaHorizonte || 0) !== (a.perdidaHorizonte || 0)) return (b.perdidaHorizonte || 0) - (a.perdidaHorizonte || 0);
-    if ((b.vel_dia || 0) !== (a.vel_dia || 0)) return (b.vel_dia || 0) - (a.vel_dia || 0);
-    if (a.dias_cobertura !== b.dias_cobertura) return a.dias_cobertura - b.dias_cobertura;
-    return a.nombre.localeCompare(b.nombre);
-  });
+  // Del más urgente de comprar al menos urgente. Como el nivel sale del mismo
+  // puntaje, ordenar por urgencia deja los tres niveles agrupados y en orden.
+  rows.sort(compararUrgencia);
   return rows;
 }
 
@@ -695,7 +727,7 @@ function pageHtml() {
             <span class="material-icons">close</span>
           </button>
         </div>
-        <span class="cc-hint">Ordenada por prioridad y plata en riesgo · Registrar descuenta el presupuesto, no el stock · La lapicera marca lo que ya está en el cuaderno.</span>
+        <span class="cc-hint">Del más urgente al que puede esperar: conjuga lo que más se vende en el mes, lo que más se movió estos días y el stock mínimo · Registrar descuenta el presupuesto, no el stock · La lapicera marca lo que ya está en el cuaderno.</span>
       </div>
       <div class="cc-filtros" id="cc-filtros">
         <span class="material-icons cc-filtros-ico" title="Los filtros se combinan entre sí y con la lupa">filter_list</span>
@@ -710,6 +742,8 @@ function pageHtml() {
         <table class="cc-table">
           <thead><tr>
             <th style="width:34px"></th>
+            <th style="text-align:center;width:78px"
+                title="Urgencia de compra, de 0 a 100. Junta lo que más se vende en el mes, lo que más se movió estos últimos días y el stock mínimo, contra lo que queda de stock.">Urgencia</th>
             <th>Producto</th>
             <th>Rubro</th>
             <th style="text-align:right">Stock</th>
@@ -1070,7 +1104,7 @@ function pintarFilas() {
   if (!tbody) return;
   if (!s.rows.length) {
     paintFiltros(0);
-    tbody.innerHTML = `<tr><td colspan="9" class="cc-empty">
+    tbody.innerHTML = `<tr><td colspan="10" class="cc-empty">
       <span class="material-icons">check_circle</span> No hay faltantes que reponer ahora mismo.</td></tr>`;
     return;
   }
@@ -1098,7 +1132,7 @@ function pintarFilas() {
       nFiltros ? (nFiltros === 1 ? 'el filtro puesto' : 'los filtros puestos') : '',
       s.filtroAnotados ? 'lo del cuaderno' : '',
     ].filter(Boolean).join(' y ');
-    tbody.innerHTML = `<tr><td colspan="9" class="cc-empty">
+    tbody.innerHTML = `<tr><td colspan="10" class="cc-empty">
       <span class="material-icons">search_off</span> Nada en la lista coincide con ${que}.
       ${(nFiltros || s.busqueda) ? `<button type="button" class="cc-btn-ghost cc-empty-btn" data-action="filtros-clear-todo">Ver la lista completa</button>` : ''}
     </td></tr>`;
@@ -1113,13 +1147,28 @@ function pintarFilas() {
   };
   arriba.forEach(emit);
   if (abajo.length) {
-    parts.push(`<tr class="cc-cutoff"><td colspan="9">
+    parts.push(`<tr class="cc-cutoff"><td colspan="10">
       <span class="material-icons">content_cut</span>
       Acá se acaba la plata (${money(disp)}) · lo de abajo no entra en el presupuesto</td></tr>`);
     prevDoc = null;
     abajo.forEach(emit);
   }
   tbody.innerHTML = parts.join('');
+}
+
+// Flecha de tendencia al lado del ritmo. Solo cuando la semana se despegó del
+// mes Y hubo movimiento en más de un día: con una sola venta no hay tendencia
+// que mostrar, hay una venta.
+function tendenciaDe(r) {
+  if (!(r.vel_dia_30 > 0) || Number(r.dias_con_mov_7) < 2) return '';
+  const rel = r.vel_dia_7 / r.vel_dia_30;
+  if (rel >= 1.4) {
+    return `<span class="material-icons cc-tend cc-tend-up" title="Se está vendiendo más rápido que el promedio del mes">trending_up</span>`;
+  }
+  if (rel <= 0.6) {
+    return `<span class="material-icons cc-tend cc-tend-down" title="Se está vendiendo más lento que el promedio del mes">trending_down</span>`;
+  }
+  return '';
 }
 
 function rowHtml(r, i, esContinuacion) {
@@ -1154,9 +1203,24 @@ function rowHtml(r, i, esContinuacion) {
     ? `<span class="material-icons cc-check-off" title="${r.sinCosto ? 'Sin costo cargado' : 'Ya registrado'}">${r.sinCosto ? 'block' : 'check_circle'}</span>`
     : `<input type="checkbox" class="cc-check" data-idx="${i}"${r.checked ? ' checked' : ''} />`;
 
-  const ritmo = r.vel_semana >= 1
+  // Ritmo: el número con el que se decide (mes corregido por estos días) y, en
+  // el tooltip, las dos ventanas por separado. La flecha aparece solo cuando la
+  // semana se despegó del mes lo suficiente como para cambiar la decisión.
+  const ritmoTxt = r.vel_semana >= 1
     ? `~${fmt(Math.round(r.vel_semana), 0)}/sem`
     : (r.vel_semana > 0 ? '<1/sem' : '—');
+  const ritmoTitle = r.vel_dia > 0
+    ? [
+        `Ritmo con el que se decide: ~${fmt(r.vel_semana, 1)} por semana`,
+        `Últimos 30 días: ${fmt(r.unidades_ventana, 0)} unidades`,
+        `Últimos ${VENTANA_CORTA_DIAS} días: ${fmt(r.unidades_7, 0)} unidades en ${fmt(r.dias_con_mov_7, 0)} día(s) distintos`,
+        r.dias_con_mov_7 <= 1 && r.unidades_7 > 0
+          ? 'Una sola venta en la semana no cuenta como ritmo: manda el promedio del mes.'
+          : '',
+      ].filter(Boolean).join('\n')
+    : 'Sin ventas registradas en el último mes';
+  const tendencia = tendenciaDe(r);
+  const ritmo = `<span title="${esc(ritmoTitle)}">${ritmoTxt}${tendencia}</span>`;
 
   const esPack = r.esVariedad && r.packSize > 0;
   const costo = r.sinCosto
@@ -1169,10 +1233,12 @@ function rowHtml(r, i, esContinuacion) {
   const subtotal = r.sinCosto ? '—' : money(r.subtotal, 0);
   const acumulado = r.fits ? money(r.acumulado, 0) : '—';   // solo tiene sentido dentro del plan
 
-  // Cobertura y plata en riesgo en UNA línea apagada: con una fila por producto
-  // se lee igual, y la página deja de ser una pared de texto rojo repetido.
+  // Cobertura, por qué está donde está y plata en riesgo, en UNA línea apagada:
+  // con una fila por producto se lee igual, y la página deja de ser una pared
+  // de texto rojo repetido.
   const detalles = [];
   if (r.cobertura_texto) detalles.push(esc(r.cobertura_texto));
+  for (const m of motivosUrgencia(r)) detalles.push(esc(m));
   if (!r.registrado && r.tier !== 'opcional' && r.perdidaSemana > 0) {
     detalles.push(`dejás de vender ~${money(r.perdidaSemana)}/sem si falta`);
   }
@@ -1189,6 +1255,9 @@ function rowHtml(r, i, esContinuacion) {
 
   return `<tr class="${cls}" data-idx="${i}">
     <td style="text-align:center">${checkbox}</td>
+    <td style="text-align:center">
+      <span class="cc-urg cc-urg-${r.tier}" title="${esc(explicarUrgencia(r))}">${fmt(Math.round(r.urgencia), 0)}</span>
+    </td>
     <td>
       <div class="cc-prod">
         ${esContinuacion ? '<span class="material-icons cc-var-arrow" title="Otra variante del producto de arriba">subdirectory_arrow_right</span>' : ''}
@@ -1257,7 +1326,8 @@ function paintAjustes() {
         <span class="material-icons">save</span> Guardar
       </button>
     </div>
-    <div class="cc-ajustes-hint">La rentabilidad efectiva es la mayor entre el monto fijo y el piso % de los ingresos del mes.</div>`;
+    <div class="cc-ajustes-hint">La rentabilidad efectiva es la mayor entre el monto fijo y el piso % de los ingresos del mes.</div>
+    <div class="cc-ajustes-hint">La cobertura objetivo es hasta dónde mirás para adelante: con 30 días, lo que tiene stock para 35 no urge todavía. Subila si querés comprar con más anticipación (y que lo que más se vende suba en la lista).</div>`;
 }
 
 // ── Resumen por nivel ─────────────────────────────────────────────────────────

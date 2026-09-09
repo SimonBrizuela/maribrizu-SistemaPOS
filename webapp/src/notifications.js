@@ -22,10 +22,14 @@ import { collection, getDocs, doc, onSnapshot, query, orderBy, limit, setDoc, ar
 import { getCached } from './cache.js';
 import { fechaDMYtoYMD } from './config.js';
 import { alertaPorBulto, bultoDe, textoBultos } from './bulto.js';
-// Lo que se vende fraccionado llega con el nombre decorado y la cantidad en la
-// presentación vendida: hay que leerlo antes de medir el ritmo.
-import { parseNombreItem, unidadesDelRenglon } from './nombre_item.js';
 import { mostrarToast } from './components/toasts.js';
+// El ritmo se mide con dos ventanas —el mes y los últimos días— y se pondera;
+// el ranking de ventas del local sale de la misma pasada. Todo eso es lógica
+// pura y vive aparte, para poder probarla y correrla fuera del navegador.
+import {
+  VENTANA_CORTA_DIAS, VENTANA_LARGA_DIAS as VENTANA_DIAS, UMBRAL_TOP,
+  computarVentanas, ritmoDe, normNombre,
+} from './urgencia_compra.js';
 
 // ── Estado interno ───────────────────────────────────────────────────────────
 let _db = null;
@@ -42,20 +46,13 @@ let _refreshPromise = null;    // refresh en vuelo — los que llegan tarde lo e
 let _baselineDone = false;
 
 // ── Velocidad de venta (recomendación de reposición urgente) ─────────────────
-// Mapa nombre_normalizado → unidades vendidas en la ventana reciente. Se usa
-// para detectar qué productos en alerta de stock ROTAN seguido y, por lo tanto,
-// son urgentes de reponer. Se carga desde la misma cache que "Productos más
-// vendidos" (`productos:items_rich`), así no agrega lecturas a Firestore.
-let _velocidadPorNombre = new Map();       // nombre → unidades vendidas en la ventana
-let _velocidadPorNombreColor = new Map();  // "nombre||color" → unidades (variedades de conjuntos)
-let _nombresConColor = new Set();          // productos cuyas ventas vienen con conjunto_color (docs nuevos)
-let _consumoPorDocId = new Map();  // doc_id → unidades consumidas vía vinculaciones (impresiones → hoja, etc.)
-let _primerMovPorNombre = new Map();  // nombre → ymd de la primera venta en la ventana (ritmo de productos nuevos)
-let _primerMovPorDocId = new Map();   // doc_id → ymd del primer consumo vinculado en la ventana
-let _hoyYmd = '';                  // fecha AR del último refresh de velocidades
-let _umbralTop = Infinity;       // unidades de la ventana en el percentil 80 (top vendidos)
+// Las ventas medidas en DOS ventanas: la del mes (30 días, lo que sostiene el
+// mostrador) y la de los últimos días (7, lo que se está moviendo ahora). De
+// ahí salen el ritmo con el que se decide, el ranking del local y las urgencias
+// de reposición. Se carga desde la misma cache que "Productos más vendidos"
+// (`productos:items_rich`), así no agrega lecturas a Firestore.
+let _ventanas = computarVentanas([], { hoyYmd: '', aYmd: () => '' });
 
-const VENTANA_DIAS = 30;          // ventana de ventas recientes para medir el ritmo
 const UMBRAL_DIAS_COBERTURA = 7;  // si al ritmo actual se agota en ≤ esto → urgente
 const MIN_VENTAS_URGENTE = 3;     // mínimo vendido para escalar a urgente una alerta ya existente
 const MIN_VENTAS_RITMO = 8;       // mínimo vendido para generar urgencia SOLA por ritmo (sin stock_min)
@@ -383,13 +380,12 @@ export function _alertasProducto(p) {
 }
 
 // ── Velocidad de venta ────────────────────────────────────────────────────────
-function _normNombre(s) {
-  return String(s ?? '').trim().toLowerCase().replace(/\s+/g, ' ');
-}
-
-// Carga las unidades vendidas por producto en la ventana reciente y deja listo
-// el umbral de "top vendidos". Es barato: reusa la cache de la página de
-// ranking. Falla en silencio (sin ventas → simplemente no hay urgencias).
+// Carga las unidades vendidas por producto en las DOS ventanas y deja armadas
+// las escalas del ranking del local. Es barato: reusa la cache de la página de
+// "Productos más vendidos", así no agrega lecturas a Firestore. Falla en
+// silencio (sin ventas → simplemente no hay urgencias). La pasada en sí es
+// pura y vive en `urgencia_compra.js`, para poder probarla y para poder
+// correrla contra un volcado de Firestore desde un script.
 async function _cargarVelocidades() {
   try {
     const items = await getCached('productos:items_rich', async () => {
@@ -398,88 +394,36 @@ async function _cargarVelocidades() {
       return snap.docs.map(d => d.data());
     }, { ttl: 5 * 60 * 1000, memOnly: true });
 
-    // Ventana en fecha ARGENTINA (los docs guardan la fecha local del local).
-    const AR = { timeZone: 'America/Argentina/Buenos_Aires' };
-    _hoyYmd = new Date().toLocaleDateString('en-CA', AR);
-    const corteYMD = new Date(Date.now() - VENTANA_DIAS * 86400000).toLocaleDateString('en-CA', AR);
-
-    const mapa = new Map();
-    const mapaColor = new Map();
-    const conColor = new Set();
-    const consumo = new Map();
-    const primerNombre = new Map();
-    const primerDoc = new Map();
-    // Catálogo por nombre normalizado, para traducir las presentaciones. Se
-    // arma acá porque `_productos` ya está cargado cuando corre esto.
+    // Catálogo por nombre normalizado, para traducir las presentaciones ("1
+    // pack(s)" es un 1 que son 500 hojas). Se arma acá porque `_productos` ya
+    // está cargado cuando corre esto.
     const catPorNombre = new Map();
     for (const p of _productos) {
-      const n = _normNombre(p?.nombre);
+      const n = normNombre(p?.nombre);
       if (n && !catPorNombre.has(n)) catPorNombre.set(n, p);
     }
-    for (const it of items) {
-      if (it.deleted === true) continue;
-      const ymd = fechaDMYtoYMD(it.fecha);
-      if (!ymd || ymd < corteYMD) continue;
-
-      // Consumo vía vinculaciones (ej: cada impresión descuenta hojas). Es la
-      // verdad de terreno: lo que el watcher de consumibles ya descontó queda
-      // registrado en `consumibles_descuentos: [{target_id, cantidad}]`. Así la
-      // hoja/insumo acumula su consumo real aunque nunca se venda "suelta".
-      const desc = Array.isArray(it.consumibles_descuentos) ? it.consumibles_descuentos : null;
-      if (desc) {
-        for (const d of desc) {
-          if (!d || d.skip || d.error) continue;
-          const tid = String(d.target_id || '');
-          const c = Number(d.cantidad || 0);
-          if (tid && c > 0) {
-            consumo.set(tid, (consumo.get(tid) || 0) + c);
-            const prev = primerDoc.get(tid);
-            if (!prev || ymd < prev) primerDoc.set(tid, ymd);
-          }
-        }
-      }
-
-      // Por el nombre limpio. Lo que se vende fraccionado llega decorado
-      // ("[Verde]  CINTA  ·  2,5 m") y con ese texto no coincidía con ningún
-      // producto del catálogo: rollos, packs y cartulinas por color quedaban
-      // con ritmo cero y NUNCA se marcaban como "reponer urgente".
-      const crudo = it.producto || it.product_name || '';
-      const nombre = _normNombre(parseNombreItem(crudo).base || crudo);
-      if (!nombre) continue;
-      // Y la cantidad viene en la presentación vendida: "1 pack(s)" es un 1 que
-      // son 500 hojas. Se traduce con el producto del catálogo.
-      const cant = unidadesDelRenglon(
-        { producto: crudo, cantidad: it.cantidad ?? it.quantity ?? 0 },
-        catPorNombre.get(nombre) || null,
-      );
-      if (!cant) continue;
-      // Las devoluciones/correcciones (cantidad negativa) restan del ritmo.
-      mapa.set(nombre, (mapa.get(nombre) || 0) + cant);
-      const color = _normNombre(it.conjunto_color || '');
-      if (color) {
-        conColor.add(nombre);
-        const k = nombre + '||' + color;
-        mapaColor.set(k, (mapaColor.get(k) || 0) + cant);
-      }
-      if (cant > 0) {
-        const prev = primerNombre.get(nombre);
-        if (!prev || ymd < prev) primerNombre.set(nombre, ymd);
-      }
-    }
-    _velocidadPorNombre = mapa;
-    _velocidadPorNombreColor = mapaColor;
-    _nombresConColor = conColor;
-    _consumoPorDocId = consumo;
-    _primerMovPorNombre = primerNombre;
-    _primerMovPorDocId = primerDoc;
-
-    // "Top vendido" = percentil 80 de los que vendieron algo. Con muy pocos
-    // datos no marcamos a nadie como top (evita inventar urgencias).
-    const vals = Array.from(mapa.values()).filter(v => v > 0).sort((a, b) => a - b);
-    _umbralTop = vals.length >= 5 ? vals[Math.floor(vals.length * 0.8)] : Infinity;
+    // La ventana se corta en fecha ARGENTINA: los docs guardan la fecha local
+    // del mostrador, no la del navegador.
+    _ventanas = computarVentanas(items, {
+      hoyYmd: new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' }),
+      aYmd: fechaDMYtoYMD,
+      catalogoPorNombre: catPorNombre,
+      ventanaLarga: VENTANA_DIAS,
+    });
   } catch (e) {
     console.warn('[notificaciones] no se pudieron cargar velocidades de venta:', e);
   }
+}
+
+// Ritmo de un producto (o de UNA variedad) contra las ventanas ya computadas:
+// unidades del mes, unidades de los últimos días, el ritmo ponderado con el que
+// se decide y el puesto del producto en el ranking del local.
+function _ritmoEfectivo(p, nombreFallback, color) {
+  return ritmoDe(_ventanas, {
+    nombre: (p && p.nombre) || nombreFallback || '',
+    color: color || '',
+    docId: (p && p.doc_id != null) ? String(p.doc_id) : '',
+  });
 }
 
 // Enriquece una alerta con ritmo de venta, días de cobertura y la marca de
@@ -487,60 +431,26 @@ async function _cargarVelocidades() {
 // MIN_VENTAS_URGENTE en la ventana) y al ritmo actual se agota en ≤ 7 días
 // (lo que incluye los que ya están en cero). Las variantes auto-detectadas no
 // escalan a urgente para no inflar el ruido.
-// Días entre dos fechas "YYYY-MM-DD" (positivo si b es posterior).
-function _diasEntreYmd(a, b) {
-  const [ay, am, ad] = a.split('-').map(Number);
-  const [by, bm, bd] = b.split('-').map(Number);
-  return Math.round((Date.UTC(by, bm - 1, bd) - Date.UTC(ay, am - 1, ad)) / 86400000);
-}
-
-// Ritmo de un producto (o de UNA variedad) en la ventana:
-//   unidades = ventas directas por nombre + consumo vía vinculaciones (la hoja
-//              que se gasta al imprimir cuenta aunque nunca se venda "suelta").
-//   dias     = días efectivos de medición. Si el producto empezó a venderse
-//              hace poco (nuevo en catálogo), se mide desde su primera venta
-//              (piso 7 días) para no subestimar a los que arrancan fuerte.
-// Con `color`, mide SOLO esa variedad (las ventas nuevas guardan conjunto_color).
-// Si las ventas del producto no traen color (docs viejos), cae al ritmo del
-// producto entero — igual que antes.
-function _ritmoEfectivo(p, nombreFallback, color) {
-  const nombre = _normNombre((p && p.nombre) || nombreFallback || '');
-  const usaColor = !!color && _nombresConColor.has(nombre);
-  let unidades;
-  if (usaColor) {
-    unidades = _velocidadPorNombreColor.get(nombre + '||' + _normNombre(color)) || 0;
-  } else {
-    unidades = _velocidadPorNombre.get(nombre) || 0;
-    if (p && p.doc_id != null) unidades += _consumoPorDocId.get(String(p.doc_id)) || 0;
-  }
-  unidades = Math.max(0, unidades);   // devoluciones pueden dejarlo negativo
-
-  let dias = VENTANA_DIAS;
-  if (unidades > 0 && _hoyYmd) {
-    const primeros = [];
-    const pn = _primerMovPorNombre.get(nombre);
-    if (pn) primeros.push(pn);
-    if (!usaColor && p && p.doc_id != null) {
-      const pd = _primerMovPorDocId.get(String(p.doc_id));
-      if (pd) primeros.push(pd);
-    }
-    if (primeros.length) {
-      const transcurridos = _diasEntreYmd(primeros.sort()[0], _hoyYmd) + 1;
-      dias = Math.max(7, Math.min(VENTANA_DIAS, transcurridos));
-    }
-  }
-  return { unidades, dias };
-}
-
 function _aplicarUrgencia(a) {
-  const { unidades, dias } = _ritmoEfectivo(a.producto, a.nombre, a.variedad);
-  const velDia = unidades / dias;
+  const r = _ritmoEfectivo(a.producto, a.nombre, a.variedad);
+  const { unidades, dias } = r;
+  // El ritmo con el que se decide es el ponderado: el del mes corregido por lo
+  // que pasó estos días. Es lo que se usa para los días de cobertura, para la
+  // cantidad sugerida y para la plata en riesgo.
+  const velDia = r.velDia;
 
   a.unidades_ventana = unidades;
   a.ritmo_dias = dias;
   a.vel_dia = velDia;
   a.vel_semana = velDia * 7;
-  a.es_top = velDia > 0 && unidades >= _umbralTop;
+  // Las dos ventanas por separado, para poder explicar el orden de la lista.
+  a.unidades_7 = r.unidades7;
+  a.dias_con_mov_7 = r.diasConMov7;
+  a.vel_dia_30 = r.velLarga;
+  a.vel_dia_7 = r.velCorta;
+  a.rank_mes = r.rankMes;
+  a.rank_reciente = r.rankReciente;
+  a.es_top = r.rankMes >= UMBRAL_TOP;
   // Cobertura en UNIDADES SUELTAS: en alertas por variedad `stock` es el contador
   // de packs/rollos, pero el ritmo se mide en unidades — usar el total real en
   // unidades para no inflar (ni ocultar) la urgencia de los conjuntos.
@@ -556,14 +466,21 @@ function _aplicarUrgencia(a) {
   return a;
 }
 
-// Texto humano del ritmo: "Se agota en ~3 días · vendiste 12 en 30 días (~3/sem)".
+// Texto humano del ritmo: "Se agota en ~3 días · vendiste 12 en 30 días, 5 en
+// los últimos 7 (~3/sem)". Las dos ventanas juntas: el número del mes solo no
+// deja ver si el producto se está acelerando o se frenó.
 function _coberturaTexto(a) {
   if (!a || !a.vel_dia || a.vel_dia <= 0) return '';
   const porSem = a.vel_semana;
   const ritmo = porSem >= 1
     ? `~${_fmt(Math.round(porSem))}/sem`
     : `~${_fmt(Math.max(1, Math.round(a.vel_dia * 30)))}/mes`;
-  const vendidos = `vendiste ${_fmt(Math.round(a.unidades_ventana))} en ${a.ritmo_dias || VENTANA_DIAS} días`;
+  // Con un producto nuevo las dos ventanas son la misma medición ("3 en 7 días,
+  // 3 en los últimos 7"): ahí el segundo número no agrega nada.
+  const recientes = (Number(a.unidades_7) > 0 && Number(a.ritmo_dias || VENTANA_DIAS) > VENTANA_CORTA_DIAS)
+    ? `, ${_fmt(Math.round(a.unidades_7))} en los últimos ${VENTANA_CORTA_DIAS}`
+    : '';
+  const vendidos = `vendiste ${_fmt(Math.round(a.unidades_ventana))} en ${a.ritmo_dias || VENTANA_DIAS} días${recientes}`;
   if (a.stock <= 0) return `Sin stock · ${vendidos} (${ritmo})`;
   const d = Math.max(1, Math.round(a.dias_cobertura));
   return `Se agota en ~${d} ${d === 1 ? 'día' : 'días'} · ${vendidos} (${ritmo})`;
@@ -576,10 +493,9 @@ function _coberturaTexto(a) {
 function _alertaVelocidad(p) {
   if (_esIlimitado(p)) return null;                   // servicio / ilimitado
   if (_esServicio(p)) return null;                    // impresión/fotocopia/etc.: se repone el insumo, no el servicio
-  const { unidades, dias } = _ritmoEfectivo(p);
+  const { unidades, velDia } = _ritmoEfectivo(p);
   if (unidades < MIN_VENTAS_RITMO) return null;
   const stock = _stockEfectivo(p);
-  const velDia = unidades / dias;
   const cobertura = velDia > 0 ? (stock <= 0 ? 0 : stock / velDia) : Infinity;
   if (!(stock <= 0 || cobertura <= UMBRAL_DIAS_COBERTURA)) return null;
   return {
@@ -1001,7 +917,8 @@ export function obtenerCandidatosCompra(dias = 30) {
     const ritmo = _ritmoEfectivo(p);
     if (ritmo.unidades < MIN_VENTAS_URGENTE) continue;   // casi no rota → no vale adelantar
     const stock = _stockEfectivo(p);
-    const velDia = ritmo.unidades / ritmo.dias;
+    const velDia = ritmo.velDia;
+    if (!(velDia > 0)) continue;
     const cobertura = stock <= 0 ? 0 : stock / velDia;
     if (cobertura >= dias) continue;               // el stock alcanza hasta el objetivo
     out.push(_aplicarUrgencia({

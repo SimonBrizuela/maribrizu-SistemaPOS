@@ -80,6 +80,10 @@ let contenedor;
 beforeEach(() => {
   vi.resetModules();
   localStorage.clear();
+  // El Centro de Compras guarda su búsqueda y sus filtros en sessionStorage:
+  // sin limpiarlo, lo que tipeó una prueba deja la lista filtrada en la
+  // siguiente y el test que sigue ve una tabla vacía sin explicación.
+  sessionStorage.clear();
   datos.escrituras.length = 0;
   datos.porColeccion = {
     catalogo: CATALOGO.map(p => ({ ...p })),
@@ -336,6 +340,117 @@ describe('Centro de Compras', () => {
     await montar('centro_compras', 'renderCentroCompras');
     expect(document.getElementById('cc-tbody')?.textContent || '')
       .not.toContain('FOTOCOPIA');
+  });
+});
+
+describe('Centro de Compras: en qué orden hay que comprar', () => {
+  // Pedido del dueño: la lista tiene que conjugar lo que más se vende en el
+  // mes (las hojas), lo que más se movió estos días y el stock mínimo. Acá se
+  // arma un mes de ventas de verdad y se mira el orden que sale en pantalla.
+  const fechaAR = (n) => {
+    const d = new Date();
+    d.setDate(d.getDate() - n);
+    return `${dd(d.getDate())}/${dd(d.getMonth() + 1)}/${d.getFullYear()}`;
+  };
+  const venta = (producto, cantidad, dias) => ({
+    producto, cantidad, fecha: fechaAR(dias), fecha_dt: `${iso(new Date(Date.now() - dias * 86400000))}T12:00:00`,
+  });
+  const prod = (id, nombre, extra) => ({
+    __id: id, doc_id: id, id, nombre, codigo: id.toUpperCase(), rubro: 'LIBRERIA',
+    precio_venta: 1000, costo: 500, estado: 'activo', ...extra,
+  });
+
+  beforeEach(() => {
+    datos.porColeccion.catalogo = [
+      // Lo que sostiene el mostrador: 840 hojas en el mes y stock para una semana.
+      prod('h1', 'HOJA A4', { stock: 200, precio_venta: 60, costo: 30 }),
+      // Sin nada y con mínimo cargado, aunque venda de a poco.
+      prod('t1', 'TIJERA ESCOLAR', { stock: 0, stock_min: 5 }),
+      // Misma venta en el mes que su gemela, pero se disparó esta semana.
+      prod('c1', 'CINTA PAPEL', { stock: 25 }),
+      prod('c2', 'CINTA TELA', { stock: 25 }),
+      // No vende nada; figura solo porque está debajo del mínimo.
+      prod('a1', 'ADORNO NAVIDAD', { stock: 1, stock_min: 2 }),
+      // Vende bien y tiene stock para medio año: NO es una compra pendiente.
+      prod('l1', 'LAPIZ NEGRO', { stock: 300 }),
+      // Los dos de abajo no entran en la lista: están para que el ranking del
+      // local tenga contra qué comparar.
+      prod('m1', 'MARCADOR', { stock: 400 }),
+      prod('q1', 'CUADERNO', { stock: 400 }),
+    ];
+    const ventas = [];
+    for (let d = 1; d <= 28; d++) ventas.push(venta('HOJA A4', 30, d));
+    for (let d = 8; d <= 28; d++) ventas.push(venta('CINTA PAPEL', 1, d));
+    for (let d = 1; d <= 5; d++) ventas.push(venta('CINTA PAPEL', 6, d));
+    for (let d = 1; d <= 25; d++) ventas.push(venta('CINTA TELA', 2, d));
+    ventas.push(venta('CINTA TELA', 1, 26));
+    for (const d of [20, 22, 24, 26]) ventas.push(venta('TIJERA ESCOLAR', 1, d));
+    for (let d = 1; d <= 30; d++) ventas.push(venta('LAPIZ NEGRO', 2, d));
+    for (let d = 1; d <= 20; d++) ventas.push(venta('MARCADOR', 1, d));
+    for (let d = 1; d <= 24; d += 2) ventas.push(venta('CUADERNO', 1, d));
+    datos.porColeccion.ventas_por_dia = ventas;
+  });
+
+  const nombresEnLista = () => [...document.querySelectorAll('#cc-tbody tr[data-idx] .cc-prod-btn')]
+    .map(b => (b.firstChild?.textContent || '').trim());
+  const urgencias = () => [...document.querySelectorAll('#cc-tbody tr[data-idx] .cc-urg')]
+    .map(e => Number(e.textContent.trim()));
+
+  it('la lista sale del más urgente al que puede esperar', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    const urg = urgencias();
+    expect(urg.length).toBeGreaterThan(3);
+    for (let i = 1; i < urg.length; i++) expect(urg[i]).toBeLessThanOrEqual(urg[i - 1]);
+  });
+
+  it('lo que más se vende en el mes y se está por acabar va primero', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    expect(nombresEnLista()[0]).toBe('HOJA A4');
+  });
+
+  it('vender mucho con stock de sobra no es una compra urgente', async () => {
+    // El lápiz vende más que la tijera y no aparece: tiene para medio año.
+    await montar('centro_compras', 'renderCentroCompras');
+    expect(nombresEnLista()).not.toContain('LAPIZ NEGRO');
+  });
+
+  it('el que se disparó esta semana le gana a su gemelo que vendió lo mismo', async () => {
+    // Las dos cintas vendieron 51 en el mes y tienen el mismo stock. La
+    // diferencia es cuándo: una se movió estos días y la otra viene pareja.
+    await montar('centro_compras', 'renderCentroCompras');
+    const nombres = nombresEnLista();
+    expect(nombres.indexOf('CINTA PAPEL')).toBeGreaterThanOrEqual(0);
+    expect(nombres.indexOf('CINTA PAPEL')).toBeLessThan(nombres.indexOf('CINTA TELA'));
+  });
+
+  it('el que se aceleró lleva la flecha al lado del ritmo', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    const fila = [...document.querySelectorAll('#cc-tbody tr[data-idx]')]
+      .find(tr => (tr.querySelector('.cc-prod-btn')?.firstChild?.textContent || '').trim() === 'CINTA PAPEL');
+    expect(fila.querySelector('.cc-tend-up')).toBeTruthy();
+  });
+
+  it('lo que no vende nada queda al final aunque esté bajo el mínimo', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    const nombres = nombresEnLista();
+    expect(nombres[nombres.length - 1]).toBe('ADORNO NAVIDAD');
+  });
+
+  it('quedarse sin nada de algo que rota es sí o sí', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    const fila = [...document.querySelectorAll('#cc-tbody tr[data-idx]')]
+      .find(tr => (tr.querySelector('.cc-prod-btn')?.firstChild?.textContent || '').trim() === 'TIJERA ESCOLAR');
+    expect(fila.querySelector('.cc-chip-sisi')).toBeTruthy();
+  });
+
+  it('la fila explica por qué está donde está', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    const fila = [...document.querySelectorAll('#cc-tbody tr[data-idx]')]
+      .find(tr => (tr.querySelector('.cc-prod-btn')?.firstChild?.textContent || '').trim() === 'HOJA A4');
+    const detalle = fila.querySelector('.cc-cob').textContent;
+    expect(detalle).toContain('Se agota en');
+    expect(detalle).toContain('más se vende en el mes');
+    expect(detalle).toContain('últimos 7');
   });
 });
 
