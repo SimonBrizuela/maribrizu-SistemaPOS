@@ -126,6 +126,41 @@ describe('la rotación de todas las noches', () => {
     const items = [item({ fecha_dt: new Date('2026-09-05T11:00:00-03:00') })];
     expect(evaluarCaja({ cajaActiva: cerroRecien, items, ahora: T('2026-09-05T21:30:00-03:00') })).toBe(null);
   });
+
+  // El documento REAL de una caja cerrada, que es el que faltaba acá: el POS
+  // lo escribe con merge al cerrar, así que `opening_date` se queda con la
+  // apertura de ayer y `updated_at` trae el cierre de recién. Midiendo la
+  // gracia contra la apertura daba un día entero, nunca menos de diez minutos,
+  // y el panel avisaba "nadie abrió la caja" con la plata del día completo en
+  // cada rotación. El dueño lo veía casi todas las noches.
+  const CERRADA_COMO_EN_LA_BASE = {
+    status: 'closed',
+    id: 129,
+    register_id: 129,
+    opening_date: '2026-09-07T20:47:00-03:00',
+    updated_at: '2026-09-08T20:35:51-03:00',
+  };
+
+  it('con el documento real, la rotación de la noche sigue sin disparar nada', () => {
+    const items = [
+      item({ fecha_dt: new Date('2026-09-08T11:00:00-03:00'), cash_register_id: 129 }),
+      item({ fecha_dt: new Date('2026-09-08T20:30:00-03:00'), cash_register_id: 129 }),
+    ];
+    const a = evaluarCaja({
+      cajaActiva: CERRADA_COMO_EN_LA_BASE, items,
+      ahora: T('2026-09-08T20:36:00-03:00'),
+    });
+    expect(a).toBe(null);
+  });
+
+  it('y si de verdad nadie abre en toda la mañana, avisa igual', () => {
+    const items = [item({ fecha_dt: new Date('2026-09-09T09:15:00-03:00'), cash_register_id: 129 })];
+    const a = evaluarCaja({
+      cajaActiva: CERRADA_COMO_EN_LA_BASE, items,
+      ahora: T('2026-09-09T09:30:00-03:00'),
+    });
+    expect(a.tipo).toBe('sin_caja');
+  });
 });
 
 describe('la PC colgada de una caja vieja', () => {

@@ -81,10 +81,23 @@ export function evaluarCaja({ cajaActiva, items = [], ahora = Date.now() } = {})
   const reales = items.filter(it => it && it.deleted !== true && !isItemVarios2(it));
   if (reales.length === 0) return null;
 
-  // Desde cuándo hay que mirar: si no hay caja, desde que se cerró la última;
-  // si hay, desde que se abrió. Las ventas anteriores llevan con razón el
+  // Desde cuándo hay que mirar. Las ventas anteriores llevan con razón el
   // número de la caja de antes y no son ningún error.
   const desdeMs = aMillis(cajaActiva && (cajaActiva.opening_date || cajaActiva.updated_at));
+
+  // Desde cuándo se está SIN caja, que es otra fecha y no la de arriba.
+  //
+  // Al cerrar, el POS escribe `caja_activa/current` con merge, así que
+  // `opening_date` queda con la apertura de la caja que se acaba de cerrar y
+  // `updated_at` con el cierre. Midiendo la gracia contra `opening_date` daba
+  // siempre las horas que esa caja estuvo abierta —un día entero—, nunca menos
+  // de diez minutos, así que la gracia no protegía nada: todas las noches,
+  // entre el cierre de las 20:29 y la apertura de las 20:30, el panel avisaba
+  // "nadie abrió la caja" con la plata del día completo. El dueño lo veía casi
+  // a diario y ya no le creía al cartel.
+  const sinCajaDesdeMs = abierta === null
+    ? aMillis(cajaActiva && (cajaActiva.updated_at || cajaActiva.opening_date))
+    : null;
 
   const posteriores = desdeMs === null
     ? reales
@@ -105,8 +118,9 @@ export function evaluarCaja({ cajaActiva, items = [], ahora = Date.now() } = {})
   if (sospechosos.length === 0) return null;
 
   // Sin caja abierta se espera la gracia: la rotación de todas las noches deja
-  // unos segundos sin caja y no es un problema.
-  if (abierta === null && desdeMs !== null && (ahora - desdeMs) < GRACIA_MS) return null;
+  // unos minutos sin caja y no es un problema. Se mide desde el CIERRE.
+  if (abierta === null && sinCajaDesdeMs !== null
+      && (ahora - sinCajaDesdeMs) < GRACIA_MS) return null;
 
   const ventas = new Set();
   const pcs = new Set();
