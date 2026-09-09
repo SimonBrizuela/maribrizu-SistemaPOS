@@ -31,8 +31,8 @@
 // deja de facturar se sigue mostrando y se usa para desempatar.
 //
 // Todo acá es lógica pura y sin DOM (ni Firebase): se prueba en
-// `tienda/pruebas/urgencia_compra.test.js` y lo puede correr un script suelto
-// contra un volcado de Firestore (`diag_urgencia_compras.py`).
+// `tienda/pruebas/urgencia_compra.test.js` y se puede correr fuera del
+// navegador contra un volcado de Firestore.
 
 // Lo que se vende fraccionado viaja con el nombre decorado y con la cantidad en
 // la presentación vendida: hay que leerlo antes de contarlo.
@@ -41,6 +41,12 @@ import { parseNombreItem, unidadesDelRenglon } from './nombre_item.js';
 // ── Ventanas y pesos ─────────────────────────────────────────────────────────
 export const VENTANA_CORTA_DIAS = 7;    // "los últimos días"
 export const VENTANA_LARGA_DIAS = 30;   // "lo que se vende en el mes"
+// Hasta dónde se mira para adelante al decidir la compra: lo que tenga stock
+// para más que esto no urge todavía. Es la ventana de la COMPRA, no la de la
+// medición — se cambia desde Ajustes (`cobertura_dias_objetivo`). En 45 días
+// porque el viaje al mayorista no es semanal: con 30 quedaba afuera lo que
+// tiene stock para poco más de un mes, que igual hay que traer.
+export const COBERTURA_DEFAULT_DIAS = 45;
 // Días que quedan para considerar que se agota YA. Debajo de esto el riesgo
 // entra en la meseta alta: entre 2 y 5 días de stock la diferencia es poca,
 // las dos cosas hay que comprarlas en este viaje.
@@ -325,8 +331,8 @@ export function rankEnEscala(escala, unidades) {
 //     stock la diferencia no cambia la decisión, las dos van en este viaje.
 //   · por mínimo → cuánto le falta para llegar al mínimo que cargó el dueño.
 //     En cero (o negativo) es 1; justo en el mínimo, 0.
-export function riesgoPorCobertura(diasCobertura, coberturaObjetivo = VENTANA_LARGA_DIAS) {
-  const obj = Math.max(1, Number(coberturaObjetivo) || VENTANA_LARGA_DIAS);
+export function riesgoPorCobertura(diasCobertura, coberturaObjetivo = COBERTURA_DEFAULT_DIAS) {
+  const obj = Math.max(1, Number(coberturaObjetivo) || COBERTURA_DEFAULT_DIAS);
   const d = Number(diasCobertura);
   if (!Number.isFinite(d)) return 0;        // sin ritmo no se puede saber cuándo se agota
   if (d <= 0) return 1;
@@ -365,7 +371,7 @@ export function importanciaDeVenta(rankMes, rankReciente) {
 // abierto —0,4 packs, 40 unidades sueltas— no es quedarse sin nada.
 export function puntajeUrgencia({
   diasCobertura = Infinity,
-  coberturaObjetivo = VENTANA_LARGA_DIAS,
+  coberturaObjetivo = COBERTURA_DEFAULT_DIAS,
   stock = 0,
   stockMin = 0,
   sinStock = null,

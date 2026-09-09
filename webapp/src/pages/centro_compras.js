@@ -42,7 +42,7 @@ import {
 } from '../filtros_compras.js';
 import {
   puntajeUrgencia, nivelPorPuntaje, compararUrgencia, motivosUrgencia, explicarUrgencia,
-  VENTANA_CORTA_DIAS,
+  VENTANA_CORTA_DIAS, COBERTURA_DEFAULT_DIAS as COBERTURA_DEFAULT,
 } from '../urgencia_compra.js';
 
 const MEDIOS = [
@@ -53,7 +53,6 @@ const MEDIOS = [
 // Rubros que NO son inversión en producto (se cubren como gasto fijo aparte) y por
 // eso no descuentan del presupuesto de compras. Normalizados (sin acento, minúscula).
 const RUBROS_FIJOS_DEFAULT = ['sueldos', 'gastos fijos'];
-const COBERTURA_DEFAULT = 30;    // días de venta a cubrir al sugerir cantidad
 const MIN_COBERTURA_DIAS = 7;    // piso al achicar cantidades de lo SÍ O SÍ cuando la plata no alcanza
 const MIN_ROTACION = 3;          // unidades vendidas en la ventana para considerar que "rota"
 // Marca "ya lo anoté en el cuaderno": si el producto salió de la lista (se repuso
@@ -1317,7 +1316,7 @@ function paintAjustes() {
       </div>
       <div class="cc-reg-field">
         <label>Cobertura objetivo (días)</label>
-        <input id="cc-aj-cob" type="text" inputmode="numeric" value="${c.cobertura_dias_objetivo != null ? c.cobertura_dias_objetivo : COBERTURA_DEFAULT}" placeholder="30" />
+        <input id="cc-aj-cob" type="text" inputmode="numeric" value="${c.cobertura_dias_objetivo != null ? c.cobertura_dias_objetivo : COBERTURA_DEFAULT}" placeholder="${COBERTURA_DEFAULT}" />
       </div>
     </div>
     <div class="cc-ajustes-actions">
@@ -1327,7 +1326,7 @@ function paintAjustes() {
       </button>
     </div>
     <div class="cc-ajustes-hint">La rentabilidad efectiva es la mayor entre el monto fijo y el piso % de los ingresos del mes.</div>
-    <div class="cc-ajustes-hint">La cobertura objetivo es hasta dónde mirás para adelante: con 30 días, lo que tiene stock para 35 no urge todavía. Subila si querés comprar con más anticipación (y que lo que más se vende suba en la lista).</div>`;
+    <div class="cc-ajustes-hint">La cobertura objetivo es hasta dónde mirás para adelante: con ${COBERTURA_DEFAULT} días, lo que tenga stock para más que eso no urge todavía. Subila para comprar con más anticipación (lo que más se vende sube en la lista y las cantidades sugeridas crecen); bajala para viajes más chicos y más seguidos.</div>`;
 }
 
 // ── Resumen por nivel ─────────────────────────────────────────────────────────
