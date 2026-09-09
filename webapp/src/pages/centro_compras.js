@@ -517,6 +517,7 @@ let _state = null;
 export async function renderCentroCompras(container, db) {
   _db = db;
   cerrarDropdown();   // un panel abierto de la visita anterior no puede quedar colgado
+  ocultarTip();
   // Shell sincrónico (cancela el skeleton diferido de main.js y da feedback ya).
   container.innerHTML = shellHtml();
 
@@ -741,8 +742,8 @@ function pageHtml() {
         <table class="cc-table">
           <thead><tr>
             <th style="width:34px"></th>
-            <th style="text-align:center;width:78px"
-                title="Urgencia de compra, de 0 a 100. Junta lo que más se vende en el mes, lo que más se movió estos últimos días y el stock mínimo, contra lo que queda de stock.">Urgencia</th>
+            <th style="text-align:center;width:78px" class="cc-tip-ancla"
+                data-tip="Urgencia de compra, de 0 a 100&#10;Junta lo que más se vende en el mes, lo que más se movió estos últimos días y el stock mínimo, contra lo que le queda de stock.">Urgencia</th>
             <th>Producto</th>
             <th>Rubro</th>
             <th style="text-align:right">Stock</th>
@@ -1101,6 +1102,7 @@ function pintarFilas() {
   const s = _state;
   const tbody = document.getElementById('cc-tbody');
   if (!tbody) return;
+  ocultarTip();   // las filas se reemplazan: el tooltip quedaría colgado de una que ya no está
   if (!s.rows.length) {
     paintFiltros(0);
     tbody.innerHTML = `<tr><td colspan="10" class="cc-empty">
@@ -1153,6 +1155,77 @@ function pintarFilas() {
     abajo.forEach(emit);
   }
   tbody.innerHTML = parts.join('');
+}
+
+// ── Tooltip propio ────────────────────────────────────────────────────────────
+// El `title` del navegador tarda casi un segundo en aparecer y sale como el
+// cuadro negro del sistema, pegado al cursor y sin formato. Este sale al toque
+// y con el estilo del panel. Va colgado del <body> porque la tabla scrollea:
+// adentro lo recortaría el `overflow` del contenedor.
+const _tip = { anchor: null };
+
+function tipEl() {
+  let t = document.getElementById('cc-tip');
+  if (!t) {
+    t = document.createElement('div');
+    t.id = 'cc-tip';
+    t.className = 'cc-tip';
+    t.style.display = 'none';
+    document.body.appendChild(t);
+  }
+  return t;
+}
+
+// Cada renglón del texto es una línea: la primera es el título, las que
+// empiezan con "·" son los números de la cuenta y el resto queda como nota.
+function tipHtml(texto) {
+  const lineas = String(texto || '').split('\n').map(l => l.trim()).filter(Boolean);
+  if (!lineas.length) return '';
+  const partes = [`<div class="cc-tip-head">${esc(lineas[0])}</div>`];
+  for (const l of lineas.slice(1)) {
+    const dato = l.startsWith('·');
+    partes.push(`<div class="${dato ? 'cc-tip-dato' : 'cc-tip-nota'}">${esc(dato ? l.slice(1).trim() : l)}</div>`);
+  }
+  return partes.join('');
+}
+
+function mostrarTip(el) {
+  const texto = el.dataset.tip || '';
+  if (!texto) return;
+  const t = tipEl();
+  t.innerHTML = tipHtml(texto);
+  t.style.display = 'block';
+  _tip.anchor = el;
+  // Centrado sobre lo que se está mirando, y abajo si arriba no entra.
+  const r = el.getBoundingClientRect();
+  const ancho = t.offsetWidth;
+  const left = Math.max(8, Math.min(r.left + r.width / 2 - ancho / 2, window.innerWidth - ancho - 8));
+  const arriba = r.top - t.offsetHeight - 8;
+  t.style.left = `${Math.round(left)}px`;
+  t.style.top = `${Math.round(arriba < 8 ? r.bottom + 8 : arriba)}px`;
+  window.addEventListener('scroll', ocultarTip, true);
+}
+
+function ocultarTip() {
+  if (!_tip.anchor) return;
+  _tip.anchor = null;
+  window.removeEventListener('scroll', ocultarTip, true);
+  const t = document.getElementById('cc-tip');
+  if (t) { t.style.display = 'none'; t.innerHTML = ''; }
+}
+
+function onMouseOver(e) {
+  const el = e.target.closest ? e.target.closest('[data-tip]') : null;
+  if (!el || el === _tip.anchor) return;
+  mostrarTip(el);
+}
+
+function onMouseOut(e) {
+  if (!_tip.anchor) return;
+  const el = e.target.closest ? e.target.closest('[data-tip]') : null;
+  if (el !== _tip.anchor) return;
+  if (e.relatedTarget && el.contains(e.relatedTarget)) return;
+  ocultarTip();
 }
 
 // Flecha de tendencia al lado del ritmo. Solo cuando la semana se despegó del
@@ -1219,7 +1292,7 @@ function rowHtml(r, i, esContinuacion) {
       ].filter(Boolean).join('\n')
     : 'Sin ventas registradas en el último mes';
   const tendencia = tendenciaDe(r);
-  const ritmo = `<span title="${esc(ritmoTitle)}">${ritmoTxt}${tendencia}</span>`;
+  const ritmo = `<span class="cc-tip-ancla" data-tip="${esc(ritmoTitle)}">${ritmoTxt}${tendencia}</span>`;
 
   const esPack = r.esVariedad && r.packSize > 0;
   const costo = r.sinCosto
@@ -1255,7 +1328,7 @@ function rowHtml(r, i, esContinuacion) {
   return `<tr class="${cls}" data-idx="${i}">
     <td style="text-align:center">${checkbox}</td>
     <td style="text-align:center">
-      <span class="cc-urg cc-urg-${r.tier}" title="${esc(explicarUrgencia(r))}">${fmt(Math.round(r.urgencia), 0)}</span>
+      <span class="cc-urg cc-urg-${r.tier}" data-tip="${esc(explicarUrgencia(r))}">${fmt(Math.round(r.urgencia), 0)}</span>
     </td>
     <td>
       <div class="cc-prod">
@@ -1270,7 +1343,7 @@ function rowHtml(r, i, esContinuacion) {
       <span class="badge badge-gray"${r.marca ? ` title="Marca: ${esc(r.marca)}"` : ''}>${esc(r.rubro || 'Sin rubro')}</span>
       ${(r.sub_rubro || r.proveedor) ? `<div class="cc-rubro-sub">${[r.sub_rubro, r.proveedor].filter(Boolean).map(esc).join(' · ')}</div>` : ''}
     </td>
-    <td class="cc-stock${stk.total <= 0 ? ' is-cero' : ''}" title="${esc(stockTitle)}">${esc(stk.texto)}</td>
+    <td class="cc-stock${stk.total <= 0 ? ' is-cero' : ''}" data-tip="${esc(stockTitle)}">${esc(stk.texto)}</td>
     <td style="text-align:right">${ritmo}</td>
     <td style="text-align:center">
       <input type="text" inputmode="numeric" class="cc-qty" data-idx="${i}" value="${r.qty}" title="${qtyTitle}"${r.registrado ? ' disabled' : ''} />
@@ -1441,6 +1514,8 @@ function bindEvents(root) {
   root.addEventListener('change', onChange);
   root.addEventListener('input', onInput);
   root.addEventListener('keydown', onKeydown);
+  root.addEventListener('mouseover', onMouseOver);
+  root.addEventListener('mouseout', onMouseOut);
 }
 
 function onClick(e) {

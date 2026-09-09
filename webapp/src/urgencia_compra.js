@@ -459,10 +459,12 @@ export function explicarUrgencia(r) {
   const pct = n => `${Math.round(clamp01(n) * 100)}%`;
   const lineas = [
     `Urgencia ${_num(r.urgencia)} de 100`,
-    `· riesgo de quedarse sin stock: ${pct(r.riesgo)}`,
-    `· peso en las ventas: ${pct(r.importancia)} (mes ${pct(r.rank_mes)} · últimos días ${pct(r.rank_reciente)})`,
+    `· Riesgo de quedarse sin stock: ${pct(r.riesgo)}`,
+    `· Peso en las ventas: ${pct(r.importancia)}`,
+    `· En el mes vende más que el ${pct(r.rank_mes)} del catálogo`,
+    `· En los últimos días, más que el ${pct(r.rank_reciente)}`,
   ];
-  if (Number(r.stock_min) > 0) lineas.push(`· mínimo cargado: ${_num(r.stock_min)}`);
+  if (Number(r.stock_min) > 0) lineas.push(`· Mínimo cargado: ${_num(r.stock_min)}`);
   lineas.push('Urgencia = riesgo × peso en las ventas. Vender mucho no urge si hay stock de sobra.');
   return lineas.join('\n');
 }

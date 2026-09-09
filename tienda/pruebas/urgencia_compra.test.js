@@ -393,8 +393,11 @@ describe('por qué está donde está', () => {
     const t = explicarUrgencia({
       urgencia: 87, riesgo: 0.87, importancia: 1, rank_mes: 0.98, rank_reciente: 0.9, stock_min: 0,
     });
-    expect(t).toContain('87');
-    expect(t).toContain('riesgo');
-    expect(t).toContain('ventas');
+    expect(t).toContain('Urgencia 87 de 100');
+    expect(t).toContain('Riesgo de quedarse sin stock: 87%');
+    expect(t).toContain('Peso en las ventas: 100%');
+    expect(t).toContain('98%');   // lo que vende en el mes contra el resto
+    expect(t).toContain('90%');   // y en los últimos días
+    expect(t).not.toContain('Mínimo cargado');   // sin mínimo, no se inventa la línea
   });
 });

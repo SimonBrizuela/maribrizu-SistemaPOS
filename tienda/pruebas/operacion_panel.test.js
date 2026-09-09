@@ -443,6 +443,35 @@ describe('Centro de Compras: en qué orden hay que comprar', () => {
     expect(fila.querySelector('.cc-chip-sisi')).toBeTruthy();
   });
 
+  it('el tooltip de la urgencia sale al toque y con formato propio', async () => {
+    // El `title` del navegador tarda casi un segundo y sale como el cuadro
+    // negro del sistema: no puede quedar ninguno en la tabla.
+    await montar('centro_compras', 'renderCentroCompras');
+    const badge = document.querySelector('#cc-tbody .cc-urg');
+    expect(badge.getAttribute('title')).toBe(null);
+    expect(document.getElementById('cc-tip')).toBe(null);
+
+    badge.dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    const tip = document.getElementById('cc-tip');
+    expect(tip.style.display).toBe('block');
+    expect(tip.querySelector('.cc-tip-head').textContent).toContain('Urgencia');
+    expect(tip.querySelectorAll('.cc-tip-dato').length).toBeGreaterThan(2);
+    expect(tip.querySelector('.cc-tip-nota').textContent).toContain('riesgo');
+
+    badge.dispatchEvent(new MouseEvent('mouseout', { bubbles: true }));
+    expect(document.getElementById('cc-tip').style.display).toBe('none');
+  });
+
+  it('repintar la tabla no deja el tooltip colgado', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    document.querySelector('#cc-tbody .cc-urg')
+      .dispatchEvent(new MouseEvent('mouseover', { bubbles: true }));
+    expect(document.getElementById('cc-tip').style.display).toBe('block');
+    tipear(document.getElementById('cc-buscar'), 'hoja');
+    await esperar(200);
+    expect(document.getElementById('cc-tip').style.display).toBe('none');
+  });
+
   it('la fila explica por qué está donde está', async () => {
     await montar('centro_compras', 'renderCentroCompras');
     const fila = [...document.querySelectorAll('#cc-tbody tr[data-idx]')]
