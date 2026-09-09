@@ -735,9 +735,18 @@ export async function renderTiendaDescuentos(container, db) {
     }
 
     if (boton.dataset.accion === 'borrar') {
+      // El cartel tiene que decir lo que de verdad va a pasar. "Los precios
+      // vuelven a los de lista" es mentira cuando hay otro descuento vigente:
+      // al borrar el del rubro, lo que también cae bajo el del subrubro queda
+      // con ESE precio. Prometer la vuelta a la lista deja a quien lo borró
+      // buscando por qué un producto sigue rebajado.
+      const otros = vigentesAhora().filter(v => v.id !== d._id);
       const ok = await confirmDialog({
         title: 'Borrar descuento',
-        message: `¿Borrar <b>${escHtml(d.nombre)}</b>? Los precios vuelven a los de lista.`,
+        message: `¿Borrar <b>${escHtml(d.nombre)}</b>? Los precios vuelven a los de lista`
+          + (otros.length
+            ? ', salvo los que caigan bajo otro descuento vigente: ésos quedan con ese precio.'
+            : '.'),
         confirmText: 'Borrar',
         danger: true,
       });

@@ -50,6 +50,11 @@ beforeAll(async () => {
  * las 26 comparaciones documento por documento sin ejecutarse. La prueba que se
  * saltea sola no cuida nada, y el sync republicando lo que el panel sacó es
  * justamente lo que existe para evitar.
+ *
+ * Va en rojo y no en `it.skip`: no hay ningún lugar donde esta prueba corra
+ * legítimamente sin Python. En la PC del local está instalado (el sync y el POS
+ * son de Python) y los tres workflows del repo lo usan. Así que "no hay Python"
+ * no es un entorno distinto, es que se rompió algo.
  */
 const exigirElSync = () => {
   expect(delSync, 'no se pudo correr scripts/casos_espejo.py: el documento del panel '
@@ -300,6 +305,29 @@ describe('rubros y subrubros, panel contra sync', () => {
     // El mismo subrubro colgando de otro rubro no se toca.
     expect(motivoDeNoPublicar({ ...base, rubro: 'PAPELERA' }, ['PAPELERA'],
                               { LIBRERIA: ['ABROCHADORA'] })).toBe(null);
+  });
+
+  /*
+   * La lista de excluidos se guarda tal como la tipeó quien la editó. Hasta el
+   * 2026-09-08 el sync le pasaba trim + mayúsculas a las claves Y a los valores
+   * al leer la configuración, y el panel comparaba el texto crudo: un subrubro
+   * anotado " abrochadora " salía de la tienda en la corrida del sync y el
+   * guardado siguiente del panel lo volvía a subir, ida y vuelta cada seis
+   * horas.
+   */
+  it('el subrubro excluido pesa aunque esté guardado con espacios o en minúsculas', () => {
+    const base = { nombre: 'Abrochadora', estado: 'activo', precio_venta: 100,
+                   stock: 5, rubro: 'LIBRERIA', sub_rubro: 'Abrochadora',
+                   tienda_imagenes: ['https://x/foto.webp'] };
+
+    expect(motivoDeNoPublicar(base, ['LIBRERIA'], { LIBRERIA: ['  abrochadora '] }))
+      .toBe('el subrubro está excluido');
+    // Y el rubro que hace de clave del mapa, lo mismo.
+    expect(motivoDeNoPublicar(base, ['LIBRERIA'], { ' libreria ': ['ABROCHADORA'] }))
+      .toBe('el subrubro está excluido');
+    // Una entrada vacía o basura no excluye nada.
+    expect(motivoDeNoPublicar(base, ['LIBRERIA'], { LIBRERIA: ['', '   '] })).toBe(null);
+    expect(motivoDeNoPublicar(base, ['LIBRERIA'], { LIBRERIA: 'ABROCHADORA' })).toBe(null);
   });
 
   /*

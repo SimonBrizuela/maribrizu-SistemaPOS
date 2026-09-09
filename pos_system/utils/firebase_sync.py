@@ -6,11 +6,13 @@ También escucha cambios en tiempo real desde la web (inventario).
 """
 
 import json
+import math
 import threading
 import time as _time
 import logging
 import socket as _socket
 import re as _re
+import unicodedata as _unicodedata
 import uuid as _uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Callable
@@ -117,6 +119,194 @@ def merge_colores_con_nube(nube, locales, colores_vendidos):
         if isinstance(c, dict) and str(c.get('color', '')).strip() not in en_nube:
             out.append(dict(c))
     return out
+
+
+# ── Lo que la tienda tiene que saber despues de una venta ──────────────────
+#
+# La regla de la vidriera esta escrita tres veces: en el panel
+# (webapp/src/tienda_espejo.js), en el sync que corre cada seis horas
+# (scripts/sync_tienda.py) y aca, que es la puerta del mostrador. Estas
+# funciones son la parte que el POS necesita para no contradecir a las otras
+# dos en el momento de la venta. Son puras a proposito: se prueban sin tocar
+# Firebase, en pos_system/tests/test_avisar_a_la_tienda.py.
+
+def entero_de_tienda(valor):
+    """El stock como lo publica la tienda: floor(x + 0.5), nunca negativo.
+
+    El POS venia haciendo `int(stock)`, que trunca: 2,7 metros de cinta salian
+    publicados como 2 y el aviso del panel para el mismo producto los dejaba en
+    3. Dos cuentas distintas sobre el mismo campo hacen que el numero de la
+    vidriera cambie solo, segun quien haya escrito ultimo.
+
+    Es la cuenta de a_peso() en scripts/sync_tienda.py y aPeso() en
+    webapp/src/tienda_espejo.js. round() de Python no sirve: redondea al par
+    (2,5 -> 2 y 3,5 -> 4).
+    """
+    try:
+        return max(0, math.floor(float(valor or 0) + 0.5))
+    except (TypeError, ValueError, OverflowError):
+        return 0
+
+
+def _clave_de_color(texto):
+    """Sin acentos y en minusculas, para cruzar el color del POS con el nombre
+    que quedo publicado. Es normalizar() de scripts/sync_tienda.py: el catalogo
+    guarda "CELESTE" y la tienda muestra "Celeste"."""
+    s = _unicodedata.normalize('NFD', str(texto or '').lower())
+    return ''.join(c for c in s if _unicodedata.category(c) != 'Mn').strip()
+
+
+def variedades_con_stock_nuevo(publicadas, colores, contenido):
+    """Mete el stock nuevo de cada color adentro de las variedades publicadas.
+
+    Hasta ahora la venta subia solo el total: un producto con colores quedaba
+    con el numero nuevo arriba y el viejo en cada color, asi que el cliente
+    elegia un color agotado, lo ponia en el pedido y al confirmarlo desaparecia.
+
+    Se pisa UNICAMENTE el stock. El nombre publico, el precio con la rebaja
+    puesta y la foto de esa variedad los decide el panel, no viajan en la venta
+    y rearmar la lista desde el catalogo local los borraria (paso el 01-09 con
+    los minimos y las fotos de 14 variedades).
+
+    El color se busca por nombre normalizado. Una variedad renombrada a mano
+    desde el panel no cruza con nada: se deja como esta, que es mejor que
+    ponerle el numero de otro color. Lo mismo las escondidas, que directamente
+    no estan en la lista publicada.
+
+    Devuelve None cuando no hay nada que hacer (el producto no publica
+    variedades, o ninguna cruza): ahi manda el stock total y esta lista no se
+    toca.
+    """
+    if not isinstance(publicadas, list) or not publicadas:
+        return None
+
+    por_clave = {}
+    for c in (colores or ()):
+        if not isinstance(c, dict):
+            continue
+        clave = _clave_de_color(c.get('color'))
+        if clave:
+            por_clave[clave] = c
+    if not por_clave:
+        return None
+
+    try:
+        contenido = float(contenido or 0)
+    except (TypeError, ValueError):
+        contenido = 0
+
+    salida, cruzados = [], 0
+    for v in publicadas:
+        if not isinstance(v, dict):
+            salida.append(v)
+            continue
+        fila = dict(v)
+        local = por_clave.get(_clave_de_color(v.get('nombre')))
+        if local is not None:
+            cruzados += 1
+            try:
+                unidades = float(local.get('unidades') or 0)
+                restante = float(local.get('restante') or 0)
+            except (TypeError, ValueError):
+                unidades, restante = 0, 0
+            # El stock de una variedad son los packs cerrados por el contenido
+            # del pack mas las sueltas del abierto. Misma cuenta que
+            # variedades_de() en el sync y variedadesDe() en el panel.
+            fila['stock'] = entero_de_tienda(unidades * contenido + restante)
+        salida.append(fila)
+    return salida if cruzados else None
+
+
+def minimo_publicado(publicado):
+    """De a cuanto se vende esto en la tienda, segun lo que dice el espejo.
+
+    Un pedido online cuesta trabajo: hay que leerlo, recorrer el local juntando
+    las cosas y embalarlo. Por eso hay productos que se venden de a 50 y el
+    panel se los deja escrito en `minimo`. Sin ese campo el minimo es cero y
+    manda solo el stock.
+    """
+    try:
+        return float((publicado or {}).get('minimo') or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
+def descontar_del_conteo(lista, bajas):
+    """Le resta al conteo de la portada los productos que se acaban de ir.
+
+    `tienda_config/rubros` es lo que dibuja los filtros: cuantos productos hay
+    en cada rubro y en cada subrubro. Lo rehace entero el sync cada seis horas y
+    el panel despues de cada cambio suyo. Entre medio, la ultima unidad vendida
+    en el mostrador sacaba el producto de la vidriera y el filtro seguia
+    prometiendo los de antes: "Aros 1" y adentro no hay nada.
+
+    Recontar de verdad implica leer el catalogo entero (8.312 productos) en cada
+    venta, que es justo lo que no se puede hacer en el mostrador. Restar uno es
+    una escritura chica y se corrige sola en la proxima corrida del sync.
+
+    `bajas` es una lista de (rubro, subrubro) tal como los publica el espejo.
+    Devuelve la lista nueva, o None si no hubo nada que restar.
+
+    Los numeros se clavan en cero y no bajan mas: la tienda no dibuja lo que
+    tiene cantidad 0 (cargarRubros() y subrubrosDe() en tienda/src/datos.js),
+    asi que con eso alcanza para que el filtro desaparezca, y dejar la entrada
+    conserva el orden de la portada, que sale de esta misma lista.
+    """
+    if not isinstance(lista, list) or not bajas:
+        return None
+
+    cuenta = {}
+    for baja in bajas:
+        rubro = str((baja[0] if len(baja) > 0 else '') or '').strip().upper()
+        if not rubro:
+            continue
+        sub = str((baja[1] if len(baja) > 1 else '') or '').strip().upper()
+        cuenta[(rubro, sub)] = cuenta.get((rubro, sub), 0) + 1
+    if not cuenta:
+        return None
+
+    def entero(v):
+        try:
+            return int(float(v or 0))
+        except (TypeError, ValueError):
+            return 0
+
+    nueva, toco = [], False
+    for entrada in lista:
+        if not isinstance(entrada, dict):
+            nueva.append(entrada)
+            continue
+        rubro = str(entrada.get('clave') or entrada.get('nombre') or '').strip().upper()
+        cuantos = sum(n for (r, _s), n in cuenta.items() if r == rubro)
+        if not cuantos:
+            nueva.append(entrada)
+            continue
+
+        toco = True
+        fila = dict(entrada)
+        fila['cantidad'] = max(0, entero(fila.get('cantidad')) - cuantos)
+        # Publicado implica stock, asi que el que se fue estaba contado en los
+        # dos numeros. `con_stock` es hasta donde puede saltar la portada al
+        # elegir un producto al azar: dejarlo alto la manda a un lugar vacio.
+        fila['con_stock'] = max(0, entero(fila.get('con_stock')) - cuantos)
+
+        subs = fila.get('subrubros')
+        if isinstance(subs, list):
+            renglones = []
+            for sub in subs:
+                if not isinstance(sub, dict):
+                    renglones.append(sub)
+                    continue
+                clave = str(sub.get('clave') or sub.get('nombre') or '').strip().upper()
+                cuantos_sub = cuenta.get((rubro, clave), 0)
+                if cuantos_sub:
+                    sub = dict(sub)
+                    sub['cantidad'] = max(0, entero(sub.get('cantidad')) - cuantos_sub)
+                renglones.append(sub)
+            fila['subrubros'] = renglones
+        nueva.append(fila)
+
+    return nueva if toco else None
 
 
 def _fmt_qty(q):
@@ -2270,9 +2460,14 @@ class FirebaseSync:
                             batch.set(cat_ref, payload_conj, merge=True)
                             # En un conjunto lo que se vende son las unidades
                             # sueltas, no los packs cerrados: la tienda mira
-                            # `conjunto_total`, igual que el sync.
+                            # `conjunto_total`, igual que el sync. Los colores
+                            # viajan con el total porque la tienda publica el
+                            # stock de cada uno y hasta ahora se quedaban con el
+                            # número viejo.
                             tienda.append((firebase_id,
-                                           float(payload_conj['conjunto_total'])))
+                                           float(payload_conj['conjunto_total']),
+                                           payload_conj.get('conjunto_colores'),
+                                           float(row.get('conjunto_contenido') or 0)))
                         updated += 1
                         continue
 
@@ -2332,48 +2527,156 @@ class FirebaseSync:
         # queda pendiente en SQLite y se reintenta, sin frenar la venta.
         self.push_stock_movimientos(db_manager)
 
-    # Productos que NO están en la tienda. Se recuerdan para no volver a
-    # intentar escribirles en cada venta del día.
-    _fuera_de_la_tienda = set()
+    # Cuánto vale la anotación de "este producto no está en la tienda".
+    #
+    # De los 8.312 productos del catálogo hay 1.077 publicados: casi nueve de
+    # cada diez ventas son de algo que la tienda no muestra, y anotarlos evita
+    # una lectura por renglón en cada venta. Pero la anotación no puede ser
+    # para siempre: el 08-09, al prender dos rubros desde el panel, 35
+    # productos pasaron a estar publicados y las PCs los tenían anotados desde
+    # la mañana, así que no les avisaron el stock hasta que alguien cerró el
+    # programa.
+    #
+    # Media hora es lo que puede quedar desactualizado algo recién publicado, y
+    # el costo de que venza es una lectura chica por producto vendido cada
+    # media hora: en un día de mostrador son un par de miles contra las 50.000
+    # gratis, y el sync ya gasta más que eso.
+    _MINUTOS_DE_LA_ANOTACION = 30
+
+    # Productos que NO están en la tienda, con el momento en que se anotaron.
+    _fuera_de_la_tienda = {}
 
     def _avisar_a_la_tienda(self, cambios: list) -> None:
         """Deja el espejo de la tienda al día en el momento de la venta.
 
         Hasta ahora la web se enteraba cuando corría `scripts/sync_tienda.py`,
-        cada 15 minutos y solo si la PC del local estaba prendida: en el medio
-        ofrecía lo que ya no había. Acá se hace lo mismo que hace el sync, pero
-        al instante:
+        cada seis horas y solo si la PC del local estaba prendida: en el medio
+        ofrecía lo que ya no había.
 
-          · queda stock  → se actualiza el número en `tienda_productos`
-          · llegó a cero → se borra el doc, que es la misma baja que hace el
-            sync. Así la vidriera no necesita ningún cambio: lo que no está,
-            no se muestra.
+        Cada cambio es `(firebase_id, stock)` y, cuando el producto tiene
+        colores, además `(colores, contenido_del_pack)` para poder actualizar
+        cada variedad.
 
-        Es best-effort y va después del commit del stock: si falla, la venta ya
-        está firme y el sync de los 15 minutos lo arregla igual.
+        Lo que se hace con cada uno es exactamente lo que decide el sync en
+        `se_publica()` y el panel en `motivoDeNoPublicar()`:
+
+          · queda stock, y alcanza para la venta mínima → se actualizan el
+            número y las variedades en `tienda_productos`.
+          · llegó a cero, o quedó por debajo de la venta mínima → se borra el
+            doc. Un producto que se vende de a 50 y quedó con 42 es, para el
+            que compra, lo mismo que no haber: lo podía mirar, ponerlo en el
+            pedido, y al confirmar desaparecía con un cartel de "se quedó sin
+            stock".
+
+        Primero se lee el doc publicado en vez de escribir a ciegas: de ahí
+        salen la venta mínima, las variedades tal como las dejó el panel y el
+        rubro. Si no existe, el producto no está en la tienda y se anota para no
+        volver a preguntar por un rato.
+
+        Es best-effort y va después del commit del stock: todo error queda acá
+        adentro. Si algo falla, la venta ya está firme y el sync lo arregla en
+        la próxima corrida.
         """
         if not self.enabled or not cambios:
             return
         col = self.db.collection('tienda_productos')
-        bajas = 0
-        tocados = 0
-        for firebase_id, stock in cambios:
-            if firebase_id in self._fuera_de_la_tienda:
+        ahora = _time.time()
+        vence = self._MINUTOS_DE_LA_ANOTACION * 60
+        tocados, bajas, sacados = 0, 0, []
+
+        for cambio in cambios:
+            firebase_id = cambio[0]
+            stock = cambio[1]
+            colores = cambio[2] if len(cambio) > 2 else None
+            contenido = cambio[3] if len(cambio) > 3 else 0
+
+            anotado = self._fuera_de_la_tienda.get(firebase_id)
+            if anotado is not None and (ahora - anotado) < vence:
                 continue
+
             try:
-                if stock > 0:
-                    # update() falla si el producto no está publicado, que es
-                    # justo lo que queremos: no inventar fichas a medias.
-                    col.document(firebase_id).update({'stock': int(stock)})
+                ref = col.document(firebase_id)
+                snap = ref.get()
+                if not snap.exists:
+                    self._fuera_de_la_tienda[firebase_id] = ahora
+                    continue
+                publicado = snap.to_dict() or {}
+                # Está publicado: si venía anotado de antes, ya no va más.
+                self._fuera_de_la_tienda.pop(firebase_id, None)
+
+                variedades = variedades_con_stock_nuevo(
+                    publicado.get('variedades'), colores, contenido)
+                if variedades is not None:
+                    # Con colores, el total es la suma de lo que se ofrece: las
+                    # variedades escondidas desde el panel no están en la lista
+                    # publicada y tampoco tienen que estar en el total.
+                    total = sum(entero_de_tienda(v.get('stock'))
+                                for v in variedades if isinstance(v, dict))
+                else:
+                    total = entero_de_tienda(stock)
+
+                if total > 0 and total >= minimo_publicado(publicado):
+                    nuevo = {'stock': total}
+                    if variedades is not None:
+                        nuevo['variedades'] = variedades
+                    ref.update(nuevo)
                     tocados += 1
                 else:
-                    col.document(firebase_id).delete()
+                    ref.delete()
+                    self._fuera_de_la_tienda[firebase_id] = ahora
                     bajas += 1
+                    # Un producto que está dentro de un grupo de tamaños NO
+                    # descuenta: la tienda muestra el grupo como una sola card
+                    # y sigue ahí mientras quede otro tamaño. Averiguar si
+                    # quedan hermanos publicados es una consulta más por venta,
+                    # y equivocarse hacia abajo esconde un filtro que sí tiene
+                    # productos. Esos los recuenta el sync.
+                    if not publicado.get('grupo'):
+                        sacados.append((publicado.get('rubro'),
+                                        publicado.get('sub_rubro')))
             except Exception:
-                # No publicado (o borrado en el medio): anotarlo y seguir.
-                self._fuera_de_la_tienda.add(firebase_id)
+                # No publicado, borrado en el medio, o la nube no contesta:
+                # anotarlo y seguir. La venta no se entera de nada.
+                self._fuera_de_la_tienda[firebase_id] = ahora
+
+        if sacados:
+            self._descontar_de_la_portada(sacados)
         if tocados or bajas:
             logger.info(f"Tienda: {tocados} con stock nuevo, {bajas} dados de baja.")
+
+    def _descontar_de_la_portada(self, sacados: list) -> None:
+        """Ajusta el conteo por rubro y subrubro de los que se acaban de ir.
+
+        Una escritura chica y condicionada, no un recuento: contar de verdad es
+        leer el catálogo entero, y eso no puede pasar en cada venta.
+
+        La condición es la versión que se acaba de leer. `tienda_config/rubros`
+        lo reescriben enteros el sync y el panel; sin la condición, esta PC
+        podía guardar encima una lista vieja y devolver la portada al estado
+        anterior. Si alguien escribió en el medio, la escritura se cae sola y el
+        conteo queda como estaba hasta la próxima corrida del sync.
+        """
+        try:
+            ref = self.db.collection('tienda_config').document('rubros')
+            snap = ref.get()
+            if not snap.exists:
+                return
+            nueva = descontar_del_conteo((snap.to_dict() or {}).get('lista'), sacados)
+            if not nueva:
+                return
+            try:
+                opcion = self.db.write_option(last_update_time=snap.update_time)
+            except Exception:
+                opcion = None
+            # `actualizado` no se toca a propósito: marca el último recuento de
+            # verdad, y esto es un ajuste de dos números, no un recuento.
+            if opcion is not None:
+                ref.update({'lista': nueva}, option=opcion)
+            else:
+                ref.update({'lista': nueva})
+        except Exception as e:
+            logger.info(f"Tienda: el conteo de la portada no se ajustó ({e}); "
+                        f"lo rehace el sync.")
 
     def push_stock_movimientos(self, db_manager, en_hilo: bool = True) -> None:
         """Sube a `stock_movimientos` las filas que todavía no viajaron.

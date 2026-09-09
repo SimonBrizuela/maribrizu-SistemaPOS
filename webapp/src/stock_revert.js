@@ -16,7 +16,8 @@
  *
  * Escribe en `catalogo` (fuente del webapp) y en `inventario` (lo que lee el POS
  * de escritorio por id numérico), y toca `config/catalogo_meta` +
- * `config/inventario_meta` para que las PCs detecten el cambio.
+ * `config/inventario_meta` para que las PCs detecten el cambio. La tienda online
+ * lee su propio espejo y también se entera: ver `_avisarALaTienda()` al final.
  *
  * Lo que NO se puede revertir automáticamente queda listado en `omitidos` con el
  * motivo, para avisarle al usuario que lo ajuste a mano.
@@ -107,10 +108,16 @@ function _repartirTotal(total, contenido) {
  * Devuelve stock a un producto conjunto leyendo su estado real dentro de una
  * transacción. `a` es el ajuste acumulado: `variedades` (Map color→cantidad)
  * y/o `conjunto` (cantidad al total, para conjuntos sin variantes).
+ *
+ * Devuelve los campos que quedaron escritos en el catálogo. El total y el
+ * reparto entre packs cerrados y sueltos salen de leer el documento adentro de
+ * la transacción, así que afuera no hay forma de calcularlos; el espejo de la
+ * tienda los necesita para publicar el stock de cada variedad.
  */
 async function _revertirConjunto(db, docId, invDocId, nombre, a) {
   const catRef = doc(db, 'catalogo', docId);
   const invRef = doc(db, 'inventario', invDocId);
+  let escrito = null;
 
   await runTransaction(db, async (tx) => {
     const snap = await tx.get(catRef);
@@ -128,13 +135,13 @@ async function _revertirConjunto(db, docId, invDocId, nombre, a) {
         return { ...v, unidades: r.unidades, restante: r.restante };
       });
       const total = nuevas.reduce((acc, v) => acc + _totalVariedad(v, contGlobal), 0);
-      tx.set(catRef, {
+      escrito = {
         conjunto_colores:  nuevas,
         conjunto_unidades: nuevas.reduce((acc, v) => acc + _num(v.unidades), 0),
         conjunto_restante: _redondear(nuevas.reduce((acc, v) => acc + _num(v.restante), 0)),
         conjunto_total:    _redondear(total),
-        ultima_actualizacion: serverTimestamp(),
-      }, { merge: true });
+      };
+      tx.set(catRef, { ...escrito, ultima_actualizacion: serverTimestamp() }, { merge: true });
       tx.set(invRef, {
         stock: Math.round(total), nombre,
         id: parseInt(invDocId) || invDocId,
@@ -145,19 +152,21 @@ async function _revertirConjunto(db, docId, invDocId, nombre, a) {
 
     // Conjunto sin variantes: total plano + espejo entero en `stock` (igual que el POS).
     const r = _repartirTotal(_num(p.conjunto_total) + a.conjunto, contGlobal);
-    tx.set(catRef, {
+    escrito = {
       conjunto_total:    r.total,
       conjunto_unidades: r.unidades,
       conjunto_restante: r.restante,
       stock:             Math.round(r.total),
-      ultima_actualizacion: serverTimestamp(),
-    }, { merge: true });
+    };
+    tx.set(catRef, { ...escrito, ultima_actualizacion: serverTimestamp() }, { merge: true });
     tx.set(invRef, {
       stock: Math.round(r.total), nombre,
       id: parseInt(invDocId) || invDocId,
       ultima_actualizacion: serverTimestamp(),
     }, { merge: true });
   });
+
+  return escrito;
 }
 
 /**
@@ -323,6 +332,9 @@ export async function revertirStockVenta(db, { saleId, pcId = '', itemDocs = nul
   // sobre el doc leído en el momento: si otra PC vendió mientras tanto, la
   // devolución se aplica sobre el estado real y no lo pisa.
   const ops = [];
+  // Los productos que quedaron con stock nuevo, ya con el cambio aplicado
+  // encima: es lo que necesita el espejo de la tienda (ver `_avisarALaTienda`).
+  const cambiados = [];
 
   for (const [docId, a] of ajustes) {
     const p = a.prod;
@@ -344,7 +356,8 @@ export async function revertirStockVenta(db, { saleId, pcId = '', itemDocs = nul
 
     if (a.variedades.size || a.conjunto > 0) {
       try {
-        await _revertirConjunto(db, docId, invDocId, nombre, a);
+        const escrito = await _revertirConjunto(db, docId, invDocId, nombre, a);
+        if (escrito) cambiados.push({ docId, datos: { ...p, ...escrito } });
       } catch (err) {
         console.warn('[stock] no se pudo devolver el conjunto', nombre, err);
         _omitir(nombre || docId, `no se pudo actualizar el stock (${err.message || err})`);
@@ -363,6 +376,12 @@ export async function revertirStockVenta(db, { saleId, pcId = '', itemDocs = nul
         id: parseInt(invDocId) || invDocId,
         ultima_actualizacion: serverTimestamp(),
       }, merge: true });
+      // El número lo escribe Firestore con `increment()` sobre el valor real;
+      // acá se suma sobre el que tiene el panel en memoria. Si justo otra PC
+      // vendió en el mismo segundo la vidriera queda un pelo desfasada, y eso
+      // lo corrige la próxima venta o la corrida del sync. Lo que no se puede
+      // perder es que el producto vuelva a estar.
+      cambiados.push({ docId, datos: { ...p, stock: _redondear(_num(p.stock) + a.plano) } });
     }
   }
 
@@ -394,6 +413,8 @@ export async function revertirStockVenta(db, { saleId, pcId = '', itemDocs = nul
     ]);
   }
 
+  await _avisarALaTienda(db, cambiados);
+
   // Consolidar devoluciones repetidas del mismo producto para el resumen visual.
   const agrupado = new Map();
   resumen.devueltos.forEach(x => {
@@ -404,4 +425,70 @@ export async function revertirStockVenta(db, { saleId, pcId = '', itemDocs = nul
   resumen.devueltos = [...agrupado.values()];
 
   return resumen;
+}
+
+/**
+ * Vuelve a poner en la vidriera lo que la venta borrada devolvió.
+ *
+ * El caso real: se vendió la última unidad, el POS dejó el producto en cero y
+ * lo sacó del espejo; el local se da cuenta de que la venta estaba mal y la
+ * borra. El stock vuelve al catálogo, pero el documento del espejo ya no
+ * existe.
+ *
+ * Por eso acá no sirve `avisarStockALaTienda()`, que es lo que usa el resto del
+ * panel (la ficha, el conteo físico, la reposición, el editor rápido): sabe
+ * actualizar el stock del espejo o borrarlo, y las dos puertas dan por sentado
+ * que el producto ya está publicado. Su `updateDoc` sobre un documento que no
+ * está falla y el error se traga en silencio. `reflejarSiPublicado()` tampoco:
+ * se planta antes justamente si el producto no está en la tienda.
+ *
+ * La puerta que corresponde es `espejar()`, la misma del guardado de la ficha:
+ * escribe el documento —lo cree si hace falta— cuando el producto tiene que
+ * estar, y lo borra cuando no. Necesita el producto entero (precio, fotos,
+ * rubro, variedades) y no solo el stock, así que se le pasa el del catálogo que
+ * el panel ya tiene en memoria con la devolución aplicada encima.
+ *
+ * Sin la lista de rubros habilitados no se toca nada. `motivoDeNoPublicar()`
+ * con `null` saltea el rubro apagado y la falta de foto, así que espejar así
+ * publicaría cosas que la tienda no muestra. Mismo criterio que el recuento de
+ * la portada: si la configuración no se pudo leer, lo arregla el sync.
+ *
+ * Nada de esto puede tirar error hacia arriba: el stock ya se devolvió, y
+ * Ventas trata el error de esta función como "no se pudo devolver el stock" y
+ * le pregunta al usuario si borra la venta igual. Que la vidriera se entere seis
+ * horas más tarde no justifica esa pregunta.
+ *
+ * @param {Array<{docId: string, datos: object}>} cambiados
+ */
+async function _avisarALaTienda(db, cambiados) {
+  if (!db || !cambiados.length) return;
+  try {
+    // Tarde y por dinámico: quien borra una venta no tiene por qué haber
+    // cargado el módulo del espejo, y así este archivo se sigue pudiendo
+    // importar sin arrastrar Firebase Storage ni la tienda entera.
+    const { espejar, leerPublicacion, programarRecuentoDeRubros } =
+      await import('./tienda_espejo.js');
+
+    const { rubros, subrubrosExcluidos } = await leerPublicacion(db);
+    if (!Array.isArray(rubros)) return;
+
+    let hayEnLaVidriera = false;
+    for (const { docId, datos } of cambiados) {
+      try {
+        const { publicado } = await espejar(db, docId, datos, rubros, subrubrosExcluidos);
+        if (publicado) hayEnLaVidriera = true;
+      } catch (err) {
+        console.warn('[tienda] no se pudo actualizar el espejo de', docId, err?.message || err);
+      }
+    }
+
+    // Un producto que vuelve a la vidriera cambia el número que la portada
+    // muestra en su rubro y en su subrubro. Si ya estaba publicado el conteo da
+    // igual que antes: es una escritura sola, agrupada con las demás de los
+    // próximos segundos, y es más barato eso que leer el espejo de cada
+    // producto para saber si hacía falta.
+    if (hayEnLaVidriera) programarRecuentoDeRubros(db);
+  } catch (err) {
+    console.warn('[tienda] no se le pudo avisar a la tienda:', err?.message || err);
+  }
 }

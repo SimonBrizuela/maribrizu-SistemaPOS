@@ -63,6 +63,12 @@ beforeAll(() => {
  * arriba de casos_espejo.py y la suite dio "66 tests passed" sin comparar una
  * sola vez, con la mutación del redondeo de Python adentro. Un descuido que se
  * reporta como éxito es peor que no tener la prueba.
+ *
+ * Va en rojo y no en `it.skip`: no hay ningún lugar donde estas pruebas corran
+ * legítimamente sin Python. En la PC del local está instalado (el sync y el POS
+ * son de Python) y los tres workflows del repo lo usan. Así que "no hay Python"
+ * no es un entorno distinto, es que se rompió algo, y saltear la prueba sería
+ * dejar de mirar justo cuando hay algo que mirar.
  */
 const casosDelSync = () => {
   expect(delSync, 'no se pudo correr scripts/casos_espejo.py: la cuenta del panel '
@@ -98,7 +104,13 @@ describe('la cuenta del panel contra la del sync', () => {
         const otraVez = aplicarDescuento(esperado.doc_id, { ...obtenido }, vigentes);
         expect(otraVez, `${caso.que_prueba} — ${esperado.doc_id}, segunda vuelta`)
           .toEqual(esperado.otra_vez);
-        expect(otraVez).toEqual(obtenido);
+        // Y esto le pega al caso, no al código: como las dos de arriba ya
+        // pasaron, acá lo que se exige es que el propio caso de Python declare
+        // las dos vueltas iguales. Un caso que espere un precio distinto la
+        // segunda vez estaría dando por buena la rebaja doble.
+        expect(esperado.otra_vez, `${caso.que_prueba} — ${esperado.doc_id}: el caso `
+               + 'del sync espera un precio distinto en la segunda vuelta')
+          .toEqual(esperado.documento);
       }
     }
   });
@@ -415,9 +427,18 @@ describe('espejar un producto con un descuento vigente', () => {
     objetivo: { stringValue: 'LIBRERIA' },
   };
 
-  /** El fetch de mentira: el producto no está en el espejo y hay un descuento. */
+  /**
+   * El fetch de mentira: el espejo arranca vacío y hay un descuento vigente.
+   *
+   * Se queda con lo que se va escribiendo y lo devuelve cuando alguien vuelve a
+   * leer ese documento. Espejar dos veces el mismo producto es lo que pasa todo
+   * el día (se guarda la ficha, se marca un pedido entregado, se cambia una
+   * foto) y la segunda vez el producto YA está publicado: si la red de mentira
+   * contestara siempre "no existe", la segunda pasada no sería la de verdad.
+   */
   function conRed() {
     const commits = [];
+    const publicado = new Map();   // nombre del documento -> campos escritos
     globalThis.fetch = vi.fn((url, opciones) => {
       const u = String(url);
       const cuerpo = opciones?.body ? JSON.parse(opciones.body) : {};
@@ -430,7 +451,20 @@ describe('espejar un producto con un descuento vigente', () => {
       if (u.endsWith(':batchGet')) {
         return RESPUESTA(200, [{ missing: `${BASE}/tienda_productos/A` }]);
       }
-      if (u.endsWith(':commit')) { commits.push(...cuerpo.writes); return RESPUESTA(200); }
+      if (u.endsWith(':commit')) {
+        commits.push(...cuerpo.writes);
+        for (const escritura of cuerpo.writes) {
+          if (escritura.update?.name) {
+            publicado.set(escritura.update.name, escritura.update.fields);
+          }
+        }
+        return RESPUESTA(200);
+      }
+      // Un documento suelto: `.../tienda_productos/A?mask.fieldPaths=orden&…`
+      const ruta = u.split('?')[0];
+      for (const [nombre, fields] of publicado) {
+        if (ruta.endsWith(nombre)) return RESPUESTA(200, { name: nombre, fields });
+      }
       return RESPUESTA(404, {});
     });
     return commits;
@@ -468,17 +502,30 @@ describe('espejar un producto con un descuento vigente', () => {
     });
   });
 
+  /*
+   * Es lo que pasa todo el día: se guarda la ficha, se marca un pedido
+   * entregado, se cambia una foto. El precio tiene que quedar donde estaba.
+   *
+   * Los números van escritos a mano y no comparados contra la primera pasada.
+   * Antes esta prueba espejaba dos veces y comparaba la segunda con la primera:
+   * las dos podían estar mal y la prueba salía verde igual. Lo que hay que
+   * cuidar son estos tres valores contra los dos que serían un error: $600 es
+   * volver al precio de lista con la cinta "−20%" ya anunciada, y $384 es
+   * descontar de nuevo sobre lo descontado, que en cada guardado de la ficha
+   * derrumbaría el precio un poco más.
+   */
   it('re-espejarlo no lo devuelve a precio de lista ni descuenta de nuevo', async () => {
-    // Es lo que pasa todo el día: se guarda la ficha, se marca un pedido
-    // entregado, se cambia una foto. El precio tiene que quedar donde estaba.
     const commits = conRed();
 
     await espejar({}, 'A', CARTULINA, ['LIBRERÍA'], {});
     await espejar({}, 'A', CARTULINA, ['LIBRERÍA'], {});
 
     expect(commits).toHaveLength(2);
-    expect(decodificarCampos(commits[1].update.fields))
-      .toEqual(decodificarCampos(commits[0].update.fields));
+    expect(decodificarCampos(commits[1].update.fields)).toMatchObject({
+      precio: 480, precio_anterior: 600,
+      precio_pack: 4480, precio_pack_anterior: 5600,
+      descuento: { id: 'd1', nombre: 'Semana del cuaderno', porcentaje: 20 },
+    });
   });
 
   it('sin descuentos que apliquen sale a precio de lista y sin cinta', async () => {

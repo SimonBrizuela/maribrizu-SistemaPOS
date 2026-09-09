@@ -55,6 +55,24 @@ CASOS_PUBLICACION = [
                   'stock': 5, 'rubro': 'LIBRERIA', 'sub_rubro': '  abrochadora '},
         'rubros': ['LIBRERIA'], 'excluidos': {'LIBRERIA': ['ABROCHADORA']},
     },
+    # La lista de excluidos se guarda tal como la tipeo quien la edito. Hasta el
+    # 2026-09-08 el sync le pasaba un trim + mayusculas a las claves Y a los
+    # valores al leer la configuracion, y el panel comparaba el texto crudo: un
+    # subrubro anotado " abrochadora " salia de la tienda en la corrida del sync
+    # y el guardado siguiente del panel lo volvia a subir, ida y vuelta cada
+    # seis horas.
+    {
+        'que_prueba': 'el subrubro excluido pesa aunque este guardado con espacios y en minusculas',
+        'datos': {'nombre': 'Abrochadora', 'estado': 'activo', 'precio_venta': 100,
+                  'stock': 5, 'rubro': 'LIBRERIA', 'sub_rubro': 'Abrochadora'},
+        'rubros': ['LIBRERIA'], 'excluidos': {'LIBRERIA': ['  abrochadora ']},
+    },
+    {
+        'que_prueba': 'el rubro del mapa de excluidos tambien se compara normalizado',
+        'datos': {'nombre': 'Abrochadora', 'estado': 'activo', 'precio_venta': 100,
+                  'stock': 5, 'rubro': 'LIBRERIA', 'sub_rubro': 'Abrochadora'},
+        'rubros': ['LIBRERIA'], 'excluidos': {' libreria ': ['ABROCHADORA']},
+    },
     {
         'que_prueba': 'el mismo subrubro en otro rubro no se toca',
         'datos': {'nombre': 'Abrochadora chica', 'estado': 'activo', 'precio_venta': 100,
@@ -303,6 +321,24 @@ CASOS_CONTEO = [
             {'doc_id': 'f2', 'datos': _publicable('CUADERNO', 'LIBRERIA', 'CUADERNOS')},
         ],
     },
+    {
+        'que_prueba': 'los subrubros salen en el mismo orden, y los empatados no se dan vuelta',
+        # La segunda fila de filtros de la tienda se dibuja en el orden de esta
+        # lista: el filtro con mas productos va primero porque es el que mas
+        # sirve. Los dos lados ordenan por cantidad, y los empatados quedan en
+        # el orden en que aparecieron; si uno de los dos los diera vuelta, los
+        # filtros se reacomodarian solos cada seis horas y el que ya sabe donde
+        # esta el suyo tendria que volver a buscarlo. Gomas y Reglas empatan en
+        # dos: tienen que salir Gomas, Reglas y Cuadernos, en ese orden.
+        'rubros': ['LIBRERIA'], 'excluidos': {},
+        'productos': [
+            {'doc_id': 'g1', 'datos': _publicable('GOMA', 'LIBRERIA', 'GOMAS')},
+            {'doc_id': 'g2', 'datos': _publicable('REGLA', 'LIBRERIA', 'REGLAS')},
+            {'doc_id': 'g3', 'datos': _publicable('CUADERNO', 'LIBRERIA', 'CUADERNOS')},
+            {'doc_id': 'g4', 'datos': _publicable('REGLA CHICA', 'LIBRERIA', 'REGLAS')},
+            {'doc_id': 'g5', 'datos': _publicable('GOMA CHICA', 'LIBRERIA', 'GOMAS')},
+        ],
+    },
 ]
 
 
@@ -316,6 +352,12 @@ def conteo():
 
     Lo facturado no viaja: sale de las ventas del local, el panel no lo tiene y
     solo sirve para ordenar los rubros de la portada.
+
+    Los subrubros de cada rubro van EN ORDEN, que es como los dibuja la tienda:
+    el filtro con mas productos primero y los empatados como aparecieron. El
+    orden de los RUBROS, en cambio, es lo unico que a proposito no se compara:
+    el sync los pone por lo que factura cada uno y el panel conserva el que ya
+    tenia la portada.
     """
     salida = []
     for caso in CASOS_CONTEO:

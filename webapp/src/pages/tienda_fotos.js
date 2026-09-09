@@ -28,7 +28,7 @@ import { leerDocRapido } from '../config.js';
 import { alertDialog, confirmDialog, escHtml, verFotoGrande } from '../components/dialogs.js';
 import {
   actualizarDoc, espejar, imagenesDe, motivoDeNoPublicar, nombreBonito, subirFoto,
-  borrarFoto, borrarDoc,
+  borrarFoto, borrarDoc, programarRecuentoDeRubros, usarCatalogoParaRecontar,
 } from '../tienda_espejo.js';
 import {
   ponerDePortada, moverFoto, desvincularFoto, limpiarAjustes, fotosQuitadas,
@@ -111,6 +111,11 @@ async function cargar() {
     _catalogo = new Map((catalogo || []).map(d => [String(d.doc_id), d]));
     _habilitados = publicacion?.rubros || [];
     _subExcluidos = publicacion?.subrubrosExcluidos || {};
+
+    // El catálogo entero que acaba de leer esta pantalla se presta para rehacer
+    // el conteo por rubro y subrubro de la portada de la tienda. Sin esto el
+    // recuento no tiene con qué contar y se saltea (ver tienda_espejo.js).
+    usarCatalogoParaRecontar(() => [..._catalogo.values()]);
 
     _lista = ordenarPorFecha(docs.map(d => filaDePedido(d.id, d.data() || {})));
 
@@ -732,6 +737,11 @@ function abrirPanelFotos(id, f, archivosIniciales) {
       // medias en la tienda.
       if (!producto) throw new Error('El producto ya no está en el catálogo.');
 
+      // Si el cliente lo estaba viendo ANTES de tocar las fotos. Se mide acá,
+      // con el producto todavía sin cambiar, para compararlo después contra lo
+      // que decidió el espejo.
+      const estabaPublicado = motivoDeNoPublicar(producto, _habilitados, _subExcluidos) === null;
+
       decir('Guardando…');
 
       // 3. El catálogo primero y el espejo después, en dos pasos y no con
@@ -758,6 +768,17 @@ function abrirPanelFotos(id, f, archivosIniciales) {
       f.enLaVidriera = estaEnLaVidrieraSinFoto(producto, imagenes);
 
       const resultado = await espejar(_db, id, producto, _habilitados, _subExcluidos);
+
+      // Esta es la pantalla por la que MÁS productos entran a la tienda: al que
+      // ya tenía stock y el rubro prendido lo único que le faltaba era la foto,
+      // y con ella se publica en el momento. El conteo por rubro y subrubro que
+      // dibuja los filtros de la portada seguía con el número de antes hasta la
+      // corrida siguiente del sync, hasta seis horas: el filtro decía "Aros 1"
+      // y adentro no había nada, o al revés, contaba uno que ya no estaba.
+      // Solo cuando entra o sale: acomodar el orden de las fotos o cambiar la
+      // portada no mueve ningún número.
+      const quedoPublicado = resultado?.publicado === true;
+      if (quedoPublicado !== estabaPublicado) programarRecuentoDeRubros(_db);
 
       // 5. Con foto ya no está pendiente: sale de las dos listas. Se saca
       //    recién ahora: si el guardado hubiera fallado, tenía que seguir acá.

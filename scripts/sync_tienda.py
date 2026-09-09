@@ -412,6 +412,36 @@ def imagenes_de(datos):
     return [str(suelta)] if suelta else []
 
 
+def subrubros_excluidos_de(subrubros_excluidos, rubro):
+    """Los subrubros que el panel dejo afuera de ESTE rubro, para comparar.
+
+    La lista vive en `tienda_config/publicacion` tal como la tipeo quien la
+    edito, y ahi adentro hay de todo: "Abrochadora", " abrochadora ", el rubro
+    escrito "Libreria" y "LIBRERÍA". Hasta el 2026-09-08 el sync normalizaba
+    claves y valores al leer la configuracion y el panel comparaba el texto
+    crudo: un subrubro guardado con espacios o en minusculas salia de la tienda
+    en la corrida del sync y el guardado siguiente del panel lo volvia a subir.
+    Normalizando aca adentro las dos puertas deciden igual sin depender de quien
+    leyo la configuracion. Gemelo de subrubrosExcluidosDe() en
+    webapp/src/tienda_espejo.js.
+
+    `rubro` ya viene sin espacios y en mayusculas.
+    """
+    salida = set()
+    for clave, subs in (subrubros_excluidos or {}).items():
+        # Un texto suelto donde iba la lista se recorreria letra por letra: se
+        # descarta, igual que hace el gemelo con Array.isArray().
+        if not isinstance(subs, (list, tuple, set, frozenset)):
+            continue
+        if str(clave or '').strip().upper() != rubro:
+            continue
+        for sub in subs:
+            limpio = str(sub or '').strip().upper()
+            if limpio:
+                salida.add(limpio)
+    return salida
+
+
 def se_publica(datos, rubros_habilitados=None, subrubros_excluidos=None):
     """Reglas de curado.
 
@@ -490,7 +520,7 @@ def se_publica(datos, rubros_habilitados=None, subrubros_excluidos=None):
     # que en el panel: quien pregunta sin la lista igual tiene derecho a que le
     # digan que el subrubro esta excluido.
     sub = str(datos.get('sub_rubro') or '').strip().upper()
-    if sub and sub in (subrubros_excluidos or {}).get(rubro, set()):
+    if sub and sub in subrubros_excluidos_de(subrubros_excluidos, rubro):
         return False, 'subrubro excluido'
 
     if rubros_habilitados is None:
@@ -1055,6 +1085,8 @@ def main():
     datos_cfg = cfg.to_dict() if cfg.exists else {}
     rubros_habilitados = {str(r).strip().upper()
                           for r in (datos_cfg.get('rubros') or [])}
+    # Normalizados para el resumen que se imprime abajo; la regla ya no depende
+    # de esto: `se_publica()` normaliza lo que reciba, igual que el panel.
     subrubros_excluidos = {
         str(rubro).strip().upper(): {str(s).strip().upper() for s in (subs or [])}
         for rubro, subs in (datos_cfg.get('subrubros_excluidos') or {}).items()

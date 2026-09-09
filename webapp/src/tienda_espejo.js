@@ -366,9 +366,38 @@ export function claveDeRubro(texto) {
 }
 
 /**
+ * Los subrubros que el panel dejó afuera de ESTE rubro, listos para comparar.
+ *
+ * La lista vive en `tienda_config/publicacion` tal como la tipeó quien la
+ * editó, y ahí adentro hay de todo: "Abrochadora", " abrochadora ", el rubro
+ * escrito "Libreria" y "LIBRERÍA". Hasta el 2026-09-08 el sync normalizaba
+ * claves y valores al leer la configuración y el panel comparaba el texto
+ * crudo: un subrubro guardado con espacios o en minúsculas salía de la tienda
+ * en la corrida del sync y el guardado siguiente del panel lo volvía a subir.
+ * Normalizando acá adentro las dos puertas deciden igual sin depender de quién
+ * leyó la configuración. Gemelo de subrubros_excluidos_de() en
+ * scripts/sync_tienda.py.
+ *
+ * @param {object|null} subrubrosExcluidos  { RUBRO: ['SUBRUBRO', …] }
+ * @param {string} rubro   ya pasado por `claveDeRubro()`
+ */
+export function subrubrosExcluidosDe(subrubrosExcluidos, rubro) {
+  const salida = new Set();
+  for (const [clave, subs] of Object.entries(subrubrosExcluidos || {})) {
+    if (!Array.isArray(subs) || claveDeRubro(clave) !== rubro) continue;
+    for (const sub of subs) {
+      const limpio = claveDeRubro(sub);
+      if (limpio) salida.add(limpio);
+    }
+  }
+  return salida;
+}
+
+/**
  * @param {object} datos                      producto del catálogo
  * @param {string[]|null} rubrosHabilitados   rubros que salen a la web
- * @param {object|null} subrubrosExcluidos    { RUBRO: ['SUBRUBRO', …] }
+ * @param {object|null} subrubrosExcluidos    { RUBRO: ['SUBRUBRO', …] }, tal
+ *        como quedó guardado: las mayúsculas y los espacios no importan
  *
  * El rubro manda: si está apagado no se publica nada de él, ni lo marcado a
  * mano con "publicar siempre". Prendido, sale todo salvo los subrubros
@@ -413,10 +442,9 @@ export function motivoDeNoPublicar(datos, rubrosHabilitados = null,
   // llama para saber "¿por qué no está en la tienda?" pasa `null` como rubros
   // para preguntar por el resto de las reglas, y el subrubro excluido es una
   // razón tan válida como la falta de stock.
-  const excluidos = subrubrosExcluidos?.[rubro];
-  if (excluidos?.length) {
-    const sub = claveDeRubro(datos?.sub_rubro);
-    if (sub && excluidos.includes(sub)) return 'el subrubro está excluido';
+  const sub = claveDeRubro(datos?.sub_rubro);
+  if (sub && subrubrosExcluidosDe(subrubrosExcluidos, rubro).has(sub)) {
+    return 'el subrubro está excluido';
   }
 
   if (!rubrosHabilitados) return null;
@@ -558,8 +586,33 @@ export function destacadoQueQueda(datos, anterior) {
  *        leídos (`descuentosVigentes`); sin eso se leen acá, con un minuto de
  *        memoria
  */
+/**
+ * Una lista de rubros VACIA no se distingue de una lectura que fallo.
+ *
+ * `leerDocRapido` devuelve `{}` cuando no pudo leer `tienda_config/publicacion`
+ * (sin red, cache frio, permisos), y las pantallas traducen eso a `rubros: []`.
+ * Con la lista vacia `motivoDeNoPublicar` contesta "el rubro no esta
+ * habilitado" para TODO, y como el arreglo del dia hace que cada guardado
+ * borre del espejo lo que no corresponde publicar, una sola foto cargada en
+ * ese estado sacaba el producto de la vidriera. Guardando varios, se vaciaba
+ * la tienda de a uno.
+ *
+ * El estado "ningun rubro habilitado" existe de verdad, pero no ocurre nunca en
+ * el local y no vale el riesgo: ante la duda no se toca el espejo y lo resuelve
+ * la proxima corrida del sync, que lee la configuracion de nuevo.
+ */
+const MOTIVO_SIN_LISTA = 'no se pudo leer que rubros salen a la tienda';
+
+function listaDeRubrosSospechosa(rubrosHabilitados) {
+  return Array.isArray(rubrosHabilitados) && rubrosHabilitados.length === 0;
+}
+
 export async function espejar(db, docId, datos, rubrosHabilitados = null,
                               subrubrosExcluidos = null, { descuentos = null } = {}) {
+  if (listaDeRubrosSospechosa(rubrosHabilitados)) {
+    return { publicado: false, motivo: MOTIVO_SIN_LISTA };
+  }
+
   const motivo = motivoDeNoPublicar(datos, rubrosHabilitados, subrubrosExcluidos);
 
   if (motivo) {
@@ -901,6 +954,10 @@ function numeroONull(n) {
  */
 export async function espejarLote(db, productos, rubrosHabilitados, alProgreso = null,
                                   subrubrosExcluidos = null) {
+  if (listaDeRubrosSospechosa(rubrosHabilitados)) {
+    throw new Error(MOTIVO_SIN_LISTA);
+  }
+
   let orden = await proximoOrden(db);
   // Una sola lectura para el lote entero: un rubro son cientos de productos.
   const descuentos = await leerDescuentosVigentes(db);
