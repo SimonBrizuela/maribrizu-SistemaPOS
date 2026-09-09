@@ -228,3 +228,23 @@ logs/
 # y compras mes a mes) escritas dentro de un .js. El repo es publico.
 webapp/src/pages/balance_dias_seed.js
 webapp/src/pages/balance_seed.js
+
+# La contabilidad y el catalogo con costos: el repo es PUBLICO.
+# El balance del local mes a mes, en todas sus formas y copias.
+Datoss/
+nuevooo/
+BALANCE*LIBRERIA*
+*BALANCE*.xlsx
+*BALANCE*.zip
+# Volcados del catalogo: traen costo, margen y proveedor de cada producto,
+# ademas de la razon social de los proveedores.
+catalogo_snapshot_*.json
+backup_catalogo_*.json
+backup_firebase_*/
+backup_storage_downloads_*/
+# Respaldos de las correcciones de datos: nombres de producto y montos reales.
+backup_tienda_publicar_*.json
+backup_prender_rubro_*.json
+pedidos_prueba_backup_*.json
+# Informes con numeros del negocio.
+INFORME_CAJAS_*.md

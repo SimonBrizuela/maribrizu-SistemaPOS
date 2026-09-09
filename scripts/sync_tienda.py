@@ -1074,6 +1074,9 @@ def clave_de_venta(nombre):
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument('--permitir-vaciar', action='store_true',
+                    help='seguir aunque no haya ningun rubro habilitado, lo que '
+                         'deja la tienda sin productos')
     ap.add_argument('--simular', action='store_true',
                     help='muestra el resumen sin escribir nada')
     args = ap.parse_args()
@@ -1093,8 +1096,26 @@ def main():
     }
 
     if not rubros_habilitados:
+        # Sin ningun rubro habilitado NO se publica nada, y esta corrida
+        # borraria el espejo entero: son ~1.100 productos y la tienda queda
+        # vacia hasta que alguien se de cuenta.
+        #
+        # Ese estado existe de verdad (nadie tildo ningun rubro) pero no ocurre
+        # nunca en el local, y no se distingue de una lectura que fallo o de un
+        # guardado a medias de Configuracion de la Tienda. Ante la duda no se
+        # toca nada: mejor la tienda con lo de la corrida anterior que una
+        # vidriera vacia. El panel tiene el mismo freno en `espejar()` y
+        # `espejarLote()` de webapp/src/tienda_espejo.js.
+        #
+        # Para vaciarla a proposito: apagar la tienda desde el panel, o correr
+        # esto con --permitir-vaciar.
         print('Ningun rubro habilitado en tienda_config/publicacion.')
-        print('Se publican solo los productos marcados uno por uno.\n')
+        if not args.permitir_vaciar:
+            print('No se toca nada: publicar con la lista vacia dejaria la '
+                  'tienda sin productos.')
+            print('Si es a proposito, correr de nuevo con --permitir-vaciar.')
+            return
+        print('--permitir-vaciar puesto: se sigue igual.')
     else:
         print(f'Rubros habilitados: {", ".join(sorted(rubros_habilitados))}')
         for rubro, subs in sorted(subrubros_excluidos.items()):
