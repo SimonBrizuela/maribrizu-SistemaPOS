@@ -156,7 +156,7 @@ def _clave_de_color(texto):
     return ''.join(c for c in s if _unicodedata.category(c) != 'Mn').strip()
 
 
-def variedades_con_stock_nuevo(publicadas, colores, contenido):
+def variedades_con_stock_nuevo(publicadas, colores, contenido, ajustes=None):
     """Mete el stock nuevo de cada color adentro de las variedades publicadas.
 
     Hasta ahora la venta subia solo el total: un producto con colores quedaba
@@ -168,14 +168,30 @@ def variedades_con_stock_nuevo(publicadas, colores, contenido):
     y rearmar la lista desde el catalogo local los borraria (paso el 01-09 con
     los minimos y las fotos de 14 variedades).
 
-    El color se busca por nombre normalizado. Una variedad renombrada a mano
-    desde el panel no cruza con nada: se deja como esta, que es mejor que
-    ponerle el numero de otro color. Lo mismo las escondidas, que directamente
-    no estan en la lista publicada.
+    El cruce va por el nombre del catalogo normalizado, que es la clave de
+    `tienda_variedades` y la misma que usan variedades_de() en
+    scripts/sync_tienda.py y variedadesDe() en webapp/src/tienda_espejo.js.
+    `ajustes` es ese mapa, leido del catalogo en la misma vuelta que los
+    colores. Sin el, el POS comparaba el nombre del catalogo contra el nombre
+    que ve el cliente: una variedad renombrada desde el panel (el catalogo dice
+    "AZUL FRANCIA", la vidriera muestra "Azul") no cruzaba con nada, se quedaba
+    con el stock viejo, y el total publicado terminaba diciendo otra cosa que
+    la suma de los colores que la tienda ofrece.
+
+    Una variedad publicada que aun asi no cruza con ningun color va a CERO, no
+    se queda con el numero viejo: los colores viajan completos en cada venta,
+    asi que si el nombre no esta entre ellos es porque lo borraron o lo
+    renombraron en el catalogo y no hay stock detras. Con el numero viejo la
+    tienda la sigue ofreciendo y el pedido se cae al confirmarlo, que es
+    justamente lo que este aviso vino a evitar. La fila se conserva entera
+    (nombre, precio y foto los pone el panel) y el sync la saca de la lista en
+    la proxima corrida. Va a cero solo si `ajustes` llego: sin ese mapa no hay
+    forma de separar un renombre del panel de un color borrado, y ahi la
+    variedad se deja como esta.
 
     Devuelve None cuando no hay nada que hacer (el producto no publica
-    variedades, o ninguna cruza): ahi manda el stock total y esta lista no se
-    toca.
+    variedades, no llegaron los colores, o ninguna cruza y no hay con que
+    decidir): ahi manda el stock total y esta lista no se toca.
     """
     if not isinstance(publicadas, list) or not publicadas:
         return None
@@ -190,12 +206,29 @@ def variedades_con_stock_nuevo(publicadas, colores, contenido):
     if not por_clave:
         return None
 
+    # Los renombrados se anotan tambien bajo el nombre con el que salieron
+    # publicados. Va en una pasada aparte para que el renombre gane siempre y
+    # no dependa del orden en que estan los colores en el catalogo.
+    #
+    # Los escondidos se saltean: `tienda_variedades` guarda todo junto y uno
+    # escondido tambien puede tener nombre propio, pero no esta en la lista
+    # publicada. Anotarlo le pisaria el stock a otro color que si se llama asi.
+    sabemos_los_renombres = isinstance(ajustes, dict)
+    if sabemos_los_renombres:
+        for nombre_catalogo, ajuste in ajustes.items():
+            if not isinstance(ajuste, dict) or ajuste.get('publicar') is False:
+                continue
+            local = por_clave.get(_clave_de_color(nombre_catalogo))
+            publicado_como = _clave_de_color(ajuste.get('nombre'))
+            if local is not None and publicado_como:
+                por_clave[publicado_como] = local
+
     try:
         contenido = float(contenido or 0)
     except (TypeError, ValueError):
         contenido = 0
 
-    salida, cruzados = [], 0
+    salida, cruzados, huerfanas = [], 0, 0
     for v in publicadas:
         if not isinstance(v, dict):
             salida.append(v)
@@ -213,8 +246,11 @@ def variedades_con_stock_nuevo(publicadas, colores, contenido):
             # del pack mas las sueltas del abierto. Misma cuenta que
             # variedades_de() en el sync y variedadesDe() en el panel.
             fila['stock'] = entero_de_tienda(unidades * contenido + restante)
+        elif sabemos_los_renombres:
+            huerfanas += 1
+            fila['stock'] = 0
         salida.append(fila)
-    return salida if cruzados else None
+    return salida if (cruzados or huerfanas) else None
 
 
 def minimo_publicado(publicado):
@@ -2421,6 +2457,7 @@ class FirebaseSync:
                             'ultima_actualizacion': now_dt,
                         }
                         colores_json = row.get('conjunto_colores')
+                        ajustes_tienda = None
                         if colores_json:
                             try:
                                 import json as _json
@@ -2437,7 +2474,16 @@ class FirebaseSync:
                                     try:
                                         snap = self.db.collection('catalogo') \
                                             .document(firebase_id).get()
-                                        nube = (snap.to_dict() or {}).get('conjunto_colores')
+                                        del_catalogo = snap.to_dict() or {}
+                                        nube = del_catalogo.get('conjunto_colores')
+                                        # De la MISMA lectura sale cómo se
+                                        # llama cada color de cara al cliente.
+                                        # Sin esto el aviso a la tienda no
+                                        # sabe que "AZUL FRANCIA" salió
+                                        # publicado como "Azul". El `or {}`
+                                        # distingue "leí y no hay retoques"
+                                        # de "no pude leer".
+                                        ajustes_tienda = del_catalogo.get('tienda_variedades') or {}
                                         colores = merge_colores_con_nube(
                                             nube, colores, vendidos)
                                         payload_conj['conjunto_unidades'] = sum(
@@ -2467,7 +2513,8 @@ class FirebaseSync:
                             tienda.append((firebase_id,
                                            float(payload_conj['conjunto_total']),
                                            payload_conj.get('conjunto_colores'),
-                                           float(row.get('conjunto_contenido') or 0)))
+                                           float(row.get('conjunto_contenido') or 0),
+                                           ajustes_tienda))
                         updated += 1
                         continue
 
@@ -2554,8 +2601,10 @@ class FirebaseSync:
         ofrecía lo que ya no había.
 
         Cada cambio es `(firebase_id, stock)` y, cuando el producto tiene
-        colores, además `(colores, contenido_del_pack)` para poder actualizar
-        cada variedad.
+        colores, además `(colores, contenido_del_pack, ajustes_del_panel)`
+        para poder actualizar cada variedad. `ajustes_del_panel` es el
+        `tienda_variedades` del catálogo: sin él no se sabe con qué nombre
+        salió publicado un color renombrado a mano.
 
         Lo que se hace con cada uno es exactamente lo que decide el sync en
         `se_publica()` y el panel en `motivoDeNoPublicar()`:
@@ -2589,6 +2638,7 @@ class FirebaseSync:
             stock = cambio[1]
             colores = cambio[2] if len(cambio) > 2 else None
             contenido = cambio[3] if len(cambio) > 3 else 0
+            ajustes = cambio[4] if len(cambio) > 4 else None
 
             anotado = self._fuera_de_la_tienda.get(firebase_id)
             if anotado is not None and (ahora - anotado) < vence:
@@ -2605,11 +2655,14 @@ class FirebaseSync:
                 self._fuera_de_la_tienda.pop(firebase_id, None)
 
                 variedades = variedades_con_stock_nuevo(
-                    publicado.get('variedades'), colores, contenido)
+                    publicado.get('variedades'), colores, contenido, ajustes)
                 if variedades is not None:
                     # Con colores, el total es la suma de lo que se ofrece: las
                     # variedades escondidas desde el panel no están en la lista
-                    # publicada y tampoco tienen que estar en el total.
+                    # publicada y tampoco tienen que estar en el total. Los dos
+                    # números salen de la misma lista a propósito: un total que
+                    # no da la suma de los colores le muestra al cliente un
+                    # disponible que después, al elegir el color, no está.
                     total = sum(entero_de_tienda(v.get('stock'))
                                 for v in variedades if isinstance(v, dict))
                 else:
