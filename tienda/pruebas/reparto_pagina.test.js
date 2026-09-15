@@ -9,6 +9,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { iniciarReparto } from '../src/reparto/app.js';
+import { diaArgentina } from '../src/reparto.js';
 
 const LOCAL = { lat: -31.354, lng: -64.173 };
 const CLAVE = 'k'.repeat(40);
@@ -37,6 +38,8 @@ function dependencias() {
     permiso: 'granted',
     mapas: [],
     cerrada: 0,
+    historial: [],
+    historialFalla: null,
   };
   return {
     sesion: {
@@ -54,6 +57,11 @@ function dependencias() {
             mio.escuchas++;
             return () => { mio.cerrada++; };
           },
+          historial: vi.fn(async (dias) => {
+            mundo.pedidosHistorial = [...(mundo.pedidosHistorial || []), dias];
+            if (mundo.historialFalla) throw mundo.historialFalla;
+            return mundo.historial.filter(p => dias.includes(p.entregado_dia));
+          }),
         };
       }),
     },
@@ -240,6 +248,16 @@ describe('las listas', () => {
     expect($('[data-resumen]').textContent).toContain('$3.000');
   });
 
+  it('en la lista la etiqueta es corta: el nombre del cliente es lo que tiene que entrar', async () => {
+    await abrir();
+    // "a" queda al lado del local: es la tarjeta grande, y "b" y "c" van a la lista.
+    const cerca = { modo: 'delivery', direccion: 'Cerca 1', coordenadas: { lat: -31.355, lng: -64.174 } };
+    llegan({ enCurso: [pedido('a', { entrega: cerca }), pedido('b'), pedido('c', { estado: 'en_camino' })] });
+    await respirar();
+    const etiquetas = $$('.parada .reparto-estado').map(n => n.textContent.trim()).sort();
+    expect(etiquetas).toEqual(['En camino', 'Listo']);
+  });
+
   it('lo que llega de la base aparece solo, y un pedido abierto sigue abierto', async () => {
     await abrir();
     llegan({ enCurso: [pedido('a'), pedido('b')] });
@@ -252,6 +270,9 @@ describe('las listas', () => {
     expect($$('[data-parada]')).toHaveLength(3);
     expect($('[data-parada="b"]').classList.contains('parada--abierta')).toBe(true);
     expect($('[data-parada="b"]').textContent).toContain('Resma A4');
+    // Abierta, la dirección completa se lee en el detalle.
+    expect($('[data-parada="b"] .parada__detalle .reparto-direccion').textContent).toBe('Calle b 100');
+    expect($('[data-parada="b"] .parada__detalle').textContent).toContain('timbre B');
   });
 
   it('al irse se cortan las escuchas', async () => {
@@ -286,14 +307,18 @@ describe('la escucha en vivo', () => {
     mundo.falla({ code: 'unavailable' });
     // Las dos consultas avisan del mismo corte: se reconecta una sola vez.
     mundo.falla({ code: 'unavailable' });
-    expect($('[data-vivo]').classList.contains('reparto-vivo--cortado')).toBe(true);
+    // Se dice debajo de la barra, no adentro: en un celular angosto no entra al lado del logo.
+    expect($('[data-conexion]').hidden).toBe(false);
+    expect($('[data-conexion]').textContent).toMatch(/Se cortó la conexión/);
+    expect($('[data-vivo]').hidden).toBe(true);
     expect(mundo.cerrada).toBe(1);
 
     await vi.advanceTimersByTimeAsync(10_000);
     expect(mundo.escuchas).toBe(2);
     llegan({ enCurso: [pedido('a'), pedido('b')] });
     await vi.advanceTimersByTimeAsync(0);
-    expect($('[data-vivo]').classList.contains('reparto-vivo--cortado')).toBe(false);
+    expect($('[data-conexion]').hidden).toBe(true);
+    expect($('[data-vivo]').hidden).toBe(false);
     expect($$('[data-parada]')).toHaveLength(2);
   });
 
@@ -485,5 +510,105 @@ describe('entregar', () => {
     expect($('[data-hoja-entrega]')).toBeTruthy();
     expect($('[data-hoja-entrega]').textContent).toMatch(/No se pudo/);
     expect(deps.mover).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('el historial', () => {
+  const hoy = diaArgentina();
+  const diaAnterior = (n) => diaArgentina(new Date(Date.now() - n * 86_400_000));
+  const entregado = (id, dia, extra = {}) => pedido(id, {
+    estado: 'entregado', entregado_dia: dia, entregado_en: `${dia}T15:00:00Z`, envio: 1800, total: 6000,
+    pago: { modo: 'transferencia', pagado: true }, ...extra,
+  });
+
+  async function alHistorial() {
+    await abrir();
+    llegan({ enCurso: [pedido('a')], entregadosHoy: [entregado('h1', hoy, { envio: 2600 })] });
+    await respirar();
+    $('[data-vista="historial"]').click();
+    await respirar();
+  }
+
+  it('la pestaña muestra lo entregado en los últimos 7 días y la plata de los envíos', async () => {
+    mundo = null;
+    const deps = dependencias();
+    mundo.historial = [entregado('v1', diaAnterior(1)), entregado('v2', diaAnterior(3), { envio: 0, entrega: { modo: 'delivery', envio_gratis: true } })];
+    raiz = document.createElement('div');
+    document.body.appendChild(raiz);
+    await iniciarReparto(raiz, deps);
+    await respirar();
+    llegan({ enCurso: [pedido('a')], entregadosHoy: [entregado('h1', hoy, { envio: 2600 })] });
+    await respirar();
+
+    $('[data-vista="historial"]').click();
+    await respirar();
+    // Se pregunta por los 6 días anteriores: hoy ya llega en vivo.
+    expect(mundo.pedidosHistorial).toHaveLength(1);
+    expect(mundo.pedidosHistorial[0]).toHaveLength(6);
+    expect(mundo.pedidosHistorial[0]).not.toContain(hoy);
+
+    const historial = $('[data-historial]');
+    expect(historial.hidden).toBe(false);
+    expect($('[data-pantalla-reparto]').hidden).toBe(true);
+    expect($('[data-periodo="semana"]').getAttribute('aria-pressed')).toBe('true');
+    expect(historial.querySelector('.reparto-total__monto').textContent).toBe('$4.400');
+    expect(historial.textContent).toMatch(/3\s*pedidos entregados/);
+    expect(historial.textContent).toMatch(/1 con envío gratis/);
+    expect($$('[data-historial] .reparto-dia').map(d => d.querySelector('.reparto-dia__titulo span').textContent)).toEqual(['Hoy', 'Ayer', expect.any(String)]);
+    expect(historial.textContent).toContain('Gratis');
+  });
+
+  it('hoy no consulta: usa lo que llega en vivo, y se actualiza solo', async () => {
+    await alHistorial();
+    $('[data-periodo="hoy"]').click();
+    await respirar();
+    expect(mundo.pedidosHistorial).toHaveLength(1); // solo la de "7 días" al abrir
+    expect($('.reparto-total__monto').textContent).toBe('$2.600');
+
+    llegan({ enCurso: [], entregadosHoy: [entregado('h1', hoy, { envio: 2600 }), entregado('h2', hoy)] });
+    await respirar();
+    expect($('.reparto-total__monto').textContent).toBe('$4.400');
+  });
+
+  it('otro período vuelve a consultar con sus días', async () => {
+    await alHistorial();
+    $('[data-periodo="mes_pasado"]').click();
+    await respirar();
+    const dias = mundo.pedidosHistorial.at(-1);
+    expect(dias.length).toBeGreaterThanOrEqual(28);
+    expect(dias).not.toContain(hoy);
+    expect($('[data-periodo="mes_pasado"]').getAttribute('aria-pressed')).toBe('true');
+    expect($('[data-historial]').textContent).toMatch(/No hubo entregas/);
+  });
+
+  it('si la consulta falla, lo dice y deja reintentar', async () => {
+    mundo = null;
+    const deps = dependencias();
+    mundo.historialFalla = new Error('sin red');
+    raiz = document.createElement('div');
+    document.body.appendChild(raiz);
+    await iniciarReparto(raiz, deps);
+    await respirar();
+    llegan({ enCurso: [pedido('a')] });
+    await respirar();
+    $('[data-vista="historial"]').click();
+    await respirar();
+    expect($('[data-historial]').textContent).toMatch(/No pudimos traer el historial/);
+
+    mundo.historialFalla = null;
+    mundo.historial = [entregado('v1', diaAnterior(2))];
+    $('[data-reintentar-historial]').click();
+    await respirar();
+    expect($('.reparto-total__monto').textContent).toBe('$1.800');
+  });
+
+  it('volver a Pedidos deja la pantalla de siempre', async () => {
+    await alHistorial();
+    $('[data-vista="reparto"]').click();
+    await respirar();
+    expect($('[data-historial]').hidden).toBe(true);
+    expect($('[data-pantalla-reparto]').hidden).toBe(false);
+    expect($('[data-vista="reparto"]').getAttribute('aria-selected')).toBe('true');
+    expect($('[data-proxima]')).toBeTruthy();
   });
 });

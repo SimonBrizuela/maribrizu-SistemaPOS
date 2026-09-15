@@ -7,6 +7,10 @@ import { icono } from '../iconos.js';
 import { whatsappDeTelefono } from '../telefono.js';
 import { ETIQUETAS, siguientePaso, cobroDe, enlaceNavegar, enlaceRuta, resumenDelDia } from '../reparto.js';
 
+// En la lista "Después" todo está para llevar: con "Listo" alcanza, y el lugar
+// que sobra es para el nombre del cliente.
+const ETIQUETAS_LISTA = { listo: 'Listo' };
+
 /* ── Pantallas enteras ────────────────────────────────────────────────────── */
 
 export function pantallaAviso({ titulo, texto, reintentar = false }) {
@@ -37,6 +41,9 @@ export function armazon() {
         <span class="reparto-barra__titulo">Reparto</span>
       </div>
       <span class="reparto-vivo" data-vivo><i aria-hidden="true"></i>En vivo</span>
+      <p class="reparto-conexion" data-conexion role="status" hidden>
+        ${icono('atencion', { tam: 16 })}<span>Se cortó la conexión. Reconectando, lo que ves puede no estar al día.</span>
+      </p>
     </header>
     <div class="reparto-resumen" data-resumen></div>
     <main class="reparto-cuerpo">
@@ -185,11 +192,11 @@ function parada({ pedido, km }, numero, { moviendo, abiertos }) {
         </span>
         <span class="parada__lado">
           ${km !== null && km !== undefined ? `<span class="parada__km">${distancia(km)}</span>` : ''}
-          <span class="reparto-estado reparto-estado--${esc(pedido.estado)}">${esc(ETIQUETAS[pedido.estado] || '')}</span>
+          <span class="reparto-estado reparto-estado--${esc(pedido.estado)}">${esc(ETIQUETAS_LISTA[pedido.estado] || ETIQUETAS[pedido.estado] || '')}</span>
         </span>
       </button>
       <div class="parada__detalle">
-        ${pedido.entrega?.referencia ? `<p class="reparto-referencia">${esc(pedido.entrega.referencia)}</p>` : ''}
+        ${direccion(pedido)}
         <div class="parada__fila">
           <span class="reparto-codigo">${esc(pedido.codigo || '')}</span>
           ${chipCobro(pedido)}

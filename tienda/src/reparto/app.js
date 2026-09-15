@@ -164,6 +164,13 @@ export async function iniciarReparto(raiz, dependencias) {
     estado.cortar = estado.abierta.escuchar(alLlegarDatos, alCortarseEscucha);
   }
 
+  function marcarConexion(conectada) {
+    const vivo = zona('vivo');
+    const aviso = zona('conexion');
+    if (vivo) vivo.hidden = !conectada;
+    if (aviso) aviso.hidden = conectada;
+  }
+
   function buscarPedido(id) {
     return estado.enCurso.find(p => p.id === id) || estado.entregadosHoy.find(p => p.id === id) || null;
   }
@@ -173,7 +180,7 @@ export async function iniciarReparto(raiz, dependencias) {
     estado.entregadosHoy = entregadosHoy;
     estado.recibido = true;
     estado.reconexion.intento = 0;
-    zona('vivo')?.classList.remove('reparto-vivo--cortado');
+    marcarConexion(true);
     // Lo que la base ya muestra hecho no espera la respuesta de la función, que
     // contesta recién después de avisarle al cliente.
     for (const [id, espera] of estado.esperas) {
@@ -189,7 +196,7 @@ export async function iniciarReparto(raiz, dependencias) {
     if (err?.code === 'permission-denied') { linkVencido(); return; }
     // Las dos consultas avisan del mismo corte: se reprograma una sola vez.
     if (estado.reconexion.temporizador) return;
-    zona('vivo')?.classList.add('reparto-vivo--cortado');
+    marcarConexion(false);
     estado.cortar?.();
     estado.cortar = null;
     const { intento } = estado.reconexion;
