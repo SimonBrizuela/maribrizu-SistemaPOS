@@ -19,6 +19,7 @@ import { reflejarSiPublicado } from '../tienda_espejo.js';
 import { enlaceAviso, whatsappDe } from '../avisos_pedido.js';
 import { imprimirPedido } from '../ticket_pedido.js';
 import { leerDocRapido } from '../config.js';
+import { avisarAlCliente } from '../avisos_cliente.js';
 // Los botones de esta pantalla son los mismos que los de las otras dos de la
 // sección. Sin esta línea salían sin estilo: la hoja la importaban solo el
 // catálogo y la configuración, y entrar directo a Pedidos no la cargaba nunca.
@@ -248,6 +249,8 @@ async function cambiarEstado(id, estado) {
     refrescarPedido(id, resultado.pedido);
     return false;
   }
+  // La notificación al celular del cliente, sin esperarla.
+  avisarAlCliente(id);
   return true;
 }
 
@@ -311,6 +314,7 @@ async function entregarPedido(id) {
     refrescarPedido(id, resultado.pedido);
     return false;
   }
+  avisarAlCliente(id);
   if (resultado.yaEstaba) return true;
 
   const { pedido, plan, catalogo } = resultado;

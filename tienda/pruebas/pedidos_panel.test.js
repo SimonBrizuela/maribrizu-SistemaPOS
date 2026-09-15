@@ -300,3 +300,48 @@ describe('al irse de la pantalla', () => {
     expect(marcadosVistos()).toEqual(['k2']);
   });
 });
+
+describe('el aviso al celular del cliente', () => {
+  // Cada vez que el local mueve el pedido, el panel le pide a la tienda que
+  // mande la notificación. Va sin esperar respuesta: si la tienda no contesta,
+  // el cambio de estado ya está hecho y el local sigue trabajando.
+  const avisos = () => fetch.mock.calls
+    .filter(([url]) => String(url).endsWith('/.netlify/functions/avisar-estado'))
+    .map(([url, op]) => ({ url: String(url), cuerpo: JSON.parse(op.body) }));
+
+  it('al avanzar un pedido se le avisa a la tienda, con el id y nada más', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) })));
+    preparar({ tarjeta: { estado: 'nuevo' }, base: { estado: 'nuevo' } });
+    await montar();
+    await tocar('[data-act="avanzar"]');
+
+    expect(datos.base['tienda_pedidos/k1'].estado).toBe('preparando');
+    expect(avisos()).toEqual([{ url: expect.stringMatching(/^https?:\/\//), cuerpo: { id: 'k1' } }]);
+  });
+
+  it('entregar también avisa', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) })));
+    preparar({ tarjeta: { estado: 'listo' }, base: { estado: 'listo' } });
+    await montar();
+    await tocar('[data-act="avanzar"]');
+    expect(avisos().map(a => a.cuerpo.id)).toEqual(['k1']);
+  });
+
+  it('si la tienda no contesta, el pedido queda movido y no salta ningún error', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => { throw new Error('sin red'); }));
+    preparar({ tarjeta: { estado: 'nuevo' }, base: { estado: 'nuevo' } });
+    await montar();
+    await tocar('[data-act="avanzar"]');
+    expect(datos.base['tienda_pedidos/k1'].estado).toBe('preparando');
+    expect(alert).not.toHaveBeenCalled();
+  });
+
+  it('un cambio que no se hizo no avisa', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, status: 200, json: async () => ({}) })));
+    preparar({ tarjeta: { estado: 'nuevo' }, base: { estado: 'cancelado' } });
+    await montar();
+    await tocar('[data-act="avanzar"]');
+    expect(avisos()).toEqual([]);
+  });
+});
+
