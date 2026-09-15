@@ -1216,6 +1216,46 @@
 /* ── Guardá el enlace del pedido ──────────────────────────────────────────
    La lista de "Mis pedidos" sale de este navegador, así que el enlace es la
    única llave que abre el pedido desde otro aparato. */
+/* Los avisos al celular, justo debajo del bloque negro: es lo primero que sirve
+   decidir recién confirmado el pedido. Una tarjeta tranquila con un solo botón;
+   activados, queda una línea que lo confirma. */
+.pedido-avisos {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: var(--e-3) var(--e-4);
+  margin: var(--e-5) 0 0;
+  padding: var(--e-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.pedido-avisos__icono {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-full);
+  background: var(--liceo-violeta-bg, var(--surface-2));
+  color: var(--primary-txt, var(--primary));
+}
+.pedido-avisos__cuerpo { flex: 1 1 220px; min-width: 0; }
+.pedido-avisos__titulo { margin: 0; font-weight: 700; font-size: var(--t-base); }
+.pedido-avisos__texto { margin: 2px 0 0; color: var(--text-2); font-size: var(--t-sm); }
+.pedido-avisos__texto--mal { color: var(--error); }
+.pedido-avisos .boton { flex: none; }
+.pedido-avisos--activos {
+  gap: var(--e-2);
+  padding: var(--e-3) var(--e-4);
+  color: var(--exito);
+  font-size: var(--t-sm);
+  font-weight: 600;
+  background: var(--exito-bg);
+  border-color: transparent;
+}
+.pedido-avisos--activos svg { flex: none; }
+
 .pedido__guardar {
   display: flex;
   flex-direction: column;

@@ -27,12 +27,17 @@ import { montarMapa } from '../mapa.js';
 import { seguirPedido, pasosDe, indiceDeEstado } from '../pedidos.js';
 import { describirPack } from '../carrito.js';
 import { avisar } from '../avisos.js';
+import { soporteDeAvisos, permisoDado, avisosActivos, activarAvisos } from '../avisos_push.js';
 
 // Viven fuera de la funcion a proposito: al navegar a otra pantalla el nodo se
 // reemplaza pero la suscripcion y el mapa seguirian vivos, escuchando y
 // midiendo una pagina que ya no existe.
 let cortarSeguimiento = null;
 let soltarMapa = null;
+// Cómo van los avisos al celular de este pedido. Vive afuera de `pintar`
+// porque la pantalla se rearma entera con cada cambio de estado del pedido y lo
+// que el cliente ya tocó no se puede perder.
+let avisos = { pedido: null, estado: 'inicio' };
 
 export async function pedido({ montar, params }) {
   cortarSeguimiento?.();
@@ -41,6 +46,8 @@ export async function pedido({ montar, params }) {
   soltarMapa = null;
 
   const cfg = configEnCache() || await cargarConfig();
+  avisos = { pedido: params.id, estado: avisosActivos(params.id) ? 'activos' : 'inicio' };
+  let ultimo = null;
 
   // Se pinta el armazón antes de tener el pedido. Antes esta pantalla hacía dos
   // viajes a la red en fila —una lectura suelta y después la suscripción, que
@@ -52,9 +59,10 @@ export async function pedido({ montar, params }) {
   const caja = document.querySelector('[data-pedido]');
 
   function pintar(p) {
+    ultimo = p;
     soltarMapa?.();
     soltarMapa = null;
-    caja.innerHTML = contenido(p, cfg);
+    caja.innerHTML = contenido(p, cfg, avisos);
 
     // El mapa se monta despues de tener el nodo en el documento: necesita
     // medirlo para saber que area pedirle a Google.
@@ -120,6 +128,24 @@ export async function pedido({ montar, params }) {
       decir(err?.message || 'No se pudo enviar. Probá de nuevo.', true);
       if (boton) boton.disabled = false;
     }
+  });
+
+  /* ── Avisos al celular ──────────────────────────────────────────────────
+     El permiso se pide recién acá, con el toque del cliente: si se pide solo y
+     dice que no, el navegador no deja volver a preguntar. */
+  async function activar({ preguntar }) {
+    avisos = { ...avisos, estado: 'activando' };
+    if (ultimo && preguntar) pintar(ultimo);
+    const resultado = await activarAvisos(params.id, { preguntar });
+    if (avisos.pedido !== params.id) return;   // se fue a otro pedido
+    // La activación sola que no pudo (sin permiso) vuelve a ofrecer el botón.
+    avisos = { ...avisos, estado: !preguntar && resultado === 'rechazado' ? 'inicio' : resultado };
+    if (ultimo && document.contains(caja)) pintar(ultimo);
+  }
+
+  caja.addEventListener('click', ev => {
+    if (!ev.target.closest('[data-activar-avisos]') || avisos.estado === 'activando') return;
+    activar({ preguntar: true });
   });
 
   // La miniatura del comprobante abre el visor, sin salir de la página.
@@ -189,7 +215,14 @@ export async function pedido({ montar, params }) {
     }
     if (actualizado) {
       document.title = `Pedido ${actualizado.codigo || ''} · Librería Liceo`;
+      const primera = !ultimo;
       pintar(actualizado);
+      // Quien ya dio el permiso en otro pedido no tiene por qué tocar nada: se
+      // anota este celular solo, sin preguntar.
+      if (primera && avisos.estado === 'inicio' && !TERMINADOS.has(actualizado.estado)
+          && soporteDeAvisos() === 'ok' && permisoDado()) {
+        activar({ preguntar: false });
+      }
     } else {
       pintarPerdido();
     }
@@ -230,7 +263,56 @@ function esqueleto() {
 
 /* ── Pantalla ─────────────────────────────────────────────────────────────── */
 
-function contenido(p, cfg) {
+const TERMINADOS = new Set(['entregado', 'cancelado']);
+
+/**
+ * El cartel de los avisos al celular.
+ *
+ * Aparece solo donde sirve: con el pedido en curso y en un navegador que puede
+ * recibirlos. En iPhone los avisos web andan únicamente con la tienda agregada
+ * a la pantalla de inicio, así que ahí se explica cómo en vez de ofrecer un
+ * botón que no haría nada. Si el cliente dijo que no, no se insiste.
+ */
+function bloqueAvisos(p, avisos) {
+  if (TERMINADOS.has(p.estado)) return '';
+  if (avisos.estado === 'activos') {
+    return `
+      <p class="pedido-avisos pedido-avisos--activos" data-avisos role="status">
+        ${icono('campana', { tam: 17 })}
+        <span>Te avisamos en este celular cada vez que cambie tu pedido.</span>
+      </p>`;
+  }
+  const soporte = soporteDeAvisos();
+  if (soporte === 'iphone_sin_instalar') {
+    return `
+      <div class="pedido-avisos" data-avisos>
+        <span class="pedido-avisos__icono">${icono('campana', { tam: 20 })}</span>
+        <div class="pedido-avisos__cuerpo">
+          <p class="pedido-avisos__titulo">Avisos en tu iPhone</p>
+          <p class="pedido-avisos__texto">Tocá Compartir, elegí "Agregar a inicio" y abrí la tienda
+            desde ese ícono: así te avisamos cuando cambie tu pedido.</p>
+        </div>
+      </div>`;
+  }
+  if (soporte !== 'ok' || ['rechazado', 'no_disponible', 'sin_soporte'].includes(avisos.estado)) return '';
+
+  const activando = avisos.estado === 'activando';
+  return `
+    <div class="pedido-avisos" data-avisos>
+      <span class="pedido-avisos__icono">${icono('campana', { tam: 20 })}</span>
+      <div class="pedido-avisos__cuerpo">
+        <p class="pedido-avisos__titulo">¿Te avisamos cuando cambie tu pedido?</p>
+        <p class="pedido-avisos__texto${avisos.estado === 'error' ? ' pedido-avisos__texto--mal' : ''}">${
+          avisos.estado === 'error'
+            ? 'No se pudieron activar. Probá de nuevo.'
+            : 'Te llega una notificación al celular aunque cierres esta página.'}</p>
+      </div>
+      <button type="button" class="boton boton--primario boton--chico${activando ? ' boton--cargando' : ''}"
+              data-activar-avisos ${activando ? 'disabled' : ''}>Activar avisos</button>
+    </div>`;
+}
+
+function contenido(p, cfg, avisos = { estado: 'inicio' }) {
   const modo = p.entrega?.modo || 'retiro';
   const cancelado = p.estado === 'cancelado';
 
@@ -240,6 +322,7 @@ function contenido(p, cfg) {
   return `
     <div class="pedido">
       ${encabezado(p, cfg, { modo, cancelado })}
+      ${bloqueAvisos(p, avisos)}
 
       <!-- Tres hermanos y no dos columnas con cosas adentro: en el celular se
            apilan en un orden distinto del que tienen en escritorio, y eso solo

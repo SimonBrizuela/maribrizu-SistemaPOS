@@ -18,7 +18,9 @@ const { datos } = vi.hoisted(() => ({
   // `paginar`: traerProductos devuelve de a `cantidad`, con cursor, como la base.
   // `tandas` cuenta los pedidos y `fallarTanda` hace fallar el próximo con cursor.
   datos: { productos: [], rubros: [], config: null, avisos: [], pedidos: {}, vacio: false,
-           paginar: false, tandas: [], fallarTanda: false },
+           paginar: false, tandas: [], fallarTanda: false,
+           // Los avisos al celular: qué soporta el navegador y qué contesta activarlos.
+           avisos: { soporte: 'ok', permiso: 'default', activos: [], resultado: 'activos', llamadas: [] } },
 }));
 
 vi.mock('firebase/firestore', async () =>
@@ -81,6 +83,16 @@ vi.mock('../src/cuenta.js', () => ({
   recordarDelPedido: async () => {},
 }));
 vi.mock('../src/mapa.js', () => ({ montarMapa: () => {} }));
+vi.mock('../src/avisos_push.js', () => ({
+  soporteDeAvisos: () => datos.avisos.soporte,
+  permisoDado: () => datos.avisos.permiso === 'granted',
+  avisosActivos: (id) => datos.avisos.activos.includes(id),
+  activarAvisos: async (id, opciones = {}) => {
+    datos.avisos.llamadas.push({ id, preguntar: opciones.preguntar !== false });
+    if (datos.avisos.resultado === 'activos') datos.avisos.activos.push(id);
+    return datos.avisos.resultado;
+  },
+}));
 vi.mock('../src/direcciones.js', () => ({ montarDirecciones: () => {} }));
 
 const CONFIG = {
@@ -138,6 +150,7 @@ beforeEach(() => {
   datos.pedidos = {};
   datos.vacio = false;
   datos.paginar = false;
+  datos.avisos = { soporte: 'ok', permiso: 'default', activos: [], resultado: 'activos', llamadas: [] };
   datos.tandas = [];
   datos.fallarTanda = false;
   globalThis.fetch = vi.fn(() => Promise.resolve({ ok: true, json: async () => ({}) }));
@@ -454,6 +467,93 @@ describe('el pedido confirmado', () => {
     expect(c.textContent.toLowerCase()).toMatch(/no (lo )?encontr|no existe/);
   });
 
+  describe('los avisos al celular', () => {
+    // Que le llegue al celular cada vez que el local mueve el pedido, aunque
+    // haya cerrado la página. El permiso se pide solo si toca el botón: si se
+    // pide solo y dice que no, el navegador no deja volver a preguntar.
+    const respirar = async () => { for (let i = 0; i < 10; i++) await esperar(); };
+    const boton = () => document.querySelector('[data-activar-avisos]');
+
+    it('en un pedido en curso ofrece activarlos, sin preguntar nada todavía', async () => {
+      const c = await abrir('pedido', { params: { id: 'k1' } });
+      expect(boton()).toBeTruthy();
+      expect(c.querySelector('[data-avisos]').textContent).toMatch(/avis/i);
+      expect(datos.avisos.llamadas).toEqual([]);
+    });
+
+    it('tocar el botón los activa y lo confirma', async () => {
+      await abrir('pedido', { params: { id: 'k1' } });
+      boton().click();
+      await respirar();
+      expect(datos.avisos.llamadas).toEqual([{ id: 'k1', preguntar: true }]);
+      expect(boton()).toBeNull();
+      expect(document.querySelector('[data-avisos]').textContent).toMatch(/Te avisamos en este celular/);
+    });
+
+    it('con el permiso ya dado en otro pedido se activan solos, sin preguntar', async () => {
+      datos.avisos.permiso = 'granted';
+      await abrir('pedido', { params: { id: 'k1' } });
+      await respirar();
+      expect(datos.avisos.llamadas).toEqual([{ id: 'k1', preguntar: false }]);
+      expect(boton()).toBeNull();
+    });
+
+    it('si ya estaban activos no lo vuelve a anotar', async () => {
+      datos.avisos.activos = ['k1'];
+      datos.avisos.permiso = 'granted';
+      await abrir('pedido', { params: { id: 'k1' } });
+      await respirar();
+      expect(datos.avisos.llamadas).toEqual([]);
+      expect(document.querySelector('[data-avisos]').textContent).toMatch(/Te avisamos en este celular/);
+    });
+
+    it('en iPhone sin la tienda instalada explica cómo, sin un botón que no haría nada', async () => {
+      datos.avisos.soporte = 'iphone_sin_instalar';
+      await abrir('pedido', { params: { id: 'k1' } });
+      expect(boton()).toBeNull();
+      expect(document.querySelector('[data-avisos]').textContent).toMatch(/Agregar a inicio/);
+    });
+
+    it('sin soporte o con el permiso bloqueado no muestra nada', async () => {
+      for (const soporte of ['sin_soporte', 'bloqueado']) {
+        datos.avisos.soporte = soporte;
+        await abrir('pedido', { params: { id: 'k1' } });
+        expect(document.querySelector('[data-avisos]')).toBeNull();
+        document.body.innerHTML = '';
+      }
+    });
+
+    it('un pedido terminado no ofrece avisos', async () => {
+      datos.pedidos.k1.estado = 'entregado';
+      await abrir('pedido', { params: { id: 'k1' } });
+      expect(document.querySelector('[data-avisos]')).toBeNull();
+    });
+
+    it('si falla lo dice y deja volver a probar', async () => {
+      datos.avisos.resultado = 'error';
+      await abrir('pedido', { params: { id: 'k1' } });
+      boton().click();
+      await respirar();
+      expect(boton()).toBeTruthy();
+      expect(document.querySelector('[data-avisos]').textContent).toMatch(/No se pudieron activar/);
+    });
+
+    it('si el cliente dice que no, no se le vuelve a insistir', async () => {
+      datos.avisos.resultado = 'rechazado';
+      await abrir('pedido', { params: { id: 'k1' } });
+      boton().click();
+      await respirar();
+      expect(document.querySelector('[data-avisos]')).toBeNull();
+    });
+
+    it('con la función apagada desaparece sin dejar un botón muerto', async () => {
+      datos.avisos.resultado = 'no_disponible';
+      await abrir('pedido', { params: { id: 'k1' } });
+      boton().click();
+      await respirar();
+      expect(document.querySelector('[data-avisos]')).toBeNull();
+    });
+  });
 });
 
 describe('la cuenta', () => {

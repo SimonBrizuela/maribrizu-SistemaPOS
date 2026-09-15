@@ -109,6 +109,18 @@ def main():
                 pag.wait_for_timeout(150)
                 pag.screenshot(path=str(archivo), type='png')
                 print(f'{archivo.name:28} {archivo.stat().st_size // 1024} KB')
+
+        # La insignia de la barra de estado de Android: blanca sobre transparente,
+        # que el sistema la pinta con su color. Es la bolsa de los iconos de la tienda.
+        insignia = SALIDA / 'insignia.png'
+        pag.set_viewport_size({'width': 96, 'height': 96})
+        pag.set_content('''<html><body style="margin:0;background:transparent">
+          <svg width="96" height="96" viewBox="0 0 24 24" fill="none" stroke="#fff" stroke-width="2.4"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M5 12h14"/><path d="M5 12a7 7 0 0 1 14 0"/>
+            <path d="M7 12v6a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-6"/></svg></body></html>''')
+        pag.screenshot(path=str(insignia), type='png', omit_background=True)
+        print(f'{insignia.name:28} {insignia.stat().st_size // 1024} KB')
         nav.close()
 
 
