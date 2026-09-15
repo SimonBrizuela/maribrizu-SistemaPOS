@@ -21,6 +21,7 @@ import { collection, doc, getDocs, orderBy, query } from 'firebase/firestore';
 import { getCached, peekCacheValue, setCacheValue } from '../cache.js';
 import { leerDocRapido } from '../config.js';
 import { alertDialog, confirmDialog, escHtml } from '../components/dialogs.js';
+import { montarLinkReparto } from '../components/link_reparto.js';
 import { espejarLote, recomputarRubros, motivoDeNoPublicar, nombreBonito,
          claveDeRubro, actualizarDoc, reemplazarDoc,
          olvidarPublicacion } from '../tienda_espejo.js';
@@ -581,6 +582,10 @@ export async function renderTiendaAjustes(container, db) {
         <h4 style="margin-top:18px">Cuánto sale el envío</h4>
         <div id="cfgTramos"></div>
         <div class="tienda-pista" id="cfgTramosResumen" style="margin-top:10px;line-height:1.7"></div>
+
+        <h4 style="margin-top:18px">Repartidor</h4>
+        <!-- Se guarda al tocar, sin pasar por "Guardar": el link cambia en el momento. -->
+        <div id="cfgReparto"></div>
       </section>
 
       <section class="tienda-bloque" style="background:var(--surface);border:1px solid var(--border);
@@ -642,6 +647,7 @@ export async function renderTiendaAjustes(container, db) {
   pintarTramos();
   pintarHorarios();
   pintarRubros();
+  montarLinkReparto(document.getElementById('cfgReparto'), db);
 
   /* ── Eventos ── */
   const $ = sel => container.querySelector(sel);

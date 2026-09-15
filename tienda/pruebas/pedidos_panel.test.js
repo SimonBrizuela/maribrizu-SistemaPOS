@@ -47,7 +47,8 @@ vi.mock('firebase/firestore', async () => {
       const escucha = {
         nombre, activa: true,
         avisar() {
-          const lista = nombre === 'tienda_pedidos' ? datos.lista : [];
+          const lista = nombre === 'tienda_pedidos' ? datos.lista
+            : nombre === 'tienda_entregas' ? (datos.entregas || []) : [];
           cb({
             ...vacio, empty: !lista.length, size: lista.length,
             docs: lista.map(d => ({ id: d.__id, data: () => d, exists: () => true })),
@@ -109,6 +110,7 @@ beforeEach(() => {
   datos.lista = [];
   datos.escrituras.length = 0;
   datos.escuchas = [];
+  datos.entregas = [];
   datos.fallar = false;
   window.__limpiarPagina = null;
   vi.stubGlobal('alert', vi.fn());
@@ -220,6 +222,39 @@ describe('si la escritura falla', () => {
   });
 });
 
+describe('lo que entregó el repartidor', () => {
+  it('la tarjeta dice que lo entregó él, si cobró, que la venta se está registrando y tiene la foto', async () => {
+    preparar({
+      tarjeta: { estado: 'entregado', entrega: { modo: 'delivery', direccion: 'Colón 1200' },
+                 entregado_por: 'reparto', venta_pendiente: true, entregado_en: new Date() },
+    });
+    datos.entregas = [{ __id: 'k1', cobrado: true, foto: { url: 'https://firebasestorage.googleapis.com/v0/b/x/o/entregas%2Fk1.jpg?alt=media&token=t' } }];
+    const c = await montar();
+    await tocar('[data-filtro="entregado"]');
+    const ficha = c.querySelector('[data-id="k1"]');
+    expect(ficha.textContent).toContain('Lo entregó el repartidor');
+    expect(ficha.textContent).toContain('cobró en efectivo');
+    expect(ficha.textContent).toContain('Registrando la venta');
+    await tocar('[data-act="foto-entrega"]');
+    expect(document.querySelector('.tienda-foto-zoom img').getAttribute('src')).toContain('entregas%2Fk1.jpg');
+  });
+
+  it('si no cobró el efectivo, se ve', async () => {
+    preparar({ tarjeta: { estado: 'entregado', entregado_por: 'reparto', venta_registrada: true } });
+    datos.entregas = [{ __id: 'k1', cobrado: false, foto: null }];
+    const c = await montar();
+    await tocar('[data-filtro="entregado"]');
+    expect(c.querySelector('[data-id="k1"]').textContent).toContain('no cobró el efectivo');
+  });
+
+  it('un pedido entregado desde el panel no muestra nada de esto', async () => {
+    preparar({ tarjeta: { estado: 'entregado', venta_registrada: true } });
+    const c = await montar();
+    await tocar('[data-filtro="entregado"]');
+    expect(c.querySelector('[data-id="k1"]').textContent).not.toContain('repartidor');
+  });
+});
+
 describe('el teléfono en la tarjeta', () => {
   // Un fijo de Córdoba tiene siete dígitos y `whatsappDe` devuelve null abajo de
   // ocho. Como el número se pintaba adentro del enlace de WhatsApp, la tarjeta
@@ -268,7 +303,7 @@ describe('al irse de la pantalla', () => {
     preparar();
     await montar();
     expect(datos.escuchas.map(e => e.nombre).sort())
-      .toEqual(['tienda_comprobantes', 'tienda_pedidos']);
+      .toEqual(['tienda_comprobantes', 'tienda_entregas', 'tienda_pedidos']);
 
     expect(typeof window.__limpiarPagina).toBe('function');
     window.__limpiarPagina();

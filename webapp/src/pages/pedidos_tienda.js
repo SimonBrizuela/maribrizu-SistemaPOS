@@ -18,6 +18,7 @@ import { enlaceAviso, whatsappDe } from '../avisos_pedido.js';
 import { imprimirPedido } from '../ticket_pedido.js';
 import { leerDocRapido } from '../config.js';
 import { avisarAlCliente } from '../avisos_cliente.js';
+import { verFotoGrande } from '../components/dialogs.js';
 // Los botones de esta pantalla son los mismos que los de las otras dos de la
 // sección. Sin esta línea salían sin estilo: la hoja la importaban solo el
 // catálogo y la configuración, y entrar directo a Pedidos no la cargaba nunca.
@@ -72,12 +73,17 @@ let _config = {};
 // id del pedido -> { url, tipo }. Lo que adjuntaron los clientes.
 let _comprobantes = new Map();
 let _unsubComprobantes = null;
+// id del pedido -> lo que anotó el repartidor al entregarlo (foto, si cobró).
+let _entregas = new Map();
+let _unsubEntregas = null;
 
 function cleanup() {
   _unsub?.();
   _unsub = null;
   _unsubComprobantes?.();
   _unsubComprobantes = null;
+  _unsubEntregas?.();
+  _unsubEntregas = null;
 }
 
 /**
@@ -121,6 +127,46 @@ function escucharComprobantes() {
       pintarLista();
     },
     err => console.warn('[pedidos] comprobantes:', err?.code || err),
+  );
+}
+
+/**
+ * Lo que entregó el repartidor desde su pantalla (`/reparto` en la tienda):
+ * cuándo, si cobró el efectivo, la foto de la entrega y si la venta todavía se
+ * está registrando (la registra el panel solo, ver ventas_pendientes_watcher.js).
+ */
+function bloqueEntregaReparto(p) {
+  const e = _entregas.get(p.id);
+  if (p.entregado_por !== 'reparto' && !e) return '';
+  const cobro = e?.cobrado === true
+    ? ' · cobró en efectivo'
+    : e?.cobrado === false ? ' · <b style="color:#9a5b00">no cobró el efectivo</b>' : '';
+  return `
+    <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px 10px;background:#e8f5e9;color:#1e5a2b;
+                border-radius:8px;padding:8px 11px;font-size:13px">
+      <span class="material-icons" style="font-size:17px">two_wheeler</span>
+      <span><b>Lo entregó el repartidor</b>${p.entregado_en ? ` · ${esc(cuando(p.entregado_en))}` : ''}${cobro}</span>
+      ${p.venta_pendiente === true ? `
+        <span style="background:#fff;color:#9a5b00;font-size:11.5px;font-weight:700;padding:2px 8px;border-radius:99px">
+          Registrando la venta</span>` : ''}
+      ${e?.foto?.url ? `
+        <button type="button" data-act="foto-entrega" data-url="${esc(e.foto.url)}" title="Ver la foto de la entrega"
+                style="margin-left:auto;width:44px;height:44px;padding:0;border:1px solid #b9dcc0;border-radius:6px;overflow:hidden;cursor:zoom-in">
+          <img src="${esc(e.foto.url)}" alt="Foto de la entrega" loading="lazy" style="width:100%;height:100%;object-fit:cover;display:block">
+        </button>` : ''}
+    </div>`;
+}
+
+/** Las entregas del repartidor llegan en vivo, como los comprobantes. */
+function escucharEntregas() {
+  _unsubEntregas?.();
+  _unsubEntregas = onSnapshot(
+    query(collection(_db, 'tienda_entregas'), orderBy('entregado_en', 'desc'), limit(200)),
+    snap => {
+      _entregas = new Map(snap.docs.map(d => [d.id, d.data() || {}]));
+      pintarLista();
+    },
+    err => console.warn('[pedidos] entregas del repartidor:', err?.code || err),
   );
 }
 
@@ -380,6 +426,8 @@ function tarjeta(p) {
           ${esc(p.nota)}
         </div>` : ''}
 
+      ${bloqueEntregaReparto(p)}
+
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:10px">
         <div style="font-size:13px;color:var(--text-muted)">
           Productos ${pesos(p.subtotal)} ·
@@ -470,6 +518,8 @@ export async function renderPedidosTienda(container, db) {
   // aparte del pedido: viven en su propia coleccion para que el cliente no
   // tenga que poder escribir en el documento del pedido.
   escucharComprobantes();
+  // Lo que anotó el repartidor al entregar (foto, cobro), también aparte.
+  escucharEntregas();
 
   // El nombre, la dirección y el teléfono del local van en el encabezado del
   // ticket. Se leen del cache del SDK y se revalidan atrás: si fallan, el ticket
@@ -524,6 +574,11 @@ export async function renderPedidosTienda(container, db) {
     if (!boton) return;
     const id = boton.closest('[data-id]')?.dataset.id;
     if (!id) return;
+
+    if (boton.dataset.act === 'foto-entrega') {
+      verFotoGrande(boton.dataset.url);
+      return;
+    }
 
     if (boton.dataset.act === 'avisar') {
       // El enlace abre WhatsApp solo; acá únicamente se anota que ya se avisó
