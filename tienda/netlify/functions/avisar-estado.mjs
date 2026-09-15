@@ -17,7 +17,7 @@ import {
 } from './lib/firestore.mjs';
 import { mandarAviso } from './lib/mensajes.mjs';
 import { responder } from './lib/cors.mjs';
-import { avisoDeEstado, avisoDeReclamo } from '../../src/avisos_estado.js';
+import { avisoDeEstado, avisoDeReclamo, claveDeReclamo } from '../../src/avisos_estado.js';
 
 const RE_ID = /^[A-Za-z0-9]{15,40}$/;
 
@@ -56,10 +56,11 @@ export default async (peticion) => {
     }
 
     const reclamo = pedido.reclamo;
-    if (reclamo?.estado && reclamo.estado !== suscripcion.reclamo_avisado) {
+    const claveReclamo = claveDeReclamo(reclamo);
+    if (claveReclamo && claveReclamo !== suscripcion.reclamo_avisado) {
       const aviso = avisoDeReclamo(pedido, reclamo);
       if (aviso) pendientes.push(aviso);
-      cambios.reclamo_avisado = reclamo.estado;
+      cambios.reclamo_avisado = claveReclamo;
     }
 
     if (!Object.keys(cambios).length) return responder(peticion, { enviados: 0 });

@@ -101,6 +101,16 @@ export function avisoDeEstado(pedido, { direccionLocal = '' } = {}) {
 }
 
 /**
+ * Con qué se anota un paso del reclamo como ya avisado. Lleva el id además del
+ * estado: un pedido puede tener un segundo reclamo, y si terminara igual que el
+ * primero ("resuelto") no le llegaría nada.
+ */
+export function claveDeReclamo(reclamo) {
+  if (!reclamo?.estado) return null;
+  return `${reclamo.id || ''}:${reclamo.estado}`;
+}
+
+/**
  * La notificación de un reclamo, o null si ese estado no se avisa (recién
  * creado: lo acaba de mandar el cliente). Va con su propia etiqueta, así no
  * reemplaza el aviso del pedido.

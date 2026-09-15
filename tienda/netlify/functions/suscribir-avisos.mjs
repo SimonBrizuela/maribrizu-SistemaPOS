@@ -9,8 +9,13 @@
  *
  * Se guarda el estado que el pedido tiene en este momento como ya avisado: el
  * cliente lo está mirando en la pantalla y no hace falta que le llegue.
+ *
+ * Un pedido terminado ya no se sigue, salvo que tenga un reclamo abierto: la
+ * respuesta del local también le llega al celular.
  */
 import { hayCredenciales, leerDoc, leerDocPrivado, escribirCampos } from './lib/firestore.mjs';
+import { claveDeReclamo } from '../../src/avisos_estado.js';
+import { ABIERTOS } from '../../src/reclamos.js';
 
 const RE_ID = /^[A-Za-z0-9]{15,40}$/;
 // Los tokens de FCM son base64url con dos puntos; con este tope entran de sobra.
@@ -41,7 +46,10 @@ export default async (peticion) => {
   try {
     const pedido = await leerDoc('tienda_pedidos', id);
     if (!pedido) return Response.json({ error: 'no_existe' }, { status: 404 });
-    if (TERMINADOS.has(pedido.estado)) return Response.json({ error: 'terminado' }, { status: 409 });
+    const reclamoAbierto = ABIERTOS.includes(pedido.reclamo?.estado);
+    if (TERMINADOS.has(pedido.estado) && !reclamoAbierto) {
+      return Response.json({ error: 'terminado' }, { status: 409 });
+    }
 
     const anterior = await leerDocPrivado('tienda_avisos', id);
     const tokens = Array.isArray(anterior?.tokens) ? anterior.tokens : [];
@@ -51,7 +59,7 @@ export default async (peticion) => {
     await escribirCampos('tienda_avisos', id, {
       tokens: [...tokens, token].slice(-MAX_DISPOSITIVOS),
       estado_avisado: anterior?.estado_avisado ?? pedido.estado ?? null,
-      reclamo_avisado: anterior?.reclamo_avisado ?? pedido.reclamo?.estado ?? null,
+      reclamo_avisado: anterior?.reclamo_avisado ?? claveDeReclamo(pedido.reclamo),
       creado: anterior?.creado ? new Date(anterior.creado) : ahora,
       actualizado: ahora,
     }, { crear: true });

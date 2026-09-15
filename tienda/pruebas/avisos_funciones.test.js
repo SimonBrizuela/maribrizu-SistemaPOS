@@ -64,6 +64,13 @@ describe('suscribir-avisos', () => {
     expect(g.docs[`tienda_avisos/${ID}`]).toBeUndefined();
   });
 
+  it('un pedido entregado con un reclamo abierto sí: la respuesta del reclamo también llega', async () => {
+    Object.assign(g.docs[`tienda_pedidos/${ID}`], { estado: 'entregado', reclamo: { id: `${ID}-1`, estado: 'nuevo' } });
+    const res = await (await funcion('suscribir-avisos'))(pedir('suscribir-avisos', { pedido: ID, token: TOKEN_A }));
+    expect(res.status).toBe(200);
+    expect(g.docs[`tienda_avisos/${ID}`].reclamo_avisado).toBe(`${ID}-1:nuevo`);
+  });
+
   it('rechaza lo que no tiene forma de id ni de token', async () => {
     const suscribir = await funcion('suscribir-avisos');
     expect((await suscribir(pedir('suscribir-avisos', { pedido: '../config', token: TOKEN_A }))).status).toBe(400);
@@ -148,14 +155,28 @@ describe('avisar-estado', () => {
     suscripto({ estado_avisado: 'entregado' });
     Object.assign(g.docs[`tienda_pedidos/${ID}`], {
       estado: 'entregado',
-      reclamo: { estado: 'resuelto', respuesta: 'Te cambiamos la resma el lunes.' },
+      reclamo: { id: `${ID}-1`, estado: 'resuelto', respuesta: 'Te cambiamos la resma el lunes.' },
     });
     await (await funcion('avisar-estado'))(pedir('avisar-estado', { id: ID }));
 
     expect(g.mensajes).toHaveLength(1);
     expect(g.mensajes[0].data.tag).toBe(`reclamo-${ID}`);
     expect(g.mensajes[0].data.cuerpo).toContain('resma');
-    expect(g.docs[`tienda_avisos/${ID}`].reclamo_avisado).toBe('resuelto');
+    expect(g.docs[`tienda_avisos/${ID}`].reclamo_avisado).toBe(`${ID}-1:resuelto`);
+  });
+
+  it('un segundo reclamo que termina igual que el primero también se avisa', async () => {
+    suscripto({ estado_avisado: 'entregado', reclamo_avisado: `${ID}-1:resuelto` });
+    Object.assign(g.docs[`tienda_pedidos/${ID}`], {
+      estado: 'entregado',
+      reclamo: { id: `${ID}-2`, estado: 'resuelto', respuesta: 'Te devolvimos la diferencia.' },
+    });
+    const avisar = await funcion('avisar-estado');
+    await avisar(pedir('avisar-estado', { id: ID }));
+    await avisar(pedir('avisar-estado', { id: ID }));
+
+    expect(g.mensajes).toHaveLength(1);
+    expect(g.mensajes[0].data.cuerpo).toContain('diferencia');
   });
 
   it('el texto nunca sale del que llama', async () => {

@@ -9,7 +9,7 @@
 import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { avisoDeEstado, avisoDeReclamo, pasosDeAviso, imagenesDeAvisos } from '../src/avisos_estado.js';
+import { avisoDeEstado, avisoDeReclamo, claveDeReclamo, pasosDeAviso, imagenesDeAvisos } from '../src/avisos_estado.js';
 
 const retiro = (estado, extra = {}) => ({
   id: 'abc123', codigo: 'K7M2', estado, entrega: { modo: 'retiro' }, pago: { modo: 'efectivo' }, ...extra,
@@ -113,5 +113,17 @@ describe('avisoDeReclamo', () => {
 
   it('un reclamo recién creado no avisa', () => {
     expect(avisoDeReclamo(pedido, { estado: 'nuevo' })).toBeNull();
+  });
+});
+
+describe('claveDeReclamo', () => {
+  it('junta el reclamo y su estado: dos reclamos en el mismo estado son dos avisos', () => {
+    expect(claveDeReclamo({ id: 'p-1', estado: 'resuelto' })).toBe('p-1:resuelto');
+    expect(claveDeReclamo({ id: 'p-2', estado: 'resuelto' })).not.toBe(claveDeReclamo({ id: 'p-1', estado: 'resuelto' }));
+  });
+
+  it('sin reclamo no hay clave', () => {
+    expect(claveDeReclamo(null)).toBeNull();
+    expect(claveDeReclamo({})).toBeNull();
   });
 });
