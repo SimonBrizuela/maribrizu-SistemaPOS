@@ -25,9 +25,13 @@ export const LIMITES = {
   detalleMin: 10,
   detalleMax: 600,
   fotos: 3,
-  // Ya achicada en el celular (1280 px en WebP): una foto así pesa unos 200 kB.
-  bytesFoto: 1_500_000,
+  // Ya achicada en el celular (1600 px en JPEG): una foto así pesa unos 300 kB.
+  // El tope deja entrar las tres en un solo envío sin pasar el límite de las
+  // funciones de Netlify (6 MB, y en base64 pesan un tercio más).
+  bytesFoto: 1_000_000,
   diasParaReclamar: 30,
+  // Un pedido admite pocos reclamos: más que esto ya es una charla por WhatsApp.
+  reclamosPorPedido: 3,
 };
 
 /** Los que el local todavía tiene que mirar. */
@@ -84,20 +88,23 @@ export function puedeReclamar(pedido, ahora = new Date()) {
 /**
  * Qué le falta a un reclamo para poder mandarse, o null si está completo.
  *
- * @param {{motivo, items, detalle, fotos}} entrada
+ * @param {{motivo, renglones, detalle, fotos}} entrada
  * @returns {{campo: string, mensaje: string}|null}
  */
 export function validarReclamo(entrada, pedido) {
   const motivo = motivosPara(pedido).find(m => m.clave === entrada?.motivo);
   if (!motivo) return { campo: 'motivo', mensaje: 'Elegí qué pasó con el pedido.' };
 
-  const items = Array.isArray(entrada.items) ? entrada.items : [];
-  const delPedido = new Set((pedido?.items || []).map(i => String(i.id)));
-  if (motivo.conProductos && !items.length) {
-    return { campo: 'items', mensaje: 'Marcá con qué producto fue el problema.' };
+  // Los productos van por número de renglón y no por id: el mismo producto
+  // puede venir en dos colores, o suelto y por pack, en el mismo pedido.
+  const renglones = Array.isArray(entrada.renglones) ? entrada.renglones : [];
+  const cantidad = (pedido?.items || []).length;
+  if (motivo.conProductos && !renglones.length) {
+    return { campo: 'renglones', mensaje: 'Marcá con qué producto fue el problema.' };
   }
-  if (items.some(id => !delPedido.has(String(id)))) {
-    return { campo: 'items', mensaje: 'Ese producto no está en este pedido.' };
+  const validos = renglones.every(n => Number.isInteger(n) && n >= 0 && n < cantidad);
+  if (!validos || new Set(renglones).size !== renglones.length) {
+    return { campo: 'renglones', mensaje: 'Ese producto no está en este pedido.' };
   }
 
   const detalle = String(entrada.detalle ?? '').trim();

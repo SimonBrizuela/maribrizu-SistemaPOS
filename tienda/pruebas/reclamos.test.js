@@ -67,7 +67,7 @@ describe('puedeReclamar', () => {
 });
 
 describe('validarReclamo', () => {
-  const bueno = { motivo: 'roto', items: ['p1'], detalle: 'La resma llegó mojada en una esquina.', fotos: [] };
+  const bueno = { motivo: 'roto', renglones: [0], detalle: 'La resma llegó mojada en una esquina.', fotos: [] };
 
   it('uno completo pasa', () => {
     expect(validarReclamo(bueno, pedido())).toBeNull();
@@ -79,17 +79,24 @@ describe('validarReclamo', () => {
   });
 
   it('"no me llegó" en un pedido de retiro, no', () => {
-    expect(validarReclamo({ ...bueno, motivo: 'no_llego', items: [] }, pedido({ entrega: { modo: 'retiro' } })).campo)
+    expect(validarReclamo({ ...bueno, motivo: 'no_llego', renglones: [] }, pedido({ entrega: { modo: 'retiro' } })).campo)
       .toBe('motivo');
   });
 
   it('un motivo de productos pide al menos uno, y del pedido', () => {
-    expect(validarReclamo({ ...bueno, items: [] }, pedido()).campo).toBe('items');
-    expect(validarReclamo({ ...bueno, items: ['p9'] }, pedido()).campo).toBe('items');
+    expect(validarReclamo({ ...bueno, renglones: [] }, pedido()).campo).toBe('renglones');
+    expect(validarReclamo({ ...bueno, renglones: [2] }, pedido()).campo).toBe('renglones');
+    expect(validarReclamo({ ...bueno, renglones: ['0'] }, pedido()).campo).toBe('renglones');
+    expect(validarReclamo({ ...bueno, renglones: [0, 0] }, pedido()).campo).toBe('renglones');
+  });
+
+  it('va por renglón: el mismo producto en dos colores se distingue', () => {
+    const conColores = pedido({ items: [{ id: 'p2', variedad: 'Rojo' }, { id: 'p2', variedad: 'Azul' }] });
+    expect(validarReclamo({ ...bueno, renglones: [1] }, conColores)).toBeNull();
   });
 
   it('un motivo sin productos no los pide', () => {
-    expect(validarReclamo({ ...bueno, motivo: 'cobro', items: [] }, pedido())).toBeNull();
+    expect(validarReclamo({ ...bueno, motivo: 'cobro', renglones: [] }, pedido())).toBeNull();
   });
 
   it(`el detalle va de ${LIMITES.detalleMin} a ${LIMITES.detalleMax} letras`, () => {
@@ -104,7 +111,7 @@ describe('validarReclamo', () => {
   });
 
   it('cada problema lo dice en palabras del cliente', () => {
-    const error = validarReclamo({ ...bueno, items: [] }, pedido());
+    const error = validarReclamo({ ...bueno, renglones: [] }, pedido());
     expect(error.mensaje).toMatch(/producto/i);
   });
 });
