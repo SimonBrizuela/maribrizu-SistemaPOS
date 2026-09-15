@@ -10,7 +10,12 @@
 
 body.reparto { background: var(--bg); }
 
-.reparto-app { min-height: 100dvh; }
+/* Red de seguridad contra el desplazamiento lateral. En Chrome del celular, un
+   solo renglón que se pasa del ancho agranda la página entera: todo se ve
+   achicado y corrido, y la hoja de entrega (fija, de borde a borde) sale más
+   ancha que la pantalla. `clip` y no `hidden`: `hidden` crea un contenedor de
+   desplazamiento y la barra de arriba deja de quedar pegada. */
+.reparto-app { min-height: 100dvh; overflow-x: clip; }
 
 /* ── Barra ─────────────────────────────────────────────────────────────── */
 
@@ -420,6 +425,11 @@ body.reparto { background: var(--bg); }
   border: 1px dashed var(--border-2);
 }
 .reparto-preparando__texto { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
+/* Con `align-items: flex-start` cada renglón mide lo que su texto, y el recorte
+   con puntos suspensivos no tiene contra qué cortar: la dirección larga se salía
+   de la pantalla. */
+.reparto-preparando__texto .parada__nombre,
+.reparto-preparando__texto .parada__direccion { max-width: 100%; }
 @media (min-width: 520px) {
   .reparto-preparando { flex-direction: row; align-items: center; }
   .reparto-preparando__texto { flex: 1; }
