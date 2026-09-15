@@ -19,7 +19,7 @@
 import {
   collection, doc, getDocs, query, where, setDoc, updateDoc, deleteDoc, serverTimestamp,
 } from 'firebase/firestore';
-import { getCached } from '../cache.js';
+import { getCached, peekCacheValue } from '../cache.js';
 import { alertDialog, confirmDialog, escHtml } from '../components/dialogs.js';
 import { nombreBonito, decodificarCampos, codificarValor } from '../tienda_espejo.js';
 import { auth } from '../auth.js';
@@ -34,6 +34,8 @@ const REST = 'https://firestore.googleapis.com/v1/projects/mari-d7c71/databases/
 let _db = null;
 let _cupones = [];
 let _catalogo = [];
+let _catalogoFuente = null;     // el arreglo del store del que salió `_catalogo`
+const ORDEN_NOMBRE = new Intl.Collator('es');
 /** código → resumen de usos (o null mientras se cuenta). */
 let _usos = new Map();
 /** Todos los pedidos que llevan cupón, con lo justo para contar. */
@@ -214,7 +216,31 @@ function pintar() {
 
 /* ── Alta y edición ───────────────────────────────────────────────────────── */
 
+/** Lo que se puede vender, ordenado por nombre para el buscador. */
+function tomarCatalogo(lista) {
+  _catalogoFuente = lista;
+  _catalogo = (lista || [])
+    .filter(p => p && p.doc_id && p.estado !== 'baja' && !p.duplicado)
+    .sort((a, b) => ORDEN_NOMBRE.compare(String(a.nombre || ''), String(b.nombre || '')));
+  return _catalogo;
+}
+
+/**
+ * El catálogo como está AHORA, no como estaba al abrir la pantalla.
+ *
+ * La pantalla no se redibuja con cada venta del POS, así que la copia que leyó
+ * al entrar se quedaba vieja: un artículo dado de alta después no aparecía en
+ * el buscador hasta salir y volver. El store mantiene el catálogo al día en
+ * `catalogo:all`; se lee de ahí al usarlo, y se rehace solo si llegó otro.
+ */
+function catalogoDeAhora() {
+  const vivo = peekCacheValue('catalogo:all');
+  if (Array.isArray(vivo) && vivo.length && vivo !== _catalogoFuente) tomarCatalogo(vivo);
+  return _catalogo;
+}
+
 function abrirEditor(c = null) {
+  catalogoDeAhora();
   const rubros = [...new Set(_catalogo.map(p => claveDeRubro(p.rubro)).filter(Boolean))].sort();
   const elegidos = new Set((c?.aplica?.productos || []).map(String));
 
@@ -793,13 +819,10 @@ export async function renderTiendaCupones(container, db) {
       ${Array(3).fill('<div class="skel skel-card" style="height:170px"></div>').join('')}
     </div>`;
 
-  _catalogo = (await getCached('catalogo:all', async () => {
+  tomarCatalogo(await getCached('catalogo:all', async () => {
     const snap = await getDocs(query(collection(db, 'catalogo')));
     return snap.docs.map(d => ({ ...d.data(), doc_id: d.id }));
-  }, { ttl: 10 * 60 * 1000, memOnly: true })) || [];
-  _catalogo = _catalogo
-    .filter(p => p && p.doc_id && p.estado !== 'baja' && !p.duplicado)
-    .sort((a, b) => String(a.nombre || '').localeCompare(String(b.nombre || ''), 'es'));
+  }, { ttl: 10 * 60 * 1000, memOnly: true }));
 
   await recargar();
 

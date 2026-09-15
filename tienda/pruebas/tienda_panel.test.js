@@ -612,6 +612,27 @@ describe('Cupones de la Tienda', () => {
     }
   });
 
+  it('un producto dado de alta con la pantalla abierta aparece en el buscador', async () => {
+    // La copia del catálogo que se leyó al entrar se quedaba vieja: la pantalla
+    // no se redibuja con cada venta, y lo nuevo no aparecía hasta volver a entrar.
+    await montar('tienda_cupones', 'renderTiendaCupones');
+    const { setCacheValue } = await import('../../webapp/src/cache.js');
+    setCacheValue('catalogo:all', [
+      ...CATALOGO.map(p => ({ ...p })),
+      { doc_id: 'p9', nombre: 'MARCADOR FLUO NUEVO', rubro: 'LIBRERIA', precio_venta: 1500,
+        stock: 3, estado: 'activo' },
+    ]);
+
+    document.getElementById('cupNuevo')?.click();
+    await esperar(50);
+    document.getElementById('cuAlcance').value = 'productos';
+    document.getElementById('cuAlcance').dispatchEvent(new Event('change', { bubbles: true }));
+    tipear(document.getElementById('cuBuscar'), 'marcador fluo');
+    await esperar(20);
+
+    expect(document.querySelector('#cuResultados [data-prod="p9"]')).toBeTruthy();
+  });
+
   it('"Generar" arma un código que se puede dictar', async () => {
     await montar('tienda_cupones', 'renderTiendaCupones');
     document.getElementById('cupNuevo')?.click();

@@ -23,7 +23,7 @@
 import {
   collection, doc, getDocs, getDoc, query, orderBy, where,
 } from 'firebase/firestore';
-import { getCached } from '../cache.js';
+import { getCached, peekCacheValue } from '../cache.js';
 import { alertDialog, confirmDialog, escHtml } from '../components/dialogs.js';
 import {
   nombreBonito, medidasDe, motivoDeNoPublicar, leerDocEspejoRest, consultarEspejoRest,
@@ -39,6 +39,7 @@ import '../styles/tienda.css';
 let _db = null;
 let _descuentos = [];
 let _catalogo = [];
+let _catalogoFuente = null;     // el arreglo del store del que salió `_catalogo`
 let _publicadosPorDescuento = new Map();
 
 const pesos = n => `$${Number(n || 0).toLocaleString('es-AR')}`;
@@ -87,6 +88,28 @@ function masBaratosQueElMonto(d) {
   return alcanzados(d)
     .filter(p => motivoDeNoPublicar(p) === null && precioTienda(p) <= monto)
     .sort((a, b) => precioTienda(a) - precioTienda(b));
+}
+
+/** Solo lo que puede llegar a estar en la tienda: descontarle el precio a algo
+ *  dado de baja no le sirve a nadie. */
+function tomarCatalogo(lista) {
+  _catalogoFuente = lista;
+  _catalogo = (lista || []).filter(p => p && p.doc_id && p.estado !== 'baja' && !p.duplicado);
+  return _catalogo;
+}
+
+/**
+ * El catálogo como está AHORA, no como estaba al abrir la pantalla.
+ *
+ * La pantalla no se redibuja con cada venta del POS, así que la copia que leyó
+ * al entrar se quedaba vieja: un artículo dado de alta después no aparecía en
+ * el buscador hasta salir y volver. El store mantiene el catálogo al día en
+ * `catalogo:all`; se lee de ahí al usarlo, y se rehace solo si llegó otro.
+ */
+function catalogoDeAhora() {
+  const vivo = peekCacheValue('catalogo:all');
+  if (Array.isArray(vivo) && vivo.length && vivo !== _catalogoFuente) tomarCatalogo(vivo);
+  return _catalogo;
 }
 
 /* ── Pintado ──────────────────────────────────────────────────────────────── */
@@ -151,6 +174,7 @@ function pintar() {
 /* ── Alta y edición ───────────────────────────────────────────────────────── */
 
 function abrirEditor(d = null) {
+  catalogoDeAhora();
   const rubros = [...new Set(_catalogo.map(p => String(p.rubro || '').trim().toUpperCase())
     .filter(Boolean))].sort();
   const subrubros = [...new Set(_catalogo
@@ -538,6 +562,7 @@ const CAMPOS_DEL_ESPEJO = ['precio', 'precio_anterior', 'precio_pack', 'precio_p
 async function productosDelDescuento(d) {
   const regla = reglaDe(d);
   if (!regla.objetivo) return [];
+  catalogoDeAhora();
 
   if (regla.alcance === 'producto') {
     // El id tal cual, y si no está, el del catálogo que coincide sin mirar
@@ -688,13 +713,10 @@ export async function renderTiendaDescuentos(container, db) {
       ${Array(3).fill('<div class="skel skel-card" style="height:150px"></div>').join('')}
     </div>`;
 
-  _catalogo = (await getCached('catalogo:all', async () => {
+  tomarCatalogo(await getCached('catalogo:all', async () => {
     const snap = await getDocs(query(collection(db, 'catalogo'), orderBy('nombre')));
     return snap.docs.map(d => ({ ...d.data(), doc_id: d.id }));
-  }, { ttl: 10 * 60 * 1000, memOnly: true })) || [];
-  // Solo lo que puede llegar a estar en la tienda: descontarle el precio a algo
-  // dado de baja no le sirve a nadie.
-  _catalogo = _catalogo.filter(p => p && p.doc_id && p.estado !== 'baja' && !p.duplicado);
+  }, { ttl: 10 * 60 * 1000, memOnly: true }));
 
   await recargar();
 

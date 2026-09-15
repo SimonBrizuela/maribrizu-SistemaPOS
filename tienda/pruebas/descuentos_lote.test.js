@@ -101,11 +101,23 @@ vi.mock('../../webapp/src/tienda_espejo.js', async (original) => {
   };
 });
 
-vi.mock('../../webapp/src/cache.js', () => ({
-  getCached: async (_clave, traer) => traer(),
-  invalidateCacheByPrefix: () => {},
-  invalidateCache: () => {},
-}));
+vi.mock('../../webapp/src/cache.js', () => {
+  // Siempre trae de nuevo, pero se acuerda de lo último: la pantalla guarda el
+  // catálogo al entrar y lo vuelve a mirar al abrir el editor y al aplicar, y
+  // una venta del POS lo reemplaza con `setCacheValue`, como el store.
+  const memoria = new Map();
+  return {
+    getCached: async (clave, traer) => {
+      const valor = await traer();
+      memoria.set(clave, valor);
+      return valor;
+    },
+    peekCacheValue: (clave) => memoria.get(clave),
+    setCacheValue: (clave, valor) => { memoria.set(clave, valor); },
+    invalidateCacheByPrefix: () => {},
+    invalidateCache: () => {},
+  };
+});
 
 vi.mock('../../webapp/src/components/dialogs.js', async (original) => {
   const real = await original();
@@ -574,3 +586,31 @@ describe('un alcance de cientos de productos', () => {
     expect(nube.espejo.get('art500')).toMatchObject({ precio: 1000, descuento: null });
   });
 });
+
+describe('el catálogo con la pantalla abierta', () => {
+  // La pantalla no se redibuja con cada venta del POS, así que la copia del
+  // catálogo que leyó al entrar se quedaba vieja: un artículo dado de alta
+  // después no aparecía en el buscador del descuento hasta salir y volver.
+  it('un artículo dado de alta después de entrar aparece en el buscador', async () => {
+    await montar();
+    const { setCacheValue } = await import('../../webapp/src/cache.js');
+    setCacheValue('catalogo:all', [
+      ...CATALOGO.map(p => ({ ...p })),
+      { doc_id: 'p9', nombre: 'MARCADOR FLUO NUEVO', rubro: 'LIBRERIA', sub_rubro: 'MARCADORES',
+        precio_venta: 1500, stock: 3, estado: 'activo' },
+    ]);
+
+    document.getElementById('descNuevo').click();
+    await asentar();
+    const alcance = document.getElementById('dAlcance');
+    alcance.value = 'producto';
+    alcance.dispatchEvent(new Event('change', { bubbles: true }));
+    const buscador = document.getElementById('dBuscarProd');
+    buscador.value = 'marcador fluo';
+    buscador.dispatchEvent(new Event('input', { bubbles: true }));
+    await asentar();
+
+    expect(document.querySelector('#dResultados [data-prod="p9"]')).toBeTruthy();
+  });
+});
+
