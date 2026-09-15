@@ -27,8 +27,9 @@
  * yéndose de a poco, y lo que oculta otra pestaña se va solo.
  */
 import { collection, doc, getDoc, getDocs, onSnapshot, orderBy, query } from 'firebase/firestore';
-import { getCached } from '../cache.js';
+import { getCached, peekCacheValue } from '../cache.js';
 import { leerDocRapido } from '../config.js';
+import { onStoreChange } from '../store.js';
 import { alertDialog, confirmDialog, escHtml, verFotoGrande } from '../components/dialogs.js';
 import { mostrarToast, cerrarToast } from '../components/toasts.js';
 import { sacarFila, meterFila, desplegar, plegar } from '../components/filas_animadas.js';
@@ -64,6 +65,9 @@ let _ocultos = new Map();       // lo que se muestra: la base con lo pendiente e
 let _verOcultos = false;        // la tabla de ocultos desplegada
 let _unsubOcultos = null;
 let _avisoOculto = null;        // el aviso con "Deshacer" del último que se ocultó
+let _unsubCatalogo = null;      // los cambios del catálogo que trae el store
+let _esperaCatalogo = null;     // junta una ráfaga de ventas en una sola mirada
+let _catalogoAlSoltar = false;  // cambió el catálogo con un panel abierto
 
 export async function renderTiendaFotos(container, db) {
   _db = db;
@@ -149,44 +153,7 @@ async function cargar() {
 
     _lista = ordenarPorFecha(docs.map(d => filaDePedido(d.id, d.data() || {})));
 
-    // Los que están sin foto entran solos a la lista. Antes dependían de que
-    // alguien los marcara desde la tienda: mientras tanto se veían igual, con
-    // el cuadrito gris, para cualquiera que entrara a comprar. No se pisan los
-    // pedidos a mano — esos ya están arriba con su fecha.
-    const yaEstan = new Set(_lista.map(x => x.id));
-    const automaticos = [];
-    for (const [id, producto] of _catalogo) {
-      if (imagenesDe(producto).length) continue;
-      const motivo = motivoDeNoPublicar(producto, _habilitados, _subExcluidos);
-      // Dos casos, y los dos se resuelven con una foto: el frenado JUSTO por
-      // eso (todo lo demás está en orden y sale a la vidriera en cuanto se le
-      // cargue una) y el marcado "publicar siempre", que se saltea el control
-      // de la foto y YA se está mostrando con el cuadrito gris. Este segundo
-      // quedaba afuera de las dos tablas mientras Tienda > Catálogo lo contaba
-      // en rojo como publicado sin foto: se lo venía a buscar acá y no estaba.
-      if (motivo !== null && motivo !== 'sin foto') continue;
-      if (yaEstan.has(id)) continue;
-      automaticos.push({
-        id,
-        nombre: producto.nombre || '(sin nombre)',
-        rubro: producto.rubro || '',
-        teniaFoto: false,
-        cuando: null,
-        fotos: [],
-        enCatalogo: true,
-        automatico: true,
-        enLaVidriera: motivo === null,
-      });
-    }
-    // Primero los que el cliente ya está viendo con el cuadrito gris: son los
-    // urgentes, y ordenados solo por nombre quedaban perdidos entre doscientos
-    // que todavía no salieron.
-    automaticos.sort((a, b) => (Number(b.enLaVidriera) - Number(a.enLaVidriera))
-      || String(a.nombre).localeCompare(String(b.nombre), 'es'));
-    // Separadas a propósito: una es la lista que armó el personal a mano y la
-    // otra la que arma el sistema. Mezcladas, lo pedido puntualmente se perdía
-    // entre doscientos renglones automáticos.
-    _esperando = automaticos;
+    _esperando = armarEsperando();
 
     pintarLista();
 
@@ -196,6 +163,7 @@ async function cargar() {
     // 9.000 del catálogo— y a cambio la pantalla queda al día sola.
     escucharPedidas();
     escucharOcultosEnVivo();
+    escucharCatalogo();
   } catch (err) {
     console.error('[fotos] no se pudo leer la lista:', err);
     cuerpo.innerHTML = `
@@ -203,6 +171,51 @@ async function cargar() {
         No se pudo leer la lista: ${escHtml(err?.message || String(err))}
       </div>`;
   }
+}
+
+/**
+ * La lista que arma el sistema mirando el catálogo.
+ *
+ * Los que están sin foto entran solos. Antes dependían de que alguien los
+ * marcara desde la tienda: mientras tanto se veían igual, con el cuadrito gris,
+ * para cualquiera que entrara a comprar. No se pisan los pedidos a mano — esos
+ * ya están arriba con su fecha.
+ */
+function armarEsperando() {
+  const yaEstan = new Set(_lista.map(x => x.id));
+  const automaticos = [];
+  for (const [id, producto] of _catalogo) {
+    if (imagenesDe(producto).length) continue;
+    const motivo = motivoDeNoPublicar(producto, _habilitados, _subExcluidos);
+    // Dos casos, y los dos se resuelven con una foto: el frenado JUSTO por
+    // eso (todo lo demás está en orden y sale a la vidriera en cuanto se le
+    // cargue una) y el marcado "publicar siempre", que se saltea el control
+    // de la foto y YA se está mostrando con el cuadrito gris. Este segundo
+    // quedaba afuera de las dos tablas mientras Tienda > Catálogo lo contaba
+    // en rojo como publicado sin foto: se lo venía a buscar acá y no estaba.
+    if (motivo !== null && motivo !== 'sin foto') continue;
+    if (yaEstan.has(id)) continue;
+    automaticos.push({
+      id,
+      nombre: producto.nombre || '(sin nombre)',
+      rubro: producto.rubro || '',
+      teniaFoto: false,
+      cuando: null,
+      fotos: [],
+      enCatalogo: true,
+      automatico: true,
+      enLaVidriera: motivo === null,
+    });
+  }
+  // Primero los que el cliente ya está viendo con el cuadrito gris: son los
+  // urgentes, y ordenados solo por nombre quedaban perdidos entre doscientos
+  // que todavía no salieron.
+  automaticos.sort((a, b) => (Number(b.enLaVidriera) - Number(a.enLaVidriera))
+    || String(a.nombre).localeCompare(String(b.nombre), 'es'));
+  // Separadas a propósito: una es la lista que armó el personal a mano y la
+  // otra la que arma el sistema. Mezcladas, lo pedido puntualmente se perdía
+  // entre doscientos renglones automáticos.
+  return automaticos;
 }
 
 /**
@@ -390,16 +403,19 @@ async function completarDelCatalogo(ids) {
 }
 
 function cortarEscucha() {
-  for (const cortar of [_unsubPedidas, _unsubOcultos]) {
+  for (const cortar of [_unsubPedidas, _unsubOcultos, _unsubCatalogo]) {
     if (!cortar) continue;
     try { cortar(); } catch (_) { /* ya estaba cortado */ }
   }
   _unsubPedidas = null;
   _unsubOcultos = null;
+  _unsubCatalogo = null;
   _primerSnapshot = true;
   clearTimeout(_olvidarNuevas);
+  clearTimeout(_esperaCatalogo);
   _nuevas.clear();
   _repintarAlSoltar = false;
+  _catalogoAlSoltar = false;
 }
 
 /** Al irse de la pantalla: nada escuchando y ningún "Deshacer" suelto. */
@@ -411,9 +427,94 @@ function alSalir() {
 
 /** Aplica lo que llegó mientras había un panel abierto o una subida en curso. */
 function soltarRepintadoPendiente() {
-  if (!_repintarAlSoltar || _panel || _subiendo) return;
+  if (_panel || _subiendo) return;
+  if (_catalogoAlSoltar) {
+    _catalogoAlSoltar = false;
+    if (tomarCatalogoDelStore()) _repintarAlSoltar = true;
+  }
+  if (!_repintarAlSoltar) return;
   _repintarAlSoltar = false;
   pintarLista();
+}
+
+/* ── El catálogo vivo ─────────────────────────────────────────────────────── */
+// La pantalla no se redibuja entera con cada cambio del store (main.js la deja
+// afuera): con cada venta del POS quedaba arriba de todo, con los ocultos
+// cerrados y la fila que se estaba yendo cortada. Escucha el catálogo por su
+// cuenta y mueve solo lo que cambió: la foto cargada desde otro lado, el que se
+// quedó sin stock, el que volvió a tener.
+
+const ESPERA_CATALOGO_MS = 500;
+
+function escucharCatalogo() {
+  if (_unsubCatalogo) {
+    try { _unsubCatalogo(); } catch (_) { /* ya estaba cortado */ }
+  }
+  _unsubCatalogo = onStoreChange(col => {
+    if (col !== 'catalogo') return;
+    clearTimeout(_esperaCatalogo);
+    _esperaCatalogo = setTimeout(refrescarDelCatalogo, ESPERA_CATALOGO_MS);
+  });
+}
+
+/**
+ * Rehace las dos listas con el catálogo que tiene el store. `false` si todavía
+ * no hay catálogo para mirar.
+ */
+function tomarCatalogoDelStore() {
+  const datos = peekCacheValue('catalogo:all');
+  if (!Array.isArray(datos) || !datos.length) return false;
+
+  const catalogo = new Map(datos.map(d => [String(d.doc_id), d]));
+  // Lo que se trajo de a uno (recién marcado desde la tienda) puede no haber
+  // llegado todavía al store: sin esto su fila perdía el botón de cargar.
+  for (const id of _buscados) {
+    if (!catalogo.has(id) && _catalogo.has(id)) catalogo.set(id, _catalogo.get(id));
+  }
+  _catalogo = catalogo;
+
+  _lista = _lista.map(f => {
+    const producto = _catalogo.get(f.id);
+    if (!producto) return f;
+    const fotos = imagenesDe(producto);
+    return { ...f, fotos, enCatalogo: true, enLaVidriera: estaEnLaVidrieraSinFoto(producto, fotos) };
+  });
+  _esperando = armarEsperando();
+  return true;
+}
+
+function refrescarDelCatalogo() {
+  if (!document.getElementById('fotosCuerpo')) return;
+  if (_panel || _subiendo) { _catalogoAlSoltar = true; return; }
+
+  const firmaLista = () => _lista
+    .map(f => `${f.id}:${f.fotos.join(',')}:${f.enCatalogo}:${f.enLaVidriera}`).join('|');
+  const listaAntes = firmaLista();
+  const vidrieraAntes = cuentas().enVidriera;
+  const antes = new Map(_esperando.map(f => [f.id, f]));
+  if (!tomarCatalogoDelStore()) return;
+
+  const ahora = new Map(_esperando.map(f => [f.id, f]));
+  const salen = [...antes.keys()].filter(id => !ahora.has(id));
+  const entran = [...ahora.keys()].filter(id => !antes.has(id));
+  const cambiados = [...ahora.values()].some(f => {
+    const a = antes.get(f.id);
+    return a && (a.nombre !== f.nombre || a.rubro !== f.rubro || a.enLaVidriera !== f.enLaVidriera);
+  });
+  const listaCambio = firmaLista() !== listaAntes;
+  // Casi todas las ventas terminan acá: cambió el stock y nada más.
+  if (!salen.length && !entran.length && !cambiados && !listaCambio) return;
+
+  // Lo que no es solo entrar o salir (un nombre, uno que pasó a la vidriera, la
+  // lista a mano) se vuelve a pintar adentro de la misma pantalla: el
+  // contenedor no se toca, así que la vista y los ocultos abiertos siguen donde
+  // estaban.
+  if (cambiados || listaCambio || cuentas().enVidriera !== vidrieraAntes
+      || !_esperando.length || !document.getElementById('fotosTablaEsperando')) {
+    pintarLista();
+    return;
+  }
+  moverFilas({ salen, entran });
 }
 
 /* ── Pintado ──────────────────────────────────────────────────────────────── */
@@ -703,24 +804,33 @@ function refrescarOcultos() {
   if (!aOcultar.length && !aMostrar.length) return;
 
   if (_panel || _subiendo) { _repintarAlSoltar = true; return; }
-  moverFilas(aOcultar, aMostrar);
+  // Ocultar es salir de la lista y entrar a los ocultos; mostrar, al revés.
+  const movidos = [...aOcultar, ...aMostrar];
+  moverFilas({ salen: movidos, entran: movidos });
 }
 
-function moverFilas(aOcultar, aMostrar) {
+/**
+ * Mueve en el lugar las filas que cambiaron: las de `salen` se van de la tabla
+ * donde estén (la lista o los ocultos) y las de `entran` van a la que les toca
+ * ahora, en su posición.
+ */
+function moverFilas({ salen = [], entran = [] }) {
   const tabla = document.getElementById('fotosTablaEsperando');
   if (!tabla) { pintarLista(); return; }
 
   const { visibles, ocultas } = cuentas();
-  const tablaOcultos = () => document.getElementById('fotosTablaOcultos');
+  const tablaOcultos = document.getElementById('fotosTablaOcultos');
   const salidas = [];
 
-  for (const id of aOcultar) {
-    salidas.push(sacarFila(filaViva(tabla, id)));
-    if (_verOcultos) meterEnTabla(tablaOcultos(), id, ocultas, { oculta: true });
+  for (const id of salen) {
+    for (const donde of [tabla, tablaOcultos]) {
+      const fila = filaViva(donde, id);
+      if (fila) salidas.push(sacarFila(fila));
+    }
   }
-  for (const id of aMostrar) {
-    if (tablaOcultos()) salidas.push(sacarFila(filaViva(tablaOcultos(), id)));
-    meterEnTabla(tabla, id, visibles);
+  for (const id of entran) {
+    if (!_ocultos.has(id)) meterEnTabla(tabla, id, visibles);
+    else if (tablaOcultos) meterEnTabla(tablaOcultos, id, ocultas, { oculta: true });
   }
 
   actualizarCuentas();

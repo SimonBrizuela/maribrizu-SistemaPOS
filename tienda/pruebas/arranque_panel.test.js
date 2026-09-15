@@ -16,7 +16,7 @@ import { join } from 'node:path';
 
 const { estado } = vi.hoisted(() => ({
   estado: { sesion: { uid: 'u1', display: 'Mari', role: 'admin' }, hayPista: true,
-            salidas: 0, pintadas: [] },
+            salidas: 0, pintadas: [], oyentesStore: [] },
 }));
 
 vi.mock('firebase/firestore', async () => {
@@ -57,7 +57,9 @@ vi.mock('../../webapp/src/auth.js', () => ({
 }));
 vi.mock('../../webapp/src/store.js', () => ({
   prewarmStore: () => {}, ensureCollections: () => {}, prewarmRest: () => {},
-  teardownStore: () => {}, onStoreChange: () => () => {}, hydrateStore: async () => {},
+  teardownStore: () => {}, hydrateStore: async () => {},
+  // Se guarda quién escucha: así se puede simular una venta del POS.
+  onStoreChange: (cb) => { estado.oyentesStore.push(cb); return () => {}; },
   initStore: async () => {}, storeListo: async () => {},
 }));
 vi.mock('../../webapp/src/snapshot_cache.js', () => ({
@@ -79,6 +81,7 @@ async function arrancar() {
   document.body.innerHTML = CUERPO;
   vi.resetModules();
   estado.pintadas = [];
+  estado.oyentesStore = [];
   await import('../../webapp/src/main.js');
   document.dispatchEvent(new Event('DOMContentLoaded'));
   for (let i = 0; i < 16; i++) await esperar();
@@ -273,5 +276,25 @@ describe('salir', () => {
     document.getElementById('logoutBtn').click();
     for (let i = 0; i < 6; i++) await esperar();
     expect(estado.salidas).toBe(1);
+  });
+});
+
+describe('los refrescos en vivo', () => {
+  it('Fotos Pedidas no se vuelve a dibujar entera con cada venta del POS', async () => {
+    // Cada venta toca `catalogo`. Redibujar la pantalla entera la dejaba arriba
+    // de todo, con la lista de ocultos cerrada y la animación cortada: "aprieto
+    // Mostrar y me recarga toda la página". Se refresca sola, en el lugar.
+    localStorage.setItem('lastPage', 'tienda_fotos');
+    await arrancar();
+    for (let i = 0; i < 10; i++) await esperar();
+    const cuerpo = document.getElementById('fotosCuerpo');
+    expect(cuerpo, 'la pantalla no llegó a abrirse').toBeTruthy();
+    // Nadie ocupado: sin esto el refresco se posterga y la prueba pasaría igual.
+    document.querySelectorAll('body > :not(#app)').forEach(n => { n.style.display = 'none'; });
+
+    estado.oyentesStore.forEach(cb => cb('catalogo'));
+    await esperar(600);
+
+    expect(document.getElementById('fotosCuerpo'), 'se dibujó entera de nuevo').toBe(cuerpo);
   });
 });

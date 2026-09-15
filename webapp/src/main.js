@@ -1028,6 +1028,11 @@ function initApp(session) {
       // Estadísticas de la Tienda: no dependen de ninguna colección del
       // store y se refrescan solas al cambiar el rango.
       if (currentPage === 'tienda_estadisticas') return;
+      // Fotos Pedidas: se recorre de arriba abajo ocultando y cargando fotos.
+      // Redibujarla entera con cada venta la dejaba arriba de todo, con la
+      // lista de ocultos cerrada y la fila que se estaba yendo cortada a la
+      // mitad. Escucha el catálogo por su cuenta y mueve solo lo que cambió.
+      if (currentPage === 'tienda_fotos') return;
 
       // Si el usuario está interactuando, diferimos el refresh para no
       // pisar lo que está haciendo (buscar, editar, llenar un form).

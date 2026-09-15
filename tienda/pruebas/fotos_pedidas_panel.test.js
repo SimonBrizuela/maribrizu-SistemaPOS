@@ -38,7 +38,8 @@ const { nube, cacheSdk, espia, oyentes } = vi.hoisted(() => ({
            ocultos: [], fallarOcultos: false },
   // Quién está escuchando `config/fotos_ocultas`, para avisarle como lo haría
   // Firestore cuando otra pestaña oculta algo.
-  oyentes: { ocultos: [] },
+  // Y quién escucha los cambios del store (una venta del POS toca el catálogo).
+  oyentes: { ocultos: [], store: [] },
 }));
 
 vi.mock('firebase/firestore', () => {
@@ -141,6 +142,13 @@ vi.mock('../../webapp/src/tienda_espejo.js', async (original) => {
   };
 });
 
+vi.mock('../../webapp/src/store.js', () => ({
+  onStoreChange: (cb) => {
+    oyentes.store.push(cb);
+    return () => { oyentes.store = oyentes.store.filter(o => o !== cb); };
+  },
+}));
+
 // Los diálogos taparían la pantalla y no aportan nada acá.
 vi.mock('../../webapp/src/components/dialogs.js', async (original) => ({
   ...(await original()),
@@ -185,6 +193,7 @@ beforeEach(() => {
   espia.ocultos.length = 0;
   espia.fallarOcultos = false;
   oyentes.ocultos = [];
+  oyentes.store = [];
 
   nube.catalogo = CATALOGO.map(d => structuredClone(d));
   nube.pedidas = [];
@@ -569,5 +578,106 @@ describe('ocultar de "Les falta la foto"', () => {
       window.__limpiarPagina();
       expect(oyentes.ocultos).toHaveLength(0);
     });
+  });
+});
+
+/* ── El catálogo cambia con la pantalla abierta ───────────────────────────── */
+
+describe('lo que cambia en el catálogo mientras se mira la lista', () => {
+  // La pantalla ya no se redibuja entera con cada venta del POS (dejaba la
+  // vista arriba de todo y cerraba los ocultos): escucha el catálogo y mueve
+  // solo las filas que cambiaron.
+  const enEspera = () => [...contenedor.querySelectorAll('#fotosTablaEsperando tbody tr')]
+    .filter(f => !f.hasAttribute('data-saliendo')).map(f => f.dataset.fila);
+  const numero = (texto) => dato(texto).querySelector('b').textContent;
+  const tabla = () => document.getElementById('fotosTablaEsperando');
+
+  /** Lo que hace el store cuando el POS vende o alguien toca un producto. */
+  async function cambiaElCatalogo(cambiar) {
+    const catalogo = nube.catalogo.map(d => structuredClone(d));
+    cambiar(Object.fromEntries(catalogo.map(d => [d.doc_id, d])));
+    nube.catalogo = catalogo;
+    setCacheValue('catalogo:all', catalogo);
+    oyentes.store.forEach(cb => cb('catalogo'));
+    oyentes.store.forEach(cb => cb('ventas'));
+    await new Promise(r => setTimeout(r, 700));
+    await respirar();
+  }
+
+  it('una venta que no cambia nada de la lista no toca ninguna fila', async () => {
+    await montar();
+    const filas = [...tabla().tBodies[0].rows];
+
+    await cambiaElCatalogo(p => { p.p1.stock = 9; });
+
+    const ahora = [...tabla().tBodies[0].rows];
+    expect(ahora).toHaveLength(filas.length);
+    expect(ahora.every((f, i) => f === filas[i]), 'se volvieron a dibujar las filas').toBe(true);
+  });
+
+  it('si le cargan la foto desde otro lado, sale sola y sin redibujar la pantalla', async () => {
+    await montar();
+    const antes = tabla();
+
+    await cambiaElCatalogo(p => { p.p1.tienda_imagenes = ['https://x/nueva.webp']; });
+
+    expect(enEspera()).toEqual(['p3']);
+    expect(tabla(), 'se redibujó la tabla entera').toBe(antes);
+    expect(numero('esperando foto para salir')).toBe('0');
+  });
+
+  it('lo que vuelve a tener stock entra solo, en su lugar', async () => {
+    await montar();
+    const antes = tabla();
+
+    await cambiaElCatalogo(p => { p.p4.stock = 5; });
+
+    expect(enEspera()).toEqual(['p3', 'p4', 'p1']);
+    expect(tabla()).toBe(antes);
+    expect(numero('esperando foto para salir')).toBe('2');
+  });
+
+  it('la lista de ocultos abierta sigue abierta', async () => {
+    nube.ocultos = { p3: { nombre: 'MOCHILA CHICA', oculto_en: new Date() } };
+    await montar();
+    contenedor.querySelector('[data-ver-ocultos]').click();
+    await respirar();
+
+    await cambiaElCatalogo(p => { p.p1.tienda_imagenes = ['https://x/nueva.webp']; });
+
+    expect(document.getElementById('fotosTablaOcultos'), 'se cerró la lista de ocultos').toBeTruthy();
+  });
+
+  it('con el panel de fotos abierto espera a que se cierre', async () => {
+    await montar();
+    await cargarFoto('p3');
+
+    await cambiaElCatalogo(p => { p.p1.tienda_imagenes = ['https://x/nueva.webp']; });
+    expect(enEspera()).toContain('p1');
+
+    document.querySelector('.tienda-overlay[data-panel-fotos] [data-accion="cancelar"]').click();
+    await respirar();
+    expect(enEspera()).toEqual(['p3']);
+  });
+
+  it('"Mostrar" mueve la fila y no redibuja la pantalla', async () => {
+    nube.ocultos = { p1: { nombre: 'TIJERA ESCOLAR', oculto_en: new Date() } };
+    await montar();
+    const antes = tabla();
+    contenedor.querySelector('[data-ver-ocultos]').click();
+    await respirar();
+
+    contenedor.querySelector('[data-mostrar="p1"]').click();
+    await respirar();
+
+    expect(enEspera()).toEqual(['p3', 'p1']);
+    expect(tabla()).toBe(antes);
+  });
+
+  it('al salir de la pantalla deja de escuchar el catálogo', async () => {
+    await montar();
+    expect(oyentes.store.length).toBeGreaterThan(0);
+    window.__limpiarPagina();
+    expect(oyentes.store).toHaveLength(0);
   });
 });
