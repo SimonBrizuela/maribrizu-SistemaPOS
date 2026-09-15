@@ -148,7 +148,7 @@ export async function tokenPara(permiso = PERMISOS.base) {
 
 const accessToken = () => tokenPara(PERMISOS.base);
 
-async function pedirToken(permiso) {
+function leerCuenta() {
   const crudo = process.env.FIREBASE_SERVICE_ACCOUNT;
   if (!crudo) throw new Error('falta FIREBASE_SERVICE_ACCOUNT');
 
@@ -168,7 +168,42 @@ async function pedirToken(permiso) {
   if (!cuenta.client_email || !cuenta.private_key) {
     throw new Error('la cuenta de servicio no tiene client_email/private_key');
   }
+  return cuenta;
+}
 
+const AUDIENCIA_AUTH = 'https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit';
+
+/**
+ * Un token personalizado de Firebase Auth, firmado acá con la cuenta de
+ * servicio (no hace falta pedirle nada a Google). El navegador lo canjea con
+ * `signInWithCustomToken` y queda con una sesión que lleva estos `claims`: las
+ * reglas de Firestore los leen en `request.auth.token`.
+ *
+ * Así entra el repartidor sin usuario ni clave: su link le da este token, y las
+ * reglas le dejan leer los pedidos con envío y nada más.
+ */
+export async function firmarTokenPersonalizado(uid, claims = {}) {
+  const cuenta = leerCuenta();
+  const ahora = Math.floor(Date.now() / 1000);
+  const cabecera = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
+  const cuerpo = b64url(JSON.stringify({
+    iss: cuenta.client_email,
+    sub: cuenta.client_email,
+    aud: AUDIENCIA_AUTH,
+    iat: ahora,
+    // Una hora es el máximo que acepta Firebase. La sesión que abre se renueva
+    // sola después: el token solo sirve para entrar.
+    exp: ahora + 3600,
+    uid,
+    claims,
+  }));
+  const firma = crypto.createSign('RSA-SHA256');
+  firma.update(`${cabecera}.${cuerpo}`);
+  return `${cabecera}.${cuerpo}.${b64url(firma.sign(cuenta.private_key))}`;
+}
+
+async function pedirToken(permiso) {
+  const cuenta = leerCuenta();
   const ahora = Math.floor(Date.now() / 1000);
   const cabecera = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
   const cuerpo = b64url(JSON.stringify({
@@ -264,9 +299,13 @@ export async function escribirCampos(coleccion, id, valores, { crear = false } =
  *     llegan a la vez piden el mismo número; con esto entra uno solo, y el
  *     resumen que va al pedido no queda escrito por el que perdió.
  *   · 'cualquiera': escribe esos campos exista o no.
+ *   · { version }: escribe esos campos solo si el documento sigue en la versión
+ *     que se leyó (`leerDocConVersion`). El repartidor y el local pueden tocar
+ *     el mismo pedido a la vez: lo que decidió uno sobre un pedido que el otro
+ *     ya cambió (lo canceló, lo entregó) no entra.
  *
- * @param {Array<{coleccion: string, id: string, valores: object, condicion?: 'existe'|'nuevo'|'cualquiera'}>} escrituras
- * @throws {Error & {status: number, yaExiste?: boolean}}
+ * @param {Array<{coleccion: string, id: string, valores: object, condicion?: 'existe'|'nuevo'|'cualquiera'|{version: string}}>} escrituras
+ * @throws {Error & {status: number, yaExiste?: boolean, cambio?: boolean}}
  */
 export async function escribirJuntos(escrituras) {
   const token = await accessToken();
@@ -278,6 +317,7 @@ export async function escribirJuntos(escrituras) {
     ...(condicion === 'nuevo' ? {} : { updateMask: { fieldPaths: Object.keys(valores).map(c => rutaDeCampo([c])) } }),
     ...(condicion === 'existe' ? { currentDocument: { exists: true } } : {}),
     ...(condicion === 'nuevo' ? { currentDocument: { exists: false } } : {}),
+    ...(condicion?.version ? { currentDocument: { updateTime: condicion.version } } : {}),
   }));
 
   const respuesta = await fetch(`${BASE}:commit`, {
@@ -287,12 +327,32 @@ export async function escribirJuntos(escrituras) {
   });
   if (!respuesta.ok) {
     const destino = escrituras.map(e => `${e.coleccion}/${e.id}`).join(', ');
-    const err = new Error(`Firestore devolvió ${respuesta.status} escribiendo ${destino}: ${(await respuesta.text()).slice(0, 300)}`);
+    const detalle = await respuesta.text();
+    const err = new Error(`Firestore devolvió ${respuesta.status} escribiendo ${destino}: ${detalle.slice(0, 300)}`);
     err.status = respuesta.status;
     if (respuesta.status === 409) err.yaExiste = true;
+    if (detalle.includes('FAILED_PRECONDITION')) err.cambio = true;
     throw err;
   }
   return respuesta.json();
+}
+
+/**
+ * Un documento con la hora de su última escritura, que sirve de versión para
+ * escribirlo después sin pisar un cambio del medio. Con la cuenta de servicio:
+ * sirve para colecciones públicas y cerradas.
+ *
+ * @returns {Promise<{datos: object, version: string}|null>}
+ */
+export async function leerDocConVersion(coleccion, id) {
+  const token = await accessToken();
+  const respuesta = await fetch(`${BASE}/${coleccion}/${encodeURIComponent(id)}`, {
+    headers: { Authorization: `Bearer ${token}` },
+  });
+  if (respuesta.status === 404) return null;
+  if (!respuesta.ok) throw new Error(`Firestore devolvió ${respuesta.status} leyendo ${coleccion}/${id}`);
+  const crudo = await respuesta.json();
+  return { datos: aplanar(crudo.fields || {}), version: crudo.updateTime };
 }
 
 /* ── Archivos ─────────────────────────────────────────────────────────────── */

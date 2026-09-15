@@ -174,3 +174,52 @@ describe('subirArchivo', () => {
     await expect(lib.subirArchivo('r/x.png', PNG, 'image/png')).rejects.toThrow(/403/);
   });
 });
+
+describe('firmarTokenPersonalizado', () => {
+  it('firma con la cuenta de servicio un token que Firebase Auth acepta, con los permisos del repartidor', async () => {
+    const crypto = await import('node:crypto');
+    const lib = await cargar();
+    const token = await lib.firmarTokenPersonalizado('repartidor', { reparto: true, reparto_version: 3 });
+
+    const [cabecera, cuerpo, firma] = token.split('.');
+    const datos = JSON.parse(Buffer.from(cuerpo, 'base64url').toString());
+    const cuenta = JSON.parse(CUENTA);
+    expect(JSON.parse(Buffer.from(cabecera, 'base64url').toString())).toEqual({ alg: 'RS256', typ: 'JWT' });
+    expect(datos).toMatchObject({
+      iss: cuenta.client_email, sub: cuenta.client_email, uid: 'repartidor',
+      aud: 'https://identitytoolkit.googleapis.com/google.identity.identitytoolkit.v1.IdentityToolkit',
+      claims: { reparto: true, reparto_version: 3 },
+    });
+    expect(datos.exp - datos.iat).toBe(3600);
+    const publica = crypto.createPublicKey(cuenta.private_key);
+    const ok = crypto.createVerify('RSA-SHA256').update(`${cabecera}.${cuerpo}`).verify(publica, Buffer.from(firma, 'base64url'));
+    expect(ok).toBe(true);
+    // No hace falta pedirle nada a Google para firmarlo.
+    expect(pedidos).toHaveLength(0);
+  });
+});
+
+describe('leerDocConVersion y escribir con condición de versión', () => {
+  it('lee el documento con la hora de su última escritura', async () => {
+    const lib = await cargar();
+    fetch.mockImplementation((url) => (String(url).startsWith('https://oauth2')
+      ? respuesta({ access_token: 't', expires_in: 3600 })
+      : respuesta({ name: 'x', fields: { estado: { stringValue: 'listo' } }, updateTime: '2026-09-15T18:00:00.123456Z' })));
+    const leido = await lib.leerDocConVersion('tienda_pedidos', 'abc');
+    expect(leido).toEqual({ datos: { estado: 'listo' }, version: '2026-09-15T18:00:00.123456Z' });
+  });
+
+  it('una escritura atada a esa versión no pisa lo que otro cambió en el medio', async () => {
+    const lib = await cargar();
+    await lib.escribirJuntos([{ coleccion: 'tienda_pedidos', id: 'abc', valores: { estado: 'entregado' }, condicion: { version: 'V1' } }]);
+    const commit = JSON.parse(pedidos.find(p => p.url.endsWith(':commit')).opciones.body);
+    expect(commit.writes[0].currentDocument).toEqual({ updateTime: 'V1' });
+    expect(commit.writes[0].updateMask.fieldPaths).toEqual(['estado']);
+
+    fetch.mockImplementation((url) => (String(url).startsWith('https://oauth2')
+      ? respuesta({ access_token: 't', expires_in: 3600 })
+      : respuesta({ error: { status: 'FAILED_PRECONDITION' } }, 400)));
+    const error = await lib.escribirJuntos([{ coleccion: 'c', id: 'x', valores: { a: 1 }, condicion: { version: 'V1' } }]).catch(e => e);
+    expect(error.cambio).toBe(true);
+  });
+});
