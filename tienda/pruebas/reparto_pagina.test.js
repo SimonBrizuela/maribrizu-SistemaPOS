@@ -7,7 +7,7 @@
  * que los botones hagan lo que dicen, que lo de la base aparezca solo y que un
  * link vencido o un error se expliquen.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { iniciarReparto } from '../src/reparto/app.js';
 
 const LOCAL = { lat: -31.354, lng: -64.173 };
@@ -29,6 +29,8 @@ function dependencias() {
     clave: CLAVE,
     abrir: { ok: true },
     escucha: null,
+    falla: null,
+    escuchas: 0,
     movidos: [],
     respuestaMover: { ok: true },
     posicion: null,
@@ -45,7 +47,13 @@ function dependencias() {
         return {
           ok: true,
           config: { origen: LOCAL, whatsapp: '5493517046684' },
-          escuchar: (alCambiar) => { const mio = mundo; mio.escucha = alCambiar; return () => { mio.cerrada++; }; },
+          escuchar: (alCambiar, alFallar) => {
+            const mio = mundo;
+            mio.escucha = alCambiar;
+            mio.falla = alFallar;
+            mio.escuchas++;
+            return () => { mio.cerrada++; };
+          },
         };
       }),
     },
@@ -252,6 +260,63 @@ describe('las listas', () => {
     window.dispatchEvent(new Event('pagehide'));
     expect(mundo.cerrada).toBe(1);
   });
+
+  it('un cambio que no toca lo que se ve no reemplaza los botones', async () => {
+    // Si se reemplazan mientras el dedo está apoyado, el toque se pierde.
+    await abrir();
+    llegan({ enCurso: [pedido('a'), pedido('b')] });
+    await respirar();
+    const boton = $('[data-proxima] [data-mover]');
+    llegan({ enCurso: [pedido('a'), pedido('b')] });
+    await respirar();
+    expect($('[data-proxima] [data-mover]')).toBe(boton);
+  });
+});
+
+describe('la escucha en vivo', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('si se corta, avisa y vuelve a conectarse sola', async () => {
+    await abrir();
+    llegan({ enCurso: [pedido('a')] });
+    await respirar();
+    expect(mundo.escuchas).toBe(1);
+
+    vi.useFakeTimers();
+    mundo.falla({ code: 'unavailable' });
+    // Las dos consultas avisan del mismo corte: se reconecta una sola vez.
+    mundo.falla({ code: 'unavailable' });
+    expect($('[data-vivo]').classList.contains('reparto-vivo--cortado')).toBe(true);
+    expect(mundo.cerrada).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(mundo.escuchas).toBe(2);
+    llegan({ enCurso: [pedido('a'), pedido('b')] });
+    await vi.advanceTimersByTimeAsync(0);
+    expect($('[data-vivo]').classList.contains('reparto-vivo--cortado')).toBe(false);
+    expect($$('[data-parada]')).toHaveLength(2);
+  });
+
+  it('al volver a la pantalla (desde Google Maps) con la escucha cortada, reconecta enseguida', async () => {
+    await abrir();
+    llegan({ enCurso: [pedido('a')] });
+    await respirar();
+    mundo.falla({ code: 'unavailable' });
+    Object.defineProperty(document, 'visibilityState', { value: 'visible', configurable: true });
+    document.dispatchEvent(new Event('visibilitychange'));
+    await respirar();
+    expect(mundo.escuchas).toBe(2);
+  });
+
+  it('un link anulado no reintenta: lo dice', async () => {
+    await abrir();
+    llegan({ enCurso: [pedido('a')] });
+    await respirar();
+    mundo.falla({ code: 'permission-denied' });
+    await respirar();
+    expect(raiz.textContent).toMatch(/ya no sirve/i);
+    expect(mundo.escuchas).toBe(1);
+  });
 });
 
 describe('los botones', () => {
@@ -294,6 +359,45 @@ describe('los botones', () => {
     expect(mundo.movidos).toHaveLength(1);
     soltar();
     await respirar();
+    expect($('[data-proxima] [data-mover]').disabled).toBe(false);
+  });
+
+  it('si la base ya muestra el pedido movido, el botón se libera sin esperar la respuesta', async () => {
+    // La función contesta después de avisarle al cliente: puede tardar varios
+    // segundos más que el cambio en la base.
+    const deps = dependencias();
+    let soltar;
+    deps.mover.mockImplementationOnce(() => new Promise(r => { soltar = r; }));
+    await abrir(deps);
+    llegan({ enCurso: [pedido('a')] });
+    await respirar();
+    $('[data-proxima] [data-mover]').click();
+    await respirar();
+    expect($('[data-proxima] [data-mover]').disabled).toBe(true);
+
+    llegan({ enCurso: [pedido('a', { estado: 'en_camino' })] });
+    await respirar();
+    const siguiente = $('[data-proxima] [data-mover]');
+    expect(siguiente.textContent).toMatch(/Lo entregué/);
+    expect(siguiente.disabled).toBe(false);
+    expect(siguiente.classList.contains('boton--cargando')).toBe(false);
+
+    // Y si la respuesta llega tarde y con error (se cortó la conexión después
+    // de escribir), no asusta con un aviso: el cambio está hecho.
+    soltar({ ok: false, error: 'red' });
+    await respirar();
+    expect(document.body.textContent).not.toMatch(/No se pudo/);
+    expect($('[data-proxima] [data-mover]').disabled).toBe(false);
+  });
+
+  it('si la respuesta falla y la base no cambió, sí avisa', async () => {
+    await abrir();
+    mundo.respuestaMover = { ok: false, error: 'red' };
+    llegan({ enCurso: [pedido('a')] });
+    await respirar();
+    $('[data-proxima] [data-mover]').click();
+    await respirar();
+    expect(document.body.textContent).toMatch(/No se pudo cambiar el pedido/);
     expect($('[data-proxima] [data-mover]').disabled).toBe(false);
   });
 
@@ -358,6 +462,19 @@ describe('entregar', () => {
     $('[data-confirmar-entrega]').click();
     await respirar();
     expect(mundo.movidos[0]).toMatchObject({ estado: 'entregado', cobrado: null, foto: { tipo: 'image/jpeg', datos: 'base64foto' } });
+  });
+
+  it('la hoja se cierra en cuanto la base muestra el pedido entregado', async () => {
+    const deps = await hastaLaHoja({ pago: { modo: 'transferencia', pagado: true } });
+    deps.mover.mockImplementationOnce(() => new Promise(() => {}));
+    $('[data-confirmar-entrega]').click();
+    await respirar();
+    expect($('[data-confirmar-entrega]').disabled).toBe(true);
+
+    llegan({ enCurso: [], entregadosHoy: [pedido('a', { estado: 'entregado' })] });
+    await respirar();
+    expect($('[data-hoja-entrega]')).toBeNull();
+    expect(raiz.textContent).toMatch(/No hay pedidos para llevar/);
   });
 
   it('si no se pudo, la hoja queda abierta con el motivo', async () => {

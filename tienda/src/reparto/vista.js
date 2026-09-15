@@ -235,7 +235,7 @@ export function listas({ ruta, preparandoLista, entregadosHoy }, estado) {
         ${preparandoLista.map(p => preparando(p, estado)).join('')}
       </ul>` : ''}
     ${entregadosHoy.length ? `
-      <details class="reparto-entregados">
+      <details class="reparto-entregados"${estado.entregadosAbiertos ? ' open' : ''}>
         <summary>Entregados hoy <span>${entregadosHoy.length}</span></summary>
         <ul>
           ${entregadosHoy.map(p => `

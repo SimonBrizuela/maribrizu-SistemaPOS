@@ -51,6 +51,17 @@ export function validarMovimiento(pedido, estado) {
   return null;
 }
 
+/**
+ * Si el pedido ya está en ese paso o más adelante. La pantalla lo usa para no
+ * esperar la respuesta de `reparto-mover` cuando la base ya muestra el cambio.
+ * Un pedido cancelado no llegó a ningún paso.
+ */
+export function yaLlego(pedido, estado) {
+  const destino = ORDEN.indexOf(estado);
+  const actual = ORDEN.indexOf(pedido?.estado);
+  return destino >= 1 && actual >= destino;
+}
+
 /* ── Distancias y ruta ────────────────────────────────────────────────────── */
 
 const esCoordenada = (c) => Number.isFinite(Number(c?.lat)) && Number.isFinite(Number(c?.lng))

@@ -8,7 +8,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import {
-  ESTADOS_EN_CURSO, siguientePaso, validarMovimiento, distanciaKm, ordenarRuta,
+  ESTADOS_EN_CURSO, siguientePaso, validarMovimiento, yaLlego, distanciaKm, ordenarRuta,
   paraLlevar, enPreparacion, enlaceNavegar, enlaceRuta, cobroDe, diaArgentina, resumenDelDia,
 } from '../src/reparto.js';
 
@@ -61,6 +61,21 @@ describe('validarMovimiento', () => {
   it('un estado que no existe, o cancelar, no', () => {
     expect(validarMovimiento(pedido(), 'volando')).toBe('estado_invalido');
     expect(validarMovimiento(pedido(), 'cancelado')).toBe('estado_invalido');
+  });
+});
+
+describe('yaLlego', () => {
+  it('el pedido ya está en ese paso o más adelante', () => {
+    expect(yaLlego(pedido({ estado: 'en_camino' }), 'en_camino')).toBe(true);
+    expect(yaLlego(pedido({ estado: 'entregado' }), 'en_camino')).toBe(true);
+    expect(yaLlego(pedido({ estado: 'entregado' }), 'entregado')).toBe(true);
+  });
+
+  it('todavía no llegó, o lo cancelaron: no', () => {
+    expect(yaLlego(pedido({ estado: 'listo' }), 'en_camino')).toBe(false);
+    expect(yaLlego(pedido({ estado: 'cancelado' }), 'en_camino')).toBe(false);
+    expect(yaLlego(null, 'en_camino')).toBe(false);
+    expect(yaLlego(pedido({ estado: 'listo' }), 'volando')).toBe(false);
   });
 });
 

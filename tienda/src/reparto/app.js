@@ -11,13 +11,18 @@
  * eso.
  */
 import { avisar } from '../avisos.js';
-import { ordenarRuta, paraLlevar, enPreparacion, distanciaKm } from '../reparto.js';
+import { ordenarRuta, paraLlevar, enPreparacion, distanciaKm, yaLlego } from '../reparto.js';
 import * as vista from './vista.js';
 import { abrirHojaEntrega, cerrarHojaEntrega } from './hoja_entrega.js';
 
 // Un movimiento del GPS por debajo de esto no cambia la recomendación: no vale
 // repintar la lista con cada paso.
 const METROS_PARA_REORDENAR = 40;
+
+// Una escucha de Firestore que falla no se vuelve a abrir sola: queda muerta y
+// la pantalla dejaría de actualizarse hasta recargar. Se reabre con estas
+// esperas, cada vez más largas mientras siga fallando.
+const ESPERAS_RECONEXION = [2_000, 5_000, 10_000, 30_000];
 
 const MENSAJES_MOVER = {
   cambio: 'El local cambió este pedido mientras tanto. Ya está actualizado.',
@@ -40,8 +45,12 @@ export async function iniciarReparto(raiz, dependencias) {
     ordenadoDesde: null,
     ubicacion: 'sin_pedir',
     moviendo: new Set(),
+    // Pedido → { destino, listo }: movimientos que esperan ver el cambio en la base.
+    esperas: new Map(),
     abiertos: new Set(),
+    abierta: null,
     cortar: null,
+    reconexion: { intento: 0, temporizador: null },
     soltarUbicacion: null,
     mapa: null,
     recibido: false,
@@ -49,7 +58,13 @@ export async function iniciarReparto(raiz, dependencias) {
 
   const zona = (nombre) => raiz.querySelector(`[data-${nombre}]`);
 
+  function dejarDeReconectar() {
+    clearTimeout(estado.reconexion.temporizador);
+    estado.reconexion.temporizador = null;
+  }
+
   function mostrarAviso(opciones) {
+    dejarDeReconectar();
     estado.cortar?.();
     estado.cortar = null;
     estado.mapa?.soltar();
@@ -74,15 +89,31 @@ export async function iniciarReparto(raiz, dependencias) {
     return { ruta, preparandoLista: enPreparacion(estado.enCurso), entregadosHoy: estado.entregadosHoy };
   }
 
+  // Lo último que se dibujó en cada zona. Solo se reemplaza lo que cambió: si se
+  // rearma un botón mientras el dedo está apoyado, el toque se pierde.
+  const dibujado = new WeakMap();
+
+  function poner(nombre, html) {
+    const nodo = zona(nombre);
+    if (!nodo || dibujado.get(nodo) === html) return;
+    nodo.innerHTML = html;
+    dibujado.set(nodo, html);
+  }
+
   function pintar() {
     if (!zona('zona-proxima')) return;
     const datos = calcular();
-    const opciones = { moviendo: estado.moviendo, abiertos: estado.abiertos, conUbicacion: Boolean(estado.yo) };
-    zona('resumen').innerHTML = vista.resumen(estado);
-    zona('aviso-ubicacion').innerHTML = vista.avisoUbicacion(estado.ubicacion);
-    zona('zona-proxima').innerHTML = estado.recibido ? vista.proxima(datos.ruta[0], opciones) : vista.esqueleto();
-    zona('listas').innerHTML = vista.listas(datos, opciones);
-    zona('zona-ruta').innerHTML = vista.enlaceDeRuta(datos.ruta);
+    const opciones = {
+      moviendo: estado.moviendo,
+      abiertos: estado.abiertos,
+      conUbicacion: Boolean(estado.yo),
+      entregadosAbiertos: Boolean(raiz.querySelector('.reparto-entregados')?.open),
+    };
+    poner('resumen', vista.resumen(estado));
+    poner('aviso-ubicacion', vista.avisoUbicacion(estado.ubicacion));
+    poner('zona-proxima', estado.recibido ? vista.proxima(datos.ruta[0], opciones) : vista.esqueleto());
+    poner('listas', vista.listas(datos, opciones));
+    poner('zona-ruta', vista.enlaceDeRuta(datos.ruta));
     estado.mapa?.actualizar({
       local: estado.config.origen || null,
       yo: estado.yo,
@@ -117,25 +148,56 @@ export async function iniciarReparto(raiz, dependencias) {
     }
 
     estado.config = abierta.config || {};
+    estado.abierta = abierta;
     raiz.innerHTML = vista.armazon();
     estado.mapa = mapa(zona('mapa'));
     pintar();
 
-    estado.cortar = abierta.escuchar(
-      ({ enCurso, entregadosHoy }) => {
-        estado.enCurso = enCurso;
-        estado.entregadosHoy = entregadosHoy;
-        estado.recibido = true;
-        zona('vivo')?.classList.remove('reparto-vivo--cortado');
-        pintar();
-      },
-      (err) => {
-        if (err?.code === 'permission-denied') { linkVencido(); return; }
-        zona('vivo')?.classList.add('reparto-vivo--cortado');
-      },
-    );
-
+    estado.reconexion.intento = 0;
+    escucharEnVivo();
     arrancarUbicacion();
+  }
+
+  function escucharEnVivo() {
+    dejarDeReconectar();
+    estado.cortar?.();
+    estado.cortar = estado.abierta.escuchar(alLlegarDatos, alCortarseEscucha);
+  }
+
+  function buscarPedido(id) {
+    return estado.enCurso.find(p => p.id === id) || estado.entregadosHoy.find(p => p.id === id) || null;
+  }
+
+  function alLlegarDatos({ enCurso, entregadosHoy }) {
+    estado.enCurso = enCurso;
+    estado.entregadosHoy = entregadosHoy;
+    estado.recibido = true;
+    estado.reconexion.intento = 0;
+    zona('vivo')?.classList.remove('reparto-vivo--cortado');
+    // Lo que la base ya muestra hecho no espera la respuesta de la función, que
+    // contesta recién después de avisarle al cliente.
+    for (const [id, espera] of estado.esperas) {
+      if (!yaLlego(buscarPedido(id), espera.destino)) continue;
+      estado.esperas.delete(id);
+      estado.moviendo.delete(id);
+      espera.listo({ ok: true });
+    }
+    pintar();
+  }
+
+  function alCortarseEscucha(err) {
+    if (err?.code === 'permission-denied') { linkVencido(); return; }
+    // Las dos consultas avisan del mismo corte: se reprograma una sola vez.
+    if (estado.reconexion.temporizador) return;
+    zona('vivo')?.classList.add('reparto-vivo--cortado');
+    estado.cortar?.();
+    estado.cortar = null;
+    const { intento } = estado.reconexion;
+    estado.reconexion.intento = intento + 1;
+    estado.reconexion.temporizador = setTimeout(
+      escucharEnVivo,
+      ESPERAS_RECONEXION[Math.min(intento, ESPERAS_RECONEXION.length - 1)],
+    );
   }
 
   /* ── Ubicación ──────────────────────────────────────────────────────────── */
@@ -172,17 +234,29 @@ export async function iniciarReparto(raiz, dependencias) {
 
   /* ── Botones ────────────────────────────────────────────────────────────── */
 
+  /**
+   * Termina con lo primero que llegue: la respuesta de la función o el cambio
+   * visto en la base. La función escribe antes de avisarle al cliente, así que
+   * en general la base gana por un par de segundos.
+   */
   async function moverPedido(id, estadoNuevo, extra = {}) {
     estado.moviendo.add(id);
     pintar();
-    let resultado;
-    try {
-      resultado = await mover(estado.clave, id, estadoNuevo, extra);
-    } catch {
-      resultado = { ok: false, error: 'red' };
-    }
+    const porLaBase = new Promise(listo => estado.esperas.set(id, { destino: estadoNuevo, listo }));
+    const porLaFuncion = (async () => {
+      try {
+        return await mover(estado.clave, id, estadoNuevo, extra);
+      } catch {
+        return { ok: false, error: 'red' };
+      }
+    })();
+    let resultado = await Promise.race([porLaFuncion, porLaBase]);
+    estado.esperas.delete(id);
     estado.moviendo.delete(id);
     if (resultado.error === 'link') { linkVencido(); return resultado; }
+    // Se cortó la conexión después de escribir, o el local lo había movido igual:
+    // el pedido está donde el repartidor quería.
+    if (!resultado.ok && yaLlego(buscarPedido(id), estadoNuevo)) resultado = { ok: true };
     pintar();
     return resultado;
   }
@@ -232,7 +306,14 @@ export async function iniciarReparto(raiz, dependencias) {
     }
   });
 
+  // Al volver de Google Maps o de WhatsApp con la escucha cortada no se espera
+  // al próximo reintento.
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && estado.reconexion.temporizador) escucharEnVivo();
+  });
+
   window.addEventListener('pagehide', () => {
+    dejarDeReconectar();
     estado.cortar?.();
     estado.cortar = null;
     estado.soltarUbicacion?.();

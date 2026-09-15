@@ -3,6 +3,11 @@
  * pedido (función `reparto-mover`) y seguir la ubicación del celular.
  */
 
+// Con mala señal un pedido colgado puede tardar minutos en fallar, con el botón
+// girando. Pasado este tiempo se da por perdido; si la escritura llegó igual, la
+// pantalla la ve en la base. Alcanza para subir la foto con poca señal.
+export const ESPERA_MAXIMA_MS = 30_000;
+
 /**
  * @returns {Promise<{ok: true} | {ok: false, error: string}>}
  */
@@ -12,6 +17,7 @@ export async function mover(clave, pedido, estado, { cobrado = null, foto = null
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ clave, pedido, estado, cobrado, foto }),
+      signal: AbortSignal.timeout?.(ESPERA_MAXIMA_MS),
     });
     if (respuesta.ok) return { ok: true };
     if (respuesta.status === 401) return { ok: false, error: 'link' };
