@@ -12,7 +12,7 @@
  * destacados, el catálogo filtra por rubro y busca, y el seguimiento encuentra
  * un pedido por su código.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const { datos } = vi.hoisted(() => ({
   datos: { productos: [], rubros: [], config: null, avisos: [], pedidos: {}, vacio: false },
@@ -229,6 +229,64 @@ describe('la ficha de un producto', () => {
   it('deja lo que Google necesita para mostrar el precio en el resultado', async () => {
     await abrir('producto', { params: { id: 'p1' } });
     expect(document.head.innerHTML).toContain('3500');
+  });
+});
+
+describe('ampliar la foto de la ficha', () => {
+  // En el celular la foto de la ficha es chica: una cartulina de 29 colores no
+  // se distingue sin acercarse. Tocarla la abre a pantalla completa.
+  const cartulina = {
+    id: 'f1', nombre: 'Cartulina Luma Comun', precio: 600, stock: 30,
+    rubro: 'LIBRERIA', categoria: 'Cartulina', marca: 'LUMA',
+    imagenes: ['https://x/abanico.webp', 'https://x/rollos.webp'],
+    variedades: [
+      { nombre: 'Rojo', stock: 5, imagen: 'https://x/rojo.webp' },
+      { nombre: 'Blanco', stock: 8 },
+    ],
+  };
+
+  afterEach(async () => {
+    const { cerrarVisorFotos } = await import('../src/visor_fotos.js');
+    cerrarVisorFotos();
+  });
+
+  const cuenta = () => document.querySelector('.visor-fotos [data-visor-cuenta]')?.textContent.trim();
+  const enGrande = () => document.querySelector('.visor-fotos [data-visor-imagen]')?.getAttribute('src');
+
+  it('tocar la foto la abre a pantalla completa con todas las del producto', async () => {
+    datos.productos = [cartulina];
+    const c = await abrir('producto', { params: { id: 'f1' } });
+
+    c.querySelector('[data-galeria-ampliar]').click();
+    expect(document.querySelector('.visor-fotos')).not.toBeNull();
+    expect(enGrande()).toBe('https://x/abanico.webp');
+    expect(cuenta()).toBe('1 / 2');
+  });
+
+  it('abre en la miniatura que se estaba mirando', async () => {
+    datos.productos = [cartulina];
+    const c = await abrir('producto', { params: { id: 'f1' } });
+
+    c.querySelector('[data-galeria-mini="https://x/rollos.webp"]').click();
+    c.querySelector('[data-galeria-ampliar]').click();
+    expect(enGrande()).toBe('https://x/rollos.webp');
+    expect(cuenta()).toBe('2 / 2');
+  });
+
+  it('con un color elegido que tiene su foto, arranca en esa', async () => {
+    datos.productos = [cartulina];
+    const c = await abrir('producto', { params: { id: 'f1' } });
+
+    c.querySelector('[data-variedad="Rojo"]').click();
+    c.querySelector('[data-galeria-ampliar]').click();
+    expect(enGrande()).toBe('https://x/rojo.webp');
+    expect(cuenta()).toBe('1 / 3');
+  });
+
+  it('sin fotos no hay nada para ampliar', async () => {
+    datos.productos = [{ ...cartulina, imagenes: [], variedades: [] }];
+    const c = await abrir('producto', { params: { id: 'f1' } });
+    expect(c.querySelector('[data-galeria-ampliar]')).toBeNull();
   });
 });
 

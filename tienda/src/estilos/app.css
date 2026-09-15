@@ -691,6 +691,181 @@
 }
 .galeria__miniatura:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 
+/* Ampliar la foto grande. Toda la foto es el botón (tocarla la abre en el
+   visor) y la lupa de la esquina es la pista de que se puede. Con mouse,
+   además, la foto se acerca en el lugar siguiendo al puntero: `transform-origin`
+   lo pone visor_fotos.js y acá solo se escala. */
+.galeria__principal { position: relative; }
+.galeria__principal img {
+  transition: transform var(--m-lento) var(--curva);
+  will-change: transform;
+}
+.galeria__principal--lupa img { transform: scale(2); }
+
+.galeria__ampliar {
+  position: absolute;
+  inset: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  cursor: zoom-in;
+  border-radius: inherit;
+  -webkit-tap-highlight-color: transparent;
+}
+.galeria__ampliar:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.galeria__ampliar-lupa {
+  position: absolute;
+  right: var(--e-3);
+  bottom: var(--e-3);
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-full);
+  background: color-mix(in srgb, var(--surface) 88%, transparent);
+  border: 1px solid var(--border);
+  color: var(--text);
+  box-shadow: var(--s-1);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+  transition: opacity var(--m-normal) var(--curva), transform var(--m-normal) var(--curva);
+}
+/* Con la lupa puesta la esquina tapa lo que se está mirando: se corre. */
+.galeria__principal--lupa .galeria__ampliar-lupa { opacity: 0; transform: scale(.9); }
+
+/* ── El visor de fotos ─────────────────────────────────────────────────────
+   Pantalla completa sobre negro de la marca. El fondo se aclara mientras se
+   desliza la foto para abajo (--visor-fondo lo baja visor_fotos.js), que es
+   la señal de que soltar ahí la cierra. */
+.visor-fotos {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--z-toast) + 1);
+  background: rgba(14, 13, 16, calc(.96 * var(--visor-fondo, 1)));
+  color: #FFFFFF;
+  overscroll-behavior: contain;
+}
+.visor-fotos__barra {
+  position: absolute;
+  inset: 0 0 auto;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--e-3);
+  padding: max(var(--e-3), env(safe-area-inset-top)) var(--e-3) var(--e-3) var(--e-4);
+  pointer-events: none;
+}
+.visor-fotos__barra > * { pointer-events: auto; }
+/* Los controles van sobre la foto cuando está acercada, y la foto casi siempre
+   tiene fondo blanco: blanco sobre blanco no se ve. Fondo oscuro translúcido
+   con un filo claro, que se lee sobre cualquier foto. */
+.visor-fotos__cuenta,
+.visor-fotos__boton,
+.visor-fotos__flecha,
+.visor-fotos__pista {
+  background: rgba(14, 13, 16, .58);
+  border: 1px solid rgba(255, 255, 255, .16);
+  -webkit-backdrop-filter: blur(8px);
+  backdrop-filter: blur(8px);
+}
+.visor-fotos__cuenta {
+  font-family: var(--font-titulo);
+  font-size: var(--t-sm);
+  font-weight: 500;
+  letter-spacing: .02em;
+  font-variant-numeric: tabular-nums;
+  padding: 6px 12px;
+  border-radius: var(--r-full);
+}
+.visor-fotos__acciones { display: flex; gap: var(--e-2); }
+.visor-fotos__boton,
+.visor-fotos__flecha {
+  width: 44px;
+  height: 44px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border-radius: var(--r-full);
+  color: #FFFFFF;
+  cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  transition: background var(--m-rapido) var(--curva), opacity var(--m-normal) var(--curva);
+}
+.visor-fotos__boton:hover,
+.visor-fotos__flecha:hover:not(:disabled) { background: rgba(14, 13, 16, .8); }
+.visor-fotos__boton:focus-visible,
+.visor-fotos__flecha:focus-visible { outline: 2px solid #FFFFFF; outline-offset: 2px; }
+
+.visor-fotos__escenario {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 68px var(--e-3) var(--e-6);
+  overflow: hidden;
+  /* Los gestos los maneja el visor: sin esto el navegador hace su propio
+     zoom de página o arrastra la de atrás. */
+  touch-action: none;
+}
+@media (min-width: 900px) {
+  .visor-fotos__escenario { padding: 76px 96px var(--e-7); }
+}
+.visor-fotos__imagen {
+  max-width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border-radius: var(--r-md);
+  background: #FFFFFF;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-user-drag: none;
+  cursor: zoom-in;
+  will-change: transform;
+}
+.visor-fotos__imagen--animada { transition: transform var(--m-normal) var(--curva); }
+.visor-fotos--acercada .visor-fotos__imagen { cursor: grab; }
+.visor-fotos--arrastrando .visor-fotos__imagen { cursor: grabbing; }
+
+.visor-fotos__flecha {
+  position: absolute;
+  top: 50%;
+  z-index: 2;
+  transform: translateY(-50%);
+}
+.visor-fotos__flecha--anterior { left: var(--e-3); }
+.visor-fotos__flecha--siguiente { right: var(--e-3); }
+@media (min-width: 900px) {
+  .visor-fotos__flecha { width: 52px; height: 52px; }
+  .visor-fotos__flecha--anterior { left: var(--e-5); }
+  .visor-fotos__flecha--siguiente { right: var(--e-5); }
+}
+/* En la punta la flecha se va en vez de quedar apagada: una flecha gris que no
+   hace nada parece rota. Con zoom también: tapaban lo que se mira. */
+.visor-fotos__flecha:disabled,
+.visor-fotos--acercada .visor-fotos__flecha { opacity: 0; pointer-events: none; }
+
+.visor-fotos__pista {
+  position: absolute;
+  left: 50%;
+  bottom: max(var(--e-5), env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  margin: 0;
+  padding: 8px 14px;
+  border-radius: var(--r-full);
+  font-size: var(--t-sm);
+  white-space: nowrap;
+  pointer-events: none;
+  animation: visor-pista 3.4s var(--curva) forwards;
+}
+@keyframes visor-pista {
+  0%   { opacity: 0; }
+  10%  { opacity: 1; }
+  78%  { opacity: 1; }
+  100% { opacity: 0; visibility: hidden; }
+}
+
 /* La columna de datos.
  *
  * El ancho tiene tope por dos motivos: un renglón de texto de 60 caracteres se

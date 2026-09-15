@@ -20,6 +20,7 @@
  * la pantalla.
  */
 import { esc } from './formato.js';
+import { icono } from './iconos.js';
 
 /** La foto propia de una variedad, por su nombre público. Null si no tiene. */
 export function fotoDeVariedad(p, nombre) {
@@ -66,6 +67,12 @@ export function htmlGaleria(p) {
   return `
     <div class="galeria__principal">
       <img data-galeria-grande src="${esc(grande)}" alt="${esc(p.nombre)}" width="800" height="800">
+      <!-- Toda la foto es el botón: tocarla la abre en grande (visor_fotos.js).
+           La lupa de la esquina es la pista de que se puede. -->
+      <button type="button" class="galeria__ampliar" data-galeria-ampliar
+              aria-label="Ver la foto en grande">
+        <span class="galeria__ampliar-lupa">${icono('ampliar', { tam: 18 })}</span>
+      </button>
     </div>
     ${minis.length ? `
       <div class="galeria__miniaturas" role="group" aria-label="Más fotos del producto">
@@ -80,13 +87,14 @@ export function htmlGaleria(p) {
 /**
  * Engancha la galería ya pintada dentro de `raiz`.
  *
- * Devuelve `mostrar(url)` para poner una foto grande y `alElegirVariedad(nombre)`
- * para que la ficha avise cuando cambia el color. Sin fotos no hay nada que
- * enganchar y las dos funciones no hacen nada.
+ * Devuelve `mostrar(url)` para poner una foto grande, `alElegirVariedad(nombre)`
+ * para que la ficha avise cuando cambia el color y `actual()` con la foto que se
+ * está viendo, que es la que se abre en grande. Sin fotos no hay nada que
+ * enganchar: las funciones no hacen nada y `actual()` da null.
  */
 export function montarGaleria(raiz, p) {
   const grande = raiz?.querySelector('[data-galeria-grande]');
-  if (!grande) return { mostrar() {}, alElegirVariedad() {} };
+  if (!grande) return { mostrar() {}, alElegirVariedad() {}, actual: () => null };
 
   const minis = [...raiz.querySelectorAll('[data-galeria-mini]')];
   let actual = grande.getAttribute('src');
@@ -103,5 +111,6 @@ export function montarGaleria(raiz, p) {
   return {
     mostrar,
     alElegirVariedad(nombre) { mostrar(fotoAlElegir(p, nombre, actual)); },
+    actual: () => actual,
   };
 }

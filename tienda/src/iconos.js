@@ -14,6 +14,8 @@
 
 const TRAZOS = {
   buscar:   '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>',
+  ampliar:  '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M11 8v6M8 11h6"/>',
+  achicar:  '<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5M8 11h6"/>',
   carrito:  '<path d="M6 2 3 6v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V6l-3-4z"/><path d="M3 6h18"/><path d="M16 10a4 4 0 0 1-8 0"/>',
   mas:      '<path d="M12 5v14M5 12h14"/>',
   menos:    '<path d="M5 12h14"/>',

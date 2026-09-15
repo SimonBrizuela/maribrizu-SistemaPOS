@@ -85,6 +85,12 @@ describe('el HTML de la galería', () => {
     expect(html).not.toContain(ROJO);
   });
 
+  it('la foto grande trae el botón para verla en grande', () => {
+    const html = htmlGaleria(LAPIZ);
+    expect(html).toContain('data-galeria-ampliar');
+    expect(html).toMatch(/aria-label="Ver la foto en grande"/);
+  });
+
   it('con una sola foto no hay miniaturas', () => {
     const html = htmlGaleria({ ...LAPIZ, imagenes: [PORTADA] });
     expect(html).toContain('data-galeria-grande');
@@ -94,6 +100,7 @@ describe('el HTML de la galería', () => {
   it('sin fotos, la placa con la inicial', () => {
     const html = htmlGaleria({ ...LAPIZ, imagenes: [] });
     expect(html).toContain('card-producto__placa');
+    expect(html).not.toContain('data-galeria-ampliar');
     expect(html).toContain('>L<');
     expect(html).not.toContain('data-galeria-grande');
   });
@@ -172,10 +179,21 @@ describe('montada en la ficha', () => {
     expect(minis.map(m => m.getAttribute('aria-pressed'))).toEqual(['false', 'true', 'false']);
   });
 
+  it('dice qué foto se está viendo, para abrirla en grande', () => {
+    const { raiz, minis } = galeriaDeMentira(LAPIZ);
+    const g = montarGaleria(raiz, LAPIZ);
+    expect(g.actual()).toBe(PORTADA);
+    minis[2].disparar('click');
+    expect(g.actual()).toBe(CAJA);
+    g.alElegirVariedad('Rojo');
+    expect(g.actual()).toBe(ROJO);
+  });
+
   it('sin fotos no hay nada que montar y las funciones no revientan', () => {
     const raiz = { querySelector: () => null, querySelectorAll: () => [] };
     const g = montarGaleria(raiz, { ...LAPIZ, imagenes: [] });
     expect(() => { g.mostrar(ROJO); g.alElegirVariedad('Rojo'); }).not.toThrow();
+    expect(g.actual()).toBeNull();
     expect(() => montarGaleria(null, LAPIZ).alElegirVariedad('Rojo')).not.toThrow();
   });
 });

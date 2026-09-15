@@ -71,5 +71,43 @@ export function iniciar() {
     ir(href);
   });
 
-  window.addEventListener('popstate', () => alCambiar?.());
+  window.addEventListener('popstate', () => {
+    // El "atrás" que sacó la entrada de una capa cerrada con su propio botón.
+    if (_ignorarVuelta) { _ignorarVuelta = false; return; }
+    // El "atrás" con una capa abierta la cierra y deja la página como estaba.
+    if (_capa) {
+      const cerrar = _capa;
+      _capa = null;
+      cerrar();
+      return;
+    }
+    alCambiar?.();
+  });
+}
+
+/* ── Capas que usan el botón atrás ─────────────────────────────────────────
+   En el celular el "atrás" es el gesto para salir de lo que se abrió encima
+   (el visor de fotos). Sin esto sacaba al cliente de la ficha, y volver era
+   esperar a que se cargue de nuevo y buscar dónde estaba. */
+let _capa = null;
+let _ignorarVuelta = false;
+
+/**
+ * Pone una entrada en el historial para una capa que se abre encima de la
+ * página. El "atrás" llama a `alVolver` en vez de navegar.
+ *
+ * Devuelve `soltar()`, para cuando la capa se cierra con su propio botón: saca
+ * la entrada que había puesto sin que la página se entere.
+ */
+export function capaConHistorial(alVolver) {
+  window.history.pushState({ capa: true }, '', window.location.href);
+  _capa = alVolver;
+  return {
+    soltar() {
+      if (_capa !== alVolver) return;   // ya la cerró el "atrás"
+      _capa = null;
+      _ignorarVuelta = true;
+      window.history.back();
+    },
+  };
 }

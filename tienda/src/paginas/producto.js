@@ -10,6 +10,7 @@ import { montarCinta } from '../cinta.js';
 import { fijarAmbito } from '../sugerencias.js';
 import { fijarTitulo, fijarProducto } from '../seo.js';
 import { htmlGaleria, montarGaleria } from '../galeria.js';
+import { montarAmpliar } from '../visor_fotos.js';
 import { botonFotoFicha } from '../fotos.js';
 import { medir } from '../medicion.js';
 
@@ -406,6 +407,8 @@ export async function producto({ montar, params }) {
 
   /* ── Galería ─────────────────────────────────────────────────────────────── */
   const galeria = montarGaleria(document.querySelector('[data-galeria]'), p);
+  // Tocar la foto la abre en grande; con mouse, además, la lupa al pasar.
+  montarAmpliar(document.querySelector('[data-galeria]'), p, galeria);
 
   /* ── Variedades ─────────────────────────────────────────────────────────── */
   const botonAgregar = document.querySelector('[data-agregar]');
