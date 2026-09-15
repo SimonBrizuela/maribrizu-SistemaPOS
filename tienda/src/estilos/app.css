@@ -1595,8 +1595,45 @@
 
 .cargar-mas {
   display: flex;
-  justify-content: center;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--e-3);
   padding-block: var(--e-6);
+}
+
+/* La carga sola al bajar. El centinela no se ve: avisa cuando el final se
+   acerca. Mientras llega la tanda, una línea tranquila, y si falla la red lo
+   dice con una forma de volver a probar. */
+.carga-continua { width: 100%; height: 1px; }
+.carga-continua__estado {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e-2);
+  margin: 0;
+  color: var(--text-2);
+  font-size: var(--t-sm);
+}
+.carga-continua__estado[hidden],
+.carga-continua__error[hidden] { display: none; }
+.carga-continua__ruedita {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--border-2);
+  border-top-color: var(--primary);
+  border-radius: 50%;
+  animation: girar .7s linear infinite;
+}
+.carga-continua__error {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--e-2);
+  color: var(--text-2);
+  font-size: var(--t-sm);
+}
+.carga-continua__error p { margin: 0; }
+@media (prefers-reduced-motion: reduce) {
+  .carga-continua__ruedita { animation-duration: 1.6s; }
 }
 
 

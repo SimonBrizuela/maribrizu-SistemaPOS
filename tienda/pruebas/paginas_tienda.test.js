@@ -15,7 +15,10 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const { datos } = vi.hoisted(() => ({
-  datos: { productos: [], rubros: [], config: null, avisos: [], pedidos: {}, vacio: false },
+  // `paginar`: traerProductos devuelve de a `cantidad`, con cursor, como la base.
+  // `tandas` cuenta los pedidos y `fallarTanda` hace fallar el próximo con cursor.
+  datos: { productos: [], rubros: [], config: null, avisos: [], pedidos: {}, vacio: false,
+           paginar: false, tandas: [], fallarTanda: false },
 }));
 
 vi.mock('firebase/firestore', async () =>
@@ -31,10 +34,19 @@ vi.mock('../src/datos.js', async (original) => {
     cargarAvisos: async () => datos.avisos,
     cargarRubros: async () => (datos.vacio ? [] : datos.rubros),
     subrubrosDe: async () => [],
-    traerProductos: async ({ rubro = null } = {}) => ({
-      productos: lista().filter(p => !rubro || p.rubro === rubro),
-      cursor: null,
-    }),
+    traerProductos: async ({ rubro = null, cursor = null, cantidad = 24 } = {}) => {
+      datos.tandas.push({ rubro, cursor, cantidad });
+      const todos = lista().filter(p => !rubro || p.rubro === rubro);
+      if (!datos.paginar) return { productos: todos, cursor: null };
+      if (cursor && datos.fallarTanda) { datos.fallarTanda = false; throw new Error('sin red'); }
+      const desde = cursor ? Number(cursor[0]) : 0;
+      const hayMas = desde + cantidad < todos.length;
+      return {
+        productos: todos.slice(desde, desde + cantidad),
+        cursor: hayMas ? [desde + cantidad, 'id'] : null,
+        hayMas,
+      };
+    },
     traerDestacados: async () => lista().slice(0, 4),
     traerMuestra: async () => lista().slice(0, 4),
     traerProducto: async (id) => lista().find(p => p.id === id) || null,
@@ -125,6 +137,9 @@ beforeEach(() => {
   datos.avisos = [];
   datos.pedidos = {};
   datos.vacio = false;
+  datos.paginar = false;
+  datos.tandas = [];
+  datos.fallarTanda = false;
   globalThis.fetch = vi.fn(() => Promise.resolve({ ok: true, json: async () => ({}) }));
   window.history.replaceState({}, '', '/');
   globalThis.IntersectionObserver = class {
@@ -209,6 +224,88 @@ describe('el catálogo', () => {
     const c = await abrir('catalogo', { query: new URLSearchParams('q=zzzzz') });
     expect(c.innerHTML.length).toBeGreaterThan(0);
     expect(c.textContent.toLowerCase()).toMatch(/no encontr|sin resultado|nada/);
+  });
+});
+
+describe('el catálogo carga solo al bajar', () => {
+  // Con 900 productos en Librería, apretar "Ver más" cada veinticuatro era la
+  // forma de no llegar nunca a la Z. Ahora la tanda siguiente entra sola al
+  // acercarse al final de la lista.
+  let observadores;
+  class ObservadorFalso {
+    constructor(alCambiar, opciones) {
+      Object.assign(this, { alCambiar, opciones, mirando: new Set(), desconectado: false });
+      observadores.push(this);
+    }
+    observe(el) { this.mirando.add(el); }
+    unobserve(el) { this.mirando.delete(el); }
+    disconnect() { this.desconectado = true; this.mirando.clear(); }
+    ver() { this.alCambiar([...this.mirando].map(target => ({ target, isIntersecting: true }))); }
+  }
+  const centinela = () => observadores.find(o => [...o.mirando].some(el => el.matches?.('[data-centinela]')));
+  const cards = () => document.querySelectorAll('[data-lista] .card-producto').length;
+  const respirar = async () => { for (let i = 0; i < 10; i++) await esperar(); };
+
+  const muchos = Array.from({ length: 60 }, (_, i) => ({
+    id: `c${i}`, nombre: `Cuaderno ${String(i).padStart(2, '0')}`, precio: 1000, stock: 5,
+    rubro: 'LIBRERIA', categoria: 'Cuadernos', imagenes: ['c.webp'],
+  }));
+
+  beforeEach(() => {
+    observadores = [];
+    globalThis.IntersectionObserver = ObservadorFalso;
+    datos.productos = muchos.map(p => ({ ...p }));
+    datos.rubros = [{ clave: 'LIBRERIA', nombre: 'Librería', cantidad: 60 }];
+    datos.paginar = true;
+  });
+
+  it('al acercarse al final entra la tanda siguiente, sin botón', async () => {
+    await abrir('catalogo', { params: { rubro: 'LIBRERIA' } });
+    expect(cards()).toBe(24);
+    expect(document.querySelector('[data-cargar]')).toBeNull();
+
+    centinela().ver();
+    await respirar();
+    expect(cards()).toBe(48);
+
+    centinela().ver();
+    await respirar();
+    expect(cards()).toBe(60);
+    // Ya no queda nada: nadie sigue mirando el final.
+    expect(centinela()).toBeUndefined();
+  });
+
+  it('las tandas siguen el cursor de la base, sin repetir productos', async () => {
+    await abrir('catalogo', { params: { rubro: 'LIBRERIA' } });
+    centinela().ver();
+    await respirar();
+    const nombres = [...document.querySelectorAll('[data-lista] .card-producto')]
+      .map(c => c.textContent.match(/Cuaderno \d+/)?.[0]);
+    expect(new Set(nombres).size).toBe(nombres.length);
+    expect(datos.tandas.map(t => t.cursor?.[0] ?? 0)).toEqual([0, 24]);
+  });
+
+  it('si falla la red lo dice y deja reintentar', async () => {
+    await abrir('catalogo', { params: { rubro: 'LIBRERIA' } });
+    datos.fallarTanda = true;
+    centinela().ver();
+    await respirar();
+
+    const reintentar = document.querySelector('[data-reintentar]');
+    expect(reintentar, 'falló en silencio').toBeTruthy();
+    reintentar.click();
+    await respirar();
+    expect(cards()).toBe(48);
+  });
+
+  it('en un navegador sin IntersectionObserver queda el botón de siempre', async () => {
+    delete globalThis.IntersectionObserver;
+    await abrir('catalogo', { params: { rubro: 'LIBRERIA' } });
+    const boton = document.querySelector('[data-cargar]');
+    expect(boton).toBeTruthy();
+    boton.click();
+    await respirar();
+    expect(cards()).toBe(48);
   });
 });
 

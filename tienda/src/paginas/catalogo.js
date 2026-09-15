@@ -9,6 +9,7 @@ import { ir } from '../router.js';
 import { fijarTitulo } from '../seo.js';
 import { abrirAsistente, asistenteApagado } from '../asistente.js';
 import { medir } from '../medicion.js';
+import { cargaContinua } from '../carga_continua.js';
 
 export async function catalogo({ montar, params, query }) {
   const rubro = params.rubro ? decodeURIComponent(params.rubro) : null;
@@ -245,9 +246,10 @@ export async function catalogo({ montar, params, query }) {
     return;
   }
 
-  /* ── Listado con paginado ──────────────────────────────────────────────── */
+  /* ── Listado que carga solo al bajar ───────────────────────────────────── */
   let cursor = null;
   let acumulados = 0;
+  let quedanMas = false;
 
   // Grupos de tamaños ya dibujados, entre tandas: si un tamaño cae en una
   // página posterior, no vuelve a dibujar la card del grupo.
@@ -268,6 +270,7 @@ export async function catalogo({ montar, params, query }) {
       await traerProductos({ rubro, sub, cursor, cantidad: POR_PAGINA });
 
     cursor = siguiente;
+    quedanMas = Boolean(hayMas);
 
     // Cada grupo de tamaños es una sola card; el conteo acompaña a las cards
     // para que el número de arriba no contradiga lo que se ve abajo.
@@ -307,16 +310,60 @@ export async function catalogo({ montar, params, query }) {
     cuenta.textContent = totalConocido
       ? `${totalConocido.toLocaleString('es-AR')} producto${totalConocido === 1 ? '' : 's'}`
       : `${acumulados}${hayMas ? '+' : ''} producto${acumulados === 1 ? '' : 's'}`;
-
-    zonaMas.innerHTML = hayMas
-      ? '<button class="boton boton--secundario boton--grande" data-cargar>Ver más productos</button>'
-      : '';
-
-    zonaMas.querySelector('[data-cargar]')?.addEventListener('click', async ev => {
-      ev.target.classList.add('boton--cargando');
-      await traerTanda(false);
-    });
+    return quedanMas;
   }
 
   await traerTanda(true);
+  if (!quedanMas) return;
+
+  // La tanda siguiente entra sola al acercarse al final. Con 900 productos en
+  // Librería, apretar "Ver más" cada veinticuatro era la forma de no llegar
+  // nunca a la Z.
+  zonaMas.innerHTML = `
+    <div class="carga-continua" data-centinela aria-hidden="true"></div>
+    <p class="carga-continua__estado" data-cargando role="status" hidden>
+      <span class="carga-continua__ruedita" aria-hidden="true"></span> Trayendo más productos…
+    </p>
+    <div class="carga-continua__error" data-error-carga hidden>
+      <p>No se pudieron traer más productos.</p>
+      <button type="button" class="boton boton--secundario" data-reintentar>Probar de nuevo</button>
+    </div>`;
+  const estado = zonaMas.querySelector('[data-cargando]');
+  const aviso = zonaMas.querySelector('[data-error-carga]');
+
+  const continua = cargaContinua({
+    centinela: zonaMas.querySelector('[data-centinela]'),
+    cargar: () => traerTanda(false),
+    alCargar: trayendo => { estado.hidden = !trayendo; },
+    alTerminar: () => { zonaMas.innerHTML = ''; },
+    // Sin red la carga se frena y lo dice: seguir pidiendo en silencio dejaba
+    // al cliente mirando el final de una lista que no termina.
+    alFallar: (_err, reintentar) => {
+      aviso.hidden = false;
+      aviso.querySelector('[data-reintentar]').onclick = () => {
+        aviso.hidden = true;
+        reintentar();
+      };
+    },
+  });
+
+  // Un navegador que no sabe avisar cuándo se acerca el final se queda con el
+  // botón de siempre.
+  if (!continua) ponerBotonVerMas();
+
+  function ponerBotonVerMas() {
+    zonaMas.innerHTML =
+      '<button class="boton boton--secundario boton--grande" data-cargar>Ver más productos</button>';
+    zonaMas.querySelector('[data-cargar]').addEventListener('click', async ev => {
+      const boton = ev.currentTarget;
+      boton.classList.add('boton--cargando');
+      try {
+        if (await traerTanda(false)) ponerBotonVerMas();
+        else zonaMas.innerHTML = '';
+      } catch (err) {
+        console.warn('[catalogo] no se pudo traer la tanda siguiente:', err?.message || err);
+        boton.classList.remove('boton--cargando');
+      }
+    });
+  }
 }
