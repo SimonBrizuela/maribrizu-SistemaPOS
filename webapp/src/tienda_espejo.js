@@ -802,13 +802,22 @@ export async function leerDocEspejoRest(docId, campos = null) {
 /**
  * Lo mismo sobre cualquier colección de lectura pública (`tienda_productos`,
  * `tienda_config`). Sin credencial y sin pasar por la cola del SDK.
+ *
+ * Con `conSesion` va el token del usuario, para las que no son públicas
+ * (`config`); sin sesión devuelve `null` para que se caiga al SDK.
  */
-export async function leerDocRest(coleccion, docId, campos = null) {
+export async function leerDocRest(coleccion, docId, campos = null, { conSesion = false } = {}) {
   const mascara = campos?.length
     ? '?' + campos.map(c => `mask.fieldPaths=${encodeURIComponent(c)}`).join('&') : '';
+  const opciones = {};
+  if (conSesion) {
+    const token = await tokenDeSesion();
+    if (!token) return null;
+    opciones.headers = { Authorization: `Bearer ${token}` };
+  }
   try {
     const r = await conEspera(
-      `${REST}/${coleccion}/${encodeURIComponent(docId)}${mascara}`);
+      `${REST}/${coleccion}/${encodeURIComponent(docId)}${mascara}`, opciones);
     if (r.status === 404) return { existe: false, datos: null };
     if (!r.ok) return null;
     const cuerpo = await r.json();
