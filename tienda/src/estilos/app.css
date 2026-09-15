@@ -1217,35 +1217,60 @@
    La lista de "Mis pedidos" sale de este navegador, así que el enlace es la
    única llave que abre el pedido desde otro aparato. */
 /* Los avisos al celular, justo debajo del bloque negro: es lo primero que sirve
-   decidir recién confirmado el pedido. Una tarjeta tranquila con un solo botón;
-   activados, queda una línea que lo confirma. */
+   decidir recién confirmado el pedido. Una tarjeta tranquila: la campana y el
+   texto centrados, y el botón aparte a la derecha; activados, queda una línea
+   que lo confirma. */
 .pedido-avisos {
   display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: var(--e-3) var(--e-4);
+  align-items: stretch;
+  gap: var(--e-4);
   /* El bloque negro ya deja su aire abajo: sumarle más lo separaba del pedido. */
   margin: 0;
-  padding: var(--e-4);
+  padding: var(--e-5) var(--e-4);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
   background: var(--surface);
 }
+.pedido-avisos__cuerpo {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+}
 .pedido-avisos__icono {
   flex: none;
-  width: 40px;
-  height: 40px;
+  width: 44px;
+  height: 44px;
+  margin-bottom: var(--e-2);
   display: grid;
   place-items: center;
   border-radius: var(--r-full);
   background: var(--liceo-violeta-bg, var(--surface-2));
   color: var(--primary-txt, var(--primary));
 }
-.pedido-avisos__cuerpo { flex: 1 1 220px; min-width: 0; }
-.pedido-avisos__titulo { margin: 0; font-weight: 700; font-size: var(--t-base); }
-.pedido-avisos__texto { margin: 2px 0 0; color: var(--text-2); font-size: var(--t-sm); }
+.pedido-avisos__titulo { margin: 0; font-weight: 700; font-size: var(--t-base); text-wrap: balance; }
+.pedido-avisos__texto { margin: 2px 0 0; color: var(--text-2); font-size: var(--t-sm); text-wrap: pretty; }
 .pedido-avisos__texto--mal { color: var(--error); }
-.pedido-avisos .boton { flex: none; }
+/* Una raya fina separa la pregunta de la acción: el botón queda en su lugar sin
+   competir con el texto. */
+.pedido-avisos__accion {
+  flex: none;
+  display: flex;
+  align-items: center;
+  padding-left: var(--e-4);
+  border-left: 1px solid var(--border);
+}
+.pedido-avisos__accion .boton { min-width: 148px; }
+/* En el celular el botón se ajusta a su texto: cada milímetro que no ocupa se
+   lo lleva la pregunta, que si no se parte en muchas líneas cortas. */
+@media (max-width: 480px) {
+  .pedido-avisos { gap: var(--e-3); padding: var(--e-4) var(--e-3); }
+  .pedido-avisos__accion { padding-left: var(--e-3); }
+  .pedido-avisos__accion .boton { min-width: 0; padding: 0 var(--e-4); font-size: var(--t-sm); }
+}
 .pedido-avisos--activos {
   flex-wrap: nowrap;
   align-items: flex-start;

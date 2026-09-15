@@ -286,8 +286,8 @@ function bloqueAvisos(p, avisos) {
   if (soporte === 'iphone_sin_instalar') {
     return `
       <div class="pedido-avisos" data-avisos>
-        <span class="pedido-avisos__icono">${icono('campana', { tam: 20 })}</span>
         <div class="pedido-avisos__cuerpo">
+          <span class="pedido-avisos__icono">${icono('campana', { tam: 22 })}</span>
           <p class="pedido-avisos__titulo">Avisos en tu iPhone</p>
           <p class="pedido-avisos__texto">Tocá Compartir, elegí "Agregar a inicio" y abrí la tienda
             desde ese ícono: así te avisamos cuando cambie tu pedido.</p>
@@ -299,16 +299,18 @@ function bloqueAvisos(p, avisos) {
   const activando = avisos.estado === 'activando';
   return `
     <div class="pedido-avisos" data-avisos>
-      <span class="pedido-avisos__icono">${icono('campana', { tam: 20 })}</span>
       <div class="pedido-avisos__cuerpo">
+        <span class="pedido-avisos__icono">${icono('campana', { tam: 22 })}</span>
         <p class="pedido-avisos__titulo">¿Te avisamos cuando cambie tu pedido?</p>
         <p class="pedido-avisos__texto${avisos.estado === 'error' ? ' pedido-avisos__texto--mal' : ''}">${
           avisos.estado === 'error'
             ? 'No se pudieron activar. Probá de nuevo.'
             : 'Te llega una notificación al celular aunque cierres esta página.'}</p>
       </div>
-      <button type="button" class="boton boton--primario boton--chico${activando ? ' boton--cargando' : ''}"
-              data-activar-avisos ${activando ? 'disabled' : ''}>Activar avisos</button>
+      <div class="pedido-avisos__accion">
+        <button type="button" class="boton boton--primario${activando ? ' boton--cargando' : ''}"
+                data-activar-avisos ${activando ? 'disabled' : ''}>Activar avisos</button>
+      </div>
     </div>`;
 }
 
