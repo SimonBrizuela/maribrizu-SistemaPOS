@@ -11,6 +11,7 @@ import { initNotifications, obtenerAlertasActivas, onAlertasCambian, refrescarAl
 import { initConsumiblesWatcher } from './consumibles_watcher.js';
 import { initPedidosWatcher, onPedidosCambian } from './pedidos_watcher.js';
 import { initReclamosWatcher, onReclamosCambian } from './reclamos_watcher.js';
+import { iniciarVentasPendientes } from './ventas_pendientes_watcher.js';
 import { initCajaWatcher } from './caja_watcher.js';
 import { initCalendarioBadge, proximosEventos, textoSobre } from './pages/calendario_core.js';
 import { renderSkeleton } from './skeletons.js';
@@ -914,6 +915,8 @@ function initApp(session) {
   // Los reclamos que nadie tomó todavía, con el mismo criterio.
   initReclamosWatcher(db);
   onReclamosCambian(lista => actualizarBadgeContador('navReclamosBadge', lista));
+  // Lo que entregó el repartidor: la venta y el stock los registra el panel.
+  iniciarVentasPendientes(db);
 
   // Si se está vendiendo sin caja abierta, avisarlo apenas pasa. Lee del store
   // (caja_activa + ventas_por_dia), no agrega lecturas propias.
