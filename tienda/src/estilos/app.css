@@ -1285,6 +1285,315 @@
 .pedido-avisos--activos svg { flex: none; margin-top: 2px; }
 .pedido-avisos--activos span { flex: 1; min-width: 0; }
 
+/* ── Reclamo: en qué anda ─────────────────────────────────────────────────── */
+
+/* Mientras está abierto, el ícono va en el violeta de la marca: es algo en
+   curso, igual que el pedido. Cerrado pasa al verde de lo que ya se resolvió.
+   La respuesta del local va en su propio recuadro, que es lo que el cliente
+   vino a leer. */
+.pedido-reclamo {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--e-3);
+  margin: 0;
+  padding: var(--e-4);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  background: var(--surface);
+}
+.pedido-reclamo__icono {
+  flex: none;
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-full);
+  background: var(--primary-bg);
+  color: var(--primary-txt);
+}
+.pedido-reclamo--cerrado .pedido-reclamo__icono { background: var(--exito-bg); color: var(--exito); }
+.pedido-reclamo__cuerpo { flex: 1; min-width: 0; }
+.pedido-reclamo__etiqueta { margin: 0; font-size: var(--t-xs); color: var(--text-2); }
+.pedido-reclamo__estado { margin: 2px 0 0; font-weight: var(--peso-bold); font-size: var(--t-base); }
+.pedido-reclamo__texto { margin: var(--e-1) 0 0; font-size: var(--t-sm); color: var(--text-2); }
+.pedido-reclamo__respuesta {
+  margin-top: var(--e-3);
+  padding: var(--e-3);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+.pedido-reclamo__de {
+  display: block;
+  margin-bottom: 2px;
+  font-size: var(--t-xs);
+  font-weight: var(--peso-semi);
+  color: var(--text-2);
+}
+.pedido-reclamo__respuesta p { margin: 0; font-size: var(--t-sm); white-space: pre-line; }
+
+/* La puerta para reclamar: tranquila, al pie de lo que se pidió. La mayoría de
+   los pedidos llegan bien y no hace falta gritarlo. */
+.pedido-problema {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: var(--e-2) var(--e-3);
+  margin-top: var(--e-4);
+  padding-top: var(--e-4);
+  border-top: 1px dashed var(--border-2, var(--border));
+}
+.pedido-problema__texto { margin: 0; font-size: var(--t-sm); color: var(--text-2); }
+
+/* ── Reclamo: la hoja ─────────────────────────────────────────────────────── */
+
+/* Sube desde abajo en el celular, como el asistente; en escritorio es una
+   ventana centrada. Va por encima del botón del asistente. */
+.reclamo-hoja {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.reclamo-hoja__fondo {
+  position: absolute;
+  inset: 0;
+  background: var(--overlay);
+  animation: asistente-aparecer var(--m-normal) var(--curva);
+}
+.reclamo-hoja__caja {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: 92vh;
+  max-height: 92dvh;
+  background: var(--surface);
+  border-radius: var(--r-xl) var(--r-xl) 0 0;
+  box-shadow: var(--s-4);
+  animation: asistente-subir var(--m-normal) var(--curva);
+}
+@media (min-width: 768px) {
+  .reclamo-hoja { align-items: center; padding: var(--e-5); }
+  .reclamo-hoja__caja {
+    width: min(560px, 100%);
+    max-height: min(780px, calc(100vh - 2 * var(--e-5)));
+    border-radius: var(--r-lg);
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reclamo-hoja__caja,
+  .reclamo-hoja__fondo { animation: none; }
+}
+
+.reclamo-hoja__cabecera {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: var(--e-3);
+  padding: var(--e-4);
+  border-bottom: 1px solid var(--border);
+}
+.reclamo-hoja__titulo { margin: 0; font-size: var(--t-md); font-weight: var(--peso-bold); line-height: 1.2; }
+.reclamo-hoja__bajada { margin: 2px 0 0; font-size: var(--t-xs); color: var(--text-2); }
+.reclamo-hoja__cerrar {
+  flex: none;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: none;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.reclamo-hoja__cerrar:hover { background: var(--surface-3); color: var(--text); }
+
+.reclamo-hoja__cuerpo {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-5);
+  padding: var(--e-4);
+}
+
+.reclamo-paso { display: flex; flex-direction: column; gap: var(--e-2); min-width: 0; }
+.reclamo-paso[hidden] { display: none; }
+.reclamo-paso__titulo {
+  margin: 0;
+  font-size: var(--t-sm);
+  font-weight: var(--peso-semi);
+  color: var(--text);
+}
+.reclamo-paso__opcional { margin-left: var(--e-1); font-weight: var(--peso-normal); color: var(--text-2); }
+
+.reclamo-motivos {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--e-2);
+}
+@media (max-width: 359px) {
+  .reclamo-motivos { grid-template-columns: 1fr; }
+}
+.reclamo-motivo { align-items: center; padding: var(--e-3); gap: var(--e-2); }
+.reclamo-motivo .opcion__marca { width: 18px; height: 18px; margin-top: 0; }
+.reclamo-motivo .opcion__marca::after { width: 8px; height: 8px; }
+.reclamo-motivo .opcion__titulo { font-size: var(--t-sm); line-height: 1.25; }
+.reclamo-paso--error .reclamo-motivo,
+.reclamo-paso--error .reclamo-producto { border-color: var(--error); }
+
+.reclamo-productos { display: flex; flex-direction: column; gap: var(--e-2); }
+.reclamo-producto {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: var(--e-3);
+  padding: var(--e-2) var(--e-3);
+  border: 1.5px solid var(--borde-control);
+  border-radius: var(--r-md);
+  cursor: pointer;
+  transition: border-color var(--m-rapido) var(--curva), background var(--m-rapido) var(--curva);
+}
+.reclamo-producto:hover { border-color: var(--text-3); }
+.reclamo-producto:has(input:checked) { border-color: var(--primary); background: var(--primary-bg); }
+.reclamo-producto:has(input:focus-visible) { outline: 2px solid var(--primary); outline-offset: 2px; }
+.reclamo-producto__foto {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  overflow: hidden;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-weight: var(--peso-bold);
+}
+.reclamo-producto__foto img { width: 100%; height: 100%; object-fit: cover; }
+.reclamo-producto__texto { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.reclamo-producto__nombre {
+  font-size: var(--t-sm);
+  font-weight: var(--peso-semi);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.reclamo-producto__nota { font-size: var(--t-xs); color: var(--text-2); }
+.reclamo-producto__marca {
+  flex: none;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: 2px solid var(--borde-control);
+  border-radius: 6px;
+  color: transparent;
+  transition: background var(--m-rapido) var(--curva), border-color var(--m-rapido) var(--curva);
+}
+.reclamo-producto:has(input:checked) .reclamo-producto__marca {
+  border-color: var(--primary);
+  background: var(--primary);
+  color: var(--primary-ink);
+}
+
+.reclamo-detalle { min-height: 112px; }
+.reclamo-contador { align-self: flex-end; font-variant-numeric: tabular-nums; }
+
+.reclamo-fotos {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: var(--e-2);
+}
+.reclamo-foto {
+  position: relative;
+  margin: 0;
+  aspect-ratio: 1;
+  max-width: 100%;
+  overflow: hidden;
+  border-radius: var(--r-md);
+  background: var(--surface-2);
+}
+.reclamo-foto img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.reclamo-foto__quitar {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: var(--r-full);
+  background: rgb(0 0 0 / 0.62);
+  color: #fff;
+  cursor: pointer;
+}
+.reclamo-foto__quitar:hover { background: rgb(0 0 0 / 0.8); }
+.reclamo-fotos__sumar {
+  aspect-ratio: 1;
+  max-width: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--e-1);
+  border: 1.5px dashed var(--borde-control);
+  border-radius: var(--r-md);
+  color: var(--text-2);
+  font-size: var(--t-xs);
+  font-weight: var(--peso-semi);
+  cursor: pointer;
+  transition: border-color var(--m-rapido) var(--curva), color var(--m-rapido) var(--curva);
+}
+.reclamo-fotos__sumar:hover { border-color: var(--primary); color: var(--primary-txt); }
+.reclamo-fotos__sumar:focus-within { outline: 2px solid var(--primary); outline-offset: 2px; }
+.reclamo-paso--error .reclamo-fotos__sumar { border-color: var(--error); }
+
+.reclamo-hoja__pie {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-2);
+  padding: var(--e-3) var(--e-4) calc(var(--e-3) + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--border);
+}
+.reclamo-hoja__error {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--e-2);
+  margin: 0;
+  font-size: var(--t-sm);
+  font-weight: var(--peso-semi);
+  color: var(--error);
+}
+.reclamo-hoja__error[hidden] { display: none; }
+.reclamo-hoja__error svg { flex: none; margin-top: 2px; }
+
+.reclamo-hecho {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--e-3);
+  padding: var(--e-7) var(--e-5) calc(var(--e-6) + env(safe-area-inset-bottom, 0px));
+  text-align: center;
+}
+.reclamo-hecho__icono {
+  width: 56px;
+  height: 56px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-full);
+  background: var(--exito-bg);
+  color: var(--exito);
+}
+.reclamo-hecho__titulo { margin: 0; font-size: var(--t-lg); font-weight: var(--peso-bold); }
+.reclamo-hecho__texto { margin: 0 0 var(--e-2); max-width: 36ch; color: var(--text-2); font-size: var(--t-sm); }
+
 .pedido__guardar {
   display: flex;
   flex-direction: column;

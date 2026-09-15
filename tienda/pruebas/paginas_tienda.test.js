@@ -20,7 +20,9 @@ const { datos } = vi.hoisted(() => ({
   datos: { productos: [], rubros: [], config: null, avisos: [], pedidos: {}, vacio: false,
            paginar: false, tandas: [], fallarTanda: false,
            // Los avisos al celular: qué soporta el navegador y qué contesta activarlos.
-           avisos: { soporte: 'ok', permiso: 'default', activos: [], resultado: 'activos', llamadas: [] } },
+           avisos: { soporte: 'ok', permiso: 'default', activos: [], resultado: 'activos', llamadas: [] },
+           // Cada vez que la pantalla abre la hoja del reclamo.
+           hojas: [] },
 }));
 
 vi.mock('firebase/firestore', async () =>
@@ -94,6 +96,11 @@ vi.mock('../src/avisos_push.js', () => ({
   },
 }));
 vi.mock('../src/direcciones.js', () => ({ montarDirecciones: () => {} }));
+// La hoja del reclamo tiene sus propias pruebas: acá importa que la pantalla la
+// abra con el pedido y reaccione cuando se manda.
+vi.mock('../src/hoja_reclamo.js', () => ({
+  abrirHojaReclamo: (pedido, opciones) => { datos.hojas.push({ pedido, opciones }); },
+}));
 
 const CONFIG = {
   abierta: true,
@@ -151,6 +158,7 @@ beforeEach(() => {
   datos.vacio = false;
   datos.paginar = false;
   datos.avisos = { soporte: 'ok', permiso: 'default', activos: [], resultado: 'activos', llamadas: [] };
+  datos.hojas = [];
   datos.tandas = [];
   datos.fallarTanda = false;
   globalThis.fetch = vi.fn(() => Promise.resolve({ ok: true, json: async () => ({}) }));
@@ -552,6 +560,83 @@ describe('el pedido confirmado', () => {
       boton().click();
       await respirar();
       expect(document.querySelector('[data-avisos]')).toBeNull();
+    });
+  });
+
+  describe('los reclamos', () => {
+    const respirar = async () => { for (let i = 0; i < 10; i++) await esperar(); };
+    const entrada = () => document.querySelector('[data-abrir-reclamo]');
+    const tarjeta = () => document.querySelector('[data-reclamo]');
+    const entregado = (extra = {}) => Object.assign(datos.pedidos.k1, {
+      estado: 'entregado',
+      entregado_en: { toDate: () => new Date(Date.now() - 86400000) },
+      ...extra,
+    });
+
+    it('un pedido entregado ofrece contar un problema, junto a lo que se pidió', async () => {
+      entregado();
+      await abrir('pedido', { params: { id: 'k1' } });
+      expect(entrada()).toBeTruthy();
+      expect(entrada().closest('.pedido-seccion').textContent).toContain('Lo que pediste');
+    });
+
+    it('uno recién entrado o cancelado, no', async () => {
+      datos.pedidos.k1.estado = 'nuevo';
+      await abrir('pedido', { params: { id: 'k1' } });
+      expect(entrada()).toBeNull();
+      document.body.innerHTML = '';
+      datos.pedidos.k1.estado = 'cancelado';
+      await abrir('pedido', { params: { id: 'k1' } });
+      expect(entrada()).toBeNull();
+    });
+
+    it('tocarlo abre la hoja con el pedido y el WhatsApp del local', async () => {
+      entregado();
+      datos.config.whatsapp = '5493517046684';
+      await abrir('pedido', { params: { id: 'k1' } });
+      entrada().click();
+      await respirar();
+      expect(datos.hojas).toHaveLength(1);
+      expect(datos.hojas[0].pedido.id).toBe('k1');
+      expect(datos.hojas[0].opciones.whatsapp).toBe('5493517046684');
+    });
+
+    it('con un reclamo en curso muestra en qué anda y no ofrece otro', async () => {
+      entregado({ reclamo: { id: 'k1-1', estado: 'revisando', motivo: 'roto', respuesta: null } });
+      await abrir('pedido', { params: { id: 'k1' } });
+      expect(tarjeta().textContent).toContain('Lo estamos revisando');
+      expect(tarjeta().textContent).toContain('Llegó roto');
+      expect(entrada()).toBeNull();
+    });
+
+    it('resuelto muestra la respuesta del local', async () => {
+      entregado({ reclamo: { id: 'k1-1', estado: 'resuelto', motivo: 'falta', respuesta: 'Te mandamos la cartulina que faltó.' } });
+      await abrir('pedido', { params: { id: 'k1' } });
+      expect(tarjeta().textContent).toContain('Resuelto');
+      expect(tarjeta().textContent).toContain('Te mandamos la cartulina que faltó.');
+    });
+
+    it('con un reclamo abierto, un pedido entregado ofrece los avisos del reclamo', async () => {
+      entregado({ reclamo: { id: 'k1-1', estado: 'nuevo', motivo: 'roto' } });
+      await abrir('pedido', { params: { id: 'k1' } });
+      expect(document.querySelector('[data-avisos]').textContent).toMatch(/reclamo/);
+    });
+
+    it('al mandarlo se ve al instante y, con el permiso ya dado, se anotan los avisos solos', async () => {
+      entregado();
+      datos.avisos.permiso = 'granted';
+      await abrir('pedido', { params: { id: 'k1' } });
+      await respirar();
+      // Entregado y sin reclamo no se sigue: no se anotó nada.
+      expect(datos.avisos.llamadas).toEqual([]);
+
+      entrada().click();
+      await respirar();
+      datos.hojas[0].opciones.alEnviado({ id: 'k1-1', estado: 'nuevo', motivo: 'roto', respuesta: null });
+      await respirar();
+      expect(tarjeta().textContent).toContain('Recibido');
+      expect(entrada()).toBeNull();
+      expect(datos.avisos.llamadas).toEqual([{ id: 'k1', preguntar: false }]);
     });
   });
 });

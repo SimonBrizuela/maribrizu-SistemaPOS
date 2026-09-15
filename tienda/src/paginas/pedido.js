@@ -28,6 +28,7 @@ import { seguirPedido, pasosDe, indiceDeEstado } from '../pedidos.js';
 import { describirPack } from '../carrito.js';
 import { avisar } from '../avisos.js';
 import { soporteDeAvisos, permisoDado, avisosActivos, activarAvisos } from '../avisos_push.js';
+import { ABIERTOS, puedeReclamar, estadoLegible, motivoLegible } from '../reclamos.js';
 
 // Viven fuera de la funcion a proposito: al navegar a otra pantalla el nodo se
 // reemplaza pero la suscripcion y el mapa seguirian vivos, escuchando y
@@ -148,6 +149,27 @@ export async function pedido({ montar, params }) {
     activar({ preguntar: true });
   });
 
+  /* ── Reclamos ───────────────────────────────────────────────────────────
+     La hoja se carga recién cuando alguien la abre: la mayoría de los pedidos
+     llegan bien y no tienen por qué bajar el formulario ni el achicador de
+     fotos. */
+  caja.addEventListener('click', async ev => {
+    if (!ev.target.closest('[data-abrir-reclamo]') || !ultimo) return;
+    const { abrirHojaReclamo } = await import('../hoja_reclamo.js');
+    abrirHojaReclamo(ultimo, {
+      whatsapp: cfg.whatsapp,
+      alEnviado: resumen => {
+        if (!document.contains(caja) || !ultimo) return;
+        // Se muestra ya, sin esperar a que la base lo devuelva por la
+        // suscripción: el cliente acaba de tocar "Enviar".
+        pintar({ ...ultimo, reclamo: resumen, reclamos_cantidad: (Number(ultimo.reclamos_cantidad) || 0) + 1 });
+        if (avisos.estado === 'inicio' && soporteDeAvisos() === 'ok' && permisoDado()) {
+          activar({ preguntar: false });
+        }
+      },
+    });
+  });
+
   // La miniatura del comprobante abre el visor, sin salir de la página.
   caja.addEventListener('click', ev => {
     const boton = ev.target.closest('[data-ver-comprobante]');
@@ -219,7 +241,7 @@ export async function pedido({ montar, params }) {
       pintar(actualizado);
       // Quien ya dio el permiso en otro pedido no tiene por qué tocar nada: se
       // anota este celular solo, sin preguntar.
-      if (primera && avisos.estado === 'inicio' && !TERMINADOS.has(actualizado.estado)
+      if (primera && avisos.estado === 'inicio' && seSigue(actualizado)
           && soporteDeAvisos() === 'ok' && permisoDado()) {
         activar({ preguntar: false });
       }
@@ -266,20 +288,34 @@ function esqueleto() {
 const TERMINADOS = new Set(['entregado', 'cancelado']);
 
 /**
+ * Si todavía hay algo que avisarle al cliente: el pedido en curso, o uno ya
+ * terminado con un reclamo que el local no respondió.
+ */
+function seSigue(p) {
+  return !TERMINADOS.has(p.estado) || ABIERTOS.includes(p.reclamo?.estado);
+}
+
+/**
  * El cartel de los avisos al celular.
  *
- * Aparece solo donde sirve: con el pedido en curso y en un navegador que puede
- * recibirlos. En iPhone los avisos web andan únicamente con la tienda agregada
- * a la pantalla de inicio, así que ahí se explica cómo en vez de ofrecer un
- * botón que no haría nada. Si el cliente dijo que no, no se insiste.
+ * Aparece solo donde sirve: con el pedido en curso (o con un reclamo abierto) y
+ * en un navegador que puede recibirlos. En iPhone los avisos web andan
+ * únicamente con la tienda agregada a la pantalla de inicio, así que ahí se
+ * explica cómo en vez de ofrecer un botón que no haría nada. Si el cliente dijo
+ * que no, no se insiste.
  */
 function bloqueAvisos(p, avisos) {
-  if (TERMINADOS.has(p.estado)) return '';
+  if (!seSigue(p)) return '';
+  // Con el pedido ya entregado lo único que falta avisar es la respuesta.
+  const porReclamo = TERMINADOS.has(p.estado);
+  const cuando = porReclamo ? 'cuando respondamos tu reclamo' : 'cuando cambie tu pedido';
   if (avisos.estado === 'activos') {
     return `
       <p class="pedido-avisos pedido-avisos--activos" data-avisos role="status">
         ${icono('campana', { tam: 17 })}
-        <span>Te avisamos en este celular cada vez que cambie tu pedido.</span>
+        <span>${porReclamo
+          ? 'Te avisamos en este celular cuando respondamos tu reclamo.'
+          : 'Te avisamos en este celular cada vez que cambie tu pedido.'}</span>
       </p>`;
   }
   const soporte = soporteDeAvisos();
@@ -290,7 +326,7 @@ function bloqueAvisos(p, avisos) {
           <span class="pedido-avisos__icono">${icono('campana', { tam: 22 })}</span>
           <p class="pedido-avisos__titulo">Avisos en tu iPhone</p>
           <p class="pedido-avisos__texto">Tocá Compartir, elegí "Agregar a inicio" y abrí la tienda
-            desde ese ícono: así te avisamos cuando cambie tu pedido.</p>
+            desde ese ícono: así te avisamos ${cuando}.</p>
         </div>
       </div>`;
   }
@@ -301,7 +337,7 @@ function bloqueAvisos(p, avisos) {
     <div class="pedido-avisos" data-avisos>
       <div class="pedido-avisos__cuerpo">
         <span class="pedido-avisos__icono">${icono('campana', { tam: 22 })}</span>
-        <p class="pedido-avisos__titulo">¿Te avisamos cuando cambie tu pedido?</p>
+        <p class="pedido-avisos__titulo">¿Te avisamos ${cuando}?</p>
         <p class="pedido-avisos__texto${avisos.estado === 'error' ? ' pedido-avisos__texto--mal' : ''}">${
           avisos.estado === 'error'
             ? 'No se pudieron activar. Probá de nuevo.'
@@ -311,6 +347,51 @@ function bloqueAvisos(p, avisos) {
         <button type="button" class="boton boton--primario${activando ? ' boton--cargando' : ''}"
                 data-activar-avisos ${activando ? 'disabled' : ''}>Activar avisos</button>
       </div>
+    </div>`;
+}
+
+/**
+ * En qué anda el reclamo del pedido, si hay uno.
+ *
+ * Va arriba de todo, debajo del bloque negro: quien volvió a entrar después de
+ * reclamar vuelve a esto. La respuesta del local se ve entera acá; el aviso
+ * del celular la trae recortada.
+ */
+function bloqueReclamo(p) {
+  const reclamo = p.reclamo;
+  if (!reclamo?.estado) return '';
+  const abierto = ABIERTOS.includes(reclamo.estado);
+  const respuesta = String(reclamo.respuesta || '').trim();
+
+  return `
+    <section class="pedido-reclamo${abierto ? '' : ' pedido-reclamo--cerrado'}" data-reclamo aria-live="polite">
+      <span class="pedido-reclamo__icono" aria-hidden="true">${
+        icono(abierto ? 'reloj' : 'tilde', { tam: 20, grosor: abierto ? 2 : 2.5 })}</span>
+      <div class="pedido-reclamo__cuerpo">
+        <p class="pedido-reclamo__etiqueta">Tu reclamo · ${esc(motivoLegible(reclamo.motivo))}</p>
+        <p class="pedido-reclamo__estado">${esc(estadoLegible(reclamo.estado))}</p>
+        ${respuesta ? `
+          <div class="pedido-reclamo__respuesta">
+            <span class="pedido-reclamo__de">Respuesta del local</span>
+            <p>${esc(respuesta)}</p>
+          </div>`
+        : abierto ? `
+          <p class="pedido-reclamo__texto">Te respondemos en esta página. Si querés sumar algo,
+            escribinos por WhatsApp.</p>` : ''}
+      </div>
+    </section>`;
+}
+
+/** La puerta para reclamar, al pie de lo que se pidió. */
+function entradaReclamo(p) {
+  if (!puedeReclamar(p).puede) return '';
+  return `
+    <div class="pedido-problema">
+      <p class="pedido-problema__texto">${
+        p.estado === 'entregado' ? '¿Algo no vino bien?' : '¿Algún problema con el pedido?'}</p>
+      <button type="button" class="boton boton--secundario boton--chico" data-abrir-reclamo>
+        Contanos qué pasó
+      </button>
     </div>`;
 }
 
@@ -324,6 +405,7 @@ function contenido(p, cfg, avisos = { estado: 'inicio' }) {
   return `
     <div class="pedido">
       ${encabezado(p, cfg, { modo, cancelado })}
+      ${bloqueReclamo(p)}
       ${bloqueAvisos(p, avisos)}
 
       <!-- Tres hermanos y no dos columnas con cosas adentro: en el celular se
@@ -586,7 +668,9 @@ function detalleDelPedido(p, modo) {
     ${p.entrega?.envio_a_confirmar
       ? `<p class="checkout__nota-envio">${icono('atencion', { tam: 15 })}
            <span>Falta sumarle el envío. Te lo decimos antes de salir.</span></p>`
-      : ''}`;
+      : ''}
+
+    ${entradaReclamo(p)}`;
 }
 
 /* ── La ficha del costado ─────────────────────────────────────────────────── */
