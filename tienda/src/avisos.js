@@ -10,7 +10,9 @@ import { esc } from './formato.js';
 let zona = null;
 
 function asegurarZona() {
-  if (zona) return zona;
+  // Si alguien vació el body, la zona vieja quedó suelta y lo que se agregue ahí
+  // no se ve: se arma otra.
+  if (zona?.isConnected) return zona;
   zona = document.createElement('div');
   zona.className = 'toast-zona';
   zona.setAttribute('aria-live', 'polite');
