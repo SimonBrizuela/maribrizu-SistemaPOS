@@ -912,8 +912,9 @@ function alternarOcultos() {
   _verOcultos = !_verOcultos;
   boton.setAttribute('aria-expanded', String(_verOcultos));
   if (_verOcultos) {
-    caja.innerHTML = tablaOcultosHtml(cuentas().ocultas);
-    desplegar(caja);
+    // Se llena siempre de nuevo: si se estaba cerrando, lo que tenía adentro
+    // no se actualizó mientras tanto.
+    desplegar(caja, () => { caja.innerHTML = tablaOcultosHtml(cuentas().ocultas); });
   } else {
     plegar(caja, () => { if (!_verOcultos) caja.innerHTML = ''; });
   }

@@ -140,19 +140,53 @@ export async function meterFila(fila, colocar) {
     { duration: APARICION_MS, easing: CURVA });
 }
 
-/** Abre una caja que se acaba de llenar, del alto cero al suyo. */
-export async function desplegar(caja) {
-  if (!puedeAnimar(caja)) return;
-  if (movimientoReducido()) {
-    await animar(caja, [{ opacity: 0 }, { opacity: 1 }], { duration: REDUCIDO_MS });
-    return;
+/*
+ * Una caja que se abre y se cierra (la lista de ocultos). Se puede apretar
+ * rápido: cada vez arranca desde el alto que tiene en ese momento, no desde
+ * cerrada o abierta del todo, y una animación que quedó vieja no toca nada al
+ * terminar. Medido cuadro a cuadro antes de esto: con clicks seguidos la caja
+ * saltaba de 135 a 360 px o de 250 a 0 en un solo cuadro, y a veces la lista no
+ * aparecía porque un cierre viejo cortaba la apertura nueva.
+ */
+
+const CAJA_MS = 280;
+
+async function moverAlto(caja, { abrir, llenar = null, vaciar = null }) {
+  if (!caja) return false;
+  const turno = (caja._turnoAlto || 0) + 1;
+  caja._turnoAlto = turno;
+
+  if (!puedeAnimar(caja) || movimientoReducido()) {
+    cortarAnimaciones(caja);
+    llenar?.();
+    vaciar?.();
+    caja.style.overflow = '';
+    return true;
   }
-  const alto = caja.scrollHeight;
+
+  // El alto que se ve ahora, con lo que se estuviera moviendo: desde ahí sigue.
+  const desde = caja.getBoundingClientRect().height;
+  cortarAnimaciones(caja);
+  llenar?.();
+  const hasta = abrir ? caja.scrollHeight : 0;
   caja.style.overflow = 'hidden';
-  await animar(caja,
-    [{ height: '0px', opacity: 0 }, { height: `${alto}px`, opacity: 1 }],
-    { duration: APERTURA_MS, easing: CURVA_ALTO });
+  // Lo que falta recorrer, no el recorrido entero: cerrar una caja abierta a
+  // medias no tiene por qué tardar lo mismo que cerrarla entera.
+  const falta = Math.abs(hasta - desde) / Math.max(hasta, desde, 1);
+  await animar(caja, [{ height: `${desde}px` }, { height: `${hasta}px` }],
+    { duration: Math.max(120, Math.round(CAJA_MS * falta)), easing: CURVA_ALTO, fill: 'forwards' });
+
+  // Otro click la tomó mientras tanto: esa decide cómo termina.
+  if (caja._turnoAlto !== turno) return false;
+  vaciar?.();
+  cortarAnimaciones(caja);
   caja.style.overflow = '';
+  return true;
+}
+
+/** Abre una caja; `llenar()` le pone el contenido justo antes de medirla. */
+export function desplegar(caja, llenar = null) {
+  return moverAlto(caja, { abrir: true, llenar });
 }
 
 /**
@@ -160,17 +194,6 @@ export async function desplegar(caja) {
  * recién después de vaciarla: si quedara puesta, la caja seguiría en alto cero
  * la próxima vez que se abra.
  */
-export async function plegar(caja, vaciar) {
-  if (puedeAnimar(caja)) {
-    const reducido = movimientoReducido();
-    const alto = caja.scrollHeight;
-    caja.style.overflow = 'hidden';
-    await animar(caja, reducido
-      ? [{ opacity: 1 }, { opacity: 0 }]
-      : [{ height: `${alto}px`, opacity: 1 }, { height: '0px', opacity: 0 }],
-    { duration: reducido ? REDUCIDO_MS : CIERRE_MS, easing: CURVA_ALTO, fill: 'forwards' });
-  }
-  vaciar?.();
-  if (caja) caja.style.overflow = '';
-  cortarAnimaciones(caja);
+export function plegar(caja, vaciar = null) {
+  return moverAlto(caja, { abrir: false, vaciar });
 }

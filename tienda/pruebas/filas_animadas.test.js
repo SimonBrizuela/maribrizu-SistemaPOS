@@ -203,6 +203,95 @@ describe('desplegar y plegar una caja', () => {
     expect(cancelada).toHaveBeenCalled();
   });
 
+  describe('apretando rápido', () => {
+    // Pasó de verdad, medido cuadro a cuadro: con clicks seguidos la caja
+    // saltaba de 135 a 360 px o de 250 a 0 en un solo cuadro, y a veces los
+    // ocultos no aparecían. Cada animación arrancaba de cerrado o de abierto
+    // del todo, y una vieja que terminaba cortaba a la nueva.
+    let animaciones;
+
+    beforeEach(() => {
+      animaciones = [];
+      Element.prototype.animate = function (cuadros, opciones) {
+        let terminar;
+        const a = {
+          cuadros, opciones, cancelada: false,
+          finished: new Promise(r => { terminar = r; }),
+          cancel() { this.cancelada = true; },
+          terminar: () => terminar(),
+        };
+        animaciones.push(a);
+        return a;
+      };
+      Element.prototype.getAnimations = function () {
+        return animaciones.filter(a => !a.cancelada);
+      };
+    });
+
+    const caja = (alto, contenido) => {
+      const nodo = document.createElement('div');
+      nodo.innerHTML = '<p>ocultos</p>';
+      Object.defineProperty(nodo, 'scrollHeight', { configurable: true, get: () => contenido });
+      nodo.getBoundingClientRect = () => ({ top: 0, height: alto, bottom: alto, left: 0, right: 0, width: 0 });
+      document.body.appendChild(nodo);
+      return nodo;
+    };
+
+    it('cerrar a mitad de la apertura arranca desde el alto que tenía', async () => {
+      const nodo = caja(120, 300);
+      plegar(nodo, () => {});
+      const cierre = animaciones.at(-1);
+      expect(cierre.cuadros[0].height).toBe('120px');
+      expect(cierre.cuadros.at(-1).height).toBe('0px');
+    });
+
+    it('abrir a mitad del cierre arranca desde el alto que tenía', async () => {
+      const nodo = caja(90, 300);
+      desplegar(nodo);
+      const apertura = animaciones.at(-1);
+      expect(apertura.cuadros[0].height).toBe('90px');
+      expect(apertura.cuadros.at(-1).height).toBe('300px');
+    });
+
+    it('el cierre que quedó viejo no vacía la caja ni corta la apertura nueva', async () => {
+      const nodo = caja(200, 300);
+      let vaciada = false;
+      const cerrando = plegar(nodo, () => { vaciada = true; });
+      const cierre = animaciones.at(-1);
+
+      const abriendo = desplegar(nodo);
+      const apertura = animaciones.at(-1);
+      expect(cierre.cancelada, 'la apertura no cortó el cierre anterior').toBe(true);
+
+      cierre.terminar();
+      await cerrando;
+      expect(vaciada, 'el cierre viejo vació la caja recién abierta').toBe(false);
+      expect(apertura.cancelada, 'el cierre viejo cortó la apertura').toBe(false);
+
+      apertura.terminar();
+      await abriendo;
+    });
+
+    it('la apertura que quedó vieja no le saca el alto al cierre nuevo', async () => {
+      const nodo = caja(150, 300);
+      const abriendo = desplegar(nodo);
+      const apertura = animaciones.at(-1);
+      let vaciada = false;
+      const cerrando = plegar(nodo, () => { vaciada = true; });
+      const cierre = animaciones.at(-1);
+
+      apertura.terminar();
+      await abriendo;
+      expect(cierre.cancelada).toBe(false);
+      expect(nodo.style.overflow, 'el contenido se vería por afuera mientras se cierra').toBe('hidden');
+
+      cierre.terminar();
+      await cerrando;
+      expect(vaciada).toBe(true);
+      expect(nodo.style.overflow).toBe('');
+    });
+  });
+
   it('sin soporte de animaciones, desplegar y plegar no traban nada', async () => {
     const caja = document.createElement('div');
     caja.innerHTML = '<p>algo</p>';
