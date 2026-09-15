@@ -874,24 +874,50 @@ def aplicar_descuento(doc_id, doc, descuentos):
     return doc
 
 
-def clave_de_orden(doc):
-    """
-    Orden del catalogo: primero lo destacado, despues lo que hay en stock,
-    despues lo que mas se vende, y recien al final alfabetico.
+# La franja de lo que mas se vende: el 10% de cada lista, entre 6 y 48.
+FRANJA_FRACCION = 0.10
+FRANJA_MINIMO = 6
+FRANJA_MAXIMO = 48
 
-    Ordenar alfabetico era ordenar por nada. El catalogo real arranca con
-    Abecedario, Abrojal, Abrochadora, Abrochadora: la primera pantalla de la
-    tienda mostraba cuatro abrochadoras y parecia rota. Medido sobre cuatro
-    meses de ventas, 100 productos hacen la mitad de la facturacion y 500 hacen
-    el 78%: esos son los que tienen que estar arriba.
 
-    `vendidos` son las unidades de los ultimos meses. Se ordena descendente, y
-    empatados en cero —que son la mayoria— queda el alfabetico de siempre.
+def cupo_de_ventas(cantidad):
+    """Cuantos van en la franja de ventas de una lista de `cantidad` productos."""
+    if cantidad <= 0:
+        return 0
+    return min(cantidad, FRANJA_MAXIMO, max(FRANJA_MINIMO, round(cantidad * FRANJA_FRACCION)))
+
+
+def franja_de_ventas(publicables):
     """
+    Los ids que van arriba por lo que se venden, despues de los destacados.
+
+    Solo entra lo que tiene stock y se vendio alguna vez: una franja "por
+    ventas" rellenada con productos sin ventas seria el alfabetico disfrazado.
+    """
+    candidatos = sorted(
+        (k for k, d in publicables.items()
+         if not d['destacado'] and d['stock'] > 0 and d.get('vendidos', 0) > 0),
+        key=lambda k: (-publicables[k].get('vendidos', 0), normalizar(publicables[k]['nombre'])))
+    return set(candidatos[:cupo_de_ventas(len(publicables))])
+
+
+def clave_de_orden(doc, en_franja=False):
+    """
+    Orden de la vidriera, un equilibrio entre lo que se vende y el alfabeto:
+    primero los destacados ("Mas pedido") y la franja de lo que mas se vende,
+    los dos por ventas; despues todo lo demas de la A a la Z.
+
+    Todo por ventas escondia el alfabetico: casi todo lo publicado vende algo,
+    asi que buscar un producto por su letra era imposible. Todo alfabetico, en
+    cambio, arrancaba Libreria con nueve abrochadoras seguidas y la primera
+    pantalla parecia rota. Medido sobre cuatro meses, 100 productos hacen la
+    mitad de la facturacion: esos arriba, y el resto donde se lo busca.
+    """
+    rankea = doc['destacado'] or en_franja
     return (
-        0 if doc['destacado'] else 1,
+        0 if doc['destacado'] else (1 if en_franja else 2),
         0 if doc['stock'] > 0 else 1,
-        -doc.get('vendidos', 0),
+        -doc.get('vendidos', 0) if rankea else 0,
         normalizar(doc['nombre']),
     )
 
@@ -909,17 +935,21 @@ def valor_de_tamano(tamano):
     return tuple(float(n.replace(',', '.')) for n in numeros)
 
 
-def ordenar_publicables(publicables):
+def ordenar_publicables(publicables, franja=None):
     """
     Los ids en el orden de la vidriera, con los grupos de tamaños JUNTOS.
 
-    El orden normal rankea por ventas, asi que los tamaños de un mismo grupo
-    quedaban desparramados por el catalogo entero: la tienda los pliega en una
-    sola card, y con los miembros repartidos en paginas distintas esa card
-    salia con datos a medias. El grupo completo toma el lugar de su mejor
-    miembro, y adentro se ordena del tamaño mas chico al mas grande.
+    Los tamaños de un mismo grupo no pueden quedar desparramados: la tienda los
+    pliega en una sola card, y con los miembros repartidos en paginas distintas
+    esa card salia con datos a medias. El grupo completo toma el lugar de su
+    mejor miembro, y adentro se ordena del tamaño mas chico al mas grande.
+
+    `franja` son los ids que van por ventas; sin pasarla se calcula sobre la
+    lista que llega.
     """
-    base = {k: clave_de_orden(doc) for k, doc in publicables.items()}
+    if franja is None:
+        franja = franja_de_ventas(publicables)
+    base = {k: clave_de_orden(doc, k in franja) for k, doc in publicables.items()}
     mejor = {}
     for k, doc in publicables.items():
         g = doc.get('grupo_clave')
@@ -934,6 +964,29 @@ def ordenar_publicables(publicables):
         return (mejor[g], 0, valor_de_tamano(doc.get('tamano')), normalizar(doc['nombre']))
 
     return sorted(publicables, key=clave)
+
+
+def numerar_orden(publicables):
+    """
+    Pone `orden` y `orden_rubro` en cada documento.
+
+    `orden` es global: el listado de todo el catalogo, con su franja de ventas
+    calculada sobre el catalogo entero.
+
+    `orden_rubro` numera de cero dentro de cada rubro, con la franja de ESE
+    rubro. Sin numeracion propia no se puede pedir "doce productos de Libreria
+    a partir del 340"; y con la franja global, un rubro que vende poco al lado
+    de Libreria no tenia franja y su tira de la portada arrancaba en la A.
+    """
+    for i, doc_id in enumerate(ordenar_publicables(publicables)):
+        publicables[doc_id]['orden'] = i
+
+    por_rubro = {}
+    for doc_id, doc in publicables.items():
+        por_rubro.setdefault(doc['rubro'], {})[doc_id] = doc
+    for docs in por_rubro.values():
+        for i, doc_id in enumerate(ordenar_publicables(docs)):
+            publicables[doc_id]['orden_rubro'] = i
 
 
 def contar_rubros(publicables):
@@ -1183,23 +1236,7 @@ def main():
         print(f'  {len(a_mano)} destacados marcados a mano en el panel')
 
     # ── Numerar para el orden del catalogo ────────────────────────────────
-    ordenados = ordenar_publicables(publicables)
-
-    # `orden` es global: sirve para el listado completo del catalogo.
-    for i, doc_id in enumerate(ordenados):
-        publicables[doc_id]['orden'] = i
-
-    # `orden_rubro` numera de nuevo dentro de cada rubro. Sin esto no se puede
-    # pedir "seis productos de Libreria a partir del numero 340": el orden
-    # global tiene los rubros entremezclados, asi que saltar a un punto al azar
-    # cae casi siempre en otro rubro. Y sin poder saltar, las tiras de la portada
-    # muestran siempre los primeros alfabeticamente, que en Libreria son seis
-    # abrochadoras seguidas.
-    contador = {}
-    for doc_id in ordenados:
-        rubro = publicables[doc_id]['rubro']
-        publicables[doc_id]['orden_rubro'] = contador.get(rubro, 0)
-        contador[rubro] = contador.get(rubro, 0) + 1
+    numerar_orden(publicables)
 
     # ── Que hay hoy en el espejo ──────────────────────────────────────────
     espejo = {d.id for d in db.collection('tienda_productos').select([]).stream()}
