@@ -1224,7 +1224,8 @@
   align-items: center;
   flex-wrap: wrap;
   gap: var(--e-3) var(--e-4);
-  margin: var(--e-5) 0 0;
+  /* El bloque negro ya deja su aire abajo: sumarle más lo separaba del pedido. */
+  margin: 0;
   padding: var(--e-4);
   border: 1px solid var(--border);
   border-radius: var(--r-md);
@@ -1246,6 +1247,8 @@
 .pedido-avisos__texto--mal { color: var(--error); }
 .pedido-avisos .boton { flex: none; }
 .pedido-avisos--activos {
+  flex-wrap: nowrap;
+  align-items: flex-start;
   gap: var(--e-2);
   padding: var(--e-3) var(--e-4);
   color: var(--exito);
@@ -1254,7 +1257,8 @@
   background: var(--exito-bg);
   border-color: transparent;
 }
-.pedido-avisos--activos svg { flex: none; }
+.pedido-avisos--activos svg { flex: none; margin-top: 2px; }
+.pedido-avisos--activos span { flex: 1; min-width: 0; }
 
 .pedido__guardar {
   display: flex;
