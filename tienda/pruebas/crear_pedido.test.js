@@ -389,6 +389,23 @@ describe('lo que ya está prometido en otros pedidos', () => {
     expect(res.status).toBe(200);
   });
 
+  it('uno que entregó el repartidor sigue apartando hasta que el panel registra la venta', async () => {
+    // Hasta registrarla el stock de la vidriera no bajó: si dejara de apartar
+    // en ese rato, esas 4 resmas se venderían dos veces.
+    const crear = await cargar();
+    mundo.abiertos.push({ id: 'rep', estado: 'entregado', venta_pendiente: true, items: [{ id: 'resma', cantidad: 3 }] });
+    const res = await crear(pedir(retiro([{ id: 'resma', cantidad: 2 }])));
+    expect(res.status).toBe(409);
+    expect((await res.json()).cambios).toContainEqual(expect.objectContaining({ tipo: 'menos_stock', ahora: 1 }));
+  });
+
+  it('con la venta ya registrada deja de apartar: el stock de la vidriera ya bajó', async () => {
+    const crear = await cargar();
+    mundo.abiertos.push({ id: 'rep', estado: 'entregado', venta_pendiente: false, venta_registrada: true, items: [{ id: 'resma', cantidad: 3 }] });
+    const res = await crear(pedir(retiro([{ id: 'resma', cantidad: 4 }])));
+    expect(res.status).toBe(200);
+  });
+
   it('un pack en otro pedido cuenta por su contenido', async () => {
     // 60 m de cinta; en un pedido en preparación van dos rollos de 25.
     const crear = await cargar();

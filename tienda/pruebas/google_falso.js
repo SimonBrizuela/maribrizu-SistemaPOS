@@ -6,6 +6,7 @@
  * validar-cupon y medir, y agregarle casos para esto era arriesgar que una
  * prueba vieja pase por el camino nuevo sin enterarse.
  */
+import crypto from 'node:crypto';
 import { aCampos } from '../netlify/functions/lib/firestore.mjs';
 import { desplanar, respuesta } from './rest_falso.js';
 
@@ -32,6 +33,11 @@ export function crearGoogle() {
 }
 
 const RUTA_DOC = /\/documents\/([^/]+)\/([^/?:]+)$/;
+
+// La versión de un documento (su `updateTime`) sale de su contenido: cualquier
+// cambio, sea por una escritura o porque la prueba toca `g.docs` a mano para
+// simular al panel, le cambia la versión.
+const versionDe = (datos) => '2026-09-15T00:00:00.' + crypto.createHash('md5').update(JSON.stringify(datos ?? null)).digest('hex').slice(0, 9) + 'Z';
 
 export function fetchGoogle(g) {
   return async function (url, opciones = {}) {
@@ -82,6 +88,9 @@ export function fetchGoogle(g) {
       for (const { w, ruta } of writes) {
         if (w.currentDocument?.exists === true && !g.docs[ruta]) return respuesta({ error: 'NOT_FOUND' }, 404);
         if (w.currentDocument?.exists === false && g.docs[ruta]) return respuesta({ error: 'ALREADY_EXISTS' }, 409);
+        if (w.currentDocument?.updateTime && (!g.docs[ruta] || versionDe(g.docs[ruta]) !== w.currentDocument.updateTime)) {
+          return respuesta({ error: { status: 'FAILED_PRECONDITION' } }, 400);
+        }
       }
       for (const { w, ruta } of writes) {
         const campos = desplanar(w.update.fields || {});
@@ -108,7 +117,7 @@ export function fetchGoogle(g) {
       const publico = ['tienda_pedidos', 'tienda_config', 'tienda_productos'].includes(lectura[1]);
       if (!publico && !opciones.headers?.Authorization) return respuesta({ error: 'PERMISSION_DENIED' }, 403);
       const datos = g.docs[ruta];
-      return datos ? respuesta({ name: ruta, fields: aCampos(datos) }) : respuesta({}, 404);
+      return datos ? respuesta({ name: ruta, fields: aCampos(datos), updateTime: versionDe(datos) }) : respuesta({}, 404);
     }
 
     throw new Error(`fetch sin mockear: ${opciones.method || 'GET'} ${u}`);

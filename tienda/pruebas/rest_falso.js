@@ -119,7 +119,7 @@ export function fetchFalso(mundo) {
           docs = [{ codigo: filtro.value.stringValue }];
         }
       } else if (campo) {
-        const valor = filtro.value.stringValue;
+        const valor = filtro.value.stringValue ?? filtro.value.booleanValue;
         docs = todosLosPedidos(mundo).filter(d => campoDe(d, campo) === valor);
       }
       // Solo los campos pedidos, como hace la API con `select`.

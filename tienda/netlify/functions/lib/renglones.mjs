@@ -209,6 +209,10 @@ async function leerProductos(ids) {
  * Un pack cuenta por su contenido. Lo que sale de un color también sale del
  * producto: un renglón sin variedad se compara contra el total.
  *
+ * También apartan los que entregó el repartidor y todavía no tienen la venta
+ * registrada (`venta_pendiente`): el stock de la vidriera baja recién cuando el
+ * panel la registra, y si dejaran de apartar en ese rato se venderían dos veces.
+ *
  * Si la lectura falla, el pedido entra igual mirando solo el espejo, que es lo
  * que hacía siempre: perder una venta por no poder leer los pedidos abiertos
  * es peor que arriesgar una sobreventa.
@@ -216,11 +220,19 @@ async function leerProductos(ids) {
 export async function stockComprometido() {
   let abiertos;
   try {
-    abiertos = await consultar('tienda_pedidos', {
-      where: [['estado', 'IN', ESTADOS_ABIERTOS]],
-      limite: 500,
-      campos: ['items'],
-    });
+    const [enCurso, pendientes] = await Promise.all([
+      consultar('tienda_pedidos', {
+        where: [['estado', 'IN', ESTADOS_ABIERTOS]],
+        limite: 500,
+        campos: ['items'],
+      }),
+      consultar('tienda_pedidos', {
+        where: [['venta_pendiente', 'EQUAL', true]],
+        limite: 200,
+        campos: ['items'],
+      }),
+    ]);
+    abiertos = [...enCurso, ...pendientes];
   } catch (err) {
     console.warn('[renglones] no se pudieron leer los pedidos abiertos:', err);
     return new Map();
