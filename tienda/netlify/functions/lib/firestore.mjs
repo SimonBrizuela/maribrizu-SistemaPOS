@@ -28,9 +28,18 @@ const BASE = `https://firestore.googleapis.com/v1/projects/${PROYECTO}` +
              '/databases/(default)/documents';
 
 const TOKEN_URL = 'https://oauth2.googleapis.com/token';
-// datastore = Firestore. Sin `cloud-platform`: si el token se filtra no sirve
-// para tocar ningún otro servicio del proyecto.
-const SCOPE = 'https://www.googleapis.com/auth/datastore';
+
+/**
+ * Los permisos que puede pedir una función, cada uno en su propio token. Sin
+ * `cloud-platform`: si un token se filtra sirve para una sola cosa. La base es
+ * el de siempre; los avisos al celular y las fotos de los reclamos piden el
+ * suyo recién cuando los usan.
+ */
+export const PERMISOS = {
+  base: 'https://www.googleapis.com/auth/datastore',
+  mensajes: 'https://www.googleapis.com/auth/firebase.messaging',
+  archivos: 'https://www.googleapis.com/auth/devstorage.read_write',
+};
 
 /* ── Leer ─────────────────────────────────────────────────────────────────── */
 
@@ -120,22 +129,26 @@ export function hayCredenciales() {
 
 // El token dura una hora y la instancia se reusa entre invocaciones mientras
 // siga caliente: pedir uno nuevo por pedido sería un viaje de más en el momento
-// en que el cliente está esperando la confirmación.
-let _token = null;
-let _tokenVence = 0;
+// en que el cliente está esperando la confirmación. Uno por permiso.
+const _tokens = new Map();      // permiso -> { token, vence }
 // Varias lecturas arrancan a la vez dentro de un mismo pedido (los pedidos
 // abiertos, el código libre): sin esto cada una pedía su propio token.
-let _tokenEnCurso = null;
+const _tokensEnCurso = new Map();
 
-async function accessToken() {
-  if (_token && Date.now() < _tokenVence - 60_000) return _token;
-  if (!_tokenEnCurso) {
-    _tokenEnCurso = pedirToken().finally(() => { _tokenEnCurso = null; });
+/** Un access token de Google para ese permiso, reusado mientras dure. */
+export async function tokenPara(permiso = PERMISOS.base) {
+  const guardado = _tokens.get(permiso);
+  if (guardado && Date.now() < guardado.vence - 60_000) return guardado.token;
+  if (!_tokensEnCurso.has(permiso)) {
+    _tokensEnCurso.set(permiso,
+      pedirToken(permiso).finally(() => { _tokensEnCurso.delete(permiso); }));
   }
-  return _tokenEnCurso;
+  return _tokensEnCurso.get(permiso);
 }
 
-async function pedirToken() {
+const accessToken = () => tokenPara(PERMISOS.base);
+
+async function pedirToken(permiso) {
   const crudo = process.env.FIREBASE_SERVICE_ACCOUNT;
   if (!crudo) throw new Error('falta FIREBASE_SERVICE_ACCOUNT');
 
@@ -160,7 +173,7 @@ async function pedirToken() {
   const cabecera = b64url(JSON.stringify({ alg: 'RS256', typ: 'JWT' }));
   const cuerpo = b64url(JSON.stringify({
     iss: cuenta.client_email,
-    scope: SCOPE,
+    scope: permiso,
     aud: TOKEN_URL,
     exp: ahora + 3600,
     iat: ahora,
@@ -184,9 +197,11 @@ async function pedirToken() {
   }
 
   const datos = await respuesta.json();
-  _token = datos.access_token;
-  _tokenVence = Date.now() + (Number(datos.expires_in) || 3600) * 1000;
-  return _token;
+  _tokens.set(permiso, {
+    token: datos.access_token,
+    vence: Date.now() + (Number(datos.expires_in) || 3600) * 1000,
+  });
+  return datos.access_token;
 }
 
 function b64url(entrada) {
@@ -225,6 +240,34 @@ export async function crearDoc(coleccion, id, datos) {
     throw new Error(`Firestore devolvió ${respuesta.status}: ${(await respuesta.text()).slice(0, 300)}`);
   }
 
+  return respuesta.json();
+}
+
+/**
+ * Escribe algunos campos de un documento sin tocar el resto.
+ *
+ * La máscara nombra exactamente lo que se escribe: el reclamo se anota en el
+ * pedido sin pisar el estado, el total ni lo que el local marcó mientras tanto.
+ * Por defecto el documento tiene que existir (un pedido no nace de un reclamo);
+ * con `crear` nace si falta.
+ */
+export async function escribirCampos(coleccion, id, valores, { crear = false } = {}) {
+  const token = await accessToken();
+  const nombre = `projects/${PROYECTO}/databases/(default)/documents/${coleccion}/${id}`;
+  const escritura = {
+    update: { name: nombre, fields: aCampos(valores) },
+    updateMask: { fieldPaths: Object.keys(valores).map(c => rutaDeCampo([c])) },
+    ...(crear ? {} : { currentDocument: { exists: true } }),
+  };
+
+  const respuesta = await fetch(`${BASE}:commit`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ writes: [escritura] }),
+  });
+  if (!respuesta.ok) {
+    throw new Error(`Firestore devolvió ${respuesta.status} escribiendo ${coleccion}/${id}: ${(await respuesta.text()).slice(0, 300)}`);
+  }
   return respuesta.json();
 }
 
