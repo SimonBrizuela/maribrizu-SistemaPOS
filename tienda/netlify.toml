@@ -12,15 +12,21 @@
   functions = "netlify/functions"
 
 # Cabeceras de seguridad para todo el sitio. La tienda no se muestra dentro de
-# un iframe de nadie, no usa cámara, micrófono ni ubicación, y el navegador no
-# tiene por qué adivinar tipos de contenido. HSTS ya lo manda Netlify.
+# un iframe de nadie, no usa cámara ni micrófono, y el navegador no tiene por qué
+# adivinar tipos de contenido. HSTS ya lo manda Netlify.
+#
+# La ubicación queda permitida solo para el propio sitio: la usa la pantalla del
+# repartidor (/reparto) para recomendar el pedido más cercano. Con
+# `geolocation=()` el navegador la bloqueaba sin preguntar. La foto de la entrega
+# no necesita `camera`: el campo de archivo abre la cámara del celular por fuera
+# de la página.
 [[headers]]
   for = "/*"
   [headers.values]
     X-Content-Type-Options = "nosniff"
     X-Frame-Options = "DENY"
     Referrer-Policy = "strict-origin-when-cross-origin"
-    Permissions-Policy = "camera=(), microphone=(), geolocation=(), payment=()"
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(self), payment=()"
 
 # El index nunca se cachea: es el que trae la lista de assets con hash. Si queda
 # cacheado, el navegador sigue pidiendo el JS de la versión anterior.
