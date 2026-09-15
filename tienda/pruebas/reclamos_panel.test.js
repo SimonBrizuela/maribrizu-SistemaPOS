@@ -192,6 +192,7 @@ describe('la bandeja', () => {
     datos.errorEscucha = Object.assign(new Error('Missing or insufficient permissions.'), { code: 'permission-denied' });
     await montar();
     expect(contenedor.textContent).toMatch(/No se pudieron cargar los reclamos/);
+    expect(contenedor.textContent).toMatch(/faltan publicar las reglas/);
   });
 
   it('al irse de la pantalla se corta la escucha', async () => {

@@ -420,11 +420,16 @@ export async function renderTiendaReclamos(container, db) {
     err => {
       console.warn('[reclamos] se cortó la escucha:', err?.code || err);
       const caja = document.getElementById('reclamosLista');
+      // Sin permiso no es un problema de red: pedir que revisen la conexión
+      // manda a buscar la falla donde no está.
+      const sinPermiso = err?.code === 'permission-denied';
       if (caja) {
         caja.innerHTML = `
           <div class="empty-state">
-            <span class="material-icons">cloud_off</span>
-            <p>No se pudieron cargar los reclamos. Revisá la conexión.</p>
+            <span class="material-icons">${sinPermiso ? 'lock' : 'cloud_off'}</span>
+            <p>No se pudieron cargar los reclamos. ${sinPermiso
+              ? 'La base todavía no da permiso para leerlos: faltan publicar las reglas.'
+              : 'Revisá la conexión.'}</p>
           </div>`;
       }
     },
