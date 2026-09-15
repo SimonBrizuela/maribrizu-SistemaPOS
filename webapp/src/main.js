@@ -1028,6 +1028,12 @@ function initApp(session) {
       // Estadísticas de la Tienda: no dependen de ninguna colección del
       // store y se refrescan solas al cambiar el rango.
       if (currentPage === 'tienda_estadisticas') return;
+      // Pedidos de la Tienda: escucha los pedidos y los comprobantes por su
+      // cuenta, así que un pedido nuevo aparece solo. Redibujarla con cada
+      // venta rehacía las dos escuchas, la dejaba arriba de todo y vaciaba el
+      // buscador dejando el filtro puesto: "Ningún pedido coincide" sin que se
+      // viera por qué.
+      if (currentPage === 'pedidos_tienda') return;
       // Fotos Pedidas: se recorre de arriba abajo ocultando y cargando fotos.
       // Redibujarla entera con cada venta la dejaba arriba de todo, con la
       // lista de ocultos cerrada y la fila que se estaba yendo cortada a la

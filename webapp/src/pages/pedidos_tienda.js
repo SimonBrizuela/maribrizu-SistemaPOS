@@ -519,6 +519,10 @@ function pintarContadores() {
 
 export async function renderPedidosTienda(container, db) {
   cleanup();
+  // Al irse de la pantalla se cortan las dos escuchas. Quedaban abiertas, y la
+  // de pedidos marca "visto" lo que llega: un pedido nuevo entraba mientras se
+  // miraba otra pantalla y el aviso rojo se apagaba sin que nadie lo viera.
+  window.__limpiarPagina = cleanup;
   _db = db;
 
   // Los comprobantes de transferencia que adjuntaron los clientes. Se leen
@@ -628,7 +632,9 @@ export async function renderPedidosTienda(container, db) {
       pintarLista();
 
       // Estar en esta pantalla es haberlos visto: se apaga el aviso rojo para
-      // que la campana no vuelva a sonar por algo que ya se miro.
+      // que la campana no vuelva a sonar por algo que ya se miro. Solo con la
+      // pantalla a la vista: un aviso que llega justo después de irse no cuenta.
+      if (!document.getElementById('pedidosLista')) return;
       _pedidos.filter(p => p.visto === false).forEach(p => marcarVisto(p.id));
     },
     err => {

@@ -280,21 +280,33 @@ describe('salir', () => {
 });
 
 describe('los refrescos en vivo', () => {
-  it('Fotos Pedidas no se vuelve a dibujar entera con cada venta del POS', async () => {
-    // Cada venta toca `catalogo`. Redibujar la pantalla entera la dejaba arriba
-    // de todo, con la lista de ocultos cerrada y la animación cortada: "aprieto
-    // Mostrar y me recarga toda la página". Se refresca sola, en el lugar.
-    localStorage.setItem('lastPage', 'tienda_fotos');
+  // Cada venta del POS toca el store, y el panel volvía a dibujar entera la
+  // pantalla abierta. En las de la tienda eso tiraba lo que se estaba haciendo:
+  // Fotos Pedidas quedaba arriba de todo con los ocultos cerrados ("aprieto
+  // Mostrar y me recarga toda la página") y en Pedidos el buscador quedaba vacío
+  // con el filtro puesto. Todas se mantienen al día solas, sin redibujarse.
+  const TIENDA = [...new DOMParser().parseFromString(HTML, 'text/html')
+    .querySelectorAll('[data-group="tienda"] [data-page]')].map(a => a.dataset.page);
+
+  it('la sección Tienda tiene sus pantallas', () => {
+    expect(TIENDA).toContain('pedidos_tienda');
+    expect(TIENDA).toContain('tienda_fotos');
+    expect(TIENDA.length).toBeGreaterThanOrEqual(7);
+  });
+
+  it.each(TIENDA)('%s no se vuelve a dibujar entera con cada venta del POS', async (pagina) => {
+    localStorage.setItem('lastPage', pagina);
     await arrancar();
     for (let i = 0; i < 10; i++) await esperar();
-    const cuerpo = document.getElementById('fotosCuerpo');
-    expect(cuerpo, 'la pantalla no llegó a abrirse').toBeTruthy();
+    const pantalla = document.getElementById('pageContent')?.firstElementChild;
+    expect(pantalla, 'la pantalla no llegó a abrirse').toBeTruthy();
     // Nadie ocupado: sin esto el refresco se posterga y la prueba pasaría igual.
     document.querySelectorAll('body > :not(#app)').forEach(n => { n.style.display = 'none'; });
 
     estado.oyentesStore.forEach(cb => cb('catalogo'));
+    estado.oyentesStore.forEach(cb => cb('ventas'));
     await esperar(600);
 
-    expect(document.getElementById('fotosCuerpo'), 'se dibujó entera de nuevo').toBe(cuerpo);
+    expect(pantalla.isConnected, 'se dibujó entera de nuevo').toBe(true);
   });
 });

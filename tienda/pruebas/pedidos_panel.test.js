@@ -16,7 +16,8 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 const { datos } = vi.hoisted(() => ({
-  datos: { base: {}, lista: [], escrituras: [], fallar: false },
+  // `escuchas`: cada onSnapshot abierto, para avisarle de nuevo o ver si se cortó.
+  datos: { base: {}, lista: [], escrituras: [], fallar: false, escuchas: [] },
 }));
 
 vi.mock('firebase/firestore', async () => {
@@ -43,12 +44,19 @@ vi.mock('firebase/firestore', async () => {
     // estaba aunque la base cambie, que es justo el caso que se prueba.
     onSnapshot: (q, cb) => {
       const nombre = q?._col || q?.col?._col;
-      const lista = nombre === 'tienda_pedidos' ? datos.lista : [];
-      cb({
-        ...vacio, empty: !lista.length, size: lista.length,
-        docs: lista.map(d => ({ id: d.__id, data: () => d, exists: () => true })),
-      });
-      return () => {};
+      const escucha = {
+        nombre, activa: true,
+        avisar() {
+          const lista = nombre === 'tienda_pedidos' ? datos.lista : [];
+          cb({
+            ...vacio, empty: !lista.length, size: lista.length,
+            docs: lista.map(d => ({ id: d.__id, data: () => d, exists: () => true })),
+          });
+        },
+      };
+      datos.escuchas.push(escucha);
+      escucha.avisar();
+      return () => { escucha.activa = false; };
     },
     updateDoc: async (ref, cambios) => escribir('update', ref, cambios),
     runTransaction: async (_db, fn) => {
@@ -100,7 +108,9 @@ beforeEach(() => {
   datos.base = {};
   datos.lista = [];
   datos.escrituras.length = 0;
+  datos.escuchas = [];
   datos.fallar = false;
+  window.__limpiarPagina = null;
   vi.stubGlobal('alert', vi.fn());
   vi.stubGlobal('confirm', vi.fn(() => true));
   document.body.innerHTML = '';
@@ -242,5 +252,51 @@ describe('el teléfono en la tarjeta', () => {
 
     expect(ficha.textContent).toContain('Marta Gómez');
     expect(ficha.textContent).not.toContain('call');
+  });
+});
+
+describe('al irse de la pantalla', () => {
+  // Las escuchas de pedidos y comprobantes seguían abiertas después de pasar
+  // a otra pantalla, y la de pedidos marca "visto" todo lo que llega: un pedido
+  // nuevo entraba mientras se miraba el Catálogo y el aviso rojo se apagaba
+  // solo, sin que nadie lo hubiera visto.
+  const nuevo = { ...PEDIDO, __id: 'k2', codigo: 'Z9Q1', estado: 'nuevo', visto: false };
+  const marcadosVistos = () => escritas('update', 'tienda_pedidos')
+    .filter(e => e.datos?.visto === true).map(e => e.ref.id);
+
+  it('deja de escuchar los pedidos y los comprobantes', async () => {
+    preparar();
+    await montar();
+    expect(datos.escuchas.map(e => e.nombre).sort())
+      .toEqual(['tienda_comprobantes', 'tienda_pedidos']);
+
+    expect(typeof window.__limpiarPagina).toBe('function');
+    window.__limpiarPagina();
+
+    expect(datos.escuchas.every(e => !e.activa), 'quedó una escucha abierta').toBe(true);
+  });
+
+  it('un pedido que llega con la pantalla cerrada no se marca visto', async () => {
+    preparar();
+    await montar();
+    const pedidos = datos.escuchas.find(e => e.nombre === 'tienda_pedidos');
+
+    // Se pasó a otra pantalla, y el aviso del pedido ya venía en camino.
+    contenedor.remove();
+    datos.lista = [nuevo, ...datos.lista];
+    pedidos.avisar();
+    for (let i = 0; i < 10; i++) await esperar();
+
+    expect(marcadosVistos()).toEqual([]);
+  });
+
+  it('con la pantalla abierta, lo que entra sí se marca visto', async () => {
+    preparar();
+    await montar();
+    datos.lista = [nuevo, ...datos.lista];
+    datos.escuchas.find(e => e.nombre === 'tienda_pedidos').avisar();
+    for (let i = 0; i < 10; i++) await esperar();
+
+    expect(marcadosVistos()).toEqual(['k2']);
   });
 });
