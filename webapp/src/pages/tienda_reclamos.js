@@ -156,8 +156,9 @@ function editor(r) {
       </span>
       ${_error ? `<span data-error-respuesta style="font-size:12.5px;font-weight:600;color:#dc3545">${esc(_error)}</span>` : ''}
       <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <!-- Rechazar no va en el gris del estado: en un botón, gris se lee como apagado. -->
         <button class="pc-btn" data-act="guardar" ${_guardando.has(r.id) ? 'disabled' : ''}
-                style="background:${ESTADOS[_editando.estado].color};color:#fff;border:none;font-weight:700">
+                style="background:${rechaza ? '#343a40' : ESTADOS.resuelto.color};color:#fff;border:none;font-weight:700">
           <span class="material-icons" style="font-size:18px">send</span>
           ${rechaza ? 'Rechazar y avisar' : 'Resolver y avisar'}
         </button>
