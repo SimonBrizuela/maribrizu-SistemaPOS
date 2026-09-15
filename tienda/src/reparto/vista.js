@@ -2,10 +2,13 @@
  * Lo que se dibuja en la pantalla del repartidor. Solo HTML a partir de datos:
  * quién lo decide y cuándo se repinta está en `app.js`.
  */
-import { esc, distancia, haceCuanto, pesos } from '../formato.js';
+import { esc, distancia, haceCuanto, pesos, aFecha } from '../formato.js';
 import { icono } from '../iconos.js';
 import { whatsappDeTelefono } from '../telefono.js';
-import { ETIQUETAS, siguientePaso, cobroDe, enlaceNavegar, enlaceRuta, resumenDelDia } from '../reparto.js';
+import {
+  ETIQUETAS, siguientePaso, cobroDe, enlaceNavegar, enlaceRuta, resumenDelDia,
+  PERIODOS_HISTORIAL, etiquetaDia, envioDe,
+} from '../reparto.js';
 
 // En la lista "Después" todo está para llevar: con "Listo" alcanza, y el lugar
 // que sobra es para el nombre del cliente.
@@ -41,22 +44,29 @@ export function armazon() {
         <span class="reparto-barra__titulo">Reparto</span>
       </div>
       <span class="reparto-vivo" data-vivo><i aria-hidden="true"></i>En vivo</span>
+      <nav class="reparto-pestanas" role="tablist" aria-label="Secciones">
+        <button type="button" role="tab" class="reparto-pestana" data-vista="reparto" aria-selected="true">Pedidos</button>
+        <button type="button" role="tab" class="reparto-pestana" data-vista="historial" aria-selected="false">Historial</button>
+      </nav>
       <p class="reparto-conexion" data-conexion role="status" hidden>
         ${icono('atencion', { tam: 16 })}<span>Se cortó la conexión. Reconectando, lo que ves puede no estar al día.</span>
       </p>
     </header>
-    <div class="reparto-resumen" data-resumen></div>
-    <main class="reparto-cuerpo">
-      <div class="reparto-principal">
-        <div data-aviso-ubicacion></div>
-        <section data-zona-proxima></section>
-        <section data-listas></section>
-      </div>
-      <aside class="reparto-lateral">
-        <div class="reparto-mapa" data-mapa></div>
-        <div data-zona-ruta></div>
-      </aside>
-    </main>`;
+    <div data-pantalla-reparto>
+      <div class="reparto-resumen" data-resumen></div>
+      <main class="reparto-cuerpo">
+        <div class="reparto-principal">
+          <div data-aviso-ubicacion></div>
+          <section data-zona-proxima></section>
+          <section data-listas></section>
+        </div>
+        <aside class="reparto-lateral">
+          <div class="reparto-mapa" data-mapa></div>
+          <div data-zona-ruta></div>
+        </aside>
+      </main>
+    </div>
+    <section class="reparto-historial" data-historial aria-label="Historial" hidden></section>`;
 }
 
 /* ── Partes ───────────────────────────────────────────────────────────────── */
@@ -262,4 +272,91 @@ export function enlaceDeRuta(ruta) {
     <a class="boton boton--secundario boton--bloque reparto-ruta" href="${esc(url)}" target="_blank" rel="noopener" data-ruta>
       ${icono('navegar', { tam: 18 })} Ruta con las ${Math.min(ruta.length, 10)} paradas
     </a>` : '';
+}
+
+/* ── Historial ────────────────────────────────────────────────────────────── */
+
+const HORA = new Intl.DateTimeFormat('es-AR', {
+  hour: '2-digit', minute: '2-digit', hour12: false, timeZone: 'America/Argentina/Buenos_Aires',
+});
+
+function envioDeTexto(pedido) {
+  if (pedido.entrega?.envio_gratis) return 'Gratis';
+  if (pedido.entrega?.envio_a_confirmar) return 'A confirmar';
+  return pesos(envioDe(pedido));
+}
+
+function entregaDelHistorial(pedido) {
+  const fecha = aFecha(pedido.entregado_en);
+  return `
+    <li class="reparto-entrega">
+      <div class="reparto-entrega__texto">
+        <span class="reparto-entrega__nombre">${esc(pedido.cliente?.nombre || 'Sin nombre')}</span>
+        <span class="reparto-entrega__direccion">${esc(pedido.entrega?.direccion || '')}</span>
+        <span class="reparto-entrega__meta">
+          <span class="reparto-codigo">${esc(pedido.codigo || '')}</span>${fecha ? `<span>${HORA.format(fecha)}</span>` : ''}
+        </span>
+      </div>
+      <span class="reparto-entrega__envio">${esc(envioDeTexto(pedido))}</span>
+    </li>`;
+}
+
+/**
+ * El historial: la plata de los envíos del período, lo entregado y la lista
+ * por día.
+ * @param {{periodo: string, resumen: object, cargando: boolean, error: boolean}} datos
+ */
+export function historial({ periodo, resumen: r, cargando, error }) {
+  const periodos = `
+    <div class="reparto-periodos" role="group" aria-label="Período">
+      ${PERIODOS_HISTORIAL.map(p => `
+        <button type="button" class="reparto-periodo" data-periodo="${p.clave}" aria-pressed="${p.clave === periodo}">${p.texto}</button>`).join('')}
+    </div>`;
+
+  if (error) {
+    return `${periodos}
+      <div class="reparto-vacio reparto-vacio--error" role="alert">
+        ${icono('atencion', { tam: 26 })}
+        <p class="reparto-vacio__titulo">No pudimos traer el historial</p>
+        <p class="reparto-vacio__texto">Revisá que tengas internet y probá de nuevo.</p>
+        <button type="button" class="boton boton--secundario" data-reintentar-historial>Reintentar</button>
+      </div>`;
+  }
+  if (cargando) {
+    return `${periodos}
+      <div class="esqueleto reparto-esqueleto reparto-esqueleto--total" aria-busy="true"></div>
+      <div class="esqueleto reparto-esqueleto"></div>
+      <div class="esqueleto reparto-esqueleto"></div>`;
+  }
+
+  const nombrePeriodo = PERIODOS_HISTORIAL.find(p => p.clave === periodo)?.texto || '';
+  const notas = [
+    r.gratis ? `${r.gratis} con envío gratis` : '',
+    r.aConfirmar ? `${r.aConfirmar} con envío a confirmar` : '',
+  ].filter(Boolean);
+
+  return `${periodos}
+    <section class="reparto-total">
+      <p class="reparto-total__etiqueta">Plata de envíos · ${esc(nombrePeriodo)}</p>
+      <p class="reparto-total__monto">${pesos(r.envios)}</p>
+      <p class="reparto-total__detalle">
+        <strong>${r.entregados}</strong> ${r.entregados === 1 ? 'pedido entregado' : 'pedidos entregados'}${
+          r.efectivo ? ` · <strong>${pesos(r.efectivo)}</strong> cobrados en efectivo` : ''}
+      </p>
+      ${notas.length ? `<p class="reparto-total__nota">${esc(notas.join(' · '))}: no suman a la plata de envíos.</p>` : ''}
+    </section>
+    ${r.dias.length ? r.dias.map(dia => `
+      <section class="reparto-dia">
+        <h3 class="reparto-dia__titulo">
+          <span>${esc(etiquetaDia(dia.dia))}</span>
+          <span class="reparto-dia__suma">${dia.cantidad} ${dia.cantidad === 1 ? 'pedido' : 'pedidos'} · ${pesos(dia.envios)}</span>
+        </h3>
+        <ul class="reparto-dia__lista">
+          ${dia.pedidos.map(entregaDelHistorial).join('')}
+        </ul>
+      </section>`).join('') : `
+      <div class="reparto-vacio reparto-vacio--neutro">
+        <p class="reparto-vacio__titulo">No hubo entregas en este período</p>
+        <p class="reparto-vacio__texto">Probá con otro período arriba.</p>
+      </div>`}`;
 }

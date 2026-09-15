@@ -10,6 +10,7 @@ import { describe, it, expect } from 'vitest';
 import {
   ESTADOS_EN_CURSO, siguientePaso, validarMovimiento, yaLlego, distanciaKm, ordenarRuta,
   paraLlevar, enPreparacion, enlaceNavegar, enlaceRuta, cobroDe, diaArgentina, resumenDelDia,
+  PERIODOS_HISTORIAL, diasDelPeriodo, tandas, resumenHistorial, etiquetaDia,
 } from '../src/reparto.js';
 
 const LOCAL = { lat: -31.3540, lng: -64.1730 };
@@ -183,5 +184,82 @@ describe('el día', () => {
       pedido({ estado: 'entregado', total: 9000, pago: { modo: 'transferencia', pagado: true } }),
     ];
     expect(resumenDelDia(entregados)).toEqual({ entregados: 3, efectivo: 3500 });
+  });
+});
+
+describe('el historial', () => {
+  // Mediodía del 15 de septiembre en Argentina.
+  const AHORA = new Date('2026-09-15T15:00:00Z');
+
+  it('los períodos, en el orden en que se muestran', () => {
+    expect(PERIODOS_HISTORIAL.map(p => p.clave)).toEqual(['hoy', 'semana', 'mes', 'mes_pasado']);
+  });
+
+  it('los días de cada período, del más nuevo al más viejo', () => {
+    expect(diasDelPeriodo('hoy', AHORA)).toEqual(['2026-09-15']);
+    expect(diasDelPeriodo('semana', AHORA)).toEqual([
+      '2026-09-15', '2026-09-14', '2026-09-13', '2026-09-12', '2026-09-11', '2026-09-10', '2026-09-09',
+    ]);
+    const mes = diasDelPeriodo('mes', AHORA);
+    expect(mes).toHaveLength(15);
+    expect([mes[0], mes.at(-1)]).toEqual(['2026-09-15', '2026-09-01']);
+    const pasado = diasDelPeriodo('mes_pasado', AHORA);
+    expect(pasado).toHaveLength(31);
+    expect([pasado[0], pasado.at(-1)]).toEqual(['2026-08-31', '2026-08-01']);
+  });
+
+  it('el día sale de la hora de Argentina, aunque en UTC ya sea otro mes', () => {
+    const noche = new Date('2026-10-01T01:00:00Z'); // 30 de septiembre, 22 h
+    expect(diasDelPeriodo('hoy', noche)).toEqual(['2026-09-30']);
+    expect(diasDelPeriodo('mes', noche)).toHaveLength(30);
+    expect(diasDelPeriodo('mes_pasado', noche)[0]).toBe('2026-08-31');
+  });
+
+  it('en enero, el mes pasado es diciembre del año anterior; y febrero bisiesto', () => {
+    const pasado = diasDelPeriodo('mes_pasado', new Date('2027-01-10T15:00:00Z'));
+    expect([pasado[0], pasado.at(-1), pasado.length]).toEqual(['2026-12-31', '2026-12-01', 31]);
+    expect(diasDelPeriodo('mes_pasado', new Date('2028-03-05T15:00:00Z'))).toHaveLength(29);
+  });
+
+  it('un período que no existe es hoy', () => {
+    expect(diasDelPeriodo('siempre', AHORA)).toEqual(['2026-09-15']);
+  });
+
+  it('los días van a la consulta de a 30, que es lo que acepta Firestore', () => {
+    const dias = Array.from({ length: 45 }, (_, i) => `d${i}`);
+    expect(tandas(dias).map(t => t.length)).toEqual([30, 15]);
+    expect(tandas([])).toEqual([]);
+  });
+
+  it('suma la plata de los envíos y separa los gratis y los que están a confirmar', () => {
+    const entregado = (id, dia, extra = {}) => pedido({
+      id, estado: 'entregado', entregado_dia: dia, entregado_en: `${dia}T15:00:00Z`, envio: 1800, total: 5000,
+      pago: { modo: 'transferencia', pagado: true }, ...extra,
+    });
+    const r = resumenHistorial([
+      entregado('a', '2026-09-15', { entregado_en: '2026-09-15T18:00:00Z' }),
+      entregado('b', '2026-09-15', { envio: 2600, total: 7000, pago: { modo: 'efectivo', pagado: true } }),
+      entregado('c', '2026-09-14', { envio: 0, entrega: { modo: 'delivery', envio_gratis: true } }),
+      entregado('d', '2026-09-14', { envio: 0, entrega: { modo: 'delivery', envio_a_confirmar: true } }),
+      // Lo entregaron y después lo cancelaron desde el panel: no cuenta.
+      entregado('e', '2026-09-13', { estado: 'cancelado' }),
+      // El de hoy llega por la escucha y por la consulta: va una sola vez.
+      entregado('a', '2026-09-15'),
+    ]);
+    expect(r).toMatchObject({ entregados: 4, envios: 4400, efectivo: 7000, gratis: 1, aConfirmar: 1 });
+    expect(r.dias.map(d => [d.dia, d.cantidad, d.envios])).toEqual([['2026-09-15', 2, 4400], ['2026-09-14', 2, 0]]);
+    // Dentro del día, el último entregado primero.
+    expect(r.dias[0].pedidos.map(x => x.id)).toEqual(['a', 'b']);
+  });
+
+  it('sin entregas, todo en cero', () => {
+    expect(resumenHistorial([])).toEqual({ entregados: 0, envios: 0, efectivo: 0, gratis: 0, aConfirmar: 0, dias: [] });
+  });
+
+  it('el nombre del día: hoy, ayer o la fecha', () => {
+    expect(etiquetaDia('2026-09-15', AHORA)).toBe('Hoy');
+    expect(etiquetaDia('2026-09-14', AHORA)).toBe('Ayer');
+    expect(etiquetaDia('2026-09-13', AHORA)).toBe('Domingo 13 de septiembre');
+    expect(etiquetaDia('2026-08-31', AHORA)).toBe('Lunes 31 de agosto');
   });
 });

@@ -12,9 +12,9 @@
  */
 import { initializeApp, getApps } from 'firebase/app';
 import { initializeAuth, inMemoryPersistence, signInWithCustomToken } from 'firebase/auth';
-import { getFirestore, collection, query, where, onSnapshot, doc, getDoc } from 'firebase/firestore';
+import { getFirestore, collection, query, where, onSnapshot, doc, getDoc, getDocs } from 'firebase/firestore';
 import { config } from '../firebase_config.js';
-import { ESTADOS_EN_CURSO, diaArgentina } from '../reparto.js';
+import { ESTADOS_EN_CURSO, diaArgentina, tandas } from '../reparto.js';
 
 const LLAVE = 'liceo.reparto.clave';
 
@@ -83,6 +83,7 @@ export async function abrir(clave) {
     ok: true,
     config: { origen: ajustes.origen || null, whatsapp: ajustes.whatsapp || '', direccion: ajustes.direccion || '' },
     escuchar: (alCambiar, alFallar) => escuchar(db, alCambiar, alFallar),
+    historial: (dias) => historial(db, dias),
   };
 }
 
@@ -113,4 +114,18 @@ function escuchar(db, alCambiar, alFallar) {
     ),
   ];
   return () => cortes.forEach(cortar => cortar());
+}
+
+/**
+ * Los pedidos con envío entregados en esos días, de una vez (el historial no
+ * necesita estar en vivo). Mismo filtro por `entrega.modo` que la escucha, por
+ * las reglas; los días van de a 30 en un `in`, que con la igualdad de al lado
+ * no pide un índice compuesto.
+ */
+async function historial(db, dias) {
+  const pedidos = collection(db, 'tienda_pedidos');
+  const lotes = await Promise.all(tandas(dias).map(lote => getDocs(
+    query(pedidos, where('entrega.modo', '==', 'delivery'), where('entregado_dia', 'in', lote)),
+  )));
+  return lotes.flatMap(snap => snap.docs.map(d => ({ id: d.id, ...d.data() })));
 }

@@ -28,7 +28,7 @@ body.reparto { background: var(--bg); }
   justify-content: space-between;
   flex-wrap: wrap;
   gap: 0 var(--e-3);
-  padding: calc(var(--e-3) + env(safe-area-inset-top, 0px)) var(--e-4) var(--e-3);
+  padding: calc(var(--e-3) + env(safe-area-inset-top, 0px)) var(--e-4) 0;
   background: var(--ink-superficie);
   color: var(--ink-texto);
 }
@@ -61,6 +61,31 @@ body.reparto { background: var(--bg); }
   background: var(--liceo-verde);
 }
 
+/* Pedidos | Historial, a lo ancho debajo del logo. */
+.reparto-pestanas {
+  flex: 0 0 calc(100% + 2 * var(--e-4));
+  display: flex;
+  margin: var(--e-3) calc(-1 * var(--e-4)) 0;
+  border-top: 1px solid var(--ink-borde);
+}
+.reparto-pestana {
+  flex: 1;
+  min-height: 46px;
+  border: 0;
+  background: none;
+  color: var(--ink-texto-2);
+  font-family: var(--font-titulo);
+  font-weight: var(--peso-semi);
+  font-size: var(--t-sm);
+  cursor: pointer;
+  box-shadow: inset 0 -3px 0 transparent;
+}
+.reparto-pestana[aria-selected="true"] { color: var(--ink-texto); box-shadow: inset 0 -3px 0 var(--primary); }
+.reparto-pestana:focus-visible { outline: 2px solid var(--primary); outline-offset: -4px; }
+@media (min-width: 900px) {
+  .reparto-pestana { flex: 0 0 180px; }
+}
+
 /* El corte de conexión va en un renglón propio debajo de la barra: al lado del
    logo no entra en un celular angosto, y ahí se leía encimado con "Reparto". */
 .reparto-conexion {
@@ -68,7 +93,7 @@ body.reparto { background: var(--bg); }
   display: flex;
   align-items: flex-start;
   gap: var(--e-2);
-  margin: var(--e-3) calc(-1 * var(--e-4)) calc(-1 * var(--e-3));
+  margin: 0 calc(-1 * var(--e-4));
   padding: var(--e-2) var(--e-4);
   background: var(--liceo-naranja-bg);
   color: var(--liceo-naranja-txt);
@@ -136,7 +161,7 @@ body.reparto { background: var(--bg); }
     gap: var(--e-5);
     padding-top: var(--e-5);
   }
-  .reparto-lateral { position: sticky; top: calc(64px + var(--e-4)); }
+  .reparto-lateral { position: sticky; top: calc(112px + var(--e-4)); }
   .reparto-mapa { --mapa-ruta-alto: 440px; }
 }
 
@@ -588,3 +613,96 @@ body.reparto { background: var(--bg); }
 }
 .reparto-hoja__error { display: flex; gap: var(--e-2); margin: 0; color: var(--error); font-weight: var(--peso-semi); font-size: var(--t-sm); }
 .reparto-hoja__error svg { flex: none; margin-top: 2px; }
+
+/* ── Historial ─────────────────────────────────────────────────────────── */
+
+.reparto-historial {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-4);
+  max-width: 720px;
+  margin: 0 auto;
+  padding: var(--e-4) var(--e-4) calc(var(--e-7) + env(safe-area-inset-bottom, 0px));
+}
+
+/* Los cuatro en una fila pareja; en un celular muy angosto, de a dos. */
+.reparto-periodos { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: var(--e-2); }
+@media (max-width: 359px) {
+  .reparto-periodos { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+.reparto-periodo {
+  min-height: 44px;
+  padding: var(--e-1) var(--e-2);
+  line-height: 1.15;
+  border: 1.5px solid var(--borde-control);
+  border-radius: var(--r-full);
+  background: var(--surface);
+  color: var(--text);
+  font-family: var(--font-titulo);
+  font-weight: var(--peso-semi);
+  font-size: var(--t-sm);
+  cursor: pointer;
+}
+.reparto-periodo[aria-pressed="true"] { background: var(--ink-superficie); border-color: var(--ink-superficie); color: var(--ink-texto); }
+.reparto-periodo:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+
+.reparto-total {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-1);
+  padding: var(--e-4) var(--e-5);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.reparto-total p { margin: 0; }
+.reparto-total__etiqueta {
+  font-size: var(--t-xs);
+  font-weight: var(--peso-bold);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-2);
+}
+.reparto-total__monto {
+  font-family: var(--font-titulo);
+  font-weight: var(--peso-bold);
+  font-size: var(--t-2xl);
+  line-height: 1.1;
+  font-variant-numeric: tabular-nums;
+  color: var(--text);
+}
+.reparto-total__detalle { font-size: var(--t-sm); color: var(--text-2); }
+.reparto-total__detalle strong { color: var(--text); font-weight: var(--peso-bold); }
+.reparto-total__nota { font-size: var(--t-xs); color: var(--text-2); }
+.reparto-esqueleto--total { height: 132px; }
+
+.reparto-dia { display: flex; flex-direction: column; gap: var(--e-2); }
+.reparto-dia__titulo {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0 var(--e-3);
+  margin: var(--e-2) 0 0;
+  font-size: var(--t-sm);
+  font-weight: var(--peso-bold);
+}
+.reparto-dia__suma { font-weight: var(--peso-semi); color: var(--text-2); font-variant-numeric: tabular-nums; }
+.reparto-dia__lista {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  border-radius: var(--r-md);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.reparto-entrega { display: flex; align-items: flex-start; gap: var(--e-3); padding: var(--e-3); }
+.reparto-entrega + .reparto-entrega { border-top: 1px solid var(--border); }
+.reparto-entrega__texto { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.reparto-entrega__nombre { font-weight: var(--peso-bold); }
+.reparto-entrega__direccion { font-size: var(--t-sm); color: var(--text-2); }
+.reparto-entrega__meta { display: flex; flex-wrap: wrap; align-items: center; gap: var(--e-2); margin-top: 4px; font-size: var(--t-xs); color: var(--text-2); }
+.reparto-entrega__envio { flex: none; font-family: var(--font-titulo); font-weight: var(--peso-bold); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+.reparto-vacio--error { color: var(--error); }
+.reparto-vacio--neutro { color: var(--text-2); }

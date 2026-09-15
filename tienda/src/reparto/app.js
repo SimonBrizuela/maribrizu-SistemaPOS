@@ -11,7 +11,10 @@
  * eso.
  */
 import { avisar } from '../avisos.js';
-import { ordenarRuta, paraLlevar, enPreparacion, distanciaKm, yaLlego } from '../reparto.js';
+import {
+  ordenarRuta, paraLlevar, enPreparacion, distanciaKm, yaLlego,
+  diaArgentina, diasDelPeriodo, resumenHistorial,
+} from '../reparto.js';
 import * as vista from './vista.js';
 import { abrirHojaEntrega, cerrarHojaEntrega } from './hoja_entrega.js';
 
@@ -54,6 +57,10 @@ export async function iniciarReparto(raiz, dependencias) {
     soltarUbicacion: null,
     mapa: null,
     recibido: false,
+    vista: 'reparto',
+    // `cargado`: de qué período son los `pedidos` que hay. `turno` descarta la
+    // respuesta de un período que ya se cambió por otro.
+    historial: { periodo: 'semana', pedidos: [], cargado: null, error: false, turno: 0 },
   };
 
   const zona = (nombre) => raiz.querySelector(`[data-${nombre}]`);
@@ -149,6 +156,7 @@ export async function iniciarReparto(raiz, dependencias) {
 
     estado.config = abierta.config || {};
     estado.abierta = abierta;
+    estado.vista = 'reparto';
     raiz.innerHTML = vista.armazon();
     estado.mapa = mapa(zona('mapa'));
     pintar();
@@ -190,6 +198,7 @@ export async function iniciarReparto(raiz, dependencias) {
       espera.listo({ ok: true });
     }
     pintar();
+    pintarHistorial();
   }
 
   function alCortarseEscucha(err) {
@@ -205,6 +214,63 @@ export async function iniciarReparto(raiz, dependencias) {
       escucharEnVivo,
       ESPERAS_RECONEXION[Math.min(intento, ESPERAS_RECONEXION.length - 1)],
     );
+  }
+
+  /* ── Historial ──────────────────────────────────────────────────────────── */
+
+  function mostrarVista(nombre) {
+    estado.vista = nombre;
+    const enHistorial = nombre === 'historial';
+    zona('pantalla-reparto').hidden = enHistorial;
+    zona('historial').hidden = !enHistorial;
+    raiz.querySelectorAll('[data-vista]').forEach(b => b.setAttribute('aria-selected', String(b.dataset.vista === nombre)));
+    if (window.scrollY > 0) window.scrollTo(0, 0);
+    if (enHistorial) cargarHistorial();
+  }
+
+  /** Hoy sale de la escucha en vivo; los días anteriores, de una consulta. */
+  async function cargarHistorial() {
+    const h = estado.historial;
+    const { periodo } = h;
+    const hoy = diaArgentina();
+    const anteriores = diasDelPeriodo(periodo).filter(d => d !== hoy);
+    const turno = ++h.turno;
+    h.error = false;
+    if (!anteriores.length) {
+      h.pedidos = [];
+      h.cargado = periodo;
+      pintarHistorial();
+      return;
+    }
+    pintarHistorial();
+    try {
+      const pedidos = await estado.abierta.historial(anteriores);
+      if (turno !== h.turno) return;
+      h.pedidos = pedidos;
+      h.cargado = periodo;
+    } catch (err) {
+      if (turno !== h.turno) return;
+      if (err?.code === 'permission-denied') { linkVencido(); return; }
+      h.error = true;
+    }
+    pintarHistorial();
+  }
+
+  function pintarHistorial() {
+    if (estado.vista !== 'historial' || !zona('historial')) return;
+    const h = estado.historial;
+    const hoy = diaArgentina();
+    const dias = diasDelPeriodo(h.periodo);
+    const faltaConsultar = dias.some(d => d !== hoy) && h.cargado !== h.periodo;
+    poner('historial', vista.historial({
+      periodo: h.periodo,
+      resumen: resumenHistorial([
+        ...(dias.includes(hoy) ? estado.entregadosHoy : []),
+        ...(h.cargado === h.periodo ? h.pedidos : []),
+      ]),
+      cargando: faltaConsultar && !h.error,
+      error: h.error,
+    }));
   }
 
   /* ── Ubicación ──────────────────────────────────────────────────────────── */
@@ -271,6 +337,21 @@ export async function iniciarReparto(raiz, dependencias) {
   raiz.addEventListener('click', async (ev) => {
     if (ev.target.closest('[data-reintentar]')) { entrar(); return; }
     if (ev.target.closest('[data-activar-ubicacion]')) { arrancarUbicacion({ pedir: true }); return; }
+
+    const pestana = ev.target.closest('[data-vista]');
+    if (pestana) {
+      if (pestana.dataset.vista !== estado.vista) mostrarVista(pestana.dataset.vista);
+      return;
+    }
+    const periodo = ev.target.closest('[data-periodo]');
+    if (periodo) {
+      if (periodo.dataset.periodo !== estado.historial.periodo) {
+        estado.historial.periodo = periodo.dataset.periodo;
+        cargarHistorial();
+      }
+      return;
+    }
+    if (ev.target.closest('[data-reintentar-historial]')) { cargarHistorial(); return; }
 
     const abrir = ev.target.closest('[data-abrir]');
     if (abrir) {

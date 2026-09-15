@@ -204,6 +204,108 @@ export function diaArgentina(fecha = new Date()) {
   }).format(fecha);
 }
 
+/* ── Historial ────────────────────────────────────────────────────────────── */
+
+export const PERIODOS_HISTORIAL = [
+  { clave: 'hoy', texto: 'Hoy' },
+  { clave: 'semana', texto: '7 días' },
+  { clave: 'mes', texto: 'Este mes' },
+  { clave: 'mes_pasado', texto: 'Mes pasado' },
+];
+
+// Las cuentas de días van en UTC sobre la fecha ya pasada a Argentina: así no
+// importa la zona horaria del celular.
+const aUTC = (dia) => {
+  const [a, m, d] = dia.split('-').map(Number);
+  return Date.UTC(a, m - 1, d);
+};
+const deUTC = (ms) => new Date(ms).toISOString().slice(0, 10);
+const UN_DIA = 86_400_000;
+
+/**
+ * Los días (AAAA-MM-DD, hora de Argentina) de un período del historial, del más
+ * nuevo al más viejo. Un período que no existe es hoy.
+ */
+export function diasDelPeriodo(periodo, ahora = new Date()) {
+  const hoy = aUTC(diaArgentina(ahora));
+  const hasta = (desde, cantidad) => Array.from({ length: cantidad }, (_, i) => deUTC(desde - i * UN_DIA));
+  if (periodo === 'semana') return hasta(hoy, 7);
+  if (periodo === 'mes') return hasta(hoy, new Date(hoy).getUTCDate());
+  if (periodo === 'mes_pasado') {
+    const ultimoDelAnterior = hoy - new Date(hoy).getUTCDate() * UN_DIA;
+    return hasta(ultimoDelAnterior, new Date(ultimoDelAnterior).getUTCDate());
+  }
+  return hasta(hoy, 1);
+}
+
+/** De a 30: es lo más que acepta un `in` de Firestore. */
+export function tandas(lista, tam = 30) {
+  const salida = [];
+  for (let i = 0; i < lista.length; i += tam) salida.push(lista.slice(i, i + tam));
+  return salida;
+}
+
+const msDe = (valor) => {
+  if (!valor) return 0;
+  const fecha = typeof valor?.toDate === 'function' ? valor.toDate() : new Date(valor);
+  return Number.isNaN(fecha.getTime()) ? 0 : fecha.getTime();
+};
+
+/** Lo que se cobró de envío. Gratis o a confirmar no suma. */
+export function envioDe(pedido) {
+  if (pedido?.entrega?.envio_gratis || pedido?.entrega?.envio_a_confirmar) return 0;
+  return Number(pedido?.envio) || 0;
+}
+
+/**
+ * Lo entregado en un período: cuántos, la plata de los envíos, el efectivo
+ * cobrado y la lista por día. Un pedido que llega dos veces (el de hoy viene de
+ * la escucha y de la consulta) cuenta una; uno que después se canceló, ninguna.
+ */
+export function resumenHistorial(pedidos) {
+  const vistos = new Set();
+  const lista = [];
+  for (const p of pedidos || []) {
+    if (p?.estado !== 'entregado' || !p.entregado_dia || vistos.has(p.id)) continue;
+    vistos.add(p.id);
+    lista.push(p);
+  }
+
+  const porDia = new Map();
+  for (const p of lista) {
+    if (!porDia.has(p.entregado_dia)) porDia.set(p.entregado_dia, []);
+    porDia.get(p.entregado_dia).push(p);
+  }
+  const dias = [...porDia.entries()]
+    .sort(([a], [b]) => b.localeCompare(a))
+    .map(([dia, delDia]) => ({
+      dia,
+      cantidad: delDia.length,
+      envios: delDia.reduce((s, p) => s + envioDe(p), 0),
+      pedidos: delDia.sort((a, b) => msDe(b.entregado_en) - msDe(a.entregado_en)),
+    }));
+
+  return {
+    entregados: lista.length,
+    envios: lista.reduce((s, p) => s + envioDe(p), 0),
+    efectivo: resumenDelDia(lista).efectivo,
+    gratis: lista.filter(p => p.entrega?.envio_gratis).length,
+    aConfirmar: lista.filter(p => !p.entrega?.envio_gratis && p.entrega?.envio_a_confirmar).length,
+    dias,
+  };
+}
+
+const NOMBRE_DIA = new Intl.DateTimeFormat('es-AR', { weekday: 'long', day: 'numeric', month: 'long', timeZone: 'UTC' });
+
+/** "Hoy" · "Ayer" · "Domingo 13 de septiembre" */
+export function etiquetaDia(dia, ahora = new Date()) {
+  const diferencia = Math.round((aUTC(diaArgentina(ahora)) - aUTC(dia)) / UN_DIA);
+  if (diferencia === 0) return 'Hoy';
+  if (diferencia === 1) return 'Ayer';
+  const texto = NOMBRE_DIA.format(new Date(aUTC(dia))).replace(',', '');
+  return texto.charAt(0).toUpperCase() + texto.slice(1);
+}
+
 /** Cuántos entregó y cuánta plata en efectivo tiene que rendir. */
 export function resumenDelDia(entregados) {
   const lista = (entregados || []).filter(p => p.estado === 'entregado');
