@@ -252,23 +252,95 @@ export async function crearDoc(coleccion, id, datos) {
  * con `crear` nace si falta.
  */
 export async function escribirCampos(coleccion, id, valores, { crear = false } = {}) {
+  return escribirJuntos([{ coleccion, id, valores, condicion: crear ? 'cualquiera' : 'existe' }]);
+}
+
+/**
+ * Varias escrituras en un solo commit: entran todas o ninguna.
+ *
+ * Cada una lleva su condición:
+ *   · 'existe' (la de siempre): escribe esos campos en un documento que ya está.
+ *   · 'nuevo': crea el documento entero y falla si ya existe. Dos reclamos que
+ *     llegan a la vez piden el mismo número; con esto entra uno solo, y el
+ *     resumen que va al pedido no queda escrito por el que perdió.
+ *   · 'cualquiera': escribe esos campos exista o no.
+ *
+ * @param {Array<{coleccion: string, id: string, valores: object, condicion?: 'existe'|'nuevo'|'cualquiera'}>} escrituras
+ * @throws {Error & {status: number, yaExiste?: boolean}}
+ */
+export async function escribirJuntos(escrituras) {
   const token = await accessToken();
-  const nombre = `projects/${PROYECTO}/databases/(default)/documents/${coleccion}/${id}`;
-  const escritura = {
-    update: { name: nombre, fields: aCampos(valores) },
-    updateMask: { fieldPaths: Object.keys(valores).map(c => rutaDeCampo([c])) },
-    ...(crear ? {} : { currentDocument: { exists: true } }),
-  };
+  const writes = escrituras.map(({ coleccion, id, valores, condicion = 'existe' }) => ({
+    update: {
+      name: `projects/${PROYECTO}/databases/(default)/documents/${coleccion}/${id}`,
+      fields: aCampos(valores),
+    },
+    ...(condicion === 'nuevo' ? {} : { updateMask: { fieldPaths: Object.keys(valores).map(c => rutaDeCampo([c])) } }),
+    ...(condicion === 'existe' ? { currentDocument: { exists: true } } : {}),
+    ...(condicion === 'nuevo' ? { currentDocument: { exists: false } } : {}),
+  }));
 
   const respuesta = await fetch(`${BASE}:commit`, {
     method: 'POST',
     headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ writes: [escritura] }),
+    body: JSON.stringify({ writes }),
   });
   if (!respuesta.ok) {
-    throw new Error(`Firestore devolvió ${respuesta.status} escribiendo ${coleccion}/${id}: ${(await respuesta.text()).slice(0, 300)}`);
+    const destino = escrituras.map(e => `${e.coleccion}/${e.id}`).join(', ');
+    const err = new Error(`Firestore devolvió ${respuesta.status} escribiendo ${destino}: ${(await respuesta.text()).slice(0, 300)}`);
+    err.status = respuesta.status;
+    if (respuesta.status === 409) err.yaExiste = true;
+    throw err;
   }
   return respuesta.json();
+}
+
+/* ── Archivos ─────────────────────────────────────────────────────────────── */
+
+export const BUCKET = `${PROYECTO}.firebasestorage.app`;
+
+/**
+ * Sube un archivo a Storage y devuelve un enlace para verlo.
+ *
+ * El enlace es el mismo que arma Firebase: lleva un token largo que no se
+ * adivina y abre sin sesión. Así el panel muestra la foto con un `<img>` sin
+ * que haga falta publicar reglas nuevas de Storage, y quien no tiene el enlace
+ * (que solo está en `tienda_reclamos`, cerrada al público) no llega al archivo.
+ *
+ * @param {string} ruta  dentro del bucket, p. ej. `reclamos/{id}/1.webp`
+ * @param {Uint8Array} bytes
+ * @param {string} tipo  el Content-Type
+ * @returns {Promise<{ruta: string, url: string}>}
+ */
+export async function subirArchivo(ruta, bytes, tipo) {
+  const token = await tokenPara(PERMISOS.archivos);
+  const llave = crypto.randomUUID();
+  const limite = `liceo-${crypto.randomBytes(12).toString('hex')}`;
+  const datos = JSON.stringify({
+    name: ruta,
+    contentType: tipo,
+    metadata: { firebaseStorageDownloadTokens: llave },
+  });
+  const cuerpo = Buffer.concat([
+    Buffer.from(`--${limite}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${datos}\r\n`),
+    Buffer.from(`--${limite}\r\nContent-Type: ${tipo}\r\n\r\n`),
+    Buffer.from(bytes),
+    Buffer.from(`\r\n--${limite}--`),
+  ]);
+
+  const respuesta = await fetch(
+    `https://storage.googleapis.com/upload/storage/v1/b/${BUCKET}/o?uploadType=multipart`, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}`, 'Content-Type': `multipart/related; boundary=${limite}` },
+      body: cuerpo,
+    });
+  if (!respuesta.ok) {
+    throw new Error(`Storage devolvió ${respuesta.status} subiendo ${ruta}: ${(await respuesta.text()).slice(0, 300)}`);
+  }
+  return {
+    ruta,
+    url: `https://firebasestorage.googleapis.com/v0/b/${BUCKET}/o/${encodeURIComponent(ruta)}?alt=media&token=${llave}`,
+  };
 }
 
 /**

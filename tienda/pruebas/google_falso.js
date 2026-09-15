@@ -23,7 +23,10 @@ export function crearGoogle() {
     // token -> status con que contesta FCM (por defecto 200)
     fcm: {},
     fcmCaido: false,
+    // Cada archivo subido a Storage: {nombre, tipo, llave, bytes}
     subidas: [],
+    storageCaido: false,
+    firestoreCaido: false,
     scopes: [],
   };
 }
@@ -52,22 +55,40 @@ export function fetchGoogle(g) {
     }
 
     if (u.startsWith('https://storage.googleapis.com/upload/')) {
-      const nombre = new URL(u).searchParams.get('name');
-      g.subidas.push({ nombre, cuerpo: opciones.body, tipo: opciones.headers?.['Content-Type'] });
-      return respuesta({ name: nombre, bucket: 'mari-d7c71.firebasestorage.app' });
+      if (g.storageCaido) return respuesta({ error: { message: 'Forbidden' } }, 403);
+      // Subida multipart: primero los datos del archivo en JSON, después el archivo.
+      const crudo = Buffer.from(opciones.body);
+      const texto = crudo.toString('latin1');
+      const inicio = texto.indexOf('{');
+      const finDatos = texto.indexOf('\r\n--', inicio);
+      const meta = JSON.parse(texto.slice(inicio, finDatos));
+      const cabeceraArchivo = texto.indexOf('\r\n\r\n', finDatos) + 4;
+      const fin = texto.lastIndexOf('\r\n--');
+      g.subidas.push({
+        nombre: meta.name, tipo: meta.contentType, llave: meta.metadata?.firebaseStorageDownloadTokens,
+        bytes: crudo.subarray(cabeceraArchivo, fin),
+      });
+      return respuesta({ name: meta.name, bucket: 'mari-d7c71.firebasestorage.app' });
     }
 
     if (u.endsWith(':commit')) {
       if (!opciones.headers?.Authorization) return respuesta({ error: 'PERMISSION_DENIED' }, 403);
-      for (const w of JSON.parse(opciones.body).writes) {
+      if (g.firestoreCaido) return respuesta({ error: 'UNAVAILABLE' }, 503);
+      const writes = JSON.parse(opciones.body).writes.map(w => {
         const [, col, id] = w.update.name.match(/documents\/([^/]+)\/([^/]+)$/);
-        const ruta = `${col}/${id}`;
-        if (w.currentDocument?.exists && !g.docs[ruta]) return respuesta({ error: 'NOT_FOUND' }, 404);
+        return { w, ruta: `${col}/${id}` };
+      });
+      // Como la base: si una condición falla no se escribe ninguna.
+      for (const { w, ruta } of writes) {
+        if (w.currentDocument?.exists === true && !g.docs[ruta]) return respuesta({ error: 'NOT_FOUND' }, 404);
+        if (w.currentDocument?.exists === false && g.docs[ruta]) return respuesta({ error: 'ALREADY_EXISTS' }, 409);
+      }
+      for (const { w, ruta } of writes) {
         const campos = desplanar(w.update.fields || {});
         g.escrituras.push({ ruta, campos, mascara: w.updateMask?.fieldPaths, precondicion: w.currentDocument });
-        g.docs[ruta] = { ...(g.docs[ruta] || {}), ...campos };
+        g.docs[ruta] = w.updateMask ? { ...(g.docs[ruta] || {}), ...campos } : campos;
       }
-      return respuesta({ writeResults: [{}] });
+      return respuesta({ writeResults: writes.map(() => ({})) });
     }
 
     const creacion = u.match(/\/documents\/([^/?]+)\?documentId=([^&]+)/);
