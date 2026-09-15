@@ -473,6 +473,50 @@
 .tienda-tabla tbody tr:last-child td { border-bottom: none; }
 .tienda-tabla tbody tr:hover { background: var(--bg); }
 
+/* Mientras una fila se va (o se abre el lugar de una que llega) no reacciona
+   al mouse: un fondo de hover prendiéndose sobre algo que desaparece se ve
+   como un parpadeo. */
+.tienda-tabla tbody tr[data-saliendo],
+.tienda-tabla tbody tr.fila-hueco { pointer-events: none; }
+.tienda-tabla tbody tr.fila-hueco:hover { background: transparent; }
+
+/* "Les falta la foto": el título con su cuenta y, a la derecha, lo oculto. */
+.fotos-encabezado {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px 12px; flex-wrap: wrap; margin: 22px 0 8px;
+  /* El alto del botón aunque no esté: al ocultar el primero aparece, y sin
+     esto empujaba toda la tabla unos píxeles justo mientras la fila se iba. */
+  min-height: 32px;
+}
+.fotos-encabezado h3 { margin: 0; font-size: 15px; }
+.fotos-encabezado__cuenta { color: var(--text-muted); font-weight: 400; }
+.fotos-encabezado__cuenta [data-cuenta] { font-variant-numeric: tabular-nums; }
+
+.fotos-ver-ocultos { padding: 6px 8px 6px 10px; gap: 6px; }
+/* `.pc-btn` es flex y le gana al `hidden` de la hoja del navegador. */
+.fotos-ver-ocultos[hidden] { display: none; }
+.fotos-ver-ocultos .material-icons { font-size: 16px !important; }
+.fotos-ver-ocultos b {
+  min-width: 18px; padding: 0 5px; border-radius: 99px; background: var(--bg);
+  font-variant-numeric: tabular-nums; font-size: 11.5px; line-height: 18px;
+}
+.fotos-ver-ocultos[aria-expanded="true"] { background: var(--bg); border-color: var(--text-muted); }
+.fotos-ver-ocultos[aria-expanded="true"] b { background: var(--card-bg); }
+.fotos-ver-ocultos__flecha { transition: transform .2s ease; }
+.fotos-ver-ocultos[aria-expanded="true"] .fotos-ver-ocultos__flecha { transform: rotate(180deg); }
+
+/* Lo oculto se lee apagado y con el borde punteado: está a mano para
+   recuperarlo, no para trabajarlo. */
+.fotos-ocultos { padding-bottom: 18px; }
+.fotos-tabla-ocultos { border-style: dashed; }
+.fotos-tabla-ocultos td { color: var(--text-muted); }
+.fotos-tabla-ocultos .tienda-nombre { font-weight: 500; }
+.fotos-todo-oculto { margin: 0 0 10px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .fotos-ver-ocultos__flecha { transition: none; }
+}
+
 /* ── Subrubros dentro de un rubro ────────────────────────────────────────── */
 .tienda-rubro-caja { display: flex; flex-direction: column; }
 /* `display:flex` de la clase le gana al `display:none` del atributo hidden, que

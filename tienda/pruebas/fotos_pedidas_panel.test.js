@@ -25,12 +25,17 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
-const { nube, cacheSdk, espia } = vi.hoisted(() => ({
-  // Lo que hay en el servidor.
-  nube: { catalogo: [], pedidas: [], publicacion: {}, tienda_productos: {} },
+const { nube, cacheSdk, espia, oyentes } = vi.hoisted(() => ({
+  // Lo que hay en el servidor. `ocultos` es `config/fotos_ocultas`: un campo
+  // por producto, o null si el documento todavía no existe.
+  nube: { catalogo: [], pedidas: [], publicacion: {}, tienda_productos: {}, ocultos: null },
   // El cache local del SDK: la lista de rubros de antes, congelada.
   cacheSdk: { publicacion: null },
-  espia: { espejo: vi.fn(), catalogo: vi.fn(), borradas: [], subidas: 0 },
+  espia: { espejo: vi.fn(), catalogo: vi.fn(), borradas: [], subidas: 0,
+           ocultos: [], fallarOcultos: false },
+  // Quién está escuchando `config/fotos_ocultas`, para avisarle como lo haría
+  // Firestore cuando otra pestaña oculta algo.
+  oyentes: { ocultos: [] },
 }));
 
 vi.mock('firebase/firestore', () => {
@@ -55,6 +60,7 @@ vi.mock('firebase/firestore', () => {
     getDocs: async (q) => instantanea(deColeccion(q?._col)),
     getDoc: async (ref) => (ref?._col === 'tienda_config'
       ? unDoc(ref, nube.publicacion)
+      : ref?._col === 'config' ? unDoc(ref, nube.ocultos)
       : unDoc(ref, nube.catalogo.find(d => d.doc_id === ref?.id))),
     getDocFromCache: async (ref) => {
       if (ref?._col === 'tienda_config' && cacheSdk.publicacion) {
@@ -63,6 +69,12 @@ vi.mock('firebase/firestore', () => {
       throw new Error('sin cache local');
     },
     onSnapshot: (q, alLlegar) => {
+      if (q?._col === 'config' && q?.id === 'fotos_ocultas') {
+        const avisar = () => alLlegar?.(unDoc(q, nube.ocultos));
+        oyentes.ocultos.push(avisar);
+        avisar();
+        return () => { oyentes.ocultos = oyentes.ocultos.filter(o => o !== avisar); };
+      }
       try { alLlegar?.(instantanea(deColeccion(q?._col))); } catch (_) { /* nada */ }
       return () => {};
     },
@@ -80,7 +92,18 @@ vi.mock('../../webapp/src/tienda_espejo.js', async (original) => {
   const real = await original();
   return {
     ...real,
-    actualizarDoc: async (_db, col, id, cambios) => {
+    actualizarDoc: async (_db, col, id, cambios, opciones) => {
+      if (col === 'config' && id === 'fotos_ocultas') {
+        espia.ocultos.push({ cambios, opciones });
+        if (espia.fallarOcultos) throw new Error('Firestore respondió 403');
+        const doc = { ...(nube.ocultos || {}) };
+        for (const [campo, valor] of Object.entries(cambios)) {
+          if (valor === undefined) delete doc[campo];
+          else doc[campo] = valor;
+        }
+        nube.ocultos = doc;
+        return;
+      }
       espia.catalogo(col, id, cambios);
       const producto = nube.catalogo.find(d => d.doc_id === id);
       if (producto) Object.assign(producto, cambios);
@@ -99,6 +122,10 @@ vi.mock('../../webapp/src/tienda_espejo.js', async (original) => {
       };
       return { publicado: true, motivo: null };
     },
+    // Con sesión, `config` se lee por REST igual que en producción.
+    leerDocRest: async (col, id) => (col === 'config' && id === 'fotos_ocultas'
+      ? { existe: !!nube.ocultos, datos: nube.ocultos }
+      : real.leerDocRest(col, id)),
     subirFoto: async () => `https://x/subida-${++espia.subidas}.webp`,
     borrarFoto: (url) => { espia.borradas.push(url); },
     borrarDoc: async (_db, col, id) => {
@@ -150,10 +177,14 @@ beforeEach(() => {
   espia.catalogo.mockClear();
   espia.borradas.length = 0;
   espia.subidas = 0;
+  espia.ocultos.length = 0;
+  espia.fallarOcultos = false;
+  oyentes.ocultos = [];
 
   nube.catalogo = CATALOGO.map(d => structuredClone(d));
   nube.pedidas = [];
   nube.tienda_productos = {};
+  nube.ocultos = null;
   // En el servidor JUGUETERÍA ya está prendida; el SDK sigue con la de antes.
   nube.publicacion = { rubros: ['LIBRERIA', 'JUGUETERIA'], subrubros_excluidos: {} };
   cacheSdk.publicacion = { rubros: ['LIBRERIA'], subrubros_excluidos: {} };
@@ -309,5 +340,204 @@ describe('lo que ya está en la vidriera sin foto', () => {
 
     expect(fila('p1').textContent).toContain('Todavía no sale');
     expect(fila('p1').textContent).not.toContain('En la vidriera');
+  });
+});
+
+/* ── Ocultar lo que no se va a fotografiar ────────────────────────────────── */
+
+describe('ocultar de "Les falta la foto"', () => {
+  const enEspera = () => [...contenedor.querySelectorAll('#fotosTablaEsperando tbody tr')]
+    .filter(f => !f.hasAttribute('data-saliendo')).map(f => f.dataset.fila);
+  const enOcultos = () => [...contenedor.querySelectorAll('#fotosTablaOcultos tbody tr')]
+    .filter(f => !f.hasAttribute('data-saliendo')).map(f => f.dataset.fila);
+  const cuenta = (cual) => contenedor.querySelector(`[data-cuenta="${cual}"]`)?.textContent.trim();
+  const numero = (texto) => dato(texto).querySelector('b').textContent;
+  const toast = () => document.getElementById('llToastStack');
+
+  /** Lo que haría Firestore al cambiar el documento: avisarle a quien escucha. */
+  const avisarOcultos = async () => {
+    oyentes.ocultos.forEach(o => o());
+    await respirar();
+  };
+
+  async function ocultar(id) {
+    contenedor.querySelector(`[data-ocultar="${id}"]`).click();
+    await respirar();
+  }
+
+  async function verOcultos() {
+    contenedor.querySelector('[data-ver-ocultos]').click();
+    await respirar();
+  }
+
+  it('cada renglón de la lista tiene su botón; lo pedido a mano no, que ya tiene el suyo', async () => {
+    nube.pedidas = [{ doc_id: 'p5', nombre: 'CUADERNO RIVADAVIA', rubro: 'LIBRERIA' }];
+    await montar();
+
+    expect(contenedor.querySelector('[data-ocultar="p1"]')).toBeTruthy();
+    expect(contenedor.querySelector('[data-ocultar="p3"]')).toBeTruthy();
+    expect(contenedor.querySelector('[data-ocultar="p5"]')).toBeNull();
+  });
+
+  it('ocultar lo saca de la lista, baja los números y lo guarda', async () => {
+    await montar();
+    expect(enEspera()).toEqual(['p3', 'p1']);
+
+    await ocultar('p1');
+
+    expect(enEspera()).toEqual(['p3']);
+    expect(cuenta('esperando')).toBe('1');
+    expect(cuenta('ocultos')).toBe('1');
+    expect(numero('esperando foto para salir')).toBe('0');
+
+    expect(espia.ocultos).toHaveLength(1);
+    expect(Object.keys(espia.ocultos[0].cambios)).toEqual(['p1']);
+    expect(espia.ocultos[0].opciones).toEqual({ crearSiFalta: true });
+    expect(nube.ocultos.p1.nombre).toBe('TIJERA ESCOLAR');
+    expect(nube.ocultos.p1.oculto_en).toBeInstanceOf(Date);
+  });
+
+  it('no toca el producto ni la tienda: es una decisión de esta lista', async () => {
+    await montar();
+    await ocultar('p3');
+
+    expect(espia.catalogo).not.toHaveBeenCalled();
+    expect(espia.espejo).not.toHaveBeenCalled();
+    // El cliente lo sigue viendo con el cuadrito gris, así que el número de la
+    // vidriera no cambia: es el mismo que marca Tienda > Catálogo.
+    expect(numero('en la vidriera sin foto')).toBe('1');
+  });
+
+  it('al volver a entrar a la pantalla sigue oculto', async () => {
+    nube.ocultos = { p1: { nombre: 'TIJERA ESCOLAR', oculto_en: new Date('2026-09-15') } };
+    await montar();
+
+    expect(enEspera()).toEqual(['p3']);
+    expect(cuenta('ocultos')).toBe('1');
+    expect(numero('esperando foto para salir')).toBe('0');
+  });
+
+  it('los ocultos se pueden ver y volver a la lista', async () => {
+    await montar();
+    await ocultar('p1');
+    expect(contenedor.querySelector('#fotosTablaOcultos')).toBeNull();
+
+    await verOcultos();
+    expect(enOcultos()).toEqual(['p1']);
+
+    contenedor.querySelector('[data-mostrar="p1"]').click();
+    await respirar();
+
+    // Vuelve a su lugar de siempre, no al final.
+    expect(enEspera()).toEqual(['p3', 'p1']);
+    expect(enOcultos()).toEqual([]);
+    expect(cuenta('ocultos') ?? '0').toBe('0');
+    expect(numero('esperando foto para salir')).toBe('1');
+    expect(nube.ocultos).toEqual({});
+    expect(Object.values(espia.ocultos.at(-1).cambios)).toEqual([undefined]);
+  });
+
+  it('con la lista de ocultos abierta, lo que se oculta aparece arriba de todo', async () => {
+    nube.ocultos = { p3: { nombre: 'MOCHILA CHICA', oculto_en: new Date('2026-09-01') } };
+    await montar();
+    await verOcultos();
+
+    await ocultar('p1');
+
+    expect(enOcultos()).toEqual(['p1', 'p3']);
+  });
+
+  it('ocultando todo, la sección queda con el acceso a los ocultos', async () => {
+    await montar();
+    await ocultar('p1');
+    await ocultar('p3');
+
+    expect(enEspera()).toEqual([]);
+    expect(cuenta('esperando')).toBe('0');
+    expect(contenedor.querySelector('[data-ver-ocultos]')).toBeTruthy();
+    expect(cuenta('ocultos')).toBe('2');
+
+    await verOcultos();
+    contenedor.querySelector('[data-mostrar="p1"]').click();
+    await respirar();
+    expect(enEspera()).toEqual(['p1']);
+  });
+
+  it('"Deshacer" lo devuelve a la lista', async () => {
+    await montar();
+    await ocultar('p1');
+
+    const deshacer = toast()?.querySelector('[data-act="deshacer"]');
+    expect(deshacer, 'ocultar no ofrece deshacer').toBeTruthy();
+    deshacer.click();
+    await respirar();
+
+    expect(enEspera()).toEqual(['p3', 'p1']);
+    expect(nube.ocultos).toEqual({});
+  });
+
+  it('si no se pudo guardar, vuelve a su lugar y lo dice', async () => {
+    espia.fallarOcultos = true;
+    await montar();
+
+    await ocultar('p1');
+
+    expect(enEspera()).toEqual(['p3', 'p1']);
+    expect(cuenta('ocultos') ?? '0').toBe('0');
+    expect(toast()?.textContent).toContain('No se pudo ocultar');
+  });
+
+  describe('en vivo', () => {
+    it('lo que oculta otra pestaña se va solo, y vuelve solo', async () => {
+      await montar();
+
+      nube.ocultos = { p3: { nombre: 'MOCHILA CHICA', oculto_en: new Date() } };
+      await avisarOcultos();
+      expect(enEspera()).toEqual(['p1']);
+      expect(cuenta('ocultos')).toBe('1');
+
+      nube.ocultos = {};
+      await avisarOcultos();
+      expect(enEspera()).toEqual(['p3', 'p1']);
+    });
+
+    it('una copia vieja que llega tarde no hace parpadear lo recién tocado', async () => {
+      await montar();
+      const antes = nube.ocultos;
+
+      await ocultar('p1');
+      // La base todavía no tenía el cambio cuando armó este aviso.
+      const guardado = nube.ocultos;
+      nube.ocultos = antes;
+      await avisarOcultos();
+      expect(enEspera(), 'volvió a aparecer con una copia vieja').toEqual(['p3']);
+
+      // Llega la confirmación, y después otra pestaña lo vuelve a mostrar.
+      nube.ocultos = guardado;
+      await avisarOcultos();
+      nube.ocultos = {};
+      await avisarOcultos();
+      expect(enEspera()).toEqual(['p3', 'p1']);
+    });
+
+    it('con el panel de fotos abierto espera a que se cierre para mover la tabla', async () => {
+      await montar();
+      await cargarFoto('p3');
+
+      nube.ocultos = { p1: { nombre: 'TIJERA ESCOLAR', oculto_en: new Date() } };
+      await avisarOcultos();
+      expect(enEspera()).toContain('p1');
+
+      document.querySelector('.tienda-overlay[data-panel-fotos] [data-accion="cancelar"]').click();
+      await respirar();
+      expect(enEspera()).toEqual(['p3']);
+    });
+
+    it('al salir de la pantalla deja de escuchar', async () => {
+      await montar();
+      expect(oyentes.ocultos).toHaveLength(1);
+      window.__limpiarPagina();
+      expect(oyentes.ocultos).toHaveLength(0);
+    });
   });
 });

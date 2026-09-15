@@ -21,11 +21,17 @@
  * el producto (que reescribe el espejo público en el momento) y se saca al
  * producto de esta lista. Si algo falla en el medio, el producto sigue
  * pendiente: es preferible que aparezca de más y no que se pierda.
+ *
+ * Lo que no se va a fotografiar nunca se oculta de "Les falta la foto" y queda
+ * aparte, en Ocultos (ver fotos_ocultas.js). Se mueve en el momento, con la fila
+ * yéndose de a poco, y lo que oculta otra pestaña se va solo.
  */
 import { collection, doc, getDoc, getDocs, onSnapshot, orderBy, query } from 'firebase/firestore';
 import { getCached } from '../cache.js';
 import { leerDocRapido } from '../config.js';
 import { alertDialog, confirmDialog, escHtml, verFotoGrande } from '../components/dialogs.js';
+import { mostrarToast, cerrarToast } from '../components/toasts.js';
+import { sacarFila, meterFila, desplegar, plegar } from '../components/filas_animadas.js';
 import {
   actualizarDoc, espejar, imagenesDe, motivoDeNoPublicar, nombreBonito, subirFoto,
   borrarFoto, borrarDoc, programarRecuentoDeRubros, usarCatalogoParaRecontar,
@@ -33,6 +39,10 @@ import {
 import {
   ponerDePortada, moverFoto, desvincularFoto, limpiarAjustes, fotosQuitadas,
 } from '../tienda_galeria.js';
+import {
+  separarOcultos, cambioOcultar, cambioMostrar, diferencias, reconciliar,
+  leerOcultos, escucharOcultos, guardarCambioDeOcultos,
+} from '../fotos_ocultas.js';
 import '../styles/tienda.css';
 
 let _db = null;
@@ -48,9 +58,21 @@ let _primerSnapshot = true;     // el primero trae toda la lista, no novedades
 let _repintarAlSoltar = false;  // llegó algo mientras había un panel abierto
 let _nuevas = new Set();        // ids que entraron sin recargar, para señalarlos
 let _olvidarNuevas = null;      // temporizador que apaga esa señal
+let _ocultosServidor = new Map(); // lo último que dijo la base de lo oculto
+let _pendientes = new Map();    // lo recién ocultado o mostrado, hasta que la base lo confirme
+let _ocultos = new Map();       // lo que se muestra: la base con lo pendiente encima
+let _verOcultos = false;        // la tabla de ocultos desplegada
+let _unsubOcultos = null;
+let _avisoOculto = null;        // el aviso con "Deshacer" del último que se ocultó
 
 export async function renderTiendaFotos(container, db) {
   _db = db;
+  // Cada entrada arranca de lo que diga la base: un pendiente de la visita
+  // anterior no tiene por qué seguir mandando.
+  _ocultosServidor = new Map();
+  _pendientes = new Map();
+  _ocultos = new Map();
+  _verOcultos = false;
 
   container.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:flex-start;
@@ -81,11 +103,14 @@ export async function renderTiendaFotos(container, db) {
 
   // Al volver a entrar a la pantalla, cortar lo que hubiera quedado escuchando.
   cortarEscucha();
-  window.__limpiarPagina = cortarEscucha;
+  window.__limpiarPagina = alSalir;
 
   document.getElementById('fotosRefrescar').addEventListener('click', cargar);
   document.getElementById('fotosImprimir').addEventListener('click', imprimir);
   document.getElementById('fotosArchivo').addEventListener('change', alElegirArchivo);
+  // Un solo oyente para todos los botones de las tablas: las filas entran y
+  // salen de a una (ocultar, mostrar) y cada una nueva tendría que conectarse.
+  document.getElementById('fotosCuerpo').addEventListener('click', alClickEnTabla);
 
   await cargar();
 }
@@ -97,20 +122,25 @@ async function cargar() {
   if (!cuerpo) return;
 
   try {
-    // Las tres cosas a la vez: la lista, el catálogo (para la foto que tiene
-    // hoy) y qué se publica (para no despublicar sin querer al guardar).
-    const [docs, catalogo, publicacion] = await Promise.all([
+    // Todo a la vez: la lista, el catálogo (para la foto que tiene hoy), qué se
+    // publica (para no despublicar sin querer al guardar) y lo que se ocultó.
+    // Lo oculto entra antes del primer pintado: pintar los doscientos y sacar
+    // después los ocultos era ver la tabla entera parpadear al entrar.
+    const [docs, catalogo, publicacion, ocultos] = await Promise.all([
       traerPedidas(),
       getCached('catalogo:all', async () => {
         const snap = await getDocs(query(collection(_db, 'catalogo'), orderBy('nombre')));
         return snap.docs.map(d => ({ ...d.data(), doc_id: d.id }));
       }, { ttl: 10 * 60 * 1000, memOnly: true }),
       leerPublicacionDeLaTienda(),
+      leerOcultos(_db),
     ]);
 
     _catalogo = new Map((catalogo || []).map(d => [String(d.doc_id), d]));
     _habilitados = publicacion?.rubros || [];
     _subExcluidos = publicacion?.subrubrosExcluidos || {};
+    _ocultosServidor = ocultos;
+    _ocultos = reconciliar(_ocultosServidor, _pendientes).efectivo;
 
     // El catálogo entero que acaba de leer esta pantalla se presta para rehacer
     // el conteo por rubro y subrubro de la portada de la tienda. Sin esto el
@@ -165,6 +195,7 @@ async function cargar() {
     // lectura de arriba —una colección de decenas de documentos, al lado de los
     // 9.000 del catálogo— y a cambio la pantalla queda al día sola.
     escucharPedidas();
+    escucharOcultosEnVivo();
   } catch (err) {
     console.error('[fotos] no se pudo leer la lista:', err);
     cuerpo.innerHTML = `
@@ -359,14 +390,23 @@ async function completarDelCatalogo(ids) {
 }
 
 function cortarEscucha() {
-  if (_unsubPedidas) {
-    try { _unsubPedidas(); } catch (_) { /* ya estaba cortado */ }
+  for (const cortar of [_unsubPedidas, _unsubOcultos]) {
+    if (!cortar) continue;
+    try { cortar(); } catch (_) { /* ya estaba cortado */ }
   }
   _unsubPedidas = null;
+  _unsubOcultos = null;
   _primerSnapshot = true;
   clearTimeout(_olvidarNuevas);
   _nuevas.clear();
   _repintarAlSoltar = false;
+}
+
+/** Al irse de la pantalla: nada escuchando y ningún "Deshacer" suelto. */
+function alSalir() {
+  cortarEscucha();
+  if (_avisoOculto) cerrarToast(_avisoOculto.el);
+  _avisoOculto = null;
 }
 
 /** Aplica lo que llegó mientras había un panel abierto o una subida en curso. */
@@ -377,6 +417,38 @@ function soltarRepintadoPendiente() {
 }
 
 /* ── Pintado ──────────────────────────────────────────────────────────────── */
+
+/**
+ * Los números de la pantalla, de una sola cuenta: el pintado entero y el
+ * retoque en el lugar (al ocultar o mostrar una fila) tienen que decir lo mismo.
+ */
+function cuentas() {
+  const { visibles, ocultas } = separarOcultos(_esperando, _ocultos);
+  return {
+    visibles,
+    ocultas,
+    // Los que el cliente está viendo ahora mismo con el cuadrito gris, estén
+    // pedidos a mano, en la lista o se hayan ocultado de ella: es el mismo
+    // número que Tienda > Catálogo marca en rojo, y si acá dijera otra cosa
+    // habría que dudar de los dos. Ocultar no los saca de la vidriera.
+    enVidriera: _lista.filter(f => f.enLaVidriera).length
+              + _esperando.filter(f => f.enLaVidriera).length,
+    // Lo que queda por hacer: lo oculto no se va a fotografiar.
+    porSalir: visibles.filter(f => !f.enLaVidriera).length,
+    sinFoto: _lista.filter(f => !f.fotos.length).length,
+  };
+}
+
+const CABECERA = `
+  <thead>
+    <tr>
+      <th style="width:54px">Foto</th>
+      <th>Producto</th>
+      <th style="width:140px">Rubro</th>
+      <th style="width:112px">Marcado</th>
+      <th style="width:210px" data-no-imprimir></th>
+    </tr>
+  </thead>`;
 
 function pintarLista() {
   const cuerpo = document.getElementById('fotosCuerpo');
@@ -391,13 +463,9 @@ function pintarLista() {
     return;
   }
 
-  const sinFoto = _lista.filter(f => !f.fotos.length).length;
-  // Los que el cliente está viendo ahora mismo con el cuadrito gris, estén
-  // pedidos a mano o no: es el mismo número que Tienda > Catálogo marca en
-  // rojo, y si acá dijera otra cosa habría que dudar de los dos.
-  const enVidriera = _lista.filter(f => f.enLaVidriera).length
-                   + _esperando.filter(f => f.enLaVidriera).length;
-  const porSalir = _esperando.filter(f => !f.enLaVidriera).length;
+  const c = cuentas();
+  // Sin ninguno visible la tabla de ocultos no tiene sentido abierta.
+  if (!c.ocultas.length) _verOcultos = false;
 
   const tabla = (titulo, bajada, filas, id) => !filas.length ? '' : `
     <h3 style="margin:22px 0 8px;font-size:15px">${escHtml(titulo)}
@@ -405,16 +473,40 @@ function pintarLista() {
     </h3>
     <p class="tienda-pista" style="margin:0 0 10px">${escHtml(bajada)}</p>
     <table class="tienda-tabla" id="${id}">
-      <thead>
-        <tr>
-          <th style="width:54px">Foto</th>
-          <th>Producto</th>
-          <th style="width:140px">Rubro</th>
-          <th style="width:112px">Marcado</th>
-          <th style="width:210px" data-no-imprimir></th>
-        </tr>
-      </thead>
+      ${CABECERA}
       <tbody>${filas.map(f => filaHtml(f)).join('')}</tbody>
+    </table>`;
+
+  // Se arma aunque estén todos ocultos: es la única puerta para volver a verlos.
+  const faltaFoto = !_esperando.length ? '' : `
+    <div class="fotos-encabezado">
+      <h3>Les falta la foto
+        <span class="fotos-encabezado__cuenta">· <span data-cuenta="esperando">${c.visibles.length}</span></span>
+      </h3>
+      <button class="pc-btn fotos-ver-ocultos" data-ver-ocultos
+              aria-expanded="${_verOcultos}" aria-controls="fotosOcultosCaja"
+              title="Los que se sacaron de esta lista porque no se van a fotografiar"
+              ${c.ocultas.length ? '' : 'hidden'}>
+        <span class="material-icons">visibility_off</span>
+        Ocultos <b data-cuenta="ocultos">${c.ocultas.length}</b>
+        <span class="material-icons fotos-ver-ocultos__flecha">expand_more</span>
+      </button>
+    </div>
+    <p class="tienda-pista" style="margin:0 0 10px">${escHtml(
+      'Esta la arma el sistema mirando el catálogo. Los que están en orden salen '
+      + 'a la vidriera apenas se les carga una; los marcados "publicar siempre" ya '
+      + 'se están mostrando, con el cuadrito gris. En los dos casos salen de la '
+      + 'lista al cargarla. Al que no se le va a sacar foto se lo oculta con el '
+      + 'ojo: sale de esta lista y no cambia nada en la tienda.')}</p>
+    <div id="fotosOcultosCaja" class="fotos-ocultos-caja">${
+      _verOcultos ? tablaOcultosHtml(c.ocultas) : ''}</div>
+    <p class="tienda-pista fotos-todo-oculto" data-todo-oculto
+       ${c.visibles.length ? 'hidden' : ''}>
+      No queda nada a la vista: todo lo que falta está en Ocultos.
+    </p>
+    <table class="tienda-tabla" id="fotosTablaEsperando" ${c.visibles.length ? '' : 'hidden'}>
+      ${CABECERA}
+      <tbody>${c.visibles.map(f => filaHtml(f)).join('')}</tbody>
     </table>`;
 
   cuerpo.innerHTML = `
@@ -422,15 +514,15 @@ function pintarLista() {
       <div class="tienda-dato">
         <b>${_lista.length}</b><span>pedidas a mano</span>
       </div>
-      <div class="tienda-dato${porSalir ? ' alerta' : ''}">
-        <b>${porSalir}</b><span>esperando foto para salir</span>
+      <div class="tienda-dato${c.porSalir ? ' alerta' : ''}" data-dato="porSalir">
+        <b data-cuenta="porSalir">${c.porSalir}</b><span>esperando foto para salir</span>
       </div>
-      ${enVidriera ? `
+      ${c.enVidriera ? `
       <div class="tienda-dato alerta">
-        <b>${enVidriera}</b><span>en la vidriera sin foto</span>
+        <b>${c.enVidriera}</b><span>en la vidriera sin foto</span>
       </div>` : ''}
       <div class="tienda-dato">
-        <b>${_lista.length - sinFoto}</b><span>con foto a reemplazar</span>
+        <b>${_lista.length - c.sinFoto}</b><span>con foto a reemplazar</span>
       </div>
     </div>
 
@@ -438,12 +530,7 @@ function pintarLista() {
             'Lo que se marcó desde la tienda, con su fecha.',
             _lista, 'fotosTabla')}
 
-    ${tabla('Les falta la foto',
-            'Esta la arma el sistema mirando el catálogo. Los que están en '
-            + 'orden salen a la vidriera apenas se les carga una; los marcados '
-            + '"publicar siempre" ya se están mostrando, con el cuadrito gris. '
-            + 'En los dos casos salen de la lista al cargarla.',
-            _esperando, 'fotosTablaEsperando')}`;
+    ${faltaFoto}`;
 
   // La señal de "recién marcado" dura lo que tarda en encontrarse: el fondo se
   // apaga solo por CSS y acá se olvida el id, así el próximo pintado ya sale
@@ -453,20 +540,69 @@ function pintarLista() {
     clearTimeout(_olvidarNuevas);
     _olvidarNuevas = setTimeout(() => vistos.forEach(id => _nuevas.delete(id)), 8000);
   }
-
-  cuerpo.querySelectorAll('[data-sacar]').forEach(b => {
-    b.addEventListener('click', () => sacar(b.dataset.sacar));
-  });
-  cuerpo.querySelectorAll('[data-cargar]').forEach(b => {
-    b.addEventListener('click', () => pedirArchivo(b.dataset.cargar));
-  });
 }
 
-function filaHtml(f) {
-  const foto = f.fotos[0];
-  const recien = _nuevas.has(f.id);
+function tablaOcultosHtml(ocultas) {
+  if (!ocultas.length) return '';
   return `
-    <tr data-fila="${escHtml(f.id)}"${recien ? ' class="fila-recien"' : ''}>
+    <div class="fotos-ocultos">
+      <p class="tienda-pista" style="margin:0 0 8px">
+        Siguen sin foto y la tienda no cambió: los publicados se siguen viendo
+        con el cuadrito gris. "Mostrar" los devuelve a la lista.
+      </p>
+      <table class="tienda-tabla fotos-tabla-ocultos" id="fotosTablaOcultos">
+        ${CABECERA}
+        <tbody>${ocultas.map(f => filaHtml(f, { oculta: true })).join('')}</tbody>
+      </table>
+    </div>`;
+}
+
+/** Los botones de las tablas, que entran y salen con las filas. */
+function alClickEnTabla(ev) {
+  const boton = ev.target.closest('button');
+  if (!boton || boton.disabled) return;
+  const { sacar: aSacar, cargar, ocultar: aOcultar, mostrar: aMostrar } = boton.dataset;
+  if (aSacar) sacar(aSacar);
+  else if (cargar) pedirArchivo(cargar);
+  else if (aOcultar) ocultar(aOcultar);
+  else if (aMostrar) mostrar(aMostrar);
+  else if (boton.hasAttribute('data-ver-ocultos')) alternarOcultos();
+}
+
+function filaHtml(f, { oculta = false } = {}) {
+  const foto = f.fotos[0];
+  const recien = !oculta && _nuevas.has(f.id);
+  const id = escHtml(f.id);
+  const cuando = oculta ? _ocultos.get(f.id)?.oculto_en : null;
+
+  let acciones;
+  if (oculta) {
+    acciones = `
+      <button class="pc-btn" data-mostrar="${id}" title="Volver a la lista de los que les falta la foto"
+              style="padding:6px 10px;white-space:nowrap">
+        <span class="material-icons">visibility</span> Mostrar
+      </button>`;
+  } else {
+    acciones = `
+      ${f.enCatalogo ? `
+        <button class="pc-btn" data-cargar="${id}"
+                style="padding:6px 10px;white-space:nowrap">
+          <span class="material-icons">add_a_photo</span>
+          ${f.fotos.length ? 'Cambiar' : 'Cargar'}
+        </button>` : ''}
+      ${f.automatico ? `
+        <button class="pc-btn" data-ocultar="${id}" title="Ocultar: no se le va a sacar foto"
+                aria-label="Ocultar de esta lista" style="padding:6px 8px">
+          <span class="material-icons" style="font-size:17px">visibility_off</span>
+        </button>` : `
+        <button class="pc-btn" data-sacar="${id}" title="Sacar de la lista"
+                style="padding:6px 8px">
+          <span class="material-icons" style="font-size:17px">close</span>
+        </button>`}`;
+  }
+
+  return `
+    <tr data-fila="${id}"${recien ? ' class="fila-recien"' : ''}>
       <td>
         ${foto
           ? `<img src="${escHtml(foto)}" alt="" class="tienda-foto" loading="lazy">`
@@ -477,31 +613,224 @@ function filaHtml(f) {
       <td>
         <div class="tienda-nombre">${escHtml(f.nombre)}${
           recien ? '<span class="tienda-etiqueta recien">recién marcado</span>' : ''}</div>
-        ${f.enCatalogo
-          ? (f.fotos.length > 1
-              ? `<div class="tienda-sub">${f.fotos.length} fotos cargadas</div>` : '')
-          : '<div class="tienda-sub" style="color:var(--tint-red-fg)">'
-            + 'Ya no está en el catálogo</div>'}
+        ${cuando ? `<div class="tienda-sub">Oculto el ${fecha(cuando)}</div>`
+          : f.enCatalogo
+            ? (f.fotos.length > 1
+                ? `<div class="tienda-sub">${f.fotos.length} fotos cargadas</div>` : '')
+            : '<div class="tienda-sub" style="color:var(--tint-red-fg)">'
+              + 'Ya no está en el catálogo</div>'}
       </td>
       <td>${escHtml(nombreBonito(f.rubro))}</td>
       <td style="color:var(--text-muted)">${marcaDe(f)}</td>
       <td data-no-imprimir>
         <div style="display:flex;gap:6px;align-items:center;justify-content:flex-end">
-          <span class="tienda-pista" data-estado="${escHtml(f.id)}" style="margin:0"></span>
-          ${f.enCatalogo ? `
-            <button class="pc-btn" data-cargar="${escHtml(f.id)}"
-                    style="padding:6px 10px;white-space:nowrap">
-              <span class="material-icons">add_a_photo</span>
-              ${f.fotos.length ? 'Cambiar' : 'Cargar'}
-            </button>` : ''}
-          ${f.automatico ? '' : `
-            <button class="pc-btn" data-sacar="${escHtml(f.id)}" title="Sacar de la lista"
-                    style="padding:6px 8px">
-              <span class="material-icons" style="font-size:17px">close</span>
-            </button>`}
+          <span class="tienda-pista" data-estado="${id}" style="margin:0"></span>
+          ${acciones}
         </div>
       </td>
     </tr>`;
+}
+
+/* ── Ocultar y mostrar ────────────────────────────────────────────────────── */
+// La fila se mueve en el momento y el guardado va detrás. Si falla, vuelve a
+// su lugar y se avisa: esperar a la base para mover la fila hacía que cada
+// click tardara lo que tarda la escritura, y con doscientos renglones para
+// revisar eso se siente.
+
+function ocultar(id) {
+  const f = _esperando.find(x => x.id === id);
+  if (!f || _ocultos.has(id)) return;
+  const cambios = cambioOcultar(f);
+  cambiarOculto(f, cambios, { entrada: cambios[id], error: 'No se pudo ocultar' });
+  avisarOcultado(f);
+}
+
+function mostrar(id) {
+  const f = _esperando.find(x => x.id === id);
+  if (!f || !_ocultos.has(id)) return;
+  if (_avisoOculto?.id === id) { cerrarToast(_avisoOculto.el); _avisoOculto = null; }
+  cambiarOculto(f, cambioMostrar(id), { entrada: null, error: 'No se pudo volver a mostrar' });
+}
+
+async function cambiarOculto(f, cambios, { entrada, error }) {
+  const pendiente = { entrada, guardadoEn: null };
+  _pendientes.set(f.id, pendiente);
+  refrescarOcultos();
+
+  try {
+    await guardarCambioDeOcultos(_db, cambios);
+    pendiente.guardadoEn = Date.now();
+  } catch (err) {
+    console.error(`[fotos] ${error.toLowerCase()}:`, err);
+    // Si mientras tanto se lo volvió a tocar, manda lo último.
+    if (_pendientes.get(f.id) !== pendiente) return;
+    _pendientes.delete(f.id);
+    if (_avisoOculto?.id === f.id) { cerrarToast(_avisoOculto.el); _avisoOculto = null; }
+    refrescarOcultos();
+    mostrarToast({
+      tono: 'rojo', icono: 'error_outline', etiqueta: error, titulo: f.nombre,
+      detalleHtml: escHtml(err?.message || 'Probá de nuevo.'), duracion: 8000,
+    });
+  }
+}
+
+/** Escucha lo que se oculta desde esta pestaña o desde cualquier otra. */
+function escucharOcultosEnVivo() {
+  if (_unsubOcultos) {
+    try { _unsubOcultos(); } catch (_) { /* ya estaba cortado */ }
+  }
+  _unsubOcultos = escucharOcultos(_db, (ocultos) => {
+    _ocultosServidor = ocultos;
+    refrescarOcultos();
+  });
+}
+
+/**
+ * Recalcula lo oculto (la base con lo pendiente encima) y mueve en el lugar las
+ * filas que cambiaron. Con un panel de fotos abierto no se toca la tabla: se
+ * repinta al cerrarlo, igual que con lo que llega desde la tienda.
+ */
+function refrescarOcultos() {
+  const antes = _ocultos;
+  const { efectivo, resueltos } = reconciliar(_ocultosServidor, _pendientes);
+  resueltos.forEach(id => _pendientes.delete(id));
+  _ocultos = efectivo;
+
+  const enLaLista = new Set(_esperando.map(f => f.id));
+  const { ocultados, mostrados } = diferencias(antes, efectivo);
+  const aOcultar = ocultados.filter(id => enLaLista.has(id));
+  const aMostrar = mostrados.filter(id => enLaLista.has(id));
+  if (!aOcultar.length && !aMostrar.length) return;
+
+  if (_panel || _subiendo) { _repintarAlSoltar = true; return; }
+  moverFilas(aOcultar, aMostrar);
+}
+
+function moverFilas(aOcultar, aMostrar) {
+  const tabla = document.getElementById('fotosTablaEsperando');
+  if (!tabla) { pintarLista(); return; }
+
+  const { visibles, ocultas } = cuentas();
+  const tablaOcultos = () => document.getElementById('fotosTablaOcultos');
+  const salidas = [];
+
+  for (const id of aOcultar) {
+    salidas.push(sacarFila(filaViva(tabla, id)));
+    if (_verOcultos) meterEnTabla(tablaOcultos(), id, ocultas, { oculta: true });
+  }
+  for (const id of aMostrar) {
+    if (tablaOcultos()) salidas.push(sacarFila(filaViva(tablaOcultos(), id)));
+    meterEnTabla(tabla, id, visibles);
+  }
+
+  actualizarCuentas();
+  // Lo que queda vacío se acomoda cuando termina de irse la última fila, no
+  // antes: esconder la tabla en el momento cortaba la animación a la mitad.
+  Promise.all(salidas).then(acomodarVacios);
+}
+
+function filaViva(tabla, id) {
+  return tabla?.querySelector(`tbody tr[data-fila="${CSS.escape(id)}"]:not([data-saliendo])`) || null;
+}
+
+/** Pone la fila de `id` en su lugar según `orden`, abriéndose paso. */
+function meterEnTabla(tabla, id, orden, opciones = {}) {
+  const tbody = tabla?.tBodies?.[0];
+  const indice = orden.findIndex(x => x.id === id);
+  if (!tbody || indice < 0 || filaViva(tabla, id)) return;
+
+  if (tabla.id === 'fotosTablaEsperando' && tabla.hidden) {
+    tabla.hidden = false;
+    const aviso = document.querySelector('[data-todo-oculto]');
+    if (aviso) aviso.hidden = true;
+  }
+
+  const molde = document.createElement('tbody');
+  molde.innerHTML = filaHtml(orden[indice], opciones);
+  const fila = molde.firstElementChild;
+
+  // Va antes del primer renglón vivo que en el orden viene después.
+  const despues = new Set(orden.slice(indice + 1).map(x => x.id));
+  const siguiente = [...tbody.rows].find(r =>
+    !r.hasAttribute('data-saliendo') && despues.has(r.dataset.fila)) || null;
+  meterFila(fila, () => tbody.insertBefore(fila, siguiente));
+}
+
+/** Los números que dependen de lo oculto, cambiados en el lugar. */
+function actualizarCuentas() {
+  const c = cuentas();
+  const poner = (cual, valor) => {
+    const nodo = document.querySelector(`[data-cuenta="${cual}"]`);
+    if (!nodo || nodo.textContent === String(valor)) return;
+    nodo.textContent = String(valor);
+    nodo.classList.remove('val-fill');
+    void nodo.offsetWidth;          // reinicia la animación si ya la tenía
+    nodo.classList.add('val-fill');
+  };
+  poner('esperando', c.visibles.length);
+  poner('ocultos', c.ocultas.length);
+  poner('porSalir', c.porSalir);
+  document.querySelector('[data-dato="porSalir"]')?.classList.toggle('alerta', c.porSalir > 0);
+  const boton = document.querySelector('[data-ver-ocultos]');
+  if (boton && c.ocultas.length) boton.hidden = false;
+}
+
+/** Cuando termina de irse lo que se iba: tablas vacías, botón sin ocultos. */
+function acomodarVacios() {
+  const c = cuentas();
+  const tabla = document.getElementById('fotosTablaEsperando');
+  if (!tabla) return;
+  tabla.hidden = !c.visibles.length;
+  const aviso = document.querySelector('[data-todo-oculto]');
+  if (aviso) aviso.hidden = c.visibles.length > 0;
+
+  if (c.ocultas.length) return;
+  const boton = document.querySelector('[data-ver-ocultos]');
+  if (boton) { boton.hidden = true; boton.setAttribute('aria-expanded', 'false'); }
+  if (_verOcultos) {
+    _verOcultos = false;
+    const caja = document.getElementById('fotosOcultosCaja');
+    if (caja) plegar(caja, () => { if (!_verOcultos) caja.innerHTML = ''; });
+  }
+}
+
+function alternarOcultos() {
+  const caja = document.getElementById('fotosOcultosCaja');
+  const boton = document.querySelector('[data-ver-ocultos]');
+  if (!caja || !boton) return;
+
+  _verOcultos = !_verOcultos;
+  boton.setAttribute('aria-expanded', String(_verOcultos));
+  if (_verOcultos) {
+    caja.innerHTML = tablaOcultosHtml(cuentas().ocultas);
+    desplegar(caja);
+  } else {
+    plegar(caja, () => { if (!_verOcultos) caja.innerHTML = ''; });
+  }
+}
+
+/**
+ * El aviso con "Deshacer". Uno solo a la vez: ocultando varios seguidos, una
+ * pila de avisos taparía la tabla que se está revisando.
+ */
+function avisarOcultado(f) {
+  if (_avisoOculto) cerrarToast(_avisoOculto.el);
+  const aviso = mostrarToast({
+    tono: 'violeta',
+    icono: 'visibility_off',
+    etiqueta: 'Oculto de la lista',
+    titulo: f.nombre,
+    acciones: [{ id: 'deshacer', texto: 'Deshacer', principal: true }],
+    duracion: 6000,
+    onAccion: (accion, api) => {
+      // Un aviso que ya se está yendo (lo reemplazó el de otro producto) sigue
+      // dibujado un instante: su "Deshacer" no puede devolver el que no es.
+      if (accion !== 'deshacer' || api.el.dataset.cerrando === '1') return;
+      api.cerrar();
+      mostrar(f.id);
+    },
+  });
+  _avisoOculto = { id: f.id, el: aviso.el };
 }
 
 /**
