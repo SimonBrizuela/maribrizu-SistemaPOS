@@ -123,7 +123,6 @@ export default async (peticion) => {
       fotos: subidas.map((s, i) => ({ url: s.url, ruta: s.ruta, tipo: fotos[i].tipo, bytes: fotos[i].bytes.length })),
       estado: 'nuevo',
       respuesta: null,
-      visto: false,
       creado: ahora,
       actualizado: ahora,
     };

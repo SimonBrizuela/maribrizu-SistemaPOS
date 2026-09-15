@@ -475,6 +475,31 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // ── RECLAMOS DE LA TIENDA ─────────────────────────────────────────────
+    // Lo que el cliente cuenta desde su pedido: el detalle, los productos, sus
+    // datos y los enlaces a las fotos. Nace únicamente en la función
+    // `crear-reclamo`, con la cuenta de servicio, que valida todo y deja el
+    // resumen en el pedido en la misma escritura.
+    //
+    // Lo lee solo el local. El local cambia el estado y la respuesta, nada más:
+    // lo que escribió el cliente no se edita desde el panel.
+    match /tienda_reclamos/{reclamoId} {
+      allow read:   if authorized();
+      allow create: if false;
+      allow update: if authorized()
+                    && request.resource.data.diff(resource.data).affectedKeys()
+                         .hasOnly(['estado', 'respuesta', 'actualizado'])
+                    && request.resource.data.estado in ['nuevo', 'revisando', 'resuelto', 'rechazado']
+                    && (request.resource.data.respuesta == null
+                        || (request.resource.data.respuesta is string
+                            && request.resource.data.respuesta.size() <= 800));
+      allow delete: if isAdmin();
+    }
+
+    // Los celulares anotados para los avisos de cada pedido (`tienda_avisos`)
+    // no tienen regla propia a propósito: los tokens los leen y escriben solo
+    // las funciones de la tienda, y la regla de abajo los deja cerrados.
+
     // ── BLOQUEAR TODO LO DEMÁS ────────────────────────────────────────────
     match /{document=**} {
       allow read, write: if false;

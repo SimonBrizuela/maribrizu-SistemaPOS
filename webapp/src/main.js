@@ -10,6 +10,7 @@ import { initTheme, toggleTheme, getTheme } from './theme.js';
 import { initNotifications, obtenerAlertasActivas, onAlertasCambian, refrescarAlertas } from './notifications.js';
 import { initConsumiblesWatcher } from './consumibles_watcher.js';
 import { initPedidosWatcher, onPedidosCambian } from './pedidos_watcher.js';
+import { initReclamosWatcher, onReclamosCambian } from './reclamos_watcher.js';
 import { initCajaWatcher } from './caja_watcher.js';
 import { initCalendarioBadge, proximosEventos, textoSobre } from './pages/calendario_core.js';
 import { renderSkeleton } from './skeletons.js';
@@ -71,6 +72,7 @@ const pages = {
   notificaciones:  { title: 'Notificaciones',          loader: () => import('./pages/notificaciones.js'),   render: 'renderNotificaciones',  cacheKey: null,                      needs: ['catalogo'] },
   centro_compras:  { title: 'Centro de Compras',        loader: () => import('./pages/centro_compras.js'),   render: 'renderCentroCompras',   cacheKey: null,                      needs: ['catalogo', 'ventas_por_dia'] },
   pedidos_tienda:  { title: 'Pedidos de la Tienda',     loader: () => import('./pages/pedidos_tienda.js'),   render: 'renderPedidosTienda',   cacheKey: null,                      needs: [] },
+  tienda_reclamos: { title: 'Reclamos de la Tienda',    loader: () => import('./pages/tienda_reclamos.js'),  render: 'renderTiendaReclamos',  cacheKey: null,                      needs: [] },
   tienda_catalogo: { title: 'Catálogo de la Tienda',    loader: () => import('./pages/tienda_catalogo.js'),  render: 'renderTiendaCatalogo',  cacheKey: null,                      needs: ['catalogo'] },
   tienda_descuentos: { title: 'Descuentos de la Tienda', loader: () => import('./pages/tienda_descuentos.js'), render: 'renderTiendaDescuentos', cacheKey: null, needs: ['catalogo'] },
   tienda_cupones:  { title: 'Cupones de la Tienda',    loader: () => import('./pages/tienda_cupones.js'),   render: 'renderTiendaCupones',   cacheKey: null,                      needs: ['catalogo'] },
@@ -909,6 +911,9 @@ function initApp(session) {
   // sobre la pantalla de login.
   initPedidosWatcher(db);
   onPedidosCambian(actualizarBadgePedidos);
+  // Los reclamos que nadie tomó todavía, con el mismo criterio.
+  initReclamosWatcher(db);
+  onReclamosCambian(lista => actualizarBadgeContador('navReclamosBadge', lista));
 
   // Si se está vendiendo sin caja abierta, avisarlo apenas pasa. Lee del store
   // (caja_activa + ventas_por_dia), no agrega lecturas propias.
@@ -1039,6 +1044,9 @@ function initApp(session) {
       // lista de ocultos cerrada y la fila que se estaba yendo cortada a la
       // mitad. Escucha el catálogo por su cuenta y mueve solo lo que cambió.
       if (currentPage === 'tienda_fotos') return;
+      // Reclamos de la Tienda: escucha los reclamos por su cuenta, y puede
+      // tener una respuesta a medio escribir que un redibujo borraría.
+      if (currentPage === 'tienda_reclamos') return;
 
       // Si el usuario está interactuando, diferimos el refresh para no
       // pisar lo que está haciendo (buscar, editar, llenar un form).
@@ -1142,9 +1150,14 @@ function actualizarBadgeFiados() {
 // esperando del otro lado, asi que va aunque el grupo este colapsado: el badge
 // del grupo lo suma solo.
 function actualizarBadgePedidos(pendientes) {
-  const badge = document.getElementById('navPedidosBadge');
+  actualizarBadgeContador('navPedidosBadge', pendientes);
+}
+
+/** Un badge del menú que cuenta los elementos de una lista. */
+function actualizarBadgeContador(id, lista) {
+  const badge = document.getElementById(id);
   if (!badge) return;
-  const n = (pendientes || []).length;
+  const n = (lista || []).length;
   badge.textContent = n > 99 ? '99+' : String(n);
   badge.style.display = n > 0 ? 'inline-flex' : 'none';
   refrescarBadgesGrupo();

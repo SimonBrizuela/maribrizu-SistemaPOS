@@ -67,7 +67,7 @@ describe('crear-reclamo: lo que queda escrito', () => {
     const doc = g.docs[`tienda_reclamos/${ID}-1`];
     expect(doc).toMatchObject({
       id: `${ID}-1`, pedido_id: ID, pedido_codigo: 'K7M2', motivo: 'roto', estado: 'nuevo',
-      detalle: 'Dos cartulinas azules llegaron dobladas por la mitad.', respuesta: null, visto: false,
+      detalle: 'Dos cartulinas azules llegaron dobladas por la mitad.', respuesta: null,
     });
     expect(doc.fotos).toHaveLength(2);
     expect(g.subidas.map(s => s.tipo)).toEqual(['image/jpeg', 'image/png']);
