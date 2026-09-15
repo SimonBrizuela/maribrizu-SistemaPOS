@@ -30,7 +30,10 @@ const { nube, cacheSdk, espia, oyentes } = vi.hoisted(() => ({
   // por producto, o null si el documento todavía no existe.
   nube: { catalogo: [], pedidas: [], publicacion: {}, tienda_productos: {}, ocultos: null },
   // El cache local del SDK: la lista de rubros de antes, congelada.
-  cacheSdk: { publicacion: null },
+  // `ocultos`: lo que el SDK tiene guardado de `config/fotos_ocultas`. Si está
+  // puesto, el listener avisa primero desde ahí y lo del servidor llega recién
+  // con `avisarOcultos()`, como pasa cuando el SDK viene atrasado.
+  cacheSdk: { publicacion: null, ocultos: undefined },
   espia: { espejo: vi.fn(), catalogo: vi.fn(), borradas: [], subidas: 0,
            ocultos: [], fallarOcultos: false },
   // Quién está escuchando `config/fotos_ocultas`, para avisarle como lo haría
@@ -70,9 +73,11 @@ vi.mock('firebase/firestore', () => {
     },
     onSnapshot: (q, alLlegar) => {
       if (q?._col === 'config' && q?.id === 'fotos_ocultas') {
-        const avisar = () => alLlegar?.(unDoc(q, nube.ocultos));
+        const conOrigen = (snap, fromCache) => ({ ...snap, metadata: { fromCache } });
+        const avisar = () => alLlegar?.(conOrigen(unDoc(q, nube.ocultos), false));
         oyentes.ocultos.push(avisar);
-        avisar();
+        if (cacheSdk.ocultos !== undefined) alLlegar?.(conOrigen(unDoc(q, cacheSdk.ocultos), true));
+        else avisar();
         return () => { oyentes.ocultos = oyentes.ocultos.filter(o => o !== avisar); };
       }
       try { alLlegar?.(instantanea(deColeccion(q?._col))); } catch (_) { /* nada */ }
@@ -188,6 +193,7 @@ beforeEach(() => {
   // En el servidor JUGUETERÍA ya está prendida; el SDK sigue con la de antes.
   nube.publicacion = { rubros: ['LIBRERIA', 'JUGUETERIA'], subrubros_excluidos: {} };
   cacheSdk.publicacion = { rubros: ['LIBRERIA'], subrubros_excluidos: {} };
+  cacheSdk.ocultos = undefined;
 
   // Lo que el navegador aporta y jsdom no.
   URL.createObjectURL = () => 'blob:vista-previa';
@@ -517,6 +523,30 @@ describe('ocultar de "Les falta la foto"', () => {
       await avisarOcultos();
       nube.ocultos = {};
       await avisarOcultos();
+      expect(enEspera()).toEqual(['p3', 'p1']);
+    });
+
+    it('al recargar, la copia vieja del cache no devuelve lo que ya estaba oculto', async () => {
+      // Pasó de verdad: se ocultó uno, se recargó la página y volvió a la lista
+      // con el botón Ocultos desaparecido. La escritura va por REST, así que el
+      // cache del SDK se había quedado con el documento de antes, sin nada
+      // oculto; el primer aviso del listener sale de ahí y pisaba lo que la
+      // pantalla acababa de leer bien de la base.
+      nube.ocultos = { p1: { nombre: 'TIJERA ESCOLAR', oculto_en: new Date() } };
+      cacheSdk.ocultos = null;
+      await montar();
+
+      expect(enEspera(), 'el cache viejo lo devolvió a la lista').toEqual(['p3']);
+      expect(cuenta('ocultos')).toBe('1');
+
+      // Cuando llega lo del servidor, sigue igual.
+      await avisarOcultos();
+      expect(enEspera()).toEqual(['p3']);
+    });
+
+    it('lo que dice el cache tampoco oculta nada: manda el servidor', async () => {
+      cacheSdk.ocultos = { p1: { nombre: 'TIJERA ESCOLAR', oculto_en: new Date() } };
+      await montar();
       expect(enEspera()).toEqual(['p3', 'p1']);
     });
 

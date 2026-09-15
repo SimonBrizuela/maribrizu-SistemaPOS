@@ -122,17 +122,36 @@ export function reconciliar(servidor, pendientes, ahora = Date.now()) {
  */
 export async function leerOcultos(db) {
   const porRest = await leerDocRest(COLECCION, DOCUMENTO, null, { conSesion: true });
-  if (porRest) return ocultosDelDoc(porRest.datos);
+  if (porRest) {
+    const ocultos = ocultosDelDoc(porRest.datos);
+    console.info(`[fotos] ${ocultos.size} ocultos, leídos de la base`);
+    return ocultos;
+  }
+  // Sin REST, el cache del SDK puede estar atrasado: lo corrige el primer
+  // aviso del servidor en `escucharOcultos`.
+  console.warn('[fotos] ocultos sin REST, se leen del cache del SDK');
   const datos = await leerDocRapido(doc(db, COLECCION, DOCUMENTO),
                                     { etiqueta: `${COLECCION}/${DOCUMENTO}`, vacio: null });
   return ocultosDelDoc(datos);
 }
 
-/** Avisa cada vez que cambia el documento, venga de esta pestaña o de otra. */
+/**
+ * Avisa cada vez que cambia el documento, venga de esta pestaña o de otra.
+ *
+ * Solo lo que confirma el servidor: lo que sale del cache del SDK se ignora.
+ * Las escrituras van por REST y el SDK no se entera de ellas hasta que el
+ * servidor se lo cuenta, así que su cache puede tener la copia de antes. Pasó
+ * de verdad: se ocultó uno, se recargó la página y el primer aviso, sacado de
+ * ese cache viejo, lo devolvió a la lista encima de lo que se acababa de leer
+ * bien de la base.
+ */
 export function escucharOcultos(db, alCambiar) {
   try {
     return onSnapshot(doc(db, COLECCION, DOCUMENTO),
-      snap => alCambiar(ocultosDelDoc(snap.exists() ? snap.data() : null)),
+      snap => {
+        if (snap.metadata?.fromCache) return;
+        alCambiar(ocultosDelDoc(snap.exists() ? snap.data() : null));
+      },
       err => console.warn('[fotos] no se pudo escuchar los ocultos:', err?.message || err));
   } catch (err) {
     console.warn('[fotos] no se pudo escuchar los ocultos:', err?.message || err);
