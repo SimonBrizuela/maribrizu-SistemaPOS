@@ -18,7 +18,7 @@
  * `tienda/src/datos.js`: si el documento no existe, la tienda igual funciona.
  */
 import { collection, doc, getDocs, orderBy, query } from 'firebase/firestore';
-import { getCached, setCacheValue } from '../cache.js';
+import { getCached, peekCacheValue, setCacheValue } from '../cache.js';
 import { leerDocRapido } from '../config.js';
 import { alertDialog, confirmDialog, escHtml } from '../components/dialogs.js';
 import { espejarLote, recomputarRubros, motivoDeNoPublicar, nombreBonito,
@@ -247,6 +247,26 @@ function pintarHorarios() {
 const PISTA_RUBROS = 'Lo tildado sale a la web y el rubro apagado no publica nada, '
   + 'ni lo marcado con «Publicar siempre». Desde el catálogo de la tienda se puede '
   + 'sacar un producto suelto, o forzarlo dentro de un rubro prendido.';
+
+function normalizarCatalogo(catalogo) {
+  return (catalogo || []).filter(d => d && d.doc_id)
+    .map(d => (typeof d.doc_id === 'string' ? d : { ...d, doc_id: String(d.doc_id) }));
+}
+
+/**
+ * El catálogo como está AHORA, no como estaba al abrir la pantalla.
+ *
+ * Esta pantalla no se redibuja con cada venta (es un formulario) y la copia
+ * del catálogo que leyó al entrar se queda vieja: prender un rubro con la
+ * pantalla abierta desde hacía horas publicaba el precio y el stock de
+ * entonces, y un producto dado de alta después ni entraba. El store mantiene
+ * el catálogo al día en `catalogo:all`; se lee de ahí justo antes de usarlo.
+ */
+function catalogoDeAhora() {
+  const vivo = peekCacheValue('catalogo:all');
+  if (Array.isArray(vivo) && vivo.length) _catalogo = normalizarCatalogo(vivo);
+  return _catalogo;
+}
 
 function pintarRubros() {
   const caja = document.getElementById('cfgRubros');
@@ -493,8 +513,7 @@ export async function renderTiendaAjustes(container, db) {
   _habilitados = Array.isArray(publicacion?.rubros)
     ? publicacion.rubros.map(r => String(r).trim().toUpperCase()) : [];
   _subExcluidos = normalizarExcluidos(publicacion?.subrubros_excluidos);
-  _catalogo = (catalogo || []).filter(d => d && d.doc_id)
-    .map(d => (typeof d.doc_id === 'string' ? d : { ...d, doc_id: String(d.doc_id) }));
+  _catalogo = normalizarCatalogo(catalogo);
 
   const e = config.entrega;
 
@@ -760,7 +779,7 @@ async function guardarTodo(container) {
   // instante. Se avisa antes con el número puesto, no después.
   if (cambioPublicacion) {
     const tocados = [...new Set([...entraron, ...salieron, ...rubrosConSubsCambiados])];
-    const afectados = _catalogo.filter(d => tocados.includes(claveDeRubro(d.rubro)));
+    const afectados = catalogoDeAhora().filter(d => tocados.includes(claveDeRubro(d.rubro)));
 
     const sacadosPorSub = rubrosConSubsCambiados
       .flatMap(r => (excluidos[r] || []).map(s => nombreBonito(s)));
@@ -855,7 +874,8 @@ async function guardarTodo(container) {
       olvidarPublicacion();
 
       const tocados = [...new Set([...entraron, ...salieron, ...rubrosConSubsCambiados])];
-      const afectados = _catalogo
+      const catalogo = catalogoDeAhora();
+      const afectados = catalogo
         .filter(d => tocados.includes(claveDeRubro(d.rubro)))
         .map(d => ({ id: d.doc_id, datos: d }));
 
@@ -866,7 +886,7 @@ async function guardarTodo(container) {
 
       estado.textContent = 'Actualizando la portada…';
       await recomputarRubros(_db,
-        _catalogo.map(d => ({ datos: d })), elegidos, excluidos);
+        catalogo.map(d => ({ datos: d })), elegidos, excluidos);
 
       _habilitados = elegidos;
       _subExcluidos = excluidos;

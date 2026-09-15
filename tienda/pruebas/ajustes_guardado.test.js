@@ -479,6 +479,32 @@ describe('prender y apagar un rubro mueve la vidriera en el momento', () => {
     expect(escrituras('tienda_productos', '3001')).toHaveLength(0);
   });
 
+  it('publica con el catálogo de ahora, no con el que había al abrir la pantalla', async () => {
+    // La pantalla se deja abierta y mientras tanto el POS sigue: cambia un
+    // precio, entra stock, se da de alta un producto. Prender el rubro
+    // publicaba con la copia del catálogo leída al entrar, y la tienda quedaba
+    // con el precio y el stock de hace horas hasta la corrida siguiente del sync.
+    await montar();
+
+    const { setCacheValue } = await import('../../webapp/src/cache.js');
+    const ahora = CATALOGO.map(p => structuredClone(p));
+    ahora.find(p => p.doc_id === '2001').precio_venta = 450;
+    ahora.find(p => p.doc_id === '2003').stock = 5;
+    ahora.push({ doc_id: '2004', nombre: 'VELA NUMERO', codigo: 'C007', rubro: 'COTILLON',
+                 sub_rubro: 'VELAS', categoria: 'Velas', marca: 'SIN MARCA', estado: 'activo',
+                 precio_venta: 900, costo: 400, stock: 9, tienda_imagenes: ['vela.webp'] });
+    setCacheValue('catalogo:all', ahora);
+
+    tildar(casilla('COTILLON'), true);
+    const dice = await guardar();
+
+    expect(espia.confirmaciones[0].message).toContain('4 productos');
+    expect(ultima('tienda_productos', '2001').campos.precio).toBe(450);
+    expect(ultima('tienda_productos', '2003').op, 'el gorrito ya tiene stock').toBe('escribir');
+    expect(ultima('tienda_productos', '2004')?.op, 'el producto nuevo no se publicó').toBe('escribir');
+    expect(dice).toBe('Guardado. 4 productos en la tienda, 0 afuera.');
+  });
+
   it('lo que entra nuevo se numera al final y no se mete adelante de nada', async () => {
     await montar();
     tildar(casilla('COTILLON'), true);
