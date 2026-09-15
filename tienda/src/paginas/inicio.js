@@ -4,6 +4,7 @@ import { cardProducto, grilla, grillaCargando, pie } from '../componentes.js';
 import { franjaMarca, icono, iconoDeRubro, resplandores } from '../iconos.js';
 import { esc } from '../formato.js';
 import { fijarNegocio } from '../seo.js';
+import { cargaContinua } from '../carga_continua.js';
 
 /**
  * En cuántas columnas se reparten las fichas de rubro.
@@ -30,10 +31,8 @@ export function columnasParaRubros(cantidad, { min = 3, max = 6 } = {}) {
   return mejor;
 }
 
-// Hasta dónde puede saltar una tira de la portada dentro de su rubro. El sync
-// ordena por lo que se vende, así que los primeros treinta son los que valen
-// mostrar; más allá empieza la cola larga.
-const CABEZA_DE_TIRA = 30;
+// Cuántos productos trae una tira de entrada y en cada tanda al deslizar.
+const TANDA_TIRA = 12;
 
 /**
  * Imagen de la portada.
@@ -91,8 +90,33 @@ function ilustracionMovil() {
     </div>`;
 }
 
+/**
+ * Las cards de una tira con sus flechas.
+ *
+ * La tira se desliza de costado en cualquier pantalla: con el dedo en el
+ * celular y con las flechas en la computadora. Al final va el centinela que
+ * avisa que se acerca el borde y hay que traer más (ver `montarTira`).
+ */
+function pistaConFlechas(nombre, cardsHtml, { conMas = false } = {}) {
+  return `
+    <div class="tira__cuerpo">
+      <button type="button" class="tira__flecha tira__flecha--anterior" data-tira-anterior
+              aria-label="Ver los anteriores de ${esc(nombre)}" hidden>
+        ${icono('izquierda', { tam: 20, grosor: 2.5 })}
+      </button>
+      <div class="tira__productos" data-tira-pista>
+        ${cardsHtml}
+        ${conMas ? '<span class="tira__centinela" data-centinela-tira aria-hidden="true"></span>' : ''}
+      </div>
+      <button type="button" class="tira__flecha tira__flecha--siguiente" data-tira-siguiente
+              aria-label="Ver más de ${esc(nombre)}">
+        ${icono('derecha', { tam: 20, grosor: 2.5 })}
+      </button>
+    </div>`;
+}
+
 /** Una tira de productos de un rubro. */
-function tira(rubro, productos) {
+function tira(rubro, productos, { hayMas = false } = {}) {
   // El mismo número que la ficha de arriba: lo que se puede comprar hoy. Con
   // `cantidad` acá y `con_stock` allá, la misma pantalla decía 4.163 y 1.024 del
   // mismo rubro, y eso hace dudar de los dos.
@@ -105,10 +129,86 @@ function tira(rubro, productos) {
         <span class="tira__cuenta">${hay.toLocaleString('es-AR')}</span>
         <a class="tira__ver" href="/catalogo/${encodeURIComponent(rubro.clave)}">Ver todo</a>
       </div>
-      <div class="tira__productos">
-        ${productos.map((p, i) => cardProducto(p, i, { conRubro: false })).join('')}
-      </div>
+      ${pistaConFlechas(rubro.nombre,
+        productos.map((p, i) => cardProducto(p, i, { conRubro: false })).join(''),
+        { conMas: hayMas })}
     </section>`;
+}
+
+const movimientoQuieto = () =>
+  window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches === true;
+
+/**
+ * Las flechas de una tira: corren de a casi una pantalla (queda asomando una
+ * card de la anterior, para no perder el hilo) y se esconden donde no hay a
+ * dónde ir. La de la derecha sigue a la vista mientras falten tandas.
+ */
+function montarFlechas(seccion) {
+  const pista = seccion.querySelector('[data-tira-pista]');
+  const anterior = seccion.querySelector('[data-tira-anterior]');
+  const siguiente = seccion.querySelector('[data-tira-siguiente]');
+  if (!pista || !anterior || !siguiente) return () => {};
+
+  const correr = sentido => pista.scrollBy({
+    left: sentido * pista.clientWidth * 0.85,
+    behavior: movimientoQuieto() ? 'auto' : 'smooth',
+  });
+  anterior.addEventListener('click', () => correr(-1));
+  siguiente.addEventListener('click', () => correr(1));
+
+  const actualizar = () => {
+    const fin = pista.scrollWidth - pista.clientWidth;
+    anterior.hidden = pista.scrollLeft <= 2;
+    siguiente.hidden = pista.scrollLeft >= fin - 2 && !pista.querySelector('[data-centinela-tira]');
+  };
+  pista.addEventListener('scroll', actualizar, { passive: true });
+  // El ancho cambia al achicar la ventana: con el mouse encima se recalcula.
+  seccion.addEventListener('pointerenter', actualizar);
+  requestAnimationFrame(actualizar);
+  return actualizar;
+}
+
+/**
+ * Trae más productos del rubro cuando la tira se acerca a su final, de a
+ * `TANDA_TIRA`, siguiendo el cursor de la base. Los tamaños de un grupo que ya
+ * salió no vuelven a dibujar su card.
+ */
+function montarTira(seccion, { rubro, cursor, vistos, cantidad }) {
+  const pista = seccion.querySelector('[data-tira-pista]');
+  const centinela = pista?.querySelector('[data-centinela-tira]');
+  const actualizarFlechas = montarFlechas(seccion);
+  if (!centinela) return;
+
+  let siguiente = cursor;
+  let indice = cantidad;
+
+  cargaContinua({
+    centinela,
+    raiz: pista,
+    horizontal: true,
+    margen: '600px',
+    async cargar() {
+      const tanda = await traerProductos({ rubro: rubro.clave, cursor: siguiente, cantidad: TANDA_TIRA });
+      siguiente = tanda.cursor;
+      const molde = document.createElement('div');
+      molde.innerHTML = plegarGrupos(tanda.productos, vistos)
+        .map((p, i) => cardProducto(p, indice + i, { conRubro: false })).join('');
+      const nuevas = [...molde.children];
+      nuevas.forEach(card => pista.insertBefore(card, centinela));
+      indice += nuevas.length;
+      return Boolean(tanda.hayMas);
+    },
+    alCargar: trayendo => pista.classList.toggle('tira__productos--cargando', trayendo),
+    alTerminar: () => { centinela.remove(); actualizarFlechas(); },
+    alFallar: (_err, reintentar) => {
+      const boton = document.createElement('button');
+      boton.type = 'button';
+      boton.className = 'tira__reintentar';
+      boton.textContent = 'No se pudieron traer más. Probar de nuevo';
+      boton.addEventListener('click', () => { boton.remove(); reintentar(); });
+      pista.insertBefore(boton, centinela);
+    },
+  });
 }
 
 export async function inicio({ montar }) {
@@ -245,22 +345,13 @@ export async function inicio({ montar }) {
   // encadenados y la portada tardaría seis veces más en llenarse.
   const conProductos = await Promise.all(
     vidriera.map(async r => {
-      // Cada tira arranca dentro de lo que más se vende de ese rubro.
-      //
-      // Antes saltaba a un punto al azar de todo el rubro, porque el catálogo
-      // estaba ordenado alfabéticamente y las tiras mostraban seis abrochadoras
-      // seguidas. Ahora el sync lo ordena por ventas: saltar lejos sería
-      // esconder justo lo que la gente compra.
-      //
-      // Queda un salto corto, dentro de la cabeza de la lista, para que la
-      // portada no sea idéntica en cada visita. El tramo se acota también al
-      // stock, así ninguna tira arranca con algo agotado.
-      const cabeza = Math.min(CABEZA_DE_TIRA, Math.max(0, (r.con_stock || r.cantidad) - 6));
-      const desde = cabeza > 0 ? Math.floor(Math.random() * cabeza) : 0;
-      return {
-        rubro: r,
-        productos: (await traerProductos({ rubro: r.clave, desde, cantidad: 6 })).productos,
-      };
+      // Cada tira arranca en el principio de su rubro: el sync pone arriba los
+      // destacados y lo que más se vende, y después sigue de la A a la Z. Antes
+      // saltaba a un punto al azar para variar la portada; ahora que la tira se
+      // desliza y va trayendo más, arrancar en el medio escondería justo lo
+      // que la gente compra.
+      const tanda = await traerProductos({ rubro: r.clave, cantidad: TANDA_TIRA });
+      return { rubro: r, productos: tanda.productos, cursor: tanda.cursor, hayMas: Boolean(tanda.hayMas) };
     }),
   );
 
@@ -278,9 +369,8 @@ export async function inicio({ montar }) {
           <h2 class="tira__titulo">Lo más pedido</h2>
           <a class="tira__ver" href="/catalogo" style="color:var(--primary-txt)">Ver todo</a>
         </div>
-        <div class="tira__productos">
-          ${plegarGrupos(destacados).map((p, i) => cardProducto(p, i, { conDestacado: false })).join('')}
-        </div>
+        ${pistaConFlechas('Lo más pedido',
+          plegarGrupos(destacados).map((p, i) => cardProducto(p, i, { conDestacado: false })).join(''))}
       </section>`);
   }
 
@@ -291,13 +381,26 @@ export async function inicio({ montar }) {
   // portada sin productos es peor.
   const MINIMO_TIRA = 3;
   const conCards = conProductos
-    .map(x => ({ rubro: x.rubro, cards: plegarGrupos(x.productos) }))
+    .map(x => {
+      const vistos = new Set();
+      return { ...x, vistos, cards: plegarGrupos(x.productos, vistos) };
+    })
     .filter(x => x.cards.length);
   const llenas = conCards.filter(x => x.cards.length >= MINIMO_TIRA);
+  const visibles = llenas.length ? llenas : conCards;
 
-  partes.push(...(llenas.length ? llenas : conCards).map(x => tira(x.rubro, x.cards)));
+  partes.push(...visibles.map(x => tira(x.rubro, x.cards, { hayMas: x.hayMas })));
 
   cajaTiras.innerHTML = partes.length
     ? partes.join('')
     : '<p style="color:var(--text-2)">Estamos cargando el catálogo. Volvé en un rato.</p>';
+
+  cajaTiras.querySelectorAll('.tira').forEach(seccion => {
+    const datosTira = visibles.find(x => x.rubro.clave === seccion.dataset.rubro);
+    if (!datosTira) { montarFlechas(seccion); return; }
+    montarTira(seccion, {
+      rubro: datosTira.rubro, cursor: datosTira.cursor, vistos: datosTira.vistos,
+      cantidad: datosTira.cards.length,
+    });
+  });
 }

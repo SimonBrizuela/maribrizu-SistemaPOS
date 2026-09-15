@@ -34,16 +34,16 @@ vi.mock('../src/datos.js', async (original) => {
     cargarAvisos: async () => datos.avisos,
     cargarRubros: async () => (datos.vacio ? [] : datos.rubros),
     subrubrosDe: async () => [],
-    traerProductos: async ({ rubro = null, cursor = null, cantidad = 24 } = {}) => {
-      datos.tandas.push({ rubro, cursor, cantidad });
+    traerProductos: async ({ rubro = null, cursor = null, cantidad = 24, desde = 0 } = {}) => {
+      datos.tandas.push({ rubro, cursor, cantidad, desde });
       const todos = lista().filter(p => !rubro || p.rubro === rubro);
       if (!datos.paginar) return { productos: todos, cursor: null };
       if (cursor && datos.fallarTanda) { datos.fallarTanda = false; throw new Error('sin red'); }
-      const desde = cursor ? Number(cursor[0]) : 0;
-      const hayMas = desde + cantidad < todos.length;
+      const inicio = cursor ? Number(cursor[0]) : 0;
+      const hayMas = inicio + cantidad < todos.length;
       return {
-        productos: todos.slice(desde, desde + cantidad),
-        cursor: hayMas ? [desde + cantidad, 'id'] : null,
+        productos: todos.slice(inicio, inicio + cantidad),
+        cursor: hayMas ? [inicio + cantidad, 'id'] : null,
         hayMas,
       };
     },
@@ -521,6 +521,98 @@ describe('la portada', () => {
     const fichas = c.querySelector('.rubros').textContent;
     expect(fichas).toContain('Libreria');
     expect(fichas).not.toMatch(/880|disponibles/);
+  });
+});
+
+describe('las tiras de la portada', () => {
+  // Cada tira traía seis productos y los tamaños de un mismo producto se
+  // pliegan en una card: "Librería 914" salía con tres cards y la fila vacía.
+  // Ahora se deslizan (flechas en la computadora, el dedo en el celular) y van
+  // trayendo más de ese rubro a medida que se llega al final.
+  let observadores;
+  class ObservadorFalso {
+    constructor(alCambiar, opciones) {
+      Object.assign(this, { alCambiar, opciones, mirando: new Set(), desconectado: false });
+      observadores.push(this);
+    }
+    observe(el) { this.mirando.add(el); }
+    unobserve(el) { this.mirando.delete(el); }
+    disconnect() { this.desconectado = true; this.mirando.clear(); }
+    ver() { this.alCambiar([...this.mirando].map(target => ({ target, isIntersecting: true }))); }
+  }
+  const respirar = async () => { for (let i = 0; i < 10; i++) await esperar(); };
+  const tira = (rubro) => document.querySelector(`.tira[data-rubro="${rubro}"]`);
+  const pista = (rubro) => tira(rubro).querySelector('[data-tira-pista]');
+  const cards = (rubro) => pista(rubro).querySelectorAll('.card-producto').length;
+  const observadorDe = (rubro) => observadores.find(o => o.opciones?.root === pista(rubro) && !o.desconectado);
+
+  const producto = (rubro, i) => ({
+    id: `${rubro}${i}`, nombre: `${rubro} ${String(i).padStart(2, '0')}`, precio: 500, stock: 4,
+    rubro, categoria: 'Varios', imagenes: ['x.webp'],
+  });
+
+  beforeEach(() => {
+    observadores = [];
+    globalThis.IntersectionObserver = ObservadorFalso;
+    datos.paginar = true;
+    datos.productos = [
+      ...Array.from({ length: 40 }, (_, i) => producto('LIBRERIA', i)),
+      ...Array.from({ length: 5 }, (_, i) => producto('PAPELERIA', i)),
+    ];
+    datos.rubros = [
+      { clave: 'LIBRERIA', nombre: 'Librería', cantidad: 40, con_stock: 40 },
+      { clave: 'PAPELERIA', nombre: 'Papelería', cantidad: 5, con_stock: 5 },
+    ];
+  });
+
+  it('cada tira arranca en el principio de su rubro, que es lo que más se vende, y trae doce', async () => {
+    await abrir('inicio');
+    const pedidoLibreria = datos.tandas.find(t => t.rubro === 'LIBRERIA');
+    expect(pedidoLibreria).toMatchObject({ cursor: null, cantidad: 12, desde: 0 });
+    expect(cards('LIBRERIA')).toBe(12);
+  });
+
+  it('al llegar al final de la tira entran más de ese rubro, hasta que no queda nada', async () => {
+    await abrir('inicio');
+    expect(observadorDe('LIBRERIA').opciones.rootMargin).toMatch(/^0px \d+px 0px 0px$/);
+
+    observadorDe('LIBRERIA').ver();
+    await respirar();
+    expect(cards('LIBRERIA')).toBe(24);
+
+    observadorDe('LIBRERIA').ver();
+    await respirar();
+    observadorDe('LIBRERIA').ver();
+    await respirar();
+    expect(cards('LIBRERIA')).toBe(40);
+    expect(observadorDe('LIBRERIA'), 'sigue mirando sin nada más para traer').toBeUndefined();
+    // Nada se repite ni se pisa entre tandas.
+    const nombres = [...pista('LIBRERIA').querySelectorAll('.card-producto')].map(c => c.textContent);
+    expect(new Set(nombres).size).toBe(40);
+  });
+
+  it('una tira que ya trajo todo no se queda mirando el final', async () => {
+    await abrir('inicio');
+    expect(cards('PAPELERIA')).toBe(5);
+    expect(observadorDe('PAPELERIA')).toBeUndefined();
+  });
+
+  it('las flechas corren la tira de a casi una pantalla', async () => {
+    await abrir('inicio');
+    const movidas = [];
+    const p = pista('LIBRERIA');
+    Object.defineProperty(p, 'clientWidth', { configurable: true, value: 1000 });
+    p.scrollBy = (opciones) => movidas.push(opciones.left);
+
+    tira('LIBRERIA').querySelector('[data-tira-siguiente]').click();
+    tira('LIBRERIA').querySelector('[data-tira-anterior]').click();
+    expect(movidas).toEqual([850, -850]);
+  });
+
+  it('las flechas se llaman como lo que hacen', async () => {
+    await abrir('inicio');
+    expect(tira('LIBRERIA').querySelector('[data-tira-siguiente]').getAttribute('aria-label'))
+      .toContain('Librería');
   });
 });
 

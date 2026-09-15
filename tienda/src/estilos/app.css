@@ -293,17 +293,19 @@
   white-space: nowrap;
 }
 
-/* En celular la tira se desliza de costado: mostrar seis productos apilados por
-   cada uno de los seis rubros serian treinta y seis pantallazos de scroll. */
+/* La tira se desliza de costado en cualquier pantalla: con el dedo en el
+   celular y con las flechas en la computadora, y va trayendo más productos del
+   rubro al acercarse al final. Antes era una grilla fija de seis: los tamaños de
+   un mismo producto se pliegan en una card y "Librería 914" salía con tres
+   cards y la fila vacía.
+
+   Flex y no grid: el centinela del final tiene que medir un píxel, y en una
+   grilla de columnas iguales ocupaba una columna entera en blanco. */
+.tira__cuerpo { position: relative; }
 .tira__productos {
-  display: grid;
-  grid-auto-flow: column;
-  /* 78% deja asomando un pedazo de la card siguiente. Ese asomo es lo que
-     avisa que hay mas para el costado; sin el, la fila parece terminar ahi.
-     Antes era 46%, que metia dos cards enteras y media a la fuerza en 375 px:
-     el nombre entraba a cuatro palabras por linea y todo se veia apretado. */
-  grid-auto-columns: 78%;
-  gap: var(--e-3);
+  --tira-gap: var(--e-3);
+  display: flex;
+  gap: var(--tira-gap);
   overflow-x: auto;
   overflow-y: hidden;
   /* Que el desplazamiento lateral no se contagie a la pagina cuando la tira
@@ -319,27 +321,101 @@
   scroll-padding-inline: var(--e-4);
 }
 .tira__productos::-webkit-scrollbar { display: none; }
-.tira__productos > * { scroll-snap-align: start; }
+/* 78% deja asomando un pedazo de la card siguiente. Ese asomo es lo que avisa
+   que hay mas para el costado; sin el, la fila parece terminar ahi. */
+.tira__productos > .card-producto {
+  flex: 0 0 78%;
+  min-width: 0;
+  scroll-snap-align: start;
+}
 /* Aire al final del recorrido: sin esto la ultima card queda tocando el borde
    derecho y parece cortada en vez de terminada. */
 .tira__productos::after {
   content: '';
-  width: var(--e-1);
+  flex: 0 0 var(--e-1);
 }
+.tira__centinela { flex: 0 0 1px; align-self: stretch; }
 
-@media (min-width: 480px) { .tira__productos { grid-auto-columns: 56%; } }
-@media (min-width: 600px) { .tira__productos { grid-auto-columns: 34%; } }
+@media (min-width: 480px) { .tira__productos > .card-producto { flex-basis: 56%; } }
+@media (min-width: 600px) { .tira__productos > .card-producto { flex-basis: 34%; } }
 @media (min-width: 900px) {
   .tira__productos {
-    grid-auto-flow: row;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
-    overflow: visible;
     margin-inline: 0;
     padding-inline: 0;
+    scroll-padding-inline: 0;
+  }
+  .tira__productos > .card-producto {
+    flex-basis: calc((100% - 4 * var(--tira-gap)) / 5);
   }
 }
 @media (min-width: 1200px) {
-  .tira__productos { grid-template-columns: repeat(6, minmax(0, 1fr)); }
+  .tira__productos > .card-producto {
+    flex-basis: calc((100% - 5 * var(--tira-gap)) / 6);
+  }
+}
+
+/* Mientras llega la tanda, una card fantasma al final: el dedo que llegó al
+   borde ve que viene algo en vez de un corte seco. */
+.tira__productos--cargando::after {
+  flex: 0 0 min(160px, 40%);
+  border-radius: var(--r-lg);
+  background: linear-gradient(90deg, var(--surface-2), var(--bg), var(--surface-2));
+  background-size: 200% 100%;
+  animation: tira-cargando 1.2s linear infinite;
+}
+@keyframes tira-cargando { to { background-position: -200% 0; } }
+
+.tira__reintentar {
+  flex: 0 0 min(220px, 60%);
+  align-self: center;
+  padding: var(--e-3);
+  border: 1px dashed var(--border-2);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  color: var(--text-2);
+  font: inherit;
+  font-size: var(--t-sm);
+  cursor: pointer;
+}
+.tira__reintentar:hover { border-color: var(--primary); color: var(--primary-txt); }
+
+/* Las flechas son para el mouse: con el dedo la tira ya se desliza sola, y en
+   el celular dos botones encima de las cards tapan lo que se quiere tocar. */
+.tira__flecha { display: none; }
+@media (hover: hover) and (pointer: fine) {
+  .tira__flecha {
+    position: absolute;
+    /* A la altura de las fotos, que es donde está la mirada. */
+    top: 34%;
+    z-index: 2;
+    width: 44px;
+    height: 44px;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: 1px solid var(--border);
+    border-radius: var(--r-full);
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: var(--s-2);
+    cursor: pointer;
+    opacity: 0;
+    transform: translateY(-50%) scale(.92);
+    transition:
+      opacity var(--m-normal) var(--curva),
+      transform var(--m-normal) var(--curva),
+      border-color var(--m-rapido) var(--curva),
+      color var(--m-rapido) var(--curva);
+  }
+  .tira__flecha--anterior { left: -22px; }
+  .tira__flecha--siguiente { right: -22px; }
+  /* Aparecen al pasar por la tira: quietas, no compiten con los productos. */
+  .tira:hover .tira__flecha,
+  .tira__flecha:focus-visible { opacity: 1; transform: translateY(-50%) scale(1); }
+  .tira__flecha:hover { border-color: var(--primary); color: var(--primary-txt); }
+  .tira__flecha:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+  /* `display: grid` le gana al `hidden` de la hoja del navegador. */
+  .tira__flecha[hidden] { display: none; }
 }
 
 /* ── Cómo funciona ───────────────────────────────────────────────────────────
