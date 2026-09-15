@@ -48,6 +48,13 @@
   to = "/.netlify/functions/robots"
   status = 200
 
+# La pantalla del repartidor es una página aparte. Va antes del comodín de abajo,
+# que si no la resuelve con el index de la tienda.
+[[redirects]]
+  from = "/reparto"
+  to = "/reparto.html"
+  status = 200
+
 # Rutas de verdad, sin almohadilla: /p/:id y /pedido/:id las resuelve el router
 # del navegador, pero al entrar directo o al recargar el pedido llega al
 # servidor y hay que devolverle el index igual.

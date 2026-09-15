@@ -11,15 +11,7 @@
  */
 import { initializeApp } from 'firebase/app';
 import { getFirestore } from 'firebase/firestore';
-
-const config = {
-  apiKey: 'AIzaSyDBqPTloSp1MWBFcVMY6mdgyYKoqhTwFRA',
-  authDomain: 'mari-d7c71.firebaseapp.com',
-  projectId: 'mari-d7c71',
-  storageBucket: 'mari-d7c71.firebasestorage.app',
-  messagingSenderId: '477197039887',
-  appId: '1:477197039887:web:f00b662c87d6eb74d2667a',
-};
+import { config } from './firebase_config.js';
 
 export const app = initializeApp(config);
 export const db = getFirestore(app);

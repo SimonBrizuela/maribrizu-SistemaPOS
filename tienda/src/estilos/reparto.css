@@ -1,0 +1,534 @@
+/* ═══════════════════════════════════════════════════════════════════════════
+   Pantalla del repartidor (/reparto).
+
+   Pensada para el celular en la mano, con una sola mano y a veces al sol: lo
+   que hay que tocar es grande, el nombre y la dirección se leen de un vistazo y
+   la acción del momento (navegar, "Lo entregué") está siempre a la vista. En la
+   computadora la lista va a la izquierda y el mapa queda fijo a la derecha.
+   Usa los tokens y componentes de la tienda (app.css).
+   ═══════════════════════════════════════════════════════════════════════════ */
+
+body.reparto { background: var(--bg); }
+
+.reparto-app { min-height: 100dvh; }
+
+/* ── Barra ─────────────────────────────────────────────────────────────── */
+
+.reparto-barra {
+  position: sticky;
+  top: 0;
+  z-index: var(--z-nav);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--e-3);
+  padding: calc(var(--e-3) + env(safe-area-inset-top, 0px)) var(--e-4) var(--e-3);
+  background: var(--ink-superficie);
+  color: var(--ink-texto);
+}
+.reparto-barra__marca { display: flex; align-items: center; gap: var(--e-3); min-width: 0; }
+.reparto-barra__marca img { height: 22px; width: auto; display: block; }
+.reparto-barra__titulo {
+  padding-left: var(--e-3);
+  border-left: 1px solid var(--ink-borde);
+  font-family: var(--font-titulo);
+  font-weight: var(--peso-semi);
+  font-size: var(--t-sm);
+  letter-spacing: .02em;
+}
+
+.reparto-vivo {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e-2);
+  font-size: var(--t-xs);
+  font-weight: var(--peso-semi);
+  color: var(--ink-texto-2);
+}
+.reparto-vivo i {
+  width: 8px;
+  height: 8px;
+  border-radius: var(--r-full);
+  background: var(--liceo-verde);
+}
+.reparto-vivo--cortado i { background: var(--liceo-naranja); }
+.reparto-vivo--cortado::after { content: ' · reconectando'; }
+
+/* ── Resumen del día ───────────────────────────────────────────────────── */
+
+.reparto-resumen {
+  display: flex;
+  gap: var(--e-2);
+  overflow-x: auto;
+  padding: var(--e-3) var(--e-4);
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  scrollbar-width: none;
+}
+.reparto-resumen::-webkit-scrollbar { display: none; }
+.reparto-resumen__dato {
+  flex: none;
+  padding: var(--e-1) var(--e-3);
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  font-size: var(--t-xs);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.reparto-resumen__dato strong { color: var(--text); font-weight: var(--peso-bold); }
+.reparto-resumen__dato--plata { background: var(--exito-bg); color: var(--exito); font-weight: var(--peso-semi); }
+
+/* ── Cuerpo ────────────────────────────────────────────────────────────── */
+
+.reparto-cuerpo {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-4);
+  padding: var(--e-4) var(--e-4) calc(var(--e-7) + env(safe-area-inset-bottom, 0px));
+  max-width: 1180px;
+  margin: 0 auto;
+}
+.reparto-principal { display: flex; flex-direction: column; gap: var(--e-4); min-width: 0; }
+.reparto-lateral { display: flex; flex-direction: column; gap: var(--e-3); min-width: 0; }
+
+/* En el celular el mapa va entre la próxima parada y el resto de la lista. */
+@media (max-width: 899px) {
+  .reparto-cuerpo { display: grid; }
+  .reparto-principal { display: contents; }
+  [data-aviso-ubicacion] { order: 1; }
+  [data-zona-proxima] { order: 2; }
+  .reparto-lateral { order: 3; }
+  [data-listas] { order: 4; }
+  [data-aviso-ubicacion]:empty { display: none; }
+}
+
+@media (min-width: 900px) {
+  .reparto-cuerpo {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(360px, 460px);
+    align-items: start;
+    gap: var(--e-5);
+    padding-top: var(--e-5);
+  }
+  .reparto-lateral { position: sticky; top: calc(64px + var(--e-4)); }
+  .reparto-mapa { --mapa-ruta-alto: 440px; }
+}
+
+.reparto-esqueleto { height: 88px; border-radius: var(--r-lg); }
+.reparto-esqueleto--alto { height: 260px; }
+
+/* ── Aviso de pantalla entera ──────────────────────────────────────────── */
+
+.reparto-aviso {
+  min-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: var(--e-3);
+  padding: var(--e-6) var(--e-5);
+  text-align: center;
+}
+.reparto-aviso__icono {
+  width: 64px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-full);
+  background: var(--primary-bg);
+  color: var(--primary-txt);
+}
+.reparto-aviso__titulo { font-size: var(--t-lg); }
+.reparto-aviso__texto { max-width: 34ch; margin: 0 0 var(--e-2); color: var(--text-2); }
+
+/* ── Ubicación ─────────────────────────────────────────────────────────── */
+
+.reparto-ubicacion {
+  display: flex;
+  align-items: center;
+  gap: var(--e-3);
+  padding: var(--e-3) var(--e-4);
+  border-radius: var(--r-md);
+  background: var(--primary-bg);
+  color: var(--primary-txt);
+}
+.reparto-ubicacion svg { flex: none; }
+.reparto-ubicacion p { flex: 1; margin: 0; font-size: var(--t-sm); color: var(--text); }
+.reparto-ubicacion .boton { flex: none; }
+
+/* ── Próxima parada ────────────────────────────────────────────────────── */
+
+.reparto-proxima {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-3);
+  padding: var(--e-4);
+  border-radius: var(--r-lg);
+  background: var(--surface);
+  border: 1.5px solid var(--primary);
+  box-shadow: var(--s-2);
+}
+.reparto-proxima__cabeza { display: flex; align-items: center; gap: var(--e-2); }
+.reparto-proxima__etiqueta {
+  flex: 1;
+  font-size: var(--t-xs);
+  font-weight: var(--peso-bold);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--primary-txt);
+}
+.reparto-proxima__km {
+  font-family: var(--font-titulo);
+  font-weight: var(--peso-bold);
+  font-size: var(--t-md);
+  color: var(--text);
+  font-variant-numeric: tabular-nums;
+}
+.reparto-proxima__nombre { font-size: var(--t-xl); line-height: 1.1; }
+.reparto-direccion { margin: 0; font-size: var(--t-md); font-weight: var(--peso-semi); line-height: 1.3; }
+.reparto-referencia { margin: -4px 0 0; font-size: var(--t-sm); color: var(--text-2); }
+.reparto-proxima__datos { display: flex; flex-wrap: wrap; align-items: center; gap: var(--e-2); }
+
+.reparto-proxima__acciones { display: flex; gap: var(--e-2); }
+.reparto-navegar { flex: 1; min-height: 52px; font-size: var(--t-base); }
+.reparto-icono-boton { flex: none; width: 52px; min-height: 52px; padding: 0; color: var(--text); }
+.reparto-icono-boton--wa { color: #1B8E4A; }
+
+.reparto-codigo {
+  font-family: ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  font-weight: var(--peso-bold);
+  font-size: var(--t-sm);
+  letter-spacing: .12em;
+  padding: 2px var(--e-2);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+
+.reparto-estado {
+  font-size: var(--t-xs);
+  font-weight: var(--peso-semi);
+  padding: 2px var(--e-2);
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: var(--text-2);
+  white-space: nowrap;
+}
+.reparto-estado--listo { background: var(--liceo-violeta-bg); color: var(--liceo-violeta-txt); }
+.reparto-estado--en_camino { background: var(--liceo-naranja-bg); color: var(--liceo-naranja-txt); }
+.reparto-estado--preparando { background: var(--liceo-cyan-bg); color: var(--liceo-cyan-txt); }
+.reparto-estado--nuevo { background: var(--liceo-verde-bg); color: var(--liceo-verde-txt); }
+
+.reparto-cobro {
+  font-size: var(--t-xs);
+  font-weight: var(--peso-bold);
+  padding: 2px var(--e-2);
+  border-radius: var(--r-full);
+}
+.reparto-cobro--cobrar { background: var(--alerta-bg); color: var(--alerta); }
+.reparto-cobro--pagado { background: var(--exito-bg); color: var(--exito); }
+.reparto-cobro--consultar { background: var(--surface-2); color: var(--text-2); }
+
+.reparto-nota {
+  display: flex;
+  gap: var(--e-2);
+  margin: 0;
+  padding: var(--e-2) var(--e-3);
+  border-radius: var(--r-sm);
+  background: var(--liceo-naranja-bg);
+  color: var(--liceo-naranja-txt);
+  font-size: var(--t-sm);
+}
+.reparto-nota svg { flex: none; margin-top: 3px; }
+
+.reparto-vacio {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: var(--e-2);
+  padding: var(--e-6) var(--e-4);
+  border: 1.5px dashed var(--border-2);
+  border-radius: var(--r-lg);
+  text-align: center;
+  color: var(--exito);
+}
+.reparto-vacio__titulo { margin: 0; font-family: var(--font-titulo); font-weight: var(--peso-bold); font-size: var(--t-md); color: var(--text); }
+.reparto-vacio__texto { margin: 0; font-size: var(--t-sm); color: var(--text-2); max-width: 32ch; }
+
+/* ── Mapa ──────────────────────────────────────────────────────────────── */
+
+.reparto-mapa { --mapa-ruta-alto: 240px; }
+.reparto-mapa:empty { display: none; }
+.mapa-ruta {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--r-lg);
+  background: var(--surface-2);
+  contain: paint;
+}
+.mapa-ruta__parada {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  padding: 0;
+  border: 2px solid var(--surface);
+  border-radius: var(--r-full);
+  background: var(--ink-superficie);
+  color: var(--ink-texto);
+  font-family: var(--font-titulo);
+  font-weight: var(--peso-bold);
+  font-size: var(--t-sm);
+  box-shadow: 0 3px 8px rgba(14, 13, 16, .3);
+  cursor: pointer;
+}
+.mapa-ruta__parada--proxima {
+  width: 38px;
+  height: 38px;
+  background: var(--primary);
+  color: var(--primary-ink);
+  font-size: var(--t-base);
+  z-index: 1;
+}
+.mapa-ruta__yo {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 16px;
+  height: 16px;
+  border: 3px solid #FFF;
+  border-radius: var(--r-full);
+  background: #1A73E8;
+  box-shadow: 0 0 0 6px rgba(26, 115, 232, .22);
+  z-index: 2;
+}
+
+.reparto-ruta { min-height: 48px; }
+
+/* ── Listas ────────────────────────────────────────────────────────────── */
+
+[data-listas] { display: flex; flex-direction: column; gap: var(--e-3); }
+[data-listas]:empty { display: none; }
+
+.reparto-seccion {
+  display: flex;
+  align-items: center;
+  gap: var(--e-2);
+  margin-top: var(--e-2);
+  font-size: var(--t-sm);
+  font-weight: var(--peso-bold);
+  text-transform: uppercase;
+  letter-spacing: .06em;
+  color: var(--text-2);
+}
+.reparto-seccion span {
+  padding: 0 var(--e-2);
+  border-radius: var(--r-full);
+  background: var(--surface-3);
+  color: var(--text);
+  font-size: var(--t-xs);
+}
+
+.reparto-paradas { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: var(--e-2); }
+
+.parada {
+  border-radius: var(--r-md);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  overflow: hidden;
+}
+.parada__cabeza {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: var(--e-3);
+  padding: var(--e-3);
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  min-height: 64px;
+}
+.parada__numero {
+  flex: none;
+  width: 30px;
+  height: 30px;
+  display: grid;
+  place-items: center;
+  border-radius: var(--r-full);
+  background: var(--ink-superficie);
+  color: var(--ink-texto);
+  font-family: var(--font-titulo);
+  font-weight: var(--peso-bold);
+  font-size: var(--t-sm);
+}
+.reparto-proxima .parada__numero { background: var(--primary); color: var(--primary-ink); }
+.parada__texto { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.parada__nombre { font-weight: var(--peso-bold); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.parada__direccion { font-size: var(--t-sm); color: var(--text-2); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.parada__lado { flex: none; display: flex; flex-direction: column; align-items: flex-end; gap: 4px; }
+.parada__km { font-weight: var(--peso-bold); font-variant-numeric: tabular-nums; }
+
+.parada__detalle {
+  display: none;
+  flex-direction: column;
+  gap: var(--e-3);
+  padding: 0 var(--e-3) var(--e-3);
+}
+.parada--abierta .parada__detalle { display: flex; }
+.parada--abierta .parada__cabeza { padding-bottom: var(--e-2); }
+.parada__fila { display: flex; flex-wrap: wrap; align-items: center; gap: var(--e-2); }
+.parada__enlaces { display: flex; flex-wrap: wrap; gap: var(--e-2); }
+
+.reparto-enlace {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--e-2);
+  min-height: 44px;
+  padding: 0 var(--e-3);
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: var(--text);
+  font-weight: var(--peso-semi);
+  font-size: var(--t-sm);
+  text-decoration: none;
+}
+.reparto-enlace:hover { background: var(--surface-3); text-decoration: none; }
+
+.reparto-productos { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 4px; font-size: var(--t-sm); }
+.reparto-productos strong { display: inline-block; min-width: 2ch; }
+.reparto-productos span { color: var(--text-2); }
+
+.reparto-preparando {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-3);
+  padding: var(--e-3);
+  border-radius: var(--r-md);
+  background: var(--surface);
+  border: 1px dashed var(--border-2);
+}
+.reparto-preparando__texto { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; min-width: 0; }
+@media (min-width: 520px) {
+  .reparto-preparando { flex-direction: row; align-items: center; }
+  .reparto-preparando__texto { flex: 1; }
+  .reparto-preparando .boton { width: auto; flex: none; }
+}
+
+.reparto-entregados {
+  border-radius: var(--r-md);
+  background: var(--surface);
+  border: 1px solid var(--border);
+}
+.reparto-entregados summary {
+  display: flex;
+  align-items: center;
+  gap: var(--e-2);
+  padding: var(--e-3);
+  min-height: 48px;
+  font-weight: var(--peso-semi);
+  cursor: pointer;
+}
+.reparto-entregados summary span { padding: 0 var(--e-2); border-radius: var(--r-full); background: var(--exito-bg); color: var(--exito); font-size: var(--t-xs); }
+.reparto-entregados ul { list-style: none; margin: 0; padding: 0 var(--e-3) var(--e-3); display: flex; flex-direction: column; gap: var(--e-2); }
+.reparto-entregados li { display: flex; justify-content: space-between; gap: var(--e-2); font-size: var(--t-sm); color: var(--text-2); }
+
+/* ── Hoja de entrega ───────────────────────────────────────────────────── */
+
+.reparto-hoja {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+}
+.reparto-hoja__fondo { position: absolute; inset: 0; background: var(--overlay); }
+.reparto-hoja__caja {
+  position: relative;
+  width: 100%;
+  max-height: 92dvh;
+  display: flex;
+  flex-direction: column;
+  background: var(--surface);
+  border-radius: var(--r-xl) var(--r-xl) 0 0;
+  box-shadow: var(--s-4);
+  animation: asistente-subir var(--m-normal) var(--curva);
+}
+@media (min-width: 700px) {
+  .reparto-hoja { align-items: center; padding: var(--e-5); }
+  .reparto-hoja__caja { width: min(480px, 100%); border-radius: var(--r-lg); }
+}
+@media (prefers-reduced-motion: reduce) { .reparto-hoja__caja { animation: none; } }
+
+.reparto-hoja__cabecera {
+  display: flex;
+  align-items: flex-start;
+  gap: var(--e-3);
+  padding: var(--e-4);
+  border-bottom: 1px solid var(--border);
+}
+.reparto-hoja__cabecera div { flex: 1; min-width: 0; }
+.reparto-hoja__cabecera h2 { font-size: var(--t-md); }
+.reparto-hoja__cabecera p { margin: 2px 0 0; font-size: var(--t-sm); color: var(--text-2); }
+.reparto-hoja__cerrar {
+  flex: none;
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-full);
+  background: var(--surface-2);
+  color: var(--text-2);
+  cursor: pointer;
+}
+.reparto-hoja__cuerpo { flex: 1; overflow-y: auto; padding: var(--e-4); display: flex; flex-direction: column; gap: var(--e-5); }
+.reparto-hoja__paso { display: flex; flex-direction: column; gap: var(--e-2); }
+.reparto-hoja__pregunta { margin: 0; font-weight: var(--peso-bold); font-size: var(--t-base); }
+.reparto-hoja__pregunta span { font-weight: var(--peso-normal); color: var(--text-2); font-size: var(--t-sm); }
+.reparto-hoja__opciones { display: grid; grid-template-columns: 1fr 1fr; gap: var(--e-2); }
+.reparto-hoja__opcion { align-items: center; min-height: 56px; }
+.reparto-hoja__nota { margin: 0; font-size: var(--t-sm); color: var(--text-2); }
+
+.reparto-hoja__sumar {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: var(--e-2);
+  min-height: 96px;
+  border: 1.5px dashed var(--borde-control);
+  border-radius: var(--r-md);
+  color: var(--text-2);
+  font-weight: var(--peso-semi);
+  cursor: pointer;
+}
+.reparto-hoja__sumar:focus-within { outline: 2px solid var(--primary); outline-offset: 2px; }
+.reparto-hoja__foto { position: relative; margin: 0; }
+.reparto-hoja__foto img { display: block; width: 100%; max-height: 260px; object-fit: cover; border-radius: var(--r-md); }
+.reparto-hoja__quitar {
+  position: absolute;
+  top: var(--e-2);
+  right: var(--e-2);
+  width: 36px;
+  height: 36px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: var(--r-full);
+  background: rgb(0 0 0 / .62);
+  color: #FFF;
+  cursor: pointer;
+}
+.reparto-hoja__pie {
+  display: flex;
+  flex-direction: column;
+  gap: var(--e-2);
+  padding: var(--e-3) var(--e-4) calc(var(--e-3) + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--border);
+}
+.reparto-hoja__error { display: flex; gap: var(--e-2); margin: 0; color: var(--error); font-weight: var(--peso-semi); font-size: var(--t-sm); }
+.reparto-hoja__error svg { flex: none; margin-top: 2px; }
