@@ -203,3 +203,57 @@ function zoomQueEntra(a, b, ancho, alto) {
 function clamp(n, min, max) {
   return Math.min(max, Math.max(min, n));
 }
+
+/* ── Varios puntos ────────────────────────────────────────────────────────────
+   El mapa del repartidor muestra el local, dónde está él y todas las paradas.
+   Es la misma cuenta que la de dos puntos, con el rectángulo que los contiene
+   a todos. */
+
+// Con una sola parada no se acerca tanto como el checkout: al repartidor le
+// sirve ver las calles de alrededor.
+const ZOOM_MAX_VARIOS = 16;
+
+/**
+ * El zoom más cerrado en el que entran todos los puntos con aire, el centro que
+ * hay que pedirle a Google y dónde cae cada punto en la imagen, en porcentaje.
+ *
+ * @param {Array<{lat:number, lng:number}>} puntos
+ * @param {number} ancho  de la imagen que se pide, en píxeles
+ * @param {number} alto
+ * @returns {{zoom: number, centro: {lat:number, lng:number}, enPantalla: Function}|null}
+ */
+export function vistaQueEntra(puntos, ancho, alto) {
+  const validos = (puntos || []).filter(esCoordenada);
+  if (!validos.length) return null;
+
+  const caja = (z) => {
+    const px = validos.map(p => aPixeles(p, z));
+    return {
+      minX: Math.min(...px.map(p => p.x)), maxX: Math.max(...px.map(p => p.x)),
+      minY: Math.min(...px.map(p => p.y)), maxY: Math.max(...px.map(p => p.y)),
+    };
+  };
+
+  let zoom = ZOOM_MIN;
+  for (let z = ZOOM_MAX_VARIOS; z >= ZOOM_MIN; z--) {
+    const c = caja(z);
+    if (c.maxX - c.minX <= ancho - AIRE.costado * 2 && c.maxY - c.minY <= alto - AIRE.arriba - AIRE.abajo) {
+      zoom = z;
+      break;
+    }
+  }
+
+  const c = caja(zoom);
+  // El marcador cuelga hacia arriba de su punto: el centro baja un poco para
+  // que el de más arriba no quede cortado.
+  const centro = { x: (c.minX + c.maxX) / 2, y: (c.minY + c.maxY) / 2 - (AIRE.arriba - AIRE.abajo) / 2 };
+  const origen = { x: centro.x - ancho / 2, y: centro.y - alto / 2 };
+  return {
+    zoom,
+    centro: aGrados(centro, zoom),
+    enPantalla: (punto) => {
+      const p = aPixeles(punto, zoom);
+      return { x: (p.x - origen.x) / ancho * 100, y: (p.y - origen.y) / alto * 100 };
+    },
+  };
+}
