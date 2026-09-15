@@ -93,7 +93,9 @@ body.reparto { background: var(--bg); }
 
 /* En el celular el mapa va entre la próxima parada y el resto de la lista. */
 @media (max-width: 899px) {
-  .reparto-cuerpo { display: grid; }
+  /* minmax(0, 1fr): sin esto la columna toma el ancho del texto más largo que no
+     se corta (una dirección) y la página se corre de costado. */
+  .reparto-cuerpo { display: grid; grid-template-columns: minmax(0, 1fr); }
   .reparto-principal { display: contents; }
   [data-aviso-ubicacion] { order: 1; }
   [data-zona-proxima] { order: 2; }
@@ -256,8 +258,9 @@ body.reparto { background: var(--bg); }
 
 /* ── Mapa ──────────────────────────────────────────────────────────────── */
 
+/* Sin `:empty { display: none }`: escondido mide cero de ancho y el mapa no se
+   dibuja nunca, porque espera a tener dónde. */
 .reparto-mapa { --mapa-ruta-alto: 240px; }
-.reparto-mapa:empty { display: none; }
 .mapa-ruta {
   position: relative;
   overflow: hidden;
@@ -305,6 +308,11 @@ body.reparto { background: var(--bg); }
 }
 
 .reparto-ruta { min-height: 48px; }
+
+/* La acción que cierra el pedido va en verde: al lado de "Navegar", dos
+   botones violetas iguales se confunden. */
+.boton--entregar { background: var(--exito-solido); color: var(--exito-tinta); box-shadow: var(--s-2); }
+.boton--entregar:hover:not(:disabled) { filter: brightness(.95); }
 
 /* ── Listas ────────────────────────────────────────────────────────────── */
 

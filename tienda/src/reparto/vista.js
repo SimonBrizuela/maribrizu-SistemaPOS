@@ -109,7 +109,7 @@ function botonMover(pedido, moviendo) {
   const ocupado = moviendo.has(pedido.id);
   const final = paso.estado === 'entregado';
   return `
-    <button type="button" class="boton ${final ? 'boton--primario' : 'boton--secundario'} boton--bloque${ocupado ? ' boton--cargando' : ''}"
+    <button type="button" class="boton ${final ? 'boton--entregar' : 'boton--secundario'} boton--bloque${ocupado ? ' boton--cargando' : ''}"
             data-mover="${paso.estado}" data-id="${esc(pedido.id)}" ${ocupado ? 'disabled' : ''}>
       ${final ? icono('tilde', { tam: 18, grosor: 2.5 }) : ''}${esc(paso.texto)}
     </button>`;

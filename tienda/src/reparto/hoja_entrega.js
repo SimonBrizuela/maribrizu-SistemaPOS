@@ -100,7 +100,7 @@ function pintar() {
 
       <footer class="reparto-hoja__pie">
         ${a.error ? `<p class="reparto-hoja__error" role="alert">${icono('atencion', { tam: 16 })}<span>${esc(a.error)}</span></p>` : ''}
-        <button type="button" class="boton boton--primario boton--bloque boton--grande${a.enviando ? ' boton--cargando' : ''}"
+        <button type="button" class="boton boton--entregar boton--bloque boton--grande${a.enviando ? ' boton--cargando' : ''}"
                 data-confirmar-entrega ${listo() ? '' : 'disabled'}>
           ${icono('tilde', { tam: 20, grosor: 2.5 })} Confirmar entrega
         </button>
