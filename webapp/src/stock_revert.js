@@ -28,8 +28,39 @@ import {
 } from 'firebase/firestore';
 import { getCached, invalidateCacheByPrefix } from './cache.js';
 import { registrarMovimiento } from './stock_ledger.js';
+import { unidadesBase, PC_TIENDA } from './pedido_venta.js';
 
 const MAX_OPS_POR_BATCH = 400;
+
+/**
+ * Los renglones de `ventas_por_dia` de una venta.
+ *
+ * El POS guarda `num_venta` como número y la tienda como texto (el código del
+ * pedido, "Y73U"). Buscar solo como número no encontraba ningún renglón de una
+ * venta de la tienda: no se devolvía el stock y el renglón seguía contando en
+ * el balance. Se busca con los dos tipos y se queda con los de esa PC, porque
+ * el número de venta se repite entre PCs.
+ *
+ * @param {{id?: string, sale_id?: string|number, pc_id?: string}} venta
+ */
+export async function itemsDeLaVenta(db, venta) {
+  const saleId = venta?.sale_id ?? venta?.id;
+  const pcId = String(venta?.pc_id || '');
+  if (saleId === undefined || saleId === null || saleId === '') return [];
+
+  const valores = new Set([saleId]);
+  const texto = String(saleId).trim();
+  valores.add(texto);
+  if (/^\d+$/.test(texto)) valores.add(Number(texto));
+
+  const snap = await getDocs(query(collection(db, 'ventas_por_dia'), where('num_venta', 'in', [...valores])));
+  return pcId ? snap.docs.filter(d => d.id.startsWith(pcId + '_')) : snap.docs;
+}
+
+/** Un renglón que escribió la tienda al entregar un pedido (`pedido_venta.js`). */
+function _esDeLaTienda(item) {
+  return item?.origen === 'tienda' || item?.pc_id === PC_TIENDA;
+}
 
 function _num(n) { return Number(n) || 0; }
 function _redondear(n) { return Math.round(_num(n) * 10000) / 10000; }
@@ -140,6 +171,10 @@ async function _revertirConjunto(db, docId, invDocId, nombre, a) {
         conjunto_unidades: nuevas.reduce((acc, v) => acc + _num(v.unidades), 0),
         conjunto_restante: _redondear(nuevas.reduce((acc, v) => acc + _num(v.restante), 0)),
         conjunto_total:    _redondear(total),
+        // El espejo entero del total, igual que el conjunto sin variantes de
+        // abajo y que la venta al descontar. Sin esto el total volvía y `stock`
+        // se quedaba con el número de después de la venta.
+        stock:             Math.round(total),
       };
       tx.set(catRef, { ...escrito, ultima_actualizacion: serverTimestamp() }, { merge: true });
       tx.set(invRef, {
@@ -187,14 +222,7 @@ export async function revertirStockVenta(db, { saleId, pcId = '', itemDocs = nul
 
   // ── 1. Items de la venta ────────────────────────────────────────────────
   let docs = itemDocs;
-  if (!docs) {
-    const snap = await getDocs(query(
-      collection(db, 'ventas_por_dia'),
-      where('num_venta', '==', Number(saleId))
-    ));
-    docs = snap.docs;
-    if (pcId) docs = docs.filter(d => d.id.startsWith(pcId + '_'));
-  }
+  if (!docs) docs = await itemsDeLaVenta(db, { sale_id: saleId, pc_id: pcId });
   const pendientes = docs.filter(d => (d.data() || {}).stock_revertido !== true);
   resumen.items = pendientes.length;
   if (!pendientes.length) return resumen;
@@ -269,39 +297,57 @@ export async function revertirStockVenta(db, { saleId, pcId = '', itemDocs = nul
 
     if (!nombreOriginal || cantidad <= 0) continue;
 
-    // 3.b — Stock propio del producto vendido. Primero por nombre exacto; si no
-    // aparece, se reintenta con el nombre limpio (sin variante ni presentación).
-    const parsed = _parseNombreItem(nombreOriginal);
-    let prod = porNombre.get(nombre);
-    let porParseo = false;
-    if (!prod && parsed.base && parsed.base.toUpperCase() !== nombre) {
-      prod = porNombre.get(parsed.base.toUpperCase());
-      porParseo = true;
-    }
-    if (!prod) {
-      // Productos Madre (mp_*), "Varios" y productos borrados caen acá: el item
-      // sólo guarda el nombre, no el id del producto.
-      if (!huboVinculaciones) _omitir(nombreOriginal, 'no se encontró en el catálogo');
-      continue;
-    }
-    // El nombre limpio sólo se acepta si el producto es conjunto: un nombre
-    // compuesto de Producto Madre ("Madre Nodo · presentación") podría matchear
-    // por casualidad otro producto del catálogo y devolverle stock que no es suyo.
-    if (porParseo && !_esConjunto(prod)) {
-      _omitir(nombreOriginal, 'vendido por variante o presentación — ajustá el stock a mano');
-      continue;
-    }
-    if (_esIlimitado(prod)) continue;                       // servicio/ilimitado
-    if (_linksDe(prod).length > 0) continue;                // el stock vive en los targets
+    let prod;
+    let cantBase;
+    let parsed = { color: '' };
 
-    let cantBase = cantidad;
-    if (_esConjunto(prod) && parsed.descripcion) {
-      const factor = _factorPorUnidad(prod, parsed.descripcion);
-      if (factor === null) {
-        _omitir(prod.nombre || nombreOriginal, `no se pudo interpretar "${parsed.descripcion}" — ajustá el stock a mano`);
+    if (_esDeLaTienda(it)) {
+      // 3.b (tienda) — Inversa exacta de `planDescuento` (pedido_venta.js), que
+      // es lo que descontó al entregar: el producto viene por id, la cantidad
+      // por `es_pack` × `pack_contenido` (el nombre no trae "· 1 Caja") y el
+      // stock propio baja aunque el producto tenga vínculos.
+      const productoId = String(it.producto_id || '').trim();
+      // Sin producto es el renglón del envío: no hay stock que devolver.
+      if (!productoId) continue;
+      prod = porDocId.get(productoId) || porNombre.get(nombre);
+      if (!prod) { _omitir(nombreOriginal, 'no se encontró en el catálogo'); continue; }
+      if (prod.stock_ilimitado === true || prod.stock_ilimitado === 1) continue;
+      cantBase = _redondear(unidadesBase(it));
+    } else {
+      // 3.b — Stock propio del producto vendido. Primero por nombre exacto; si no
+      // aparece, se reintenta con el nombre limpio (sin variante ni presentación).
+      parsed = _parseNombreItem(nombreOriginal);
+      prod = porNombre.get(nombre);
+      let porParseo = false;
+      if (!prod && parsed.base && parsed.base.toUpperCase() !== nombre) {
+        prod = porNombre.get(parsed.base.toUpperCase());
+        porParseo = true;
+      }
+      if (!prod) {
+        // Productos Madre (mp_*), "Varios" y productos borrados caen acá: el item
+        // sólo guarda el nombre, no el id del producto.
+        if (!huboVinculaciones) _omitir(nombreOriginal, 'no se encontró en el catálogo');
         continue;
       }
-      cantBase = _redondear(cantidad * factor);
+      // El nombre limpio sólo se acepta si el producto es conjunto: un nombre
+      // compuesto de Producto Madre ("Madre Nodo · presentación") podría matchear
+      // por casualidad otro producto del catálogo y devolverle stock que no es suyo.
+      if (porParseo && !_esConjunto(prod)) {
+        _omitir(nombreOriginal, 'vendido por variante o presentación — ajustá el stock a mano');
+        continue;
+      }
+      if (_esIlimitado(prod)) continue;                       // servicio/ilimitado
+      if (_linksDe(prod).length > 0) continue;                // el stock vive en los targets
+
+      cantBase = cantidad;
+      if (_esConjunto(prod) && parsed.descripcion) {
+        const factor = _factorPorUnidad(prod, parsed.descripcion);
+        if (factor === null) {
+          _omitir(prod.nombre || nombreOriginal, `no se pudo interpretar "${parsed.descripcion}" — ajustá el stock a mano`);
+          continue;
+        }
+        cantBase = _redondear(cantidad * factor);
+      }
     }
 
     if (_esConjunto(prod)) {

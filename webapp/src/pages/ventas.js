@@ -1,10 +1,10 @@
-import { collection, getDocs, query, orderBy, limit, where, updateDoc, doc, writeBatch, serverTimestamp } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, limit, updateDoc, doc, writeBatch, serverTimestamp } from 'firebase/firestore';
 import { openSaleModal } from '../components/modal.js';
 import { getCached, invalidateCache } from '../cache.js';
 import { getFechaInicioDate, isVentaVarios2 } from '../config.js';
 import { getSaleNumberMap, displayNumForVenta } from '../sale_numbers.js';
 import { confirmDialog, alertDialog, escHtml } from '../components/dialogs.js';
-import { revertirStockVenta } from '../stock_revert.js';
+import { revertirStockVenta, itemsDeLaVenta } from '../stock_revert.js';
 
 export async function renderVentas(container, db) {
   // 1) Shell vacío al toque: filtros + tabla con skeletons en el tbody.
@@ -203,15 +203,11 @@ export async function renderVentas(container, db) {
 
       // Items de la venta: sirven para devolver el stock y para marcarlos
       // borrados. Se leen una sola vez y se reusan en ambos pasos.
+      // Las de la tienda llevan el código del pedido como número de venta, en
+      // texto: `itemsDeLaVenta` las busca con los dos tipos.
       let itemDocs = [];
       try {
-        const itemsSnap = await getDocs(query(
-          collection(db, 'ventas_por_dia'),
-          where('num_venta', '==', Number(saleId))
-        ));
-        itemDocs = pcId
-          ? itemsSnap.docs.filter(d => d.id.startsWith(pcId + '_'))
-          : itemsSnap.docs;
+        itemDocs = await itemsDeLaVenta(db, venta);
       } catch (err) {
         console.warn('No se pudieron leer los items de ventas_por_dia:', err);
       }
