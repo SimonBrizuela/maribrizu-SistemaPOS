@@ -232,15 +232,31 @@ en blanco.
 El panel ya lo permite, pero no hay ninguno marcado: hasta que lo haya, la
 portada dice "Del catálogo" en vez de "Lo más pedido", que sería mentira.
 
-### 3. POS: escuchar pedidos e imprimir el ticket de reparto
+### 3. POS: pestaña Pedidos web (hecho el 16-09, falta publicar)
 
-Listener de `tienda_pedidos` siguiendo el patrón de
-`pos_system/ui/remote_terminal_listener.py`, con impresión automática vía
-`ticket_printer.py`. Requiere bump de versión, tag y push.
+Los pedidos se preparan, entregan y **cobran en la caja del POS**
+(`pos_system/ui/pedidos_web_view.py`, F9). El stock sale al entregar y la
+venta nace al cobrar, en la caja del día, con la pantalla de cobro precargada
+(efectivo o transferencia) y ARCA opcional. El panel ya no registra ventas de
+la tienda: "Entregado" descuenta el stock y deja el pedido "Sin cobrar".
 
-El tablero de pedidos en la webapp ya está hecho (`webapp/src/pages/pedidos_tienda.js`),
-y el watcher con sonido y notificación también (`webapp/src/pedidos_watcher.js`).
-Los dos esperan el despliegue de la webapp.
+Piezas y contrato de campos: `pos_system/models/pedido_tienda.py` (reglas, con
+la cuenta del stock comparada contra `webapp/src/pedido_venta.js`),
+`pos_system/utils/pedidos_tienda_nube.py` (transacciones),
+`pos_system/utils/pedidos_tienda_watcher.py` (escuchas). Cada paso queda en
+`tienda_pedidos_eventos`. Para revisar o deshacer:
+`python scripts/revisar_pedidos_tienda.py --help`.
+
+Pruebas de concurrencia contra el emulador (seis cajas y un panel viejo a la vez):
+
+```
+firebase emulators:exec --config pos_system/tests/emulador/firebase.json --only firestore --project demo-pos-pedidos "python -m pytest pos_system/tests/test_pedidos_tienda_nube.py pos_system/tests/test_revisar_pedidos_emulador.py -q"
+```
+
+Orden para publicar: **1)** POS (bump + tag) y que las PCs actualicen; **2)**
+reglas de Firestore (agregan `tienda_pedidos_eventos`); **3)** panel. El POS
+nuevo convive con el panel viejo sin duplicar nada; el panel nuevo con cajas
+viejas deja pedidos sin nadie que los cobre ni descuente lo del repartidor.
 
 ### 4. El dominio propio
 
