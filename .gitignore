@@ -248,3 +248,6 @@ backup_prender_rubro_*.json
 pedidos_prueba_backup_*.json
 # Informes con numeros del negocio.
 INFORME_CAJAS_*.md
+
+# Emulador de Firestore de las pruebas de pedidos.
+firestore-debug.log
