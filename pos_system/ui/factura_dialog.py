@@ -22,6 +22,18 @@ from pos_system.utils.firebase_sync import now_ar
 logger = logging.getLogger(__name__)
 
 
+# ARCA numera por punto de venta y tipo. Si dos cajas facturan en el mismo
+# segundo, las dos piden el último número, las dos piden el siguiente y ARCA
+# le rechaza a una con el código 10016 ("no se corresponde con el próximo a
+# autorizar"). Ese rechazo no emite nada, así que se puede volver a pedir el
+# último y reintentar; antes terminaba en "¿generar la factura sin CAE?".
+REINTENTOS_NUMERO = 3
+
+
+def es_rechazo_de_numero(error) -> bool:
+    return '10016' in str(error)
+
+
 class _CaeWorker(QThread):
     """Worker que consulta ultimo_comprobante y solicita_cae en background."""
     ok = pyqtSignal(dict)
@@ -41,23 +53,37 @@ class _CaeWorker(QThread):
 
     def run(self):
         try:
-            ult = self.afip.ultimo_comprobante(self.tipo, self.pv)
-            nro = int(ult) + 1
-            res = self.afip.solicitar_cae(
-                tipo_comprobante=self.tipo,
-                punto_venta=self.pv,
-                nro_comprobante=nro,
-                importe_total=self.total,
-                importe_neto_gravado=self.neto,
-                importe_iva=self.iva_send,
-                importe_otros=self.otros_send,
-                concepto=1,
-                cuit_receptor=self.cuit_rec,
-                condicion_iva_receptor=self.cond_iva_rec,
-            )
-            self.ok.emit(res)
+            self.ok.emit(pedir_cae(self.afip, self.tipo, self.pv, self.total, self.neto,
+                                   self.iva_send, self.otros_send, self.cuit_rec, self.cond_iva_rec))
         except Exception as e:
             self.fail.emit(e)
+
+
+def pedir_cae(afip, tipo, pv, total, neto, iva, otros, cuit_rec, cond_iva_rec,
+              reintentos=REINTENTOS_NUMERO, esperar=None):
+    """Pide el próximo número y el CAE, reintentando si otra caja ganó el número."""
+    import time
+    esperar = esperar or time.sleep
+    for vuelta in range(reintentos + 1):
+        nro = int(afip.ultimo_comprobante(tipo, pv)) + 1
+        try:
+            return afip.solicitar_cae(
+                tipo_comprobante=tipo,
+                punto_venta=pv,
+                nro_comprobante=nro,
+                importe_total=total,
+                importe_neto_gravado=neto,
+                importe_iva=iva,
+                importe_otros=otros,
+                concepto=1,
+                cuit_receptor=cuit_rec,
+                condicion_iva_receptor=cond_iva_rec,
+            )
+        except Exception as e:
+            if not es_rechazo_de_numero(e) or vuelta == reintentos:
+                raise
+            logger.warning(f'ARCA: el número {nro} lo tomó otra caja, se reintenta ({e})')
+            esperar(0.4 * (vuelta + 1))
 
 
 class _PadronWorker(QThread):
@@ -108,6 +134,7 @@ class FacturaDialog(QDialog):
         self.perfil = perfil
         self.cliente_data = cliente_data
         self.pdf_path = None
+        self.factura_emitida = None
         self._show_remito_after_emit = False
         self._notas_prefill = notas
         self.es_varios_2 = bool((sale or {}).get('is_varios_2'))
@@ -719,7 +746,7 @@ class FacturaDialog(QDialog):
             'punto_venta':        pv_prev,
             'nro_comprobante':    nro_prev,
             'fecha':              now_ar().strftime('%d/%m/%Y'),
-            'turno':              str(self.sale.get('id', '')).zfill(5),
+            'turno':              str(self.sale.get('id') or '').zfill(5),
             'pago':               self.pago_input.text().strip(),
             'modalidad':          self.modalidad_input.text().strip(),
             'cliente':            self.cliente_input.text().strip() or 'CONSUMIDOR FINAL',
@@ -1000,7 +1027,7 @@ class FacturaDialog(QDialog):
             'punto_venta':        pv,
             'nro_comprobante':    nro,
             'fecha':              now_ar().strftime('%d/%m/%Y %I:%M:%S %p'),
-            'turno':              str(self.sale.get('id', '')).zfill(5),
+            'turno':              str(self.sale.get('id') or '').zfill(5),
             'pago':               self.pago_input.text().strip(),
             'modalidad':          self.modalidad_input.text().strip(),
             # Cliente / Receptor
@@ -1066,6 +1093,11 @@ class FacturaDialog(QDialog):
                     factura_fb['sale_id'] = self.sale.get('id')
                     factura_fb['created_at'] = now_ar_iso()
                     factura_fb['es_varios_2'] = bool(self.es_varios_2)
+                    # Factura de un pedido de la tienda: queda atada al pedido
+                    # para poder encontrar una factura repetida.
+                    if self.sale.get('pedido_tienda_id'):
+                        factura_fb['pedido_id'] = str(self.sale.get('pedido_tienda_id'))
+                        factura_fb['pedido_codigo'] = str(self.sale.get('pedido_tienda_codigo') or '')
                     threading.Thread(
                         target=lambda: fb.sync_factura(factura_fb), daemon=True
                     ).start()
@@ -1077,6 +1109,11 @@ class FacturaDialog(QDialog):
             traceback.print_exc()
             QMessageBox.critical(self, 'Error', f'Error al generar PDF:\n{str(e)}')
             return
+
+        # Lo que se emitió, para quien abrió el diálogo: el cobro de un pedido
+        # de la tienda lo anota en el pedido y así ninguna otra caja lo vuelve
+        # a facturar.
+        self.factura_emitida = dict(factura)
 
         # PDF generado OK → confirmar y ofrecer abrir el PDF de la factura
         reply = QMessageBox.question(

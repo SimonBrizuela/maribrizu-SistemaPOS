@@ -7672,6 +7672,24 @@ class PaymentDialog(QDialog):
             # Foco inicial sobre el campo efectivo
             self._set_mixed_focus('cash')
 
+    def precargar_pago(self, payment_type: str):
+        """Deja elegido el medio con que pagó un pedido de la tienda.
+
+        Efectivo: lo que se recibe es el total justo, sin vuelto (lo cobró el
+        repartidor o el cliente pagó al retirar). Transferencia: la opción
+        "Transferencia" del sub-tipo, no la tarjeta de débito que se elige por
+        defecto en el mostrador. El cajero puede cambiar todo igual.
+        """
+        if payment_type == 'cash':
+            self._set_payment('cash')
+            self._raw_amount = f'{float(self.total):.2f}'.rstrip('0').rstrip('.')
+            if hasattr(self, 'amount_input'):
+                self.amount_input.setText(self._fmt_input(self._raw_amount))
+            self._update_change()
+        else:
+            self._set_payment('transfer')
+            self._set_subtype('Transferencia', self._subtype_btns.get('Transferencia'))
+
     def _set_mixed_focus(self, which: str):
         """Selecciona qué campo (cash/transfer) recibe los toques del numpad."""
         if which not in ('cash', 'transfer'):

@@ -13,6 +13,15 @@ from pos_system.utils import medios_de_pago, stock_ledger, vinculos_pendientes
 
 logger = logging.getLogger(__name__)
 
+
+class VentaDePedidoRepetida(ValueError):
+    """Ese pedido de la tienda ya tiene su venta en esta PC (`sale_id`)."""
+
+    def __init__(self, sale_id: int):
+        super().__init__(f'el pedido ya tiene la venta #{sale_id}')
+        self.sale_id = sale_id
+
+
 class Sale:
     """Modelo para ventas"""
     
@@ -54,6 +63,9 @@ class Sale:
         fiado_tipo        = str(sale_data.get('fiado_tipo') or '')
         fiado_cliente     = str(sale_data.get('fiado_cliente') or '')
         fiado_cliente_fid = str(sale_data.get('fiado_cliente_fid') or '')
+        # Cobro de un pedido de la tienda online (ver pos_system/models/pedido_tienda.py).
+        pedido_tienda_id     = str(sale_data.get('pedido_tienda_id') or '')
+        pedido_tienda_codigo = str(sale_data.get('pedido_tienda_codigo') or '')
 
         # Validar consistencia para pago mixto
         if payment_type == 'mixed':
@@ -72,10 +84,16 @@ class Sale:
             #    no depender del DEFAULT de la tabla (bases viejas lo tienen
             #    como CURRENT_TIMESTAMP = UTC)
             created_at_ar = now_ar().strftime('%Y-%m-%d %H:%M:%S')
+            if pedido_tienda_id:
+                ya = cursor.execute(
+                    "SELECT id FROM sales WHERE pedido_tienda_id = ?", (pedido_tienda_id,)
+                ).fetchone()
+                if ya:
+                    raise VentaDePedidoRepetida(int(ya[0]))
             cursor.execute(
-                "INSERT INTO sales (total_amount, payment_type, cash_received, change_given, transfer_amount, cash_register_id, user_id, notes, turno_nombre, created_at, es_fiado, fiado_tipo, fiado_cliente, fiado_cliente_fid) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO sales (total_amount, payment_type, cash_received, change_given, transfer_amount, cash_register_id, user_id, notes, turno_nombre, created_at, es_fiado, fiado_tipo, fiado_cliente, fiado_cliente_fid, pedido_tienda_id, pedido_tienda_codigo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (total_amount, payment_type, cash_received, change_given, transfer_amount, cash_register_id, user_id, notes, turno_nombre, created_at_ar,
-                 es_fiado, fiado_tipo, fiado_cliente, fiado_cliente_fid)
+                 es_fiado, fiado_tipo, fiado_cliente, fiado_cliente_fid, pedido_tienda_id, pedido_tienda_codigo)
             )
             sale_id = cursor.lastrowid
 
@@ -102,18 +120,22 @@ class Sale:
                 mp_node_id_val         = item.get('mp_node_id') if is_mp else None
                 mp_presentation_id_val = item.get('mp_presentation_id') if is_mp else None
                 product_id_for_db      = 0 if is_mp else item['product_id']
+                tienda_json = (json.dumps(item['tienda'], ensure_ascii=False)
+                               if isinstance(item.get('tienda'), dict) else None)
                 cursor.execute(
                     """INSERT INTO sale_items
                        (sale_id, product_id, product_name, quantity,
                         unit_price, original_price, discount_type,
                         discount_value, discount_amount, promo_id, subtotal,
-                        conjunto_color, mp_product_id, mp_node_id, mp_presentation_id)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        conjunto_color, mp_product_id, mp_node_id, mp_presentation_id,
+                        tienda_json)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (sale_id, product_id_for_db, item['product_name'],
                      item['quantity'], item['unit_price'], original_price,
                      discount_type, discount_value, discount_amount,
                      promo_id, subtotal, conjunto_color,
-                     mp_product_id, mp_node_id_val, mp_presentation_id_val)
+                     mp_product_id, mp_node_id_val, mp_presentation_id_val,
+                     tienda_json)
                 )
                 self._aplicar_stock_de_item(
                     cursor, item, item_idx, now_iso,

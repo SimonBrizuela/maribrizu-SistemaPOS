@@ -267,6 +267,31 @@ def minimo_publicado(publicado):
         return 0
 
 
+def _campos_de_pedido_tienda(item):
+    """Lo que un renglón cobrado de un pedido de la tienda lleva de más en
+    `ventas_por_dia`: los mismos campos que usa `stock_revert.js` para saber
+    qué producto y cuántas unidades base eran. El stock ya salió al entregar,
+    así que el renglón nace marcado para que nadie descuente vinculaciones."""
+    crudo = (item or {}).get('tienda_json') or (item or {}).get('tienda')
+    if not crudo:
+        return {}
+    try:
+        datos = json.loads(crudo) if isinstance(crudo, str) else dict(crudo)
+    except (TypeError, ValueError):
+        return {}
+    if datos.get('origen') != 'tienda':
+        return {}
+    return {
+        'origen': 'tienda',
+        'pedido_id': str(datos.get('pedido_id') or ''),
+        'producto_id': str(datos.get('producto_id') or ''),
+        'es_pack': bool(datos.get('es_pack')),
+        'pack_contenido': datos.get('pack_contenido'),
+        'unidad': str(datos.get('unidad') or 'unidad'),
+        'consumibles_procesado': True,
+    }
+
+
 def _fmt_qty(q):
     """Formatea cantidades: 1.0 -> '1', 0.3 -> '0.3', 2.55 -> '2.55'."""
     q = float(q or 0)
@@ -1725,6 +1750,13 @@ class FirebaseSync:
                     'fiado_cliente':     str(sale.get('fiado_cliente') or ''),
                     'fiado_cliente_fid': str(sale.get('fiado_cliente_fid') or ''),
                 }
+                # Cobro de un pedido de la tienda: el panel lo muestra como
+                # pedido y, al borrar la venta, sabe que el stock salió al
+                # entregar y no tiene que devolverlo.
+                if sale.get('pedido_tienda_id'):
+                    doc['origen'] = 'tienda'
+                    doc['pedido_id'] = str(sale.get('pedido_tienda_id'))
+                    doc['pedido_codigo'] = str(sale.get('pedido_tienda_codigo') or '')
                 self.db.collection('ventas').document(fb_doc_id).set(doc, merge=True)
                 logger.debug(f"Firebase: Venta #{sale_id} ({pc_id}) sincronizada.")
             except Exception as e:
@@ -3288,7 +3320,8 @@ class FirebaseSync:
                                COALESCE(si.discount_value, 0) as discount_value,
                                COALESCE(si.discount_amount, 0) as discount_amount,
                                COALESCE(si.promo_id, '') as promo_id,
-                               COALESCE(si.conjunto_color, '') as conjunto_color
+                               COALESCE(si.conjunto_color, '') as conjunto_color,
+                               si.tienda_json
                         FROM sale_items si
                         LEFT JOIN products p ON si.product_id = p.id
                         WHERE si.sale_id = ?
@@ -3348,6 +3381,7 @@ class FirebaseSync:
                         # que haber en el cajón.
                         'monto_efectivo':      _item_ef,
                         'monto_transferencia': _item_tr,
+                        **_campos_de_pedido_tienda(item),
                     }, merge=True)
                 batch.commit()
                 logger.debug(f"Firebase: Detalle de venta #{sale_id} ({len(items)} items) sincronizado.")

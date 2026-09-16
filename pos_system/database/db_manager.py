@@ -259,11 +259,25 @@ class DatabaseManager:
                 "ALTER TABLE sales ADD COLUMN fiado_tipo TEXT DEFAULT ''",
                 "ALTER TABLE sales ADD COLUMN fiado_cliente TEXT DEFAULT ''",
                 "ALTER TABLE sales ADD COLUMN fiado_cliente_fid TEXT DEFAULT ''",
+                # Cobro de un pedido de la tienda online: el id del documento y
+                # el código corto. Es lo que impide crear dos ventas del mismo
+                # pedido en esta PC y lo que se busca al recuperar un cobro que
+                # quedó anotado en la nube sin su venta local.
+                "ALTER TABLE sales ADD COLUMN pedido_tienda_id TEXT DEFAULT ''",
+                "ALTER TABLE sales ADD COLUMN pedido_tienda_codigo TEXT DEFAULT ''",
             ]:
                 try:
                     cursor.execute(col_def)
                 except Exception:
                     pass
+            try:
+                # Único: un pedido no puede tener dos ventas en la misma PC,
+                # aunque se apriete dos veces o se cruce con la recuperación.
+                cursor.execute(
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_pedido_tienda "
+                    "ON sales(pedido_tienda_id) WHERE pedido_tienda_id != ''")
+            except Exception:
+                pass
 
             # Tabla de items de venta (detalle)
             cursor.execute("""
@@ -297,6 +311,11 @@ class DatabaseManager:
                 "ALTER TABLE sale_items ADD COLUMN mp_product_id TEXT DEFAULT NULL",
                 "ALTER TABLE sale_items ADD COLUMN mp_node_id TEXT DEFAULT NULL",
                 "ALTER TABLE sale_items ADD COLUMN mp_presentation_id TEXT DEFAULT NULL",
+                # Renglón de un pedido de la tienda: {origen, pedido_id,
+                # producto_id, es_pack, pack_contenido, unidad} en JSON. Viaja a
+                # ventas_por_dia para que borrar la venta desde el panel sepa de
+                # qué producto y cuántas unidades base era.
+                "ALTER TABLE sale_items ADD COLUMN tienda_json TEXT DEFAULT NULL",
             ]:
                 try:
                     cursor.execute(col_def)
