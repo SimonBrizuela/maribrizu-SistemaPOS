@@ -173,8 +173,12 @@ def _es_si(valor):
     return valor is True or valor == 1
 
 
-def plan_descuento(items, catalogo_por_id):
+def plan_descuento(items, catalogo_por_id, devolver=False):
     """Qué le pasa al stock de cada producto del pedido.
+
+    Con `devolver` hace la cuenta al revés (la mercadería vuelve): es lo que usa
+    `scripts/revisar_pedidos_tienda.py` para deshacer un descuento. El panel no
+    tiene esa variante; la devolución de una venta borrada es `stock_revert.js`.
 
     Misma cuenta que `planDescuento` del panel, renglón por renglón:
       · suelto: la cantidad; pack: cantidad × contenido.
@@ -220,6 +224,7 @@ def plan_descuento(items, catalogo_por_id):
         if not base > 0:
             saltados.append({'idx': idx, 'id': pid, 'motivo': 'cantidad en cero'})
             continue
+        delta = -base if devolver else base
         if not p['nombre']:
             p['nombre'] = str(item.get('nombre') or '')
 
@@ -241,7 +246,7 @@ def plan_descuento(items, catalogo_por_id):
                     continue
                 cont = contenido_de(v, cont_global)
                 antes_var = total_variedad(v, cont_global)
-                r = descontar_de_total(antes_var, base, cont)
+                r = descontar_de_total(antes_var, delta, cont)
                 antes_total = total_conjunto(colores, cont_global)
                 nuevos = [dict(c, unidades=r['unidades'], restante=r['restante']) if c is v else c
                           for c in colores]
@@ -262,7 +267,7 @@ def plan_descuento(items, catalogo_por_id):
                 })
             else:
                 antes = num(d.get('conjunto_total'))
-                r = descontar_de_total(antes, base, cont_global)
+                r = descontar_de_total(antes, delta, cont_global)
                 d['conjunto_total'] = r['total']
                 d['conjunto_unidades'] = r['unidades']
                 d['conjunto_restante'] = r['restante']
@@ -276,11 +281,11 @@ def plan_descuento(items, catalogo_por_id):
                                          'detalle': detalle_pack.strip()})
         else:
             antes = num(d.get('stock'))
-            despues = antes - base
+            despues = antes - delta
             d['stock'] = despues
             p['campos']['stock'] = despues
             p['movimientos'].append({'antes': antes, 'despues': despues,
-                                     'cantidad': -base, 'detalle': detalle_pack.strip()})
+                                     'cantidad': -delta, 'detalle': detalle_pack.strip()})
 
     productos = []
     for p in trabajo.values():

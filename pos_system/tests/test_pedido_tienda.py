@@ -77,6 +77,35 @@ class TestPlanDescuento:
         plan = pt.plan_descuento([{'id': 'A', 'cantidad': 3}], {'A': {'stock': 10}})
         assert isinstance(plan['productos'][0]['campos']['stock'], int)
 
+    def test_devolver_deja_el_total_como_estaba(self):
+        """Descontar y devolver el mismo pedido vuelve al total de antes en todos
+        los casos compartidos (los packs se pueden re-partir distinto, el total
+        no)."""
+        for caso in self.casos():
+            cat = json.loads(json.dumps(caso['catalogo']))
+            ida = pt.plan_descuento(caso['items'], cat)
+            despues = json.loads(json.dumps(cat))
+            for p in ida['productos']:
+                if p['campos']:
+                    despues[p['id']] = {**despues[p['id']], **p['campos']}
+            vuelta = pt.plan_descuento(caso['items'], despues, devolver=True)
+            for p in vuelta['productos']:
+                if not p['campos']:
+                    continue
+                original = caso['catalogo'][p['id']]
+                if 'conjunto_total' in p['campos']:
+                    esperado = (pt.total_conjunto(original.get('conjunto_colores'), original.get('conjunto_contenido'))
+                                if original.get('conjunto_colores') else pt.num(original.get('conjunto_total')))
+                    # Un conjunto no baja de cero: si el pedido pedía más de lo
+                    # que había, devolver repone lo pedido, no lo que había.
+                    pedido = sum(pt.unidades_base(i) for i in caso['items'] if i.get('id') == p['id'])
+                    assert p['campos']['conjunto_total'] >= esperado or esperado - pedido < 0, caso['que_prueba']
+                    if esperado >= pedido:
+                        assert p['campos']['conjunto_total'] == pytest.approx(esperado), caso['que_prueba']
+                else:
+                    assert p['campos']['stock'] == pytest.approx(pt.num(original.get('stock'))), caso['que_prueba']
+            assert all(m['cantidad'] >= 0 for p in vuelta['productos'] for m in p['movimientos'])
+
     def test_cambios_para_la_vidriera(self):
         cat = {'C': {'nombre': 'CARTULINA', 'es_conjunto': True, 'conjunto_contenido': 50,
                      'conjunto_colores': [{'color': 'ROJO', 'unidades': 1, 'restante': 10}],
