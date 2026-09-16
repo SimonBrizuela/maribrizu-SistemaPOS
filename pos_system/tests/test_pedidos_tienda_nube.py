@@ -388,3 +388,98 @@ def test_mezcla_al_azar_mantiene_las_cuentas():
         assert len(movs) == len(con_stock), pid
     goma = db.collection('catalogo').document('GOMA').get().to_dict()['stock']
     assert goma == 1000 - descontados
+
+
+# ── El vigía: lo que ve la pantalla ─────────────────────────────────────────
+
+_APP = []
+
+
+def _app():
+    """La aplicación de Qt queda guardada: si el recolector la suelta, se lleva
+    puestos los timers del vigía."""
+    from PyQt5.QtCore import QCoreApplication
+    if not _APP:
+        _APP.append(QCoreApplication.instance() or QCoreApplication([]))
+    return _APP[0]
+
+
+def esperar(condicion, segundos=20):
+    app = _app()
+    fin = time.time() + segundos
+    while time.time() < fin:
+        app.processEvents()
+        if condicion():
+            return True
+        time.sleep(0.05)
+    return False
+
+
+def vigia(i=0, descontar=True):
+    from pos_system.utils.pedidos_tienda_watcher import VigiaPedidos
+    _app()
+    c = caja(i)
+    v = VigiaPedidos(c.db, c, descontar_reparto=descontar)
+    vistos = {}
+    v.cambiaron.connect(lambda pedidos: vistos.update(ultimo=pedidos))
+    v.iniciar()
+    return v, vistos
+
+
+def test_el_vigia_junta_lo_que_hace_falta_y_nada_mas():
+    db = cliente()
+    hoy = reglas.dia_argentina(datetime.now(TZ))
+    viejo = reglas.dia_argentina(datetime.now(TZ) - timedelta(days=40))
+    pedidos = {
+        'N1': pedido_base(estado='nuevo'),
+        'L1': pedido_base(estado='listo'),
+        'C1': pedido_base(estado='entregado', entregado_dia=viejo, cobro_pendiente=True),
+        'H1': pedido_base(estado='entregado', entregado_dia=hoy, cobro={'estado': 'hecho'}),
+        'X1': pedido_base(estado='cancelado'),
+        'V1': pedido_base(estado='entregado', entregado_dia=viejo, cobro={'estado': 'hecho'}),
+    }
+    for pid, p in pedidos.items():
+        db.collection('tienda_pedidos').document(pid).set(p)
+    v, vistos = vigia(descontar=False)
+    try:
+        esperar(lambda: set((vistos.get('ultimo') or {})) == {'N1', 'L1', 'C1', 'H1'})
+        assert set(vistos.get('ultimo') or {}) == {'N1', 'L1', 'C1', 'H1'}
+        caja(1).mover('N1', 'nuevo', 'preparando')
+        assert esperar(lambda: (vistos['ultimo'].get('N1') or {}).get('estado') == 'preparando')
+        caja(1).cancelar('L1')
+        assert esperar(lambda: 'L1' not in vistos['ultimo'])
+    finally:
+        v.detener()
+
+
+def test_tres_pcs_abiertas_descuentan_lo_del_repartidor_una_sola_vez():
+    db = sembrar('R1', pedido_base(estado='listo'), CATALOGO)
+    vigias = [vigia(i) for i in range(3)]
+    try:
+        # El repartidor lo entrega: lo que escribe reparto-mover.
+        db.collection('tienda_pedidos').document('R1').update({
+            'estado': 'entregado', 'venta_pendiente': True, 'entregado_por': 'reparto',
+            'entregado_dia': reglas.dia_argentina(datetime.now(TZ)),
+        })
+        assert esperar(lambda: db.collection('tienda_pedidos').document('R1').get().to_dict()
+                       .get('venta_pendiente') is False, 40)
+        assert stock(db) == (37, 110)
+        assert all(esperar(lambda vs=vs: (vs.get('ultimo', {}).get('R1') or {}).get('cobro_pendiente') is True)
+                   for _v, vs in vigias)
+        assert len([e for e in eventos(db, 'R1', 'entregar') if e.get('stock')]) == 1
+    finally:
+        for v, _ in vigias:
+            v.detener()
+
+
+def test_una_escucha_que_se_cae_vuelve_sola():
+    db = sembrar('W1', pedido_base(estado='nuevo'), CATALOGO)
+    v, vistos = vigia(descontar=False)
+    try:
+        assert esperar(lambda: 'W1' in (vistos.get('ultimo') or {}))
+        v._escuchas['en_curso'].close()
+        v.revisar()
+        caja(1).mover('W1', 'nuevo', 'preparando')
+        assert esperar(lambda: (vistos['ultimo'].get('W1') or {}).get('estado') == 'preparando')
+    finally:
+        v.detener()
