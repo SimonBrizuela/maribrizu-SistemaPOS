@@ -19,6 +19,7 @@ import { imprimirPedido } from '../ticket_pedido.js';
 import { leerDocRapido } from '../config.js';
 import { avisarAlCliente } from '../avisos_cliente.js';
 import { verFotoGrande } from '../components/dialogs.js';
+import { auth } from '../auth.js';
 // Los botones de esta pantalla son los mismos que los de las otras dos de la
 // sección. Sin esta línea salían sin estilo: la hoja la importaban solo el
 // catálogo y la configuración, y entrar directo a Pedidos no la cargaba nunca.
@@ -384,7 +385,9 @@ async function cambiarEstado(id, estado) {
 async function entregarPedido(id) {
   let resultado;
   try {
-    resultado = await registrarEntrega(_db, id);
+    // Quién lo entregó queda en el historial de stock y en el registro del pedido.
+    const u = auth?.currentUser;
+    resultado = await registrarEntrega(_db, id, { usuario: String(u?.displayName || u?.email || 'Panel') });
   } catch (e) {
     console.warn('[pedidos] no se pudo entregar el pedido:', e);
     alert('No se pudo marcar el pedido como entregado: ' + (e?.message || e) + '\nNo se descontó el stock.');

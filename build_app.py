@@ -74,6 +74,9 @@ def main():
         # depender de que PyInstaller los encuentre solo.
         f'--hidden-import=pos_system.models.tombstones '
         f'--hidden-import=pos_system.models.marcas_de_tiempo '
+        f'--hidden-import=pos_system.utils.pedidos_tienda_nube '
+        f'--hidden-import=pos_system.utils.pedidos_tienda_watcher '
+        f'--hidden-import=pos_system.utils.ticket_pedido '
         f'--hidden-import=firebase_admin '
         f'--hidden-import=firebase_admin.credentials '
         f'--hidden-import=firebase_admin.firestore '
