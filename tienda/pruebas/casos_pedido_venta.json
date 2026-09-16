@@ -1,0 +1,96 @@
+{
+  "_que_es": "Pedidos de la tienda contra el catálogo. El panel (webapp/src/pedido_venta.js) y la caja (pos_system/models/pedido_tienda.py) descuentan el stock de un pedido entregado; pedido_venta_pos.test.js corre los dos sobre estos casos y exige lo mismo.",
+  "plan": [
+    {
+      "que_prueba": "producto común: resta y puede quedar negativo",
+      "items": [{ "id": "A", "nombre": "Goma", "cantidad": 3 }],
+      "catalogo": { "A": { "nombre": "GOMA", "stock": 2 } }
+    },
+    {
+      "que_prueba": "producto común vendido por pack: cantidad por contenido",
+      "items": [{ "id": "B", "nombre": "Lápiz", "cantidad": 2, "es_pack": true, "pack_contenido": 12, "pack_nombre": "caja" }],
+      "catalogo": { "B": { "nombre": "LAPIZ NEGRO", "stock": 100 } }
+    },
+    {
+      "que_prueba": "metros sueltos con decimales",
+      "items": [{ "id": "M", "nombre": "Cinta", "cantidad": 2.5, "unidad": "metro" }],
+      "catalogo": { "M": { "nombre": "CINTA RASO", "es_conjunto": true, "conjunto_contenido": 50, "conjunto_total": 61.3, "conjunto_unidades": 1, "conjunto_restante": 11.3, "stock": 61 } }
+    },
+    {
+      "que_prueba": "conjunto sin variedades: el pack abre solo",
+      "items": [{ "id": "P", "nombre": "Papel crepe", "cantidad": 7 }],
+      "catalogo": { "P": { "nombre": "PAPEL CREPE", "es_conjunto": true, "conjunto_contenido": 10, "conjunto_total": 25, "conjunto_unidades": 2, "conjunto_restante": 5, "stock": 25 } }
+    },
+    {
+      "que_prueba": "conjunto que se queda sin nada no baja de cero",
+      "items": [{ "id": "P", "nombre": "Papel crepe", "cantidad": 3, "es_pack": true, "pack_contenido": 10 }],
+      "catalogo": { "P": { "nombre": "PAPEL CREPE", "es_conjunto": 1, "conjunto_contenido": 10, "conjunto_total": 25, "stock": 25 } }
+    },
+    {
+      "que_prueba": "variedad por el nombre del catálogo, sin acentos ni mayúsculas",
+      "items": [{ "id": "C", "nombre": "Cartulina", "cantidad": 15, "variedad": "Rojo" }],
+      "catalogo": { "C": { "nombre": "CARTULINA", "es_conjunto": true, "conjunto_contenido": 50,
+                           "conjunto_colores": [{ "color": "ROJO", "unidades": 1, "restante": 10 }, { "color": "AZUL", "unidades": 2, "restante": 0 }],
+                           "conjunto_total": 160 } }
+    },
+    {
+      "que_prueba": "variedad por el nombre público que le puso el panel",
+      "items": [{ "id": "C", "nombre": "Cartulina", "cantidad": 1, "variedad": "Azul", "es_pack": true, "pack_contenido": 50, "pack_nombre": "paquete" }],
+      "catalogo": { "C": { "nombre": "CARTULINA", "es_conjunto": true, "conjunto_contenido": 50,
+                           "conjunto_colores": [{ "color": "ROJO", "unidades": 1, "restante": 10 }, { "color": "Azul Francia", "unidades": 2, "restante": 3 }],
+                           "tienda_variedades": { "azul francia": { "nombre": "Azul" } },
+                           "conjunto_total": 163 } }
+    },
+    {
+      "que_prueba": "variedad con contenido propio distinto al del producto",
+      "items": [{ "id": "V", "nombre": "Bolígrafo", "cantidad": 13, "variedad": "violeta" }],
+      "catalogo": { "V": { "nombre": "BOLIGRAFO", "es_conjunto": true, "conjunto_contenido": 50,
+                           "conjunto_colores": [{ "color": "AZUL", "unidades": 2, "restante": 0 }, { "color": "VIOLETA", "unidades": 2, "restante": 1, "contenido": 12 }],
+                           "conjunto_total": 125 } }
+    },
+    {
+      "que_prueba": "dos renglones del mismo producto, uno después del otro",
+      "items": [
+        { "id": "C", "nombre": "Cartulina", "cantidad": 5, "variedad": "Rojo" },
+        { "id": "C", "nombre": "Cartulina", "cantidad": 50, "variedad": "Azul" }
+      ],
+      "catalogo": { "C": { "nombre": "CARTULINA", "es_conjunto": true, "conjunto_contenido": 50,
+                           "conjunto_colores": [{ "color": "ROJO", "unidades": 1, "restante": 10 }, { "color": "AZUL", "unidades": 2, "restante": 0 }],
+                           "conjunto_total": 160 } }
+    },
+    {
+      "que_prueba": "lo que no se puede descontar se saltea con su motivo",
+      "items": [
+        { "id": "S", "nombre": "Fotocopia", "cantidad": 1 },
+        { "id": "NADIE", "nombre": "Borrado", "cantidad": 1 },
+        { "id": "V", "nombre": "Variado", "cantidad": 1, "variedad": "Z" },
+        { "id": "", "nombre": "Sin id", "cantidad": 1 },
+        { "id": "V", "nombre": "Variado", "cantidad": 0, "variedad": "A" }
+      ],
+      "catalogo": {
+        "S": { "nombre": "FOTOCOPIA", "stock": -1, "stock_ilimitado": true },
+        "V": { "nombre": "X", "es_conjunto": true, "conjunto_contenido": 1, "conjunto_colores": [{ "color": "A" }] }
+      }
+    },
+    {
+      "que_prueba": "producto sin nombre en el catálogo toma el del pedido",
+      "items": [{ "id": "N", "nombre": "Sacapuntas", "cantidad": 1 }],
+      "catalogo": { "N": { "stock": "4" } }
+    },
+    {
+      "que_prueba": "stock guardado como texto o vacío",
+      "items": [{ "id": "T", "nombre": "Regla", "cantidad": 1 }, { "id": "U", "nombre": "Compás", "cantidad": 2 }],
+      "catalogo": { "T": { "nombre": "REGLA", "stock": "7" }, "U": { "nombre": "COMPAS", "stock": "" } }
+    },
+    {
+      "que_prueba": "pack con contenido vacío cuenta de a uno",
+      "items": [{ "id": "B", "nombre": "Lápiz", "cantidad": 2, "es_pack": true, "pack_contenido": null }],
+      "catalogo": { "B": { "nombre": "LAPIZ", "stock": 10 } }
+    },
+    {
+      "que_prueba": "cantidad de un pack igual a uno va en singular",
+      "items": [{ "id": "P", "nombre": "Papel crepe", "cantidad": 1, "es_pack": true, "pack_contenido": 10 }],
+      "catalogo": { "P": { "nombre": "PAPEL CREPE", "es_conjunto": true, "conjunto_contenido": 10, "conjunto_total": 33.75, "stock": 33 } }
+    }
+  ]
+}
