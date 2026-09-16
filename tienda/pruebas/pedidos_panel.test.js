@@ -153,7 +153,7 @@ describe('cancelar desde una tarjeta vieja', () => {
 
     expect(datos.base['tienda_pedidos/k1'].estado).toBe('entregado');
     expect(datos.escrituras.some(e => e.datos?.estado === 'cancelado')).toBe(false);
-    expect(alert).toHaveBeenCalledWith(expect.stringMatching(/venta está registrada/));
+    expect(alert).toHaveBeenCalledWith(expect.stringMatching(/el stock salió/));
     // "Pendientes" ya no lo lista: pasó a Entregados sin esperar al snapshot.
     expect(c.querySelector('[data-id="k1"]')).toBeNull();
     expect(contador('entregado')).toBe('1');
@@ -194,16 +194,24 @@ describe('entregar desde una tarjeta vieja', () => {
     expect(alert).toHaveBeenCalledWith(expect.stringMatching(/cancelado/));
   });
 
-  it('con la base al día, entregar registra la venta y baja el stock', async () => {
+  it('con la base al día, entregar baja el stock y lo deja para cobrar en la caja', async () => {
     preparar({ tarjeta: { estado: 'listo' }, base: { estado: 'listo' } });
     await montar();
     await tocar('[data-act="avanzar"]');
 
-    expect(datos.base['tienda_pedidos/k1']).toMatchObject({
-      estado: 'entregado', venta_registrada: true, venta_id: 'TIENDA_K7M2',
+    const p = datos.base['tienda_pedidos/k1'];
+    expect(p).toMatchObject({
+      estado: 'entregado', entregado_por: 'panel', stock_descontado: true,
+      venta_registrada: true, cobro_pendiente: true, venta_pendiente: false,
     });
+    // La venta ya no la registra el panel: nace al cobrarla en una caja.
+    expect(p.venta_id).toBeUndefined();
+    expect(escritas('tx-set', 'ventas')).toEqual([]);
+    expect(escritas('tx-set', 'ventas_por_dia')).toEqual([]);
     expect(datos.base['catalogo/p1'].stock).toBe(10);
-    expect(escritas('tx-set', 'ventas').map(e => e.ref.id)).toEqual(['TIENDA_K7M2']);
+    const movs = escritas('tx-set', 'stock_movimientos');
+    expect(movs).toHaveLength(1);
+    expect(movs[0].datos).toMatchObject({ pedido_id: 'k1', cantidad: -2, stock_antes: 12, stock_despues: 10 });
     expect(alert).not.toHaveBeenCalled();
   });
 });
@@ -234,7 +242,7 @@ describe('lo que entregó el repartidor', () => {
     const ficha = c.querySelector('[data-id="k1"]');
     expect(ficha.textContent).toContain('Lo entregó el repartidor');
     expect(ficha.textContent).toContain('cobró en efectivo');
-    expect(ficha.textContent).toContain('Registrando la venta');
+    expect(ficha.textContent).toContain('Descontando el stock');
     await tocar('[data-act="foto-entrega"]');
     expect(document.querySelector('.tienda-foto-zoom img').getAttribute('src')).toContain('entregas%2Fk1.jpg');
   });
@@ -380,3 +388,54 @@ describe('el aviso al celular del cliente', () => {
   });
 });
 
+
+describe('el cobro en la caja, visto desde el panel', () => {
+  it('lo entregado sin cobrar se ve y tiene su filtro', async () => {
+    preparar({ tarjeta: { estado: 'entregado', stock_descontado: true, venta_registrada: true, cobro_pendiente: true } });
+    const c = await montar();
+    expect(contador('cobrar')).toBe('1');
+    await tocar('[data-filtro="cobrar"]');
+    expect(c.querySelector('[data-id="k1"]').textContent).toContain('Falta cobrarlo en la caja');
+  });
+
+  it('lo que está cobrando una caja no se cancela desde el panel', async () => {
+    const cobro = { estado: 'en_curso', pc_id: 'CAJA2-b', pc_nombre: 'CAJA2', cajero: 'Juan', desde: new Date() };
+    preparar({ tarjeta: { estado: 'listo' }, base: { estado: 'listo', cobro } });
+    await montar();
+    await tocar('[data-act="cancelar"]');
+    expect(datos.base['tienda_pedidos/k1'].estado).toBe('listo');
+    expect(alert).toHaveBeenCalledWith(expect.stringMatching(/CAJA2 \(Juan\)/));
+  });
+
+  it('una marca vieja de una caja colgada no bloquea', async () => {
+    const cobro = { estado: 'en_curso', pc_nombre: 'CAJA2', desde: new Date(Date.now() - 20 * 60_000) };
+    preparar({ tarjeta: { estado: 'listo' }, base: { estado: 'listo', cobro } });
+    await montar();
+    await tocar('[data-act="cancelar"]');
+    expect(datos.base['tienda_pedidos/k1'].estado).toBe('cancelado');
+  });
+
+  it('cobrado y facturado: dice dónde y con qué', async () => {
+    preparar({ tarjeta: {
+      estado: 'entregado', stock_descontado: true, venta_registrada: true, cobro_pendiente: false,
+      cobro: { estado: 'hecho', pc_nombre: 'CAJA1', cajero: 'Mari', pago: { payment_type: 'cash' }, venta_local: 57 },
+      factura: { estado: 'emitida', tipo: 'FAC. ELEC. C', punto_venta: 3, numero: 120 },
+    } });
+    const c = await montar();
+    await tocar('[data-filtro="entregado"]');
+    const texto = c.querySelector('[data-id="k1"]').textContent;
+    expect(texto).toContain('Cobrado en CAJA1 (Mari)');
+    expect(texto).toContain('efectivo');
+    expect(texto).toContain('venta #57');
+    expect(texto).toContain('00003-00000120');
+    expect(contador('cobrar')).toBe('0');
+  });
+
+  it('una venta TIENDA de antes no aparece como sin cobrar', async () => {
+    preparar({ tarjeta: { estado: 'entregado', venta_registrada: true, venta_id: 'TIENDA_K7M2', stock_descontado: true } });
+    const c = await montar();
+    expect(contador('cobrar')).toBe('0');
+    await tocar('[data-filtro="entregado"]');
+    expect(c.querySelector('[data-id="k1"]').textContent).toContain('Venta registrada por el panel');
+  });
+});

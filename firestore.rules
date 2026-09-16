@@ -530,6 +530,16 @@ service cloud.firestore {
       allow write: if false;
     }
 
+    // Registro de lo que se hizo con cada pedido de la tienda: quién lo
+    // aceptó, entregó, cobró o facturó, desde qué PC, y lo que se rechazó.
+    // Lo escriben las cajas (cuenta de servicio) y el panel. Nadie lo edita ni
+    // lo borra: es lo que se mira cuando algo no cierra.
+    match /tienda_pedidos_eventos/{eventoId} {
+      allow read:   if authorized();
+      allow create: if authorized();
+      allow update, delete: if false;
+    }
+
     // Los celulares anotados para los avisos de cada pedido (`tienda_avisos`)
     // no tienen regla propia a propósito: los tokens los leen y escriben solo
     // las funciones de la tienda, y la regla de abajo los deja cerrados.

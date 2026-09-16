@@ -60,9 +60,83 @@ const COLOR_ACCION = { ...Object.fromEntries(
 const FILTROS = [
   { clave: 'pendientes', texto: 'Pendientes', estados: ['nuevo', 'preparando', 'listo', 'en_camino'] },
   { clave: 'nuevo',      texto: 'Nuevos',     estados: ['nuevo'] },
+  { clave: 'cobrar',     texto: 'Sin cobrar', estados: null, cumple: p => faltaCobrar(p) },
   { clave: 'entregado',  texto: 'Entregados', estados: ['entregado'] },
   { clave: 'todos',      texto: 'Todos',      estados: null },
 ];
+
+function entraEnFiltro(f, p) {
+  if (f?.cumple) return f.cumple(p);
+  return !f?.estados || f.estados.includes(p.estado);
+}
+
+/* ── El cobro en la caja ─────────────────────────────────────────────────── */
+
+// Minutos que dura la marca de "lo está cobrando esta caja" (MINUTOS_MARCA en
+// pos_system/models/pedido_tienda.py): pasado ese tiempo sin renovar, la caja
+// se colgó o cerró la pantalla.
+const MINUTOS_MARCA = 5;
+
+function fechaDe(marca) {
+  if (!marca) return null;
+  const f = marca.toDate ? marca.toDate() : new Date(marca);
+  return Number.isNaN(f.getTime()) ? null : f;
+}
+
+function cobrado(p) { return p?.cobro?.estado === 'hecho'; }
+
+/** Venta TIENDA registrada por el panel antes del 16-09: no pasa por la caja. */
+function registradoPorElPanel(p) {
+  return p?.venta_registrada === true && String(p?.venta_id || '').startsWith('TIENDA_') && !cobrado(p);
+}
+
+export function faltaCobrar(p) {
+  return p?.estado === 'entregado' && !cobrado(p) && !registradoPorElPanel(p);
+}
+
+export function cobrandoAhora(p, ahora = Date.now()) {
+  if (p?.cobro?.estado !== 'en_curso') return false;
+  const desde = fechaDe(p.cobro.desde);
+  return !desde || (ahora - desde.getTime()) < MINUTOS_MARCA * 60_000;
+}
+
+function quienTexto(m) {
+  const pc = m?.pc_nombre || m?.pc_id || 'una caja';
+  return m?.cajero ? `${pc} (${m.cajero})` : pc;
+}
+
+function etiquetaPago(pago) {
+  if (pago?.payment_type === 'cash') return 'efectivo';
+  if (pago?.payment_type === 'mixed') return 'pago mixto';
+  return String(pago?.payment_subtype || 'transferencia').toLowerCase();
+}
+
+/** Cómo va el cobro del pedido en las cajas del POS. */
+export function bloqueCobro(p) {
+  const chip = (fondo, color, icono, html) => `
+    <div style="display:flex;align-items:center;gap:8px;background:${fondo};color:${color};
+                border-radius:8px;padding:8px 11px;font-size:13px">
+      <span class="material-icons" style="font-size:17px">${icono}</span><span>${html}</span>
+    </div>`;
+  const partes = [];
+  if (cobrandoAhora(p)) {
+    partes.push(chip('#fdf2e0', '#9a5b00', 'point_of_sale', `<b>Lo está cobrando ${esc(quienTexto(p.cobro))}</b>`));
+  } else if (faltaCobrar(p)) {
+    partes.push(chip('#fbeee5', '#a3441a', 'point_of_sale', '<b>Falta cobrarlo en la caja</b> · se cobra desde el POS, pestaña Pedidos web'));
+  } else if (cobrado(p)) {
+    const venta = p.cobro.venta_local ? ` · venta #${esc(p.cobro.venta_local)}` : '';
+    partes.push(chip('#e8f5e9', '#1e5a2b', 'point_of_sale',
+      `<b>Cobrado en ${esc(quienTexto(p.cobro))}</b> · ${esc(etiquetaPago(p.cobro.pago))}${venta}`));
+  } else if (registradoPorElPanel(p)) {
+    partes.push(chip('var(--bg)', 'var(--text-muted)', 'receipt_long', 'Venta registrada por el panel'));
+  }
+  if (p?.factura?.estado === 'emitida') {
+    const f = p.factura;
+    const numero = `${String(f.punto_venta || 1).padStart(5, '0')}-${String(f.numero || 0).padStart(8, '0')}`;
+    partes.push(chip('#e8f5e9', '#1e5a2b', 'receipt', `<b>Facturado</b> · ${esc(f.tipo || '')} ${numero}`));
+  }
+  return partes.join('');
+}
 
 let _unsub = null;
 let _pedidos = [];
@@ -132,8 +206,8 @@ function escucharComprobantes() {
 
 /**
  * Lo que entregó el repartidor desde su pantalla (`/reparto` en la tienda):
- * cuándo, si cobró el efectivo, la foto de la entrega y si la venta todavía se
- * está registrando (la registra el panel solo, ver ventas_pendientes_watcher.js).
+ * cuándo, si cobró el efectivo, la foto de la entrega y si el stock todavía no
+ * salió (lo descuenta cualquier caja abierta del POS).
  */
 function bloqueEntregaReparto(p) {
   const e = _entregas.get(p.id);
@@ -147,8 +221,9 @@ function bloqueEntregaReparto(p) {
       <span class="material-icons" style="font-size:17px">two_wheeler</span>
       <span><b>Lo entregó el repartidor</b>${p.entregado_en ? ` · ${esc(cuando(p.entregado_en))}` : ''}${cobro}</span>
       ${p.venta_pendiente === true ? `
-        <span style="background:#fff;color:#9a5b00;font-size:11.5px;font-weight:700;padding:2px 8px;border-radius:99px">
-          Registrando la venta</span>` : ''}
+        <span style="background:#fff;color:#9a5b00;font-size:11.5px;font-weight:700;padding:2px 8px;border-radius:99px"
+              title="Lo descuenta la primera caja del POS que esté abierta">
+          Descontando el stock</span>` : ''}
       ${e?.foto?.url ? `
         <button type="button" data-act="foto-entrega" data-url="${esc(e.foto.url)}" title="Ver la foto de la entrega"
                 style="margin-left:auto;width:44px;height:44px;padding:0;border:1px solid #b9dcc0;border-radius:6px;overflow:hidden;cursor:zoom-in">
@@ -244,10 +319,13 @@ async function marcarAvisado(id, estado) {
  * recuperaba un uso. Al revés también: una cancela y la otra avanza el pedido
  * desde la tarjeta vieja, y el pedido cancelado vuelve a la fila.
  */
-function motivoParaNoMover(pedido, estado) {
-  if (pedido.venta_registrada) return 'ya se entregó y la venta está registrada';
+export function motivoParaNoMover(pedido, estado) {
+  if (pedido.venta_registrada || pedido.stock_descontado) return 'ya se entregó y el stock salió';
   if (pedido.estado === 'entregado') return 'ya se entregó';
   if (pedido.estado === 'cancelado' && estado !== 'cancelado') return 'está cancelado';
+  // Una caja lo tomó para "entregar y cobrar" en el mostrador: cancelarlo o
+  // moverlo desde acá dejaría ese cobro a medias.
+  if (cobrandoAhora(pedido)) return `lo está cobrando ${quienTexto(pedido.cobro)}`;
   return null;
 }
 
@@ -309,16 +387,16 @@ async function entregarPedido(id) {
     resultado = await registrarEntrega(_db, id);
   } catch (e) {
     console.warn('[pedidos] no se pudo entregar el pedido:', e);
-    alert('No se pudo marcar el pedido como entregado: ' + (e?.message || e) + '\nNo se descontó stock ni se registró la venta.');
+    alert('No se pudo marcar el pedido como entregado: ' + (e?.message || e) + '\nNo se descontó el stock.');
     return false;
   }
   if (!resultado.ok) {
-    alert(`No se marcó como entregado: el pedido ${resultado.rechazo}.\nNo se descontó stock ni se registró la venta.`);
+    alert(`No se marcó como entregado: el pedido ${resultado.rechazo}.\nNo se descontó el stock.`);
     refrescarPedido(id, resultado.pedido);
     return false;
   }
   if (resultado.saltados.length) {
-    alert('Pedido entregado y venta registrada, pero ' + resultado.saltados.length + ' renglón(es) no se descontaron del stock: '
+    alert('Pedido entregado, pero ' + resultado.saltados.length + ' renglón(es) no se descontaron del stock: '
       + resultado.saltados.map(s => s.motivo).join(' · '));
   }
   return true;
@@ -331,7 +409,7 @@ function visibles() {
   const texto = _busqueda.trim().toLowerCase();
 
   return _pedidos.filter(p => {
-    if (filtro?.estados && !filtro.estados.includes(p.estado)) return false;
+    if (!entraEnFiltro(filtro, p)) return false;
     if (!texto) return true;
     return [p.codigo, p?.cliente?.nombre, p?.cliente?.telefono, p?.entrega?.direccion]
       .filter(Boolean).some(v => String(v).toLowerCase().includes(texto));
@@ -428,6 +506,8 @@ function tarjeta(p) {
 
       ${bloqueEntregaReparto(p)}
 
+      ${bloqueCobro(p)}
+
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;border-top:1px solid var(--border);padding-top:10px">
         <div style="font-size:13px;color:var(--text-muted)">
           Productos ${pesos(p.subtotal)} ·
@@ -496,9 +576,7 @@ function pintarContadores() {
 
   barra.querySelectorAll('[data-filtro]').forEach(boton => {
     const f = FILTROS.find(x => x.clave === boton.dataset.filtro);
-    const n = f?.estados
-      ? _pedidos.filter(p => f.estados.includes(p.estado)).length
-      : _pedidos.length;
+    const n = _pedidos.filter(p => entraEnFiltro(f, p)).length;
     boton.querySelector('.cuenta').textContent = n;
     boton.classList.toggle('active', boton.dataset.filtro === _filtro);
   });

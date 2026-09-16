@@ -5,6 +5,7 @@ import { getFechaInicioDate, isVentaVarios2 } from '../config.js';
 import { getSaleNumberMap, displayNumForVenta } from '../sale_numbers.js';
 import { confirmDialog, alertDialog, escHtml } from '../components/dialogs.js';
 import { revertirStockVenta, itemsDeLaVenta } from '../stock_revert.js';
+import { esCobroDePedido, reabrirCobro } from '../cobro_pedido.js';
 
 export async function renderVentas(container, db) {
   // 1) Shell vacío al toque: filtros + tabla con skeletons en el tbody.
@@ -186,12 +187,19 @@ export async function renderVentas(container, db) {
   async function handleDeleteVenta(venta, numMap) {
     const numMostrado = displayNumForVenta(venta, numMap);
     const total = fmt(venta.total_amount);
+    const cobroDePedido = esCobroDePedido(venta);
     const ok = await confirmDialog({
       title: 'Eliminar venta',
-      message: `¿Eliminar la venta <b>#${numMostrado}</b> por <b>$${total}</b>?<br><br>`
-        + `Esta acción la removerá del historial, dashboard, cierres, control total y resúmenes,<br>`
-        + `y <b>devolverá el stock de los productos al catálogo</b>.<br>`
-        + `<span style="color:var(--text-muted)">No se puede deshacer fácilmente.</span>`,
+      message: cobroDePedido
+        ? `¿Eliminar la venta <b>#${numMostrado}</b> por <b>$${total}</b>?<br><br>`
+          + `Es el cobro del pedido web <b>${escHtml(venta.pedido_codigo || '')}</b>: sale del historial, `
+          + `cierres y control total, y el pedido <b>vuelve a "a cobrar"</b> en las cajas.<br>`
+          + `El stock <b>no se devuelve</b>: salió cuando se entregó el pedido. Si el cliente `
+          + `devolvió la mercadería, cargala a mano.`
+        : `¿Eliminar la venta <b>#${numMostrado}</b> por <b>$${total}</b>?<br><br>`
+          + `Esta acción la removerá del historial, dashboard, cierres, control total y resúmenes,<br>`
+          + `y <b>devolverá el stock de los productos al catálogo</b>.<br>`
+          + `<span style="color:var(--text-muted)">No se puede deshacer fácilmente.</span>`,
       confirmText: 'Eliminar',
       danger: true,
     });
@@ -214,7 +222,14 @@ export async function renderVentas(container, db) {
 
       // Devolver el stock + marcar los items como borrados (mismo batch).
       let reversion = null;
-      if (itemDocs.length) {
+      if (cobroDePedido) {
+        // El cobro de un pedido no devuelve stock: solo se sacan los renglones.
+        if (itemDocs.length) {
+          const batch = writeBatch(db);
+          itemDocs.forEach(d => batch.update(d.ref, { deleted: true }));
+          await batch.commit();
+        }
+      } else if (itemDocs.length) {
         try {
           reversion = await revertirStockVenta(db, { saleId, pcId, itemDocs, marcarDeleted: true });
         } catch (err) {
@@ -239,6 +254,27 @@ export async function renderVentas(container, db) {
         deleted: true,
         deleted_at: serverTimestamp()
       });
+
+      if (cobroDePedido) {
+        try {
+          const r = await reabrirCobro(db, venta);
+          if (!r.ok) {
+            alertDialog({
+              title: 'Venta eliminada',
+              message: `La venta se eliminó, pero el pedido no volvió a "a cobrar": ${escHtml(r.rechazo)}.`,
+              type: 'warning',
+            });
+          }
+        } catch (err) {
+          console.error('No se pudo reabrir el cobro del pedido:', err);
+          alertDialog({
+            title: 'Venta eliminada',
+            message: 'La venta se eliminó, pero el pedido no volvió a "a cobrar" (sin conexión). '
+              + 'Avisá antes de cobrarlo de nuevo.',
+            type: 'warning',
+          });
+        }
+      }
 
       invalidateCache('ventas:lista');
       invalidateCache('ventas:items');

@@ -1,59 +1,71 @@
 /**
- * Entregar un pedido de la tienda es venderlo.
+ * Entregar un pedido de la tienda: la mercadería sale del stock.
  *
- * En una sola transacción: el pedido pasa a "entregado", cada producto baja del
- * stock del catálogo (conjuntos, packs y variedades incluidos, con la misma
- * cuenta que el POS) y la venta queda en `ventas` y `ventas_por_dia` como PC
- * "TIENDA", así Historial, Cierres y Control Total la ven como una más. Una sola
- * vez por pedido: si ya se registró, no se repite.
+ * Desde el 16-09 el panel NO registra la venta. La cobra una caja del POS
+ * (pestaña Pedidos web), con la pantalla de cobro de siempre, y la venta entra
+ * a la caja del día. Lo que hace el panel al entregar es lo mismo que hace una
+ * caja: en una sola transacción marca el pedido entregado, baja cada producto
+ * del catálogo (conjuntos, packs y variedades con la misma cuenta que el POS,
+ * `planDescuento`), anota los movimientos de stock y deja el pedido "a cobrar".
  *
- * Después, fuera de la transacción: el historial de movimientos, el espejo de
- * la tienda con el stock nuevo y el semáforo para que las PCs bajen el cambio.
+ * Una sola vez por pedido: si el stock ya salió (lo descontó una caja, o es una
+ * venta TIENDA de antes del cambio), solo se marca entregado.
  *
- * Lo usan el botón "Entregado" de Pedidos y el vigía de las entregas del
- * repartidor (`ventas_pendientes_watcher.js`). Para esas, la venta lleva la
- * fecha y la hora en que el repartidor lo entregó, no la de cuando el panel la
- * registró: la plata se cobró ese día.
+ * Los campos que deja son los que leen las cajas (ver
+ * `pos_system/models/pedido_tienda.py`):
+ *   stock_descontado, venta_registrada  el stock ya salió; ningún panel viejo
+ *                                       tiene que registrar nada
+ *   cobro_pendiente                     falta cobrarlo en una caja
+ *   venta_pendiente: false              la tienda deja de apartar el stock
+ *
+ * Lo que entrega el repartidor lo descuentan las cajas abiertas.
  */
 import { doc, runTransaction, serverTimestamp, setDoc } from 'firebase/firestore';
-import { planDescuento, documentosDeVenta } from './pedido_venta.js';
-import { registrarMovimiento } from './stock_ledger.js';
+import { planDescuento } from './pedido_venta.js';
 import { reflejarSiPublicado } from './tienda_espejo.js';
 import { avisarAlCliente } from './avisos_cliente.js';
 import { diaArgentina } from '../../tienda/src/reparto.js';
 
-function fechaDe(marca) {
-  if (!marca) return null;
-  if (typeof marca.toDate === 'function') return marca.toDate();
-  const fecha = new Date(marca);
-  return Number.isNaN(fecha.getTime()) ? null : fecha;
+function nuevoIntento() {
+  const bytes = new Uint8Array(8);
+  crypto.getRandomValues(bytes);
+  return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
+}
+
+function redondear(n) {
+  return Math.round((Number(n) || 0) * 10000) / 10000;
 }
 
 /**
+ * @param {object} [opciones]
+ * @param {string} [opciones.usuario] quién tocó el botón, para el historial
  * @returns {Promise<
  *   {ok: true, yaEstaba?: boolean, saltados: Array} |
  *   {ok: false, rechazo: string, pedido: object}
  * >}
  * @throws si la transacción no se pudo hacer (sin red, sin permiso)
  */
-export async function registrarEntrega(db, id) {
+export async function registrarEntrega(db, id, { usuario = 'Panel' } = {}) {
   const ref = doc(db, 'tienda_pedidos', id);
+  const intento = nuevoIntento();
 
   const resultado = await runTransaction(db, async (tx) => {
     const snap = await tx.get(ref);
     if (!snap.exists()) throw new Error('el pedido ya no existe');
     const pedido = snap.data() || {};
     // La tarjeta puede ser vieja: si otra PC lo canceló mientras acá seguía
-    // en "listo", entregarlo es vender lo que el cliente ya no quiere.
+    // en "listo", entregarlo es sacar del stock lo que el cliente ya no quiere.
     if (pedido.estado === 'cancelado') return { rechazo: 'está cancelado', pedido };
-    if (pedido.venta_registrada) {
-      tx.update(ref, { estado: 'entregado', visto: true, venta_pendiente: false });
-      return { yaEstaba: true };
-    }
 
-    // Lo que entregó el repartidor se vende con la hora de la entrega.
-    const delRepartidor = pedido.venta_pendiente === true ? fechaDe(pedido.entregado_en) : null;
-    const fecha = delRepartidor || new Date();
+    const ahora = new Date();
+    const marcarEntregado = pedido.estado !== 'entregado'
+      ? { estado: 'entregado', entregado_en: serverTimestamp(), entregado_dia: diaArgentina(ahora), entregado_por: 'panel' }
+      : {};
+
+    if (pedido.stock_descontado === true || pedido.venta_registrada === true) {
+      tx.update(ref, { ...marcarEntregado, visto: true, venta_pendiente: false });
+      return { yaEstaba: true, pedido };
+    }
 
     // Todas las lecturas antes de la primera escritura (lo exige Firestore).
     const ids = [...new Set((pedido.items || []).map(i => String(i?.id || '').trim()).filter(Boolean))];
@@ -63,43 +75,45 @@ export async function registrarEntrega(db, id) {
       catalogo[pid] = s.exists() ? { ...s.data(), doc_id: pid } : null;
     }
     const plan = planDescuento(pedido.items || [], catalogo);
-    const docs = documentosDeVenta(pedido, id, catalogo, fecha);
-    const cuando = delRepartidor || serverTimestamp();
+    const referencia = `Pedido tienda ${pedido.codigo || id}`;
 
+    let n = 0;
     for (const p of plan.productos) {
       if (p.saltado || !Object.keys(p.campos).length) continue;
       tx.set(doc(db, 'catalogo', p.id), { ...p.campos, ultima_actualizacion: serverTimestamp() }, { merge: true });
-    }
-    tx.set(doc(db, 'ventas', docs.ventaId), { ...docs.venta, created_at: cuando });
-    for (const l of docs.lineas) {
-      tx.set(doc(db, 'ventas_por_dia', l.docId), { ...l.datos, fecha_dt: cuando });
+      // Los movimientos van en la misma transacción que el stock, con el
+      // intento en el id: nunca queda un movimiento de algo que no pasó, y si
+      // el mismo pedido descontara dos veces se verían dos grupos.
+      for (const m of p.movimientos) {
+        tx.set(doc(db, 'stock_movimientos', `tienda_${id}_${intento}_${n++}`), {
+          ts: serverTimestamp(), origen: 'webapp', pc_id: 'webapp', usuario,
+          producto_id: null, firebase_id: p.id, producto_nombre: p.nombre || '',
+          motivo: 'venta', cantidad: redondear(m.cantidad),
+          stock_antes: redondear(m.antes), stock_despues: redondear(m.despues),
+          referencia, detalle: m.detalle || '', pedido_id: id, intento,
+        });
+      }
     }
     tx.update(ref, {
-      estado: 'entregado', visto: true,
-      venta_registrada: true, venta_id: docs.ventaId, stock_descontado: true,
+      ...marcarEntregado,
+      visto: true,
       venta_pendiente: false,
-      ...(delRepartidor ? {} : { entregado_en: serverTimestamp(), entregado_dia: diaArgentina(fecha) }),
+      stock_descontado: true,
+      venta_registrada: true,
+      cobro_pendiente: true,
+      stock_descontado_por: { origen: 'panel', pc_id: 'webapp', pc_nombre: 'Panel', cajero: usuario, en: ahora },
     });
     return { pedido, plan, catalogo };
   });
 
   if (resultado.rechazo) return { ok: false, rechazo: resultado.rechazo, pedido: resultado.pedido };
-  // La notificación al celular del cliente, sin esperarla. Si ya se la avisó
-  // el repartidor, la tienda no la repite.
   avisarAlCliente(id);
+  anotarEvento(db, id, resultado.pedido, intento, usuario, resultado.plan);
   if (resultado.yaEstaba) return { ok: true, yaEstaba: true, saltados: [] };
 
-  const { pedido, plan, catalogo } = resultado;
-  const referencia = `Pedido tienda ${pedido.codigo || id}`;
+  const { plan, catalogo } = resultado;
   for (const p of plan.productos) {
     if (p.saltado) continue;
-    for (const m of p.movimientos) {
-      registrarMovimiento(db, {
-        docId: p.id, nombre: p.nombre, motivo: 'venta',
-        antes: m.antes, despues: m.despues, cantidad: m.cantidad,
-        referencia, detalle: m.detalle, usuario: 'Tienda online',
-      });
-    }
     // La vidriera con el stock que quedó (y sin el producto, si llegó a cero).
     reflejarSiPublicado(db, p.id, { ...(catalogo[p.id] || {}), ...p.campos }).catch(() => {});
   }
@@ -107,4 +121,31 @@ export async function registrarEntrega(db, id) {
   // Semáforo del catálogo: las PCs bajan el stock nuevo en el próximo sync.
   setDoc(doc(db, 'config', 'catalogo_meta'), { last_updated: serverTimestamp() }, { merge: true }).catch(() => {});
   return { ok: true, saltados: plan.saltados };
+}
+
+/**
+ * El renglón del registro de eventos que también escriben las cajas. Va fuera
+ * de la transacción a propósito: si la regla de esa colección todavía no está
+ * publicada, se pierde el renglón y no la entrega.
+ */
+function anotarEvento(db, id, pedido, intento, usuario, plan) {
+  const stock = plan
+    ? plan.productos.filter(p => !p.saltado && Object.keys(p.campos).length)
+      .map(p => ({ id: p.id, nombre: p.nombre || '', movimientos: p.movimientos }))
+    : null;
+  setDoc(doc(db, 'tienda_pedidos_eventos', `${id}__entregar__${intento}`), {
+    pedido_id: id,
+    codigo: String(pedido?.codigo || ''),
+    accion: 'entregar',
+    resultado: 'hecho',
+    detalle: plan ? 'descontó el stock' : 'el stock ya había salido',
+    origen: 'panel',
+    pc_id: 'webapp', pc_nombre: 'Panel', cajero: usuario,
+    intento,
+    en: serverTimestamp(),
+    dia: diaArgentina(new Date()),
+    estado_antes: pedido?.estado || null,
+    estado_despues: 'entregado',
+    ...(stock ? { stock, saltados: plan.saltados } : {}),
+  }).catch(err => console.warn('[pedidos] evento sin anotar:', err?.code || err));
 }
