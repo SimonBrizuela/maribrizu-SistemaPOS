@@ -174,6 +174,16 @@ class NubePedidos:
 
         return self._correr('soltar_cobro', pedido_id, intento, cuerpo, anotar_rechazo=False)
 
+    def renovar_cobro(self, pedido_id: str, intento: str) -> Resultado:
+        """La pantalla de cobro sigue abierta: la marca no vence."""
+        def cuerpo(tx, ahora, quien, pedido, _catalogo):
+            marca = (pedido or {}).get('cobro') or {}
+            if marca.get('estado') == 'en_curso' and marca.get('intento') == intento:
+                self._escribir_pedido(tx, pedido_id, {'cobro.desde': ahora})
+            return {}
+
+        return self._correr('renovar_cobro', pedido_id, intento, cuerpo, anotar_rechazo=False)
+
     def cobrar(self, pedido_id: str, intento: str, pago: Dict) -> Resultado:
         """Registra el cobro en el pedido. La venta local se crea DESPUÉS, con
         el pedido ya marcado: si la PC se corta en el medio, al volver

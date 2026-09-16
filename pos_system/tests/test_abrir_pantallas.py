@@ -147,6 +147,7 @@ def pestanas(d):
     from pos_system.ui.fiados_view import FiadosView
     from pos_system.ui.fiscal_view import FiscalView
     from pos_system.ui.observations_view import ObservationsView
+    from pos_system.ui.pedidos_web_view import PedidosWebView
     from pos_system.ui.presupuestos_view import PresupuestosView
     from pos_system.ui.products_view import ProductsView
     from pos_system.ui.promos_readonly_view import PromosReadOnlyView
@@ -163,6 +164,7 @@ def pestanas(d):
         'Observaciones': lambda: ObservationsView(None, current_user=u),
         'Presupuestos':  lambda: PresupuestosView(None, current_user=u),
         'Fiados':        lambda: FiadosView(None, current_user=u),
+        'Pedidos web':   lambda: PedidosWebView(None, current_user=u),
         'Promociones':   lambda: PromosReadOnlyView(None),
         'Productos':     lambda: ProductsView(None),
         'Fiscal AFIP':   lambda: FiscalView(None),
@@ -249,6 +251,7 @@ def test_la_ventana_principal_abre_con_todas_sus_pestanas(app, local, monkeypatc
 
     monkeypatch.setattr(MainWindow, '_start_realtime_sync_listeners',
                         lambda self: None, raising=True)
+    monkeypatch.setattr(MainWindow, '_iniciar_pedidos_web', lambda self: None, raising=True)
     monkeypatch.setattr(MainWindow, '_prompt_turno', lambda self: None, raising=True)
     monkeypatch.setattr(MainWindow, 'closeEvent',
                         lambda self, ev: ev.accept(), raising=True)
@@ -262,6 +265,7 @@ def test_la_ventana_principal_abre_con_todas_sus_pestanas(app, local, monkeypatc
         assert 'Fiados' in titulos
         assert 'Historial' in titulos
         assert 'Presupuestos' in titulos
+        assert 'Pedidos web' in titulos
         # Con un admin se ven también las pestañas restringidas.
         assert 'Productos' in titulos
         assert 'Cajeros' in titulos
@@ -282,6 +286,7 @@ def test_el_cartel_de_caja_sale_y_se_lee(app, local, monkeypatch):
 
     monkeypatch.setattr(MainWindow, '_start_realtime_sync_listeners',
                         lambda self: None, raising=True)
+    monkeypatch.setattr(MainWindow, '_iniciar_pedidos_web', lambda self: None, raising=True)
     monkeypatch.setattr(MainWindow, '_prompt_turno', lambda self: None, raising=True)
     monkeypatch.setattr(MainWindow, 'closeEvent',
                         lambda self, ev: ev.accept(), raising=True)
@@ -338,6 +343,7 @@ def test_al_cajero_el_cartel_avisa_pero_no_le_ofrece_abrir_la_caja(app, local, m
 
     monkeypatch.setattr(MainWindow, '_start_realtime_sync_listeners',
                         lambda self: None, raising=True)
+    monkeypatch.setattr(MainWindow, '_iniciar_pedidos_web', lambda self: None, raising=True)
     monkeypatch.setattr(MainWindow, '_prompt_turno', lambda self: None, raising=True)
     monkeypatch.setattr(MainWindow, 'closeEvent',
                         lambda self, ev: ev.accept(), raising=True)

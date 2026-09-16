@@ -18,6 +18,7 @@ from pos_system.ui.sales_history_view import SalesHistoryView
 from pos_system.ui.observations_view import ObservationsView
 from pos_system.ui.presupuestos_view import PresupuestosView
 from pos_system.ui.fiados_view import FiadosView
+from pos_system.ui.pedidos_web_view import PedidosWebView
 from pos_system.ui.fiscal_view import FiscalView
 from pos_system.ui.components import MessageBox, Toast
 from pos_system.models.cash_register import CashRegister
@@ -124,6 +125,8 @@ class MainWindow(QMainWindow):
         self.observations_view = ObservationsView(self, current_user=self.current_user)
         self.presupuestos_view = PresupuestosView(self, current_user=self.current_user)
         self.fiados_view = FiadosView(self, current_user=self.current_user)
+        # Pedidos de la tienda online: los ven y los cobran todas las cajas.
+        self.pedidos_web_view = PedidosWebView(self, current_user=self.current_user, db=self.db)
 
         # Vista de promociones (solo lectura) — visible para todos
         from pos_system.ui.promos_readonly_view import PromosReadOnlyView
@@ -152,6 +155,12 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.promos_readonly_view, 'Promociones')
         self.tabs.addTab(self.presupuestos_view, 'Presupuestos')
         self.tabs.addTab(self.observations_view, 'Observaciones')
+        # Al final de las comunes: agregarla antes corría los atajos Ctrl+N que
+        # los cajeros ya usan para Historial y Promociones.
+        self.tabs.addTab(self.pedidos_web_view, 'Pedidos web')
+        self.pedidos_web_view.titulo_cambio.connect(self._on_pedidos_web_titulo)
+        self.pedidos_web_view.aviso.connect(self._on_pedidos_web_aviso)
+        QTimer.singleShot(1500, self._iniciar_pedidos_web)
 
         # Pestañas adicionales solo para admin
         if is_admin:
@@ -236,6 +245,7 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+5"), self, lambda: self.tabs.setCurrentIndex(4))
         QShortcut(QKeySequence("F1"), self, lambda: self.tabs.setCurrentIndex(0))
         QShortcut(QKeySequence("F5"), self, self.refresh_all_views)
+        QShortcut(QKeySequence("F9"), self, lambda: self.tabs.setCurrentWidget(self.pedidos_web_view))
         QShortcut(QKeySequence("Ctrl+L"), self, self._logout)
         logger.debug("Keyboard shortcuts configured")
 
@@ -884,6 +894,53 @@ class MainWindow(QMainWindow):
         except Exception as e:
             logger.warning(f"No se pudo activar listeners de sincronizacion: {e}")
 
+    def _iniciar_pedidos_web(self):
+        """Engancha la pestaña Pedidos web a Firestore cuando la nube está lista."""
+        if getattr(self, '_pedidos_web_listos', False):
+            return
+        try:
+            from pos_system.utils.firebase_sync import get_firebase_sync
+            fb = get_firebase_sync()
+            if not fb or not fb.enabled:
+                QTimer.singleShot(3000, self._iniciar_pedidos_web)
+                return
+            from pos_system.utils.pedidos_tienda_nube import NubePedidos
+            from pos_system.utils.pedidos_tienda_watcher import VigiaPedidos
+            nube = NubePedidos(fb.db, quien=self.pedidos_web_view.quien,
+                               al_descontar=fb._avisar_a_la_tienda)
+            self._vigia_pedidos = VigiaPedidos(fb.db, nube, parent=self)
+            self.pedidos_web_view.conectar(self._vigia_pedidos, nube)
+            self._pedidos_web_listos = True
+            logger.info("Pedidos web: escuchando la tienda.")
+        except Exception as e:
+            logger.warning(f"Pedidos web: no se pudo conectar ({e}); se reintenta.")
+            QTimer.singleShot(30_000, self._iniciar_pedidos_web)
+
+    def _apagar_pedidos_web(self):
+        vigia = getattr(self, '_vigia_pedidos', None)
+        if vigia is not None:
+            try:
+                vigia.detener()
+            except Exception:
+                pass
+
+    def _on_pedidos_web_titulo(self, texto, tooltip):
+        idx = self.tabs.indexOf(self.pedidos_web_view)
+        if idx >= 0:
+            self.tabs.setTabText(idx, texto)
+            self.tabs.setTabToolTip(idx, tooltip)
+
+    def _on_pedidos_web_aviso(self, tipo, mensaje):
+        """Pedido nuevo o entregado sin cobrar: aviso en todas las cajas."""
+        try:
+            QApplication.beep()
+            if tipo == 'cobrar':
+                Toast.warning(self, mensaje, 9000)
+            else:
+                Toast.info(self, mensaje, 9000)
+        except Exception as e:
+            logger.warning(f"Pedidos web: aviso no mostrado: {e}")
+
     def _start_remote_terminal_listener(self):
         try:
             from pos_system.utils.firebase_sync import get_firebase_sync
@@ -1219,7 +1276,8 @@ class MainWindow(QMainWindow):
         for view in [self.products_view, self.sales_view, self.cash_view,
                      self.history_view, self.promotions_view, self.fiscal_view,
                      self.users_view, self.promos_readonly_view,
-                     getattr(self, 'fiados_view', None)]:
+                     getattr(self, 'fiados_view', None),
+                     getattr(self, 'pedidos_web_view', None)]:
             if view is None:
                 continue
             try:
@@ -1698,12 +1756,14 @@ class MainWindow(QMainWindow):
                 ):
                     logger.info("Application closed with open cash register")
                     self._shutdown_pc_status()
+                    self._apagar_pedidos_web()
                     event.accept()
                 else:
                     event.ignore()
             else:
                 logger.info("Application closed normally")
                 self._shutdown_pc_status()
+                self._apagar_pedidos_web()
                 event.accept()
         except Exception as e:
             logger.error(f"Error during close: {e}")
