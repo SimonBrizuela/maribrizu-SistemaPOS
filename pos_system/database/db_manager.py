@@ -316,6 +316,10 @@ class DatabaseManager:
                 # ventas_por_dia para que borrar la venta desde el panel sepa de
                 # qué producto y cuántas unidades base era.
                 "ALTER TABLE sale_items ADD COLUMN tienda_json TEXT DEFAULT NULL",
+                # El stock de este renglón salió antes de la venta (fiado que se
+                # cobra, pedido de la tienda ya entregado). Sin esto guardado, la
+                # cola offline que resube la venta lo descontaba otra vez.
+                "ALTER TABLE sale_items ADD COLUMN stock_descontado INTEGER DEFAULT 0",
             ]:
                 try:
                     cursor.execute(col_def)

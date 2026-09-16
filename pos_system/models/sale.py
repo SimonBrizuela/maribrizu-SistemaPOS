@@ -128,14 +128,14 @@ class Sale:
                         unit_price, original_price, discount_type,
                         discount_value, discount_amount, promo_id, subtotal,
                         conjunto_color, mp_product_id, mp_node_id, mp_presentation_id,
-                        tienda_json)
-                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                        tienda_json, stock_descontado)
+                       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                     (sale_id, product_id_for_db, item['product_name'],
                      item['quantity'], item['unit_price'], original_price,
                      discount_type, discount_value, discount_amount,
                      promo_id, subtotal, conjunto_color,
                      mp_product_id, mp_node_id_val, mp_presentation_id_val,
-                     tienda_json)
+                     tienda_json, 1 if item.get('stock_descontado') else 0)
                 )
                 self._aplicar_stock_de_item(
                     cursor, item, item_idx, now_iso,

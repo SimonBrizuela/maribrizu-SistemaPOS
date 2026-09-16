@@ -266,3 +266,32 @@ def test_pantalla_de_cobro_con_efectivo_justo(app, local):
     dlg._confirm()
     assert dlg.cash_received == pytest.approx(19860.5)
     assert dlg.change_given == pytest.approx(0)
+
+
+# ── La cola offline no vuelve a descontar ───────────────────────────────────
+
+def test_el_renglon_guarda_que_su_stock_ya_salio(local):
+    venta = local['ventas'].get_by_id(cobrar(local))
+    assert all(i['stock_descontado'] == 1 for i in venta['items'])
+
+
+def test_resubir_la_venta_no_descuenta_otra_vez(local, nube, monkeypatch):
+    """La venta no llegó a subir (la caja estaba sin nube) y la cola offline la
+    resube con `sync_stock_after_sale`: los renglones del pedido y los de un
+    fiado cobrado ya descontaron, un renglón común sí descuenta."""
+    sync, db = nube
+    llamados = []
+    monkeypatch.setattr(sync, '_run', lambda fn: llamados.append(fn))
+    venta = local['ventas'].get_by_id(cobrar(local))
+    sync.sync_stock_after_sale(venta['items'], local['db'])
+    del llamados[:]
+    sync.sync_stock_after_sale(venta['items'], local['db'])
+    assert not [f for f in llamados if 'sync_stock_after_sale' in f.__qualname__]
+
+    sid = local['ventas'].create({
+        'total_amount': 100, 'payment_type': 'cash', 'cash_received': 100,
+        'items': [{'product_id': local['pid'], 'product_name': 'RESMA', 'quantity': 1, 'unit_price': 100}]})
+    comun = local['ventas'].get_by_id(sid)
+    del llamados[:]
+    sync.sync_stock_after_sale(comun['items'], local['db'])
+    assert len([f for f in llamados if 'sync_stock_after_sale' in f.__qualname__]) == 1

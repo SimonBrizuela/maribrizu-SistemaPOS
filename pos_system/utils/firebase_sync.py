@@ -2343,6 +2343,14 @@ class FirebaseSync:
         """
         if not self.enabled or not items:
             return
+        # Renglones que ya descontaron su stock antes de la venta: un fiado que
+        # se cobra (salió el día que se lo llevaron) o un pedido de la tienda
+        # (salió al entregarlo). La venta se guarda con la marca en
+        # `sale_items.stock_descontado`, así que un reintento de la cola offline
+        # tampoco los descuenta de nuevo.
+        items = [it for it in items if not it.get('stock_descontado')]
+        if not items:
+            return
 
         def _do():
             try:
