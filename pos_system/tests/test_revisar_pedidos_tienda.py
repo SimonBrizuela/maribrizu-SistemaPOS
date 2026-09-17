@@ -151,3 +151,34 @@ def test_la_historia_sale_en_orden():
     ]
     lineas = rev.historia('p1', pedido(), eventos, [mov('i1')], [VENTA], [])
     assert [t for _f, t, _x in lineas] == ['pedido', 'mover', 'stock', 'cobrar', 'venta']
+
+
+def test_un_cobro_de_cero_no_pide_venta():
+    todo_con_cupon = pedido(venta_id=None, total=0, cobro={'estado': 'hecho', **CAJA1, 'en': HACE(hours=1), 'total': 0})
+    assert rev.revisar({'p1': todo_con_cupon}, [], [mov('i1')], [], [], AHORA) == []
+
+
+def test_renglones_que_no_salieron_del_stock():
+    p = pedido(stock_saltados=[{'renglon': 1, 'producto_id': 'B', 'motivo': 'no está en el catálogo', 'nombre': 'Borrado'}])
+    r = rev.revisar({'p1': p}, [], [mov('i1')], [VENTA], [], AHORA)
+    assert tipos(r) == ['stock_sin_descontar'] and 'Borrado' in r[0]['detalle']
+    # Anulada la entrega, el aviso ya no corre.
+    cancelado = dict(p, estado='cancelado', cobro=None, venta_id=None, stock_descontado=False, venta_registrada=False)
+    assert 'stock_sin_descontar' not in tipos(rev.revisar({'p1': cancelado}, [], [], [], [], AHORA))
+
+
+def test_banderas_que_no_van_juntas():
+    import argparse
+    base = dict(pedido=None, errores=False, intento=None, reabrir_entrega=False, anular_venta=None, aplicar=False,
+                **{a.replace('-', '_'): None for a in rev.ACCIONES})
+    arg = lambda **kw: argparse.Namespace(**{**base, **kw})  # noqa: E731
+    assert rev.banderas_sueltas(arg()) == ''
+    assert rev.banderas_sueltas(arg(pedido='AB12')) == ''
+    assert 'sin una acción' in rev.banderas_sueltas(arg(aplicar=True))
+    assert 'sin una acción' in rev.banderas_sueltas(arg(intento='x'))
+    assert '--devolver-stock' in rev.banderas_sueltas(arg(soltar_cobro='AB12', intento='x'))
+    assert '--reabrir-cobro' in rev.banderas_sueltas(arg(soltar_cobro='AB12', anular_venta='v'))
+    assert 'necesita --intento' in rev.banderas_sueltas(arg(devolver_stock='AB12'))
+    assert rev.banderas_sueltas(arg(devolver_stock='AB12', intento='x', reabrir_entrega=True, aplicar=True)) == ''
+    assert rev.banderas_sueltas(arg(reabrir_cobro='AB12', anular_venta='v', aplicar=True)) == ''
+    assert 'para mirar' in rev.banderas_sueltas(arg(soltar_cobro='AB12', pedido='AB12'))

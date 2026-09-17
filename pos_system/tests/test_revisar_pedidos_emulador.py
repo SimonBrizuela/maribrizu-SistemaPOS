@@ -209,3 +209,30 @@ def test_un_cancelado_con_stock_se_devuelve_y_sigue_cancelado(db, tmp_path):
     p = pedido(db)
     assert stock(db) == 40 and p['estado'] == 'cancelado' and p['stock_descontado'] is False
     assert 'cancelado_con_stock' not in problemas(db)
+
+
+def test_no_devuelve_si_el_catalogo_cambio_desde_el_descuento(db, tmp_path):
+    """Un conjunto que al entregar tenía la variedad con otro nombre: el
+    descuento la salteó y hoy la devolución la sumaría."""
+    pid = sembrar(db, items=[{'id': 'GOMA', 'nombre': 'Goma', 'cantidad': 3, 'precio': 500, 'subtotal': 1500},
+                             {'id': 'NUEVO', 'nombre': 'Lápiz', 'cantidad': 1, 'precio': 100, 'subtotal': 100}])
+    NubePedidos(db, quien=lambda: dict(CAJA), avisar_cliente=False).entregar(pid)
+    assert pedido(db)['stock_saltados'][0]['producto_id'] == 'NUEVO'
+    dup = duplicar_descuento(db)
+    db.collection('catalogo').document('NUEVO').set({'nombre': 'LAPIZ', 'stock': 10})
+    texto = rev.arreglar(db, 'devolver-stock', 'AB12', aplicar=True, intento_a_revertir=dup,
+                         carpeta_copias=str(tmp_path))
+    assert texto.startswith('No se devuelve') and 'NUEVO' in texto
+    assert stock(db) == 34
+    assert db.collection('catalogo').document('NUEVO').get().to_dict()['stock'] == 10
+    assert 'stock_sin_descontar' in problemas(db)
+
+
+def test_se_busca_por_id_cuando_dos_pedidos_comparten_codigo(db, tmp_path):
+    sembrar(db, 'P1', estado='entregado', cobro={'estado': 'en_curso', **CAJA, 'desde': datetime.now(reglas.TZ_AR)})
+    sembrar(db, 'P2')
+    with pytest.raises(SystemExit) as err:
+        rev.arreglar(db, 'soltar-cobro', 'AB12', aplicar=False, carpeta_copias=str(tmp_path))
+    assert 'P1' in str(err.value) and 'P2' in str(err.value)
+    texto = rev.arreglar(db, 'soltar-cobro', 'P1', aplicar=True, carpeta_copias=str(tmp_path))
+    assert 'Libera el cobro' in texto and 'cobro' not in pedido(db, 'P1')

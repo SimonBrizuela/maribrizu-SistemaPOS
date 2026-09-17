@@ -6,7 +6,7 @@ Mirar (no escribe nada):
 
     python scripts/revisar_pedidos_tienda.py                  # últimos 7 días
     python scripts/revisar_pedidos_tienda.py --dias 30
-    python scripts/revisar_pedidos_tienda.py --pedido K7M2    # la historia de un pedido
+    python scripts/revisar_pedidos_tienda.py --pedido K7M2    # la historia de un pedido (código o id)
     python scripts/revisar_pedidos_tienda.py --errores        # errores y rechazos
 
 Arreglar (sin --aplicar muestra qué haría; con --aplicar guarda una copia en
@@ -17,7 +17,9 @@ backups/pedidos_tienda/ antes de escribir):
     --reabrir-cobro K7M2      el cobro quedó anotado pero hay que cobrarlo de nuevo
         [--anular-venta ID]   y además sacar de las ventas esa venta (sin tocar stock)
     --devolver-stock K7M2 --intento ID
-                              deshace UN descuento de stock (el repetido)
+                              deshace UN descuento de stock (el repetido); si el
+                              catálogo cambió y no volvería lo mismo que salió, se
+                              niega y muestra la diferencia
         [--reabrir-entrega]   si era el único: el pedido vuelve a "listo"
     --descontar-pendiente K7M2
                               descuenta lo que entregó el repartidor si ninguna caja
@@ -29,6 +31,7 @@ Lo que mira:
           venta de una caja que el pedido no tiene anotada · cobro sin venta ·
           cancelado con el stock afuera · entregado sin descontar
   aviso   lo del repartidor sin descontar hace rato (¿no hay cajas prendidas?) ·
+          renglones que al entregar no salieron del stock ·
           cobro o factura "en curso" de una caja que no terminó ·
           errores anotados por las cajas
   info    entregados sin cobrar de más de un día · rechazos por caja
@@ -158,7 +161,9 @@ def revisar(pedidos, eventos, movimientos, ventas, facturas, ahora):
                 'emitir nota de crédito por la repetida desde Fiscal AFIP'))
 
         cobro = p.get('cobro') or {}
-        if reglas.cobrado(p) and _hace_mas_de(cobro.get('en'), MINUTOS_COBRO_SIN_VENTA, ahora):
+        # Un cobro de $0 (todo con cupón) no crea venta en la caja.
+        cobro_con_plata = reglas.num(cobro.get('total'), reglas.num(p.get('total'))) > 0
+        if reglas.cobrado(p) and cobro_con_plata and _hace_mas_de(cobro.get('en'), MINUTOS_COBRO_SIN_VENTA, ahora):
             if not p.get('venta_id'):
                 problemas.append(_problema(
                     'cobro_sin_venta', 'grave', pid, p,
@@ -199,6 +204,14 @@ def revisar(pedidos, eventos, movimientos, ventas, facturas, ahora):
                 'factura_trabada', 'aviso', pid, p,
                 f"{reglas.quien_texto(factura)} empezó a facturarlo y no terminó",
                 f'mirar en ARCA si se emitió; si no: --soltar-factura {codigo}'))
+
+        saltados = p.get('stock_saltados') or []
+        if saltados and p.get('estado') != 'cancelado':
+            problemas.append(_problema(
+                'stock_sin_descontar', 'aviso', pid, p,
+                f'{len(saltados)} renglón(es) no salieron del stock al entregar: ' + '; '.join(
+                    f"{x.get('nombre') or x.get('producto_id') or 'renglón'} ({x.get('motivo')})" for x in saltados),
+                'corregir el stock de esos productos a mano en el catálogo'))
 
         if reglas.a_cobrar(p) and _hace_mas_de(p.get('entregado_en'), HORAS_SIN_COBRAR * 60, ahora):
             problemas.append(_problema('sin_cobrar', 'info', pid, p,
@@ -361,10 +374,18 @@ def _evento(tx, db, pedido_id, pedido, accion, intento, detalle, extra=None):
 
 
 def _buscar_pedido(db, codigo):
+    """El id del pedido por su código, o el id directo: dos pedidos pueden
+    compartir código (y alguno viejo no tiene), y ahí se usa el id que muestra
+    la revisión."""
     from google.cloud.firestore_v1.base_query import FieldFilter
-    encontrados = list(db.collection('tienda_pedidos').where(filter=FieldFilter('codigo', '==', codigo.upper())).stream())
+    col = db.collection('tienda_pedidos')
+    if col.document(codigo).get().exists:
+        return codigo
+    encontrados = list(col.where(filter=FieldFilter('codigo', '==', codigo.upper())).stream())
     if len(encontrados) != 1:
-        raise SystemExit(f'No hay un único pedido con código {codigo} ({len(encontrados)} encontrados).')
+        ids = ', '.join(d.id for d in encontrados)
+        raise SystemExit(f'No hay un único pedido con código {codigo} ({len(encontrados)} encontrados'
+                         + (f': {ids}; usá el id' if ids else '') + ').')
     return encontrados[0].id
 
 
@@ -486,6 +507,16 @@ def arreglar(db, accion, codigo, aplicar, intento_a_revertir=None, reabrir_entre
             salida['catalogo'] = catalogo
             plan = reglas.plan_descuento(pedido.get('items') or [], catalogo, devolver=True)
             salida['plan'] = plan
+            if intento_a_revertir != 'panel-viejo':
+                # La devolución se arma con el catálogo de hoy: si cambió desde
+                # el descuento (variedad renombrada, renglón que se salteó,
+                # contenido del pack), no devolvería lo que salió.
+                difs = reglas.diferencias_de_devolucion(plan, grupo['movimientos'])
+                if difs:
+                    salida['plan'] = None
+                    return ('No se devuelve: el catálogo cambió y no volvería lo mismo que salió. ' + '; '.join(
+                        f"{d['producto_id']} {d['detalle']}: salió {d['salio']:g}, volvería {d['devolveria']:g}"
+                        for d in difs) + '. Corregí esos productos a mano.')
             if aplicar:
                 n = 0
                 for prod in plan['productos']:
@@ -562,26 +593,54 @@ def mostrar_problemas(problemas):
             print(f"               arreglo: {p['arreglo']}")
 
 
+ACCIONES = ('soltar-cobro', 'soltar-factura', 'reabrir-cobro', 'devolver-stock', 'descontar-pendiente')
+
+
+def banderas_sueltas(args):
+    """La combinación de banderas que no tiene sentido, o '' si está bien."""
+    accion = next((a for a in ACCIONES if getattr(args, a.replace('-', '_'), None)), None)
+    if accion is None:
+        sueltas = [n for n, v in (('--aplicar', args.aplicar), ('--intento', args.intento),
+                                  ('--reabrir-entrega', args.reabrir_entrega),
+                                  ('--anular-venta', args.anular_venta)) if v]
+        return f"{', '.join(sueltas)} sin una acción" if sueltas else ''
+    if (args.intento or args.reabrir_entrega) and accion != 'devolver-stock':
+        return '--intento y --reabrir-entrega van solo con --devolver-stock'
+    if args.anular_venta and accion != 'reabrir-cobro':
+        return '--anular-venta va solo con --reabrir-cobro'
+    if accion == 'devolver-stock' and not args.intento:
+        return '--devolver-stock necesita --intento (se ve con --pedido)'
+    if accion and (args.pedido or args.errores):
+        return '--pedido y --errores son para mirar, no van con una acción'
+    return ''
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('--dias', type=int, default=7)
     ap.add_argument('--pedido')
     ap.add_argument('--errores', action='store_true')
     ap.add_argument('--json', help='guarda el informe en este archivo')
-    for accion in ('soltar-cobro', 'soltar-factura', 'reabrir-cobro', 'devolver-stock', 'descontar-pendiente'):
-        ap.add_argument(f'--{accion}', metavar='CODIGO')
+    acciones = ap.add_mutually_exclusive_group()
+    for accion in ACCIONES:
+        acciones.add_argument(f'--{accion}', metavar='CODIGO')
     ap.add_argument('--intento')
     ap.add_argument('--reabrir-entrega', action='store_true')
     ap.add_argument('--anular-venta')
     ap.add_argument('--aplicar', action='store_true')
     args = ap.parse_args(argv)
+    problema = banderas_sueltas(args)
+    if problema:
+        # Antes una bandera de más o sin su acción se ignoraba callada y corría
+        # la revisión de solo lectura: parecía que se había arreglado algo.
+        ap.error(problema)
     try:
         sys.stdout.reconfigure(encoding='utf-8')
     except AttributeError:
         pass
 
     db = conectar()
-    for accion in ('soltar-cobro', 'soltar-factura', 'reabrir-cobro', 'devolver-stock', 'descontar-pendiente'):
+    for accion in ACCIONES:
         codigo = getattr(args, accion.replace('-', '_'))
         if codigo:
             print(arreglar(db, accion, codigo, args.aplicar, intento_a_revertir=args.intento,
