@@ -232,7 +232,7 @@ en blanco.
 El panel ya lo permite, pero no hay ninguno marcado: hasta que lo haya, la
 portada dice "Del catálogo" en vez de "Lo más pedido", que sería mentira.
 
-### 3. POS: pestaña Pedidos web (hecho el 16-09, falta publicar)
+### 3. POS: pestaña Pedidos web (publicado el 16-09: POS v3.0.71, reglas y panel)
 
 Los pedidos se preparan, entregan y **cobran en la caja del POS**
 (`pos_system/ui/pedidos_web_view.py`, F9). El stock sale al entregar y la
@@ -269,6 +269,10 @@ Pruebas de concurrencia contra el emulador (seis cajas y un panel viejo a la vez
 ```
 firebase emulators:exec --config pos_system/tests/emulador/firebase.json --only firestore --project demo-pos-pedidos "python -m pytest pos_system/tests/test_pedidos_tienda_nube.py pos_system/tests/test_revisar_pedidos_emulador.py pos_system/tests/test_pedidos_web_emulador.py -q"
 ```
+
+Publicado el 16-09 a la noche con el local cerrado: release v3.0.71 (las PCs se
+actualizan solas al abrir el POS), reglas (ruleset `2f6358a3`, el anterior era
+`7aaf6f43`) y panel. Para una próxima vez, el orden sigue siendo este.
 
 Orden para publicar: **1)** POS (bump + tag) y que **todas** las PCs actualicen
 antes de seguir; **2)** reglas de Firestore (agregan `tienda_pedidos_eventos` y
