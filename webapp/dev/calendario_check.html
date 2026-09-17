@@ -1,0 +1,30 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<title>Chequeo del calendario</title>
+</head>
+<body>
+<pre id="out">cargando…</pre>
+<script type="module">
+import { eventosDeAnio } from '/src/pages/calendario_core.js';
+
+const DIAS = ['domingo','lunes','martes','miércoles','jueves','viernes','sábado'];
+const q = new URLSearchParams(location.search);
+const anio = Number(q.get('anio') || 2026);
+const soloTipos = (q.get('tipos') || '').split(',').filter(Boolean);
+
+const filas = [];
+for (const [fecha, evs] of [...eventosDeAnio(anio).entries()].sort()) {
+  const [y, m, d] = fecha.split('-').map(Number);
+  const dia = DIAS[new Date(y, m - 1, d).getDay()];
+  for (const e of evs) {
+    if (soloTipos.length && !soloTipos.includes(e.tipo)) continue;
+    filas.push(`${fecha}  ${dia.padEnd(10)} ${String(e.tipo).padEnd(13)} ${e.nombre}${e.nota ? '  — ' + e.nota : ''}`);
+  }
+}
+document.getElementById('out').textContent =
+  `AÑO ${anio} — ${filas.length} entradas\n\n` + filas.join('\n');
+</script>
+</body>
+</html>

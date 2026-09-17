@@ -22,17 +22,48 @@ export const MESES = ['Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio',
   'Julio', 'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre'];
 export const DIAS = ['Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb', 'Dom'];
 
-// Feriados que dependen del año (puentes turísticos y traslados de feriados
-// trasladables), porque los fija el gobierno por decreto y no salen de una
-// fórmula. Extender acá cada año cuando se publica el calendario oficial.
-const EXTRAS_POR_ANIO = {
-  2026: [
-    { mmdd: '03-23', nombre: 'Feriado puente turístico', tipo: 'no_laborable' },
-    { mmdd: '07-10', nombre: 'Feriado puente turístico', tipo: 'no_laborable' },
-    { mmdd: '11-23', nombre: 'Día de la Soberanía (feriado trasladado)', tipo: 'feriado', nota: 'Conmemora el 20/11' },
-    { mmdd: '12-07', nombre: 'Feriado puente turístico', tipo: 'no_laborable' },
-  ],
+// Lo que cada año se define por decreto o por acuerdo gremial y no sale de
+// ninguna fórmula. Extender acá cuando se publica el calendario oficial.
+//   puentes   : días no laborables con fines turísticos (Ley 27.399, art. 7).
+//   comercio  : Día del Empleado de Comercio efectivo. La ley 26.541 lo fija
+//               el 26/09, pero FAECyS y las cámaras acuerdan cada año pasarlo
+//               a un lunes, así que no hay regla que valga.
+//   traslados : pisa el traslado automático. Hace falta porque el decreto
+//               614/25 habilitó al Ejecutivo a correr también los feriados
+//               trasladables que caen sábado o domingo, al lunes siguiente o
+//               al viernes anterior, y eso sale por resolución, no por regla
+//               (en 2025 el 12/10 caía domingo y lo pasaron al viernes 10).
+const POR_ANIO = {
+  2026: {
+    puentes:  ['03-23', '07-10', '12-07'],   // Resolución 164/25
+    comercio: '09-28',                       // se conmemora el sábado 26/09
+  },
 };
+
+// Feriados nacionales trasladables (Ley 27.399, art. 3). Güemes es feriado
+// nacional desde la ley 27.258 y faltaba en esta lista.
+const TRASLADABLES = [
+  { mmdd: '06-17', nombre: 'Paso a la Inmortalidad del Gral. Martín Miguel de Güemes' },
+  { mmdd: '08-17', nombre: 'Paso a la Inmortalidad del Gral. José de San Martín' },
+  { mmdd: '10-12', nombre: 'Día del Respeto a la Diversidad Cultural' },
+  { mmdd: '11-20', nombre: 'Día de la Soberanía Nacional' },
+];
+
+// Ley 27.399, art. 4: si cae martes o miércoles el feriado se pasa al lunes
+// anterior; si cae jueves o viernes, al lunes siguiente. Sábado, domingo y
+// lunes se quedan donde están.
+function trasladar(date) {
+  const d = date.getDay();                                // 0 domingo … 6 sábado
+  if (d === 2 || d === 3) return addDays(date, -(d - 1)); // martes/miércoles → lunes anterior
+  if (d === 4 || d === 5) return addDays(date, 8 - d);    // jueves/viernes → lunes siguiente
+  return date;
+}
+
+function _fecha(y, mmdd) {
+  const [mm, dd] = mmdd.split('-').map(Number);
+  return new Date(y, mm - 1, dd);
+}
+function _dm(d) { return `${d.getDate()}/${String(d.getMonth() + 1).padStart(2, '0')}`; }
 
 // Domingo de Pascua (algoritmo de Meeus/Jones/Butcher).
 function pascua(y) {
@@ -122,9 +153,6 @@ export function eventosDeAnio(y) {
   add(new Date(y, 4, 25), 'Revolución de Mayo', 'feriado');
   add(new Date(y, 5, 20), 'Día de la Bandera (Belgrano)', 'feriado');
   add(new Date(y, 6, 9),  'Día de la Independencia', 'feriado');
-  add(new Date(y, 7, 17), 'Paso a la Inmortalidad del Gral. San Martín', 'feriado', 'Trasladable al lunes');
-  add(new Date(y, 9, 12), 'Día del Respeto a la Diversidad Cultural', 'feriado', 'Trasladable');
-  add(new Date(y, 10, 20),'Día de la Soberanía Nacional', 'feriado', 'Trasladable');
   add(new Date(y, 11, 8), 'Inmaculada Concepción de María', 'feriado');
   add(new Date(y, 11, 25),'Navidad', 'feriado');
 
@@ -140,10 +168,14 @@ export function eventosDeAnio(y) {
   add(new Date(y, 0, 6),  'Reyes Magos', 'comercial');
   add(new Date(y, 1, 14), 'San Valentín · Día de los Enamorados', 'comercial');
   add(new Date(y, 2, 8),  'Día de la Mujer', 'comercial');
+  add(new Date(y, 4, 28), 'Día de los Jardines de Infantes y la Maestra Jardinera', 'comercial');
+  add(new Date(y, 5, 15), 'Día del Libro', 'comercial');
   add(domingoN(y, 5, 3),  'Día del Padre', 'comercial');
   add(new Date(y, 6, 20), 'Día del Amigo', 'comercial');
   add(domingoN(y, 7, 3),  'Día del Niño', 'comercial');
+  add(new Date(y, 8, 4),  'Día de la Secretaria', 'comercial');
   add(new Date(y, 8, 11), 'Día del Maestro', 'comercial');
+  add(new Date(y, 8, 13), 'Día del Bibliotecario', 'comercial');
   add(new Date(y, 8, 17), 'Día del Profesor', 'comercial');
   add(new Date(y, 8, 21), 'Día del Estudiante · Primavera', 'comercial');
   add(domingoN(y, 9, 3),  'Día de la Madre', 'comercial');
@@ -153,11 +185,43 @@ export function eventosDeAnio(y) {
   // Escolar
   add(new Date(y, 2, 1),  'Inicio de clases (aprox.)', 'escolar', 'Varía por provincia');
 
-  // Extras del año (puentes turísticos / traslados) — declarados por decreto.
-  (EXTRAS_POR_ANIO[y] || []).forEach(x => {
-    const [mm, dd] = x.mmdd.split('-').map(Number);
-    add(new Date(y, mm - 1, dd), x.nombre, x.tipo || 'no_laborable', x.nota);
-  });
+  const cfg = POR_ANIO[y] || {};
+
+  // Feriados trasladables: se marcan en el día en que realmente no se trabaja.
+  // Si se corrieron, la fecha original queda como recordatorio en amarillo,
+  // para que nadie la confunda con el día de cierre.
+  for (const t of TRASLADABLES) {
+    const original = _fecha(y, t.mmdd);
+    const override = (cfg.traslados || {})[t.mmdd];
+    const efectivo = override ? _fecha(y, override) : trasladar(original);
+    if (ymd(efectivo) === ymd(original)) {
+      const finde = original.getDay() === 0 || original.getDay() === 6;
+      add(original, t.nombre, 'feriado', finde
+        ? 'Cae fin de semana: el Ejecutivo puede correrlo al lunes o al viernes previo (decreto 614/25). Confirmar la resolución del año.'
+        : 'Feriado trasladable: este año cae en su fecha');
+    } else {
+      add(efectivo, t.nombre, 'feriado', `Feriado trasladado del ${_dm(original)}`);
+      add(original, `${t.nombre} · fecha original`, 'nota', `No es feriado: el descanso se pasó al ${_dm(efectivo)}`);
+    }
+  }
+
+  // Días no laborables con fines turísticos: los fija el Ejecutivo por
+  // resolución, año por año.
+  for (const mmdd of (cfg.puentes || [])) {
+    add(_fecha(y, mmdd), 'Feriado puente turístico', 'no_laborable',
+        'Día no laborable con fines turísticos: abrir o no lo decide el comercio');
+  }
+
+  // Día del Empleado de Comercio (ley 26.541). El personal del CCT 130/75
+  // puede no venir sin que le descuenten el día: el local abre solo si hay
+  // con quién. La fecha efectiva se acuerda cada año.
+  if (cfg.comercio) {
+    add(_fecha(y, cfg.comercio), 'Día del Empleado de Comercio', 'no_laborable',
+        'Descanso del personal de comercio (CCT 130/75). Trasladado del 26/09.');
+  } else {
+    add(new Date(y, 8, 26), 'Día del Empleado de Comercio', 'no_laborable',
+        'Descanso del personal de comercio (CCT 130/75). Suele pasarse a un lunes: confirmar el acuerdo del año.');
+  }
 
   const mapa = new Map();
   for (const ev of lista) {
