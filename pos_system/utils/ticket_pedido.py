@@ -6,8 +6,11 @@ para quién es, a dónde va y cuánto se cobra. Pensado para la térmica del
 mostrador (72 mm). Se muestra con la vista previa del POS, que imprime directo
 al diálogo de Windows sin pasar por un navegador.
 """
+import base64
 import html
+import os
 from datetime import datetime
+from functools import lru_cache
 
 from pos_system.models import pedido_tienda as reglas
 
@@ -29,6 +32,61 @@ def _cantidad(item):
     return str(int(round(reglas.num((item or {}).get('cantidad')))))
 
 
+LOGO_PX = 400
+
+
+def _sin_bordes_transparentes(imagen, paso=4, umbral=40):
+    """Recorta el aire transparente alrededor del dibujo: el logo es cuadrado y
+    en el papel dejaba casi un centímetro en blanco arriba y abajo."""
+    if not imagen.hasAlphaChannel():
+        return imagen
+    xs, ys = [], []
+    for y in range(0, imagen.height(), paso):
+        for x in range(0, imagen.width(), paso):
+            if imagen.pixelColor(x, y).alpha() > umbral:
+                xs.append(x)
+                ys.append(y)
+    if not xs:
+        return imagen
+    x0, y0 = max(0, min(xs) - paso), max(0, min(ys) - paso)
+    x1, y1 = min(imagen.width(), max(xs) + paso + 1), min(imagen.height(), max(ys) + paso + 1)
+    return imagen.copy(x0, y0, x1 - x0, y1 - y0)
+
+
+@lru_cache(maxsize=1)
+def logo_del_local():
+    """El logo de la factura de ARCA y del ticket no fiscal, embebido: el
+    ticket del pedido es parte de la misma familia de papeles.
+
+    Achicado a `LOGO_PX`: el original (1024 px) pesa 1,7 MB en base64 y la vista
+    previa carga el HTML con `setHtml`, que no muestra nada de más de 2 MB. En
+    26 mm de una térmica de 203 ppp entran unos 210 puntos: 400 sobran."""
+    from pos_system.utils.pdf_generator import _asset_path
+    ruta = _asset_path('logo_liceo_ticket.png')
+    if not os.path.exists(ruta):
+        return ''
+    try:
+        from PyQt5.QtCore import QBuffer, QByteArray, QIODevice, Qt
+        from PyQt5.QtGui import QImage
+        imagen = QImage(ruta)
+        if not imagen.isNull():
+            imagen = _sin_bordes_transparentes(imagen)
+            if imagen.width() > LOGO_PX:
+                imagen = imagen.scaledToWidth(LOGO_PX, Qt.SmoothTransformation)
+            crudo = QByteArray()
+            buf = QBuffer(crudo)
+            buf.open(QIODevice.WriteOnly)
+            if imagen.save(buf, 'PNG'):
+                return 'data:image/png;base64,' + base64.b64encode(bytes(crudo)).decode('ascii')
+    except Exception:
+        pass
+    try:
+        with open(ruta, 'rb') as f:
+            return 'data:image/png;base64,' + base64.b64encode(f.read()).decode('ascii')
+    except OSError:
+        return ''
+
+
 def _fecha(marca):
     f = reglas._fecha(marca) or datetime.now(reglas.TZ_AR)
     return f.astimezone(reglas.TZ_AR).strftime('%d/%m/%Y %H:%M')
@@ -37,6 +95,7 @@ def _fecha(marca):
 def html_del_pedido(pedido, cfg=None):
     p = pedido or {}
     cfg = cfg or {}
+    logo = logo_del_local()
     entrega = p.get('entrega') or {}
     envio = entrega.get('modo') == 'delivery'
     cupon = p.get('cupon') if isinstance(p.get('cupon'), dict) else {}
@@ -85,6 +144,7 @@ def html_del_pedido(pedido, cfg=None):
          font: 12px/1.35 "Segoe UI", sans-serif; color: #000; background: #fff; }}
   h1 {{ font-size: 13px; margin: 0; }}
   .local {{ text-align: center; margin-bottom: 3mm; }}
+  .logo {{ display: block; margin: 0 auto 1.5mm; width: 26mm; height: auto; }}
   .local p {{ margin: 1px 0; font-size: 10px; }}
   .codigo {{ text-align: center; font-size: 26px; font-weight: 800; letter-spacing: 3px;
             font-family: "Courier New", monospace; padding: 2mm 0;
@@ -109,6 +169,7 @@ def html_del_pedido(pedido, cfg=None):
 </head>
 <body>
   <div class="local">
+    {f'<img class="logo" src="{logo}" alt="">' if logo else ''}
     <h1>{_esc(cfg.get('nombre') or 'Librería Liceo')}</h1>
     {f'<p>{_esc(cfg.get("direccion"))}</p>' if cfg.get('direccion') else ''}
     {f'<p>{_esc(cfg.get("telefono"))}</p>' if cfg.get('telefono') else ''}

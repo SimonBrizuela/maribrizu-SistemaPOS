@@ -77,6 +77,8 @@ def main():
         f'--hidden-import=pos_system.utils.pedidos_tienda_nube '
         f'--hidden-import=pos_system.utils.pedidos_tienda_watcher '
         f'--hidden-import=pos_system.utils.ticket_pedido '
+        f'--hidden-import=pos_system.ui.pedidos_web_aviso '
+        f'--hidden-import=pos_system.ui.visor_comprobante '
         f'--hidden-import=firebase_admin '
         f'--hidden-import=firebase_admin.credentials '
         f'--hidden-import=firebase_admin.firestore '

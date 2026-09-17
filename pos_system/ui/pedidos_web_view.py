@@ -105,6 +105,19 @@ def enlace_whatsapp(numero, texto, app):
     return f'https://wa.me/{numero}?text={mensaje}'
 
 
+def es_url_de_comprobante(url):
+    """Solo el Storage de Firebase: la URL la escribe el cliente."""
+    from urllib.parse import urlparse
+    return isinstance(url, str) and url.startswith('https://') and         urlparse(url).hostname == 'firebasestorage.googleapis.com'
+
+
+def _descargar(url, tope=15 * 1024 * 1024):
+    import urllib.request
+    from pos_system.utils.pedidos_tienda_nube import _contexto_tls
+    with urllib.request.urlopen(url, timeout=20, context=_contexto_tls()) as r:
+        return r.read(tope + 1)
+
+
 def enlace_mapa(entrega):
     coords = (entrega or {}).get('coordenadas') or {}
     if coords.get('lat') is not None and coords.get('lng') is not None:
@@ -1153,25 +1166,51 @@ class PedidosWebView(QWidget):
             self._en_fondo(lambda: self._nube.marcar_impreso(pid), lambda _r: None)
 
     def _ver_comprobante(self, pid):
+        """La imagen se ve en el visor del POS (zoom, girar); un PDF o una
+        imagen que no se pueda leer, en el navegador."""
         def buscar():
             snap = self._nube.db.collection('tienda_comprobantes').document(pid).get()
-            return (snap.to_dict() or {}).get('url') if snap.exists else None
+            datos = (snap.to_dict() or {}) if snap.exists else {}
+            url = datos.get('url')
+            if not isinstance(url, str) or not url:
+                return {'estado': 'sin_comprobante'}
+            if not es_url_de_comprobante(url):
+                return {'estado': 'ajeno'}
+            if datos.get('tipo') == 'pdf':
+                return {'estado': 'navegador', 'url': url}
+            return {'estado': 'imagen', 'url': url, 'datos': _descargar(url)}
 
-        def abrir(url):
-            from urllib.parse import urlparse
-            if isinstance(url, str) and url.startswith('https://'):
-                if urlparse(url).hostname != 'firebasestorage.googleapis.com':
-                    # Lo escribe el cliente: no se abre cualquier enlace.
-                    self._mensaje('Comprobante', 'El enlace del comprobante no es del almacenamiento de la '
-                                                 'tienda: no se abre.', QMessageBox.Warning)
-                    return
-                QDesktopServices.openUrl(QUrl(url))
-            elif isinstance(url, str) or url is None:
+        def abrir(r):
+            estado = (r or {}).get('estado') if isinstance(r, dict) else None
+            if estado == 'sin_comprobante':
                 self._mensaje('Comprobante', 'El cliente todavía no subió el comprobante.')
+            elif estado == 'ajeno':
+                # Lo escribe el cliente: no se abre cualquier enlace.
+                self._mensaje('Comprobante', 'El enlace del comprobante no es del almacenamiento de la '
+                                             'tienda: no se abre.', QMessageBox.Warning)
+            elif estado == 'navegador':
+                QDesktopServices.openUrl(QUrl(r['url']))
+            elif estado == 'imagen':
+                from pos_system.ui.visor_comprobante import imagen_de_bytes
+                imagen = imagen_de_bytes(r.get('datos'))
+                if imagen is None:
+                    QDesktopServices.openUrl(QUrl(r['url']))
+                    return
+                self._mostrar_comprobante(pid, imagen, r['url'])
             else:
-                self._mensaje('Comprobante', 'No se pudo leer el comprobante.')
+                self._mensaje('Comprobante', 'No se pudo bajar el comprobante. Revisá la conexión y probá '
+                                             'de nuevo.', QMessageBox.Warning)
 
         self._en_fondo(buscar, abrir)
+
+    def _mostrar_comprobante(self, pid, imagen, url):
+        from pos_system.ui.visor_comprobante import VisorComprobante
+        codigo = self._pedido(pid).get('codigo') or ''
+        self._modal += 1
+        try:
+            VisorComprobante(imagen, f'Comprobante del pedido {codigo}', url, self).exec_()
+        finally:
+            self._fin_modal()
 
     # ── Cobro ───────────────────────────────────────────────────────────────
     def _caja_abierta(self):

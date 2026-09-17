@@ -881,28 +881,56 @@ def test_renglones_sin_descontar_se_ven_en_el_pedido(pantalla):
     assert 'Sin descontar del stock (1)' in textos and 'no encontrada' in textos
 
 
-def test_comprobante_de_otro_sitio_no_se_abre(pantalla, monkeypatch):
+def test_comprobante_imagen_se_ve_en_el_visor_y_lo_demas_en_el_navegador(pantalla, monkeypatch):
+    from PyQt5.QtCore import QBuffer, QByteArray, QIODevice
+    from PyQt5.QtGui import QColor, QImage
+    from pos_system.ui import pedidos_web_view as pwv
     t = pantalla([pedido('c1')])
     vista = t['vista']
-    abiertos = []
-    from pos_system.ui import pedidos_web_view as pwv
+    abiertos, visores = [], []
     monkeypatch.setattr(pwv.QDesktopServices, 'openUrl', lambda url: abiertos.append(url.toString()))
+    monkeypatch.setattr(vista, '_mostrar_comprobante', lambda pid, img, url: visores.append((pid, img.width(), url)))
+
+    imagen = QImage(40, 30, QImage.Format_RGB32)
+    imagen.fill(QColor('white'))
+    crudo = QByteArray()
+    buf = QBuffer(crudo)
+    buf.open(QIODevice.WriteOnly)
+    imagen.save(buf, 'PNG')
+    monkeypatch.setattr(pwv, '_descargar', lambda url: bytes(crudo))
 
     class Snap:
         exists = True
 
-        def __init__(self, url):
-            self.url = url
+        def __init__(self, datos):
+            self.datos = datos
 
         def to_dict(self):
-            return {'url': self.url}
-    for url, abre in (('https://firebasestorage-googleapis.com/x.pdf', False),
-                      ('https://firebasestorage.googleapis.com/v0/b/mari-d7c71.firebasestorage.app/o/c.pdf', True)):
-        monkeypatch.setattr(t['nube'].db, 'get', lambda url=url: Snap(url), raising=False)
+            return self.datos
+    bueno = 'https://firebasestorage.googleapis.com/v0/b/mari-d7c71.firebasestorage.app/o/c.webp'
+    casos = [
+        ({'url': bueno, 'tipo': 'imagen'}, 'visor'),
+        ({'url': bueno.replace('.webp', '.pdf'), 'tipo': 'pdf'}, 'navegador'),
+        ({'url': 'https://firebasestorage-googleapis.com/x.pdf', 'tipo': 'imagen'}, 'nada'),
+    ]
+    for datos, donde in casos:
+        monkeypatch.setattr(t['nube'].db, 'get', lambda d=datos: Snap(d), raising=False)
         abiertos.clear()
+        visores.clear()
         vista._ver_comprobante('c1')
         assert esperar(lambda: not vista._tareas)
-        assert bool(abiertos) is abre
+        assert (donde == 'visor') == bool(visores) and (donde == 'navegador') == bool(abiertos)
+    assert 'no es del almacenamiento' in t['mensajes'][-1]
+
+    # Una imagen que no se puede leer va al navegador.
+    monkeypatch.setattr(pwv, '_descargar', lambda url: b'no es una imagen')
+    monkeypatch.setattr(t['nube'].db, 'get', lambda: Snap({'url': bueno, 'tipo': 'imagen'}), raising=False)
+    abiertos.clear()
+    visores.clear()
+    vista._ver_comprobante('c1')
+    assert esperar(lambda: not vista._tareas)
+    assert abiertos == [bueno] and not visores
+
 
 
 # ── El cliente ──────────────────────────────────────────────────────────────
