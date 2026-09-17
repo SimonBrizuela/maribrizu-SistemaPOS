@@ -985,6 +985,26 @@ def resumen_pestana(pedidos):
     return {'nuevos': nuevos, 'cobrar': cobrar}
 
 
+def pendientes_de_aviso(pedidos):
+    """Lo que muestra la franja de avisos del POS: los pedidos sin aceptar y
+    los entregados sin cobrar, los más viejos primero. Sale de los pedidos en
+    vivo, así que en cuanto una caja acepta o cobra, desaparece en todas."""
+    lista = list(pedidos.values()) if isinstance(pedidos, dict) else list(pedidos or [])
+    minimo = datetime.min.replace(tzinfo=timezone.utc)
+
+    def resumen(p):
+        return {'id': str(p.get('id') or ''), 'codigo': str(p.get('codigo') or ''),
+                'cliente': str((p.get('cliente') or {}).get('nombre') or ''),
+                'total': num(p.get('total')), 'envio': es_envio(p),
+                'por_reparto': p.get('entregado_por') == 'reparto'}
+
+    nuevos = sorted((p for p in lista if p.get('estado') == 'nuevo'),
+                    key=lambda p: _fecha(p.get('creado')) or minimo)
+    cobrar = sorted((p for p in lista if grupo(p) == 'cobrar'),
+                    key=lambda p: _fecha(p.get('entregado_en')) or minimo)
+    return {'nuevos': [resumen(p) for p in nuevos], 'cobrar': [resumen(p) for p in cobrar]}
+
+
 def titulo_pestana(pedidos, base='Pedidos web'):
     r = resumen_pestana(pedidos)
     partes = []

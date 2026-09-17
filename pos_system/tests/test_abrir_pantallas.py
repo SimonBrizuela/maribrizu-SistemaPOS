@@ -33,6 +33,17 @@ from pos_system.models.sale import Sale  # noqa: E402
 from pos_system.models.user import User  # noqa: E402
 
 
+@pytest.fixture(autouse=True)
+def sin_firebase_de_verdad(monkeypatch):
+    """Ventas y Promociones arrancan en otro hilo la conexión a Firebase con la
+    cuenta de servicio de la PC. En una prueba eso es escribir contra la base
+    del local, y con dos ventanas en el mismo proceso el hilo de gRPC tiraba
+    abajo Python entero (access violation al abrir la segunda)."""
+    import pos_system.utils.firebase_sync as fs
+    monkeypatch.setattr(fs, 'init_firebase_sync', lambda: None)
+    monkeypatch.setattr(fs, 'get_firebase_sync', lambda: None)
+
+
 @pytest.fixture(scope='module')
 def app():
     """Una sola QApplication para todo el módulo: Qt no admite dos.
@@ -331,49 +342,157 @@ def test_el_cartel_de_caja_sale_y_se_lee(app, local, monkeypatch):
         destruir(app, w)
 
 
-def test_al_cajero_el_cartel_avisa_pero_no_le_ofrece_abrir_la_caja(app, local, monkeypatch):
+@pytest.fixture(scope='module')
+def ventana_cajero(app, local):
+    """Una sola ventana del POS con un cajero para las pruebas que la necesitan.
+
+    Con cuatro ventanas enteras en el mismo proceso sin pantalla, Qt se cae al
+    mostrar la cuarta (sin mensaje): las pruebas del cajero comparten esta.
+    """
+    import pos_system.ui.main_window as mw
+    import pos_system.utils.firebase_sync as fs
+    from pos_system.ui.main_window import MainWindow
+
+    with pytest.MonkeyPatch.context() as mp:
+        mp.setattr(MainWindow, '_start_realtime_sync_listeners', lambda self: None, raising=True)
+        mp.setattr(MainWindow, '_iniciar_pedidos_web', lambda self: None, raising=True)
+        mp.setattr(MainWindow, '_prompt_turno', lambda self: None, raising=True)
+        mp.setattr(MainWindow, 'closeEvent', lambda self, ev: ev.accept(), raising=True)
+        mp.setattr(mw, 'Toast', lambda *a, **k: None, raising=True)
+        mp.setattr(fs, 'init_firebase_sync', lambda: None)
+        mp.setattr(fs, 'get_firebase_sync', lambda: None)
+        w = MainWindow(current_user=dict(local['admin'], role='cajero'))
+        w.show()
+        app.processEvents()
+        yield w
+        destruir(app, w)
+
+
+def test_al_cajero_el_cartel_avisa_pero_no_le_ofrece_abrir_la_caja(app, ventana_cajero):
     """El cajero no tiene pestaña Caja: el botón sería un callejón sin salida.
 
     Se le avisa igual —es el que está vendiendo— pero el cartel le dice que
     avise al encargado en vez de mandarlo a abrir algo que no puede.
     """
-    import pos_system.ui.main_window as mw
-    from pos_system.ui.main_window import MainWindow
     from pos_system.utils.caja_guard import estado_de_caja
 
-    monkeypatch.setattr(MainWindow, '_start_realtime_sync_listeners',
-                        lambda self: None, raising=True)
-    monkeypatch.setattr(MainWindow, '_iniciar_pedidos_web', lambda self: None, raising=True)
-    monkeypatch.setattr(MainWindow, '_prompt_turno', lambda self: None, raising=True)
-    monkeypatch.setattr(MainWindow, 'closeEvent',
-                        lambda self, ev: ev.accept(), raising=True)
-    monkeypatch.setattr(mw, 'Toast', lambda *a, **k: None, raising=True)
+    w = ventana_cajero
+    assert 'Caja' not in [w.tabs.tabText(i) for i in range(w.tabs.count())]
+    assert w._puede_abrir_caja is False
 
-    cajero = dict(local['admin'], role='cajero')
-    w = MainWindow(current_user=cajero)
-    try:
-        w.show()
-        app.processEvents()
-        assert 'Caja' not in [w.tabs.tabText(i) for i in range(w.tabs.count())]
-        assert w._puede_abrir_caja is False
+    aviso = estado_de_caja({'id': 123, 'status': 'open'},
+                           {'id': 126, 'status': 'closed',
+                            'updated_at': '2026-09-04T20:29:00-03:00'},
+                           puede_abrir=w._puede_abrir_caja)
+    w._on_caja_guard_slot(aviso)
+    app.processEvents()
 
-        aviso = estado_de_caja({'id': 123, 'status': 'open'},
-                               {'id': 126, 'status': 'closed',
-                                'updated_at': '2026-09-04T20:29:00-03:00'},
-                               puede_abrir=w._puede_abrir_caja)
-        w._on_caja_guard_slot(aviso)
-        app.processEvents()
+    assert w._caja_banner.isVisible(), 'el que vende tiene que enterarse igual'
+    assert not w._caja_banner_btn.isVisible()
+    assert 'Avisale al encargado' in w._caja_banner_label.text()
 
-        assert w._caja_banner.isVisible(), 'el que vende tiene que enterarse igual'
-        assert not w._caja_banner_btn.isVisible()
-        assert 'Avisale al encargado' in w._caja_banner_label.text()
+    # Y si igual se dispara la acción, no lo lleva a ninguna pestaña ajena.
+    antes = w.tabs.currentIndex()
+    w._ir_a_caja()
+    assert w.tabs.currentIndex() == antes
 
-        # Y si igual se dispara la acción, no lo lleva a ninguna pestaña ajena.
-        antes = w.tabs.currentIndex()
-        w._ir_a_caja()
-        assert w.tabs.currentIndex() == antes
-    finally:
-        destruir(app, w)
+
+def test_pedido_web_la_franja_avisa_en_cualquier_pestana_y_se_va_si_otra_caja_lo_acepta(app, ventana_cajero):
+    """Lo que ve el cajero parado en Ventas cuando entra un pedido de la tienda.
+
+    Antes era un cartel de 9 segundos encima del botón Cobrar. Ahora es una
+    franja debajo del encabezado que no tapa nada, suena al llegar y se va en
+    cuanto cualquier caja acepta el pedido.
+    """
+    from PyQt5.QtCore import QObject, pyqtSignal
+    from PyQt5.QtGui import QFont
+
+    # Dobles propios, sin el cliente de Firestore: importar gRPC con ventanas
+    # del POS abiertas en un proceso sin pantalla lo tira abajo.
+    class VigiaFalso(QObject):
+        cambiaron = pyqtSignal(object)
+        estado_conexion = pyqtSignal(bool)
+
+        def iniciar(self):
+            pass
+
+        def detener(self):
+            pass
+
+    class _Doc:
+        exists = False
+
+        def collection(self, _n):
+            return self
+
+        def document(self, _i):
+            return self
+
+        def get(self):
+            return self
+
+        def to_dict(self):
+            return {}
+
+    class NubeFalsa:
+        db = _Doc()
+
+        def __init__(self, pedidos):
+            self.pedidos = pedidos
+
+        def marcar_visto(self, ids):
+            pass
+
+    def pedido(pid, **extra):
+        return {'id': pid, 'estado': 'nuevo', 'visto': False, 'total': 1000, 'entrega': {'modo': 'retiro'},
+                'cliente': {'nombre': 'Ana'}, 'items': [], **extra}
+
+    w = ventana_cajero
+    w.tabs.setCurrentWidget(w.sales_view)
+    app.processEvents()
+    # El cajero no tiene pestaña Caja: su pantalla no puede quedar suelta
+    # encima del logo y del título.
+    assert not w.cash_view.isVisible()
+    # Las pestañas se miden con la letra que dibuja el QSS (600 → Bold en Qt 5).
+    assert w.tabs.font().weight() == QFont.Bold
+
+    sonidos = []
+    w._franja_pedidos._sonar = lambda: sonidos.append(1)
+    vista = w.pedidos_web_view
+    vista.quien = lambda: {'pc_id': 'CAJA1-aaaa', 'pc_nombre': 'CAJA1', 'cajero': 'Mari'}
+    nube, vigia = NubeFalsa({}), VigiaFalso()
+    vista.conectar(vigia, nube)
+    vista._reloj_cobros.stop()
+    vigia.cambiaron.emit({})
+    app.processEvents()
+    assert not w._franja_pedidos.isVisible()
+
+    nube.pedidos['n1'] = pedido('n1', codigo='K7M2')
+    vigia.cambiaron.emit({'n1': dict(nube.pedidos['n1'])})
+    app.processEvents()
+    assert w.tabs.currentWidget() is w.sales_view
+    assert w._franja_pedidos.isVisible()
+    assert 'K7M2' in w._franja_pedidos._detalle.text()
+    assert sonidos == [1]
+
+    # Otra caja lo acepta: la franja se va sola y no vuelve a sonar.
+    nube.pedidos['n1']['estado'] = 'preparando'
+    vigia.cambiaron.emit({'n1': dict(nube.pedidos['n1'])})
+    app.processEvents()
+    assert not w._franja_pedidos.isVisible()
+    w._franja_pedidos._ultimo_sonido = -10_000
+    w._franja_pedidos.revisar_recordatorio()
+    assert sonidos == [1]
+    assert w.tabs.tabText(w.tabs.indexOf(vista)) == 'Pedidos web'
+
+    # "Ver pedido" lleva a la pestaña con el pedido abierto.
+    nube.pedidos['n2'] = pedido('n2', codigo='P5HE')
+    vigia.cambiaron.emit({pid: dict(p) for pid, p in nube.pedidos.items()})
+    app.processEvents()
+    w._franja_pedidos._boton.click()
+    app.processEvents()
+    assert w.tabs.currentWidget() is vista and vista._seleccion == 'n2'
+    assert not w._franja_pedidos.isVisible(), 'con la pestaña a la vista la franja sobra'
 
 
 # ── El caso que motivó todo esto ──────────────────────────────────────────

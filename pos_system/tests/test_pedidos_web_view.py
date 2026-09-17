@@ -772,7 +772,8 @@ def test_el_cobro_a_medias_avisa_si_quedo_en_otra_caja(pantalla, pago, local):
     assert local['db'].get_current_cash_register()['id'] != caja['id']
     procesar(t)
     assert len(ventas(local)) == 1
-    assert any(tipo == 'cobrar' and f"caja #{caja['id']}" in m for tipo, m in t['avisos'])
+    # Es un cartel para quien cierre la caja, no un pedido que suena.
+    assert any(tipo == 'caja' and f"caja #{caja['id']}" in m for tipo, m in t['avisos'])
 
 
 def test_la_venta_sube_con_rubro_y_se_marca_subida(pantalla, pago, local, monkeypatch):
@@ -971,3 +972,29 @@ def test_un_fijo_se_puede_copiar_pero_no_tiene_whatsapp(pantalla):
 def test_la_pc_sabe_si_tiene_la_app_de_whatsapp():
     from pos_system.ui.pedidos_web_view import whatsapp_de_escritorio
     assert whatsapp_de_escritorio() in (True, False)
+
+
+# ── La franja del POS ───────────────────────────────────────────────────────
+
+def test_cada_cambio_le_pasa_a_la_franja_lo_pendiente(pantalla):
+    t = pantalla([pedido('n1')])
+    recibidos = []
+    t['vista'].pendientes_cambio.connect(recibidos.append)
+    refrescar(t)
+    assert [p['id'] for p in recibidos[-1]['nuevos']] == ['n1']
+    t['nube'].pedidos['n1']['estado'] = 'preparando'
+    refrescar(t)
+    assert recibidos[-1] == {'nuevos': [], 'cobrar': []}
+
+
+def test_ver_pedido_desde_la_franja_abre_la_lista_y_el_pedido(pantalla):
+    t = pantalla([pedido('n1'), pedido('c1', estado='entregado', cobro_pendiente=True, stock_descontado=True)])
+    vista = t['vista']
+    vista.abrir_pedido('c1')
+    assert vista._filtro == 'cobrar' and vista._seleccion == 'c1'
+    vista.abrir_pedido('n1')
+    assert vista._filtro == 'hacer' and vista._seleccion == 'n1'
+    assert esperar(lambda: ('visto', ('n1',)) in t['nube'].llamados)
+    vista._filtro = 'hechos'
+    vista.abrir_pedido('')
+    assert vista._filtro == 'hacer'

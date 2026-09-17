@@ -92,6 +92,7 @@ def cajas(app, tmp_path, monkeypatch):
     from pos_system.database.db_manager import DatabaseManager
     from pos_system.models.cash_register import CashRegister
     from pos_system.ui import pedidos_web_view as pwv
+    from pos_system.ui.pedidos_web_aviso import FranjaPedidos
     from pos_system.ui import sales_view
     from pos_system.utils.pedidos_tienda_nube import NubePedidos
     from pos_system.utils.pedidos_tienda_watcher import VigiaPedidos
@@ -108,7 +109,14 @@ def cajas(app, tmp_path, monkeypatch):
                                    db=db_local)
         _ABIERTAS.append(vista)
         monkeypatch.setattr(vista, 'quien', lambda q=quien: dict(q))
-        caja = {'vista': vista, 'db': db_local, 'mensajes': [], 'avisos': []}
+        caja = {'vista': vista, 'db': db_local, 'mensajes': [], 'avisos': [], 'sonidos': []}
+        # La franja de arriba del POS, conectada como en la ventana principal.
+        franja = FranjaPedidos(None, sonar=lambda c=caja: c['sonidos'].append(1))
+        _ABIERTAS.append(franja)
+        franja.show()
+        vista.pendientes_cambio.connect(franja.actualizar)
+        vista.aviso.connect(lambda tipo, _m, f=franja: tipo in ('pedido', 'cobrar') and f.avisar_llegada())
+        caja['franja'] = franja
         monkeypatch.setattr(vista, '_mensaje', lambda t, m, *a, c=caja: c['mensajes'].append(m))
         monkeypatch.setattr(vista, '_preguntar', lambda *a: True)
         vista.aviso.connect(lambda tipo, msg, c=caja: c['avisos'].append((tipo, msg)))
@@ -152,8 +160,17 @@ def test_de_punta_a_punta_con_dos_cajas(cajas):
     assert esperar(lambda: estado_en(caja1, 'AB12xx') == 'nuevo' and estado_en(caja2, 'AB12xx') == 'nuevo')
     assert any(t == 'pedido' and 'AB12' in m for t, m in caja2['avisos'])
 
+    assert esperar(lambda: caja1['franja'].isVisible() and caja2['franja'].isVisible())
+    assert caja1['sonidos'] and caja2['sonidos']
+
     caja1['vista']._accion('aceptar', 'AB12xx')
     assert esperar(lambda: estado_en(caja2, 'AB12xx') == 'preparando')
+    # La caja 1 lo aceptó: en la 2 la franja se va sola y el recordatorio no suena.
+    assert esperar(lambda: not caja2['franja'].isVisible() and not caja1['franja'].isVisible())
+    sonidos = len(caja2['sonidos'])
+    caja2['franja']._ultimo_sonido = -10_000
+    caja2['franja'].revisar_recordatorio()
+    assert len(caja2['sonidos']) == sonidos
     # La otra caja aprieta el botón viejo: rechazo con nombre, nada cambia.
     caja2['vista']._mover('AB12xx', 'nuevo', 'preparando')
     assert esperar(lambda: caja2['mensajes'])

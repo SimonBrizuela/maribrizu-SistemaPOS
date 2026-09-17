@@ -150,7 +150,8 @@ class _Tarea(QObject):
 
 class PedidosWebView(QWidget):
     titulo_cambio = pyqtSignal(str, str)     # (texto de la pestaña, tooltip)
-    aviso = pyqtSignal(str, str)             # (tipo, mensaje) para un Toast
+    aviso = pyqtSignal(str, str)             # (tipo, mensaje): 'pedido' y 'cobrar' suenan; el resto es un cartel
+    pendientes_cambio = pyqtSignal(object)   # reglas.pendientes_de_aviso(), para la franja del POS
 
     def __init__(self, parent=None, current_user: dict = None, db=None):
         super().__init__(parent)
@@ -328,7 +329,23 @@ class PedidosWebView(QWidget):
     def _al_cambiar(self, pedidos):
         self._avisar_novedades(pedidos)
         self._pedidos = dict(pedidos)
+        self.pendientes_cambio.emit(reglas.pendientes_de_aviso(self._pedidos))
         self._redibujar()
+
+    def abrir_pedido(self, pedido_id=''):
+        """Desde la franja de avisos: la lista donde está el pedido, y el pedido
+        abierto (con la pestaña ya a la vista, así cuenta como visto)."""
+        p = self._pedidos.get(pedido_id) if pedido_id else None
+        if p is None:
+            pendientes = reglas.pendientes_de_aviso(self._pedidos)
+            self._filtro = 'hacer' if pendientes['nuevos'] or not pendientes['cobrar'] else 'cobrar'
+            self._redibujar_lista()
+            return
+        grupo = reglas.grupo(p)
+        if grupo in dict(FILTROS):
+            self._filtro = grupo
+        self.buscar.clear()
+        self._seleccionar(pedido_id)
 
     def _al_cambiar_conexion(self, en_linea):
         if en_linea == self._en_linea:
@@ -1485,7 +1502,7 @@ class PedidosWebView(QWidget):
                 if fila.get('caja_id') and int(fila['caja_id']) != int(caja.get('id') or 0):
                     # Se cobró con otra caja abierta (un corte, un reinicio): la plata
                     # quedó en la de ahora y hay que saberlo para cerrar las dos.
-                    self.aviso.emit('cobrar', f"El cobro de {fila.get('codigo')} que había quedado a medias "
+                    self.aviso.emit('caja', f"El cobro de {fila.get('codigo')} que había quedado a medias "
                                               f"se registró en esta caja (se había cobrado con la caja "
                                               f"#{fila['caja_id']}).")
             self._anotar_venta(pid, intento, sale_id)

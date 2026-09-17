@@ -18,6 +18,7 @@ from pos_system.ui.sales_history_view import SalesHistoryView
 from pos_system.ui.observations_view import ObservationsView
 from pos_system.ui.presupuestos_view import PresupuestosView
 from pos_system.ui.fiados_view import FiadosView
+from pos_system.ui.pedidos_web_aviso import FranjaPedidos
 from pos_system.ui.pedidos_web_view import PedidosWebView
 from pos_system.ui.fiscal_view import FiscalView
 from pos_system.ui.components import MessageBox, Toast
@@ -108,11 +109,18 @@ class MainWindow(QMainWindow):
         # ventas donde va. Va pegado abajo del header, cruzando toda la pantalla.
         main_layout.addWidget(self._create_caja_banner())
 
+        # Franja de pedidos web: pedidos sin aceptar o sin cobrar, en todas las
+        # pestañas y sin tapar nada. Se va sola cuando cualquier caja los resuelve.
+        self._franja_pedidos = FranjaPedidos(self)
+        main_layout.addWidget(self._franja_pedidos)
+
         # Tabs (con padding interno via QSS, el body queda al ras)
         self.tabs = QTabWidget()
-        # Semibold para que el ancho calculado de cada pestaña coincida con el
-        # peso que dibuja el QSS (font-weight:600) y no recorte el texto.
-        self.tabs.setFont(QFont('Segoe UI', 10, QFont.DemiBold))
+        # El ancho de cada pestaña se mide con esta letra y el texto se dibuja con
+        # la del QSS. Qt 5 lee `font-weight: 600` como 600/8 = 75, que es Bold:
+        # medido en DemiBold (63) el texto quedaba más ancho que la pestaña y se
+        # cortaba en las dos puntas ("edidos web (1 nuevo").
+        self.tabs.setFont(QFont('Segoe UI', 10, QFont.Bold))
         self.tabs.setDocumentMode(True)
         self.tabs.tabBar().setExpanding(False)
 
@@ -146,6 +154,12 @@ class MainWindow(QMainWindow):
             self.fiscal_view = None
             self.users_view = None
 
+        if not is_admin:
+            # Se crea igual (el turno de un admin la agrega después), pero sin
+            # pestaña queda suelta arriba a la izquierda de la ventana y su
+            # divisor se dibujaba encima del logo y del título.
+            self.cash_view.hide()
+
         # Pestañas para cajero: Ventas, Historial, Promociones (solo lectura)
         self.tabs.addTab(self.sales_view, 'Ventas')
         self.tabs.addTab(self.fiados_view, 'Fiados')
@@ -160,6 +174,8 @@ class MainWindow(QMainWindow):
         self.tabs.addTab(self.pedidos_web_view, 'Pedidos web')
         self.pedidos_web_view.titulo_cambio.connect(self._on_pedidos_web_titulo)
         self.pedidos_web_view.aviso.connect(self._on_pedidos_web_aviso)
+        self.pedidos_web_view.pendientes_cambio.connect(self._franja_pedidos.actualizar)
+        self._franja_pedidos.ver.connect(self._abrir_pedido_web)
         QTimer.singleShot(1500, self._iniciar_pedidos_web)
 
         # Pestañas adicionales solo para admin
@@ -931,15 +947,20 @@ class MainWindow(QMainWindow):
             self.tabs.setTabToolTip(idx, tooltip)
 
     def _on_pedidos_web_aviso(self, tipo, mensaje):
-        """Pedido nuevo o entregado sin cobrar: aviso en todas las cajas."""
+        """Pedido nuevo o entregado sin cobrar: suena y lo muestra la franja (no
+        un cartel encima del botón Cobrar). Cualquier otro aviso, un cartel."""
         try:
-            QApplication.beep()
-            if tipo == 'cobrar':
-                Toast.warning(self, mensaje, 9000)
+            if tipo in ('pedido', 'cobrar'):
+                self._franja_pedidos.avisar_llegada()
             else:
-                Toast.info(self, mensaje, 9000)
+                QApplication.beep()
+                Toast.warning(self, mensaje, 9000)
         except Exception as e:
             logger.warning(f"Pedidos web: aviso no mostrado: {e}")
+
+    def _abrir_pedido_web(self, pedido_id=''):
+        self.tabs.setCurrentWidget(self.pedidos_web_view)
+        self.pedidos_web_view.abrir_pedido(pedido_id)
 
     def _start_remote_terminal_listener(self):
         try:
@@ -1187,6 +1208,9 @@ class MainWindow(QMainWindow):
 
     def on_tab_changed(self, index):
         current_widget = self.tabs.currentWidget()
+        franja = getattr(self, '_franja_pedidos', None)
+        if franja is not None:
+            franja.set_en_pestana(current_widget is getattr(self, 'pedidos_web_view', None))
         if hasattr(current_widget, 'refresh_data'):
             current_widget.refresh_data()
 

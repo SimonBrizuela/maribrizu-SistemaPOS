@@ -350,8 +350,17 @@ class Toast(QFrame):
         self.deleteLater()
 
     @classmethod
+    def _purgar(cls):
+        """Saca de la lista los toasts que Qt ya borró: si la ventana se cierra
+        antes de que terminen, se van con ella sin pasar por `_cleanup`, y
+        moverlos después era un acceso inválido que cerraba el POS."""
+        from PyQt5 import sip
+        cls._active_toasts[:] = [t for t in cls._active_toasts if not sip.isdeleted(t)]
+
+    @classmethod
     def _reposition_all_static(cls):
         """Reposiciona todos los toasts activos tras cerrar uno."""
+        cls._purgar()
         parent_win = None
         for t in cls._active_toasts:
             parent_win = t.parent()
@@ -369,6 +378,7 @@ class Toast(QFrame):
     @staticmethod
     def _reposition_from(parent_win):
         """Apila los toasts desde abajo hacia arriba, esquina inferior derecha."""
+        Toast._purgar()
         rect = parent_win.geometry()
         margin_right  = 24
         margin_bottom = 56   # justo sobre la status bar
@@ -376,6 +386,8 @@ class Toast(QFrame):
 
         y_offset = rect.bottom() - margin_bottom
         for toast in reversed(Toast._active_toasts):
+            if toast.parent() is not parent_win:
+                continue        # los de otra ventana se apilan en la suya
             toast.adjustSize()
             x = rect.right() - toast.width() - margin_right
             y = y_offset - toast.height()
