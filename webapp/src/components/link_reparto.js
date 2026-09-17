@@ -29,6 +29,8 @@ function claveNueva() {
 const linkDe = (clave) => `${urlDeLaTienda()}/reparto#k=${clave}`;
 
 export async function montarLinkReparto(caja, db) {
+  // Sin la caja no hay dónde dibujar: la página cambió antes de montarlo.
+  if (!caja) return;
   const ref = doc(db, 'tienda_reparto', 'acceso');
   let acceso = null;
 

@@ -647,7 +647,9 @@ export async function renderTiendaAjustes(container, db) {
   pintarTramos();
   pintarHorarios();
   pintarRubros();
-  montarLinkReparto(document.getElementById('cfgReparto'), db);
+  // Del contenedor y no de `document`: si la página ya se reemplazó, el de
+  // `document` es null (o el de otra pantalla).
+  montarLinkReparto(container.querySelector('#cfgReparto'), db);
 
   /* ── Eventos ── */
   const $ = sel => container.querySelector(sel);
