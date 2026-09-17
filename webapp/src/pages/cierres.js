@@ -61,14 +61,6 @@ export async function renderCierres(container, db) {
   ]);
 
   const items = normalizarItems(itemsRaw, fechaInicioStr);
-
-  // Índice catálogo por nombre (para obtener costo al calcular CMV del turno)
-  const catByName = {};
-  for (const p of catalogo) {
-    const key = (p.nombre || '').toUpperCase().trim();
-    if (key) catByName[key] = p;
-  }
-
   const aggregateInRange = (apertura, cierre) => agregarEnRango(items, apertura, cierre);
 
   // Ocultar cierres cerrados anteriores a fecha_inicio.
@@ -253,11 +245,16 @@ export async function renderCierres(container, db) {
     ${tablaCierresHTML(sesiones)}
   `;
 
-  // Click en fila → abrir modal detallado
+  // Click en fila → abrir modal detallado.
+  // El catálogo y los gastos se leen al ABRIR el detalle, no al dibujar la
+  // pantalla: como esta pantalla ya no se redibuja con cada cambio, un costo
+  // corregido en Control Total habría seguido mostrando el margen viejo hasta
+  // salir y volver a entrar.
   container.querySelectorAll('.clickable-row').forEach(row => {
     row.addEventListener('click', () => {
       const idx = parseInt(row.dataset.idx);
-      openCierreModal(sesiones[idx], catByName, gastosAll, db, () => renderCierres(container, db));
+      openCierreModal(sesiones[idx], indiceCatalogo(catalogo), gastosFrescos(gastosAll), db,
+                      () => renderCierres(container, db));
     });
   });
 
@@ -294,20 +291,80 @@ export async function renderCierres(container, db) {
   seguirCajaEnVivo(container, db, { fechaInicioStr, cajaAbiertaId });
 }
 
-// ─── Refresco en vivo de la caja abierta ──────────────────────────────────
+// Índice del catálogo por nombre, para sacar el costo de cada producto al
+// calcular el CMV del turno. `fallback` es lo que se leyó al dibujar, por si el
+// store todavía no cargó el catálogo.
+function indiceCatalogo(fallback) {
+  const cat = peekCacheValue('catalogo:all');
+  const lista = Array.isArray(cat) ? cat : (fallback || []);
+  const porNombre = {};
+  for (const p of lista) {
+    const key = (p.nombre || '').toUpperCase().trim();
+    if (key) porNombre[key] = p;
+  }
+  return porNombre;
+}
+
+function gastosFrescos(fallback) {
+  const g = peekCacheValue('gastos:all');
+  return Array.isArray(g) ? g : (fallback || []);
+}
+
+// ─── Refresco en vivo ─────────────────────────────────────────────────────
 // Esta pantalla lee `ventas_por_dia` y `catalogo`, así que main.js la
 // redibujaba entera con CADA venta del POS: con el local vendiendo se veía
 // como recargas cortitas, y la tabla se iba sola arriba de todo. Ahora main.js
-// la deja afuera de ese refresco global (ver la exclusión allá) y acá movemos
-// solamente los números de la caja abierta, que son los únicos que cambian
-// mientras hay una caja andando: los cierres ya cerrados y sus totales no se
-// tocan hasta que se cierre la caja.
+// la deja afuera de ese refresco global (ver la exclusión allá) y el refresco
+// lo maneja esta pantalla:
+//
+//   · los seis números de la caja abierta se mueven en el lugar, sin tocar la
+//     tabla ni el scroll — es lo único que cambia con cada venta;
+//   · todo lo demás (la tabla de cierres y los cuatro totales de arriba) se
+//     vigila con una huella. Si cambia, se redibuja entero. Sin eso la pantalla
+//     se quedaba vieja cuando una PC cargaba el conteo de un cierre, mergeaba
+//     su reporte al cerrar, o sincronizaba tarde una venta de una caja ya
+//     cerrada.
 let _cierresUnsub = null;
 let _cierresReloj = null;
 
 function _soltarSeguimiento() {
   if (_cierresUnsub) { try { _cierresUnsub(); } catch (_) {} _cierresUnsub = null; }
   if (_cierresReloj) { clearInterval(_cierresReloj); _cierresReloj = null; }
+}
+
+// Las fechas llegan como Timestamp vivo, como {seconds} del cache, o string.
+function _claveFecha(v) {
+  if (!v) return '';
+  if (typeof v.toDate === 'function') return String(v.toDate().getTime());
+  if (typeof v === 'object' && v.seconds !== undefined) return String(v.seconds);
+  return String(v);
+}
+
+// Huella de lo que se ve FUERA del panel de la caja abierta.
+// A propósito NO entra la cantidad total de items: cada venta la movería y
+// volveríamos a redibujar toda la pantalla, que es justo lo que se quiere
+// evitar. Solo se cuentan los renglones atribuidos a una caja que no es la
+// abierta, que son los únicos que pueden cambiar un cierre ya cerrado.
+export function huellaDeLaTabla(cierresRaw, itemsRaw, idAbierta) {
+  const partes = [];
+  for (const c of cierresRaw) {
+    partes.push([
+      c.id, c.register_id,
+      _claveFecha(c.fecha_apertura), _claveFecha(c.fecha_cierre),
+      c.total_ventas || 0, c.total_efectivo || 0, c.total_transferencia || 0,
+      c.total_retiros || 0, c.total_transacciones || 0, c.monto_final || 0,
+      c.pendiente_conteo ? 1 : 0, c.cajero || '',
+    ].join(':'));
+  }
+  const abierta = idAbierta == null ? null : Number(idAbierta);
+  let ajenos = 0;
+  for (const it of itemsRaw) {
+    const cr = it.cash_register_id;
+    if (cr === null || cr === undefined || cr === '') continue;
+    if (abierta !== null && Number(cr) === abierta) continue;
+    ajenos++;
+  }
+  return `${ajenos}#${partes.join('|')}`;
 }
 
 function seguirCajaEnVivo(container, db, ctx) {
@@ -339,14 +396,18 @@ function seguirCajaEnVivo(container, db, ctx) {
       vistos.add(key);
       abiertas.push(c);
     }
-    if (!abiertas.length) return { id: null, caja: null };
+
+    const id = abiertas.length && abiertas[0].register_id != null ? abiertas[0].register_id : null;
+    const huella = huellaDeLaTabla(cierresRaw, itemsRaw, id);
+    if (!abiertas.length) return { id: null, caja: null, huella };
 
     const aperturaRaw = abiertas.reduce(
       (min, c) => (!min || toDate(c.fecha_apertura) < toDate(min) ? c.fecha_apertura : min), null
     );
     const agg = agregarEnRango(normalizarItems(itemsRaw, fechaInicioStr), toDate(aperturaRaw), null);
     return {
-      id: abiertas[0].register_id != null ? abiertas[0].register_id : null,
+      id,
+      huella,
       caja: {
         cajero:              abiertas.map(c => c.cajero || c.pc_id || 'PC').join(', '),
         fecha_apertura:      aperturaRaw,
@@ -387,6 +448,8 @@ function seguirCajaEnVivo(container, db, ctx) {
     return true;
   };
 
+  let huellaActual = (recalcular() || {}).huella;
+
   const refrescar = () => {
     if (!document.body.contains(container)) { _soltarSeguimiento(); return; }
     // Con un modal abierto no se toca nada: el usuario puede estar cargando el
@@ -395,12 +458,23 @@ function seguirCajaEnVivo(container, db, ctx) {
 
     const r = recalcular();
     if (!r) return;
-    // Cambió CUÁL caja está abierta (se abrió, se cerró, o es otra). Eso mueve
-    // también la tabla y los totales de arriba, así que ahí sí va el redibujo
-    // entero. Es un evento de a lo sumo un par de veces por día.
-    if (String(r.id) !== String(idActual)) { renderCierres(container, db); return; }
+
+    // Cambió algo de la tabla o de los totales de arriba: otra caja abierta,
+    // un cierre con su conteo cargado, un reporte mergeado por una PC, o una
+    // venta vieja que sincronizó tarde. Ahí sí va el redibujo entero — son
+    // eventos de a lo sumo unas pocas veces por día.
+    // La barra de arriba dice "Actualizado: hh:mm:ss". La pone main.js al
+    // terminar de cargar una página, y acá ya no recargamos ninguna: sin este
+    // aviso marcaría la hora en que entraste mientras los números se mueven.
+    const marcarFresco = () => document.dispatchEvent(new CustomEvent('ll:datos-frescos'));
+
+    if (r.huella !== huellaActual || String(r.id) !== String(idActual)) {
+      renderCierres(container, db).then(marcarFresco, () => {});
+      return;
+    }
     if (!r.caja) return;                      // sin caja abierta no hay nada que mover
-    if (!pintarEnElLugar(r.caja)) renderCierres(container, db);
+    if (!pintarEnElLugar(r.caja)) { renderCierres(container, db).then(marcarFresco, () => {}); return; }
+    marcarFresco();
   };
 
   // Una venta toca `ventas_por_dia` y `catalogo` casi al mismo tiempo: sin este

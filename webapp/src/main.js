@@ -485,6 +485,10 @@ function updateLastTime() {
   if (el) el.textContent = 'Actualizado: ' + new Date().toLocaleTimeString('es-AR', { timeZone: 'America/Argentina/Buenos_Aires', hour12: false });
 }
 
+// Las páginas que se refrescan solas (sin pasar por loadPage) avisan por acá,
+// así la hora de la barra no se queda en el momento en que entraste.
+document.addEventListener('ll:datos-frescos', updateLastTime);
+
 // ── Tooltips del modo rail ──
 // Se montan en <body> y no dentro del sidebar: el sidebar tiene overflow:hidden
 // y cualquier tooltip interno quedaría recortado contra su borde.
