@@ -1049,6 +1049,12 @@ function initApp(session) {
       // Reclamos de la Tienda: escucha los reclamos por su cuenta, y puede
       // tener una respuesta a medio escribir que un redibujo borraría.
       if (currentPage === 'tienda_reclamos') return;
+      // Cierres de Caja: depende de `ventas_por_dia` y `catalogo`, así que
+      // CADA venta del POS la redibujaba entera. Con el local vendiendo se veía
+      // como recargas cortitas una atrás de otra, y la tabla volvía sola arriba
+      // de todo. La página escucha el store por su cuenta y actualiza los
+      // números de la caja abierta sin tocar el resto.
+      if (currentPage === 'cierres') return;
 
       // Si el usuario está interactuando, diferimos el refresh para no
       // pisar lo que está haciendo (buscar, editar, llenar un form).

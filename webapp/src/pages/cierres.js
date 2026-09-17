@@ -1,5 +1,6 @@
 import { collection, getDocs, query, orderBy, where, limit, doc, updateDoc, setDoc, getDoc, runTransaction, Timestamp, writeBatch } from 'firebase/firestore';
-import { getCached, invalidateCache } from '../cache.js';
+import { getCached, invalidateCache, peekCacheValue } from '../cache.js';
+import { onStoreChange } from '../store.js';
 import { getFechaInicioDate, getFechaInicio, isVentaVarios2, isItemVarios2, fechaDMYtoYMD } from '../config.js';
 import { confirmDialog, alertDialog, escHtml } from '../components/dialogs.js';
 // Cómo se reparte cada renglón entre efectivo y transferencia. La regla vive
@@ -59,98 +60,7 @@ export async function renderCierres(container, db) {
     }, { ttl: 30 * 1000 }),
   ]);
 
-  // ── Items normalizados ────────────────────────────────────────────────
-  // Cada item de `ventas_por_dia` lleva su `cash_register_id` (las ventas
-  // nuevas) → permite atribuir el item a SU caja sin doble suma cuando hay
-  // cajas que se solapan. Items viejos no tienen ese campo → fallback al
-  // rango temporal por día.
-  const items = itemsRaw
-    .filter(it => {
-      if (it.deleted === true) return false;
-      if (isItemVarios2(it)) return false;
-      return fechaDMYtoYMD(it.fecha) >= fechaInicioStr;
-    })
-    .map(it => {
-      let dt = null;
-      if (it.fecha_dt) {
-        dt = typeof it.fecha_dt.toDate === 'function' ? it.fecha_dt.toDate()
-           : it.fecha_dt.seconds !== undefined
-             ? new Date(it.fecha_dt.seconds * 1000 + Math.floor((it.fecha_dt.nanoseconds || 0) / 1e6))
-             : new Date(it.fecha_dt);
-        if (dt && isNaN(dt)) dt = null;
-      }
-      if (!dt) {
-        const ymd = fechaDMYtoYMD(it.fecha);
-        const hora = (it.hora || '00:00:00').padEnd(8, ':00').slice(0, 8);
-        if (ymd) {
-          const parsed = new Date(`${ymd}T${hora}-03:00`);
-          if (!isNaN(parsed)) dt = parsed;
-        }
-      }
-      // cash_register_id puede venir como number, string, o ausente (ventas viejas).
-      let crId = it.cash_register_id;
-      if (crId !== null && crId !== undefined && crId !== '') {
-        const n = Number(crId);
-        crId = Number.isFinite(n) ? n : null;
-      } else {
-        crId = null;
-      }
-      return {
-        pc_id:             it._pc_id || it.pc_id || '',
-        num_venta:         it.num_venta,
-        subtotal:          Number(it.subtotal || 0),
-        cantidad:          Number(it.cantidad || 0),
-        tipo_pago:         it.tipo_pago || '',
-        // Reparto entre los dos medios de pago, tal como lo dejó el POS. Los
-        // renglones viejos no lo traen y `repartoDeItem` cae al tipo_pago.
-        monto_efectivo:      it.monto_efectivo,
-        monto_transferencia: it.monto_transferencia,
-        producto:          it.producto || it.product_name || '-',
-        fecha_dt:          dt,
-        fecha_ymd:         fechaDMYtoYMD(it.fecha),  // 'YYYY-MM-DD' del día de la venta
-        cash_register_id:  crId,
-      };
-    });
-
-  // Agrega items cuyo `fecha_dt` cae en [apertura, cierre] (caja abierta actual).
-  // Solo se usa para la tarjeta "Caja Abierta" — ahí sí queremos rango temporal.
-  function aggregateInRange(apertura, cierre) {
-    const ini = apertura && !isNaN(apertura) ? apertura.getTime() : -Infinity;
-    const fin = cierre   && !isNaN(cierre)   ? cierre.getTime()   : Infinity;
-    let total_efectivo = 0, total_transferencia = 0;
-    const ventasEf = new Set();
-    const ventasTr = new Set();
-    const ventas   = new Set();
-    const prodMap  = {};
-    for (const it of items) {
-      if (!it.fecha_dt) continue;
-      const t = it.fecha_dt.getTime();
-      if (t < ini || t > fin) continue;
-      const parte = repartoDeItem(it);
-      const key   = `${it.pc_id}|${it.num_venta}`;
-      total_efectivo      += parte.efectivo;
-      total_transferencia += parte.transferencia;
-      ventas.add(key);
-      if (parte.efectivo)      ventasEf.add(key);
-      if (parte.transferencia) ventasTr.add(key);
-      if (!prodMap[it.producto]) {
-        prodMap[it.producto] = { product_name: it.producto, total_quantity: 0, total_amount: 0 };
-      }
-      prodMap[it.producto].total_quantity += it.cantidad || 1;
-      prodMap[it.producto].total_amount   += it.subtotal;
-    }
-    return {
-      total_ventas:             total_efectivo + total_transferencia,
-      total_efectivo,
-      total_transferencia,
-      num_ventas_efectivo:      ventasEf.size,
-      num_ventas_transferencia: ventasTr.size,
-      // Ventas distintas, no la suma: una mixta figura en las dos listas
-      // porque dejó plata en las dos.
-      total_transacciones:      ventas.size,
-      productos_vendidos:       Object.values(prodMap).sort((a, b) => b.total_amount - a.total_amount),
-    };
-  }
+  const items = normalizarItems(itemsRaw, fechaInicioStr);
 
   // Índice catálogo por nombre (para obtener costo al calcular CMV del turno)
   const catByName = {};
@@ -158,6 +68,8 @@ export async function renderCierres(container, db) {
     const key = (p.nombre || '').toUpperCase().trim();
     if (key) catByName[key] = p;
   }
+
+  const aggregateInRange = (apertura, cierre) => agregarEnRango(items, apertura, cierre);
 
   // Ocultar cierres cerrados anteriores a fecha_inicio.
   // Las cajas abiertas se muestran siempre (para poder cerrarlas aunque sean viejas).
@@ -378,6 +290,230 @@ export async function renderCierres(container, db) {
       });
     });
   }
+
+  seguirCajaEnVivo(container, db, { fechaInicioStr, cajaAbiertaId });
+}
+
+// ─── Refresco en vivo de la caja abierta ──────────────────────────────────
+// Esta pantalla lee `ventas_por_dia` y `catalogo`, así que main.js la
+// redibujaba entera con CADA venta del POS: con el local vendiendo se veía
+// como recargas cortitas, y la tabla se iba sola arriba de todo. Ahora main.js
+// la deja afuera de ese refresco global (ver la exclusión allá) y acá movemos
+// solamente los números de la caja abierta, que son los únicos que cambian
+// mientras hay una caja andando: los cierres ya cerrados y sus totales no se
+// tocan hasta que se cierre la caja.
+let _cierresUnsub = null;
+let _cierresReloj = null;
+
+function _soltarSeguimiento() {
+  if (_cierresUnsub) { try { _cierresUnsub(); } catch (_) {} _cierresUnsub = null; }
+  if (_cierresReloj) { clearInterval(_cierresReloj); _cierresReloj = null; }
+}
+
+function seguirCajaEnVivo(container, db, ctx) {
+  _soltarSeguimiento();
+
+  const { fechaInicioStr } = ctx;
+  const idActual = ctx.cajaAbiertaId;
+
+  // Recalcula la caja abierta con lo que ya tiene el store en memoria.
+  // Cero lecturas a Firestore: son las mismas claves que pobló el listener.
+  const recalcular = () => {
+    const cierresRaw = peekCacheValue('cierres:caja');
+    const itemsRaw   = peekCacheValue('historial:ventas_dia:v3');
+    const activa     = peekCacheValue('caja_activa:current');
+    if (!Array.isArray(cierresRaw) || !Array.isArray(itemsRaw)) return null;
+
+    const activaId = (activa && activa.status === 'open')
+      ? (activa.register_id != null ? String(activa.register_id)
+          : (activa.id != null ? String(activa.id) : null))
+      : null;
+
+    const abiertas = [];
+    const vistos = new Set();
+    for (const c of cierresRaw) {
+      if (c.fecha_cierre) continue;
+      if (activaId && c.register_id != null && String(c.register_id) !== activaId) continue;
+      const key = c.register_id != null ? String(c.register_id) : `_doc_${c.id}`;
+      if (vistos.has(key)) continue;
+      vistos.add(key);
+      abiertas.push(c);
+    }
+    if (!abiertas.length) return { id: null, caja: null };
+
+    const aperturaRaw = abiertas.reduce(
+      (min, c) => (!min || toDate(c.fecha_apertura) < toDate(min) ? c.fecha_apertura : min), null
+    );
+    const agg = agregarEnRango(normalizarItems(itemsRaw, fechaInicioStr), toDate(aperturaRaw), null);
+    return {
+      id: abiertas[0].register_id != null ? abiertas[0].register_id : null,
+      caja: {
+        cajero:              abiertas.map(c => c.cajero || c.pc_id || 'PC').join(', '),
+        fecha_apertura:      aperturaRaw,
+        monto_inicial:       abiertas[0]?.monto_inicial || 0,
+        total_retiros:       abiertas.reduce((s, c) => s + (c.total_retiros || 0), 0),
+        retiros:             abiertas.flatMap(c => c.retiros || []),
+        _pcs:                abiertas.length,
+        ...agg,
+      },
+    };
+  };
+
+  // Escribe los valores dentro de las tarjetas que ya están dibujadas. Devuelve
+  // false si el panel no es el que espera, y ahí el que llama redibuja.
+  const pintarEnElLugar = (caja) => {
+    const panel = container.querySelector('.cj-caja--abierta');
+    if (!panel) return false;
+
+    const v = valoresCaja(caja);
+    for (const [clave, texto] of Object.entries(v)) {
+      const tile = panel.querySelector(`.cj-stat[data-cj="${clave}"]`);
+      if (!tile) return false;
+      const el = tile.querySelector('.cj-stat-v');
+      if (el && el.textContent !== texto) el.textContent = texto;
+      if (clave === 'retiros') tile.classList.toggle('cj-stat--neg', (caja.total_retiros || 0) > 0);
+    }
+
+    const meta = panel.querySelector('.cj-caja-meta');
+    if (meta) {
+      const txt = metaCaja(caja);
+      if (meta.innerHTML !== txt) meta.innerHTML = txt;
+    }
+
+    // Los retiros se cargan desde el POS en el medio del turno: si aparece uno
+    // nuevo hay que dibujar la lista, y eso ya no es mover un número.
+    const enPantalla = panel.querySelectorAll('.cj-retiro').length;
+    if (enPantalla !== (caja.retiros || []).length) return false;
+    return true;
+  };
+
+  const refrescar = () => {
+    if (!document.body.contains(container)) { _soltarSeguimiento(); return; }
+    // Con un modal abierto no se toca nada: el usuario puede estar cargando el
+    // efectivo contado o cerrando la caja.
+    if (document.querySelector('.modal-overlay')) return;
+
+    const r = recalcular();
+    if (!r) return;
+    // Cambió CUÁL caja está abierta (se abrió, se cerró, o es otra). Eso mueve
+    // también la tabla y los totales de arriba, así que ahí sí va el redibujo
+    // entero. Es un evento de a lo sumo un par de veces por día.
+    if (String(r.id) !== String(idActual)) { renderCierres(container, db); return; }
+    if (!r.caja) return;                      // sin caja abierta no hay nada que mover
+    if (!pintarEnElLugar(r.caja)) renderCierres(container, db);
+  };
+
+  // Una venta toca `ventas_por_dia` y `catalogo` casi al mismo tiempo: sin este
+  // respiro recalculábamos dos veces por venta.
+  let timer = null;
+  const pedirRefresco = () => {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => { timer = null; refrescar(); }, 200);
+  };
+
+  _cierresUnsub = onStoreChange((col) => {
+    if (col !== 'ventas_por_dia' && col !== 'cierres_caja' && col !== 'caja_activa') return;
+    pedirRefresco();
+  });
+
+  // El "abierta hace 3 h 20 m" se queda viejo solo: lo movemos cada minuto.
+  if (idActual != null) _cierresReloj = setInterval(refrescar, 60 * 1000);
+}
+
+// ─── Cálculo de los totales ───────────────────────────────────────────────
+
+// Items de `ventas_por_dia` normalizados. Cada uno lleva su `cash_register_id`
+// (las ventas nuevas) → permite atribuir el item a SU caja sin doble suma
+// cuando hay cajas que se solapan. Los items viejos no tienen ese campo →
+// fallback al rango temporal por día.
+function normalizarItems(itemsRaw, fechaInicioStr) {
+  return (itemsRaw || [])
+    .filter(it => {
+      if (it.deleted === true) return false;
+      if (isItemVarios2(it)) return false;
+      return fechaDMYtoYMD(it.fecha) >= fechaInicioStr;
+    })
+    .map(it => {
+      let dt = null;
+      if (it.fecha_dt) {
+        dt = typeof it.fecha_dt.toDate === 'function' ? it.fecha_dt.toDate()
+           : it.fecha_dt.seconds !== undefined
+             ? new Date(it.fecha_dt.seconds * 1000 + Math.floor((it.fecha_dt.nanoseconds || 0) / 1e6))
+             : new Date(it.fecha_dt);
+        if (dt && isNaN(dt)) dt = null;
+      }
+      if (!dt) {
+        const ymdStr = fechaDMYtoYMD(it.fecha);
+        const hora = (it.hora || '00:00:00').padEnd(8, ':00').slice(0, 8);
+        if (ymdStr) {
+          const parsed = new Date(`${ymdStr}T${hora}-03:00`);
+          if (!isNaN(parsed)) dt = parsed;
+        }
+      }
+      // cash_register_id puede venir como number, string, o ausente (ventas viejas).
+      let crId = it.cash_register_id;
+      if (crId !== null && crId !== undefined && crId !== '') {
+        const n = Number(crId);
+        crId = Number.isFinite(n) ? n : null;
+      } else {
+        crId = null;
+      }
+      return {
+        pc_id:             it._pc_id || it.pc_id || '',
+        num_venta:         it.num_venta,
+        subtotal:          Number(it.subtotal || 0),
+        cantidad:          Number(it.cantidad || 0),
+        tipo_pago:         it.tipo_pago || '',
+        // Reparto entre los dos medios de pago, tal como lo dejó el POS. Los
+        // renglones viejos no lo traen y `repartoDeItem` cae al tipo_pago.
+        monto_efectivo:      it.monto_efectivo,
+        monto_transferencia: it.monto_transferencia,
+        producto:          it.producto || it.product_name || '-',
+        fecha_dt:          dt,
+        fecha_ymd:         fechaDMYtoYMD(it.fecha),  // 'YYYY-MM-DD' del día de la venta
+        cash_register_id:  crId,
+      };
+    });
+}
+
+// Agrega items cuyo `fecha_dt` cae en [apertura, cierre] (caja abierta actual).
+// Solo se usa para la tarjeta "Caja Abierta" — ahí sí queremos rango temporal.
+function agregarEnRango(items, apertura, cierre) {
+  const ini = apertura && !isNaN(apertura) ? apertura.getTime() : -Infinity;
+  const fin = cierre   && !isNaN(cierre)   ? cierre.getTime()   : Infinity;
+  let total_efectivo = 0, total_transferencia = 0;
+  const ventasEf = new Set();
+  const ventasTr = new Set();
+  const ventas   = new Set();
+  const prodMap  = {};
+  for (const it of items) {
+    if (!it.fecha_dt) continue;
+    const t = it.fecha_dt.getTime();
+    if (t < ini || t > fin) continue;
+    const parte = repartoDeItem(it);
+    const key   = `${it.pc_id}|${it.num_venta}`;
+    total_efectivo      += parte.efectivo;
+    total_transferencia += parte.transferencia;
+    ventas.add(key);
+    if (parte.efectivo)      ventasEf.add(key);
+    if (parte.transferencia) ventasTr.add(key);
+    if (!prodMap[it.producto]) {
+      prodMap[it.producto] = { product_name: it.producto, total_quantity: 0, total_amount: 0 };
+    }
+    prodMap[it.producto].total_quantity += it.cantidad || 1;
+    prodMap[it.producto].total_amount   += it.subtotal;
+  }
+  return {
+    total_ventas:             total_efectivo + total_transferencia,
+    total_efectivo,
+    total_transferencia,
+    num_ventas_efectivo:      ventasEf.size,
+    num_ventas_transferencia: ventasTr.size,
+    // Ventas distintas, no la suma: una mixta figura en las dos listas
+    // porque dejó plata en las dos.
+    total_transacciones:      ventas.size,
+    productos_vendidos:       Object.values(prodMap).sort((a, b) => b.total_amount - a.total_amount),
+  };
 }
 
 // ─── Markup de la pantalla ────────────────────────────────────────────────
@@ -396,20 +532,43 @@ function tiempoAbierto(apertura) {
   return hrs > 0 ? `${hrs} h ${min} m` : `${min} m`;
 }
 
-function statHTML(titulo, valor, extraClase = '') {
+// `clave` etiqueta la tarjeta para poder actualizar su número sin redibujar el
+// panel entero (ver seguirCajaEnVivo). Sin eso habría que ubicarlas por
+// posición, y mover una en el markup mezclaría los valores sin que se note.
+function statHTML(clave, titulo, valor, extraClase = '') {
   return `
-    <div class="cj-stat ${extraClase}">
+    <div class="cj-stat ${extraClase}" data-cj="${clave}">
       <span class="cj-stat-t">${titulo}</span>
       <span class="cj-stat-v">${valor}</span>
     </div>`;
 }
 
-export function cajaAbiertaHTML(caja, registerId) {
-  const retirosLista = caja.retiros || [];
-  const totalRetiros = caja.total_retiros || 0;
+// Los seis números del panel, en el mismo formato que los pinta el markup.
+// Una sola fuente: la usan el dibujo inicial y el refresco en vivo.
+export function valoresCaja(caja) {
+  const retiros = caja.total_retiros || 0;
+  return {
+    inicial:       `$${fmt(caja.monto_inicial || 0)}`,
+    ventas:        `$${fmt(caja.total_ventas || 0)}`,
+    efectivo:      `$${fmt(caja.total_efectivo || 0)}`,
+    transferencia: `$${fmt(caja.total_transferencia || 0)}`,
+    transacciones: String(caja.total_transacciones || 0),
+    retiros:       retiros > 0 ? `-$${fmt(retiros)}` : `$${fmt(0)}`,
+  };
+}
+
+// Línea de "Cajero: X · abierta hace Y · apertura Z".
+function metaCaja(caja) {
   const quien = caja._pcs > 1
     ? `${caja._pcs} cajas activas`
     : `Cajero: ${escHtml(caja.cajero || 'Sin cajero')}`;
+  return `${quien} · abierta hace ${tiempoAbierto(caja.fecha_apertura)} · apertura ${fmtDT(parseArDate(caja.fecha_apertura))}`;
+}
+
+export function cajaAbiertaHTML(caja, registerId) {
+  const retirosLista = caja.retiros || [];
+  const totalRetiros = caja.total_retiros || 0;
+  const v = valoresCaja(caja);
 
   return `
     <section class="cj-caja cj-caja--abierta">
@@ -419,7 +578,7 @@ export function cajaAbiertaHTML(caja, registerId) {
             <span class="cj-estado cj-estado--abierta"><span class="cj-punto"></span>Abierta</span>
             <h3>Caja${registerId != null ? ` #${registerId}` : ''}</h3>
           </div>
-          <p class="cj-caja-meta">${quien} · abierta hace ${tiempoAbierto(caja.fecha_apertura)} · apertura ${fmtDT(parseArDate(caja.fecha_apertura))}</p>
+          <p class="cj-caja-meta">${metaCaja(caja)}</p>
         </div>
         ${registerId != null ? `
         <button type="button" id="btn-cerrar-caja-web" class="cj-btn cj-btn--cerrar">
@@ -428,14 +587,12 @@ export function cajaAbiertaHTML(caja, registerId) {
       </div>
 
       <div class="cj-stats">
-        ${statHTML('Monto inicial',   `$${fmt(caja.monto_inicial || 0)}`)}
-        ${statHTML('Ventas en curso', `$${fmt(caja.total_ventas || 0)}`, 'cj-stat--fuerte')}
-        ${statHTML('Efectivo',        `$${fmt(caja.total_efectivo || 0)}`)}
-        ${statHTML('Transferencias',  `$${fmt(caja.total_transferencia || 0)}`)}
-        ${statHTML('Transacciones',   String(caja.total_transacciones || 0))}
-        ${statHTML('Retiros',
-                   totalRetiros > 0 ? `-$${fmt(totalRetiros)}` : `$${fmt(0)}`,
-                   totalRetiros > 0 ? 'cj-stat--neg' : '')}
+        ${statHTML('inicial',       'Monto inicial',   v.inicial)}
+        ${statHTML('ventas',        'Ventas en curso', v.ventas, 'cj-stat--fuerte')}
+        ${statHTML('efectivo',      'Efectivo',        v.efectivo)}
+        ${statHTML('transferencia', 'Transferencias',  v.transferencia)}
+        ${statHTML('transacciones', 'Transacciones',   v.transacciones)}
+        ${statHTML('retiros',       'Retiros',         v.retiros, totalRetiros > 0 ? 'cj-stat--neg' : '')}
       </div>
 
       ${retirosLista.length > 0 ? `

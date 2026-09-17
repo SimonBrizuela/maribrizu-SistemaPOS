@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<title>Chequeo del refresco en vivo de Cierres</title>
+<link rel="stylesheet" href="/src/styles/main.css" />
+</head>
+<body style="padding:16px">
+<pre id="out">corriendo…</pre>
+<div id="zona"></div>
+<script type="module">
+import { cajaAbiertaHTML, valoresCaja } from '/src/pages/cierres.js';
+
+const ts = iso => ({ seconds: Math.floor(new Date(iso).getTime() / 1000), nanoseconds: 0 });
+const linea = [];
+const ok = (cond, txt) => linea.push(`${cond ? 'OK  ' : 'FALLA'} ${txt}`);
+
+const caja = {
+  cajero: 'Web',
+  fecha_apertura: ts('2026-09-17T08:30:00-03:00'),
+  monto_inicial: 30000,
+  total_ventas: 354840,
+  total_efectivo: 187240,
+  total_transferencia: 167600,
+  total_transacciones: 64,
+  total_retiros: 0,
+  retiros: [],
+  _pcs: 1,
+};
+
+const zona = document.getElementById('zona');
+zona.innerHTML = cajaAbiertaHTML(caja, 137);
+const panel = zona.querySelector('.cj-caja--abierta');
+
+// 1. Invariante del refresco en vivo: cada clave de valoresCaja() tiene su
+//    tarjeta en el markup. Si esto se rompe, el refresco escribiría el número
+//    equivocado (o ninguno) sin que se note a simple vista.
+const v = valoresCaja(caja);
+for (const clave of Object.keys(v)) {
+  const tile = panel.querySelector(`.cj-stat[data-cj="${clave}"]`);
+  ok(!!tile, `existe la tarjeta data-cj="${clave}"`);
+  if (tile) {
+    ok(tile.querySelector('.cj-stat-v').textContent === v[clave],
+       `  y muestra ${v[clave]}`);
+  }
+}
+
+// 2. Ninguna tarjeta suelta sin clave (se agregó una y no se sumó a valoresCaja).
+const todas = panel.querySelectorAll('.cj-stat');
+ok(todas.length === Object.keys(v).length,
+   `el panel tiene ${todas.length} tarjetas y valoresCaja() devuelve ${Object.keys(v).length}`);
+
+// 3. Con retiros cargados, la tarjeta sale marcada en rojo y la lista aparece.
+const conRetiros = { ...caja, total_retiros: 145000,
+  retiros: [{ reason: 'Pago proveedor', amount: 120000 }, { reason: 'Vuelto', amount: 25000 }] };
+zona.innerHTML = cajaAbiertaHTML(conRetiros, 137);
+const p2 = zona.querySelector('.cj-caja--abierta');
+ok(p2.querySelector('.cj-stat[data-cj="retiros"]').classList.contains('cj-stat--neg'),
+   'con retiros la tarjeta queda marcada en rojo');
+ok(p2.querySelector('.cj-stat[data-cj="retiros"] .cj-stat-v').textContent === '-$145.000,00',
+   'el retiro se muestra en negativo');
+ok(p2.querySelectorAll('.cj-retiro').length === 2,
+   'se listan los 2 retiros (el refresco redibuja si cambia esta cantidad)');
+
+const fallas = linea.filter(l => l.startsWith('FALLA')).length;
+document.getElementById('out').textContent =
+  linea.join('\n') + `\n\n${fallas === 0 ? 'TODO OK' : fallas + ' FALLAS'}`;
+</script>
+</body>
+</html>
