@@ -236,3 +236,13 @@ def test_se_busca_por_id_cuando_dos_pedidos_comparten_codigo(db, tmp_path):
     assert 'P1' in str(err.value) and 'P2' in str(err.value)
     texto = rev.arreglar(db, 'soltar-cobro', 'P1', aplicar=True, carpeta_copias=str(tmp_path))
     assert 'Libera el cobro' in texto and 'cobro' not in pedido(db, 'P1')
+
+
+def test_la_historia_se_pide_por_codigo_o_por_id(db):
+    pid = sembrar(db, 'PEDIDOIDLARGO01')
+    NubePedidos(db, quien=lambda: dict(CAJA), avisar_cliente=False).entregar(pid)
+    desde = datetime.now(reglas.TZ_AR) - timedelta(days=1)
+    por_codigo = rev.leer(db, desde, 'ab12')
+    por_id = rev.leer(db, desde, pid)
+    assert list(por_codigo[0]) == list(por_id[0]) == [pid]
+    assert len(por_id[2]) == 1 and por_id[2][0]['pedido_id'] == pid

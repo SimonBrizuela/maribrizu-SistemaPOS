@@ -304,6 +304,11 @@ def leer(db, desde, codigo=None):
     col = db.collection('tienda_pedidos')
     pedidos = {}
     if codigo:
+        # El código o el id: dos pedidos pueden compartir código y la revisión
+        # muestra el id para esos casos.
+        directo = col.document(codigo).get()
+        if directo.exists:
+            pedidos[directo.id] = _datos(directo)
         for s in col.where(filter=FieldFilter('codigo', '==', codigo.upper())).stream():
             pedidos[s.id] = _datos(s)
     else:
@@ -653,7 +658,7 @@ def main(argv=None):
 
     if args.pedido:
         if not pedidos:
-            print(f'No hay pedido con código {args.pedido}.')
+            print(f'No hay pedido con código o id {args.pedido}.')
             return
         for pid, p in pedidos.items():
             print(f"Pedido {p.get('codigo')} ({pid}) · estado {p.get('estado')}")
