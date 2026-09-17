@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="es" data-theme="light">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Previsualización — Cierres de Caja</title>
+<link rel="stylesheet" href="/src/styles/main.css" />
+<link rel="stylesheet" href="/src/styles/skeleton.css" />
+<style>
+  /* Barra de la previsualización, no es parte de la pantalla */
+  .pv-bar { position: fixed; top: 0; left: 0; right: 0; z-index: 9999;
+    background: #111; color: #fff; padding: 6px 12px; font: 12px/1.4 monospace; display: flex; gap: 10px; }
+  .pv-bar button { font: inherit; background: #333; color: #fff; border: 1px solid #555; border-radius: 4px; padding: 3px 9px; cursor: pointer; }
+  .main-content { margin-left: var(--sidebar-w); }
+  .pv-sidebar { position: fixed; left: 0; top: 0; bottom: 0; width: var(--sidebar-w); background: #16181c; z-index: 5; }
+  .page-content { padding-top: 46px; }
+</style>
+</head>
+<body>
+  <div class="pv-bar">
+    <span id="pv-ancho"></span>
+    <button onclick="pvTema()">tema</button>
+    <button onclick="pvEstado('abierta')">caja abierta</button>
+    <button onclick="pvEstado('cerrada')">sin caja</button>
+    <button onclick="pvEstado('cargando')">cargando</button>
+    <button onclick="pvModal()">modal detalle</button>
+    <button onclick="pvCerrar()">modal cerrar</button>
+    <button onclick="pvAbrir()">modal abrir</button>
+  </div>
+  <div class="pv-sidebar"></div>
+  <main class="main-content">
+    <div class="page-content" id="pageContent"></div>
+  </main>
+
+<script type="module">
+import { cajaAbiertaHTML, sinCajaHTML, kpisCierresHTML, tablaCierresHTML, openCierreModal,
+         esqueletoCierresHTML, openCerrarCajaModal, openAbrirCajaModal }
+  from '/src/pages/cierres.js';
+
+const cont = document.getElementById('pageContent');
+
+const ts = (iso) => ({ seconds: Math.floor(new Date(iso).getTime() / 1000), nanoseconds: 0 });
+
+const cajaAbierta = {
+  cajero: 'Web',
+  fecha_apertura: ts('2026-09-16T20:34:00-03:00'),
+  monto_inicial: 30000,
+  total_ventas: 354840,
+  total_efectivo: 187240,
+  total_transferencia: 167600,
+  total_retiros: 0,
+  total_transacciones: 64,
+  retiros: [],
+  _pcs: 1,
+};
+
+// Mismo turno pero con retiros y numeros grandes: el caso que mas aprieta.
+const cajaAbiertaLarga = {
+  ...cajaAbierta,
+  cajero: 'María Fernanda',
+  total_ventas: 12987654.5,
+  total_efectivo: 8765432.25,
+  total_transferencia: 4222222.25,
+  total_transacciones: 1284,
+  total_retiros: 145000,
+  retiros: [
+    { reason: 'Pago proveedor Sanchez', amount: 120000 },
+    { reason: 'Vuelto para el kiosco', amount: 25000 },
+  ],
+};
+
+const dias = ['2026-09-16','2026-09-15','2026-09-14','2026-09-12','2026-09-11','2026-09-10',
+              '2026-09-09','2026-09-08','2026-09-05','2026-09-04','2026-09-03','2026-09-02'];
+const sesiones = dias.map((d, i) => ({
+  register_id: 137 - i,
+  session_id: d,
+  fecha_apertura: ts(`${d}T08:33:00-03:00`),
+  fecha_cierre:   ts(`${d}T20:32:00-03:00`),
+  cajero: i === 2 ? 'Maria' : (i === 5 ? 'Sofía Gutiérrez' : '-'),
+  pcs: i === 1 ? ['PC1','PC2'] : ['PC1'],
+  monto_inicial: 30000,
+  total_retiros: i === 3 ? 85000 : 0,
+  monto_final: 0,
+  retiros: [],
+  pendiente_conteo: i === 0,
+  total_efectivo: 530501 + i * 9137,
+  total_transferencia: 627200 + i * 7311,
+  total_ventas: 1157701 + i * 16448,
+  num_ventas_efectivo: 90 + i,
+  num_ventas_transferencia: 64 + i,
+  total_transacciones: 154 - i * 3,
+  productos_vendidos: [],
+  monto_esperado: 560501,
+  _docs: [{ id: String(137 - i), register_id: 137 - i }],
+}));
+
+const kpis = {
+  totalCierres: 129,
+  totalVentas: 98933264.6,
+  totalEfect: 40134816.18,
+  totalTransf: 58798448.43,
+};
+
+let estado = 'abierta';
+let larga = false;
+
+function pintar() {
+  if (estado === 'cargando') {
+    cont.innerHTML = esqueletoCierresHTML();
+    return;
+  }
+  const caja = larga ? cajaAbiertaLarga : cajaAbierta;
+  cont.innerHTML = (estado === 'abierta' ? cajaAbiertaHTML(caja, 137) : sinCajaHTML(138))
+    + kpisCierresHTML(kpis)
+    + tablaCierresHTML(sesiones);
+  cont.querySelectorAll('.clickable-row').forEach(r => {
+    r.addEventListener('click', () => openCierreModal(sesiones[+r.dataset.idx], {}, [], null, () => {}));
+  });
+}
+
+window.pvTema = () => {
+  const h = document.documentElement;
+  h.dataset.theme = h.dataset.theme === 'dark' ? 'light' : 'dark';
+};
+window.pvEstado = (e) => { estado = e; pintar(); };
+window.pvModal = () => openCierreModal(sesiones[0], {}, [], null, () => {});
+window.pvLarga = (v) => { larga = v; pintar(); };
+window.pvCerrar = () => openCerrarCajaModal(null, { registerId: 137, monto_inicial: 30000 }, () => {});
+window.pvAbrir = () => openAbrirCajaModal(null, 138, () => {});
+
+const anchoEl = document.getElementById('pv-ancho');
+const verAncho = () => { anchoEl.textContent = window.innerWidth + ' x ' + window.innerHeight; };
+window.addEventListener('resize', verAncho);
+verAncho();
+
+// Estado inicial por querystring, para las capturas automaticas.
+const q = new URLSearchParams(location.search);
+if (q.get('tema') === 'dark') document.documentElement.dataset.theme = 'dark';
+if (q.get('estado')) estado = q.get('estado');
+if (q.get('larga') === '1') larga = true;
+pintar();
+if (q.get('modal') === '1') window.pvModal();
+if (q.get('modal') === 'cerrar') window.pvCerrar();
+if (q.get('modal') === 'abrir') window.pvAbrir();
+if (q.get('scroll')) {
+  const w = document.querySelector('.cj-tabla-wrap');
+  if (w) w.scrollTop = Number(q.get('scroll'));
+}
+</script>
+</body>
+</html>

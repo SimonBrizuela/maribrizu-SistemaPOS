@@ -11,33 +11,9 @@ import { repartoDeItem } from '../medios_de_pago.js';
 import { buscarPorNombre } from '../nombre_item.js';
 
 export async function renderCierres(container, db) {
-  // Shell vacío al toque: filtros + tabla con headers reales.
-  container.innerHTML = `
-    <div class="filter-bar">
-      <input type="text" placeholder="Buscar cajero..." style="width:200px" disabled />
-      <input type="date" disabled />
-      <input type="date" disabled />
-      <select disabled><option>Todas las cajas</option></select>
-    </div>
-    <div class="table-card">
-      <div class="table-card-header">
-        <h3>Cierres de Caja</h3>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr>
-            <th>#</th><th>Apertura</th><th>Cierre</th>
-            <th style="text-align:center">Ventas</th>
-            <th>Total</th><th>Efectivo</th>
-            <th>Transferencia</th><th>Retiros</th><th>Cajero</th>
-          </tr></thead>
-          <tbody>
-            ${Array(8).fill('<tr><td colspan="9" style="padding:6px 12px"><div class="skel" style="height:28px;border-radius:6px"></div></td></tr>').join('')}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  `;
+  // Shell vacío al toque: mismo esqueleto que la pantalla final, para que no
+  // salte el layout cuando llegan los datos.
+  container.innerHTML = esqueletoCierresHTML();
 
   const fechaInicio    = await getFechaInicioDate(db);
   const fechaInicioStr = await getFechaInicio(db);
@@ -347,17 +323,6 @@ export async function renderCierres(container, db) {
     totalTransf += s.total_transferencia;
   }
 
-  // Calcular tiempo abierta
-  function tiempoAbierto(apertura) {
-    if (!apertura) return '-';
-    const aDate = toDate(apertura);
-    if (!aDate || isNaN(aDate)) return '-';
-    const mins = Math.round((new Date() - aDate) / 60000);
-    const hrs = Math.floor(mins / 60);
-    const min = mins % 60;
-    return hrs > 0 ? `${hrs}h ${min}m` : `${min}m`;
-  }
-
   // ID de la caja abierta (para cerrarla desde la web). Si hay varias PCs con
   // distinto register_id (raro tras la migracion), tomamos el primero.
   const cajaAbiertaId = cajaAbierta && cajasAbiertas.length > 0
@@ -371,140 +336,9 @@ export async function renderCierres(container, db) {
   const proximoRegId = maxRegId + 1;
 
   container.innerHTML = `
-    ${cajaAbierta ? `
-    <!-- CAJA ACTUALMENTE ABIERTA -->
-    <div style="background:linear-gradient(135deg,#065f46,#047857);border-radius:16px;padding:20px 24px;margin-bottom:20px;color:#fff;box-shadow:0 4px 20px rgba(4,120,87,0.3)">
-      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px">
-        <div style="display:flex;align-items:center;gap:12px">
-          <div style="width:12px;height:12px;border-radius:50%;background:#34d399;box-shadow:0 0 0 3px rgba(52,211,153,0.3);animation:pulse 2s infinite"></div>
-          <div>
-            <div style="font-size:16px;font-weight:800">Caja Abierta${cajaAbiertaId != null ? ` #${cajaAbiertaId}` : ''}</div>
-            <div style="font-size:12px;color:var(--tint-green-fg);margin-top:2px">${cajaAbierta._pcs > 1 ? `${cajaAbierta._pcs} cajas activas · ` : `Cajero: ${cajaAbierta.cajero || 'Sin cajero'} · `}Abierta hace ${tiempoAbierto(cajaAbierta.fecha_apertura)}</div>
-          </div>
-        </div>
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-          <div style="font-size:11px;color:var(--tint-green-fg)">Apertura: ${fmtDT(parseArDate(cajaAbierta.fecha_apertura))}</div>
-          ${cajaAbiertaId != null ? `
-          <button id="btn-cerrar-caja-web" style="background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.3);border-radius:8px;padding:8px 14px;font-weight:700;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:6px">
-            <span class="material-icons" style="font-size:16px">lock</span>Cerrar caja
-          </button>` : ''}
-        </div>
-      </div>
-
-      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:12px;margin-top:16px">
-        <div style="background:rgba(255,255,255,0.1);border-radius:10px;padding:12px;border:1px solid rgba(255,255,255,0.15)">
-          <div style="font-size:11px;color:var(--tint-green-fg);font-weight:600">MONTO INICIAL</div>
-          <div style="font-size:20px;font-weight:800;margin-top:4px">$${fmt(cajaAbierta.monto_inicial || 0)}</div>
-        </div>
-        <div style="background:rgba(255,255,255,0.1);border-radius:10px;padding:12px;border:1px solid rgba(255,255,255,0.15)">
-          <div style="font-size:11px;color:var(--tint-green-fg);font-weight:600">VENTAS EN CURSO</div>
-          <div style="font-size:20px;font-weight:800;margin-top:4px">$${fmt(cajaAbierta.total_ventas || 0)}</div>
-        </div>
-        <div style="background:rgba(255,255,255,0.1);border-radius:10px;padding:12px;border:1px solid rgba(255,255,255,0.15)">
-          <div style="font-size:11px;color:var(--tint-green-fg);font-weight:600">EFECTIVO</div>
-          <div style="font-size:20px;font-weight:800;margin-top:4px">$${fmt(cajaAbierta.total_efectivo || 0)}</div>
-        </div>
-        <div style="background:rgba(255,255,255,0.1);border-radius:10px;padding:12px;border:1px solid rgba(255,255,255,0.15)">
-          <div style="font-size:11px;color:var(--tint-green-fg);font-weight:600">TRANSFERENCIAS</div>
-          <div style="font-size:20px;font-weight:800;margin-top:4px">$${fmt(cajaAbierta.total_transferencia || 0)}</div>
-        </div>
-        <div style="background:rgba(255,255,255,0.1);border-radius:10px;padding:12px;border:1px solid rgba(255,255,255,0.15)">
-          <div style="font-size:11px;color:var(--tint-green-fg);font-weight:600">TRANSACCIONES</div>
-          <div style="font-size:20px;font-weight:800;margin-top:4px">${cajaAbierta.total_transacciones || 0}</div>
-        </div>
-        <div style="background:rgba(255,255,255,0.1);border-radius:10px;padding:12px;border:1px solid rgba(255,255,255,0.15)">
-          <div style="font-size:11px;color:var(--tint-green-fg);font-weight:600">RETIROS</div>
-          <div style="font-size:20px;font-weight:800;margin-top:4px;color:${(cajaAbierta.total_retiros||0)>0?'#fca5a5':'var(--surface)'}">-$${fmt(cajaAbierta.total_retiros || 0)}</div>
-        </div>
-      </div>
-
-      ${(cajaAbierta.retiros||[]).length > 0 ? `
-      <div style="margin-top:12px">
-        <div style="font-size:11px;color:#fca5a5;font-weight:700;margin-bottom:8px">RETIROS DE ESTA SESIÓN</div>
-        ${(cajaAbierta.retiros||[]).map(r=>`
-          <div style="display:flex;justify-content:space-between;background:rgba(239,68,68,0.2);border-radius:8px;padding:8px 12px;margin-bottom:4px;border:1px solid rgba(239,68,68,0.3)">
-            <span style="font-size:12px;color:#fca5a5">${r.reason||r.motivo||'Retiro'}</span>
-            <span style="font-weight:700;color:var(--tint-red-fg)">-$${fmt(r.amount||r.monto||0)}</span>
-          </div>`).join('')}
-      </div>` : ''}
-    </div>
-    ` : `
-    <div style="background:var(--tint-green-bg);border:1px solid var(--border);border-radius:12px;padding:14px 18px;margin-bottom:16px;display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap">
-      <div style="display:flex;align-items:center;gap:10px">
-        <span class="material-icons" style="color:var(--tint-green-fg)">lock</span>
-        <span style="font-size:14px;color:var(--tint-green-fg);font-weight:600">No hay ninguna caja abierta. La próxima será la <b>#${proximoRegId}</b>.</span>
-      </div>
-      <button id="btn-abrir-caja-web" style="background:#15803d;color:#fff;border:none;border-radius:8px;padding:9px 16px;font-weight:700;font-size:13px;cursor:pointer;display:flex;align-items:center;gap:6px">
-        <span class="material-icons" style="font-size:16px">lock_open</span>Abrir caja #${proximoRegId}
-      </button>
-    </div>
-    `}
-
-    <!-- Tarjetas resumen -->
-    <div class="cards-grid" style="margin-bottom:24px">
-      <div class="card stat-card">
-        <div class="icon-wrap bg-purple"><span class="material-icons">lock_clock</span></div>
-        <div class="label">Total Cierres</div>
-        <div class="value">${totalCierres}</div>
-      </div>
-      <div class="card stat-card">
-        <div class="icon-wrap bg-green"><span class="material-icons">attach_money</span></div>
-        <div class="label">Total Acumulado</div>
-        <div class="value">$${fmt(totalVentas)}</div>
-      </div>
-      <div class="card stat-card">
-        <div class="icon-wrap bg-blue"><span class="material-icons">payments</span></div>
-        <div class="label">Total Efectivo</div>
-        <div class="value">$${fmt(totalEfect)}</div>
-      </div>
-      <div class="card stat-card">
-        <div class="icon-wrap bg-orange"><span class="material-icons">swap_horiz</span></div>
-        <div class="label">Total Transferencias</div>
-        <div class="value">$${fmt(totalTransf)}</div>
-      </div>
-    </div>
-
-    <!-- Tabla de cierres -->
-    <div class="table-card">
-      <div class="table-card-header">
-        <h3>🔒 Cierres de Caja</h3>
-        <span style="font-size:12px;color:var(--text-muted)">Click en una fila para ver el detalle completo</span>
-      </div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr>
-            <th>#</th><th>Apertura</th><th class="cie-col-cierre">Cierre</th>
-            <th style="text-align:center">Ventas</th><th>Total</th><th class="cie-col-efectivo">Efectivo</th>
-            <th class="cie-col-transferencia">Transferencia</th><th class="cie-col-retiros">Retiros</th><th>Cajero</th>
-          </tr></thead>
-          <tbody id="cierresBody">
-            ${sesiones.length === 0
-              ? `<tr><td colspan="9" style="text-align:center;padding:40px;color:var(--text-muted)">Sin cierres registrados</td></tr>`
-              : sesiones.map((c, i) => {
-                  const apertura = parseArDate(c.fecha_apertura);
-                  const cierre   = parseArDate(c.fecha_cierre);
-                  const retiros  = c.total_retiros || 0;
-                  const pcLabel  = c.pcs.length > 1 ? ` <span style="font-size:10px;color:var(--text-muted)">(${c.pcs.length} PCs)</span>` : '';
-                  const pendBadge = c.pendiente_conteo ? ` <span style="background:var(--tint-yellow-bg);color:var(--tint-orange-fg);font-size:9px;padding:2px 7px;border-radius:6px;font-weight:800;letter-spacing:.3px;border:1px solid var(--border)">PENDIENTE</span>` : '';
-                  return `<tr class="clickable-row" data-idx="${i}" style="cursor:pointer" title="${c.pendiente_conteo ? 'Cierre pendiente de conteo — click para cargar' : 'Ver detalle del cierre'}">
-                    <td><b>${c.session_id || '-'}</b>${pcLabel}${pendBadge}</td>
-                    <td>${fmtDT(apertura)}</td>
-                    <td class="cie-col-cierre">${fmtDT(cierre)}</td>
-                    <td style="text-align:center"><span class="badge badge-blue">${c.total_transacciones || 0}</span></td>
-                    <td><b style="color:var(--success)">$${fmt(c.total_ventas)}</b></td>
-                    <td class="cie-col-efectivo">$${fmt(c.total_efectivo)}</td>
-                    <td class="cie-col-transferencia">$${fmt(c.total_transferencia)}</td>
-                    <td class="cie-col-retiros" style="color:${retiros > 0 ? 'var(--danger)' : 'var(--text-muted)'}">
-                      ${retiros > 0 ? `-$${fmt(retiros)}` : '-'}
-                    </td>
-                    <td>${c.cajero || '-'}</td>
-                  </tr>`;
-                }).join('')
-            }
-          </tbody>
-        </table>
-      </div>
-    </div>
+    ${cajaAbierta ? cajaAbiertaHTML(cajaAbierta, cajaAbiertaId) : sinCajaHTML(proximoRegId)}
+    ${kpisCierresHTML({ totalCierres, totalVentas, totalEfect, totalTransf })}
+    ${tablaCierresHTML(sesiones)}
   `;
 
   // Click en fila → abrir modal detallado
@@ -513,8 +347,6 @@ export async function renderCierres(container, db) {
       const idx = parseInt(row.dataset.idx);
       openCierreModal(sesiones[idx], catByName, gastosAll, db, () => renderCierres(container, db));
     });
-    row.addEventListener('mouseenter', () => row.style.background = 'var(--bg)');
-    row.addEventListener('mouseleave', () => row.style.background = '');
   });
 
   // Botón cerrar caja desde web — pasamos el monto_inicial y los retiros del doc
@@ -548,6 +380,204 @@ export async function renderCierres(container, db) {
   }
 }
 
+// ─── Markup de la pantalla ────────────────────────────────────────────────
+// Separado del fetch para poder dibujar la pantalla con datos de prueba sin
+// pegarle a Firebase (previsualización en el navegador a distintos anchos).
+// Los estilos viven en `styles/main.css`, bloque "CIERRES DE CAJA (.cj-*)".
+
+// Hace cuánto está abierta la caja, en criollo.
+function tiempoAbierto(apertura) {
+  if (!apertura) return '-';
+  const aDate = toDate(apertura);
+  if (!aDate || isNaN(aDate)) return '-';
+  const mins = Math.round((new Date() - aDate) / 60000);
+  const hrs  = Math.floor(mins / 60);
+  const min  = mins % 60;
+  return hrs > 0 ? `${hrs} h ${min} m` : `${min} m`;
+}
+
+function statHTML(titulo, valor, extraClase = '') {
+  return `
+    <div class="cj-stat ${extraClase}">
+      <span class="cj-stat-t">${titulo}</span>
+      <span class="cj-stat-v">${valor}</span>
+    </div>`;
+}
+
+export function cajaAbiertaHTML(caja, registerId) {
+  const retirosLista = caja.retiros || [];
+  const totalRetiros = caja.total_retiros || 0;
+  const quien = caja._pcs > 1
+    ? `${caja._pcs} cajas activas`
+    : `Cajero: ${escHtml(caja.cajero || 'Sin cajero')}`;
+
+  return `
+    <section class="cj-caja cj-caja--abierta">
+      <div class="cj-caja-head">
+        <div class="cj-caja-id">
+          <div class="cj-caja-titulo">
+            <span class="cj-estado cj-estado--abierta"><span class="cj-punto"></span>Abierta</span>
+            <h3>Caja${registerId != null ? ` #${registerId}` : ''}</h3>
+          </div>
+          <p class="cj-caja-meta">${quien} · abierta hace ${tiempoAbierto(caja.fecha_apertura)} · apertura ${fmtDT(parseArDate(caja.fecha_apertura))}</p>
+        </div>
+        ${registerId != null ? `
+        <button type="button" id="btn-cerrar-caja-web" class="cj-btn cj-btn--cerrar">
+          <span class="material-icons">lock</span>Cerrar caja
+        </button>` : ''}
+      </div>
+
+      <div class="cj-stats">
+        ${statHTML('Monto inicial',   `$${fmt(caja.monto_inicial || 0)}`)}
+        ${statHTML('Ventas en curso', `$${fmt(caja.total_ventas || 0)}`, 'cj-stat--fuerte')}
+        ${statHTML('Efectivo',        `$${fmt(caja.total_efectivo || 0)}`)}
+        ${statHTML('Transferencias',  `$${fmt(caja.total_transferencia || 0)}`)}
+        ${statHTML('Transacciones',   String(caja.total_transacciones || 0))}
+        ${statHTML('Retiros',
+                   totalRetiros > 0 ? `-$${fmt(totalRetiros)}` : `$${fmt(0)}`,
+                   totalRetiros > 0 ? 'cj-stat--neg' : '')}
+      </div>
+
+      ${retirosLista.length > 0 ? `
+      <div class="cj-retiros">
+        <div class="cj-retiros-t">Retiros de esta sesión</div>
+        ${retirosLista.map(r => `
+          <div class="cj-retiro">
+            <span>${escHtml(r.reason || r.motivo || 'Retiro')}</span>
+            <b>-$${fmt(r.amount || r.monto || 0)}</b>
+          </div>`).join('')}
+      </div>` : ''}
+    </section>`;
+}
+
+export function sinCajaHTML(proximoRegId) {
+  return `
+    <section class="cj-caja cj-caja--cerrada">
+      <div class="cj-caja-head">
+        <div class="cj-caja-id">
+          <div class="cj-caja-titulo">
+            <span class="cj-estado cj-estado--cerrada"><span class="cj-punto"></span>Sin caja abierta</span>
+          </div>
+          <p class="cj-caja-meta">Nadie está vendiendo contra una caja ahora mismo. La próxima será la <b>#${proximoRegId}</b>.</p>
+        </div>
+        <button type="button" id="btn-abrir-caja-web" class="cj-btn cj-btn--abrir">
+          <span class="material-icons">lock_open</span>Abrir caja #${proximoRegId}
+        </button>
+      </div>
+    </section>`;
+}
+
+function kpiHTML(icono, tono, titulo, valor) {
+  return `
+    <article class="cj-kpi">
+      <div class="cj-kpi-top">
+        <span class="cj-kpi-ico cj-kpi-ico--${tono}"><span class="material-icons">${icono}</span></span>
+        <span class="cj-kpi-t">${titulo}</span>
+      </div>
+      <div class="cj-kpi-v">${valor}</div>
+    </article>`;
+}
+
+export function kpisCierresHTML({ totalCierres, totalVentas, totalEfect, totalTransf }) {
+  return `
+    <div class="cj-kpis">
+      ${kpiHTML('lock_clock',   'violeta', 'Cierres',        String(totalCierres))}
+      ${kpiHTML('attach_money', 'verde',   'Total vendido',  `$${fmt(totalVentas)}`)}
+      ${kpiHTML('payments',     'azul',    'Efectivo',       `$${fmt(totalEfect)}`)}
+      ${kpiHTML('swap_horiz',   'naranja', 'Transferencias', `$${fmt(totalTransf)}`)}
+    </div>`;
+}
+
+function filaCierreHTML(c, i) {
+  const retiros = c.total_retiros || 0;
+  const cajero  = (c.cajero && c.cajero !== '-') ? escHtml(c.cajero) : '';
+  const pcLabel = (c.pcs || []).length > 1
+    ? ` <span class="cj-sub">${c.pcs.length} PCs</span>` : '';
+  const pendBadge = c.pendiente_conteo
+    ? ' <span class="cj-pend">Pendiente</span>' : '';
+  const titulo = c.pendiente_conteo
+    ? 'Cierre pendiente de conteo — click para cargar'
+    : 'Ver detalle del cierre';
+
+  return `
+    <tr class="clickable-row" data-idx="${i}" title="${titulo}">
+      <td class="cj-dia"><b>${c.session_id || '-'}</b>${pcLabel}${pendBadge}</td>
+      <td class="cj-fecha">${fmtDT(parseArDate(c.fecha_apertura))}</td>
+      <td class="cj-fecha cie-col-cierre">${fmtDT(parseArDate(c.fecha_cierre))}</td>
+      <td class="cj-c"><span class="badge badge-blue">${c.total_transacciones || 0}</span></td>
+      <td class="cj-n cj-total">$${fmt(c.total_ventas)}</td>
+      <td class="cj-n cie-col-efectivo">$${fmt(c.total_efectivo)}</td>
+      <td class="cj-n cie-col-transferencia">$${fmt(c.total_transferencia)}</td>
+      <td class="cj-n cie-col-retiros ${retiros > 0 ? 'cj-neg' : 'cj-vacio'}">${retiros > 0 ? `-$${fmt(retiros)}` : '—'}</td>
+      <td class="${cajero ? '' : 'cj-vacio'}">${cajero || '—'}</td>
+    </tr>`;
+}
+
+export function tablaCierresHTML(sesiones) {
+  return `
+    <div class="table-card cj-tabla-card">
+      <div class="table-card-header cj-tabla-head">
+        <h3><span class="material-icons">lock</span>Cierres de caja</h3>
+        <span class="cj-tabla-hint">${sesiones.length} ${sesiones.length === 1 ? 'cierre' : 'cierres'} · click en una fila para ver el detalle</span>
+      </div>
+      <div class="table-wrap cj-tabla-wrap">
+        <table class="cj-tabla">
+          <thead><tr>
+            <th>Día</th>
+            <th>Apertura</th>
+            <th class="cie-col-cierre">Cierre</th>
+            <th class="cj-c">Ventas</th>
+            <th class="cj-n">Total</th>
+            <th class="cj-n cie-col-efectivo">Efectivo</th>
+            <th class="cj-n cie-col-transferencia">Transferencia</th>
+            <th class="cj-n cie-col-retiros">Retiros</th>
+            <th>Cajero</th>
+          </tr></thead>
+          <tbody id="cierresBody">
+            ${sesiones.length === 0
+              ? '<tr><td colspan="9" class="cj-tabla-vacia">Sin cierres registrados</td></tr>'
+              : sesiones.map(filaCierreHTML).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
+// Esqueleto de carga: mismas cajas y mismas alturas que la pantalla real.
+export function esqueletoCierresHTML() {
+  const stat = '<div class="cj-stat"><div class="skel" style="height:10px;width:70%;border-radius:4px"></div><div class="skel" style="height:19px;width:85%;border-radius:5px;margin-top:9px"></div></div>';
+  const kpi  = '<article class="cj-kpi"><div class="skel" style="height:22px;width:60%;border-radius:5px"></div><div class="skel" style="height:26px;width:85%;border-radius:6px;margin-top:12px"></div></article>';
+  const fila = '<tr><td colspan="9" style="padding:7px 16px"><div class="skel" style="height:26px;border-radius:6px"></div></td></tr>';
+  return `
+    <section class="cj-caja">
+      <div class="cj-caja-head">
+        <div class="cj-caja-id">
+          <div class="skel" style="height:21px;width:180px;border-radius:6px"></div>
+          <div class="skel" style="height:12px;width:min(340px,100%);border-radius:5px;margin-top:9px"></div>
+        </div>
+      </div>
+      <div class="cj-stats">${Array(6).fill(stat).join('')}</div>
+    </section>
+    <div class="cj-kpis">${Array(4).fill(kpi).join('')}</div>
+    <div class="table-card cj-tabla-card">
+      <div class="table-card-header cj-tabla-head">
+        <h3><span class="material-icons">lock</span>Cierres de caja</h3>
+      </div>
+      <div class="table-wrap cj-tabla-wrap">
+        <table class="cj-tabla">
+          <thead><tr>
+            <th>Día</th><th>Apertura</th><th class="cie-col-cierre">Cierre</th>
+            <th class="cj-c">Ventas</th><th class="cj-n">Total</th>
+            <th class="cj-n cie-col-efectivo">Efectivo</th>
+            <th class="cj-n cie-col-transferencia">Transferencia</th>
+            <th class="cj-n cie-col-retiros">Retiros</th><th>Cajero</th>
+          </tr></thead>
+          <tbody>${Array(8).fill(fila).join('')}</tbody>
+        </table>
+      </div>
+    </div>`;
+}
+
 // ─── Modal: Cerrar caja desde web ─────────────────────────────────────────
 // Lee `ventas` filtradas por cash_register_id, calcula totales (efectivo,
 // transferencia, transacciones, productos_vendidos) y los escribe a
@@ -555,19 +585,19 @@ export async function renderCierres(container, db) {
 // Después marca caja_activa/current como cerrada — los listeners desktop
 // detectan y, si tienen la caja abierta local, mergean también su reporte.
 // Cuando NO hay PCs online, los stats igual aparecen porque la web los calcula.
-function openCerrarCajaModal(db, ctx, onDone) {
+export function openCerrarCajaModal(db, ctx, onDone) {
   const { registerId, monto_inicial = 0, cajero = '', retiros = [], total_retiros = 0 } = ctx;
   document.querySelector('.modal-overlay')?.remove();
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
     <div class="modal" style="max-width:480px">
-      <div class="modal-header" style="background:linear-gradient(135deg,#7c2d12,#9a3412);color:#fff;border-radius:12px 12px 0 0;padding:16px 22px;display:flex;justify-content:space-between;align-items:center">
-        <div style="display:flex;align-items:center;gap:10px">
+      <div class="modal-header cj-mh cj-mh--rojo">
+        <div class="cj-mh-id">
           <span class="material-icons">lock</span>
-          <h3 style="color:#fff;margin:0;font-size:16px">Cerrar caja #${registerId}</h3>
+          <h3>Cerrar caja #${registerId}</h3>
         </div>
-        <button class="modal-close" style="color:#fff;background:rgba(255,255,255,0.15);border-radius:8px;width:30px;height:30px;display:flex;align-items:center;justify-content:center"><span class="material-icons" style="font-size:18px">close</span></button>
+        <button class="modal-close cj-mh-x"><span class="material-icons">close</span></button>
       </div>
       <div class="modal-body" style="padding:20px 22px">
         <div style="background:var(--tint-yellow-bg);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:14px;display:flex;gap:10px">
@@ -736,18 +766,18 @@ async function calcularYMergearStatsCaja(db, registerId, extras = {}) {
 // cash_register_id automáticamente.
 // Usa runTransaction para evitar colisiones si una PC abre una caja al mismo
 // tiempo: si la caja_activa/current ya está 'open', se aborta y reintenta.
-function openAbrirCajaModal(db, sugerenciaId, onDone) {
+export function openAbrirCajaModal(db, sugerenciaId, onDone) {
   document.querySelector('.modal-overlay')?.remove();
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
     <div class="modal" style="max-width:480px">
-      <div class="modal-header" style="background:linear-gradient(135deg,#065f46,#047857);color:#fff;border-radius:12px 12px 0 0;padding:16px 22px;display:flex;justify-content:space-between;align-items:center">
-        <div style="display:flex;align-items:center;gap:10px">
+      <div class="modal-header cj-mh cj-mh--verde">
+        <div class="cj-mh-id">
           <span class="material-icons">lock_open</span>
-          <h3 style="color:#fff;margin:0;font-size:16px">Abrir caja #${sugerenciaId}</h3>
+          <h3>Abrir caja #${sugerenciaId}</h3>
         </div>
-        <button class="modal-close" style="color:#fff;background:rgba(255,255,255,0.15);border-radius:8px;width:30px;height:30px;display:flex;align-items:center;justify-content:center"><span class="material-icons" style="font-size:18px">close</span></button>
+        <button class="modal-close cj-mh-x"><span class="material-icons">close</span></button>
       </div>
       <div class="modal-body" style="padding:20px 22px">
         <div style="background:var(--tint-green-bg);border:1px solid var(--border);border-radius:10px;padding:12px 14px;margin-bottom:14px;display:flex;gap:10px">
@@ -908,7 +938,7 @@ function openAbrirCajaModal(db, sugerenciaId, onDone) {
   });
 }
 
-function openCierreModal(c, catByName, gastosAll, db, onSaved) {
+export function openCierreModal(c, catByName, gastosAll, db, onSaved) {
   document.querySelector('.modal-overlay')?.remove();
 
   const apertura  = parseArDate(c.fecha_apertura);
@@ -996,48 +1026,48 @@ function openCierreModal(c, catByName, gastosAll, db, onSaved) {
   // Top 3 productos por ingreso
   const top3 = productos.slice(0, 3);
 
+  // Las cajas viejas guardan '-' cuando nadie firmó el turno.
+  const cajeroNombre = (c.cajero && c.cajero !== '-') ? c.cajero : 'Sin cajero';
+
   const overlay = document.createElement('div');
   overlay.className = 'modal-overlay';
   overlay.innerHTML = `
     <div class="modal" id="cierreModal" style="max-width:760px">
-      <!-- Header con gradiente + metadatos -->
-      <div class="modal-header" style="background:linear-gradient(135deg,#0f172a,#1e293b,#334155);color:white;border-radius:12px 12px 0 0;padding:18px 24px">
-        <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
-          <div style="display:flex;align-items:center;gap:14px">
-            <div style="width:44px;height:44px;border-radius:12px;background:rgba(255,255,255,0.1);display:flex;align-items:center;justify-content:center;border:1px solid rgba(255,255,255,0.15)">
-              <span class="material-icons" style="color:var(--text-muted)">receipt_long</span>
-            </div>
-            <div>
-              <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
-                <h3 style="color:white;margin:0;font-size:18px">Cierre #${c.session_id || c.register_id || '-'}</h3>
-                ${c.pcs && c.pcs.length > 1 ? `<span style="background:rgba(148,163,184,0.25);color:#e2e8f0;font-size:10px;padding:2px 8px;border-radius:10px;font-weight:600">${c.pcs.length} PCs</span>` : ''}
-                <span style="background:${salud.bg};color:${salud.color};font-size:10px;padding:3px 10px;border-radius:10px;font-weight:700;display:inline-flex;align-items:center;gap:4px">
-                  <span class="material-icons" style="font-size:12px">${salud.icon}</span>${salud.label}
+      <!-- Header: identificacion del turno + los cuatro numeros que importan -->
+      <div class="modal-header cj-mh cj-mh--oscuro cj-mh--detalle">
+        <div class="cj-mh-fila">
+          <div class="cj-mh-id">
+            <div class="cj-mh-ico"><span class="material-icons">receipt_long</span></div>
+            <div style="min-width:0">
+              <div class="cj-mh-linea">
+                <h3>Cierre #${c.session_id || c.register_id || '-'}</h3>
+                ${c.pcs && c.pcs.length > 1 ? `<span class="cj-mh-tag">${c.pcs.length} PCs</span>` : ''}
+                <span class="cj-mh-tag"${ingresoConCosto > 0 ? ` style="background:${salud.bg};color:${salud.color}"` : ''}>
+                  <span class="material-icons">${salud.icon}</span>${salud.label}
                 </span>
               </div>
-              <div style="font-size:12px;color:var(--text-muted);margin-top:4px">${c.cajero || 'Sin cajero'} · ${duracion} de operacion · ${numVentas} ${numVentas === 1 ? 'venta' : 'ventas'}</div>
+              <div class="cj-mh-sub">${escHtml(cajeroNombre)} · ${duracion} de operación · ${numVentas} ${numVentas === 1 ? 'venta' : 'ventas'}</div>
             </div>
           </div>
-          <button class="modal-close" style="color:white;background:rgba(255,255,255,0.1);border-radius:8px;width:32px;height:32px;display:flex;align-items:center;justify-content:center"><span class="material-icons">close</span></button>
+          <button class="modal-close cj-mh-x"><span class="material-icons">close</span></button>
         </div>
 
-        <!-- KPIs destacados -->
-        <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-top:16px">
-          <div style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:10px 12px">
-            <div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px">Total vendido</div>
-            <div style="font-size:18px;font-weight:800;color:#fff;margin-top:3px">$${fmt(total)}</div>
+        <div class="cj-mh-kpis">
+          <div class="cj-mh-kpi">
+            <span class="cj-mh-kpi-t">Total vendido</span>
+            <span class="cj-mh-kpi-v">$${fmt(total)}</span>
           </div>
-          <div style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:10px 12px">
-            <div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px">Ticket promedio</div>
-            <div style="font-size:18px;font-weight:800;color:#fff;margin-top:3px">$${fmt(ticketPromedio)}</div>
+          <div class="cj-mh-kpi">
+            <span class="cj-mh-kpi-t">Ticket promedio</span>
+            <span class="cj-mh-kpi-v">$${fmt(ticketPromedio)}</span>
           </div>
-          <div style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:10px 12px">
-            <div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px">Margen</div>
-            <div style="font-size:18px;font-weight:800;color:${ingresoConCosto > 0 ? (margenPct >= 25 ? '#34d399' : margenPct >= 10 ? 'var(--tint-yellow-fg)' : 'var(--tint-red-fg)') : 'var(--text-muted)'};margin-top:3px">${ingresoConCosto > 0 ? margenPct.toFixed(1) + '%' : '—'}</div>
+          <div class="cj-mh-kpi">
+            <span class="cj-mh-kpi-t">Margen</span>
+            <span class="cj-mh-kpi-v" style="color:${ingresoConCosto > 0 ? (margenPct >= 25 ? '#6ee7a8' : margenPct >= 10 ? '#f2cb6a' : '#f79b9b') : 'rgba(255,255,255,.55)'}">${ingresoConCosto > 0 ? margenPct.toFixed(1) + '%' : '—'}</span>
           </div>
-          <div style="background:rgba(255,255,255,0.08);border:1px solid rgba(255,255,255,0.12);border-radius:10px;padding:10px 12px">
-            <div style="font-size:10px;color:var(--text-muted);font-weight:600;text-transform:uppercase;letter-spacing:.5px">Ganancia neta</div>
-            <div style="font-size:18px;font-weight:800;color:${gananciaNeta >= 0 ? '#34d399' : 'var(--tint-red-fg)'};margin-top:3px">${gananciaNeta >= 0 ? '$' : '-$'}${fmt(Math.abs(gananciaNeta))}</div>
+          <div class="cj-mh-kpi">
+            <span class="cj-mh-kpi-t">Ganancia neta</span>
+            <span class="cj-mh-kpi-v" style="color:${gananciaNeta >= 0 ? '#6ee7a8' : '#f79b9b'}">${gananciaNeta >= 0 ? '$' : '-$'}${fmt(Math.abs(gananciaNeta))}</span>
           </div>
         </div>
       </div>
@@ -1046,7 +1076,7 @@ function openCierreModal(c, catByName, gastosAll, db, onSaved) {
 
         ${c.pendiente_conteo ? `
         <!-- Banner: cierre pendiente de conteo -->
-        <div id="pendiente-banner" style="background:linear-gradient(135deg,var(--tint-yellow-bg),var(--tint-yellow-bg));border:1.5px solid #f59e0b;border-radius:12px;padding:14px 18px;margin-bottom:18px">
+        <div id="pendiente-banner" style="background:var(--tint-yellow-bg);border:1.5px solid #f59e0b;border-radius:12px;padding:14px 18px;margin-bottom:18px">
           <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
             <div style="display:flex;align-items:center;gap:10px">
               <span class="material-icons" style="color:var(--tint-orange-fg)">pending_actions</span>
@@ -1088,10 +1118,10 @@ function openCierreModal(c, catByName, gastosAll, db, onSaved) {
               <div style="font-size:13px;font-weight:700;color:var(--text-strong)">${fmtDT(apertura)}</div>
             </div>
           </div>
-          <div style="flex:2;min-width:120px;display:flex;align-items:center;gap:8px;justify-content:center">
-            <div style="flex:1;height:2px;background:linear-gradient(90deg,#0d6efd,#198754);border-radius:2px"></div>
+          <div style="flex:2;min-width:120px;display:flex;align-items:center;gap:10px;justify-content:center">
+            <div style="flex:1;height:2px;background:var(--border-strong);border-radius:2px"></div>
             <div style="font-size:11px;color:var(--text-muted);font-weight:600;white-space:nowrap">${duracion}${ventasPorHora > 0 ? ` · ${ventasPorHora.toFixed(1)} v/h` : ''}</div>
-            <div style="flex:1;height:2px;background:linear-gradient(90deg,#0d6efd,#198754);border-radius:2px"></div>
+            <div style="flex:1;height:2px;background:var(--border-strong);border-radius:2px"></div>
           </div>
           <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:180px;justify-content:flex-end">
             <div style="text-align:right">
@@ -1168,11 +1198,11 @@ function openCierreModal(c, catByName, gastosAll, db, onSaved) {
         <div style="margin-bottom:22px">
           <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.8px;color:var(--text-muted);margin-bottom:10px;padding-bottom:6px;border-bottom:1px solid var(--border)">Resumen de efectivo</div>
           <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:12px;padding:14px 16px">
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px 20px">
-              ${lineaEf('Monto inicial', `$${fmt(inicial)}`, '#475569')}
-              ${lineaEf('+ Ventas efectivo', `$${fmt(efectivo)}`, '#198754')}
-              ${retiros > 0 ? lineaEf('− Retiros', `$${fmt(retiros)}`, '#dc3545') : ''}
-              ${lineaEf('= Efectivo esperado', `$${fmt(esperado)}`, '#1e293b', true)}
+            <div style="display:grid;grid-template-columns:1fr;gap:8px">
+              ${lineaEf('Monto inicial', `$${fmt(inicial)}`, 'var(--text)')}
+              ${lineaEf('+ Ventas efectivo', `$${fmt(efectivo)}`, 'var(--tint-green-fg)')}
+              ${retiros > 0 ? lineaEf('− Retiros', `$${fmt(retiros)}`, 'var(--tint-red-fg)') : ''}
+              ${lineaEf('= Efectivo esperado', `$${fmt(esperado)}`, 'var(--text-strong)', true)}
             </div>
             ${final_amt > 0 ? `
               <div style="border-top:1px dashed var(--border);margin:12px 0 10px"></div>
@@ -1369,11 +1399,11 @@ function openCierreModal(c, catByName, gastosAll, db, onSaved) {
   }
 }
 
-function lineaEf(label, valor, color = '#1e293b', bold = false) {
+function lineaEf(label, valor, color = 'var(--text-strong)', bold = false) {
   return `
-    <div style="display:flex;justify-content:space-between;align-items:center;${bold ? 'padding-top:6px;border-top:1px dashed var(--border);' : ''}">
-      <span style="font-size:12px;color:var(--text-muted);${bold ? 'font-weight:700;color:var(--text-muted)' : ''}">${label}</span>
-      <span style="font-size:${bold ? '14px' : '13px'};font-weight:${bold ? '800' : '600'};color:${color}">${valor}</span>
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:16px;${bold ? 'padding-top:8px;border-top:1px dashed var(--border);' : ''}">
+      <span style="font-size:12px;color:var(--text-muted);${bold ? 'font-weight:700' : ''}">${label}</span>
+      <span style="font-size:${bold ? '15px' : '13px'};font-weight:${bold ? '800' : '600'};color:${color};font-variant-numeric:tabular-nums;white-space:nowrap">${valor}</span>
     </div>
   `;
 }

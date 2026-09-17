@@ -85,8 +85,19 @@ const SKELETONS = {
     ${skelFilterBar()}
     ${skelTableCard(10, '200px')}`,
 
+  // Misma forma que la pantalla real: panel de la caja del momento, cuatro
+  // totales y la tabla. Sin barra de filtros, que esta pantalla no tiene.
   cierres: () => `
-    ${skelFilterBar()}
+    <div class="skel-card-wrap" style="margin-bottom:16px">
+      <div class="skel skel-line lg" style="width:190px"></div>
+      <div class="skel skel-line sm" style="width:min(340px,100%);margin-top:8px"></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(146px,1fr));gap:10px;margin-top:14px">
+        ${Array(6).fill('<div class="skel" style="height:62px;border-radius:10px"></div>').join('')}
+      </div>
+    </div>
+    <div class="skel-stats" style="grid-template-columns:repeat(auto-fill,minmax(212px,1fr))">
+      ${skelKpi(4)}
+    </div>
     ${skelTableCard(8, '220px')}`,
 
   resumenes: () => `

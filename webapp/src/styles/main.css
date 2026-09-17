@@ -1206,12 +1206,22 @@ div:has(> .tab-btn)::-webkit-scrollbar { display: none; }
   .hist-col-hora, .hist-col-precio, .hist-col-cajero { display: none !important; }
 }
 
-/* ── OCULTAR COLUMNAS CIERRES ── */
-@media (max-width: 1280px) and (min-width: 769px) {
+/* ── OCULTAR COLUMNAS CIERRES ──
+   Los numeros ahora van en cifra tabular y sin cortarse, asi que la tabla
+   entra completa en bastante menos ancho: se empiezan a esconder columnas
+   mas tarde y el efectivo aguanta hasta lo ultimo. */
+@media (max-width: 1150px) and (min-width: 769px) {
+  .cie-col-retiros { display: none !important; }
+}
+@media (max-width: 1040px) and (min-width: 769px) {
   .cie-col-retiros, .cie-col-transferencia { display: none !important; }
 }
-@media (max-width: 1024px) and (min-width: 769px) {
-  .cie-col-retiros, .cie-col-transferencia, .cie-col-efectivo, .cie-col-cierre { display: none !important; }
+@media (max-width: 900px) and (min-width: 769px) {
+  .cie-col-retiros, .cie-col-transferencia, .cie-col-cierre { display: none !important; }
+}
+@media (max-width: 810px) and (min-width: 769px) {
+  .cie-col-retiros, .cie-col-transferencia, .cie-col-cierre,
+  .cie-col-efectivo { display: none !important; }
 }
 
 /* ── RESPONSIVE LAPTOP PEQUEÑA (1024px - 1280px) ── */
@@ -5367,3 +5377,281 @@ html[data-theme="dark"] .ll-toast--violeta { --t-solid: var(--primary-dark); }
   .nf-chip { padding: 5px 10px; }
   .nf-chip .nf-chip-n { font-size: 14px; }
 }
+
+/* ══════════════════════════════════════════════════════════════════════════
+   CIERRES DE CAJA (.cj-*)
+   Panel de la caja del momento, totales y tabla de cierres.
+   Superficies planas con los tokens del tema: se lee igual en claro y en
+   oscuro. Los numeros usan `cqi` (ancho de su propia tarjeta) para achicarse
+   solos en pantallas chicas en vez de desbordar la tarjeta.
+   El markup lo arma `pages/cierres.js`.
+   ══════════════════════════════════════════════════════════════════════════ */
+
+/* ── Panel de la caja del momento ── */
+.cj-caja {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left-width: 3px;
+  border-left-color: var(--border-strong);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 16px 18px;
+  margin-bottom: 16px;
+  max-width: 100%;
+}
+.cj-caja--abierta { border-left-color: var(--tint-green-fg); }
+.cj-caja--cerrada { border-left-color: var(--border-strong); }
+
+.cj-caja-head {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+}
+.cj-caja-id { min-width: 0; flex: 1 1 300px; }
+.cj-caja-titulo { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cj-caja-titulo h3 {
+  margin: 0; font-size: 17px; font-weight: 700; color: var(--text-strong);
+}
+.cj-caja-meta {
+  margin: 6px 0 0; font-size: 12.5px; color: var(--text-muted);
+  line-height: 1.45; overflow-wrap: anywhere;
+}
+.cj-caja-meta b { color: var(--text); }
+
+.cj-estado {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 3px 10px; border-radius: 20px;
+  font-size: 10.5px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase;
+  white-space: nowrap;
+}
+.cj-estado .cj-punto { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.cj-estado--abierta { background: var(--tint-green-bg); color: var(--tint-green-fg); }
+.cj-estado--cerrada { background: var(--tint-gray-bg);  color: var(--tint-gray-fg); }
+
+.cj-btn {
+  display: inline-flex; align-items: center; gap: 7px; flex-shrink: 0;
+  border: 1px solid transparent; border-radius: 9px; padding: 9px 16px;
+  font-family: inherit; font-size: 13px; font-weight: 700;
+  cursor: pointer; white-space: nowrap;
+  transition: background .12s, border-color .12s;
+}
+.cj-btn .material-icons { font-size: 17px; }
+.cj-btn--cerrar {
+  background: var(--surface); color: var(--text); border-color: var(--border-strong);
+}
+.cj-btn--cerrar:hover { background: var(--surface-3); border-color: var(--text-muted); }
+.cj-btn--abrir {
+  background: var(--tint-green-bg); color: var(--tint-green-fg); border-color: var(--tint-green-fg);
+}
+.cj-btn--abrir:hover { filter: brightness(1.06); }
+
+/* Tarjetitas del panel: se reacomodan solas y el numero se achica antes de
+   tocar el borde. */
+.cj-stats {
+  display: grid;
+  grid-template-columns: repeat(6, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 14px;
+}
+.cj-stat {
+  container-type: inline-size;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  min-width: 0;
+}
+.cj-stat-t {
+  display: block;
+  font-size: 10px; font-weight: 700; letter-spacing: .5px; text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cj-stat-v {
+  display: block; margin-top: 5px;
+  font-size: 18px; font-weight: 700; color: var(--text-strong);
+  font-variant-numeric: tabular-nums; letter-spacing: -.01em; white-space: nowrap;
+}
+.cj-stat-v { font-size: clamp(14px, 11.5cqi, 19px); }
+.cj-stat--fuerte { background: var(--tint-green-bg); border-color: transparent; }
+.cj-stat--fuerte .cj-stat-t,
+.cj-stat--fuerte .cj-stat-v { color: var(--tint-green-fg); }
+.cj-stat--neg .cj-stat-v { color: var(--tint-red-fg); }
+
+.cj-retiros { margin-top: 13px; }
+.cj-retiros-t {
+  font-size: 10.5px; font-weight: 800; letter-spacing: .5px; text-transform: uppercase;
+  color: var(--tint-red-fg); margin-bottom: 7px;
+}
+.cj-retiro {
+  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  background: var(--tint-red-bg); border-radius: 8px;
+  padding: 8px 12px; margin-bottom: 5px;
+  font-size: 12.5px; color: var(--tint-red-fg);
+}
+.cj-retiro b { font-variant-numeric: tabular-nums; white-space: nowrap; }
+
+/* ── Totales ── */
+.cj-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(212px, 1fr));
+  gap: 12px; margin-bottom: 16px;
+  max-width: 100%; min-width: 0;
+}
+.cj-kpi {
+  container-type: inline-size;
+  background: var(--card-bg);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 14px 16px;
+  min-width: 0;
+}
+.cj-kpi-top { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.cj-kpi-ico {
+  width: 28px; height: 28px; border-radius: 8px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+}
+.cj-kpi-ico .material-icons { font-size: 17px !important; color: #fff; }
+.cj-kpi-ico--violeta { background: #6a1b9a; }
+.cj-kpi-ico--verde   { background: #2e7d32; }
+.cj-kpi-ico--azul    { background: var(--primary); }
+.cj-kpi-ico--naranja { background: #e65100; }
+.cj-kpi-t {
+  min-width: 0;
+  font-size: 11.5px; font-weight: 600; letter-spacing: .4px; text-transform: uppercase;
+  color: var(--text-muted);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cj-kpi-v {
+  margin-top: 10px;
+  font-size: 24px; font-weight: 700; color: var(--text-strong);
+  font-variant-numeric: tabular-nums; letter-spacing: -.015em; white-space: nowrap;
+}
+.cj-kpi-v { font-size: clamp(17px, 10.5cqi, 26px); }
+
+/* ── Tabla de cierres ── */
+.cj-tabla-head h3 { display: flex; align-items: center; gap: 8px; }
+.cj-tabla-head h3 .material-icons { font-size: 18px; color: var(--text-muted); }
+.cj-tabla-hint { font-size: 12px; color: var(--text-muted); }
+
+/* Con 100+ cierres la fila se lee sin perder de vista que columna es cual. */
+.cj-tabla-wrap { max-height: min(64vh, 720px); overflow-y: auto; }
+.cj-tabla thead th {
+  position: sticky; top: 0; z-index: 2;
+  background: var(--surface-3);
+  box-shadow: inset 0 -1px 0 var(--border);
+  /* Los titulos son cortos: antes que partir "Ventas" en dos renglones se
+     esconde la columna entera (ver "OCULTAR COLUMNAS CIERRES"). */
+  white-space: nowrap; word-break: normal;
+}
+.cj-tabla .cj-n { text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cj-tabla .cj-c { text-align: center; }
+.cj-tabla .cj-fecha { white-space: nowrap; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.cj-tabla .cj-dia { white-space: nowrap; }
+.cj-tabla .cj-dia b { color: var(--text-strong); font-variant-numeric: tabular-nums; }
+.cj-tabla .cj-total { font-weight: 700; color: var(--text-strong); }
+.cj-tabla .cj-neg { color: var(--tint-red-fg); font-weight: 600; }
+.cj-tabla .cj-vacio { color: var(--text-muted); }
+/* Un nombre largo no puede estirar la fila al doble de alto. */
+.cj-tabla td:last-child {
+  max-width: 160px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cj-tabla .cj-sub { font-size: 10px; font-weight: 600; color: var(--text-muted); }
+.cj-pend {
+  display: inline-block; vertical-align: middle;
+  background: var(--tint-yellow-bg); color: var(--tint-orange-fg);
+  font-size: 9px; font-weight: 800; letter-spacing: .3px; text-transform: uppercase;
+  padding: 2px 7px; border-radius: 6px;
+}
+.cj-tabla-vacia { text-align: center; padding: 40px; color: var(--text-muted); }
+
+/* Notebooks y pantallas angostas: el panel y los totales se apilan sin
+   apretar los numeros. */
+/* Las seis tarjetitas pasan a dos filas de tres: nunca queda una sola
+   colgando al final. */
+@media (max-width: 1200px) {
+  .cj-stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .cj-kpis { grid-template-columns: repeat(auto-fit, minmax(186px, 1fr)); gap: 10px; }
+  .cj-kpi { padding: 12px 14px; }
+  .cj-caja { padding: 14px 15px; }
+}
+@media (max-width: 700px) {
+  .cj-stats { grid-template-columns: 1fr 1fr; }
+  .cj-kpis { grid-template-columns: 1fr 1fr; }
+  .cj-caja-head .cj-btn { width: 100%; justify-content: center; }
+  .cj-tabla-wrap { max-height: none; }
+  .cj-tabla thead th { position: static; }
+}
+
+/* ── Encabezados de los modales de caja ──
+   Color plano, no degradado, y los textos secundarios con su propio tono:
+   con `--text-muted` quedaban ilegibles sobre el fondo oscuro en tema claro. */
+.cj-mh {
+  --mh-bg: #1c2029;
+  background: var(--mh-bg);
+  color: #fff;
+  border-radius: var(--radius) var(--radius) 0 0;
+  border-bottom: none;
+  padding: 16px 22px;
+}
+.cj-mh--rojo   { --mh-bg: #7f2020; }
+.cj-mh--verde  { --mh-bg: #1b5e3a; }
+.cj-mh--oscuro { --mh-bg: #1c2029; }
+.cj-mh h3 { margin: 0; color: #fff; font-size: 16px; font-weight: 700; }
+.cj-mh-id { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.cj-mh-id > .material-icons { font-size: 21px; }
+.cj-mh-x {
+  flex-shrink: 0;
+  width: 32px; height: 32px; padding: 0;
+  display: flex; align-items: center; justify-content: center;
+  border-radius: 8px;
+  background: rgba(255,255,255,0.12); color: #fff;
+}
+.cj-mh-x:hover { background: rgba(255,255,255,0.22); color: #fff; }
+.cj-mh-x .material-icons { font-size: 18px; }
+
+.cj-mh--detalle { display: block; padding: 17px 22px 18px; }
+.cj-mh-fila {
+  display: flex; align-items: flex-start; justify-content: space-between;
+  gap: 12px; flex-wrap: wrap;
+}
+.cj-mh-ico {
+  width: 40px; height: 40px; border-radius: 11px; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center;
+  background: rgba(255,255,255,0.10); border: 1px solid rgba(255,255,255,0.14);
+}
+.cj-mh-ico .material-icons { font-size: 21px; color: rgba(255,255,255,0.85); }
+.cj-mh-linea { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.cj-mh-linea h3 { font-size: 17px; }
+.cj-mh-tag {
+  display: inline-flex; align-items: center; gap: 4px;
+  background: rgba(255,255,255,0.16); color: #fff;
+  font-size: 10px; font-weight: 700; padding: 3px 9px; border-radius: 10px;
+  white-space: nowrap;
+}
+.cj-mh-tag .material-icons { font-size: 12px; }
+.cj-mh-sub { margin-top: 4px; font-size: 12px; color: rgba(255,255,255,0.68); }
+
+.cj-mh-kpis {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(148px, 1fr));
+  gap: 9px; margin-top: 15px;
+}
+.cj-mh-kpi {
+  container-type: inline-size;
+  background: rgba(255,255,255,0.07);
+  border: 1px solid rgba(255,255,255,0.12);
+  border-radius: 10px; padding: 9px 12px; min-width: 0;
+}
+.cj-mh-kpi-t {
+  display: block;
+  font-size: 10px; font-weight: 600; letter-spacing: .5px; text-transform: uppercase;
+  color: rgba(255,255,255,0.62);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.cj-mh-kpi-v {
+  display: block; margin-top: 3px;
+  font-size: 17px; font-weight: 800; color: #fff;
+  font-variant-numeric: tabular-nums; white-space: nowrap; letter-spacing: -.01em;
+}
+.cj-mh-kpi-v { font-size: clamp(13px, 13cqi, 18px); }
