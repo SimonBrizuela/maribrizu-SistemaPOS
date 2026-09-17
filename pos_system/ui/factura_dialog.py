@@ -1053,6 +1053,11 @@ class FacturaDialog(QDialog):
             'remito':             f'X-{str(pv).zfill(5)}-{str(nro).zfill(8)}',
         }
 
+        # Con CAE la factura ya existe en ARCA, salga o no el PDF de abajo:
+        # quien abrió el diálogo tiene que enterarse igual, o la vuelve a emitir.
+        if cae:
+            self.factura_emitida = dict(factura)
+
         try:
             gen = PDFGenerator()
             self.pdf_path = gen.generate_factura_afip_a4(factura)

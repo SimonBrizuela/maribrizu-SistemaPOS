@@ -83,6 +83,11 @@ class NubePedidos:
                  al_descontar: Callable[[List], None] = None, avisar_cliente: bool = True):
         self.db = db
         self._quien = quien
+        # Sin reloj propio, las decisiones usan la hora del servidor de la
+        # lectura: la marca de "lo está cobrando" la escribe una PC y la mira
+        # otra, y con los relojes corridos una caja colgada quedaba "ocupada"
+        # tantas horas como se adelantara su reloj.
+        self._reloj_propio = reloj is not None
         self._reloj = reloj or (lambda: datetime.now(reglas.TZ_AR))
         self._al_descontar = al_descontar
         self._avisar_cliente = avisar_cliente
@@ -318,9 +323,9 @@ class NubePedidos:
 
         @transactional
         def _tx(tx):
-            ahora = self._reloj()
             quien = self._quien()
             snap = ref.get(transaction=tx)
+            ahora = self._reloj() if self._reloj_propio else _hora_de(snap)
             pedido = snap.to_dict() if snap.exists else None
             catalogo = {}
             if con_catalogo and pedido and not reglas.stock_afuera(pedido):
@@ -479,6 +484,13 @@ class NubePedidos:
                 logger.info(f'Pedidos: aviso al cliente de {pedido_id} sin enviar: {e}')
 
         threading.Thread(target=_post, daemon=True, name='aviso-cliente').start()
+
+
+def _hora_de(snap):
+    leida = getattr(snap, 'read_time', None)
+    if isinstance(leida, datetime):
+        return leida.astimezone(reglas.TZ_AR)
+    return datetime.now(reglas.TZ_AR)
 
 
 def _es_choque(error):

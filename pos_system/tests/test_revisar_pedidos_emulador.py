@@ -141,13 +141,18 @@ def test_soltar_un_cobro_trabado(db, tmp_path):
 def test_reabrir_un_cobro_y_anular_su_venta(db, tmp_path):
     pid = sembrar(db, estado='entregado', stock_descontado=True, venta_registrada=True, cobro_pendiente=False,
                   venta_id='CAJA1-0001_57', cobro={'estado': 'hecho', **CAJA, 'en': datetime.now(reglas.TZ_AR)})
-    db.collection('ventas').document('CAJA1-0001_57').set({'pedido_id': pid, 'pc_id': 'CAJA1-0001', 'total_amount': 1500})
+    db.collection('ventas').document('CAJA1-0001_57').set({'pedido_id': pid, 'pc_id': 'CAJA1-0001', 'sale_id': 57, 'total_amount': 1500})
+    db.collection('ventas_por_dia').document('CAJA1-0001_57_0').set({'num_venta': 57, 'subtotal': 1500})
+    db.collection('ventas_por_dia').document('OTRAPC_57_0').set({'num_venta': 57, 'subtotal': 900})
     texto = rev.arreglar(db, 'reabrir-cobro', 'AB12', aplicar=True, anular_venta='CAJA1-0001_57',
                          carpeta_copias=str(tmp_path))
     assert 'base local' in texto
     p = pedido(db)
     assert p['cobro_pendiente'] is True and 'cobro' not in p and 'venta_id' not in p
     assert db.collection('ventas').document('CAJA1-0001_57').get().to_dict()['deleted'] is True
+    # Los renglones salen de los cierres; los de otra PC con el mismo número, no.
+    assert db.collection('ventas_por_dia').document('CAJA1-0001_57_0').get().to_dict()['deleted'] is True
+    assert 'deleted' not in db.collection('ventas_por_dia').document('OTRAPC_57_0').get().to_dict()
     assert stock(db) == 40
 
 
@@ -178,3 +183,29 @@ def test_leer_encuentra_lo_viejo_del_panel(db):
     assert pid in pedidos
     assert any(m['id'] == 'viejo1' and m['pedido_id'] == pid for m in movs)
     assert any(v['id'] == 'TIENDA_AB12' for v in ventas)
+
+
+def test_reabrir_la_entrega_con_un_descuento_repetido_vivo_se_niega(db, tmp_path):
+    pid = sembrar(db)
+    r = NubePedidos(db, quien=lambda: dict(CAJA), avisar_cliente=False).entregar(pid)
+    dup = duplicar_descuento(db)
+    texto = rev.arreglar(db, 'devolver-stock', 'AB12', aplicar=True, intento_a_revertir=r.intento,
+                         reabrir_entrega=True, carpeta_copias=str(tmp_path))
+    assert 'descuentos activos' in texto
+    assert stock(db) == 34 and pedido(db)['estado'] == 'entregado'
+    # Primero el repetido, después la entrega.
+    rev.arreglar(db, 'devolver-stock', 'AB12', aplicar=True, intento_a_revertir=dup, carpeta_copias=str(tmp_path))
+    rev.arreglar(db, 'devolver-stock', 'AB12', aplicar=True, intento_a_revertir=r.intento,
+                 reabrir_entrega=True, carpeta_copias=str(tmp_path))
+    assert stock(db) == 40 and pedido(db)['estado'] == 'listo'
+
+
+def test_un_cancelado_con_stock_se_devuelve_y_sigue_cancelado(db, tmp_path):
+    pid = sembrar(db)
+    r = NubePedidos(db, quien=lambda: dict(CAJA), avisar_cliente=False).entregar(pid)
+    db.collection('tienda_pedidos').document(pid).update({'estado': 'cancelado'})
+    assert 'cancelado_con_stock' in problemas(db)
+    rev.arreglar(db, 'devolver-stock', 'AB12', aplicar=True, intento_a_revertir=r.intento, carpeta_copias=str(tmp_path))
+    p = pedido(db)
+    assert stock(db) == 40 and p['estado'] == 'cancelado' and p['stock_descontado'] is False
+    assert 'cancelado_con_stock' not in problemas(db)

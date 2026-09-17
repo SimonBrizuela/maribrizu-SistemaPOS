@@ -265,17 +265,22 @@ class DatabaseManager:
                 # quedó anotado en la nube sin su venta local.
                 "ALTER TABLE sales ADD COLUMN pedido_tienda_id TEXT DEFAULT ''",
                 "ALTER TABLE sales ADD COLUMN pedido_tienda_codigo TEXT DEFAULT ''",
+                # El intento de cobro: un pedido cuyo cobro se reabrió (se borró
+                # la venta desde el panel) se vuelve a cobrar con otro intento y
+                # tiene que dar otra venta.
+                "ALTER TABLE sales ADD COLUMN pedido_tienda_intento TEXT DEFAULT ''",
             ]:
                 try:
                     cursor.execute(col_def)
                 except Exception:
                     pass
             try:
-                # Único: un pedido no puede tener dos ventas en la misma PC,
-                # aunque se apriete dos veces o se cruce con la recuperación.
+                # Único por cobro: el mismo cobro no puede dar dos ventas en la
+                # PC, aunque se apriete dos veces o se cruce con la recuperación.
+                cursor.execute("DROP INDEX IF EXISTS idx_sales_pedido_tienda")
                 cursor.execute(
-                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_pedido_tienda "
-                    "ON sales(pedido_tienda_id) WHERE pedido_tienda_id != ''")
+                    "CREATE UNIQUE INDEX IF NOT EXISTS idx_sales_pedido_cobro "
+                    "ON sales(pedido_tienda_id, pedido_tienda_intento) WHERE pedido_tienda_id != ''")
             except Exception:
                 pass
 

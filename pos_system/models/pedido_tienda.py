@@ -588,11 +588,16 @@ def decidir_tomar_factura(pedido, quien, ahora, intento, forzar=False):
                 'motivo': 'emitida'}
     if not (cobrado(pedido) or registrado_por_el_panel(pedido)):
         return {'rechazo': 'primero hay que cobrarlo', 'motivo': 'estado'}
-    if factura.get('estado') == 'en_curso' and factura.get('pc_id') != quien.get('pc_id'):
-        if marca_vigente(factura, ahora):
+    if factura.get('estado') == 'en_curso':
+        # Una factura empezada y sin terminar puede haber salido en ARCA (la PC
+        # se cortó después del CAE). Se pregunta siempre, también si la empezó
+        # esta misma caja: retomarla en silencio es la forma de facturar dos veces.
+        propia = factura.get('pc_id') == quien.get('pc_id')
+        if not propia and marca_vigente(factura, ahora):
             return {'rechazo': f'lo está facturando {quien_texto(factura)}', 'motivo': 'ocupado'}
         if not forzar:
-            return {'rechazo': f'{quien_texto(factura)} empezó a facturarlo y no terminó',
+            quien_la = 'esta caja' if propia else quien_texto(factura)
+            return {'rechazo': f'{quien_la} empezó a facturarlo y no terminó',
                     'motivo': 'vencida'}
     return {'campos': {'factura': {'estado': 'en_curso', **quien, 'desde': ahora,
                                    'intento': intento}}}

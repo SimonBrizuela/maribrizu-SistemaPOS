@@ -289,6 +289,13 @@ class TestCancelarYFacturar:
         facturando = dict(cobrado, factura={'estado': 'en_curso', **CAJA2, 'desde': AHORA})
         assert pt.decidir_tomar_factura(facturando, CAJA1, AHORA, 'f2')['motivo'] == 'ocupado'
 
+    def test_factura_a_medias_de_esta_misma_caja_tambien_pregunta(self):
+        cobrado = pedido(estado='entregado', cobro={'estado': 'hecho', **CAJA1},
+                         factura={'estado': 'en_curso', **CAJA1, 'desde': AHORA, 'intento': 'f0'})
+        r = pt.decidir_tomar_factura(cobrado, CAJA1, AHORA, 'f1')
+        assert r['motivo'] == 'vencida' and 'esta caja' in r['rechazo']
+        assert 'campos' in pt.decidir_tomar_factura(cobrado, CAJA1, AHORA, 'f1', forzar=True)
+
     def test_no_se_factura_sin_cobrar(self):
         assert pt.decidir_tomar_factura(pedido(estado='entregado'), CAJA1, AHORA, 'f1')['motivo'] == 'estado'
 

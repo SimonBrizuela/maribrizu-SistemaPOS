@@ -269,9 +269,9 @@ def minimo_publicado(publicado):
 
 def _campos_de_pedido_tienda(item):
     """Lo que un renglón cobrado de un pedido de la tienda lleva de más en
-    `ventas_por_dia`: los mismos campos que usa `stock_revert.js` para saber
-    qué producto y cuántas unidades base eran. El stock ya salió al entregar,
-    así que el renglón nace marcado para que nadie descuente vinculaciones."""
+    `ventas_por_dia`: el pedido, el producto y las unidades base, para poder
+    rastrear el renglón. El stock ya salió al entregar, así que el renglón nace
+    marcado para que nadie descuente vinculaciones."""
     crudo = (item or {}).get('tienda_json') or (item or {}).get('tienda')
     if not crudo:
         return {}
@@ -281,8 +281,10 @@ def _campos_de_pedido_tienda(item):
         return {}
     if datos.get('origen') != 'tienda':
         return {}
+    # Sin `origen: 'tienda'` a propósito: ese campo hace que `stock_revert.js`
+    # devuelva el stock al borrar la venta, y el de un pedido salió al
+    # entregarlo. Un panel viejo que borre esta venta no tiene que reponerlo.
     return {
-        'origen': 'tienda',
         'pedido_id': str(datos.get('pedido_id') or ''),
         'producto_id': str(datos.get('producto_id') or ''),
         'es_pack': bool(datos.get('es_pack')),

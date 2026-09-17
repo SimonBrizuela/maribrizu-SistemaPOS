@@ -118,7 +118,8 @@ def revisar(pedidos, eventos, movimientos, ventas, facturas, ahora):
             ventas_por_pedido[pid].append(v)
     facturas_por_pedido = defaultdict(list)
     for f in facturas:
-        if f.get('pedido_id') and not es_nota_de_credito(f):
+        # Un comprobante sin CAE no es una factura en ARCA: no cuenta como repetida.
+        if f.get('pedido_id') and not es_nota_de_credito(f) and str(f.get('cae') or '').strip():
             facturas_por_pedido[f['pedido_id']].append(f)
 
     for pid, p in pedidos.items():
@@ -172,7 +173,7 @@ def revisar(pedidos, eventos, movimientos, ventas, facturas, ahora):
         if p.get('estado') == 'cancelado' and reglas.stock_afuera(p) and not str(p.get('venta_id') or '').startswith('TIENDA_'):
             problemas.append(_problema(
                 'cancelado_con_stock', 'grave', pid, p, 'está cancelado y el stock salió',
-                f'--devolver-stock {codigo} --intento <el del descuento>'))
+                f'--devolver-stock {codigo} --intento <el del descuento> (sigue cancelado)'))
 
         if (p.get('estado') == 'entregado' and not reglas.stock_afuera(p)
                 and p.get('venta_pendiente') is not True):
@@ -420,6 +421,7 @@ def arreglar(db, accion, codigo, aplicar, intento_a_revertir=None, reabrir_entre
                 return 'El pedido no está cobrado.'
             venta_ref = db.collection('ventas').document(anular_venta) if anular_venta else None
             venta = None
+            renglones = []
             if venta_ref is not None:
                 vs = venta_ref.get(transaction=tx)
                 if not vs.exists:
@@ -428,11 +430,20 @@ def arreglar(db, accion, codigo, aplicar, intento_a_revertir=None, reabrir_entre
                 if venta.get('pedido_id') != pid:
                     return f'La venta {anular_venta} no es de este pedido.'
                 salida['venta'] = venta
+                # Los renglones cuentan en los cierres por su propio `deleted`:
+                # marcar solo la venta la sacaba de la lista pero no de la caja.
+                from google.cloud.firestore_v1.base_query import FieldFilter
+                prefijo = f"{venta.get('pc_id') or ''}_"
+                renglones = [r for r in db.collection('ventas_por_dia')
+                             .where(filter=FieldFilter('num_venta', '==', venta.get('sale_id'))).get(transaction=tx)
+                             if r.id.startswith(prefijo)]
             if aplicar:
                 tx.update(ref, {'cobro_pendiente': True, 'cobro': firestore.DELETE_FIELD,
                                 'venta_id': firestore.DELETE_FIELD})
                 if venta_ref is not None:
                     tx.update(venta_ref, {'deleted': True, 'deleted_at': firestore.SERVER_TIMESTAMP})
+                    for r in renglones:
+                        tx.update(r.reference, {'deleted': True})
                 _evento(tx, db, pid, pedido, 'reabrir_cobro', intento,
                         'cobro reabierto a mano' + (f' y venta {anular_venta} anulada' if anular_venta else ''),
                         {'cobro_anterior': json.loads(json.dumps(pedido.get('cobro'), default=str))})
@@ -456,9 +467,15 @@ def arreglar(db, accion, codigo, aplicar, intento_a_revertir=None, reabrir_entre
             if grupo['revertido']:
                 return 'Ese descuento ya se devolvió.'
             vivos = [g for g in grupos.values() if not g['revertido']]
-            if len(vivos) == 1 and not reabrir_entrega:
+            cancelado = pedido.get('estado') == 'cancelado'
+            if reabrir_entrega and len(vivos) != 1:
+                return (f'Hay {len(vivos)} descuentos activos: primero devolvé los repetidos sin '
+                        '--reabrir-entrega; la entrega se reabre solo con el último.')
+            if len(vivos) == 1 and not reabrir_entrega and not cancelado:
                 return ('Es el único descuento del pedido: devolverlo deja el pedido entregado sin stock. '
                         'Si es lo que querés (se entregó por error), agregá --reabrir-entrega.')
+            if reabrir_entrega and cancelado:
+                return 'El pedido está cancelado: se devuelve sin --reabrir-entrega y sigue cancelado.'
             if reabrir_entrega and reglas.cobrado(pedido):
                 return 'El pedido está cobrado: primero --reabrir-cobro.'
             ids = sorted({str((i or {}).get('id') or '') for i in pedido.get('items') or []} - {''})
@@ -496,6 +513,9 @@ def arreglar(db, accion, codigo, aplicar, intento_a_revertir=None, reabrir_entre
                         'entregado_en': firestore.DELETE_FIELD, 'entregado_dia': firestore.DELETE_FIELD,
                         'entregado_por': firestore.DELETE_FIELD,
                     })
+                elif cancelado and len(vivos) == 1:
+                    tx.update(ref, {'stock_descontado': False, 'venta_registrada': False,
+                                    'cobro_pendiente': False, 'venta_pendiente': False})
                 _evento(tx, db, pid, pedido, 'devolver_stock', intento,
                         f'devuelto el descuento {intento_a_revertir}' + (' y entrega reabierta' if reabrir_entrega else ''),
                         {'revierte_intento': intento_a_revertir})

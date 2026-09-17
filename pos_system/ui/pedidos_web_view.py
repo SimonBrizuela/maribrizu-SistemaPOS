@@ -9,7 +9,7 @@ un botón viejo nunca pisa lo que hizo otra caja: vuelve con el motivo.
 El cobro abre la pantalla de cobro de siempre, precargada con lo que pagó el
 cliente. Mientras está abierta, el pedido queda marcado para esta caja y las
 demás lo ven. La venta local se crea recién con el cobro anotado en la nube; si
-la PC se corta justo en el medio, al volver se crea sola (`_recuperar_ventas`).
+la PC se corta justo en el medio, se termina sola (`_procesar_cobros_pendientes`).
 
 Mientras hay un diálogo abierto no se redibuja nada: un redibujo borra los
 botones y uno de ellos puede ser el que abrió el diálogo.
@@ -27,6 +27,7 @@ from PyQt5.QtWidgets import (
 )
 
 from pos_system.database.db_manager import DatabaseManager
+from pos_system.models import cobros_pedido
 from pos_system.models import pedido_tienda as reglas
 from pos_system.models.sale import Sale, VentaDePedidoRepetida
 from pos_system.ui.theme import COLORS as _T
@@ -43,10 +44,8 @@ COLOR_COBRAR = _T['accent']
 
 FILTROS = [('hacer', 'A hacer'), ('cobrar', 'A cobrar'), ('hechos', 'Entregados')]
 
-# Un cobro anotado en la nube sin su venta local se recrea solo si es reciente:
-# más viejo que esto, lo más probable es que la base local se haya cambiado y
-# crearlo metería plata de otro día en la caja de hoy.
-HORAS_RECUPERO = 48
+# Cada cuánto se revisan los cobros que esta PC dejó a medias.
+REVISION_COBROS_MS = 60_000
 
 # Cada cuánto se renueva la marca de "lo estoy cobrando" con la pantalla de
 # cobro abierta; tiene que ser bastante menos que `reglas.MINUTOS_MARCA`.
@@ -146,6 +145,10 @@ class PedidosWebView(QWidget):
         vigia.estado_conexion.connect(self._al_cambiar_conexion)
         vigia.iniciar()
         self._en_fondo(self._leer_config_tienda, lambda cfg: self._cfg_tienda.update(cfg or {}))
+        self._reloj_cobros = QTimer(self)
+        self._reloj_cobros.timeout.connect(self._procesar_cobros_pendientes)
+        self._reloj_cobros.start(REVISION_COBROS_MS)
+        QTimer.singleShot(3000, self._procesar_cobros_pendientes)
 
     def _leer_config_tienda(self):
         snap = self._nube.db.collection('tienda_config').document('settings').get()
@@ -281,7 +284,6 @@ class PedidosWebView(QWidget):
     def _al_cambiar(self, pedidos):
         self._avisar_novedades(pedidos)
         self._pedidos = dict(pedidos)
-        self._recuperar_ventas()
         self._redibujar()
 
     def _al_cambiar_conexion(self, en_linea):
@@ -979,20 +981,46 @@ class PedidosWebView(QWidget):
 
     def _confirmar_cobro(self, pid, intento, pedido, lineas, total, dlg):
         pago = self._pago_de(dlg, total)
+        # Antes de pedir el cobro queda anotado acá lo necesario para terminarlo
+        # solo si la PC se corta en el medio (ver models/cobros_pedido.py).
+        if total > 0:
+            try:
+                cobros_pedido.anotar(self.db, intento=intento, pedido_id=pid,
+                                     codigo=str(pedido.get('codigo') or ''), pedido=pedido,
+                                     pago=pago, lineas=lineas)
+            except Exception as e:
+                logger.exception('Pedidos web: no se pudo anotar el cobro local')
+                self._en_fondo(lambda: self._nube.soltar_cobro(pid, intento), lambda _r: None)
+                self._terminar_cobro(pid)
+                self._mensaje('No se cobró', f"No se pudo guardar el cobro en esta PC:\n{e}\n\n"
+                                             "No se registró nada.", QMessageBox.Warning)
+                return
         self._en_fondo(lambda: self._nube.cobrar(pid, intento, pago),
                        lambda r: self._cobro_anotado(pid, intento, pedido, lineas, pago, dlg, r))
 
     def _cobro_anotado(self, pid, intento, pedido, lineas, pago, dlg, r):
         if not r.ok:
             self._terminar_cobro(pid)
-            self._mensaje('No se cobró', f"No se registró el cobro: {r.rechazo}.\n\n"
-                                         "No se creó ninguna venta ni se tocó la caja.", QMessageBox.Warning)
+            if r.motivo == 'error':
+                # Sin respuesta de la nube no se sabe si el cobro entró. La fila
+                # local queda: la próxima revisión relee el pedido y, si entró,
+                # crea la venta; si no, la descarta.
+                self._mensaje('Cobro sin confirmar',
+                              "No hubo respuesta de la nube y no se sabe si el cobro quedó registrado.\n\n"
+                              "Esta caja lo revisa sola en un momento: si entró, crea la venta; si no, "
+                              "el pedido sigue para cobrar. No lo cobres en otra caja mientras tanto.",
+                              QMessageBox.Warning)
+            else:
+                cobros_pedido.borrar(self.db, intento)
+                self._mensaje('No se cobró', f"No se registró el cobro: {r.rechazo}.\n\n"
+                                             "No se creó ninguna venta ni se tocó la caja.", QMessageBox.Warning)
             return
 
         sale_id = None
         if pago['total'] > 0:
             try:
-                sale_id = self._crear_venta_local(pid, pedido, lineas, pago)
+                sale_id = self._crear_venta_local(pid, intento, pedido, lineas, pago)
+                cobros_pedido.marcar_venta(self.db, intento, sale_id)
             except Exception as e:
                 logger.exception('Pedidos web: la venta local del cobro no se pudo crear')
                 detalle = f'{type(e).__name__}: {e}'
@@ -1003,7 +1031,7 @@ class PedidosWebView(QWidget):
                               f"pudo crear:\n{e}\n\nSe vuelve a intentar sola; si sigue fallando, "
                               "avisá antes de cobrarlo de nuevo.", QMessageBox.Warning)
                 return
-            self._en_fondo(lambda: self._nube.anotar_venta(pid, intento, sale_id), lambda _r: None)
+            self._anotar_venta(pid, intento, sale_id)
             self._subir_venta(sale_id)
 
         self._terminar_cobro(pid)
@@ -1016,6 +1044,14 @@ class PedidosWebView(QWidget):
             self._mensaje('Pedido cobrado', f"{pedido.get('codigo', '')} cobrado: "
                                             f"{pesos(pago['total'])} en {etiqueta_pago(pago)}.")
 
+    def _anotar_venta(self, pid, intento, sale_id):
+        """Anota la venta en el pedido; con eso el cobro queda completo y la
+        fila local se borra. Si falla, la fila queda para la próxima revisión."""
+        def listo(r):
+            if r.ok:
+                cobros_pedido.borrar(self.db, intento)
+        self._en_fondo(lambda: self._nube.anotar_venta(pid, intento, sale_id), listo)
+
     def _ids_locales(self, pedido):
         ids = sorted({str((i or {}).get('id') or '') for i in (pedido.get('items') or [])} - {''})
         if not ids:
@@ -1025,21 +1061,22 @@ class PedidosWebView(QWidget):
             f"SELECT id, firebase_id FROM products WHERE firebase_id IN ({marcas})", tuple(ids)) or []
         return {f['firebase_id']: int(f['id']) for f in filas}
 
-    def _crear_venta_local(self, pid, pedido, lineas, pago):
+    def _crear_venta_local(self, pid, intento, pedido, lineas, pago):
         try:
             return self.sale_model.create({
                 'total_amount': pago['total'],
                 'payment_type': pago['payment_type'],
                 'payment_subtype': pago.get('payment_subtype', ''),
-                'cash_received': pago['cash_received'],
-                'change_given': pago['change_given'],
-                'transfer_amount': pago['transfer_amount'],
+                'cash_received': pago.get('cash_received', 0.0),
+                'change_given': pago.get('change_given', 0.0),
+                'transfer_amount': pago.get('transfer_amount', 0.0),
                 'items': lineas,
                 'user_id': self.current_user.get('id'),
                 'turno_nombre': self._cajero(),
                 'notes': f"Pedido web {pedido.get('codigo', '')}",
                 'pedido_tienda_id': pid,
                 'pedido_tienda_codigo': str(pedido.get('codigo') or ''),
+                'pedido_tienda_intento': intento,
             })
         except VentaDePedidoRepetida as ya:
             return ya.sale_id
@@ -1075,47 +1112,64 @@ class PedidosWebView(QWidget):
                 return
             w = w.parent()
 
-    def _recuperar_ventas(self):
-        """Cobros de esta caja anotados en la nube sin venta local anotada: la
-        PC se cortó entre las dos cosas, o la anotación no llegó a subir."""
-        if self._nube is None:
+    def _procesar_cobros_pendientes(self):
+        """Termina los cobros que esta PC dejó a medias (models/cobros_pedido.py).
+
+        Relee cada pedido en la nube y decide con lo que hay de verdad:
+          · el cobro con ese intento está hecho → crea la venta que falta (con
+            la caja abierta: sin caja la venta no sube) y la anota en el pedido;
+          · no está hecho → el cobro nunca se registró: si la marca sigue siendo
+            de este intento se suelta, y la fila se descarta.
+        Una fila que falla espera cada vez más antes de reintentar.
+        """
+        if self._nube is None or self._modal:
             return
-        yo = self.quien()['pc_id']
-        ahora = datetime.now(reglas.TZ_AR)
-        for pid, p in self._pedidos.items():
-            cobro = p.get('cobro') or {}
-            if (cobro.get('estado') != 'hecho' or cobro.get('pc_id') != yo or p.get('venta_id')
-                    or pid in self._cobrando or pid in self._recuperando):
-                continue
-            cuando = reglas._fecha(cobro.get('en'))
-            if cuando is None or ahora - cuando > timedelta(hours=HORAS_RECUPERO):
-                continue
-            pago = dict(cobro.get('pago') or {})
-            if reglas.num(pago.get('total')) <= 0:
-                continue
-            self._recuperando.add(pid)
-            try:
-                existente = self.db.execute_query("SELECT id FROM sales WHERE pedido_tienda_id = ?", (pid,))
-                if existente:
-                    sale_id = int(existente[0]['id'])
-                else:
-                    lineas = reglas.renglones_de_cobro(p, pid, self._ids_locales(p))
-                    pago.setdefault('cash_received', 0.0)
-                    pago.setdefault('change_given', 0.0)
-                    pago.setdefault('transfer_amount', 0.0)
-                    sale_id = self._crear_venta_local(pid, p, lineas, pago)
-                    self._subir_venta(sale_id)
-                    logger.warning(f"Pedidos web: venta #{sale_id} recreada para el cobro de {p.get('codigo')}")
-                intento = cobro.get('intento')
-                self._en_fondo(lambda pid=pid, intento=intento, sale_id=sale_id:
-                               self._nube.anotar_venta(pid, intento, sale_id),
-                               lambda _r, pid=pid: self._recuperando.discard(pid))
-            except Exception as e:
-                self._recuperando.discard(pid)
-                logger.exception('Pedidos web: no se pudo recuperar la venta')
+        try:
+            filas = [f for f in cobros_pedido.pendientes(self.db)
+                     if f['pedido_id'] not in self._cobrando and f['intento'] not in self._recuperando]
+        except Exception as e:
+            logger.warning(f'Pedidos web: no se pudieron leer los cobros pendientes: {e}')
+            return
+        for fila in filas:
+            self._recuperando.add(fila['intento'])
+            self._en_fondo(lambda fila=fila: self._nube.leer(fila['pedido_id']),
+                           lambda pedido, fila=fila: self._resolver_cobro_pendiente(fila, pedido))
+
+    def _resolver_cobro_pendiente(self, fila, pedido):
+        intento, pid = fila['intento'], fila['pedido_id']
+        try:
+            if isinstance(pedido, dict) and 'ok' in pedido and pedido.get('ok') is False:
+                raise RuntimeError(pedido.get('rechazo') or 'sin respuesta de la nube')
+            cobro = (pedido or {}).get('cobro') or {}
+            if cobro.get('estado') != 'hecho' or cobro.get('intento') != intento:
+                if cobro.get('estado') == 'en_curso' and cobro.get('intento') == intento:
+                    self._en_fondo(lambda: self._nube.soltar_cobro(pid, intento), lambda _r: None)
+                cobros_pedido.borrar(self.db, intento)
+                logger.info(f"Pedidos web: cobro {intento} de {fila.get('codigo')} no se había registrado; descartado")
+                return
+            if (pedido or {}).get('venta_id') and fila.get('sale_id'):
+                cobros_pedido.borrar(self.db, intento)
+                return
+            sale_id = fila.get('sale_id')
+            if not sale_id:
+                caja = self.db.get_current_cash_register()
+                if not caja or caja.get('status') != 'open':
+                    return      # sin caja abierta no se crea: se reintenta en la próxima vuelta
+                sale_id = self._crear_venta_local(pid, intento, fila.get('pedido') or pedido,
+                                                  fila.get('lineas') or [], fila.get('pago') or {})
+                cobros_pedido.marcar_venta(self.db, intento, sale_id)
+                self._subir_venta(sale_id)
+                logger.warning(f"Pedidos web: venta #{sale_id} creada para el cobro que quedó a medias "
+                               f"de {fila.get('codigo')}")
+            self._anotar_venta(pid, intento, sale_id)
+        except Exception as e:
+            fallas = cobros_pedido.posponer(self.db, intento, e)
+            logger.warning(f"Pedidos web: cobro pendiente de {fila.get('codigo')} sin resolver ({fallas}): {e}")
+            if fallas == 1:
                 detalle = f'{type(e).__name__}: {e}'
-                self._en_fondo(lambda pid=pid, detalle=detalle:
-                               self._nube.anotar_problema(pid, 'recuperar_venta', detalle), lambda _r: None)
+                self._en_fondo(lambda: self._nube.anotar_problema(pid, 'cobro_pendiente', detalle), lambda _r: None)
+        finally:
+            self._recuperando.discard(intento)
 
     # ── Factura ─────────────────────────────────────────────────────────────
     def _facturar(self, pid, sale_id=None, perfil=None, cliente=None, notas='', forzar=False):
@@ -1165,6 +1219,16 @@ class PedidosWebView(QWidget):
         if not emitida:
             self._en_fondo(lambda: self._nube.soltar_factura(pid, intento), lambda _r: None)
             return
+        if not str(emitida.get('cae') or '').strip():
+            # Un PDF sin CAE no es una factura en ARCA: el pedido queda sin facturar.
+            self._en_fondo(lambda: self._nube.soltar_factura(pid, intento), lambda _r: None)
+            self._mensaje('Sin CAE', 'Se generó el comprobante sin CAE: en ARCA el pedido sigue sin facturar.',
+                          QMessageBox.Warning)
+            return
+        if not getattr(fac, 'pdf_path', None):
+            self._mensaje('Factura emitida', 'ARCA dio el CAE pero el PDF no se pudo generar. '
+                                             'La factura queda anotada en el pedido: no lo vuelvas a facturar; '
+                                             'el PDF se puede rehacer desde Fiscal AFIP.', QMessageBox.Warning)
 
         def anotada(res):
             if not res.ok:
@@ -1178,20 +1242,24 @@ class PedidosWebView(QWidget):
         self._en_fondo(lambda: self._nube.anotar_factura(pid, intento, emitida), anotada)
 
     def _venta_para_factura(self, pid, pedido, sale_id):
-        if sale_id is None:
-            filas = self.db.execute_query("SELECT id FROM sales WHERE pedido_tienda_id = ?", (pid,))
+        cobro = (pedido or {}).get('cobro') or {}
+        if sale_id is None and cobro.get('intento'):
+            filas = self.db.execute_query(
+                "SELECT id FROM sales WHERE pedido_tienda_id = ? AND pedido_tienda_intento = ?",
+                (pid, cobro.get('intento')))
             sale_id = int(filas[0]['id']) if filas else None
         if sale_id is not None:
             venta = self.sale_model.get_by_id(int(sale_id))
             if venta:
                 return dict(venta)
         # Venta TIENDA del panel o cobrada en otra caja: la factura se arma con
-        # los renglones del pedido y no toca ninguna venta de esta PC.
+        # los renglones del pedido y no toca ninguna venta de esta PC. El medio
+        # de pago es el del cobro si lo hubo, no el que eligió el cliente online.
         return {
             'id': None,
             'items': reglas.renglones_de_cobro(pedido, pid),
             'total_amount': reglas.total_a_cobrar(pedido),
-            'payment_type': reglas.pago_sugerido(pedido),
+            'payment_type': (cobro.get('pago') or {}).get('payment_type') or reglas.pago_sugerido(pedido),
             'pedido_tienda_id': pid,
             'pedido_tienda_codigo': str(pedido.get('codigo') or ''),
         }

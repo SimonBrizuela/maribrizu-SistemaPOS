@@ -49,7 +49,7 @@ def local(tmp_path):
     return {'db': db, 'ventas': Sale(db), 'pid': pid}
 
 
-def cobrar(local, pedido_id='doc1', payment_type='transfer', **extra):
+def cobrar(local, pedido_id='doc1', payment_type='transfer', intento='i1', **extra):
     ids = {r['firebase_id']: r['id'] for r in local['db'].execute_query(
         "SELECT id, firebase_id FROM products WHERE firebase_id IS NOT NULL")}
     lineas = pt.renglones_de_cobro(PEDIDO, pedido_id, ids)
@@ -57,7 +57,7 @@ def cobrar(local, pedido_id='doc1', payment_type='transfer', **extra):
         'total_amount': pt.total_a_cobrar(PEDIDO), 'payment_type': payment_type,
         'cash_received': 0, 'change_given': 0, 'transfer_amount': 0,
         'items': lineas, 'turno_nombre': 'Mari',
-        'pedido_tienda_id': pedido_id, 'pedido_tienda_codigo': 'CU01', **extra,
+        'pedido_tienda_id': pedido_id, 'pedido_tienda_codigo': 'CU01', 'pedido_tienda_intento': intento, **extra,
     })
 
 
@@ -90,6 +90,16 @@ class TestVentaLocal:
         assert len(local['db'].execute_query("SELECT id FROM sales")) == 1
         caja = local['db'].get_current_cash_register()
         assert caja['transfer_sales'] == pytest.approx(19860)
+
+    def test_un_cobro_reabierto_se_cobra_con_otra_venta(self, local):
+        """Se borró la venta desde el panel y el pedido volvió a "a cobrar": el
+        nuevo cobro tiene otro intento y tiene que dejar su propia venta, no
+        devolver la vieja (que el panel ya sacó de las ventas)."""
+        primera = cobrar(local, intento='i1')
+        segunda = cobrar(local, intento='i2')
+        assert segunda != primera
+        with pytest.raises(VentaDePedidoRepetida):
+            cobrar(local, intento='i2')
 
     def test_dos_pedidos_distintos_y_ventas_comunes_conviven(self, local):
         cobrar(local, 'doc1')
@@ -168,7 +178,9 @@ def test_la_venta_sube_atada_al_pedido(local, nube):
     sync.sync_sale_detail_by_day(venta, db_manager=local['db'])
     renglones = {k[1]: v for k, v in db.escritos.items() if k[0] == 'ventas_por_dia'}
     lapiz = renglones[f"CAJA1-aaaa_{venta['id']}_1"]
-    assert lapiz['origen'] == 'tienda' and lapiz['producto_id'] == 'FB_LAPIZ'
+    # Sin `origen`: un panel viejo que borre la venta no tiene que devolver el
+    # stock, que salió al entregar.
+    assert 'origen' not in lapiz and lapiz['producto_id'] == 'FB_LAPIZ' and lapiz['pedido_id'] == 'doc1'
     assert lapiz['es_pack'] is False and lapiz['consumibles_procesado'] is True
     assert lapiz['descuento_tipo'] == 'cupon' and lapiz['descuento_monto'] == 240
     envio = renglones[f"CAJA1-aaaa_{venta['id']}_2"]

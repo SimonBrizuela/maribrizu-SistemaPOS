@@ -66,6 +66,7 @@ class Sale:
         # Cobro de un pedido de la tienda online (ver pos_system/models/pedido_tienda.py).
         pedido_tienda_id     = str(sale_data.get('pedido_tienda_id') or '')
         pedido_tienda_codigo = str(sale_data.get('pedido_tienda_codigo') or '')
+        pedido_tienda_intento = str(sale_data.get('pedido_tienda_intento') or '')
 
         # Validar consistencia para pago mixto
         if payment_type == 'mixed':
@@ -86,14 +87,15 @@ class Sale:
             created_at_ar = now_ar().strftime('%Y-%m-%d %H:%M:%S')
             if pedido_tienda_id:
                 ya = cursor.execute(
-                    "SELECT id FROM sales WHERE pedido_tienda_id = ?", (pedido_tienda_id,)
+                    "SELECT id FROM sales WHERE pedido_tienda_id = ? AND pedido_tienda_intento = ?",
+                    (pedido_tienda_id, pedido_tienda_intento)
                 ).fetchone()
                 if ya:
                     raise VentaDePedidoRepetida(int(ya[0]))
             cursor.execute(
-                "INSERT INTO sales (total_amount, payment_type, cash_received, change_given, transfer_amount, cash_register_id, user_id, notes, turno_nombre, created_at, es_fiado, fiado_tipo, fiado_cliente, fiado_cliente_fid, pedido_tienda_id, pedido_tienda_codigo) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                "INSERT INTO sales (total_amount, payment_type, cash_received, change_given, transfer_amount, cash_register_id, user_id, notes, turno_nombre, created_at, es_fiado, fiado_tipo, fiado_cliente, fiado_cliente_fid, pedido_tienda_id, pedido_tienda_codigo, pedido_tienda_intento) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 (total_amount, payment_type, cash_received, change_given, transfer_amount, cash_register_id, user_id, notes, turno_nombre, created_at_ar,
-                 es_fiado, fiado_tipo, fiado_cliente, fiado_cliente_fid, pedido_tienda_id, pedido_tienda_codigo)
+                 es_fiado, fiado_tipo, fiado_cliente, fiado_cliente_fid, pedido_tienda_id, pedido_tienda_codigo, pedido_tienda_intento)
             )
             sale_id = cursor.lastrowid
 

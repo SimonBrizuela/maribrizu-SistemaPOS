@@ -77,11 +77,13 @@ def test_una_venta_borrada_no_cuenta():
 
 
 def test_dos_facturas_pero_la_nota_de_credito_no_suma():
-    f1 = {'pedido_id': 'p1', 'tipo_comprobante': 'FAC. ELEC. C', 'nro_comprobante': 10}
-    f2 = {'pedido_id': 'p1', 'tipo_comprobante': 'FAC. ELEC. C', 'nro_comprobante': 11}
-    nc = {'pedido_id': 'p1', 'tipo_comprobante': 'NOTA CRED. C', 'nro_comprobante': 1}
+    f1 = {'pedido_id': 'p1', 'tipo_comprobante': 'FAC. ELEC. C', 'nro_comprobante': 10, 'cae': '1'}
+    f2 = {'pedido_id': 'p1', 'tipo_comprobante': 'FAC. ELEC. C', 'nro_comprobante': 11, 'cae': '2'}
+    nc = {'pedido_id': 'p1', 'tipo_comprobante': 'NOTA CRED. C', 'nro_comprobante': 1, 'cae': '3'}
+    sin_cae = {'pedido_id': 'p1', 'tipo_comprobante': 'FAC. ELEC. C', 'nro_comprobante': 9, 'cae': ''}
     assert tipos(rev.revisar({'p1': pedido()}, [], [mov('i1')], [VENTA], [f1, f2], AHORA)) == ['factura_duplicada']
     assert rev.revisar({'p1': pedido()}, [], [mov('i1')], [VENTA], [f1, nc], AHORA) == []
+    assert rev.revisar({'p1': pedido()}, [], [mov('i1')], [VENTA], [f1, sin_cae], AHORA) == []
 
 
 def test_cobro_sin_venta_y_venta_que_no_subio():

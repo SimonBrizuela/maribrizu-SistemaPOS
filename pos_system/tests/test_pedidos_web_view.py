@@ -114,13 +114,23 @@ class NubeFalsa:
 
     def tomar_cobro(self, pid, forzar=False):
         self.llamados.append(('forzar', forzar))
-        return self._r('tomar_cobro', pid, reglas.decidir_tomar_cobro(self.pedidos.get(pid), YO, AHORA, 'i1', forzar))
+        self.vueltas = getattr(self, 'vueltas', 0) + 1
+        intento = f'i{self.vueltas}'
+        return self._r('tomar_cobro', pid, reglas.decidir_tomar_cobro(self.pedidos.get(pid), YO, AHORA, intento, forzar),
+                       intento)
+
+    def leer(self, pid):
+        p = self.pedidos.get(pid)
+        return dict(p) if p is not None else None
 
     def renovar_cobro(self, pid, intento):
         return Resultado(ok=True)
 
     def soltar_cobro(self, pid, intento):
-        return self._r('soltar_cobro', pid, {'campos': {'cobro': None}}, intento)
+        self.llamados.append(('soltar_cobro', pid))
+        if (self.pedidos.get(pid, {}).get('cobro') or {}).get('intento') == intento:
+            self.pedidos[pid].pop('cobro', None)
+        return Resultado(ok=True, intento=intento)
 
     def cobrar(self, pid, intento, pago):
         self.ultimo_pago = pago
@@ -209,6 +219,7 @@ def pantalla(app, local, monkeypatch):
     # todavía puestos: si no, contesta en la prueba siguiente.
     for v in vistas:
         esperar(lambda v=v: not v._tareas and not v._cobrando, 5)
+        getattr(v, '_reloj_cobros', None) and v._reloj_cobros.stop()
 
 
 def refrescar(t):
@@ -386,34 +397,117 @@ def test_caja_cerrada_no_cobra(pantalla, pago, local):
     assert 'tomar_cobro' not in t['nube'].nombres()
 
 
-# ── Recuperar ───────────────────────────────────────────────────────────────
+# ── Cobros a medias ─────────────────────────────────────────────────────────
 
-def test_cobro_sin_venta_local_se_recrea_una_sola_vez(pantalla, local):
-    cobrado = pedido('c1', estado='entregado', stock_descontado=True, venta_registrada=True,
-                     cobro={'estado': 'hecho', **YO, 'intento': 'i1', 'en': AHORA,
-                            'pago': {'payment_type': 'transfer', 'total': 1000}})
-    t = pantalla([cobrado])
-    assert esperar(lambda: 'anotar_venta' in t['nube'].nombres())
-    assert len(ventas(local)) == 1
-    t['nube'].pedidos['c1'].pop('venta_id', None)
-    refrescar(t)
-    refrescar(t)
-    assert len(ventas(local)) == 1
+def filas_pendientes(local):
+    from pos_system.models import cobros_pedido
+    return cobros_pedido.pendientes(local['db'], AHORA + timedelta(days=1))
 
 
-def test_cobro_de_otra_caja_no_se_recrea_aca(pantalla, local):
-    t = pantalla([pedido('c1', estado='entregado', cobro={'estado': 'hecho', **OTRA, 'intento': 'x', 'en': AHORA,
-                                                          'pago': {'payment_type': 'cash', 'total': 1000}})])
-    refrescar(t)
+def procesar(t):
+    t['vista']._procesar_cobros_pendientes()
+    assert esperar(lambda: not t['vista']._tareas and not t['vista']._recuperando)
+
+
+def test_un_cobro_completo_no_deja_nada_pendiente(pantalla, pago, local):
+    t = pantalla([pedido('c1', estado='entregado', cobro_pendiente=True)])
+    t['vista']._accion('cobrar', 'c1')
+    assert esperar(lambda: 'anotar_venta' in t['nube'].nombres() and not t['vista']._tareas)
+    assert filas_pendientes(local) == []
+
+
+def test_cobro_rechazado_descarta_la_fila(pantalla, pago, local):
+    t = pantalla([pedido('c1', estado='entregado', cobro_pendiente=True)])
+    t['nube'].rechazar['cobrar'] = 'otra caja tomó el pedido para cobrarlo'
+    t['vista']._accion('cobrar', 'c1')
+    assert esperar(lambda: t['mensajes'] and not t['vista']._tareas)
+    assert filas_pendientes(local) == []
+
+
+def test_sin_respuesta_de_la_nube_se_resuelve_despues_sin_duplicar(pantalla, pago, local):
+    """El cobro entró en la nube pero la respuesta se perdió: la caja no crea la
+    venta en el momento (no sabe) y la crea la revisión al releer el pedido."""
+    t = pantalla([pedido('c1', estado='entregado', cobro_pendiente=True)])
+    nube = t['nube']
+    original = nube.cobrar
+
+    def cobrar_sin_respuesta(pid, intento, pago_):
+        original(pid, intento, pago_)          # entra en la "nube"...
+        return Resultado(ok=False, rechazo='no se pudo hablar con la nube', motivo='error')
+    nube.cobrar = cobrar_sin_respuesta
+    t['vista']._accion('cobrar', 'c1')
+    assert esperar(lambda: t['mensajes'] and not t['vista']._tareas)
     assert ventas(local) == []
+    assert len(filas_pendientes(local)) == 1
+
+    procesar(t)
+    assert len(ventas(local)) == 1
+    assert nube.pedidos['c1']['venta_id'] == f"CAJA1-aaaa_{ventas(local)[0]['id']}"
+    assert filas_pendientes(local) == []
+    procesar(t)
+    assert len(ventas(local)) == 1
 
 
-def test_cobro_viejo_no_se_recrea(pantalla, local):
-    t = pantalla([pedido('c1', estado='entregado', cobro={'estado': 'hecho', **YO, 'intento': 'x',
-                                                          'en': AHORA - timedelta(days=5),
-                                                          'pago': {'payment_type': 'cash', 'total': 1000}})])
-    refrescar(t)
+def test_un_cobro_que_nunca_entro_se_descarta(pantalla, pago, local):
+    t = pantalla([pedido('c1', estado='entregado', cobro_pendiente=True)])
+    nube = t['nube']
+    nube.cobrar = lambda pid, intento, pago_: Resultado(ok=False, rechazo='sin red', motivo='error')
+    t['vista']._accion('cobrar', 'c1')
+    assert esperar(lambda: t['mensajes'] and not t['vista']._tareas)
+    assert len(filas_pendientes(local)) == 1
+    procesar(t)
+    assert filas_pendientes(local) == []
     assert ventas(local) == []
+    assert 'soltar_cobro' in nube.nombres()     # la marca era de este intento
+
+
+def test_si_la_venta_local_falla_la_termina_la_revision(pantalla, pago, local, monkeypatch):
+    t = pantalla([pedido('c1', estado='entregado', cobro_pendiente=True)])
+    vista = t['vista']
+    real = vista.sale_model.create
+    monkeypatch.setattr(vista.sale_model, 'create', lambda datos: (_ for _ in ()).throw(RuntimeError('disco lleno')))
+    vista._accion('cobrar', 'c1')
+    assert esperar(lambda: t['mensajes'] and not vista._tareas)
+    assert ventas(local) == [] and len(filas_pendientes(local)) == 1
+    monkeypatch.setattr(vista.sale_model, 'create', real)
+    procesar(t)
+    assert len(ventas(local)) == 1 and filas_pendientes(local) == []
+
+
+def test_sin_caja_abierta_la_revision_espera(pantalla, pago, local):
+    t = pantalla([pedido('c1', estado='entregado', cobro_pendiente=True)])
+    nube = t['nube']
+    original = nube.cobrar
+    nube.cobrar = lambda pid, intento, pago_: (original(pid, intento, pago_),
+                                               Resultado(ok=False, rechazo='sin red', motivo='error'))[1]
+    t['vista']._accion('cobrar', 'c1')
+    assert esperar(lambda: t['mensajes'] and not t['vista']._tareas)
+    local['db'].execute_update("UPDATE cash_register SET status='closed'")
+    procesar(t)
+    assert ventas(local) == [] and len(filas_pendientes(local)) == 1
+    local['db'].execute_update("UPDATE cash_register SET status='open'")
+    procesar(t)
+    assert len(ventas(local)) == 1
+
+
+def test_un_cobro_reabierto_se_vuelve_a_cobrar_con_otra_venta(pantalla, pago, local):
+    """Se cobró, el panel borró la venta y reabrió el cobro: cobrarlo de nuevo en
+    la misma caja tiene que dejar una venta nueva, no reusar la borrada."""
+    t = pantalla([pedido('c1', estado='entregado', cobro_pendiente=True)])
+    t['vista']._accion('cobrar', 'c1')
+    assert esperar(lambda: 'anotar_venta' in t['nube'].nombres() and not t['vista']._tareas)
+    primera = ventas(local)[0]['id']
+    # Lo que hace reabrirCobro en el panel.
+    p = t['nube'].pedidos['c1']
+    p.update(cobro_pendiente=True)
+    p.pop('cobro', None)
+    p.pop('venta_id', None)
+    refrescar(t)
+    t['vista']._accion('cobrar', 'c1')
+    assert esperar(lambda: t['nube'].nombres().count('anotar_venta') == 2 and not t['vista']._tareas)
+    filas = ventas(local)
+    assert len(filas) == 2 and filas[1]['id'] != primera
+    assert t['nube'].pedidos['c1']['venta_id'] == f"CAJA1-aaaa_{filas[1]['id']}"
 
 
 # ── Mientras hay un diálogo abierto ─────────────────────────────────────────
@@ -430,3 +524,68 @@ def test_con_un_dialogo_abierto_no_se_borran_los_botones(pantalla):
     assert all(not b.isHidden() or True for b in botones_antes)
     vista._fin_modal()
     assert esperar(lambda: vista._redibujo_pendiente is False)
+
+
+# ── Facturar ────────────────────────────────────────────────────────────────
+
+class FacturaFalsa(QDialog):
+    emitir = None
+    pdf = 'factura.pdf'
+
+    def __init__(self, parent=None, sale=None, **kw):
+        super().__init__(parent)
+        self.sale = sale
+        self.factura_emitida = None
+        self.pdf_path = None
+
+    def exec_(self):
+        if FacturaFalsa.emitir is not None:
+            self.factura_emitida = dict(FacturaFalsa.emitir)
+            self.pdf_path = FacturaFalsa.pdf
+        return QDialog.Accepted
+
+
+@pytest.fixture
+def factura(monkeypatch):
+    from pos_system.ui import factura_dialog
+    monkeypatch.setattr(factura_dialog, 'FacturaDialog', FacturaFalsa)
+    FacturaFalsa.emitir = None
+    FacturaFalsa.pdf = 'factura.pdf'
+    return FacturaFalsa
+
+
+COBRADO = dict(estado='entregado', cobro={'estado': 'hecho', 'pc_id': 'CAJA1-aaaa', 'intento': 'i1',
+                                          'pago': {'payment_type': 'cash'}})
+EMITIDA = {'tipo_comprobante': 'FAC. ELEC. C', 'punto_venta': 3, 'nro_comprobante': 120, 'cae': '7412', 'total': 1000}
+
+
+def test_factura_con_cae_queda_anotada(pantalla, factura):
+    factura.emitir = EMITIDA
+    t = pantalla([pedido('c1', **COBRADO)])
+    t['vista']._facturar('c1', perfil={'nombre': 'X'})
+    assert esperar(lambda: 'anotar_factura' in t['nube'].nombres() and not t['vista']._tareas)
+    assert t['nube'].pedidos['c1']['factura']['numero'] == 120
+
+
+def test_comprobante_sin_cae_no_marca_facturado(pantalla, factura):
+    factura.emitir = dict(EMITIDA, cae='')
+    t = pantalla([pedido('c1', **COBRADO)])
+    t['vista']._facturar('c1', perfil={'nombre': 'X'})
+    assert esperar(lambda: 'soltar_factura' in t['nube'].nombres() and not t['vista']._tareas)
+    assert 'anotar_factura' not in t['nube'].nombres()
+    assert 'sin CAE' in t['mensajes'][-1]
+
+
+def test_cae_con_pdf_fallido_se_anota_igual_y_avisa(pantalla, factura):
+    factura.emitir = EMITIDA
+    factura.pdf = None
+    t = pantalla([pedido('c1', **COBRADO)])
+    t['vista']._facturar('c1', perfil={'nombre': 'X'})
+    assert esperar(lambda: 'anotar_factura' in t['nube'].nombres() and not t['vista']._tareas)
+    assert 'PDF' in t['mensajes'][-1]
+
+
+def test_factura_de_un_cobro_de_otra_caja_usa_el_medio_del_cobro(pantalla, factura, local):
+    t = pantalla([pedido('c1', **COBRADO)])
+    venta = t['vista']._venta_para_factura('c1', t['nube'].pedidos['c1'], None)
+    assert venta['id'] is None and venta['payment_type'] == 'cash'
