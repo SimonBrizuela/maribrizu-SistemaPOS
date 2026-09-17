@@ -10,8 +10,8 @@
  *   · que entregar dos veces baje el stock dos veces;
  *   · que un pedido ya descontado por una caja se descuente de nuevo;
  *   · que una venta TIENDA de antes del cambio se toque;
- *   · que borrar el cobro de una caja devuelva stock que salió al entregar, o
- *     reabra un pedido que ya se volvió a cobrar en otra caja.
+ *   · que el pedido, que lee cualquiera con el enlace, guarde el mail de quien
+ *     lo entregó, o que un renglón sin descontar pase callado.
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -161,6 +161,34 @@ describe('entregar desde el panel', () => {
     expect(p.entregado_dia).toMatch(/^\d{4}-\d{2}-\d{2}$/);
   });
 
+  it('en el pedido queda el primer nombre de quien entregó, nunca el mail', async () => {
+    const { cajeroPublico } = await import('../../webapp/src/entregar_pedido.js');
+    expect(cajeroPublico('María José Pérez')).toBe('María');
+    expect(cajeroPublico('mari@liceo.com')).toBe('');
+    expect(cajeroPublico('')).toBe('');
+    preparar();
+    const { registrarEntrega } = await import('../../webapp/src/entregar_pedido.js');
+    await registrarEntrega({}, 'k1', { usuario: 'mari@liceo.com' });
+    expect(datos.base['tienda_pedidos/k1'].stock_descontado_por.cajero).toBe('');
+    expect(escritas('set', 'tienda_pedidos_eventos')[0].datos.cajero).toBe('mari@liceo.com');
+  });
+
+  it('el renglón que no se pudo descontar queda anotado en el pedido', async () => {
+    preparar({
+      items: [
+        { id: 'p1', nombre: 'Cuaderno Rivadavia', cantidad: 2, precio: 3500, subtotal: 7000 },
+        { id: 'borrado', nombre: 'Goma vieja', cantidad: 1, precio: 100, subtotal: 100 },
+      ],
+    });
+    const { registrarEntrega } = await import('../../webapp/src/entregar_pedido.js');
+    const r = await registrarEntrega({}, 'k1');
+    expect(r.saltados).toHaveLength(1);
+    expect(datos.base['tienda_pedidos/k1'].stock_saltados).toEqual([
+      { renglon: 1, producto_id: 'borrado', motivo: 'no está en el catálogo', nombre: 'Goma vieja' },
+    ]);
+    expect(datos.base['catalogo/p1'].stock).toBe(10);
+  });
+
   it('un pedido cancelado no se entrega ni baja stock', async () => {
     preparar({ estado: 'cancelado', venta_pendiente: undefined });
     const { registrarEntrega } = await import('../../webapp/src/entregar_pedido.js');
@@ -178,29 +206,5 @@ describe('borrar la venta con que una caja cobró el pedido', () => {
     expect(esCobroDePedido(venta)).toBe(true);
     expect(esCobroDePedido({ ...venta, pc_id: 'TIENDA' })).toBe(false);
     expect(esCobroDePedido({ id: 'CAJA1_58', pc_id: 'CAJA1' })).toBe(false);
-  });
-
-  it('el pedido vuelve a "a cobrar" sin tocar el stock', async () => {
-    preparar({
-      venta_pendiente: false, stock_descontado: true, venta_registrada: true, cobro_pendiente: false,
-      venta_id: 'CAJA1-aaaa_57', cobro: { estado: 'hecho', pc_id: 'CAJA1-aaaa', venta_local: 57 },
-    });
-    const { reabrirCobro } = await import('../../webapp/src/cobro_pedido.js');
-    const r = await reabrirCobro({}, venta);
-    expect(r.ok).toBe(true);
-    const p = datos.base['tienda_pedidos/k1'];
-    expect(p.cobro_pendiente).toBe(true);
-    expect(p.cobro).toBeUndefined();
-    expect(p.venta_id).toBeUndefined();
-    expect(p.stock_descontado).toBe(true);
-    expect(datos.base['catalogo/p1'].stock).toBe(12);
-  });
-
-  it('si el pedido ya tiene otro cobro, no se toca', async () => {
-    preparar({ venta_id: 'CAJA2-bbbb_9', cobro: { estado: 'hecho', pc_id: 'CAJA2-bbbb' } });
-    const { reabrirCobro } = await import('../../webapp/src/cobro_pedido.js');
-    const r = await reabrirCobro({}, venta);
-    expect(r).toMatchObject({ ok: false, rechazo: 'el pedido tiene otro cobro anotado' });
-    expect(datos.base['tienda_pedidos/k1'].venta_id).toBe('CAJA2-bbbb_9');
   });
 });

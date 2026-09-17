@@ -32,6 +32,28 @@ function nuevoIntento() {
   return Array.from(bytes, b => b.toString(16).padStart(2, '0')).join('');
 }
 
+/**
+ * Quién entregó, como puede quedar en el pedido: lo lee cualquiera con el
+ * enlace de seguimiento. Primer nombre, nunca un mail (el registro de eventos,
+ * que solo lee el local, guarda el nombre entero). Gemela de `marca_publica`.
+ */
+export function cajeroPublico(usuario) {
+  const texto = String(usuario || '').trim();
+  if (!texto || texto.includes('@')) return '';
+  return texto.split(/\s+/)[0];
+}
+
+/** Los renglones que no salieron del stock, como los anota una caja. */
+export function saltadosDelPedido(pedido, saltados) {
+  const items = pedido?.items || [];
+  return (saltados || []).map(x => ({
+    renglon: Number.isInteger(x.idx) ? x.idx : null,
+    producto_id: x.id || '',
+    motivo: x.motivo || '',
+    nombre: Number.isInteger(x.idx) && x.idx < items.length ? String(items[x.idx]?.nombre || '') : '',
+  }));
+}
+
 function redondear(n) {
   return Math.round((Number(n) || 0) * 10000) / 10000;
 }
@@ -101,7 +123,8 @@ export async function registrarEntrega(db, id, { usuario = 'Panel' } = {}) {
       stock_descontado: true,
       venta_registrada: true,
       cobro_pendiente: true,
-      stock_descontado_por: { origen: 'panel', pc_id: 'webapp', pc_nombre: 'Panel', cajero: usuario, en: ahora },
+      stock_saltados: saltadosDelPedido(pedido, plan.saltados),
+      stock_descontado_por: { origen: 'panel', pc_id: 'webapp', pc_nombre: 'Panel', cajero: cajeroPublico(usuario), en: ahora },
     });
     return { pedido, plan, catalogo };
   });

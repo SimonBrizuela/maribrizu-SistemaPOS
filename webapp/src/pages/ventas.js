@@ -5,7 +5,7 @@ import { getFechaInicioDate, isVentaVarios2 } from '../config.js';
 import { getSaleNumberMap, displayNumForVenta } from '../sale_numbers.js';
 import { confirmDialog, alertDialog, escHtml } from '../components/dialogs.js';
 import { revertirStockVenta, itemsDeLaVenta } from '../stock_revert.js';
-import { esCobroDePedido, reabrirCobro } from '../cobro_pedido.js';
+import { esCobroDePedido } from '../cobro_pedido.js';
 
 export async function renderVentas(container, db) {
   // 1) Shell vacío al toque: filtros + tabla con skeletons en el tbody.
@@ -193,9 +193,10 @@ export async function renderVentas(container, db) {
       message: cobroDePedido
         ? `¿Eliminar la venta <b>#${numMostrado}</b> por <b>$${total}</b>?<br><br>`
           + `Es el cobro del pedido web <b>${escHtml(venta.pedido_codigo || '')}</b>: sale del historial, `
-          + `cierres y control total, y el pedido <b>vuelve a "a cobrar"</b> en las cajas.<br>`
-          + `El stock <b>no se devuelve</b>: salió cuando se entregó el pedido. Si el cliente `
-          + `devolvió la mercadería, cargala a mano.`
+          + `cierres y control total, pero <b>el pedido sigue cobrado</b> y la caja de esa PC la sigue sumando.<br>`
+          + `Si se cobró mal (otro medio de pago, otro monto), editala en el Historial del POS en lugar de borrarla.<br>`
+          + `El stock <b>no se devuelve</b>: salió cuando se entregó. Si el cliente devolvió la mercadería, `
+          + `usá <b>Anular entrega</b> en la pestaña Pedidos web del POS.`
         : `¿Eliminar la venta <b>#${numMostrado}</b> por <b>$${total}</b>?<br><br>`
           + `Esta acción la removerá del historial, dashboard, cierres, control total y resúmenes,<br>`
           + `y <b>devolverá el stock de los productos al catálogo</b>.<br>`
@@ -254,27 +255,6 @@ export async function renderVentas(container, db) {
         deleted: true,
         deleted_at: serverTimestamp()
       });
-
-      if (cobroDePedido) {
-        try {
-          const r = await reabrirCobro(db, venta);
-          if (!r.ok) {
-            alertDialog({
-              title: 'Venta eliminada',
-              message: `La venta se eliminó, pero el pedido no volvió a "a cobrar": ${escHtml(r.rechazo)}.`,
-              type: 'warning',
-            });
-          }
-        } catch (err) {
-          console.error('No se pudo reabrir el cobro del pedido:', err);
-          alertDialog({
-            title: 'Venta eliminada',
-            message: 'La venta se eliminó, pero el pedido no volvió a "a cobrar" (sin conexión). '
-              + 'Avisá antes de cobrarlo de nuevo.',
-            type: 'warning',
-          });
-        }
-      }
 
       invalidateCache('ventas:lista');
       invalidateCache('ventas:items');

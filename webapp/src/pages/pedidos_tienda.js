@@ -131,6 +131,17 @@ export function bloqueCobro(p) {
   } else if (registradoPorElPanel(p)) {
     partes.push(chip('var(--bg)', 'var(--text-muted)', 'receipt_long', 'Venta registrada por el panel'));
   }
+  const saltados = Array.isArray(p?.stock_saltados) ? p.stock_saltados : [];
+  if (saltados.length) {
+    const detalle = saltados.slice(0, 4)
+      .map(x => `${esc(x.nombre || x.producto_id || 'renglón')}: ${esc(x.motivo || '')}`).join('; ');
+    partes.push(chip('#fdf2e0', '#9a5b00', 'inventory_2',
+      `<b>Sin descontar del stock (${saltados.length})</b> · ${detalle}. Corregilo a mano en el catálogo.`));
+  }
+  if (p?.anulado && p?.estado === 'cancelado') {
+    partes.push(chip('#fbe9e7', '#a3271a', 'undo',
+      `<b>Entrega anulada</b> por ${esc(quienTexto(p.anulado))}: ${esc(p.anulado.motivo || '')}. El stock volvió.`));
+  }
   if (p?.factura?.estado === 'emitida') {
     const f = p.factura;
     const numero = `${String(f.punto_venta || 1).padStart(5, '0')}-${String(f.numero || 0).padStart(8, '0')}`;
