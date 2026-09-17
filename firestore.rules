@@ -443,7 +443,7 @@ service cloud.firestore {
       return d.keys().hasOnly(['pedido_id', 'url', 'tipo', 'subido_en'])
           && d.pedido_id is string && d.pedido_id == pedidoId
           && d.url is string && d.url.size() <= 800
-          && d.url.matches('https://firebasestorage.googleapis.com/.*')
+          && d.url.matches('https://firebasestorage[.]googleapis[.]com/v0/b/mari-d7c71[.](firebasestorage[.]app|appspot[.]com)/o/.*')
           && d.tipo in ['imagen', 'pdf']
           && d.subido_en is timestamp;
     }
