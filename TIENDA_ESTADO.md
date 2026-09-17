@@ -241,24 +241,42 @@ venta nace al cobrar, en la caja del día, con la pantalla de cobro precargada
 la tienda: "Entregado" descuenta el stock y deja el pedido "Sin cobrar".
 
 Piezas y contrato de campos: `pos_system/models/pedido_tienda.py` (reglas, con
-la cuenta del stock comparada contra `webapp/src/pedido_venta.js`),
-`pos_system/utils/pedidos_tienda_nube.py` (transacciones),
+la cuenta del stock, el número y el mensaje de WhatsApp comparados contra el
+panel), `pos_system/utils/pedidos_tienda_nube.py` (transacciones),
 `pos_system/utils/pedidos_tienda_watcher.py` (escuchas). Cada paso queda en
 `tienda_pedidos_eventos`. Para revisar o deshacer:
 `python scripts/revisar_pedidos_tienda.py --help`.
 
+Lo que hace la pestaña además de cobrar: datos del cliente con WhatsApp (abre
+la app instalada en la PC, o WhatsApp Web si no está), copiar teléfono y mapa;
+pide el costo real cuando el envío estaba "a confirmar"; **Anular entrega**
+(solo admin) devuelve el stock de un pedido entregado que no va, si el catálogo
+no cambió desde la entrega; muestra los renglones que no salieron del stock.
+
+Cosas a saber:
+
+- Borrar en el panel la venta de un cobro **no** reabre el pedido: esa venta
+  sigue sumando en la caja local de la PC que la cobró (pasa con cualquier
+  venta borrada en el panel). Un cobro mal hecho se corrige editando la venta
+  en el Historial del POS.
+- Si el POS arranca sin internet y sin `firebase_key.json`, la sincronización
+  (y con ella la pestaña) queda apagada hasta reiniciarlo. Es así desde antes.
+- Dos ventanas del POS en la misma PC no duplican cobros (misma base y mismo
+  `pc_id`), pero conviene no abrir dos.
+
 Pruebas de concurrencia contra el emulador (seis cajas y un panel viejo a la vez):
 
 ```
-firebase emulators:exec --config pos_system/tests/emulador/firebase.json --only firestore --project demo-pos-pedidos "python -m pytest pos_system/tests/test_pedidos_tienda_nube.py pos_system/tests/test_revisar_pedidos_emulador.py -q"
+firebase emulators:exec --config pos_system/tests/emulador/firebase.json --only firestore --project demo-pos-pedidos "python -m pytest pos_system/tests/test_pedidos_tienda_nube.py pos_system/tests/test_revisar_pedidos_emulador.py pos_system/tests/test_pedidos_web_emulador.py -q"
 ```
 
-Orden para publicar: **1)** POS (bump + tag) y que las PCs actualicen; **2)**
-reglas de Firestore (agregan `tienda_pedidos_eventos`); **3)** panel. El POS
-nuevo convive con el panel viejo sin duplicar nada; el panel nuevo con cajas
-viejas deja pedidos sin nadie que los cobre ni descuente lo del repartidor.
-Después de publicar el panel, recargar las pestañas que hayan quedado abiertas
-(una pestaña vieja todavía registra ventas TIENDA y no sabe reabrir un cobro).
+Orden para publicar: **1)** POS (bump + tag) y que **todas** las PCs actualicen
+antes de seguir; **2)** reglas de Firestore (agregan `tienda_pedidos_eventos` y
+ajustan la URL del comprobante); **3)** panel. El POS nuevo convive con el panel
+viejo sin duplicar nada; el panel nuevo con cajas viejas deja pedidos sin nadie
+que los cobre ni descuente lo del repartidor. Después de publicar el panel,
+recargar las pestañas que hayan quedado abiertas (una pestaña vieja todavía
+registra ventas TIENDA).
 
 ### 4. El dominio propio
 
