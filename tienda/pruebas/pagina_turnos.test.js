@@ -46,7 +46,9 @@ async function montar(lista) {
   return { cont, filas, html: cont.innerHTML };
 }
 
-const hoy = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
+// Como la escribe el POS: hora de Argentina sin zona. Con la hora UTC, después
+// de las 21 la venta caía en el día siguiente y la pantalla no la mostraba.
+const hoy = () => new Date().toLocaleString('sv-SE', { timeZone: 'America/Argentina/Buenos_Aires' });
 
 const venta = (extra) => ({
   sale_id: 1, cajero: 'Marta', created_at: hoy(), total_amount: 1000,
