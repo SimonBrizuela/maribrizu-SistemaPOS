@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * El ticket del pedido de la tienda.
  *
@@ -27,6 +28,19 @@ const pedido = (extra = {}) => ({
   ],
   subtotal: 6750, envio: 0, total: 6750,
   ...extra,
+});
+
+describe('el logo', () => {
+  it('arriba, el de las facturas, servido por el panel', () => {
+    const t = ticketHtml(pedido(), CFG);
+    expect(t).toContain(`<img class="logo" src="${window.location.origin}/logo-ticket.png"`);
+    expect(t.indexOf('class="logo"')).toBeLessThan(t.indexOf('Librería Liceo'));
+  });
+
+  it('se puede cambiar la ruta o sacarlo', () => {
+    expect(ticketHtml(pedido(), { ...CFG, logo: '/otro.png' })).toContain('src="/otro.png"');
+    expect(ticketHtml(pedido(), { ...CFG, logo: '' })).not.toContain('class="logo"');
+  });
 });
 
 describe('lo que hay que juntar', () => {

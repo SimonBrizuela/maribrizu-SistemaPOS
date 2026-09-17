@@ -47,11 +47,14 @@ function fechaDe(marca) {
 /**
  * El papel.
  *
- * Sin logo ni adornos: una térmica imprime en blanco y negro a 203 puntos por
- * pulgada y todo lo que no sea texto sale sucio. Lo que se lee de un vistazo
- * tiene que ser el código y a dónde va.
+ * Arriba, el logo de las facturas (`logo-ticket.png`: el de `logo-liceo.png`
+ * sin el aire transparente y a 400 px, el mismo que imprime la caja). Chico:
+ * lo que se lee de un vistazo tiene que seguir siendo el código y a dónde va.
+ * `cfg.logo` permite otra ruta, o '' para no ponerlo.
  */
 function papel(p, cfg) {
+  const logo = cfg.logo ?? (typeof window !== 'undefined' && window.location?.origin
+    ? `${window.location.origin}/logo-ticket.png` : '');
   const entrega = p.entrega || {};
   const esDelivery = entrega.modo === 'delivery';
   const items = p.items || [];
@@ -87,6 +90,7 @@ function papel(p, cfg) {
   }
   h1 { font-size: 13px; margin: 0; letter-spacing: .02em; }
   .local { text-align: center; margin-bottom: 3mm; }
+  .logo { display: block; margin: 0 auto 1.5mm; width: 26mm; height: auto; }
   .local p { margin: 1px 0; font-size: 10px; }
 
   /* El código se dicta por teléfono y se busca en el tablero: es lo único que
@@ -147,6 +151,7 @@ function papel(p, cfg) {
 </head>
 <body>
   <div class="local">
+    ${logo ? `<img class="logo" src="${esc(logo)}" alt="" onerror="this.remove()">` : ''}
     <h1>${esc(cfg.nombre || 'Librería Liceo')}</h1>
     ${cfg.direccion ? `<p>${esc(cfg.direccion)}</p>` : ''}
     ${cfg.telefono ? `<p>${esc(cfg.telefono)}</p>` : ''}
@@ -226,8 +231,16 @@ export function imprimirPedido(pedido, cfg = {}) {
   ventana.focus();
 
   const imprimir = () => { try { ventana.print(); } catch (err) { console.warn('[ticket]', err); } };
-  if (ventana.document.readyState === 'complete') setTimeout(imprimir, 120);
-  else ventana.addEventListener('load', () => setTimeout(imprimir, 120));
+  // Con el logo cargado: imprimir antes deja el hueco. Si no carga en 3
+  // segundos (sin red), se imprime igual sin él.
+  const desde = Date.now();
+  const cuandoEsteListo = () => {
+    const imagenes = [...(ventana.document.images || [])];
+    if (imagenes.every(i => i.complete) || Date.now() - desde > 3000) setTimeout(imprimir, 120);
+    else setTimeout(cuandoEsteListo, 100);
+  };
+  if (ventana.document.readyState === 'complete') cuandoEsteListo();
+  else ventana.addEventListener('load', cuandoEsteListo);
 
   return true;
 }
