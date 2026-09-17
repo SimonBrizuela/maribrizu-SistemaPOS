@@ -356,6 +356,100 @@ def _fecha(marca):
     return None
 
 
+def whatsapp_de_telefono(telefono):
+    """El número como lo quiere wa.me (549 + área + número). Gemela de
+    `whatsappDeTelefono` en tienda/src/telefono.js."""
+    d = re.sub(r'\D', '', str(telefono or ''))
+    if len(d) < 8:
+        return None
+    if d.startswith('00'):
+        d = d[2:]
+    if d.startswith('54'):
+        d = d[2:]
+    d = re.sub(r'^0', '', d)
+    if d.startswith('9') and len(d) > 10:
+        d = d[1:]
+    if len(d) == 12:
+        d = re.sub(r'^(\d{2,4})15', r'\1', d)
+    return f'549{d}' if len(d) >= 8 else None
+
+
+DIRECCION_LOCAL = 'Av. Alfonsina Storni 168'
+
+
+def nombre_corto(pedido):
+    """Solo el primer nombre: "Hola María Fernanda Gómez" no lo dice nadie."""
+    partes = str(((pedido or {}).get('cliente') or {}).get('nombre') or '').strip().split()
+    return partes[0] if partes else ''
+
+
+def mensaje_whatsapp(pedido, direccion_local=''):
+    """Lo que se le escribe al cliente según en qué anda el pedido. Gemela de
+    `mensajeDe` en webapp/src/avisos_pedido.js (la prueba de la tienda las
+    compara); None en un estado sin mensaje."""
+    p = pedido or {}
+    n, codigo = nombre_corto(p), p.get('codigo')
+    estado = p.get('estado')
+    if estado == 'preparando':
+        return f'Hola {n}, estamos preparando tu pedido {codigo}. Te avisamos apenas esté.'
+    if estado == 'listo':
+        if (p.get('entrega') or {}).get('modo') == 'delivery':
+            return f'Hola {n}, tu pedido {codigo} ya está listo y sale para tu casa.'
+        return (f'Hola {n}, tu pedido {codigo} ya está listo para que lo retires.'
+                + (f' Te esperamos en {direccion_local}.' if direccion_local else ''))
+    if estado == 'en_camino':
+        return f'Hola {n}, tu pedido {codigo} salió para tu casa. Llega en un rato.'
+    if estado == 'entregado':
+        return f'Hola {n}, gracias por tu compra. Cualquier cosa que necesites, escribinos por acá.'
+    if estado == 'cancelado':
+        return f'Hola {n}, tuvimos que cancelar tu pedido {codigo}. Cualquier duda, escribinos.'
+    return None
+
+
+def diferencias_de_devolucion(plan, movimientos):
+    """Lo que una devolución de stock pondría contra lo que salió de verdad.
+
+    La devolución se calcula con el catálogo de hoy; si entre la entrega y la
+    devolución cambió algo (variedad renombrada o creada, contenido del pack,
+    producto que pasó a sin stock, un renglón que al entregar se salteó),
+    devolvería otra cantidad. Cada diferencia es
+    {producto_id, detalle, salio, devolveria}; vacío es que coinciden.
+    """
+    devuelve, salio = {}, {}
+    for p in (plan or {}).get('productos') or []:
+        if p.get('saltado') or not p.get('campos'):
+            continue
+        for m in p.get('movimientos') or []:
+            k = (str(p.get('id') or ''), str(m.get('detalle') or ''))
+            devuelve[k] = devuelve.get(k, 0.0) + num(m.get('cantidad'))
+    for m in movimientos or []:
+        k = (str(m.get('firebase_id') or ''), str(m.get('detalle') or ''))
+        salio[k] = salio.get(k, 0.0) - num(m.get('cantidad'))
+    return [{'producto_id': k[0], 'detalle': k[1], 'salio': round(salio.get(k, 0.0), 4),
+             'devolveria': round(devuelve.get(k, 0.0), 4)}
+            for k in sorted(set(devuelve) | set(salio))
+            if abs(devuelve.get(k, 0.0) - salio.get(k, 0.0)) > 0.001]
+
+
+def marca_publica(quien):
+    """Quién hizo algo, tal como puede quedar en el pedido.
+
+    El documento del pedido lo lee cualquiera que tenga el enlace de
+    seguimiento. Ahí va la caja y el primer nombre del cajero, nunca un mail ni
+    el nombre completo: el detalle entero queda en `tienda_pedidos_eventos`,
+    que solo lee el local.
+    """
+    quien = quien or {}
+    cajero = str(quien.get('cajero') or '').strip()
+    if '@' in cajero:
+        cajero = ''
+    return {
+        'pc_id': str(quien.get('pc_id') or ''),
+        'pc_nombre': str(quien.get('pc_nombre') or ''),
+        'cajero': cajero.split()[0] if cajero else '',
+    }
+
+
 def es_envio(pedido):
     return ((pedido or {}).get('entrega') or {}).get('modo') == 'delivery'
 
@@ -448,7 +542,7 @@ def decidir_mover(pedido, desde, hacia, quien, ahora):
         return {'rechazo': f'ya lo pasaron a "{ETIQUETAS.get(actual, actual)}"{por}'}
     if hacia == 'entregado' or hacia not in siguientes(pedido):
         return {'rechazo': 'ese paso no corresponde'}
-    marca = {**quien, 'en': ahora}
+    marca = {**marca_publica(quien), 'en': ahora}
     campos = {'estado': hacia, 'visto': True, 'movido_por': {**marca, 'estado': hacia}}
     if actual == 'nuevo':
         campos['tomado_por'] = marca
@@ -474,7 +568,7 @@ def decidir_entrega(pedido, catalogo_por_id, quien, ahora, origen='pos'):
             'estado': 'entregado', 'visto': True,
             'entregado_en': ahora, 'entregado_dia': dia_argentina(ahora),
             'entregado_por': origen,
-            'movido_por': {**quien, 'en': ahora, 'estado': 'entregado'},
+            'movido_por': {**marca_publica(quien), 'en': ahora, 'estado': 'entregado'},
         })
     if stock_afuera(pedido):
         return {'campos': campos, 'plan': None}
@@ -484,7 +578,16 @@ def decidir_entrega(pedido, catalogo_por_id, quien, ahora, origen='pos'):
         'stock_descontado': True,
         'venta_registrada': True,
         'cobro_pendiente': True,
-        'stock_descontado_por': {**quien, 'en': ahora, 'origen': origen},
+        # Lo que no salió del stock (variedad renombrada, producto borrado) se
+        # anota en el pedido para que la caja y el panel lo muestren: antes
+        # solo quedaba en el log de la PC que lo descontó.
+        'stock_saltados': [
+            {'renglon': x.get('idx'), 'producto_id': x.get('id') or '', 'motivo': x.get('motivo') or '',
+             'nombre': str(((pedido.get('items') or [])[x['idx']] or {}).get('nombre') or '')
+             if isinstance(x.get('idx'), int) and x['idx'] < len(pedido.get('items') or []) else ''}
+            for x in plan['saltados']
+        ],
+        'stock_descontado_por': {**marca_publica(quien), 'en': ahora, 'origen': origen},
     })
     return {'campos': campos, 'plan': plan}
 
@@ -512,7 +615,7 @@ def decidir_tomar_cobro(pedido, quien, ahora, intento, forzar=False):
         if not forzar:
             return {'rechazo': f'{quien_texto(marca)} empezó a cobrarlo y no terminó',
                     'motivo': 'vencida'}
-    return {'campos': {'cobro': {'estado': 'en_curso', **quien, 'desde': ahora,
+    return {'campos': {'cobro': {'estado': 'en_curso', **marca_publica(quien), 'desde': ahora,
                                  'intento': intento}}}
 
 
@@ -549,10 +652,11 @@ def decidir_cobro(pedido, catalogo_por_id, quien, ahora, intento, pago, origen='
     campos = dict(entrega['campos'])
     campos['cobro_pendiente'] = False
     campos['cobro'] = {
-        'estado': 'hecho', **quien, 'en': ahora, 'intento': intento,
+        'estado': 'hecho', **marca_publica(quien), 'en': ahora, 'intento': intento,
         'desde': marca.get('desde'),
-        'total': _limpio(num(pedido.get('total'))),
-        'pago': dict(pago or {}),
+        # Lo que se cobró de verdad: con envío a confirmar puede ser otro total.
+        'total': _limpio(num((pago or {}).get('total'), num(pedido.get('total')))),
+        'pago': {k: (pago or {}).get(k) for k in ('payment_type', 'payment_subtype') if (pago or {}).get(k)},
     }
     return {'campos': campos, 'plan': entrega['plan']}
 
@@ -574,7 +678,39 @@ def decidir_cancelar(pedido, quien, ahora):
     if marca_vigente(marca, ahora):
         return {'rechazo': f'lo está cobrando {quien_texto(marca)}'}
     return {'campos': {'estado': 'cancelado', 'visto': True,
-                       'cancelado_por': {**quien, 'en': ahora}}}
+                       'cancelado_por': {**marca_publica(quien), 'en': ahora}}}
+
+
+def decidir_anular_entrega(pedido, catalogo_por_id, quien, ahora, motivo):
+    """El pedido se entregó pero no va: lo devolvieron o se marcó por error.
+
+    Devuelve el stock con la misma cuenta al revés y deja el pedido cancelado
+    (el cupón recupera su uso, como con cualquier cancelación). Un pedido
+    cobrado se puede anular igual: la venta de la caja NO se toca desde acá;
+    si se devolvió la plata, se borra esa venta aparte.
+    """
+    rechazo = _rechazo_base(pedido)
+    if rechazo:
+        return {'rechazo': 'ya estaba cancelado' if pedido else rechazo}
+    if pedido.get('estado') != 'entregado':
+        return {'rechazo': 'todavía no se entregó: se cancela con Cancelar pedido'}
+    if registrado_por_el_panel(pedido):
+        return {'rechazo': 'la venta la registró el panel: se anula borrando esa venta en el panel'}
+    if not str(motivo or '').strip():
+        return {'rechazo': 'falta el motivo'}
+    marca = pedido.get('cobro') or {}
+    if marca_vigente(marca, ahora):
+        return {'rechazo': f'lo está cobrando {quien_texto(marca)}'}
+    plan = (plan_descuento(pedido.get('items') or [], catalogo_por_id, devolver=True)
+            if pedido.get('stock_descontado') is True else None)
+    campos = {
+        'estado': 'cancelado', 'visto': True,
+        'stock_descontado': False, 'venta_registrada': False,
+        'cobro_pendiente': False, 'venta_pendiente': False,
+        'anulado': {**marca_publica(quien), 'en': ahora, 'motivo': str(motivo).strip()[:200],
+                    'estaba_cobrado': cobrado(pedido)},
+    }
+    return {'campos': campos, 'plan': plan}
 
 
 def decidir_tomar_factura(pedido, quien, ahora, intento, forzar=False):
@@ -599,7 +735,7 @@ def decidir_tomar_factura(pedido, quien, ahora, intento, forzar=False):
             quien_la = 'esta caja' if propia else quien_texto(factura)
             return {'rechazo': f'{quien_la} empezó a facturarlo y no terminó',
                     'motivo': 'vencida'}
-    return {'campos': {'factura': {'estado': 'en_curso', **quien, 'desde': ahora,
+    return {'campos': {'factura': {'estado': 'en_curso', **marca_publica(quien), 'desde': ahora,
                                    'intento': intento}}}
 
 
@@ -610,7 +746,7 @@ def decidir_anotar_factura(pedido, intento, datos, quien, ahora):
     if factura.get('estado') == 'emitida' and factura.get('intento') != intento:
         return {'rechazo': 'ya había otra factura anotada', 'duplicada': True}
     return {'campos': {'factura': {
-        'estado': 'emitida', **quien, 'en': ahora, 'intento': intento,
+        'estado': 'emitida', **marca_publica(quien), 'en': ahora, 'intento': intento,
         'tipo': str(datos.get('tipo_comprobante') or ''),
         'punto_venta': int(num(datos.get('punto_venta'), 1)),
         'numero': int(num(datos.get('nro_comprobante'))),
@@ -630,19 +766,88 @@ def _clave_cupon(r):
     return f"{r.get('id')}|{r.get('variedad') or ''}|{'p' if r.get('es_pack') else 's'}"
 
 
-def renglones_de_cobro(pedido, pedido_id, id_local_por_firebase=None):
+def _qty_texto(q):
+    """Como escribe la cantidad el carrito del POS (`_fmt_qty`): 2, 2.5."""
+    q = float(q or 0)
+    return str(int(q)) if q == int(q) else f'{q:.2f}'.rstrip('0').rstrip('.')
+
+
+def _colores_locales(producto):
+    crudo = (producto or {}).get('conjunto_colores')
+    if isinstance(crudo, str):
+        try:
+            import json
+            crudo = json.loads(crudo)
+        except ValueError:
+            return []
+    return crudo if isinstance(crudo, list) else []
+
+
+def _nombre_y_cantidad(item, local, cantidad, subtotal):
+    """Nombre, cantidad y precio unitario del renglón, escritos como los escribe
+    el carrito del POS para un producto vendido en el mostrador.
+
+    El panel cruza cada renglón de `ventas_por_dia` contra el catálogo POR
+    NOMBRE para el costo, el margen, la urgencia de compra y la velocidad de
+    venta (`webapp/src/nombre_item.js`). Con el nombre público de la tienda
+    ("Acrílico Eterna x 250ml") o con un "pack x10" inventado no cruzaba con
+    nada y la venta quedaba sin costo. Por eso:
+
+      · producto común: el nombre del catálogo, y la cantidad en unidades base
+        (un pack de 12 lápices son 12 lápices);
+      · conjunto: "[Color]  NOMBRE  ·  2 pack(s)", "NOMBRE  ·  3 u" o
+        "NOMBRE  ·  2.5 m", y con una cantidad con decimales va 1 × el total,
+        que es lo que el panel espera para leer los metros del nombre.
+
+    Sin el producto en la base local de esta PC se deja el nombre del pedido.
+    """
+    from pos_system.models.conjunto import TIPOS
+
+    if not local or not str(local.get('name') or '').strip():
+        nombre = str(item.get('nombre') or 'Producto').upper()
+        partes = [nombre]
+        if item.get('variedad'):
+            partes.append(str(item['variedad']))
+        if item.get('es_pack'):
+            partes.append(f"{item.get('pack_nombre') or 'pack'} x{_texto_num(num(item.get('pack_contenido'), 1))}")
+        return '  ·  '.join(partes), cantidad, str(item.get('variedad') or '')
+
+    nombre = str(local['name']).strip()
+    if _es_si(local.get('es_conjunto')):
+        variedad = str(item.get('variedad') or '').strip()
+        color = variedad
+        if variedad:
+            for c in _colores_locales(local):
+                if isinstance(c, dict) and normalizar_nombre(c.get('color')) == normalizar_nombre(variedad):
+                    color = str(c.get('color'))
+                    break
+        if item.get('es_pack'):
+            etiqueta = (TIPOS.get(str(local.get('conjunto_tipo') or ''), {}) or {}).get('label', 'Pack')
+            descripcion = f'{_qty_texto(cantidad)} {etiqueta.lower()}(s)'
+        else:
+            unidad = 'm' if str(item.get('unidad') or '') == 'metro' else 'u'
+            descripcion = f'{_qty_texto(cantidad)} {unidad}'
+        prefijo = f'[{color}]  ' if color else ''
+        return f'{prefijo}{nombre}  ·  {descripcion}', cantidad, color
+
+    return nombre, unidades_base(item), ''
+
+
+def renglones_de_cobro(pedido, pedido_id, productos_locales=None):
     """El carrito que va a la pantalla de cobro y a `Sale.create`.
+
+    `productos_locales` es {id del catálogo: fila de `products` de esta PC} (o
+    solo el id local, que alcanza para atar la venta al producto).
 
     Todas las líneas llevan `stock_descontado`: el stock salió al entregar, el
     cobro solo registra la plata (mismo mecanismo que el cobro de un fiado).
 
     El cupón va adentro de cada línea, como el descuento con nombre del POS:
     la venta, el ticket y la factura muestran lo que se cobró. `tienda` viaja a
-    `ventas_por_dia` para que borrar la venta desde el panel sepa que es de un
-    pedido.
+    `ventas_por_dia` con el pedido, el producto y las unidades base.
     """
     pedido = pedido or {}
-    locales = id_local_por_firebase or {}
+    locales = productos_locales or {}
     cupon = pedido.get('cupon') if isinstance(pedido.get('cupon'), dict) else None
     descuento = max(0.0, num(pedido.get('descuento')) or num((cupon or {}).get('descuento')))
     rebajas = {_clave_cupon(r): num(r.get('descuento'))
@@ -662,26 +867,32 @@ def renglones_de_cobro(pedido, pedido_id, id_local_por_firebase=None):
         bruto = num(it.get('subtotal')) or precio * cantidad
         rebaja = min(bruto, rebajas.get(_clave_cupon(it), 0.0))
         subtotal = round(bruto - rebaja, 2)
-        nombre = str(it.get('nombre') or 'Producto').upper()
-        partes = [nombre]
-        if it.get('variedad'):
-            partes.append(str(it['variedad']))
-        if it.get('es_pack'):
-            partes.append(f"{it.get('pack_nombre') or 'pack'} x{_texto_num(num(it.get('pack_contenido'), 1))}")
+        local = locales.get(pid)
+        if local is not None and not isinstance(local, dict):
+            local = {'id': local}
+        nombre, cantidad_venta, color = _nombre_y_cantidad(it, local, cantidad, subtotal)
+        if cantidad_venta > 0 and cantidad_venta != int(cantidad_venta):
+            cantidad_venta, unitario = 1, subtotal
+        else:
+            cantidad_venta = int(cantidad_venta)
+            # Sin redondear: la venta guarda cantidad × unitario, y con el
+            # unitario a 4 decimales 1000 / 3 volvía como 999,9999.
+            unitario = subtotal / cantidad_venta if cantidad_venta > 0 else subtotal
         linea = {
-            'product_id': int(locales.get(pid) or 0),
-            'product_name': '  ·  '.join(partes),
-            'quantity': cantidad,
-            'unit_price': round(subtotal / cantidad, 4) if cantidad > 0 else subtotal,
-            'original_price': precio,
+            'product_id': int((local or {}).get('id') or 0),
+            'product_name': nombre,
+            'quantity': cantidad_venta,
+            'unit_price': unitario,
+            'original_price': round(bruto / cantidad_venta, 4) if cantidad_venta > 0 else precio,
             'subtotal': subtotal,
-            'conjunto_color': str(it.get('variedad') or ''),
+            'conjunto_color': color,
             'stock_descontado': True,
             'tienda': {
                 'origen': 'tienda', 'pedido_id': str(pedido_id), 'producto_id': pid,
                 'es_pack': bool(it.get('es_pack')),
                 'pack_contenido': num(it.get('pack_contenido')) if it.get('es_pack') else None,
                 'unidad': str(it.get('unidad') or 'unidad'),
+                'cantidad': cantidad,
             },
         }
         if rebaja > 0:
@@ -700,6 +911,7 @@ def renglones_de_cobro(pedido, pedido_id, id_local_por_firebase=None):
             'subtotal': 0.0 if envio_gratis else envio,
             'conjunto_color': '',
             'is_varios': True,
+            'category': 'SERVICIOS',
             'stock_descontado': True,
             'tienda': {'origen': 'tienda', 'pedido_id': str(pedido_id), 'producto_id': '',
                        'es_pack': False, 'pack_contenido': None, 'unidad': 'unidad'},
@@ -709,6 +921,30 @@ def renglones_de_cobro(pedido, pedido_id, id_local_por_firebase=None):
                           'discount_amount': envio, 'descuento_nombre': codigo_cupon})
         lineas.append(linea)
     return lineas
+
+
+def con_envio(pedido, envio):
+    """El pedido con el costo de envío que se confirmó al cobrar.
+
+    "Envío a confirmar" quiere decir que el cliente no pagó el envío real: se
+    cobra en la caja. Se recalcula el total con la misma cuenta que
+    `crear-pedido` (subtotal + envío − descuento, sin bajar de cero) y el
+    envío deja de estar gratis o a confirmar.
+    """
+    p = dict(pedido or {})
+    entrega = dict(p.get('entrega') or {})
+    entrega['envio_a_confirmar'] = False
+    p['entrega'] = entrega
+    envio = max(0.0, num(envio))
+    p['envio'] = envio
+    descuento = num(p.get('descuento'))
+    cupon = p.get('cupon') if isinstance(p.get('cupon'), dict) else {}
+    if entrega.get('envio_gratis') or cupon.get('envio_gratis'):
+        # El cupón era el envío gratis: el descuento es el envío.
+        descuento = envio
+        p['descuento'] = envio
+    p['total'] = round(max(0.0, num(p.get('subtotal')) + envio - descuento), 2)
+    return p
 
 
 def total_a_cobrar(pedido):

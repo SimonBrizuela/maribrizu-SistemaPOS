@@ -25,7 +25,7 @@ se encarga de que el stock salga una sola vez.
 import logging
 import random
 import threading
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Callable, Dict, Optional
 
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
@@ -77,6 +77,9 @@ class VigiaPedidos(QObject):
         self._ultimo: Dict[str, dict] = {}
         self._timer: Optional[QTimer] = None
         self._activo = False
+        self._recibidas = set()
+        self._vueltas = 0
+        self._desfase = timedelta(0)
 
     # ── Ciclo de vida ───────────────────────────────────────────────────────
     def iniciar(self):
@@ -99,6 +102,26 @@ class VigiaPedidos(QObject):
         with self._lock:
             return dict(self._ultimo)
 
+    def ahora(self) -> datetime:
+        """La hora del servidor, estimada con lo que tardó la última lectura.
+        Las marcas de cobro y factura se escriben con la hora del servidor: con
+        el reloj de una PC atrasada una marca vencida seguía pareciendo vigente
+        y los botones quedaban trabados."""
+        return datetime.now(reglas.TZ_AR) + self._desfase
+
+    def _anotar_hora(self, hora):
+        if isinstance(hora, datetime) and hora.tzinfo is not None:
+            desfase = hora - datetime.now(timezone.utc)
+            # Solo si es grande: el retardo de la red no es desfase del reloj.
+            self._desfase = desfase if abs(desfase) > timedelta(seconds=20) else timedelta(0)
+
+    def completo(self) -> bool:
+        """Ya llegó la primera respuesta de las cuatro escuchas. Antes de eso la
+        lista está a medias: tomarla como "lo que ya se vio" hacía sonar un aviso
+        por cada pedido al abrir el POS."""
+        with self._lock:
+            return len(self._recibidas) >= 4
+
     # ── Escuchas ────────────────────────────────────────────────────────────
     def _consultas(self):
         from google.cloud.firestore_v1.base_query import FieldFilter
@@ -119,8 +142,9 @@ class VigiaPedidos(QObject):
     def _abrir(self, nombre, consulta):
         self._cerrar(nombre)
 
-        def al_cambiar(docs, _cambios, _hora):
+        def al_cambiar(docs, _cambios, hora):
             try:
+                self._anotar_hora(hora)
                 nuevos = {}
                 for d in docs:
                     datos = d.to_dict() or {}
@@ -146,9 +170,14 @@ class VigiaPedidos(QObject):
     def _recibir(self, nombre, docs):
         with self._lock:
             self._por_consulta[nombre] = docs
+            recien_completo = len(self._recibidas) < 4
+            self._recibidas.add(nombre)
+            recien_completo = recien_completo and len(self._recibidas) >= 4
             self._ultimo = juntar(self._por_consulta)
             copia = dict(self._ultimo)
         self.cambiaron.emit(copia)
+        if recien_completo:
+            self.estado_conexion.emit(True)
         if nombre == 'reparto' and self._descontar_reparto:
             for pid, (_v, pedido) in docs.items():
                 self._programar_descuento(pid, pedido)
@@ -166,12 +195,28 @@ class VigiaPedidos(QObject):
             consultas = self._consultas()
             for nombre in set(caidas + faltan + (['entregados'] if dia_nuevo else [])):
                 self._abrir(nombre, consultas[nombre])
-        self.estado_conexion.emit(not caidas)
+        # Una escucha sin internet no se cierra: reintenta callada y no avisa.
+        # Para saber si hay conexión se lee un documento chico cada dos vueltas.
+        self._vueltas += 1
+        sin_abrir = [n for n in ('en_curso', 'reparto', 'cobrar', 'entregados') if n not in self._escuchas]
+        if caidas or sin_abrir:
+            # La que no se pudo abrir ya avisó; la prueba de conexión no la tapa.
+            self.estado_conexion.emit(False)
+        elif self._vueltas % 2 == 1:
+            threading.Thread(target=self._probar_conexion, daemon=True, name='pedidos-conexion').start()
         if self._descontar_reparto:
             with self._lock:
                 pendientes = dict(self._por_consulta.get('reparto') or {})
             for pid, (_v, pedido) in pendientes.items():
                 self._programar_descuento(pid, pedido, espera=(0.0, 1.0))
+
+    def _probar_conexion(self):
+        try:
+            snap = self.db.collection('tienda_config').document('settings').get(timeout=10)
+            self._anotar_hora(getattr(snap, 'read_time', None))
+            self.estado_conexion.emit(True)
+        except Exception:
+            self.estado_conexion.emit(False)
 
     # ── Lo que entregó el repartidor ────────────────────────────────────────
     def _programar_descuento(self, pedido_id, pedido, espera=ESPERA_DESCUENTO):

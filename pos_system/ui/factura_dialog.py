@@ -31,7 +31,11 @@ REINTENTOS_NUMERO = 3
 
 
 def es_rechazo_de_numero(error) -> bool:
-    return '10016' in str(error)
+    """ARCA rechazó el número (otra caja tomó el mismo). Solo con el código
+    entre corchetes de una respuesta de ARCA: un error de red con esos dígitos
+    en un CUIT o un importe podía reintentar un comprobante ya autorizado."""
+    texto = str(error)
+    return '[10016]' in texto and ('rechazó el comprobante' in texto or 'Error cabecera' in texto)
 
 
 class _CaeWorker(QThread):

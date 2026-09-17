@@ -237,7 +237,7 @@ def test_otro_rechazo_no_se_reintenta():
 
 def test_reintentos_con_tope():
     from pos_system.ui.factura_dialog import pedir_cae
-    arca = _Arca([RuntimeError('[10016]')] * 10)
+    arca = _Arca([RuntimeError('AFIP rechazó el comprobante: [10016] El numero no se corresponde')] * 10)
     with pytest.raises(RuntimeError):
         pedir_cae(arca, 'FAC. ELEC. C', 1, 100, 100, 0, 0, None, 'CF', reintentos=3, esperar=lambda s: None)
     assert len(arca.pedidos) == 4
@@ -307,3 +307,47 @@ def test_resubir_la_venta_no_descuenta_otra_vez(local, nube, monkeypatch):
     del llamados[:]
     sync.sync_stock_after_sale(comun['items'], local['db'])
     assert len([f for f in llamados if 'sync_stock_after_sale' in f.__qualname__]) == 1
+
+
+def test_un_error_de_red_con_esos_digitos_no_se_reintenta():
+    """Un CUIT o un importe con 10016 adentro no es el rechazo de numeración:
+    reintentar después de que ARCA autorizó emitiría dos facturas."""
+    from pos_system.ui.factura_dialog import es_rechazo_de_numero
+    assert es_rechazo_de_numero(RuntimeError('AFIP rechazó el comprobante: [10016] El numero no se corresponde'))
+    assert es_rechazo_de_numero(RuntimeError('WSFE Error cabecera: [10016] numero'))
+    assert not es_rechazo_de_numero(RuntimeError('Error al llamar WSFE FECAESolicitar: timeout cuit 20100160000'))
+    assert not es_rechazo_de_numero(RuntimeError('AFIP rechazó el comprobante: [10015] importe 10016'))
+
+
+def test_la_tabla_vieja_de_cobros_gana_la_columna_de_la_caja(tmp_path):
+    from pos_system.models import cobros_pedido
+    db = DatabaseManager(str(tmp_path / 'vieja.db'))
+    db.initialize_database()
+    with db.get_connection() as conn:
+        conn.execute(cobros_pedido.TABLA.replace(',\n        caja_id       INTEGER', ''))
+    columnas = {f['name'] for f in db.execute_query("PRAGMA table_info(cobros_pedido_pendientes)")}
+    assert 'caja_id' not in columnas
+    cobros_pedido.anotar(db, intento='i1', pedido_id='p1', codigo='AB12', pedido={}, pago={}, lineas=[], caja_id=7)
+    assert cobros_pedido.obtener(db, 'i1')['caja_id'] == 7
+    cobros_pedido.anotar(db, intento='i2', pedido_id='p1', codigo='AB12', pedido={}, pago={}, lineas=[])
+    assert cobros_pedido.obtener(db, 'i2')['caja_id'] is None
+
+
+def test_la_subida_y_la_sincronizacion_completa_arman_la_misma_venta():
+    """La sincronización completa armaba la venta a mano y sin `merge`: perdía
+    la caja, la transferencia del pago mixto, el fiado y el pedido web, y
+    revivía las ventas borradas en el panel."""
+    from pos_system.utils.firebase_sync import documento_de_venta
+    venta = {'id': 57, 'payment_type': 'mixed', 'total_amount': 1000, 'cash_received': 400,
+             'transfer_amount': 600, 'cash_register_id': 12, 'turno_nombre': 'Mari',
+             'pedido_tienda_id': 'k1', 'pedido_tienda_codigo': 'K7M2',
+             'items': [{'product_name': 'GOMA', 'quantity': 2.0}]}
+    doc = documento_de_venta(venta, 'CAJA1-a', datetime(2026, 9, 16, 12, 0))
+    assert doc['sale_id'] == 57 and doc['cash_register_id'] == 12 and doc['transfer_amount'] == 600
+    assert doc['origen'] == 'tienda' and doc['pedido_id'] == 'k1' and doc['pedido_codigo'] == 'K7M2'
+    assert doc['cajero'] == 'Mari' and doc['productos'] == 'GOMA x2'
+    assert 'deleted' not in doc
+    fuente = open(os.path.join(os.path.dirname(__file__), '..', 'ui', 'sync_progress_dialog.py'),
+                  encoding='utf-8').read()
+    assert 'documento_de_venta(s, _pc_id' in fuente and 'merge=True' in fuente
+

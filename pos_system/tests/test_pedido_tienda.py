@@ -333,7 +333,7 @@ class TestRenglones:
         assert all(l['stock_descontado'] for l in lineas)
         assert sum(l['subtotal'] for l in lineas) == pytest.approx(19860)
         assert lapiz['tienda'] == {'origen': 'tienda', 'pedido_id': 'doc2', 'producto_id': 'L',
-                                   'es_pack': False, 'pack_contenido': None, 'unidad': 'unidad'}
+                                   'es_pack': False, 'pack_contenido': None, 'unidad': 'unidad', 'cantidad': 3}
 
     def test_envio_gratis_por_cupon(self):
         p = {'envio': 2000, 'descuento': 2000, 'total': 5000,
@@ -343,13 +343,57 @@ class TestRenglones:
         envio = pt.renglones_de_cobro(p, 'x')[-1]
         assert envio['subtotal'] == 0 and envio['discount_amount'] == 2000
 
-    def test_pack_y_variedad_en_el_nombre(self):
+    def test_sin_producto_local_queda_el_nombre_del_pedido(self):
         p = {'items': [{'id': 'C', 'nombre': 'Cartulina', 'cantidad': 2, 'precio': 900, 'subtotal': 1800,
                         'variedad': 'Rojo', 'es_pack': True, 'pack_contenido': 10, 'pack_nombre': 'paquete'}]}
         linea = pt.renglones_de_cobro(p, 'x')[0]
         assert linea['product_name'] == 'CARTULINA  ·  Rojo  ·  paquete x10'
-        assert linea['conjunto_color'] == 'Rojo'
+        assert linea['product_id'] == 0
         assert linea['tienda']['es_pack'] is True and linea['tienda']['pack_contenido'] == 10
+
+    def test_conjunto_como_lo_escribe_el_carrito_del_pos(self):
+        """El panel busca el costo y la velocidad de venta por el nombre: tiene
+        que ser el del catálogo con la presentación como la escribe el POS."""
+        locales = {'C': {'id': 7, 'name': 'CARTULINA ESCOLAR 50X65', 'es_conjunto': 1, 'conjunto_tipo': 'pack',
+                         'conjunto_colores': '[{"color": "ROJO"}, {"color": "AZUL FRANCIA"}]'}}
+        pack = pt.renglones_de_cobro({'items': [{'id': 'C', 'nombre': 'Cartulina', 'cantidad': 2, 'precio': 900,
+                                                 'subtotal': 1800, 'variedad': 'Rojo', 'es_pack': True,
+                                                 'pack_contenido': 10}]}, 'x', locales)[0]
+        assert pack['product_name'] == '[ROJO]  CARTULINA ESCOLAR 50X65  ·  2 pack(s)'
+        assert (pack['product_id'], pack['quantity'], pack['unit_price'], pack['conjunto_color']) == (7, 2, 900, 'ROJO')
+        suelta = pt.renglones_de_cobro({'items': [{'id': 'C', 'nombre': 'Cartulina', 'cantidad': 3, 'precio': 100,
+                                                   'subtotal': 300, 'variedad': 'azul francia'}]}, 'x', locales)[0]
+        assert suelta['product_name'] == '[AZUL FRANCIA]  CARTULINA ESCOLAR 50X65  ·  3 u'
+
+    def test_metros_con_decimales_van_uno_por_el_total(self):
+        locales = {'M': {'id': 9, 'name': 'CINTA RASO 6MM', 'es_conjunto': 1, 'conjunto_tipo': 'rollo'}}
+        linea = pt.renglones_de_cobro({'items': [{'id': 'M', 'nombre': 'Cinta', 'cantidad': 2.5, 'precio': 400,
+                                                  'subtotal': 1000, 'unidad': 'metro'}]}, 'x', locales)[0]
+        assert linea['product_name'] == 'CINTA RASO 6MM  ·  2.5 m'
+        assert (linea['quantity'], linea['unit_price'], linea['subtotal']) == (1, 1000, 1000)
+        assert linea['tienda']['cantidad'] == 2.5
+
+    def test_producto_comun_por_pack_va_en_unidades(self):
+        locales = {'L': {'id': 3, 'name': 'LAPIZ NEGRO HB', 'es_conjunto': 0}}
+        linea = pt.renglones_de_cobro({'items': [{'id': 'L', 'nombre': 'Lápiz', 'cantidad': 2, 'precio': 1200,
+                                                  'subtotal': 2400, 'es_pack': True, 'pack_contenido': 12}]},
+                                      'x', locales)[0]
+        assert linea['product_name'] == 'LAPIZ NEGRO HB'
+        assert (linea['quantity'], linea['unit_price'], linea['subtotal']) == (24, 100, 2400)
+
+    def test_envio_a_confirmar_se_cobra_con_el_costo_real(self):
+        p = {'subtotal': 5000, 'envio': 1500, 'descuento': 0, 'total': 6500,
+             'entrega': {'modo': 'delivery', 'envio_a_confirmar': True},
+             'items': [{'id': 'A', 'nombre': 'Goma', 'cantidad': 1, 'precio': 5000, 'subtotal': 5000}]}
+        nuevo = pt.con_envio(p, 2300)
+        assert nuevo['total'] == 7300 and nuevo['envio'] == 2300
+        assert nuevo['entrega']['envio_a_confirmar'] is False
+        assert p['total'] == 6500
+        gratis = pt.con_envio(dict(p, entrega={'modo': 'delivery', 'envio_gratis': True, 'envio_a_confirmar': True},
+                                   descuento=1500), 2300)
+        assert gratis['total'] == 5000
+        lineas = pt.renglones_de_cobro(nuevo, 'x')
+        assert sum(l['subtotal'] for l in lineas) == 7300
 
     def test_pago_sugerido_y_total(self):
         assert pt.pago_sugerido({'pago': {'modo': 'efectivo'}}) == 'cash'
@@ -373,3 +417,88 @@ class TestPestana:
         lista = [pedido(), pedido(visto=True), pedido(estado='entregado', cobro_pendiente=True)]
         assert pt.titulo_pestana(lista) == 'Pedidos web (1 nuevo · 1 a cobrar)'
         assert pt.titulo_pestana([]) == 'Pedidos web'
+
+
+# ── Lo que queda público en el pedido y la anulación de una entrega ─────────
+
+class TestPublicoYAnular:
+
+    def test_en_el_pedido_no_quedan_mails_ni_nombres_completos(self):
+        assert pt.marca_publica({'pc_id': 'P1', 'pc_nombre': 'CAJA1', 'cajero': 'María José Pérez'})['cajero'] == 'María'
+        assert pt.marca_publica({'cajero': 'mari@liceo.com'})['cajero'] == ''
+        r = pt.decidir_cobro(pedido(estado='entregado', stock_descontado=True, cobro_pendiente=True,
+                                    cobro={'estado': 'en_curso', **CAJA1, 'intento': 'i1', 'desde': AHORA}),
+                             CATALOGO, dict(CAJA1, cajero='Mari Gómez'), AHORA, 'i1',
+                             {'payment_type': 'cash', 'cash_received': 5000, 'change_given': 4000, 'total': 1000})
+        cobro = r['campos']['cobro']
+        assert cobro['cajero'] == 'Mari'
+        assert cobro['pago'] == {'payment_type': 'cash'}
+        assert cobro['total'] == 1000
+
+    def test_lo_que_no_se_pudo_descontar_queda_anotado(self):
+        p = pedido(estado='listo', items=[{'id': 'A', 'nombre': 'Goma', 'cantidad': 1},
+                                          {'id': 'NADIE', 'nombre': 'Borrado', 'cantidad': 1}])
+        c = pt.decidir_entrega(p, CATALOGO, CAJA1, AHORA)['campos']
+        assert c['stock_saltados'] == [{'renglon': 1, 'producto_id': 'NADIE', 'motivo': 'no está en el catálogo',
+                                        'nombre': 'Borrado'}]
+        assert pt.decidir_entrega(pedido(estado='listo'), CATALOGO, CAJA1, AHORA)['campos']['stock_saltados'] == []
+
+    def test_anular_una_entrega_devuelve_el_stock_y_cancela(self):
+        entregado = pedido(estado='entregado', stock_descontado=True, venta_registrada=True, cobro_pendiente=True)
+        r = pt.decidir_anular_entrega(entregado, {'A': {'nombre': 'GOMA', 'stock': 8}}, CAJA1, AHORA, 'lo devolvió')
+        assert r['campos']['estado'] == 'cancelado' and r['campos']['stock_descontado'] is False
+        assert r['campos']['anulado']['motivo'] == 'lo devolvió'
+        assert r['plan']['productos'][0]['campos'] == {'stock': 10}
+
+    def test_anular_pide_motivo_y_no_toca_lo_que_no_corresponde(self):
+        entregado = pedido(estado='entregado', stock_descontado=True)
+        assert 'motivo' in pt.decidir_anular_entrega(entregado, CATALOGO, CAJA1, AHORA, '  ')['rechazo']
+        assert 'rechazo' in pt.decidir_anular_entrega(pedido(estado='listo'), CATALOGO, CAJA1, AHORA, 'x')
+        viejo = pedido(estado='entregado', venta_registrada=True, venta_id='TIENDA_AB12', stock_descontado=True)
+        assert 'panel' in pt.decidir_anular_entrega(viejo, CATALOGO, CAJA1, AHORA, 'x')['rechazo']
+        cobrando = dict(entregado, cobro={'estado': 'en_curso', **CAJA2, 'desde': AHORA})
+        assert 'CAJA2' in pt.decidir_anular_entrega(cobrando, CATALOGO, CAJA1, AHORA, 'x')['rechazo']
+        sin_stock = pedido(estado='entregado', venta_pendiente=True)
+        assert pt.decidir_anular_entrega(sin_stock, CATALOGO, CAJA1, AHORA, 'x')['plan'] is None
+
+    def test_anular_un_cobrado_avisa_que_la_venta_sigue(self):
+        cobrado = pedido(estado='entregado', stock_descontado=True, cobro={'estado': 'hecho', **CAJA1})
+        r = pt.decidir_anular_entrega(cobrado, CATALOGO, CAJA1, AHORA, 'devolución')
+        assert r['campos']['anulado']['estaba_cobrado'] is True
+
+    def test_la_devolucion_se_compara_con_lo_que_salio(self):
+        salio = [{'firebase_id': 'A', 'detalle': '', 'cantidad': -2}]
+        igual = pt.plan_descuento([{'id': 'A', 'cantidad': 2}], {'A': {'nombre': 'GOMA', 'stock': 8}}, devolver=True)
+        assert pt.diferencias_de_devolucion(igual, salio) == []
+        # Al entregar el renglón B se salteó (no estaba en el catálogo); hoy está.
+        de_mas = pt.plan_descuento([{'id': 'A', 'cantidad': 2}, {'id': 'B', 'cantidad': 1}],
+                                   {'A': {'stock': 8}, 'B': {'stock': 3}}, devolver=True)
+        assert pt.diferencias_de_devolucion(de_mas, salio) == [
+            {'producto_id': 'B', 'detalle': '', 'salio': 0.0, 'devolveria': 1.0}]
+        assert pt.diferencias_de_devolucion(igual, salio + salio)[0]['salio'] == 4.0
+
+
+class TestWhatsapp:
+
+    def test_el_numero_como_lo_quiere_whatsapp(self):
+        assert pt.whatsapp_de_telefono('0351 15 619-4411') == '5493516194411'
+        assert pt.whatsapp_de_telefono('+54 351 619 4411') == '5493516194411'
+        assert pt.whatsapp_de_telefono('4234567') is None
+        assert pt.whatsapp_de_telefono(None) is None
+
+    def test_el_mensaje_del_estado(self):
+        p = {'codigo': 'K7M2', 'estado': 'listo', 'cliente': {'nombre': 'María Fernanda'},
+             'entrega': {'modo': 'retiro'}}
+        assert pt.mensaje_whatsapp(p, pt.DIRECCION_LOCAL) == (
+            'Hola María, tu pedido K7M2 ya está listo para que lo retires. Te esperamos en Av. Alfonsina Storni 168.')
+        assert pt.mensaje_whatsapp(dict(p, estado='nuevo')) is None
+
+
+class TestRenglonesExactos:
+
+    def test_cantidad_entera_y_precio_que_vuelve_al_centavo(self):
+        p = {'items': [{'id': 'A', 'nombre': 'Goma', 'cantidad': 3.0, 'precio': 333.34, 'subtotal': 1000}],
+             'subtotal': 1000, 'envio': 0, 'total': 1000}
+        linea = pt.renglones_de_cobro(p, 'p1', {'A': {'id': 7, 'name': 'GOMA'}})[0]
+        assert linea['quantity'] == 3 and isinstance(linea['quantity'], int)
+        assert round(linea['quantity'] * linea['unit_price'], 2) == 1000

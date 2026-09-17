@@ -35,7 +35,8 @@ TABLA = """
         fallas        INTEGER DEFAULT 0,
         proximo       TEXT DEFAULT '',
         ultimo_error  TEXT DEFAULT '',
-        creado        TEXT NOT NULL
+        creado        TEXT NOT NULL,
+        caja_id       INTEGER
     )
 """
 
@@ -46,6 +47,10 @@ MINUTOS_MAXIMO = 30
 def asegurar_tabla(db):
     with db.get_connection() as conn:
         conn.execute(TABLA)
+        columnas = {f[1] for f in conn.execute("PRAGMA table_info(cobros_pedido_pendientes)").fetchall()}
+        if 'caja_id' not in columnas:
+            # Tabla de la primera versión: la caja se agregó después.
+            conn.execute("ALTER TABLE cobros_pedido_pendientes ADD COLUMN caja_id INTEGER")
 
 
 def _ahora():
@@ -56,14 +61,14 @@ def _json(valor):
     return json.dumps(valor, ensure_ascii=False, default=str)
 
 
-def anotar(db, *, intento, pedido_id, codigo, pedido, pago, lineas):
+def anotar(db, *, intento, pedido_id, codigo, pedido, pago, lineas, caja_id=None):
     asegurar_tabla(db)
     db.execute_update(
         "INSERT OR REPLACE INTO cobros_pedido_pendientes "
-        "(intento, pedido_id, codigo, estado, pedido_json, pago_json, lineas_json, creado) "
-        "VALUES (?, ?, ?, 'cobrando', ?, ?, ?, ?)",
+        "(intento, pedido_id, codigo, estado, pedido_json, pago_json, lineas_json, creado, caja_id) "
+        "VALUES (?, ?, ?, 'cobrando', ?, ?, ?, ?, ?)",
         (intento, pedido_id, codigo or '', _json(pedido), _json(pago), _json(lineas),
-         _ahora().isoformat()))
+         _ahora().isoformat(), int(caja_id) if caja_id else None))
 
 
 def marcar_venta(db, intento, sale_id):

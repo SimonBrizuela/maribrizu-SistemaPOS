@@ -16,6 +16,7 @@ botones y uno de ellos puede ser el que abrió el diálogo.
 """
 import logging
 import socket
+import sys
 import threading
 from datetime import datetime, timedelta
 
@@ -41,6 +42,7 @@ COLOR_ESTADO = {
     'en_camino': '#b85c00', 'entregado': '#6f6a5d', 'cancelado': '#a01616',
 }
 COLOR_COBRAR = _T['accent']
+COLOR_WHATSAPP = '#1f7a45'
 
 FILTROS = [('hacer', 'A hacer'), ('cobrar', 'A cobrar'), ('hechos', 'Entregados')]
 
@@ -72,6 +74,45 @@ def hace(marca, ahora=None):
     if local.date() == (ahora.astimezone(reglas.TZ_AR) - timedelta(days=1)).date():
         return local.strftime('ayer %H:%M')
     return local.strftime('%d/%m %H:%M')
+
+
+def whatsapp_de_escritorio():
+    """¿Esta PC tiene la app de WhatsApp? La del local sí; se pregunta a Windows
+    quién abre los enlaces `whatsapp:` (encuentra también la de la Microsoft
+    Store). Sin la app, el chat se abre en WhatsApp Web."""
+    if sys.platform != 'win32':
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        consulta = ctypes.windll.shlwapi.AssocQueryStringW
+        consulta.argtypes = [wintypes.DWORD, wintypes.DWORD, wintypes.LPCWSTR, wintypes.LPCWSTR,
+                             wintypes.LPWSTR, ctypes.POINTER(wintypes.DWORD)]
+        consulta.restype = ctypes.c_long
+        nombre = ctypes.create_unicode_buffer(260)
+        largo = wintypes.DWORD(260)
+        ASSOCF_IS_PROTOCOL, ASSOCSTR_FRIENDLYAPPNAME = 0x1000, 4
+        return consulta(ASSOCF_IS_PROTOCOL, ASSOCSTR_FRIENDLYAPPNAME, 'whatsapp', 'open',
+                        nombre, ctypes.byref(largo)) == 0
+    except Exception:
+        return False
+
+
+def enlace_whatsapp(numero, texto, app):
+    mensaje = QUrl.toPercentEncoding(texto or '').data().decode()
+    if app:
+        return f'whatsapp://send?phone={numero}&text={mensaje}'
+    return f'https://wa.me/{numero}?text={mensaje}'
+
+
+def enlace_mapa(entrega):
+    coords = (entrega or {}).get('coordenadas') or {}
+    if coords.get('lat') is not None and coords.get('lng') is not None:
+        return f"https://maps.google.com/?q={coords['lat']},{coords['lng']}"
+    direccion = str((entrega or {}).get('direccion') or '').strip()
+    if not direccion:
+        return None
+    return f"https://maps.google.com/?q={QUrl.toPercentEncoding(direccion).data().decode()}"
 
 
 def etiqueta_pago(pago):
@@ -131,6 +172,9 @@ class PedidosWebView(QWidget):
         self._cobrar_vistos = set()
         self._cfg_tienda = {}
         self._tareas = []
+        self._firma_lista = None
+        self._firma_detalle = None
+        self._whatsapp_app = None
         self._build_ui()
         self._redibujar()
 
@@ -302,7 +346,22 @@ class PedidosWebView(QWidget):
                 f"color:{_T['danger']}; background:{_T['danger_bg']}; border-radius:10px;"
                 " padding:3px 10px; font-size:11px; font-weight:700;")
 
+    def _ahora(self):
+        """La hora del servidor según el vigía: las marcas de cobro y factura
+        se escriben con esa hora, y con el reloj de una PC atrasada una marca
+        vencida seguía trabando los botones."""
+        ahora = getattr(self._vigia, 'ahora', None)
+        try:
+            return ahora() if callable(ahora) else datetime.now(reglas.TZ_AR)
+        except Exception:
+            return datetime.now(reglas.TZ_AR)
+
     def _avisar_novedades(self, pedidos):
+        # Hasta que no contestaron las cuatro escuchas la lista está a medias:
+        # tomarla como "lo ya visto" hacía sonar un aviso por pedido al abrir.
+        completo = getattr(self._vigia, 'completo', None)
+        if self._nuevos_vistos is None and callable(completo) and not completo():
+            return
         nuevos = {pid for pid, p in pedidos.items()
                   if p.get('estado') == 'nuevo' and p.get('visto') is not True}
         cobrar = {pid for pid, p in pedidos.items() if reglas.grupo(p) == 'cobrar'}
@@ -332,13 +391,55 @@ class PedidosWebView(QWidget):
     #  DIBUJO
     # ══════════════════════════════════════════════════
     def _redibujar(self):
-        if self._modal:
+        self._emitir_titulo()
+        # Con la pestaña oculta no se arman widgets: cada cambio de un pedido
+        # redibujaba la lista entera mientras el cajero vendía en Ventas.
+        if self._modal or not self.isVisible():
             self._redibujo_pendiente = True
             return
         self._redibujo_pendiente = False
-        self._redibujar_lista()
-        self._redibujar_detalle()
-        self._emitir_titulo()
+        if self._seleccion is None or self._seleccion not in self._pedidos:
+            self._elegir_primero()
+        # Cada cambio de un pedido llega de la nube (una caja que renueva su
+        # marca, otra que marca visto): rearmar botones que no cambiaron hacía
+        # que el clic que estaba en el aire se perdiera.
+        if self._firma_de_lista() != self._firma_lista:
+            self._redibujar_lista()
+        if self._firma_de_detalle() != self._firma_detalle:
+            self._redibujar_detalle()
+
+    @staticmethod
+    def _sin_renovacion(p):
+        """El pedido sin la hora de renovación de la marca de cobro, que cambia
+        cada 90 segundos sin cambiar nada de lo que se ve."""
+        if not isinstance((p or {}).get('cobro'), dict):
+            return p
+        return {**p, 'cobro': {k: val for k, val in p['cobro'].items() if k != 'desde'}}
+
+    def _firma_comun(self):
+        import time
+        return (self._nube is None, int(time.time() // 60))
+
+    def _firma_de_lista(self):
+        return (self._firma_comun(), self._filtro, self.buscar.text(), self._seleccion,
+                [self._sin_renovacion(p) for p in self._visibles()],
+                sorted(reglas.grupo(p) for p in self._pedidos.values()))
+
+    def _firma_de_detalle(self):
+        p = self._pedidos.get(self._seleccion) if self._seleccion else None
+        return (self._firma_comun(), self._seleccion, self._sin_renovacion(p), bool(self._pedidos),
+                self._seleccion in self._ocupados, self._seleccion in self._cobrando)
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if self._redibujo_pendiente:
+            QTimer.singleShot(0, self._redibujar)
+
+    def _elegir_primero(self):
+        """Con la pestaña abierta y nada elegido, se abre el primero de la lista:
+        un toque menos, y el pedido nuevo ya queda a la vista."""
+        visibles = self._visibles()
+        self._seleccion = visibles[0].get('id') if visibles else None
 
     def _emitir_titulo(self):
         lista = list(self._pedidos.values())
@@ -353,7 +454,10 @@ class PedidosWebView(QWidget):
 
     def _elegir_filtro(self, clave):
         self._filtro = clave
+        if self._seleccion not in {p.get('id') for p in self._visibles()}:
+            self._elegir_primero()
         self._redibujar_lista()
+        self._redibujar_detalle()
 
     def _visibles(self):
         texto = self.buscar.text().strip().lower()
@@ -381,6 +485,9 @@ class PedidosWebView(QWidget):
             b.setChecked(clave == self._filtro)
             b.setText(f'{texto} ({cuentas[clave]})' if cuentas[clave] else texto)
 
+        if not self.isVisible():
+            self._redibujo_pendiente = True
+            return
         while self.lista_v.count() > 1:
             w = self.lista_v.takeAt(0).widget()
             if w is not None:
@@ -389,6 +496,7 @@ class PedidosWebView(QWidget):
                 w.hide()
                 w.deleteLater()
 
+        self._firma_lista = self._firma_de_lista()
         visibles = self._visibles()
         if not visibles:
             if self._nube is None:
@@ -436,7 +544,8 @@ class PedidosWebView(QWidget):
         if p.get('estado') == 'nuevo' and p.get('visto') is not True:
             top.addWidget(self._pastilla('SIN VER', _T['danger']))
         top.addStretch(1)
-        cuando = QLabel(hace(p.get('entregado_en') if reglas.grupo(p) != 'hacer' else p.get('creado')))
+        cuando = QLabel(hace(p.get('entregado_en') if reglas.grupo(p) != 'hacer' else p.get('creado'),
+                             self._ahora()))
         cuando.setStyleSheet(f"color:{_T['text_muted']}; font-size:11px; background:transparent; border:none;")
         top.addWidget(cuando)
         v.addLayout(top)
@@ -470,7 +579,7 @@ class PedidosWebView(QWidget):
         partes = ['Envío' if reglas.es_envio(p) else 'Retira en el local']
         partes.append('efectivo' if (p.get('pago') or {}).get('modo') == 'efectivo' else 'transferencia')
         marca = p.get('cobro') or {}
-        if reglas.marca_vigente(marca, datetime.now(reglas.TZ_AR), self.quien()['pc_id']):
+        if reglas.marca_vigente(marca, self._ahora(), self.quien()['pc_id']):
             partes.append(f"cobrando en {reglas.quien_texto(marca)}")
         elif reglas.cobrado(p):
             partes.append(f"cobrado en {marca.get('pc_nombre') or 'otra caja'}")
@@ -504,6 +613,7 @@ class PedidosWebView(QWidget):
             self._redibujo_pendiente = True
             return
         self._limpiar_detalle()
+        self._firma_detalle = self._firma_de_detalle()
         p = self._pedidos.get(self._seleccion) if self._seleccion else None
         if not p:
             vacio = QLabel('Elegí un pedido de la lista para verlo.' if self._pedidos
@@ -569,7 +679,7 @@ class PedidosWebView(QWidget):
 
     def _avisos_del_pedido(self, p):
         avisos = []
-        ahora = datetime.now(reglas.TZ_AR)
+        ahora = self._ahora()
         yo = self.quien()['pc_id']
         marca = p.get('cobro') or {}
         if reglas.marca_vigente(marca, ahora, yo):
@@ -605,7 +715,25 @@ class PedidosWebView(QWidget):
         elif reglas.marca_vigente(factura, ahora, yo):
             avisos.append(self._aviso(f"Lo está facturando {reglas.quien_texto(factura)}.",
                                       _T['warning_bg'], _T['warning']))
-        if p.get('estado') == 'cancelado':
+        saltados = p.get('stock_saltados') or []
+        if saltados:
+            detalle = '; '.join(f"{x.get('nombre') or x.get('producto_id') or 'renglón'}: {x.get('motivo')}"
+                                for x in saltados[:4])
+            avisos.append(self._aviso(
+                f"Sin descontar del stock ({len(saltados)}): {detalle}. Corregilo a mano en el catálogo.",
+                _T['warning_bg'], _T['warning']))
+        if (reglas.cobrado(p) and marca.get('total') is not None
+                and abs(reglas.num(marca.get('total')) - reglas.num(p.get('total'))) > 0.009):
+            avisos.append(self._aviso(f"Se cobró {pesos(marca.get('total'))} (el pedido decía {pesos(p.get('total'))}).",
+                                      _T['surface_alt'], _T['text']))
+        anulado = p.get('anulado') or {}
+        if p.get('estado') == 'cancelado' and anulado:
+            extra = (' La venta de la caja sigue registrada: si se devolvió la plata, borrala en el panel.'
+                     if anulado.get('estaba_cobrado') else '')
+            avisos.append(self._aviso(
+                f"Entrega anulada por {reglas.quien_texto(anulado)} {hace(anulado.get('en'), ahora)}: "
+                f"{anulado.get('motivo', '')}. El stock volvió.{extra}", _T['danger_bg'], _T['danger']))
+        elif p.get('estado') == 'cancelado':
             avisos.append(self._aviso('Pedido cancelado.', _T['danger_bg'], _T['danger']))
         return avisos
 
@@ -636,7 +764,7 @@ class PedidosWebView(QWidget):
         f, v = self._tarjeta('pwAcc')
         pid = p.get('id')
         ocupado = pid in self._ocupados or pid in self._cobrando
-        ahora = datetime.now(reglas.TZ_AR)
+        ahora = self._ahora()
         yo = self.quien()['pc_id']
         ajeno = reglas.marca_vigente(p.get('cobro') or {}, ahora, yo)
 
@@ -652,7 +780,7 @@ class PedidosWebView(QWidget):
 
         otras = QHBoxLayout()
         otras.setSpacing(8)
-        if p.get('estado') == 'en_camino' or (p.get('estado') == 'listo' and reglas.es_envio(p)):
+        if p.get('estado') in ('listo', 'en_camino'):
             b = self._boton('Entregado, cobrar después')
             b.setEnabled(not ocupado and self._nube is not None)
             b.clicked.connect(lambda _c, pid=pid: self._accion('entregar', pid))
@@ -682,29 +810,118 @@ class PedidosWebView(QWidget):
             cancelar.setEnabled(not ocupado and not ajeno and self._nube is not None)
             cancelar.clicked.connect(lambda _c, pid=pid: self._accion('cancelar', pid))
             otras.addWidget(cancelar)
+        elif (p.get('estado') == 'entregado' and not reglas.registrado_por_el_panel(p)
+              and self.current_user.get('role') == 'admin'):
+            anular = self._boton('Anular entrega', peligro=True)
+            anular.setToolTip('Lo devolvieron o se marcó entregado por error: vuelve el stock y se cancela.')
+            anular.setEnabled(not ocupado and not ajeno and self._nube is not None)
+            anular.clicked.connect(lambda _c, pid=pid: self._accion('anular', pid))
+            otras.addWidget(anular)
         v.addLayout(otras)
         return f
+
+    def _boton_chico(self, texto, color=None):
+        color = color or _T['text']
+        b = QPushButton(texto)
+        b.setCursor(Qt.PointingHandCursor)
+        b.setStyleSheet(f"QPushButton {{ background:{_T['surface']}; color:{color}; border:1px solid {_T['border']};"
+                        f" border-radius:7px; padding:5px 12px; min-height:18px; font-size:12px; font-weight:700; }}"
+                        f" QPushButton:hover {{ border-color:{color}; background:{_T['surface_alt']}; }}")
+        return b
+
+    def _seleccionable(self, label):
+        label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        label.setCursor(Qt.IBeamCursor)
+        return label
 
     def _tarjeta_cliente(self, p):
         f, v = self._tarjeta('pwCli')
         cliente = p.get('cliente') or {}
         entrega = p.get('entrega') or {}
-        v.addWidget(self._texto(str(cliente.get('nombre') or 'Sin nombre'), 15, peso=700))
-        if cliente.get('telefono'):
-            v.addWidget(self._texto(f"Tel. {cliente.get('telefono')}", 13, _T['text_muted']))
+        pago = p.get('pago') or {}
+
+        v.addWidget(self._texto('CLIENTE', 10, _T['text_muted'], 800, envolver=False))
+        v.addWidget(self._seleccionable(self._texto(str(cliente.get('nombre') or 'Sin nombre'), 16, peso=800)))
+
+        telefono = str(cliente.get('telefono') or '').strip()
+        if telefono:
+            fila = QHBoxLayout()
+            fila.setSpacing(8)
+            fila.addWidget(self._seleccionable(self._texto(telefono, 14, peso=600, mono=True, envolver=False)))
+            numero = reglas.whatsapp_de_telefono(telefono)
+            if numero:
+                texto = (reglas.mensaje_whatsapp(p, reglas.DIRECCION_LOCAL)
+                         or f"Hola {reglas.nombre_corto(p)}, te escribimos de Librería Liceo por tu pedido "
+                            f"{p.get('codigo', '')}.")
+                wa = self._boton_chico('WhatsApp', COLOR_WHATSAPP)
+                wa.setToolTip(f"Abre el chat con este mensaje (se puede cambiar antes de mandarlo):\n{texto}")
+                wa.clicked.connect(lambda _c, n=numero, t=texto: self._abrir_whatsapp(n, t))
+                fila.addWidget(wa)
+            copiar = self._boton_chico('Copiar')
+            copiar.setToolTip('Copia el teléfono')
+            copiar.clicked.connect(lambda _c, t=telefono, b=copiar: self._copiar(t, b))
+            fila.addWidget(copiar)
+            fila.addStretch(1)
+            v.addLayout(fila)
+            if not numero:
+                v.addWidget(self._texto('Ese número no sirve para WhatsApp (es fijo o está incompleto).', 12,
+                                        _T['text_muted']))
+        else:
+            v.addWidget(self._texto('Sin teléfono', 13, _T['text_muted']))
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        sep.setStyleSheet(f"background:{_T['border']}; max-height:1px; border:none;")
+        v.addWidget(sep)
+
         if reglas.es_envio(p):
             km = f" · {str(entrega.get('distancia_km')).replace('.', ',')} km" if entrega.get('distancia_km') else ''
-            v.addWidget(self._texto(f"Envío a domicilio{km}", 13, peso=700))
-            v.addWidget(self._texto(str(entrega.get('direccion') or 'Sin dirección'), 13))
+            fila = QHBoxLayout()
+            fila.setSpacing(8)
+            fila.addWidget(self._texto(f"Envío a domicilio{km}", 13, peso=700, envolver=False))
+            mapa = enlace_mapa(entrega)
+            if mapa:
+                ver = self._boton_chico('Mapa')
+                ver.setToolTip('Abre la dirección en Google Maps')
+                ver.clicked.connect(lambda _c, u=mapa: QDesktopServices.openUrl(QUrl(u)))
+                fila.addWidget(ver)
+            fila.addStretch(1)
+            v.addLayout(fila)
+            v.addWidget(self._seleccionable(self._texto(str(entrega.get('direccion') or 'Sin dirección'), 14)))
             if entrega.get('referencia'):
-                v.addWidget(self._texto(str(entrega.get('referencia')), 12, _T['text_muted']))
+                v.addWidget(self._seleccionable(self._texto(str(entrega.get('referencia')), 13, _T['text_muted'])))
         else:
             v.addWidget(self._texto('Retira en el local', 13, peso=700))
-        pago = 'Paga en efectivo' if (p.get('pago') or {}).get('modo') == 'efectivo' else 'Paga con transferencia'
-        v.addWidget(self._texto(pago, 13, _T['text_muted']))
+
+        if pago.get('modo') == 'efectivo':
+            medio = 'Paga en efectivo' + (' · el repartidor marcó que cobró' if pago.get('pagado') else '')
+        else:
+            medio = 'Paga con transferencia'
+        v.addWidget(self._texto(medio, 13, _T['text_muted']))
         if p.get('nota'):
-            v.addWidget(self._aviso(f"Nota: {p.get('nota')}", '#fdf2e0', '#9a5b00'))
+            v.addWidget(self._aviso(f"Nota del cliente: {p.get('nota')}", _T['warning_bg'], _T['warning']))
         return f
+
+    def _abrir_whatsapp(self, numero, texto):
+        if self._whatsapp_app is None:
+            self._whatsapp_app = whatsapp_de_escritorio()
+        if QDesktopServices.openUrl(QUrl(enlace_whatsapp(numero, texto, self._whatsapp_app))):
+            return
+        if self._whatsapp_app:
+            # La app dejó de abrir (desinstalada, rota): WhatsApp Web.
+            self._whatsapp_app = False
+            QDesktopServices.openUrl(QUrl(enlace_whatsapp(numero, texto, False)))
+
+    def _copiar(self, texto, boton):
+        QApplication.clipboard().setText(texto)
+        boton.setText('Copiado')
+
+        def volver():
+            try:
+                boton.setText('Copiar')
+            except RuntimeError:
+                pass        # el detalle se redibujó y el botón ya no existe
+        QTimer.singleShot(1500, volver)
 
     def _tarjeta_renglones(self, p):
         f, v = self._tarjeta('pwRen')
@@ -837,6 +1054,8 @@ class PedidosWebView(QWidget):
             self._ver_comprobante(pid)
         elif clave == 'facturar':
             self._facturar(pid)
+        elif clave == 'anular':
+            self._anular_entrega(pid)
 
     def _resultado(self, pid, r, que):
         self._marcar_ocupado(pid, False)
@@ -860,6 +1079,40 @@ class PedidosWebView(QWidget):
         self._marcar_ocupado(pid, True)
         self._en_fondo(lambda: self._nube.entregar(pid, origen='pos'),
                        lambda r: self._resultado(pid, r, 'marcó entregado'))
+
+    def _pedir_texto(self, titulo, pregunta):
+        from PyQt5.QtWidgets import QInputDialog
+        self._modal += 1
+        try:
+            texto, ok = QInputDialog.getText(self, titulo, pregunta)
+            return texto.strip() if ok else None
+        finally:
+            self._fin_modal()
+
+    def _pedir_monto(self, titulo, pregunta, valor):
+        from PyQt5.QtWidgets import QInputDialog
+        self._modal += 1
+        try:
+            monto, ok = QInputDialog.getDouble(self, titulo, pregunta, float(valor or 0), 0, 10_000_000, 2)
+            return monto if ok else None
+        finally:
+            self._fin_modal()
+
+    def _anular_entrega(self, pid):
+        p = self._pedido(pid)
+        extra = ('\n\nEstá cobrado: la venta de la caja NO se borra desde acá. Si se devolvió la plata, '
+                 'borrala en el panel (Ventas).' if reglas.cobrado(p) else '')
+        motivo = self._pedir_texto('Anular entrega',
+                                   f"¿Por qué se anula la entrega de {p.get('codigo', '')}?\n"
+                                   f"(el stock vuelve y el pedido queda cancelado){extra}")
+        if motivo is None:
+            return
+        if not motivo:
+            self._mensaje('Anular entrega', 'Hace falta el motivo: es lo que queda anotado.')
+            return
+        self._marcar_ocupado(pid, True)
+        self._en_fondo(lambda: self._nube.anular_entrega(pid, motivo),
+                       lambda r: self._resultado(pid, r, 'anuló la entrega'))
 
     def _cancelar(self, pid):
         p = self._pedido(pid)
@@ -888,7 +1141,13 @@ class PedidosWebView(QWidget):
             return (snap.to_dict() or {}).get('url') if snap.exists else None
 
         def abrir(url):
+            from urllib.parse import urlparse
             if isinstance(url, str) and url.startswith('https://'):
+                if urlparse(url).hostname != 'firebasestorage.googleapis.com':
+                    # Lo escribe el cliente: no se abre cualquier enlace.
+                    self._mensaje('Comprobante', 'El enlace del comprobante no es del almacenamiento de la '
+                                                 'tienda: no se abre.', QMessageBox.Warning)
+                    return
                 QDesktopServices.openUrl(QUrl(url))
             elif isinstance(url, str) or url is None:
                 self._mensaje('Comprobante', 'El cliente todavía no subió el comprobante.')
@@ -919,6 +1178,18 @@ class PedidosWebView(QWidget):
         self._marcar_ocupado(pid, False)
 
     def _cobro_tomado(self, pid, r):
+        try:
+            self._abrir_cobro(pid, r)
+        except Exception as e:
+            logger.exception('Pedidos web: la pantalla de cobro falló')
+            if pid in self._cobrando:
+                if r.ok:
+                    self._en_fondo(lambda: self._nube.soltar_cobro(pid, r.intento), lambda _r: None)
+                self._terminar_cobro(pid)
+            self._mensaje('No se cobró', f"La pantalla de cobro falló:\n{e}\n\nNo se registró nada.",
+                          QMessageBox.Warning)
+
+    def _abrir_cobro(self, pid, r):
         if not r.ok:
             self._terminar_cobro(pid)
             if r.motivo == 'vencida':
@@ -935,7 +1206,18 @@ class PedidosWebView(QWidget):
 
         pedido = r.pedido or self._pedido(pid)
         intento = r.intento
-        lineas = reglas.renglones_de_cobro(pedido, pid, self._ids_locales(pedido))
+        entrega = pedido.get('entrega') or {}
+        if reglas.es_envio(pedido) and entrega.get('envio_a_confirmar'):
+            envio = self._pedir_monto('Envío a confirmar',
+                                      f"El envío de {pedido.get('codigo', '')} estaba a confirmar "
+                                      f"(se calculó {pesos(pedido.get('envio'))}).\n¿Cuánto se cobra de envío?",
+                                      pedido.get('envio'))
+            if envio is None:
+                self._en_fondo(lambda: self._nube.soltar_cobro(pid, intento), lambda _r: None)
+                self._terminar_cobro(pid)
+                return
+            pedido = reglas.con_envio(pedido, envio)
+        lineas = reglas.renglones_de_cobro(pedido, pid, self._productos_locales(pedido))
         total = reglas.total_a_cobrar(pedido)
 
         if total <= 0:
@@ -981,13 +1263,22 @@ class PedidosWebView(QWidget):
 
     def _confirmar_cobro(self, pid, intento, pedido, lineas, total, dlg):
         pago = self._pago_de(dlg, total)
+        caja = self.db.get_current_cash_register()
+        if total > 0 and (not caja or caja.get('status') != 'open'):
+            # La cerraron (otra PC, el panel) con la pantalla de cobro abierta:
+            # la venta quedaría sin caja y no subiría nunca.
+            self._en_fondo(lambda: self._nube.soltar_cobro(pid, intento), lambda _r: None)
+            self._terminar_cobro(pid)
+            self._mensaje('Caja cerrada', 'La caja se cerró mientras cobrabas: no se registró nada.\n\n'
+                                          'Abrí la caja y volvé a cobrarlo.', QMessageBox.Warning)
+            return
         # Antes de pedir el cobro queda anotado acá lo necesario para terminarlo
         # solo si la PC se corta en el medio (ver models/cobros_pedido.py).
         if total > 0:
             try:
                 cobros_pedido.anotar(self.db, intento=intento, pedido_id=pid,
                                      codigo=str(pedido.get('codigo') or ''), pedido=pedido,
-                                     pago=pago, lineas=lineas)
+                                     pago=pago, lineas=lineas, caja_id=(caja or {}).get('id'))
             except Exception as e:
                 logger.exception('Pedidos web: no se pudo anotar el cobro local')
                 self._en_fondo(lambda: self._nube.soltar_cobro(pid, intento), lambda _r: None)
@@ -999,6 +1290,14 @@ class PedidosWebView(QWidget):
                        lambda r: self._cobro_anotado(pid, intento, pedido, lineas, pago, dlg, r))
 
     def _cobro_anotado(self, pid, intento, pedido, lineas, pago, dlg, r):
+        leido = ((r.pedido or {}).get('cobro') or {}) if not r.ok else {}
+        if (not r.ok and leido.get('estado') == 'hecho' and leido.get('intento') == intento
+                and leido.get('pc_id') == self.quien()['pc_id']):
+            # El cliente de Firestore reenvía un commit que se cortó; si la
+            # transacción corrió de nuevo, encontró el cobro ya hecho por este
+            # mismo intento. Es este cobro: se sigue con la venta.
+            logger.warning(f'Pedidos web: el cobro {intento} de {pid} ya estaba registrado (reintento de red)')
+            r = type(r)(ok=True, intento=intento, pedido=r.pedido)
         if not r.ok:
             self._terminar_cobro(pid)
             if r.motivo == 'error':
@@ -1050,16 +1349,25 @@ class PedidosWebView(QWidget):
         def listo(r):
             if r.ok:
                 cobros_pedido.borrar(self.db, intento)
+            elif r.motivo != 'error':
+                fallas = cobros_pedido.posponer(self.db, intento, r.rechazo)
+                logger.warning(f'Pedidos web: la venta #{sale_id} no se anotó en {pid}: {r.rechazo}')
+                if fallas == 1:
+                    self._en_fondo(lambda: self._nube.anotar_problema(
+                        pid, 'anotar_venta', f'venta #{sale_id}: {r.rechazo}'), lambda _r: None)
         self._en_fondo(lambda: self._nube.anotar_venta(pid, intento, sale_id), listo)
 
-    def _ids_locales(self, pedido):
+    def _productos_locales(self, pedido):
+        """Los productos del pedido en la base de esta PC: el id local y lo que
+        hace falta para escribir el renglón como lo escribe el carrito."""
         ids = sorted({str((i or {}).get('id') or '') for i in (pedido.get('items') or [])} - {''})
         if not ids:
             return {}
         marcas = ','.join('?' * len(ids))
         filas = self.db.execute_query(
-            f"SELECT id, firebase_id FROM products WHERE firebase_id IN ({marcas})", tuple(ids)) or []
-        return {f['firebase_id']: int(f['id']) for f in filas}
+            "SELECT id, firebase_id, name, category, es_conjunto, conjunto_tipo, conjunto_unidad_medida, "
+            f"conjunto_colores FROM products WHERE firebase_id IN ({marcas})", tuple(ids)) or []
+        return {f['firebase_id']: dict(f) for f in filas}
 
     def _crear_venta_local(self, pid, intento, pedido, lineas, pago):
         try:
@@ -1089,14 +1397,27 @@ class PedidosWebView(QWidget):
                 if not fb or not fb.enabled:
                     return      # la sube la cola offline cuando vuelva la nube
                 venta = self.sale_model.get_by_id(int(sale_id))
-                caja = self.db.get_current_cash_register()
-                if not venta or not caja or caja.get('status') != 'open':
+                if not venta or not venta.get('cash_register_id'):
                     return
-                venta['cash_register_id'] = caja.get('id')
                 venta['username'] = venta['turno_nombre'] = venta['cajero'] = self._cajero()
-                fb.sync_sale(venta)
-                fb.sync_sale_detail_by_day(venta, db_manager=self.db)
-                self.db.execute_update("UPDATE sales SET firebase_synced=1 WHERE id=?", (int(sale_id),))
+                # El rubro de cada renglón (el envío va como servicio) y el
+                # descuento del cupón, como los lleva una venta del mostrador.
+                ids = sorted({int(i.get('product_id') or 0) for i in venta.get('items') or []})
+                filas = self.db.execute_query(
+                    f"SELECT id, category FROM products WHERE id IN ({','.join('?' * len(ids))})",
+                    tuple(ids)) if ids else []
+                categorias = {int(f['id']): f.get('category') for f in filas or []}
+                for item in venta.get('items') or []:
+                    if item.get('product_name') == 'ENVIO A DOMICILIO':
+                        item['category'] = 'SERVICIOS'
+                    else:
+                        item['category'] = categorias.get(int(item.get('product_id') or 0)) or 'Sin categoría'
+                venta['discount'] = round(sum(float(i.get('discount_amount') or 0)
+                                              for i in venta.get('items') or []), 2)
+                subio = fb.sync_sale(venta, esperar=True)
+                subio = fb.sync_sale_detail_by_day(venta, db_manager=self.db, esperar=True) and subio
+                if subio:
+                    self.db.execute_update("UPDATE sales SET firebase_synced=1 WHERE id=?", (int(sale_id),))
             except Exception as e:
                 logger.warning(f'Pedidos web: la venta #{sale_id} no subió: {e}')
         threading.Thread(target=_do, daemon=True, name='pedidos-web-subir').start()
@@ -1161,6 +1482,12 @@ class PedidosWebView(QWidget):
                 self._subir_venta(sale_id)
                 logger.warning(f"Pedidos web: venta #{sale_id} creada para el cobro que quedó a medias "
                                f"de {fila.get('codigo')}")
+                if fila.get('caja_id') and int(fila['caja_id']) != int(caja.get('id') or 0):
+                    # Se cobró con otra caja abierta (un corte, un reinicio): la plata
+                    # quedó en la de ahora y hay que saberlo para cerrar las dos.
+                    self.aviso.emit('cobrar', f"El cobro de {fila.get('codigo')} que había quedado a medias "
+                                              f"se registró en esta caja (se había cobrado con la caja "
+                                              f"#{fila['caja_id']}).")
             self._anotar_venta(pid, intento, sale_id)
         except Exception as e:
             fallas = cobros_pedido.posponer(self.db, intento, e)

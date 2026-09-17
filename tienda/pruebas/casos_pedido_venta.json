@@ -92,5 +92,21 @@
       "items": [{ "id": "P", "nombre": "Papel crepe", "cantidad": 1, "es_pack": true, "pack_contenido": 10 }],
       "catalogo": { "P": { "nombre": "PAPEL CREPE", "es_conjunto": true, "conjunto_contenido": 10, "conjunto_total": 33.75, "stock": 33 } }
     }
+  ],
+  "whatsapp": ["3517046684", "(0351) 704-6684", "03517046684", "+54 9 351 704 6684", "+543516194411", "+54 351 619 4411", "0351 15 619-4411", "0054 351 619 4411", "4234567", "351", "", null],
+  "mensajes": [
+    {"codigo": "P5HE", "cliente": {"nombre": "  María Fernanda Gómez ", "telefono": "3517046684"}, "entrega": {"modo": "delivery"}, "estado": "nuevo"},
+    {"codigo": "P5HE", "cliente": {"nombre": "  María Fernanda Gómez ", "telefono": "3517046684"}, "entrega": {"modo": "retiro"}, "estado": "nuevo"},
+    {"codigo": "P5HE", "cliente": {"nombre": "  María Fernanda Gómez ", "telefono": "3517046684"}, "entrega": {"modo": "delivery"}, "estado": "preparando"},
+    {"codigo": "P5HE", "cliente": {"nombre": "  María Fernanda Gómez ", "telefono": "3517046684"}, "entrega": {"modo": "retiro"}, "estado": "preparando"},
+    {"codigo": "P5HE", "cliente": {"nombre": "  María Fernanda Gómez ", "telefono": "3517046684"}, "entrega": {"modo": "delivery"}, "estado": "listo"},
+    {"codigo": "P5HE", "cliente": {"nombre": "  María Fernanda Gómez ", "telefono": "3517046684"}, "entrega": {"modo": "retiro"}, "estado": "listo"},
+    {"codigo": "P5HE", "cliente": {"nombre": "  María Fernanda Gómez ", "telefono": "3517046684"}, "entrega": {"modo": "delivery"}, "estado": "en_camino"},
+    {"codigo": "P5HE", "cliente": {"nombre": "  María Fernanda Gómez ", "telefono": "3517046684"}, "entrega": {"modo": "retiro"}, "estado": "en_camino"},
+    {"codigo": "P5HE", "cliente": {"nombre": "  María Fernanda Gómez ", "telefono": "3517046684"}, "entrega": {"modo": "delivery"}, "estado": "entregado"},
+    {"codigo": "P5HE", "cliente": {"nombre": "  María Fernanda Gómez ", "telefono": "3517046684"}, "entrega": {"modo": "retiro"}, "estado": "entregado"},
+    {"codigo": "P5HE", "cliente": {"nombre": "  María Fernanda Gómez ", "telefono": "3517046684"}, "entrega": {"modo": "delivery"}, "estado": "cancelado"},
+    {"codigo": "P5HE", "cliente": {"nombre": "  María Fernanda Gómez ", "telefono": "3517046684"}, "entrega": {"modo": "retiro"}, "estado": "cancelado"},
+    {"codigo": "X1", "estado": "preparando", "cliente": {}}
   ]
 }

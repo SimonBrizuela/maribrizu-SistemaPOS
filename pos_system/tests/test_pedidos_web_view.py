@@ -142,6 +142,11 @@ class NubeFalsa:
     def cancelar(self, pid):
         return self._r('cancelar', pid, reglas.decidir_cancelar(self.pedidos.get(pid), YO, AHORA))
 
+    def anular_entrega(self, pid, motivo):
+        self.ultimo_motivo = motivo
+        return self._r('anular_entrega', pid,
+                       reglas.decidir_anular_entrega(self.pedidos.get(pid), {}, YO, AHORA, motivo))
+
     def tomar_factura(self, pid, forzar=False):
         return self._r('tomar_factura', pid, reglas.decidir_tomar_factura(self.pedidos.get(pid), YO, AHORA, 'f1', forzar), 'f1')
 
@@ -193,6 +198,9 @@ def pantalla(app, local, monkeypatch):
     def armar(pedidos):
         vista = pwv.PedidosWebView(None, current_user={'username': 'mari', 'turno_nombre': 'Mari'}, db=local['db'])
         _ABIERTAS.append(vista)
+        # La pestaña a la vista, como cuando el cajero la abre: oculta no dibuja.
+        vista.resize(1200, 800)
+        vista.show()
         vistas.append(vista)
         monkeypatch.setattr(vista, 'quien', lambda: dict(YO))
         mensajes = []
@@ -589,3 +597,377 @@ def test_factura_de_un_cobro_de_otra_caja_usa_el_medio_del_cobro(pantalla, factu
     t = pantalla([pedido('c1', **COBRADO)])
     venta = t['vista']._venta_para_factura('c1', t['nube'].pedidos['c1'], None)
     assert venta['id'] is None and venta['payment_type'] == 'cash'
+
+
+# ── Al abrir el POS ─────────────────────────────────────────────────────────
+
+def test_sin_las_cuatro_escuchas_no_suena_nada(pantalla):
+    """Cada escucha contesta por su lado: tomar la primera respuesta como "lo ya
+    visto" hacía sonar un aviso por cada pedido de las otras tres."""
+    t = pantalla([])
+    vista, vigia = t['vista'], t['vigia']
+    listo = {'si': False}
+    vigia.completo = lambda: listo['si']
+    t['nube'].pedidos.update({'n1': pedido('n1'), 'c1': pedido('c1', estado='entregado', cobro_pendiente=True)})
+    vista._nuevos_vistos = None
+    refrescar(t)
+    assert t['avisos'] == []
+    listo['si'] = True
+    refrescar(t)
+    assert t['avisos'] == [('pedido', '1 pedido web sin ver')]
+    refrescar(t)
+    assert len(t['avisos']) == 1
+
+
+def test_oculta_no_arma_la_lista_y_al_mostrarse_si(pantalla):
+    t = pantalla([pedido('n1')])
+    vista = t['vista']
+    vista.hide()
+    t['nube'].pedidos['n2'] = pedido('n2', codigo='ZZ99')
+    refrescar(t)
+    assert vista._redibujo_pendiente is True
+    assert 'Pedidos web (2 nuevos)' in t['titulos'][-1]
+    vista.show()
+    assert esperar(lambda: vista._redibujo_pendiente is False)
+    from PyQt5.QtWidgets import QLabel
+    QApplication.processEvents()
+    textos = [l.text() for l in vista.lista_v.parentWidget().findChildren(QLabel) if l.isVisible()]
+    assert 'ZZ99' in textos
+
+
+def test_abre_el_primero_sin_marcarlo_visto(pantalla):
+    t = pantalla([pedido('n1')])
+    assert t['vista']._seleccion == 'n1'
+    esperar(lambda: True, 0.1)
+    assert ('visto', ('n1',)) not in t['nube'].llamados
+
+
+def test_un_cambio_que_no_se_ve_no_rearma_los_botones(pantalla):
+    """Otra caja renueva su marca cada 90 segundos: rearmar los botones en el
+    medio de un clic lo perdía."""
+    t = pantalla([pedido('c1', estado='entregado', cobro_pendiente=True,
+                         cobro={'estado': 'en_curso', **OTRA, 'intento': 'x', 'desde': AHORA})])
+    vista = t['vista']
+    vista._seleccionar('c1')
+    antes = vista.detalle_scroll.widget().findChildren(type(vista._boton('x')))
+    t['nube'].pedidos['c1']['cobro'] = dict(t['nube'].pedidos['c1']['cobro'], desde=AHORA + timedelta(seconds=90))
+    refrescar(t)
+    despues = vista.detalle_scroll.widget().findChildren(type(vista._boton('x')))
+    assert antes and [id(b) for b in antes] == [id(b) for b in despues]
+    t['nube'].pedidos['c1']['cobro'] = dict(t['nube'].pedidos['c1']['cobro'], pc_nombre='CAJA3')
+    refrescar(t)
+    assert esperar(lambda: not any(b.isVisible() for b in antes))
+
+
+def test_con_el_reloj_de_la_pc_atrasado_la_marca_vencida_no_traba(pantalla):
+    desde = AHORA - timedelta(minutes=10)
+    t = pantalla([pedido('c1', estado='entregado', cobro_pendiente=True,
+                         cobro={'estado': 'en_curso', **OTRA, 'intento': 'x', 'desde': desde})])
+    vista = t['vista']
+    vigia = t['vigia']
+    # La hora del servidor según el vigía: la marca de hace 10 minutos venció.
+    vigia.ahora = lambda: AHORA
+    vista._filtro = 'cobrar'
+    vista._seleccionar('c1')
+    cobrar = [b for b in visibles(vista, type(vista._boton('x'))) if b.text().startswith('Cobrar')]
+    assert cobrar and cobrar[0].isEnabled()
+    vigia.ahora = lambda: desde + timedelta(minutes=1)
+    vista._redibujar_detalle()
+    cobrar = [b for b in visibles(vista, type(vista._boton('x'))) if b.text().startswith('Cobrar')]
+    assert cobrar and not cobrar[0].isEnabled()
+
+
+# ── Cobrar: lo que puede pasar en el medio ──────────────────────────────────
+
+def test_si_cierran_la_caja_con_la_pantalla_de_cobro_abierta_no_se_registra(pantalla, pago, local, monkeypatch):
+    t = pantalla([pedido('c1', estado='entregado', cobro_pendiente=True)])
+    real = PagoFalso.exec_
+
+    def cerrar_caja(self):
+        local['db'].execute_update("UPDATE cash_register SET status='closed'")
+        return real(self)
+    monkeypatch.setattr(PagoFalso, 'exec_', cerrar_caja)
+    t['vista']._accion('cobrar', 'c1')
+    assert esperar(lambda: 'soltar_cobro' in t['nube'].nombres() and not t['vista']._tareas)
+    assert 'cobrar' not in t['nube'].nombres()
+    assert ventas(local) == [] and filas_pendientes(local) == []
+    assert 'La caja se cerró' in t['mensajes'][-1]
+    assert 'c1' not in t['vista']._cobrando
+
+
+def test_envio_a_confirmar_pide_el_monto_y_cobra_el_total_nuevo(pantalla, pago, local, monkeypatch):
+    envio = dict(estado='listo', entrega={'modo': 'delivery', 'envio_a_confirmar': True}, envio=0,
+                 subtotal=1000, total=1000)
+    t = pantalla([pedido('e1', **envio)])
+    monkeypatch.setattr(t['vista'], '_pedir_monto', lambda *a: 1800.0)
+    t['vista']._accion('cobrar', 'e1')
+    assert esperar(lambda: 'anotar_venta' in t['nube'].nombres() and not t['vista']._tareas)
+    fila = ventas(local)[0]
+    assert fila['total_amount'] == 2800
+    renglones = local['db'].execute_query("SELECT product_name, subtotal FROM sale_items WHERE sale_id=?", (fila['id'],))
+    assert ('ENVIO A DOMICILIO', 1800) in [(r['product_name'], r['subtotal']) for r in renglones]
+    assert t['nube'].pedidos['e1']['cobro']['total'] == 2800
+    assert t['nube'].ultimo_pago['total'] == 2800
+
+
+def test_envio_a_confirmar_sin_monto_no_cobra(pantalla, pago, local, monkeypatch):
+    t = pantalla([pedido('e1', estado='listo', entrega={'modo': 'delivery', 'envio_a_confirmar': True})])
+    monkeypatch.setattr(t['vista'], '_pedir_monto', lambda *a: None)
+    t['vista']._accion('cobrar', 'e1')
+    assert esperar(lambda: 'soltar_cobro' in t['nube'].nombres() and not t['vista']._tareas)
+    assert 'cobrar' not in t['nube'].nombres() and ventas(local) == []
+
+
+def test_si_la_pantalla_de_cobro_falla_el_pedido_no_queda_trabado(pantalla, pago, local, monkeypatch):
+    t = pantalla([pedido('c1', estado='entregado', cobro_pendiente=True)])
+    monkeypatch.setattr(PagoFalso, 'precargar_pago', lambda self, tipo: 1 / 0)
+    t['vista']._accion('cobrar', 'c1')
+    assert esperar(lambda: 'soltar_cobro' in t['nube'].nombres() and not t['vista']._tareas)
+    assert 'c1' not in t['vista']._cobrando and 'c1' not in t['vista']._ocupados
+    assert 'falló' in t['mensajes'][-1]
+    assert ventas(local) == []
+
+
+def test_un_cobro_que_la_red_repitio_crea_la_venta_una_vez(pantalla, pago, local):
+    """El commit se reenvió y la transacción corrió dos veces: la segunda ve el
+    cobro hecho por este mismo intento y lo rechaza. Es el cobro propio."""
+    t = pantalla([pedido('c1', estado='entregado', cobro_pendiente=True)])
+    nube = t['nube']
+    original = nube.cobrar
+
+    def cobrar_dos_veces(pid, intento, pago_):
+        original(pid, intento, pago_)
+        return nube._r('cobrar', pid, reglas.decidir_cobro(nube.pedidos.get(pid), {}, YO, AHORA, intento, pago_),
+                       intento)
+    nube.cobrar = cobrar_dos_veces
+    t['vista']._accion('cobrar', 'c1')
+    assert esperar(lambda: 'anotar_venta' in nube.nombres() and not t['vista']._tareas)
+    assert len(ventas(local)) == 1 and filas_pendientes(local) == []
+    assert nube.pedidos['c1']['venta_id'] == f"CAJA1-aaaa_{ventas(local)[0]['id']}"
+
+
+def test_si_anotar_la_venta_se_rechaza_la_fila_espera(pantalla, pago, local):
+    t = pantalla([pedido('c1', estado='entregado', cobro_pendiente=True)])
+    t['nube'].rechazar['anotar_venta'] = 'el cobro no es de esta caja'
+    t['vista']._accion('cobrar', 'c1')
+    assert esperar(lambda: 'anotar_venta' in t['nube'].nombres() and not t['vista']._tareas)
+    from pos_system.models import cobros_pedido
+    assert cobros_pedido.pendientes(local['db']) == []          # pospuesta: no vuelve en la próxima vuelta
+    fila = filas_pendientes(local)[0]
+    assert fila['fallas'] == 1 and fila['estado'] == 'venta_creada'
+    assert ('problema', 'c1', 'anotar_venta') in t['nube'].llamados
+
+
+def test_el_cobro_a_medias_avisa_si_quedo_en_otra_caja(pantalla, pago, local):
+    t = pantalla([pedido('c1', estado='entregado', cobro_pendiente=True)])
+    nube = t['nube']
+    original = nube.cobrar
+    nube.cobrar = lambda pid, intento, pago_: (original(pid, intento, pago_),
+                                               Resultado(ok=False, rechazo='sin red', motivo='error'))[1]
+    t['vista']._accion('cobrar', 'c1')
+    assert esperar(lambda: t['mensajes'] and not t['vista']._tareas)
+    caja = local['db'].get_current_cash_register()
+    local['db'].execute_update("UPDATE cash_register SET status='closed'")
+    CashRegister(local['db']).open_register(initial_amount=0)
+    assert local['db'].get_current_cash_register()['id'] != caja['id']
+    procesar(t)
+    assert len(ventas(local)) == 1
+    assert any(tipo == 'cobrar' and f"caja #{caja['id']}" in m for tipo, m in t['avisos'])
+
+
+def test_la_venta_sube_con_rubro_y_se_marca_subida(pantalla, pago, local, monkeypatch):
+    subidas = []
+
+    class FbFalso:
+        enabled = True
+
+        def sync_sale(self, venta, esperar=False):
+            subidas.append(('venta', venta))
+            return True
+
+        def sync_sale_detail_by_day(self, venta, db_manager=None, esperar=False):
+            subidas.append(('detalle', venta))
+            return True
+    from pos_system.utils import firebase_sync
+    monkeypatch.setattr(firebase_sync, 'get_firebase_sync', lambda: FbFalso())
+    local['db'].execute_update("UPDATE products SET category='LIBRERIA' WHERE id=?", (local['pid'],))
+    t = pantalla([pedido('c1', estado='entregado', cobro_pendiente=True, envio=900, total=1900,
+                         entrega={'modo': 'delivery'})])
+    t['vista']._accion('cobrar', 'c1')
+    assert esperar(lambda: len(subidas) == 2)
+    venta = subidas[0][1]
+    assert {i['product_name']: i['category'] for i in venta['items']} == {'GOMA': 'LIBRERIA',
+                                                                          'ENVIO A DOMICILIO': 'SERVICIOS'}
+    assert esperar(lambda: ventas(local)[0]['firebase_synced'] == 1)
+
+
+def test_la_venta_que_no_subio_queda_para_la_cola(pantalla, pago, local, monkeypatch):
+    llamados = []
+
+    class FbSinRed:
+        enabled = True
+
+        def sync_sale(self, venta, esperar=False):
+            llamados.append('venta')
+            return False
+
+        def sync_sale_detail_by_day(self, venta, db_manager=None, esperar=False):
+            llamados.append('detalle')
+            return True
+    from pos_system.utils import firebase_sync
+    monkeypatch.setattr(firebase_sync, 'get_firebase_sync', lambda: FbSinRed())
+    t = pantalla([pedido('c1', estado='entregado', cobro_pendiente=True)])
+    t['vista']._accion('cobrar', 'c1')
+    assert esperar(lambda: len(llamados) == 2)
+    esperar(lambda: False, 0.3)
+    assert not ventas(local)[0]['firebase_synced']
+
+
+# ── Anular una entrega ──────────────────────────────────────────────────────
+
+ENTREGADO = dict(estado='entregado', stock_descontado=True, venta_registrada=True, cobro_pendiente=True,
+                 entregado_en=AHORA)
+
+
+def visibles(vista, tipo):
+    """Los widgets del detalle que se ven: los nuevos se muestran en la vuelta
+    siguiente del bucle de Qt y los reemplazados se ocultan antes de borrarse."""
+    QApplication.processEvents()
+    return [w for w in vista.detalle_scroll.widget().findChildren(tipo) if w.isVisible()]
+
+
+def botones(vista):
+    return [b.text() for b in visibles(vista, type(vista._boton('x')))]
+
+
+def test_anular_entrega_solo_para_admin_y_con_motivo(pantalla, monkeypatch):
+    t = pantalla([pedido('c1', **ENTREGADO)])
+    vista = t['vista']
+    vista._filtro = 'cobrar'
+    vista._seleccionar('c1')
+    assert 'Anular entrega' not in botones(vista)
+    vista.current_user['role'] = 'admin'
+    vista._redibujar_detalle()
+    assert 'Anular entrega' in botones(vista)
+
+    monkeypatch.setattr(vista, '_pedir_texto', lambda *a: '')
+    vista._accion('anular', 'c1')
+    assert 'motivo' in t['mensajes'][-1] and 'anular_entrega' not in t['nube'].nombres()
+
+    monkeypatch.setattr(vista, '_pedir_texto', lambda *a: None)
+    vista._accion('anular', 'c1')
+    assert 'anular_entrega' not in t['nube'].nombres()
+
+    monkeypatch.setattr(vista, '_pedir_texto', lambda *a: 'lo devolvió')
+    vista._accion('anular', 'c1')
+    assert esperar(lambda: t['nube'].pedidos['c1']['estado'] == 'cancelado' and not vista._tareas)
+    assert t['nube'].ultimo_motivo == 'lo devolvió'
+    refrescar(t)
+    vista._seleccionar('c1')
+    from PyQt5.QtWidgets import QLabel
+    textos = ' '.join(l.text() for l in vista.detalle_scroll.widget().findChildren(QLabel))
+    assert 'Entrega anulada' in textos and 'lo devolvió' in textos
+
+
+def test_renglones_sin_descontar_se_ven_en_el_pedido(pantalla):
+    t = pantalla([pedido('c1', **ENTREGADO, stock_saltados=[
+        {'renglon': 0, 'producto_id': 'GOMA', 'motivo': 'variedad "Roja" no encontrada', 'nombre': 'Goma'}])])
+    vista = t['vista']
+    vista._filtro = 'cobrar'
+    vista._seleccionar('c1')
+    from PyQt5.QtWidgets import QLabel
+    textos = ' '.join(l.text() for l in vista.detalle_scroll.widget().findChildren(QLabel))
+    assert 'Sin descontar del stock (1)' in textos and 'no encontrada' in textos
+
+
+def test_comprobante_de_otro_sitio_no_se_abre(pantalla, monkeypatch):
+    t = pantalla([pedido('c1')])
+    vista = t['vista']
+    abiertos = []
+    from pos_system.ui import pedidos_web_view as pwv
+    monkeypatch.setattr(pwv.QDesktopServices, 'openUrl', lambda url: abiertos.append(url.toString()))
+
+    class Snap:
+        exists = True
+
+        def __init__(self, url):
+            self.url = url
+
+        def to_dict(self):
+            return {'url': self.url}
+    for url, abre in (('https://firebasestorage-googleapis.com/x.pdf', False),
+                      ('https://firebasestorage.googleapis.com/v0/b/mari-d7c71.firebasestorage.app/o/c.pdf', True)):
+        monkeypatch.setattr(t['nube'].db, 'get', lambda url=url: Snap(url), raising=False)
+        abiertos.clear()
+        vista._ver_comprobante('c1')
+        assert esperar(lambda: not vista._tareas)
+        assert bool(abiertos) is abre
+
+
+# ── El cliente ──────────────────────────────────────────────────────────────
+
+def test_la_tarjeta_del_cliente_muestra_todo_y_abre_whatsapp(pantalla, monkeypatch):
+    from PyQt5.QtWidgets import QLabel
+    from pos_system.ui import pedidos_web_view as pwv
+    abiertos = []
+    monkeypatch.setattr(pwv.QDesktopServices, 'openUrl',
+                        lambda url: abiertos.append(url.toString(pwv.QUrl.FullyEncoded)) or True)
+    t = pantalla([pedido('n1', estado='listo', cliente={'nombre': 'María Fernanda Gómez', 'telefono': '0351 15 619-4411'},
+                         entrega={'modo': 'delivery', 'direccion': 'Colón 1200', 'referencia': 'timbre 2',
+                                  'coordenadas': {'lat': -31.4, 'lng': -64.18}, 'distancia_km': 2.5},
+                         pago={'modo': 'efectivo'}, nota='sin bolsa')])
+    vista = t['vista']
+    vista._seleccionar('n1')
+    textos = ' | '.join(l.text() for l in visibles(vista, QLabel))
+    for dato in ('María Fernanda Gómez', '0351 15 619-4411', 'Colón 1200', 'timbre 2', '2,5 km',
+                 'Paga en efectivo', 'sin bolsa'):
+        assert dato in textos
+    assert {'WhatsApp', 'Copiar', 'Mapa'} <= set(botones(vista))
+
+    boton = lambda texto: [b for b in visibles(vista, type(vista._boton('x'))) if b.text() == texto][0]
+
+    # Con la app de WhatsApp instalada abre la app, con el mensaje del estado.
+    monkeypatch.setattr(pwv, 'whatsapp_de_escritorio', lambda: True)
+    boton('WhatsApp').click()
+    assert abiertos[-1].startswith('whatsapp://send?phone=5493516194411&text=Hola%20Mar')
+    assert 'sale%20para%20tu%20casa' in abiertos[-1] and '%2C' in abiertos[-1]
+
+    # Sin la app, WhatsApp Web.
+    vista._whatsapp_app = None
+    monkeypatch.setattr(pwv, 'whatsapp_de_escritorio', lambda: False)
+    boton('WhatsApp').click()
+    assert abiertos[-1].startswith('https://wa.me/5493516194411?text=Hola%20Mar')
+
+    boton('Mapa').click()
+    assert abiertos[-1] == 'https://maps.google.com/?q=-31.4,-64.18'
+
+    boton('Copiar').click()
+    assert QApplication.clipboard().text() == '0351 15 619-4411'
+
+
+def test_si_la_app_no_abre_cae_a_whatsapp_web(pantalla, monkeypatch):
+    from pos_system.ui import pedidos_web_view as pwv
+    abiertos = []
+    monkeypatch.setattr(pwv, 'whatsapp_de_escritorio', lambda: True)
+    monkeypatch.setattr(pwv.QDesktopServices, 'openUrl',
+                        lambda url: abiertos.append(url.toString(pwv.QUrl.FullyEncoded))
+                        or not url.toString().startswith('whatsapp:'))
+    t = pantalla([pedido('n1')])
+    t['vista']._abrir_whatsapp('5493516194411', 'Hola')
+    assert abiertos == ['whatsapp://send?phone=5493516194411&text=Hola', 'https://wa.me/5493516194411?text=Hola']
+    t['vista']._abrir_whatsapp('5493516194411', 'Hola')
+    assert abiertos[-1].startswith('https://wa.me/')
+
+
+def test_un_fijo_se_puede_copiar_pero_no_tiene_whatsapp(pantalla):
+    from PyQt5.QtWidgets import QLabel
+    t = pantalla([pedido('n1', cliente={'nombre': 'Ana', 'telefono': '4234567'})])
+    vista = t['vista']
+    vista._seleccionar('n1')
+    assert 'WhatsApp' not in botones(vista) and 'Copiar' in botones(vista)
+    assert any('no sirve para WhatsApp' in l.text() for l in visibles(vista, QLabel))
+
+
+def test_la_pc_sabe_si_tiene_la_app_de_whatsapp():
+    from pos_system.ui.pedidos_web_view import whatsapp_de_escritorio
+    assert whatsapp_de_escritorio() in (True, False)

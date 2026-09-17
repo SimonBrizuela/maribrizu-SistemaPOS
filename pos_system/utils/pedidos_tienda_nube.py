@@ -52,6 +52,10 @@ URL_AVISO_CLIENTE = 'https://beta.liceolibreria.com/.netlify/functions/avisar-es
 # enterarse de que otra ya lo había hecho. Medido en el emulador con seis PCs.
 VUELTAS_POR_CHOQUE = 6
 
+# Tope para cada lectura adentro de una transacción. Sin él, sin internet un
+# botón quedaba "Guardando…" el minuto que tarda el cliente en rendirse.
+LECTURA_SEGUNDOS = 15
+
 # Firestore corta una transacción en 500 escrituras. Un pedido llega a 100
 # renglones (lo limita crear-pedido); con catálogo, movimientos, pedido y
 # evento no se acerca, pero se deja el control por si el límite cambia.
@@ -250,6 +254,56 @@ class NubePedidos:
             self._avisar(pedido_id)
         return r
 
+    def anular_entrega(self, pedido_id: str, motivo: str) -> Resultado:
+        """Devuelve el stock de un pedido entregado que no va (devolución,
+        entregado por error) y lo cancela. La venta de la caja, si la hubo, no se
+        toca: se borra aparte si se devolvió la plata."""
+        intento = nuevo_intento()
+
+        def cuerpo(tx, ahora, quien, pedido, catalogo):
+            decision = reglas.decidir_anular_entrega(pedido, catalogo, quien, ahora, motivo)
+            if 'rechazo' in decision:
+                return decision
+            plan = decision['plan']
+            revierte = None
+            if plan is not None:
+                from google.cloud.firestore_v1.base_query import FieldFilter
+                movs = [d.to_dict() or {} for d in self.db.collection(MOVIMIENTOS)
+                        .where(filter=FieldFilter('pedido_id', '==', pedido_id)).get(transaction=tx)]
+                devueltos = {m.get('revierte_intento') for m in movs if m.get('revierte_intento')}
+                activos = [m for m in movs if m.get('intento') and m.get('motivo') != 'anulacion'
+                           and m.get('intento') not in devueltos]
+                grupos = sorted({m.get('intento') for m in activos})
+                if len(grupos) != 1:
+                    return {'rechazo': (f'el stock de este pedido salió {len(grupos)} veces: se arregla con '
+                                        'scripts/revisar_pedidos_tienda.py' if grupos else
+                                        'no están los movimientos de stock de la entrega: corregí el stock '
+                                        'a mano y cancelalo'), 'motivo': 'stock'}
+                revierte = grupos[0]
+                difs = reglas.diferencias_de_devolucion(plan, activos)
+                if difs:
+                    detalle = '; '.join(f"{d['detalle'] or d['producto_id']}: salieron {d['salio']:g}, "
+                                        f"volverían {d['devolveria']:g}" for d in difs[:3])
+                    return {'rechazo': f'el catálogo cambió desde la entrega y el stock no volvería igual '
+                                       f'({detalle}). Corregilo a mano', 'motivo': 'stock'}
+            self._escribir_stock(tx, pedido_id, pedido, plan, intento, quien,
+                                 motivo_mov='anulacion', revierte=revierte)
+            self._escribir_pedido(tx, pedido_id, decision['campos'])
+            self._escribir_evento(tx, pedido_id, pedido, 'anular_entrega', intento, quien, ahora,
+                                  estado_despues='cancelado', plan=plan,
+                                  detalle=f'entrega anulada: {str(motivo).strip()[:200]}',
+                                  extra={'revierte_intento': revierte,
+                                         'estaba_cobrado': reglas.cobrado(pedido),
+                                         'venta_id': (pedido or {}).get('venta_id')})
+            return decision
+
+        r = self._correr('anular_entrega', pedido_id, intento, cuerpo, con_catalogo=True,
+                         catalogo_siempre=True)
+        if r.ok:
+            self._despues_del_stock(r)
+            self._avisar(pedido_id)
+        return r
+
     def tomar_factura(self, pedido_id: str, forzar: bool = False) -> Resultado:
         intento = nuevo_intento()
 
@@ -317,22 +371,22 @@ class NubePedidos:
 
     # ── Piezas internas ─────────────────────────────────────────────────────
     def _correr(self, accion, pedido_id, intento, cuerpo, con_catalogo=False,
-                anotar_rechazo=True) -> Resultado:
+                anotar_rechazo=True, catalogo_siempre=False) -> Resultado:
         ref = self.db.collection(PEDIDOS).document(pedido_id)
         salida = {}
 
         @transactional
         def _tx(tx):
             quien = self._quien()
-            snap = ref.get(transaction=tx)
+            snap = ref.get(transaction=tx, timeout=LECTURA_SEGUNDOS)
             ahora = self._reloj() if self._reloj_propio else _hora_de(snap)
             pedido = snap.to_dict() if snap.exists else None
             catalogo = {}
-            if con_catalogo and pedido and not reglas.stock_afuera(pedido):
+            if con_catalogo and pedido and (catalogo_siempre or not reglas.stock_afuera(pedido)):
                 ids = sorted({str((i or {}).get('id') or '').strip()
                               for i in (pedido.get('items') or [])} - {''})
                 for pid in ids:
-                    s = self.db.collection('catalogo').document(pid).get(transaction=tx)
+                    s = self.db.collection('catalogo').document(pid).get(transaction=tx, timeout=LECTURA_SEGUNDOS)
                     catalogo[pid] = s.to_dict() if s.exists else None
             decision = cuerpo(tx, ahora, quien, pedido, catalogo)
             salida.clear()
@@ -351,7 +405,10 @@ class NubePedidos:
                     time.sleep(random.uniform(0.05, 0.25) * (2 ** vuelta))
                     continue
                 logger.error(f'Pedidos: {accion} {pedido_id} falló: {e}')
-                self.anotar_problema(pedido_id, accion, f'{type(e).__name__}: {e}')
+                # En otro hilo: sin red, anotarlo esperaba otro minuto entero con
+                # el botón en "Guardando…".
+                threading.Thread(target=self.anotar_problema, daemon=True,
+                                 args=(pedido_id, accion, f'{type(e).__name__}: {e}')).start()
                 return Resultado(ok=False, rechazo='no se pudo hablar con la nube; no se cambió nada',
                                  motivo='error', intento=intento, error=str(e))
 
@@ -368,7 +425,7 @@ class NubePedidos:
         if campos:
             tx.update(self.db.collection(PEDIDOS).document(pedido_id), campos)
 
-    def _escribir_stock(self, tx, pedido_id, pedido, plan, intento, quien):
+    def _escribir_stock(self, tx, pedido_id, pedido, plan, intento, quien, motivo_mov='venta', revierte=None):
         if plan is None:
             return
         productos = [p for p in plan['productos'] if not p.get('saltado') and p.get('campos')]
@@ -389,14 +446,15 @@ class NubePedidos:
                     'producto_id': None,
                     'firebase_id': p['id'],
                     'producto_nombre': p.get('nombre') or '',
-                    'motivo': 'venta',
+                    'motivo': motivo_mov,
                     'cantidad': reglas._limpio(round(float(m['cantidad']), 4)),
                     'stock_antes': reglas._limpio(round(float(m['antes']), 4)),
                     'stock_despues': reglas._limpio(round(float(m['despues']), 4)),
-                    'referencia': f'Pedido tienda {codigo}',
+                    'referencia': f'Pedido tienda {codigo}' + (' (devolución)' if motivo_mov == 'anulacion' else ''),
                     'detalle': m.get('detalle') or '',
                     'pedido_id': pedido_id,
                     'intento': intento,
+                    **({'revierte_intento': revierte} if revierte else {}),
                 })
                 n += 1
 
@@ -479,11 +537,22 @@ class NubePedidos:
                 req = urllib.request.Request(
                     URL_AVISO_CLIENTE, data=json.dumps({'id': pedido_id}).encode('utf-8'),
                     headers={'Content-Type': 'application/json'}, method='POST')
-                urllib.request.urlopen(req, timeout=10).close()
+                urllib.request.urlopen(req, timeout=10, context=_contexto_tls()).close()
             except Exception as e:
                 logger.info(f'Pedidos: aviso al cliente de {pedido_id} sin enviar: {e}')
 
         threading.Thread(target=_post, daemon=True, name='aviso-cliente').start()
+
+
+def _contexto_tls():
+    """Las raíces de certifi: una PC recién instalada puede no tener en Windows
+    la de Let's Encrypt, y el aviso fallaba callado."""
+    import ssl
+    try:
+        import certifi
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        return ssl.create_default_context()
 
 
 def _hora_de(snap):

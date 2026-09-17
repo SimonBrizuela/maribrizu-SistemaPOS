@@ -398,9 +398,12 @@ _APP = []
 def _app():
     """La aplicación de Qt queda guardada: si el recolector la suelta, se lleva
     puestos los timers del vigía."""
-    from PyQt5.QtCore import QCoreApplication
+    os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
+    from PyQt5.QtWidgets import QApplication
     if not _APP:
-        _APP.append(QCoreApplication.instance() or QCoreApplication([]))
+        # QApplication y no QCoreApplication: si la suite sigue con pruebas de
+        # pantallas, una QCoreApplication ya creada las tira abajo.
+        _APP.append(QApplication.instance() or QApplication([]))
     return _APP[0]
 
 
@@ -483,3 +486,66 @@ def test_una_escucha_que_se_cae_vuelve_sola():
         assert esperar(lambda: (vistos['ultimo'].get('W1') or {}).get('estado') == 'preparando')
     finally:
         v.detener()
+
+
+# ── Anular una entrega ──────────────────────────────────────────────────────
+
+def test_anular_una_entrega_devuelve_lo_que_salio_y_cancela():
+    db = sembrar('A1', pedido_base(estado='listo'), CATALOGO)
+    entrega = caja(0).entregar('A1')
+    assert stock(db) == (37, 110)
+    r = caja(1).anular_entrega('A1', 'el cliente lo devolvió')
+    assert r.ok, r.rechazo
+    assert stock(db) == (40, 160)
+    doc = db.collection('tienda_pedidos').document('A1').get().to_dict()
+    assert doc['estado'] == 'cancelado' and doc['stock_descontado'] is False and doc['cobro_pendiente'] is False
+    assert doc['anulado']['motivo'] == 'el cliente lo devolvió' and doc['anulado']['pc_nombre'] == 'CAJA2'
+    movs = [d.to_dict() for d in db.collection(MOVIMIENTOS).where('pedido_id', '==', 'A1').stream()]
+    devolucion = [m for m in movs if m['motivo'] == 'anulacion']
+    assert len(devolucion) == 2 and {m['revierte_intento'] for m in devolucion} == {entrega.intento}
+    assert len(eventos(db, 'A1', 'anular_entrega')) == 1
+    # El botón viejo en otra caja: ya está cancelado, no devuelve dos veces.
+    assert not caja(2).anular_entrega('A1', 'otra vez').ok
+    assert stock(db) == (40, 160)
+
+
+def test_seis_cajas_anulan_a_la_vez_y_el_stock_vuelve_una_vez():
+    db = sembrar('A2', pedido_base(estado='listo'), CATALOGO)
+    caja(0).entregar('A2')
+    r = a_la_vez([lambda i=i: caja(i).anular_entrega('A2', f'devolución {i}') for i in range(SIMULTANEAS)])
+    assert sum(1 for x in r if x.ok) == 1
+    assert stock(db) == (40, 160)
+    assert len(eventos(db, 'A2', 'anular_entrega')) == 1
+
+
+def test_no_se_anula_si_el_catalogo_cambio_desde_la_entrega():
+    """La variedad se renombró después de entregar: devolver con el catálogo de
+    hoy no dejaría lo que salió. Se niega y no toca nada."""
+    db = sembrar('A3', pedido_base(estado='listo'), CATALOGO)
+    caja(0).entregar('A3')
+    cart = db.collection('catalogo').document('CART').get().to_dict()
+    cart['conjunto_colores'][0]['color'] = 'ROJO FUERTE'
+    db.collection('catalogo').document('CART').set(cart)
+    r = caja(0).anular_entrega('A3', 'devolución')
+    assert not r.ok and r.motivo == 'stock' and 'a mano' in r.rechazo and 'ROJO' in r.rechazo
+    assert stock(db) == (37, 110)
+    assert db.collection('tienda_pedidos').document('A3').get().to_dict()['estado'] == 'entregado'
+
+
+def test_no_se_anula_con_el_stock_descontado_dos_veces():
+    db = sembrar('A4', pedido_base(estado='listo'), CATALOGO)
+    caja(0).entregar('A4')
+    db.collection(MOVIMIENTOS).document('tienda_A4_dup_0').set({
+        'pedido_id': 'A4', 'intento': 'dup', 'motivo': 'venta', 'firebase_id': 'GOMA', 'cantidad': -3, 'detalle': ''})
+    r = caja(0).anular_entrega('A4', 'devolución')
+    assert not r.ok and 'revisar_pedidos_tienda' in r.rechazo
+    assert stock(db) == (37, 110)
+
+
+def test_anular_mientras_otra_caja_cobra_no_pasa():
+    db = sembrar('A5', pedido_base(estado='entregado', stock_descontado=True, venta_registrada=True,
+                                   cobro_pendiente=True), CATALOGO)
+    t = caja(1).tomar_cobro('A5')
+    assert t.ok
+    r = caja(0).anular_entrega('A5', 'devolución')
+    assert not r.ok and 'CAJA2' in r.rechazo

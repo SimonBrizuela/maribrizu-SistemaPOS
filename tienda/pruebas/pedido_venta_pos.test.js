@@ -16,6 +16,8 @@ import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 
 import { planDescuento } from '../../webapp/src/pedido_venta.js';
+import { whatsappDeTelefono } from '../../tienda/src/telefono.js';
+import { mensajeDe } from '../../webapp/src/avisos_pedido.js';
 
 const AQUI = dirname(fileURLToPath(import.meta.url));
 const RAIZ = join(AQUI, '..', '..');
@@ -64,5 +66,21 @@ describe('el stock de un pedido: panel contra caja', () => {
       expect(delPos.plan[i].que_prueba).toBe(caso.que_prueba);
       expect(delPos.plan[i].plan).toEqual(mio);
     });
+  });
+});
+
+describe('WhatsApp al cliente: panel contra caja', () => {
+  it('el mismo número', () => {
+    const mio = casos.whatsapp.map(t => whatsappDeTelefono(t));
+    expect(mio.filter(Boolean).length).toBeGreaterThan(5);
+    if (!delPos) return;
+    expect(delPos.whatsapp).toEqual(mio);
+  });
+
+  it('el mismo mensaje en cada estado', () => {
+    const mio = casos.mensajes.map(p => mensajeDe(p, { direccionLocal: 'Av. Alfonsina Storni 168' }));
+    expect(mio.filter(Boolean).length).toBeGreaterThan(5);
+    if (!delPos) return;
+    expect(delPos.mensajes).toEqual(mio);
   });
 });
