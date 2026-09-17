@@ -257,6 +257,8 @@ Orden para publicar: **1)** POS (bump + tag) y que las PCs actualicen; **2)**
 reglas de Firestore (agregan `tienda_pedidos_eventos`); **3)** panel. El POS
 nuevo convive con el panel viejo sin duplicar nada; el panel nuevo con cajas
 viejas deja pedidos sin nadie que los cobre ni descuente lo del repartidor.
+Después de publicar el panel, recargar las pestañas que hayan quedado abiertas
+(una pestaña vieja todavía registra ventas TIENDA y no sabe reabrir un cobro).
 
 ### 4. El dominio propio
 
