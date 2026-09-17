@@ -1490,8 +1490,13 @@ class FiadosView(QWidget):
                 sale = dict(sale)
                 sale['cash_register_id'] = caja.get('id')
                 sale['username'] = sale['turno_nombre'] = sale['cajero'] = self._cajero()
-                fb.sync_sale(sale)
-                fb.sync_sale_detail_by_day(sale, db_manager=self.db)
+                subio = fb.sync_sale(sale, esperar=True)
+                subio = fb.sync_sale_detail_by_day(sale, db_manager=self.db, esperar=True) and subio
+                if not subio:
+                    # La sube la cola offline, con su stock: empujarlo acá
+                    # también lo descontaría dos veces.
+                    logger.warning(f'Fiado: la venta #{sale_id} quedó para la cola offline.')
+                    return
                 try:
                     a_descontar = (stock_items if stock_items is not None
                                    else (sale.get('items') or []))

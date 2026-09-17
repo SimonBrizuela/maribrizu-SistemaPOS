@@ -1050,8 +1050,9 @@ class EditSaleDialog(QDialog):
     def _recalc_total(self):
         total = 0.0
         for iid, spin in self._spins.items():
-            row, disc, qty = self._subtotal_labels[iid]
-            sub = float(spin.value()) * qty - disc
+            row, _disc, qty = self._subtotal_labels[iid]
+            # El precio de la fila ya tiene el descuento adentro.
+            sub = float(spin.value()) * qty
             if sub < 0:
                 sub = 0.0
             self.table.item(row, 4).setText(f"${sub:.2f}")

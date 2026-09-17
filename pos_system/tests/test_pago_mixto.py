@@ -228,3 +228,33 @@ class TestEditarVentaMixta:
         assert caja['cash_sales'] >= 0
         assert caja['transfer_sales'] >= 0
         assert caja['cash_sales'] + caja['transfer_sales'] == pytest.approx(caja['total_sales'])
+
+    def test_editar_un_precio_con_descuento_no_lo_descuenta_dos_veces(self, local):
+        """El precio del renglón ya es el neto: 5000 con 10% es 4500 y el
+        subtotal 9000. Corregirlo a 4000 deja 8000, no 8000 menos el descuento."""
+        sid = local['ventas'].create({
+            'total_amount': 9000.0, 'payment_type': 'cash', 'cash_received': 9000.0,
+            'items': [{'product_id': local['pid'], 'product_name': 'Cuaderno', 'quantity': 2,
+                       'unit_price': 4500.0, 'original_price': 5000.0, 'discount_type': 'percent',
+                       'discount_value': 10, 'discount_amount': 1000.0}]})
+        item_id = local['ventas'].get_by_id(sid)['items'][0]['id']
+        local['ventas'].update(sale_id=sid, items_updates=[{'id': item_id, 'unit_price': 4000.0}])
+        venta = local['ventas'].get_by_id(sid)
+        assert venta['items'][0]['subtotal'] == 8000.0
+        assert venta['total_amount'] == 8000.0
+
+    def test_editar_un_renglon_por_metro_respeta_los_decimales(self, local):
+        sid = local['ventas'].create({
+            'total_amount': 2500.0, 'payment_type': 'cash', 'cash_received': 2500.0,
+            'items': [{'product_id': local['pid'], 'product_name': 'Cinta  ·  2.5 m', 'quantity': 2.5,
+                       'unit_price': 1000.0}]})
+        item_id = local['ventas'].get_by_id(sid)['items'][0]['id']
+        local['ventas'].update(sale_id=sid, items_updates=[{'id': item_id, 'unit_price': 1200.0}])
+        assert local['ventas'].get_by_id(sid)['total_amount'] == 3000.0
+
+    def test_el_subtotal_se_guarda_al_centavo(self, local):
+        sid = local['ventas'].create({
+            'total_amount': 1000.0, 'payment_type': 'cash', 'cash_received': 1000.0,
+            'items': [{'product_id': local['pid'], 'product_name': 'Cuaderno', 'quantity': 3,
+                       'unit_price': 1000 / 3}]})
+        assert local['ventas'].get_by_id(sid)['items'][0]['subtotal'] == 1000.0

@@ -732,31 +732,12 @@ class SyncWorker(QThread):
                 sale_id = str(s.get('id') or s.get('sale_id', ''))
                 if not sale_id:
                     continue
-                created_at = fb._parse_dt(s.get('created_at'))
-                items = s.get('items') or []
-                from pos_system.utils.firebase_sync import _fmt_qty
-                productos_str = ', '.join(
-                    f"{it.get('product_name', it.get('name','?'))} x{_fmt_qty(it.get('quantity',1))}"
-                    for it in items[:3]
-                )
-                if len(items) > 3:
-                    productos_str += f' (+{len(items)-3} más)'
+                from pos_system.utils.firebase_sync import documento_de_venta
                 fb_sale_id = f"{_pc_id}_{sale_id}"
                 ref = firedb.collection('ventas').document(fb_sale_id)
-                batch.set(ref, {
-                    'sale_id':       int(sale_id),
-                    'pc_id':         _pc_id,
-                    'created_at':    created_at,
-                    'payment_type':  s.get('payment_type', ''),
-                    'total_amount':  float(s.get('total_amount', 0) or 0),
-                    'cash_received': float(s.get('cash_received', 0) or 0),
-                    'change_given':  float(s.get('change_given', 0) or 0),
-                    'items_count':   len(items) if items else int(s.get('items_count', 0) or 0),
-                    'productos':     productos_str,
-                    'username':      s.get('username') or str(s.get('user_id', '')),
-                    'cajero':        s.get('cajero') or s.get('username') or str(s.get('user_id', '')),
-                    'discount':      float(s.get('discount', 0) or 0),
-                })
+                # merge: una venta borrada desde el panel (`deleted`) no revive, y
+                # lo que no viene de la base local no se pisa.
+                batch.set(ref, documento_de_venta(s, _pc_id, fb._parse_dt(s.get('created_at'))), merge=True)
                 count += 1
                 if count % 500 == 0:
                     batch.commit()

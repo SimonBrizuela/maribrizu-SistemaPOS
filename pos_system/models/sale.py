@@ -108,7 +108,7 @@ class Sale:
             # en ventas_por_dia/{pc_id}_{sale_id}_{item_idx}.
             vincs_para_sync_remoto = []
             for item_idx, item in enumerate(items):
-                subtotal       = item['quantity'] * item['unit_price']
+                subtotal       = round(item['quantity'] * item['unit_price'], 2)
                 original_price = item.get('original_price', item['unit_price'])
                 discount_type  = item.get('discount_type') or None
                 discount_value = item.get('discount_value', 0) or 0
@@ -1014,10 +1014,13 @@ class Sale:
                     row = cursor.fetchone()
                     if not row:
                         continue
-                    qty        = int(row[0] if row[0] is not None else 1)
-                    disc_amt   = float(row[1] or 0)
+                    # El precio unitario ya es el neto (el carrito guarda el
+                    # precio con la promo o el descuento aplicado y el subtotal
+                    # es precio × cantidad): restarle `discount_amount` otra vez
+                    # descontaba dos veces. Y la cantidad puede ser 2,5 metros.
+                    qty        = float(row[0] if row[0] is not None else 1)
                     new_price  = float(new_price)
-                    new_sub    = max(0.0, new_price * qty - disc_amt)
+                    new_sub    = round(max(0.0, new_price * qty), 2)
                     cursor.execute(
                         "UPDATE sale_items SET unit_price = ?, subtotal = ? WHERE id = ?",
                         (new_price, new_sub, int(item_id))

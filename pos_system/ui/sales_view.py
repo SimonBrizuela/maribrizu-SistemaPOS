@@ -5736,8 +5736,15 @@ class SalesView(QWidget):
                 sale_with_caja = dict(sale)
                 sale_with_caja['cash_register_id'] = caja.get('id')
 
-                fb.sync_sale(sale_with_caja)
-                fb.sync_sale_detail_by_day(sale_with_caja, db_manager=self.db)
+                subio = fb.sync_sale(sale_with_caja, esperar=True)
+                subio = fb.sync_sale_detail_by_day(sale_with_caja, db_manager=self.db, esperar=True) and subio
+                if not subio:
+                    # Queda firebase_synced=0: la cola offline la sube después
+                    # con su stock. Empujar el stock acá y otra vez allá lo
+                    # descontaría dos veces.
+                    _log.getLogger(__name__).warning(
+                        f"Firebase: venta #{sale.get('id')} sin subir; queda para la cola offline.")
+                    return
                 # Propagar stock actualizado (ya descontado en SQLite) a Firebase
                 try:
                     fb.sync_stock_after_sale(sale_with_caja.get('items') or [], self.db)

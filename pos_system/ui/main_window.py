@@ -1444,8 +1444,12 @@ class MainWindow(QMainWindow):
                     try:
                         # Adjuntar cash_register_id si la venta tiene caja asociada
                         # (sale ya lo trae si la columna existe; no hace falta tocar nada).
-                        fb.sync_sale(sale)
-                        fb.sync_sale_detail_by_day(sale, db_manager=self.db)
+                        subio = fb.sync_sale(sale, esperar=True)
+                        subio = fb.sync_sale_detail_by_day(sale, db_manager=self.db, esperar=True) and subio
+                        if not subio:
+                            # Sin marcar ni empujar stock: la próxima pasada
+                            # hace las dos cosas juntas, una sola vez.
+                            raise RuntimeError('la venta no subió')
                         # Propagar stock actualizado a Firebase (igual que el path normal).
                         # Best-effort: si falla, no impide marcar synced=1 — la venta sí subió.
                         try:

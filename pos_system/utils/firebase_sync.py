@@ -294,6 +294,63 @@ def _campos_de_pedido_tienda(item):
     }
 
 
+def documento_de_venta(sale, pc_id, created_at):
+    """El documento de `ventas/{pc_id}_{sale_id}`. Lo usan la subida de cada
+    venta y la sincronización completa: con dos armados distintos, la completa
+    perdía la caja, la transferencia de un pago mixto y las marcas de fiado y
+    de pedido web."""
+    items = sale.get('items') or []
+    # Armar resumen de productos para mostrar en la web
+    productos_str = ', '.join(
+        f"{it.get('product_name', it.get('name','?'))} x{_fmt_qty(it.get('quantity',1))}"
+        for it in items[:3]
+    )
+    if len(items) > 3:
+        productos_str += f' (+{len(items)-3} más)'
+
+    # cajero: preferir turno_nombre (quien atiende), fallback a username
+    cajero = (
+        sale.get('turno_nombre')
+        or sale.get('cajero')
+        or sale.get('username')
+        or str(sale.get('user_id', ''))
+    )
+    doc = {
+        'sale_id':          int(sale.get('id') or sale.get('sale_id')),
+        'pc_id':            pc_id,
+        'created_at':       created_at,
+        'payment_type':     sale.get('payment_type', ''),
+        'total_amount':     float(sale.get('total_amount', 0) or 0),
+        'cash_received':    float(sale.get('cash_received', 0) or 0),
+        'change_given':     float(sale.get('change_given', 0) or 0),
+        # Parte de transferencia en pago mixto. Para ventas
+        # comunes queda en 0; para 'mixed' contiene el monto
+        # transferido. Permite a la web mostrar el desglose.
+        'transfer_amount':  float(sale.get('transfer_amount', 0) or 0),
+        'items_count':      len(items) if items else int(sale.get('items_count', 0) or 0),
+        'productos':        productos_str,
+        'username':         cajero,
+        'cajero':           cajero,
+        'discount':         float(sale.get('discount', 0) or 0),
+        'cash_register_id': int(sale.get('cash_register_id') or 0) or None,
+        # Cobro de fiado: la webapp pinta estas ventas con otro color.
+        # fiado_tipo: 'productos' (se saldaron items) | 'a_cuenta'
+        # (entrega de dinero que queda como saldo a favor).
+        'es_fiado':          bool(sale.get('es_fiado')),
+        'fiado_tipo':        str(sale.get('fiado_tipo') or ''),
+        'fiado_cliente':     str(sale.get('fiado_cliente') or ''),
+        'fiado_cliente_fid': str(sale.get('fiado_cliente_fid') or ''),
+    }
+    # Cobro de un pedido de la tienda: el panel lo muestra como
+    # pedido y, al borrar la venta, sabe que el stock salió al
+    # entregar y no tiene que devolverlo.
+    if sale.get('pedido_tienda_id'):
+        doc['origen'] = 'tienda'
+        doc['pedido_id'] = str(sale.get('pedido_tienda_id'))
+        doc['pedido_codigo'] = str(sale.get('pedido_tienda_codigo') or '')
+    return doc
+
+
 def _fmt_qty(q):
     """Formatea cantidades: 1.0 -> '1', 0.3 -> '0.3', 2.55 -> '2.55'."""
     q = float(q or 0)
@@ -1698,71 +1755,32 @@ class FirebaseSync:
     # ══════════════════════════════════════════════════
     #  VENTAS
     # ══════════════════════════════════════════════════
-    def sync_sale(self, sale: dict):
-        """Sube/actualiza una venta en Firestore."""
+    def sync_sale(self, sale: dict, esperar: bool = False):
+        """Sube/actualiza una venta en Firestore.
+
+        Con `esperar` escribe en este hilo y devuelve si se pudo: quien marca la
+        venta como subida (`firebase_synced`) tiene que saberlo. Sin eso la
+        marca se ponía antes de escribir y, si la escritura fallaba, la cola
+        offline no la reintentaba nunca.
+        """
         if not self.enabled:
-            return
+            return False
         def _do():
             try:
                 sale_id = str(sale.get('id') or sale.get('sale_id', ''))
                 if not sale_id:
-                    return
-                created_at = self._parse_dt(sale.get('created_at'))
-                items = sale.get('items') or []
-                # Armar resumen de productos para mostrar en la web
-                productos_str = ', '.join(
-                    f"{it.get('product_name', it.get('name','?'))} x{_fmt_qty(it.get('quantity',1))}"
-                    for it in items[:3]
-                )
-                if len(items) > 3:
-                    productos_str += f' (+{len(items)-3} más)'
-
-                # cajero: preferir turno_nombre (quien atiende), fallback a username
-                cajero = (
-                    sale.get('turno_nombre')
-                    or sale.get('cajero')
-                    or sale.get('username')
-                    or str(sale.get('user_id', ''))
-                )
+                    return False
                 pc_id  = _get_pc_id()
                 fb_doc_id = f"{pc_id}_{sale_id}"   # único por PC → no pisan ventas de otras PCs
-                doc = {
-                    'sale_id':          int(sale_id),
-                    'pc_id':            pc_id,
-                    'created_at':       created_at,
-                    'payment_type':     sale.get('payment_type', ''),
-                    'total_amount':     float(sale.get('total_amount', 0) or 0),
-                    'cash_received':    float(sale.get('cash_received', 0) or 0),
-                    'change_given':     float(sale.get('change_given', 0) or 0),
-                    # Parte de transferencia en pago mixto. Para ventas
-                    # comunes queda en 0; para 'mixed' contiene el monto
-                    # transferido. Permite a la web mostrar el desglose.
-                    'transfer_amount':  float(sale.get('transfer_amount', 0) or 0),
-                    'items_count':      len(items) if items else int(sale.get('items_count', 0) or 0),
-                    'productos':        productos_str,
-                    'username':         cajero,
-                    'cajero':           cajero,
-                    'discount':         float(sale.get('discount', 0) or 0),
-                    'cash_register_id': int(sale.get('cash_register_id') or 0) or None,
-                    # Cobro de fiado: la webapp pinta estas ventas con otro color.
-                    # fiado_tipo: 'productos' (se saldaron items) | 'a_cuenta'
-                    # (entrega de dinero que queda como saldo a favor).
-                    'es_fiado':          bool(sale.get('es_fiado')),
-                    'fiado_tipo':        str(sale.get('fiado_tipo') or ''),
-                    'fiado_cliente':     str(sale.get('fiado_cliente') or ''),
-                    'fiado_cliente_fid': str(sale.get('fiado_cliente_fid') or ''),
-                }
-                # Cobro de un pedido de la tienda: el panel lo muestra como
-                # pedido y, al borrar la venta, sabe que el stock salió al
-                # entregar y no tiene que devolverlo.
-                if sale.get('pedido_tienda_id'):
-                    doc['origen'] = 'tienda'
-                    doc['pedido_id'] = str(sale.get('pedido_tienda_id'))
-                    doc['pedido_codigo'] = str(sale.get('pedido_tienda_codigo') or '')
+                doc = documento_de_venta(sale, pc_id, self._parse_dt(sale.get('created_at')))
                 self.db.collection('ventas').document(fb_doc_id).set(doc, merge=True)
                 logger.debug(f"Firebase: Venta #{sale_id} ({pc_id}) sincronizada.")
+                return True
             except Exception as e:
                 logger.error(f"Firebase: Error sincronizando venta: {e}")
+                return False
+        if esperar:
+            return _do()
         self._run(_do)
 
     # ══════════════════════════════════════════════════
@@ -3304,10 +3322,11 @@ class FirebaseSync:
     # ══════════════════════════════════════════════════
     #  VENTAS POR DÍA (detalle por producto)
     # ══════════════════════════════════════════════════
-    def sync_sale_detail_by_day(self, sale: dict, db_manager=None):
-        """Sube el detalle de items de una venta a Firestore."""
+    def sync_sale_detail_by_day(self, sale: dict, db_manager=None, esperar: bool = False):
+        """Sube el detalle de items de una venta a Firestore. `esperar`: igual
+        que en `sync_sale`."""
         if not self.enabled:
-            return
+            return False
         def _do():
             try:
                 sale_id    = sale.get('id')
@@ -3395,8 +3414,12 @@ class FirebaseSync:
                     }, merge=True)
                 batch.commit()
                 logger.debug(f"Firebase: Detalle de venta #{sale_id} ({len(items)} items) sincronizado.")
+                return True
             except Exception as e:
                 logger.error(f"Firebase: Error sincronizando detalle de venta: {e}")
+                return False
+        if esperar:
+            return _do()
         self._run(_do)
 
     def resync_sale_after_edit(self, sale_id: int, db_manager):
