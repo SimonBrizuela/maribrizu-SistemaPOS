@@ -92,7 +92,7 @@ const {
 
 const {
   numerosOcupados, chequearIdLibre, cajaAbiertaAhora, ejecutarSeparacion,
-  separacionPendiente, documentoDeCaja,
+  separacionPendiente, documentoDeCaja, verificarDespuesDeEscribir,
 } = await import('../../webapp/src/cajas_separar.js');
 
 /* ── Los datos: dos jornadas pegadas, como la caja #138 ───────────────────── */
@@ -574,6 +574,54 @@ describe('separar de verdad', () => {
     expect(vieja.pendiente_conteo).toBe(true);
     expect(vieja.monto_final).toBe(0);
     expect('diferencia' in vieja).toBe(false);
+  });
+
+  it('relee las cajas y confirma que quedaron como el plan', async () => {
+    const plan = planDeDosDias();
+    const r = await ejecutarSeparacion({}, { plan });
+    expect(r.verificacion.ok).toBe(true);
+    expect(r.verificacion.detalles.map(d => d.id)).toEqual([138, 139]);
+    expect(r.verificacion.detalles[1].efectivo.base).toBe(r.verificacion.detalles[1].efectivo.plan);
+  });
+
+  it('si la base no quedó como la cuenta, lo dice y marca para revisar', async () => {
+    // Una venta del día 19 que una PC sincroniza DESPUÉS de que el diálogo
+    // armó la cuenta: la separación la manda a la caja nueva, así que la #139
+    // termina con $4.000 más de los que el plan prometía.
+    const plan = planDeDosDias();
+    nube.col.ventas_por_dia['tardia'] = {
+      num_venta: 777, pc_id: 'PC1', fecha: dmy(DIA_B), producto: 'LAPIZ',
+      subtotal: 4000, monto_efectivo: 4000, monto_transferencia: 0,
+      cash_register_id: 138,
+    };
+    const r = await ejecutarSeparacion({}, { plan });
+    expect(r.verificacion.ok).toBe(false);
+    const flojo = r.verificacion.detalles.find(d => !d.ok);
+    expect(flojo.id).toBe(139);
+    expect(flojo.efectivo.base - flojo.efectivo.plan).toBe(4000);
+    expect(filaEn('cierres_caja', '138').separacion.estado).toBe('revisar');
+    expect(separacionPendiente(filaEn('cierres_caja', '138')).estado).toBe('revisar');
+  });
+
+  it('un día que no está en el plan se queda donde está', async () => {
+    // Un renglón borrado de otro día: la pantalla no lo ve, así que el plan no
+    // lo menciona. Moverlo a la caja vieja sería inventar a dónde va.
+    nube.col.ventas_por_dia['otroDia'] = {
+      num_venta: 500, pc_id: 'PC1', fecha: '20/09/2026', producto: 'ANULADO',
+      subtotal: 999, cash_register_id: 138, deleted: true,
+    };
+    const r = await ejecutarSeparacion({}, { plan: planDeDosDias() });
+    expect(filaEn('ventas_por_dia', 'otroDia').cash_register_id).toBe(138);
+    expect(r.renglones.fueraDelPlan).toEqual(['otroDia']);
+  });
+
+  it('la verificación se puede correr sola', async () => {
+    const plan = planDeDosDias();
+    const antes = await verificarDespuesDeEscribir({}, plan);
+    expect(antes.ok).toBe(false);          // todavía no se movió nada
+    await ejecutarSeparacion({}, { plan });
+    const despues = await verificarDespuesDeEscribir({}, plan);
+    expect(despues.ok).toBe(true);
   });
 
   it('deja la separación marcada como hecha', async () => {

@@ -18,7 +18,8 @@
 import {
   collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, writeBatch, deleteField, Timestamp,
 } from 'firebase/firestore';
-import { fechaDMYtoYMD } from './config.js';
+import { fechaDMYtoYMD, isItemVarios2 } from './config.js';
+import { repartoDeItem } from './medios_de_pago.js';
 import { diaAR, aFecha } from './cajas_dias.js';
 
 const POR_LOTE = 400;
@@ -154,6 +155,7 @@ async function repartirColeccion(db, nombre, ids, mapaDias, idOriginal, diaDelDo
   let movidos = 0;
   let mirados = 0;
   const sinDia = [];
+  const fueraDelPlan = [];
 
   const flush = async (forzar) => {
     if (pendientes && (forzar || pendientes >= POR_LOTE)) {
@@ -170,7 +172,11 @@ async function repartirColeccion(db, nombre, ids, mapaDias, idOriginal, diaDelDo
       const datos = d.data() || {};
       const ymd = diaDelDoc(datos);
       if (!ymd) { sinDia.push(d.id); continue; }
-      const destino = mapaDias[ymd] != null ? Number(mapaDias[ymd]) : Number(idOriginal);
+      // Un día que no está en el plan se queda donde está. Pasa con lo que la
+      // pantalla no mira —un renglón borrado de un día suelto— y moverlo "por
+      // las dudas" a la caja vieja sería inventar a dónde va.
+      if (mapaDias[ymd] == null) { fueraDelPlan.push(d.id); continue; }
+      const destino = Number(mapaDias[ymd]);
       if (Number(datos.cash_register_id) === destino) continue;
       batch.update(doc(db, nombre, d.id), { cash_register_id: destino });
       pendientes++;
@@ -180,7 +186,57 @@ async function repartirColeccion(db, nombre, ids, mapaDias, idOriginal, diaDelDo
     }
   }
   await flush(true);
-  return { movidos, mirados, sinDia };
+  return { movidos, mirados, sinDia, fueraDelPlan };
+}
+
+/**
+ * Lo que quedó en la base contra lo que el plan prometía.
+ *
+ * Se corre DESPUÉS de escribir y lee de vuelta los renglones de cada caja con
+ * las mismas reglas que la pantalla. Es el único control que ve lo que pasó de
+ * verdad: un renglón que la consulta no encontró, una venta que sincronizó una
+ * PC en el medio de la separación, un lote que no entró. Sin esto, el diálogo
+ * promete una cosa y nadie chequea que la base haya quedado así.
+ */
+export async function verificarDespuesDeEscribir(db, plan) {
+  const cerca = (a, b) => Math.abs(num(a) - num(b)) < 0.01;
+  const detalles = [];
+
+  for (const caja of plan.cajas) {
+    const snap = await getDocs(query(
+      collection(db, 'ventas_por_dia'), where('cash_register_id', '==', Number(caja.id))));
+
+    let efectivo = 0, transferencia = 0;
+    const ventas = new Set();
+    for (const d of snap.docs) {
+      const it = d.data() || {};
+      if (it.deleted === true) continue;
+      if (isItemVarios2(it)) continue;
+      // Los renglones sin fecha no son de ningún día: el plan no los cuenta y
+      // la separación no los mueve. Contarlos acá haría saltar la alarma
+      // siempre, por algo que ya estaba así antes de tocar nada.
+      if (!fechaDMYtoYMD(it.fecha)) continue;
+      const parte = repartoDeItem(it);
+      efectivo += parte.efectivo;
+      transferencia += parte.transferencia;
+      const partes = d.id.split('_');
+      const pc = partes.length >= 3 ? partes.slice(0, -2).join('_') : '';
+      ventas.add(`${pc}|${it.num_venta}`);
+    }
+
+    const ok = cerca(efectivo, caja.total_efectivo)
+            && cerca(transferencia, caja.total_transferencia)
+            && ventas.size === Number(caja.total_transacciones);
+    detalles.push({
+      id: caja.id,
+      ok,
+      efectivo:      { base: efectivo,      plan: num(caja.total_efectivo) },
+      transferencia: { base: transferencia, plan: num(caja.total_transferencia) },
+      ventas:        { base: ventas.size,   plan: Number(caja.total_transacciones) },
+    });
+  }
+
+  return { ok: detalles.every(d => d.ok), detalles };
 }
 
 /**
@@ -234,8 +290,18 @@ export async function ejecutarSeparacion(db, { plan, onProgreso = () => {}, idsP
                  documentoDeCaja(caja, { esNuevo }), { merge: true });
   }
 
+  onProgreso('Verificando cómo quedó...');
+  const quedoBien = await verificarDespuesDeEscribir(db, plan);
+
+  // La marca sólo dice "hecha" si la base quedó como el plan. Si no coincide
+  // queda en "revisar": la pantalla lo muestra y la separación se puede
+  // retomar, en vez de dar por buena una cuenta que no cierra.
   await updateDoc(doc(db, 'cierres_caja', String(original.id)), {
-    separacion: { ...marca, estado: 'hecha', terminado: new Date().toISOString() },
+    separacion: {
+      ...marca,
+      estado: quedoBien.ok ? 'hecha' : 'revisar',
+      terminado: new Date().toISOString(),
+    },
   });
 
   return {
@@ -243,17 +309,20 @@ export async function ejecutarSeparacion(db, { plan, onProgreso = () => {}, idsP
     idsNuevos,
     renglones,
     ventas,
+    verificacion: quedoBien,
   };
 }
 
 /**
- * La marca que dejó una separación a medio hacer, si quedó alguna.
+ * La marca de una separación que no terminó bien, si quedó alguna: cortada a
+ * la mitad (`en_curso`) o terminada con los números sin cerrar (`revisar`).
  * Sirve para retomarla con el mismo reparto de días.
  */
 export function separacionPendiente(cierreDoc) {
   const s = cierreDoc?.separacion;
-  if (!s || s.estado !== 'en_curso') return null;
+  if (!s || (s.estado !== 'en_curso' && s.estado !== 'revisar')) return null;
   return {
+    estado: s.estado,
     ids_nuevos: (s.ids_nuevos || []).map(Number),
     dias: s.dias || {},
     ts: aFecha(s.ts),

@@ -217,7 +217,7 @@ export async function renderCierres(container, db) {
         .sort((a, b) => a.ymd.localeCompare(b.ymd));
       s._dias     = resumenDias;
       s._mezclada = tieneDiasMezclados(resumenDias);
-      s._separando = c.separacion?.estado === 'en_curso';
+      s._separando = c.separacion?.estado === 'en_curso' || c.separacion?.estado === 'revisar';
     } else {
       // Compat: usar los stats del doc cuando no hay register_id para filtrar
       s.total_efectivo           = Number(c.total_efectivo || 0);
@@ -1708,14 +1708,19 @@ export function openCierreModal(c, catByName, gastosAll, db, onSaved, ctx = {}) 
 function bannerDiasHTML({ dias, mezclada, sePuedeSeparar, separacionAMedias }) {
   if (separacionAMedias) {
     const cuantos = separacionAMedias.ids_nuevos.length;
+    const revisar = separacionAMedias.estado === 'revisar';
     return `
       <div style="background:var(--tint-red-bg);border:1.5px solid #ef4444;border-radius:12px;padding:14px 18px;margin-bottom:18px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
         <div style="display:flex;align-items:center;gap:10px">
           <span class="material-icons" style="color:var(--tint-red-fg)">error</span>
           <div>
-            <div style="font-size:13px;font-weight:800;color:var(--tint-red-fg)">Quedó una separación sin terminar</div>
+            <div style="font-size:13px;font-weight:800;color:var(--tint-red-fg)">${revisar
+              ? 'La separación terminó pero los números no cerraron'
+              : 'Quedó una separación sin terminar'}</div>
             <div style="font-size:11px;color:var(--tint-red-fg);opacity:.85;margin-top:2px">
-              Se empezó a partir esta caja en ${cuantos + 1} y no llegó a cerrarse. Hasta terminarla, los totales pueden verse raros.
+              ${revisar
+                ? `Esta caja se partió en ${cuantos + 1} y lo que quedó en la base no da igual que lo calculado. Conviene mirarlo antes de creerle a estos totales.`
+                : `Se empezó a partir esta caja en ${cuantos + 1} y no llegó a cerrarse. Hasta terminarla, los totales pueden verse raros.`}
             </div>
           </div>
         </div>
@@ -2002,12 +2007,27 @@ export function openSepararCajaModal(db, ctx, onDone) {
       cerrar();
       if (typeof onDone === 'function') onDone();
       setTimeout(() => {
+        const quedaron = (r.renglones.sinDia.length + r.ventas.sinDia.length);
+        const base = `Quedaron <b>${plan.cajas.length}</b> cajas: ${plan.cajas.map(c => `#${c.id}`).join(', ')}.<br>
+                      Se movieron <b>${r.renglones.movidos}</b> renglones de venta y <b>${r.ventas.movidos}</b> ventas.
+                      ${quedaron ? `<br><span style="color:var(--tint-orange-fg)">Quedaron sin mover ${quedaron} registros sin fecha: siguen en la caja #${caja.register_id}.</span>` : ''}`;
+        // Lo que dice la base después de escribir, no lo que decía el plan.
+        if (r.verificacion?.ok === false) {
+          const flojas = r.verificacion.detalles.filter(d => !d.ok).map(d =>
+            `<li>Caja <b>#${d.id}</b>: en la base hay $${fmt(d.efectivo.base + d.transferencia.base)} en ${d.ventas.base} ventas, ` +
+            `y la cuenta daba $${fmt(d.efectivo.plan + d.transferencia.plan)} en ${d.ventas.plan}.</li>`).join('');
+          alertDialog({
+            title: 'Separada, pero hay que mirarla',
+            message: `${base}<br><br>Al volver a leer las cajas, los números no dieron iguales:
+                      <ul style="margin:6px 0 0;padding-left:18px;line-height:1.6">${flojas}</ul>
+                      <div style="margin-top:8px">Puede ser una venta que sincronizó una PC justo ahora. El cierre quedó marcado para revisar.</div>`,
+            type: 'error',
+          });
+          return;
+        }
         alertDialog({
           title: 'Caja separada',
-          message: `Quedaron <b>${plan.cajas.length}</b> cajas: ${plan.cajas.map(c => `#${c.id}`).join(', ')}.<br>
-                    Se movieron <b>${r.renglones.movidos}</b> renglones de venta y <b>${r.ventas.movidos}</b> ventas.
-                    ${r.renglones.sinDia.length || r.ventas.sinDia.length
-                      ? `<br><span style="color:var(--tint-orange-fg)">Quedaron sin mover ${r.renglones.sinDia.length + r.ventas.sinDia.length} registros sin fecha: siguen en la caja #${caja.register_id}.</span>` : ''}`,
+          message: `${base}<br>Las cajas se releyeron y los totales dan.`,
           type: 'success',
         });
       }, 250);

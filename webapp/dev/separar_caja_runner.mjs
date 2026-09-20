@@ -139,6 +139,25 @@ for (const d of dias) {
             + `${d.primera ? cuando(d.primera).slice(-8) : '--:--'} a ${d.ultima ? cuando(d.ultima).slice(-8) : '--:--'}`);
 }
 
+// `--verificar`: el documento de la caja contra los renglones que hay de verdad.
+// Sirve para cualquier caja, separada o no: si el doc quedó viejo, los totales
+// de la pantalla mienten.
+if (tiene('--verificar')) {
+  const ef = dias.reduce((t, d) => t + d.efectivo, 0);
+  const tr = dias.reduce((t, d) => t + d.transferencia, 0);
+  const tx = new Set(dias.flatMap(d => [...d.ventas])).size;
+  const cerca = (a, b) => Math.abs(a - b) < 0.01;
+  const bien = cerca(ef, Number(cajaDoc.total_efectivo || 0))
+            && cerca(tr, Number(cajaDoc.total_transferencia || 0))
+            && tx === Number(cajaDoc.total_transacciones || 0);
+  console.log('\nEl documento contra los renglones:');
+  console.log(`  efectivo      doc ${plata(cajaDoc.total_efectivo)}  base ${plata(ef)}`);
+  console.log(`  transferencia doc ${plata(cajaDoc.total_transferencia)}  base ${plata(tr)}`);
+  console.log(`  ventas        doc ${cajaDoc.total_transacciones}  base ${tx}`);
+  console.log(`  ${bien ? 'OK' : 'NO COINCIDE'}`);
+  process.exit(bien ? 0 : 2);
+}
+
 const cortes = aMedias ? null : cortesSugeridos(dias);
 if (!cortes || !cortes.some(Boolean)) {
   if (!aMedias) {
