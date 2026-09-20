@@ -11,7 +11,9 @@
  * Este módulo mira dos cosas que ya están en el store (no agrega ni una lectura
  * a Firestore) y avisa apenas pasa:
  *
- *   1. No hay ninguna caja abierta y se siguió vendiendo. Es el caso del sábado.
+ *   1. No hay ninguna caja abierta y se siguió vendiendo DESPUÉS del último
+ *      cierre. Es el caso del sábado. Lo vendido antes del cierre no cuenta:
+ *      entró en la caja que se cerró y está donde tiene que estar.
  *   2. Hay caja abierta pero una PC le está poniendo otro número a sus ventas.
  *      Es la misma falla vista desde la otra punta: esa PC quedó colgada de una
  *      caja vieja y su plata no va a aparecer en el cierre de hoy.
@@ -81,29 +83,44 @@ export function evaluarCaja({ cajaActiva, items = [], ahora = Date.now() } = {})
   const reales = items.filter(it => it && it.deleted !== true && !isItemVarios2(it));
   if (reales.length === 0) return null;
 
-  // Desde cuándo hay que mirar. Las ventas anteriores llevan con razón el
-  // número de la caja de antes y no son ningún error.
-  const desdeMs = aMillis(cajaActiva && (cajaActiva.opening_date || cajaActiva.updated_at));
-
-  // Desde cuándo se está SIN caja, que es otra fecha y no la de arriba.
+  // Desde cuándo hay que mirar las ventas. Son DOS cortes distintos y usar el
+  // que no va es lo que hacía saltar el aviso de mentira.
   //
-  // Al cerrar, el POS escribe `caja_activa/current` con merge, así que
-  // `opening_date` queda con la apertura de la caja que se acaba de cerrar y
-  // `updated_at` con el cierre. Midiendo la gracia contra `opening_date` daba
-  // siempre las horas que esa caja estuvo abierta —un día entero—, nunca menos
-  // de diez minutos, así que la gracia no protegía nada: todas las noches,
-  // entre el cierre de las 20:29 y la apertura de las 20:30, el panel avisaba
-  // "nadie abrió la caja" con la plata del día completo. El dueño lo veía casi
-  // a diario y ya no le creía al cartel.
-  const sinCajaDesdeMs = abierta === null
-    ? aMillis(cajaActiva && (cajaActiva.updated_at || cajaActiva.opening_date))
-    : null;
+  // Al cerrar, el POS escribe `caja_activa/current` con merge: el doc de una
+  // caja cerrada conserva el `opening_date` de esa misma caja y trae el cierre
+  // en `updated_at`.
+  //
+  //   - Sin caja abierta, el corte es el CIERRE más la gracia. Todo lo vendido
+  //     antes entró en esa caja y está bien; lo del minuto del cierre también,
+  //     que le queda pegado el número de la caja que se acaba de cerrar y cae
+  //     igual en ese cierre. Huérfano es lo que sigue saliendo un rato después,
+  //     con la caja del día sin abrir.
+  //   - Con caja abierta, el corte es la APERTURA. Lo de antes lleva con razón
+  //     el número de la caja anterior.
+  //
+  // Cortando siempre por `opening_date` —lo que se hacía— una caja recién
+  // cerrada arrastraba el día entero: la noche del 19/09, con la caja cerrada a
+  // las 20:33 y todo en orden, el panel acusó "158 ventas sin caja desde las
+  // 09:30" con el total del día. Y sin la gracia sobre la hora de la venta
+  // quedaba acusando la 5566, cobrada 21 segundos después del cierre y que está
+  // en su caja. Un aviso que miente es peor que no tenerlo.
+  const cierreMs = aMillis(cajaActiva && (cajaActiva.updated_at || cajaActiva.opening_date));
+  const aperturaMs = aMillis(cajaActiva && (cajaActiva.opening_date || cajaActiva.updated_at));
+  const desdeMs = abierta === null
+    ? (cierreMs === null ? null : cierreMs + GRACIA_MS)
+    : aperturaMs;
+
+  // Y mientras la gracia corre no hay nada que decir: la rotación de todas las
+  // noches deja unos minutos sin caja y no es un problema.
+  if (abierta === null && cierreMs !== null && (ahora - cierreMs) < GRACIA_MS) return null;
 
   const posteriores = desdeMs === null
     ? reales
     : reales.filter(it => {
         const t = aMillis(it.fecha_dt);
-        return t === null ? true : t >= desdeMs;
+        // Un renglón sin fecha no se puede ubicar en el tiempo y no alcanza
+        // para acusar a nadie. En `ventas_por_dia` los tienen todos.
+        return t !== null && t >= desdeMs;
       });
   if (posteriores.length === 0) return null;
 
@@ -116,11 +133,6 @@ export function evaluarCaja({ cajaActiva, items = [], ahora = Date.now() } = {})
         return rid !== null && rid !== abierta;
       });
   if (sospechosos.length === 0) return null;
-
-  // Sin caja abierta se espera la gracia: la rotación de todas las noches deja
-  // unos minutos sin caja y no es un problema. Se mide desde el CIERRE.
-  if (abierta === null && sinCajaDesdeMs !== null
-      && (ahora - sinCajaDesdeMs) < GRACIA_MS) return null;
 
   const ventas = new Set();
   const pcs = new Set();
@@ -204,9 +216,12 @@ function _avisar(a) {
   _notificarNavegador(t);
 }
 
+let _notif = null;
+
 function _notificarNavegador(t) {
   try {
     if (!('Notification' in window) || Notification.permission !== 'granted') return;
+    _cerrarNotificacion();
     const n = new Notification(t.etiqueta, {
       body: `${t.titulo}. ${t.cuerpo}`,
       tag: 'caja-sin-abrir',
@@ -217,9 +232,19 @@ function _notificarNavegador(t) {
       window.navigateToPage?.('cierres');
       n.close();
     };
+    _notif = n;
   } catch (e) {
     console.warn('[caja] no se pudo notificar:', e);
   }
+}
+
+// La notificación queda pegada en el escritorio hasta que alguien la toca
+// (`requireInteraction`). Si el problema se resolvió, que se vaya sola: leerla
+// media hora después, con la caja ya abierta, es leer algo que no es cierto.
+function _cerrarNotificacion() {
+  if (!_notif) return;
+  try { _notif.close(); } catch (_) {}
+  _notif = null;
 }
 
 /* ── Suscriptores ────────────────────────────────────────────────────────── */
@@ -284,6 +309,7 @@ function _revisar() {
     // baje a mano después de abrir la caja.
     _ultimoAvisoMs = 0;
     if (_toast) { try { _toast.cerrar(); } catch (_) {} _toast = null; }
+    _cerrarNotificacion();
     return;
   }
   if (cambio || ahora - _ultimoAvisoMs >= REPETIR_MS) {
@@ -313,6 +339,7 @@ export function detenerCajaWatcher() {
   _unsubStore = null;
   if (_timer) { clearInterval(_timer); _timer = null; }
   if (_toast) { try { _toast.cerrar(); } catch (_) {} _toast = null; }
+  _cerrarNotificacion();
   _initialized = false;
   _ultimoAvisoMs = 0;
   _aviso = null;

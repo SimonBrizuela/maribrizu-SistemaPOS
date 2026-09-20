@@ -113,11 +113,25 @@ describe('la rotación de todas las noches', () => {
     expect(a).toBe(null);
   });
 
-  it('pero a los quince minutos sin abrir, sí', () => {
+  it('pero si al rato siguen vendiendo con la caja sin abrir, sí', () => {
     const cerroRecien = { status: 'closed', id: 126, updated_at: '2026-09-05T20:29:00-03:00' };
-    const items = [item({ fecha_dt: new Date('2026-09-05T20:35:00-03:00') })];
-    const a = evaluarCaja({ cajaActiva: cerroRecien, items, ahora: T('2026-09-05T20:44:00-03:00') });
+    const items = [item({ fecha_dt: new Date('2026-09-05T20:45:00-03:00') })];
+    const a = evaluarCaja({ cajaActiva: cerroRecien, items, ahora: T('2026-09-05T20:50:00-03:00') });
     expect(a.tipo).toBe('sin_caja');
+  });
+
+  // La venta 5566 del 19/09: se cobró 21 segundos después de cerrar la caja y
+  // se le quedó pegado el número de esa misma caja, así que está en su cierre.
+  // El panel la estaba acusando de andar suelta.
+  it('lo que se cobra en el minuto del cierre queda en esa caja, no se acusa', () => {
+    const cerroRecien = { status: 'closed', id: 139, register_id: 139,
+                          opening_date: '2026-09-18T20:28:00-03:00',
+                          updated_at: '2026-09-19T20:33:04-03:00' };
+    const items = [item({ num_venta: 5566, cash_register_id: 139, subtotal: 16400,
+                          fecha: '19/09/2026',
+                          fecha_dt: new Date('2026-09-19T20:33:26-03:00') })];
+    expect(evaluarCaja({ cajaActiva: cerroRecien, items, ahora: T('2026-09-19T21:45:00-03:00') }))
+      .toBe(null);
   });
 
   it('las ventas de antes del cierre no acusan a nadie', () => {
@@ -160,6 +174,47 @@ describe('la rotación de todas las noches', () => {
       ahora: T('2026-09-09T09:30:00-03:00'),
     });
     expect(a.tipo).toBe('sin_caja');
+  });
+
+  // La noche del 19/09 el dueño cerró la caja 139 a las 20:33 con las 158
+  // ventas del día adentro, todo en orden, y a las 21:45 el panel le seguía
+  // mostrando "158 ventas sin caja desde las 09:30" con $1.260.930. Pasada la
+  // gracia, el corte se tomaba del `opening_date` que la caja cerrada conserva
+  // —el de ella misma, del día anterior— y el aviso se comía el día entero.
+  it('una caja cerrada hace una hora, con su día completo adentro, no acusa nada', () => {
+    const cerrada139 = {
+      status: 'closed',
+      id: 139,
+      register_id: 139,
+      opening_date: '2026-09-18T20:28:00-03:00',
+      updated_at: '2026-09-19T20:33:00-03:00',
+    };
+    const items = [
+      item({ num_venta: 1, cash_register_id: 139, subtotal: 5000,
+             fecha: '19/09/2026', fecha_dt: new Date('2026-09-19T09:30:00-03:00') }),
+      item({ num_venta: 2, cash_register_id: 139, subtotal: 7000,
+             fecha: '19/09/2026', fecha_dt: new Date('2026-09-19T18:00:00-03:00') }),
+    ];
+    expect(evaluarCaja({ cajaActiva: cerrada139, items, ahora: T('2026-09-19T21:45:00-03:00') }))
+      .toBe(null);
+    // Y si después del cierre alguien vende igual, eso sí se avisa.
+    const conVentaPosterior = [...items, item({
+      num_venta: 3, cash_register_id: 139, subtotal: 2500,
+      fecha: '19/09/2026', fecha_dt: new Date('2026-09-19T21:10:00-03:00'),
+    })];
+    const a = evaluarCaja({
+      cajaActiva: cerrada139, items: conVentaPosterior, ahora: T('2026-09-19T21:45:00-03:00'),
+    });
+    expect(a.tipo).toBe('sin_caja');
+    expect(a.ventas).toBe(1);
+    expect(a.total).toBe(2500);
+    expect(a.desde).toBe(T('2026-09-19T21:10:00-03:00'));
+  });
+
+  it('un renglón sin fecha no alcanza para acusar a nadie', () => {
+    const cerroHaceRato = { status: 'closed', id: 126, updated_at: '2026-09-05T08:00:00-03:00' };
+    const items = [item({ fecha_dt: null })];
+    expect(evaluarCaja({ cajaActiva: cerroHaceRato, items, ahora: AHORA })).toBe(null);
   });
 });
 
