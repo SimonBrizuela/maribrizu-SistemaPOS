@@ -55,6 +55,7 @@ export function firestoreFalso({ registro = null, docs = [] } = {}) {
       commit: async () => {},
     }),
     serverTimestamp: () => 'AHORA',
+    deleteField: () => ({ _borrar: true }),
     increment: (n) => ({ _incremento: n }),
     arrayUnion: (...v) => ({ _union: v }),
     arrayRemove: (...v) => ({ _remove: v }),

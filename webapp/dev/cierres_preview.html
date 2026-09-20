@@ -26,6 +26,8 @@
     <button onclick="pvModal()">modal detalle</button>
     <button onclick="pvCerrar()">modal cerrar</button>
     <button onclick="pvAbrir()">modal abrir</button>
+    <button onclick="pvMezclada()">detalle 2 días</button>
+    <button onclick="pvSeparar()">modal separar</button>
   </div>
   <div class="pv-sidebar"></div>
   <main class="main-content">
@@ -34,8 +36,9 @@
 
 <script type="module">
 import { cajaAbiertaHTML, sinCajaHTML, kpisCierresHTML, tablaCierresHTML, openCierreModal,
-         esqueletoCierresHTML, openCerrarCajaModal, openAbrirCajaModal }
+         esqueletoCierresHTML, openCerrarCajaModal, openAbrirCajaModal, openSepararCajaModal }
   from '/src/pages/cierres.js';
+import { diasDeLaCaja } from '/src/cajas_dias.js';
 
 const cont = document.getElementById('pageContent');
 
@@ -101,6 +104,79 @@ const kpis = {
   totalTransf: 58798448.43,
 };
 
+/* ── La caja que junta dos jornadas, como la #138 ──────────────────────────
+   Renglones de los dos días para que el diálogo de separar muestre números
+   reales: el 18 de mañana a noche y el 19 entero. */
+const renglonesMezclados = [];
+const armarDia = (ymd, cuantos, base, desde) => {
+  for (let i = 0; i < cuantos; i++) {
+    const h = String(8 + Math.floor(i / 3)).padStart(2, '0');
+    const m = String((i * 17) % 60).padStart(2, '0');
+    const transferencia = i % 3 === 0;
+    const sub = base + i * 137;
+    renglonesMezclados.push({
+      pc_id: 'DESKTOPS', num_venta: desde + i, subtotal: sub, cantidad: 1,
+      producto: ['CUADERNO RIVADAVIA', 'RESMA PAMPA', 'BIROME TRABI'][i % 3],
+      tipo_pago: transferencia ? 'Transferencia' : 'Efectivo',
+      monto_efectivo: transferencia ? 0 : sub,
+      monto_transferencia: transferencia ? sub : 0,
+      fecha_dt: new Date(`${ymd}T${h}:${m}:00-03:00`), fecha_ymd: ymd,
+      cash_register_id: 138,
+    });
+  }
+};
+armarDia('2026-09-18', 24, 6200, 1);
+armarDia('2026-09-19', 30, 7100, 100);
+
+const sumaDe = (campo, ymd) => renglonesMezclados
+  .filter(r => !ymd || r.fecha_ymd === ymd)
+  .reduce((t, r) => t + r[campo], 0);
+
+const cajaMezclada = {
+  register_id: 138,
+  session_id: '2026-09-19',
+  fecha_apertura: ts('2026-09-18T07:58:00-03:00'),
+  fecha_cierre:   ts('2026-09-19T20:33:00-03:00'),
+  cajero: 'Marta',
+  pcs: ['DESKTOPS-8fd7b341'],
+  monto_inicial: 30000,
+  monto_final: 30000,
+  pendiente_conteo: false,
+  total_retiros: 0,
+  retiros: [],
+  total_efectivo: sumaDe('monto_efectivo'),
+  total_transferencia: sumaDe('monto_transferencia'),
+  total_ventas: sumaDe('subtotal'),
+  num_ventas_efectivo: 36,
+  num_ventas_transferencia: 18,
+  total_transacciones: 54,
+  monto_esperado: 30000 + sumaDe('monto_efectivo'),
+  productos_vendidos: [
+    { product_name: 'RESMA PAMPA', total_quantity: 18, total_amount: 128700 },
+    { product_name: 'CUADERNO RIVADAVIA', total_quantity: 18, total_amount: 119400 },
+  ],
+  _dias: [
+    { ymd: '2026-09-18', total: sumaDe('subtotal', '2026-09-18'), tx: 24 },
+    { ymd: '2026-09-19', total: sumaDe('subtotal', '2026-09-19'), tx: 30 },
+  ],
+  _mezclada: true,
+  _docs: [{ id: '138', register_id: 138, monto_inicial: 30000 }],
+};
+
+// Los cierres que ya existen, para que el diálogo elija el próximo número libre.
+const cierresExistentes = Array.from({ length: 138 }, (_, i) => ({ id: String(i + 1), register_id: i + 1 }));
+
+// En la previsualización no hay Firestore: los chequeos se contestan a mano.
+const verificarFalso = (modo) => async () => {
+  await new Promise(r => setTimeout(r, modo === 'lento' ? 1500 : 60));
+  return modo === 'mal'
+    ? { ok: false, problemas: ['El número #139 no está libre: hay 12 ventas con el número 139.'] }
+    : { ok: true, problemas: [] };
+};
+
+// La caja mezclada va primera en la tabla, para ver el cartelito de la fila.
+sesiones.unshift(cajaMezclada);
+
 let estado = 'abierta';
 let larga = false;
 
@@ -114,7 +190,8 @@ function pintar() {
     + kpisCierresHTML(kpis)
     + tablaCierresHTML(sesiones);
   cont.querySelectorAll('.clickable-row').forEach(r => {
-    r.addEventListener('click', () => openCierreModal(sesiones[+r.dataset.idx], {}, [], null, () => {}));
+    r.addEventListener('click', () => openCierreModal(sesiones[+r.dataset.idx], {}, [], null, () => {},
+      { items: renglonesMezclados, cierres: cierresExistentes }));
   });
 }
 
@@ -127,6 +204,17 @@ window.pvModal = () => openCierreModal(sesiones[0], {}, [], null, () => {});
 window.pvLarga = (v) => { larga = v; pintar(); };
 window.pvCerrar = () => openCerrarCajaModal(null, { registerId: 137, monto_inicial: 30000 }, () => {});
 window.pvAbrir = () => openAbrirCajaModal(null, 138, () => {});
+window.pvMezclada = () => openCierreModal(cajaMezclada, {}, [], null, () => {},
+  { items: renglonesMezclados, cierres: cierresExistentes });
+window.pvSeparar = (modo) => openSepararCajaModal(null, {
+  caja: cajaMezclada,
+  dias: diasDeLaCaja(renglonesMezclados, [138]),
+  cierres: cierresExistentes,
+  items: renglonesMezclados,
+  verificar: verificarFalso(modo),
+  separar: async () => ({ ids: [138, 139], idsNuevos: [139],
+                          renglones: { movidos: 30, sinDia: [] }, ventas: { movidos: 30, sinDia: [] } }),
+}, () => {});
 
 const anchoEl = document.getElementById('pv-ancho');
 const verAncho = () => { anchoEl.textContent = window.innerWidth + ' x ' + window.innerHeight; };
@@ -135,6 +223,12 @@ verAncho();
 
 // Estado inicial por querystring, para las capturas automaticas.
 const q = new URLSearchParams(location.search);
+// `chico=1` saca la barra lateral de la previsualizacion: en el celular la app
+// no la muestra, y dejarla hace que la pagina sea mas ancha que la pantalla.
+if (q.get('chico') === '1') {
+  document.querySelector('.pv-sidebar').style.display = 'none';
+  document.querySelector('.main-content').style.marginLeft = '0';
+}
 if (q.get('tema') === 'dark') document.documentElement.dataset.theme = 'dark';
 if (q.get('estado')) estado = q.get('estado');
 if (q.get('larga') === '1') larga = true;
@@ -142,6 +236,8 @@ pintar();
 if (q.get('modal') === '1') window.pvModal();
 if (q.get('modal') === 'cerrar') window.pvCerrar();
 if (q.get('modal') === 'abrir') window.pvAbrir();
+if (q.get('modal') === 'mezclada') window.pvMezclada();
+if (q.get('modal') === 'separar') window.pvSeparar(q.get('chequeo') || 'ok');
 if (q.get('scroll')) {
   const w = document.querySelector('.cj-tabla-wrap');
   if (w) w.scrollTop = Number(q.get('scroll'));

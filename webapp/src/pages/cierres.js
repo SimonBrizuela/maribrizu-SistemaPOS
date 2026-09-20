@@ -3,6 +3,14 @@ import { getCached, invalidateCache, peekCacheValue } from '../cache.js';
 import { onStoreChange } from '../store.js';
 import { getFechaInicioDate, getFechaInicio, isVentaVarios2, isItemVarios2, fechaDMYtoYMD } from '../config.js';
 import { confirmDialog, alertDialog, escHtml } from '../components/dialogs.js';
+// Separar una caja que quedó con dos días adentro: la cuenta de los días y el
+// plan de cómo queda cada caja viven aparte, sin Firestore ni DOM, para poder
+// probarlos enteros (`tienda/pruebas/separar_caja.test.js`).
+import {
+  diasDeLaCaja, tieneDiasMezclados, cortesSugeridos, cortesDesdeMapa, armarGrupos,
+  planDeSeparacion, idsLibres, diaCompleto,
+} from '../cajas_dias.js';
+import { numerosOcupados, ejecutarSeparacion, separacionPendiente, chequearIdLibre, cajaAbiertaAhora } from '../cajas_separar.js';
 // Cómo se reparte cada renglón entre efectivo y transferencia. La regla vive
 // ahí y tiene gemelo en `pos_system/utils/medios_de_pago.py`, que es el que
 // arma el mismo cierre desde el POS. Ver tienda/pruebas/medios_pago.test.js.
@@ -168,6 +176,7 @@ export async function renderCierres(container, db) {
       const ventas   = new Set();
       const prodMap  = {};
       const ventasPorDia = {};  // ymd -> total
+      const diasDeLaFila = new Map();  // ymd -> { total, ventas } para detectar días pegados
       for (const it of items) {
         if (it.cash_register_id !== registerId) continue;
         const parte = repartoDeItem(it);
@@ -180,7 +189,15 @@ export async function renderCierres(container, db) {
         if (!prodMap[it.producto]) prodMap[it.producto] = { product_name: it.producto, total_quantity: 0, total_amount: 0 };
         prodMap[it.producto].total_quantity += it.cantidad || 1;
         prodMap[it.producto].total_amount   += it.subtotal;
-        if (it.fecha_ymd) ventasPorDia[it.fecha_ymd] = (ventasPorDia[it.fecha_ymd] || 0) + it.subtotal;
+        if (it.fecha_ymd) {
+          ventasPorDia[it.fecha_ymd] = (ventasPorDia[it.fecha_ymd] || 0) + it.subtotal;
+          if (!diasDeLaFila.has(it.fecha_ymd)) {
+            diasDeLaFila.set(it.fecha_ymd, { ymd: it.fecha_ymd, total: 0, ventas: new Set() });
+          }
+          const dia = diasDeLaFila.get(it.fecha_ymd);
+          dia.total += it.subtotal;
+          dia.ventas.add(key);
+        }
       }
       s.total_efectivo           = total_efectivo;
       s.total_transferencia      = total_transferencia;
@@ -192,6 +209,15 @@ export async function renderCierres(container, db) {
       // Día operacional = el de mayor venta dentro de los items de esta caja.
       const top = Object.entries(ventasPorDia).sort((a, b) => b[1] - a[1])[0];
       if (top) dayOfMostVentas = top[0];
+      // ¿La caja junta dos jornadas de verdad? Una que abre 20:30 y sigue
+      // vendiendo al otro día es lo normal y no se marca; dos días con
+      // actividad propia sí, que es lo que se puede separar.
+      const resumenDias = [...diasDeLaFila.values()]
+        .map(d => ({ ymd: d.ymd, total: d.total, tx: d.ventas.size }))
+        .sort((a, b) => a.ymd.localeCompare(b.ymd));
+      s._dias     = resumenDias;
+      s._mezclada = tieneDiasMezclados(resumenDias);
+      s._separando = c.separacion?.estado === 'en_curso';
     } else {
       // Compat: usar los stats del doc cuando no hay register_id para filtrar
       s.total_efectivo           = Number(c.total_efectivo || 0);
@@ -254,7 +280,8 @@ export async function renderCierres(container, db) {
     row.addEventListener('click', () => {
       const idx = parseInt(row.dataset.idx);
       openCierreModal(sesiones[idx], indiceCatalogo(catalogo), gastosFrescos(gastosAll), db,
-                      () => renderCierres(container, db));
+                      () => renderCierres(container, db),
+                      { items, cierres: todosRaw });
     });
   });
 
@@ -726,13 +753,22 @@ function filaCierreHTML(c, i) {
     ? ` <span class="cj-sub">${c.pcs.length} PCs</span>` : '';
   const pendBadge = c.pendiente_conteo
     ? ' <span class="cj-pend">Pendiente</span>' : '';
-  const titulo = c.pendiente_conteo
-    ? 'Cierre pendiente de conteo — click para cargar'
-    : 'Ver detalle del cierre';
+  // Dos jornadas pegadas en una sola caja: la fila muestra el doble de plata
+  // del día que dice. Se avisa acá porque es donde se mira.
+  const diasBadge = c._separando
+    ? ' <span class="cj-dias cj-dias--alerta">Separación a medio hacer</span>'
+    : (c._mezclada ? ` <span class="cj-dias">${c._dias.length} días</span>` : '');
+  const titulo = c._separando
+    ? 'Quedó una separación sin terminar — click para retomarla'
+    : c._mezclada
+      ? `Esta caja junta ventas de ${c._dias.length} días — click para separarla`
+      : c.pendiente_conteo
+        ? 'Cierre pendiente de conteo — click para cargar'
+        : 'Ver detalle del cierre';
 
   return `
     <tr class="clickable-row" data-idx="${i}" title="${titulo}">
-      <td class="cj-dia"><b>${c.session_id || '-'}</b>${pcLabel}${pendBadge}</td>
+      <td class="cj-dia"><b>${c.session_id || '-'}</b>${pcLabel}${pendBadge}${diasBadge}</td>
       <td class="cj-fecha">${fmtDT(parseArDate(c.fecha_apertura))}</td>
       <td class="cj-fecha cie-col-cierre">${fmtDT(parseArDate(c.fecha_cierre))}</td>
       <td class="cj-c"><span class="badge badge-blue">${c.total_transacciones || 0}</span></td>
@@ -1169,8 +1205,19 @@ export function openAbrirCajaModal(db, sugerenciaId, onDone) {
   });
 }
 
-export function openCierreModal(c, catByName, gastosAll, db, onSaved) {
+export function openCierreModal(c, catByName, gastosAll, db, onSaved, ctx = {}) {
   document.querySelector('.modal-overlay')?.remove();
+
+  // Días que junta esta caja. `ctx.items` son los renglones ya normalizados de
+  // la pantalla; sin ellos (una llamada suelta) simplemente no se ofrece separar.
+  const docCierre     = (c._docs || []).find(d => d.register_id != null) || null;
+  const separacionAMedias = separacionPendiente(docCierre);
+  const idsDeLaCaja   = [c.register_id, ...(separacionAMedias?.ids_nuevos || [])]
+    .filter(v => v != null && Number.isFinite(Number(v))).map(Number);
+  const diasDelCierre = (ctx.items && idsDeLaCaja.length)
+    ? diasDeLaCaja(ctx.items, idsDeLaCaja) : [];
+  const sePuedeSeparar = diasDelCierre.filter(d => !d.sinFecha).length >= 2;
+  const mezclada       = tieneDiasMezclados(diasDelCierre);
 
   const apertura  = parseArDate(c.fecha_apertura);
   const cierre    = parseArDate(c.fecha_cierre);
@@ -1339,6 +1386,8 @@ export function openCierreModal(c, catByName, gastosAll, db, onSaved) {
           </div>
         </div>
         ` : ''}
+
+        ${bannerDiasHTML({ dias: diasDelCierre, mezclada, sePuedeSeparar, separacionAMedias })}
 
         <!-- Linea temporal del turno -->
         <div style="background:var(--surface-2);border-radius:12px;padding:14px 18px;margin-bottom:22px;display:flex;align-items:center;justify-content:space-between;gap:16px;flex-wrap:wrap">
@@ -1595,6 +1644,28 @@ export function openCierreModal(c, catByName, gastosAll, db, onSaved) {
     inputEl.addEventListener('keydown', (e) => { if (e.key === 'Enter') guardar(); });
   }
 
+  // Wire-up: separar la caja por día
+  const btnSeparar = overlay.querySelector('#btn-separar-dias');
+  if (btnSeparar && db) {
+    btnSeparar.addEventListener('click', () => {
+      overlay.remove();
+      openSepararCajaModal(db, {
+        // La fila de la tabla no guarda la PC ni el cajero como los tiene el
+        // cierre (la PC viaja en `pcs` y el cajero vacío se muestra como '-'):
+        // se los toma del documento para que las cajas nuevas los hereden.
+        caja: {
+          ...c,
+          pc_id:  docCierre?.pc_id || (c.pcs || [])[0] || '',
+          cajero: (c.cajero && c.cajero !== '-') ? c.cajero : (docCierre?.cajero || ''),
+        },
+        dias:      diasDelCierre,
+        cierres:   ctx.cierres || [],
+        items:     ctx.items || [],
+        pendiente: separacionAMedias,
+      }, onSaved);
+    });
+  }
+
   // Wire-up: recalcular stats (solo si total_ventas == 0 y pendiente_conteo)
   const btnRecalc = overlay.querySelector('#btn-recalc-stats');
   if (btnRecalc && db) {
@@ -1628,6 +1699,500 @@ export function openCierreModal(c, catByName, gastosAll, db, onSaved) {
       }
     });
   }
+}
+
+// ─── Separar una caja que juntó varios días ───────────────────────────────
+// El aviso dentro del detalle del cierre. Tres tonos: la separación que quedó
+// a medio hacer (hay que terminarla), los dos días pegados de verdad, y el día
+// con una venta suelta, que casi siempre es normal y no conviene empujar.
+function bannerDiasHTML({ dias, mezclada, sePuedeSeparar, separacionAMedias }) {
+  if (separacionAMedias) {
+    const cuantos = separacionAMedias.ids_nuevos.length;
+    return `
+      <div style="background:var(--tint-red-bg);border:1.5px solid #ef4444;border-radius:12px;padding:14px 18px;margin-bottom:18px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:10px">
+          <span class="material-icons" style="color:var(--tint-red-fg)">error</span>
+          <div>
+            <div style="font-size:13px;font-weight:800;color:var(--tint-red-fg)">Quedó una separación sin terminar</div>
+            <div style="font-size:11px;color:var(--tint-red-fg);opacity:.85;margin-top:2px">
+              Se empezó a partir esta caja en ${cuantos + 1} y no llegó a cerrarse. Hasta terminarla, los totales pueden verse raros.
+            </div>
+          </div>
+        </div>
+        <button id="btn-separar-dias" style="background:#b91c1c;color:#fff;border:none;border-radius:8px;padding:9px 16px;font-weight:700;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:6px">
+          <span class="material-icons" style="font-size:16px">replay</span>Retomar
+        </button>
+      </div>`;
+  }
+  if (!sePuedeSeparar) return '';
+
+  const conFecha = dias.filter(d => !d.sinFecha);
+  const detalle = conFecha
+    .map(d => `${fmtDia(d.ymd)}: ${d.tx} ${d.tx === 1 ? 'venta' : 'ventas'} · $${fmt(d.total)}`)
+    .join(' — ');
+
+  if (mezclada) {
+    return `
+      <div style="background:var(--tint-yellow-bg);border:1.5px solid #f59e0b;border-radius:12px;padding:14px 18px;margin-bottom:18px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+        <div style="display:flex;align-items:center;gap:10px;min-width:0">
+          <span class="material-icons" style="color:var(--tint-orange-fg)">calendar_month</span>
+          <div style="min-width:0">
+            <div style="font-size:13px;font-weight:800;color:var(--tint-orange-fg)">Esta caja junta ${conFecha.length} días</div>
+            <div style="font-size:11px;color:var(--tint-yellow-fg);margin-top:2px">${escHtml(detalle)}</div>
+          </div>
+        </div>
+        <button id="btn-separar-dias" style="background:#d97706;color:#fff;border:none;border-radius:8px;padding:9px 16px;font-weight:700;font-size:12px;cursor:pointer;display:flex;align-items:center;gap:6px;white-space:nowrap">
+          <span class="material-icons" style="font-size:16px">call_split</span>Separar por día
+        </button>
+      </div>`;
+  }
+  return `
+    <div style="background:var(--surface-2);border:1px solid var(--border);border-radius:10px;padding:10px 14px;margin-bottom:18px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap">
+      <div style="font-size:11.5px;color:var(--text-muted)">
+        Tiene ventas de ${conFecha.length} días (${escHtml(detalle)}). Abrir de noche y seguir vendiendo al otro día es lo normal.
+      </div>
+      <button id="btn-separar-dias" style="background:transparent;color:var(--text-muted);border:1px solid var(--border-strong);border-radius:8px;padding:7px 12px;font-weight:700;font-size:11.5px;cursor:pointer;white-space:nowrap">
+        Separar igual
+      </button>
+    </div>`;
+}
+
+/**
+ * El diálogo de separar. Muestra los días, deja elegir dónde cortar, pregunta
+ * el monto inicial de cada caja nueva, chequea contra Firestore que los números
+ * estén libres y recién ahí escribe.
+ */
+export function openSepararCajaModal(db, ctx, onDone) {
+  // `verificar` y `separar` se pueden reemplazar para previsualizar el diálogo
+  // sin pegarle a Firebase (ver `dev/cierres_preview.html`). En la app van los
+  // de verdad.
+  const {
+    caja, dias, cierres = [], items = [], pendiente = null,
+    verificar = null, separar = ejecutarSeparacion,
+  } = ctx;
+
+  document.querySelector('.modal-overlay')?.remove();
+  const overlay = document.createElement('div');
+  overlay.className = 'modal-overlay';
+  overlay.innerHTML = `
+    <div class="modal" style="max-width:760px">
+      <div class="modal-header cj-mh cj-mh--oscuro">
+        <div class="cj-mh-id">
+          <div class="cj-mh-ico"><span class="material-icons">call_split</span></div>
+          <div>
+            <h3>Separar la caja #${escHtml(caja.register_id)}</h3>
+            <div class="cj-mh-sub">Cada día queda con su propia caja, su propio efectivo y su propio conteo</div>
+          </div>
+        </div>
+        <button class="modal-close cj-mh-x"><span class="material-icons">close</span></button>
+      </div>
+      <div class="modal-body sep-body" style="padding:20px 22px"></div>
+    </div>`;
+  document.body.appendChild(overlay);
+
+  const cuerpo = overlay.querySelector('.sep-body');
+  const cerrar = () => { document.removeEventListener('keydown', alEscape); overlay.remove(); };
+  const alEscape = (e) => { if (e.key === 'Escape' && !estado.trabajando) cerrar(); };
+  overlay.querySelector('.modal-close').addEventListener('click', () => { if (!estado.trabajando) cerrar(); });
+  overlay.addEventListener('click', e => { if (e.target === overlay && !estado.trabajando) cerrar(); });
+  document.addEventListener('keydown', alEscape);
+
+  // ── Estado del diálogo ──────────────────────────────────────────────────
+  const idsPropios = pendiente?.ids_nuevos || [];
+  const estado = {
+    cortes: pendiente
+      ? cortesDesdeMapa(dias, pendiente.dias, caja.register_id)
+      : cortesSugeridos(dias),
+    montos: [],     // texto del input de monto inicial, por grupo
+    conteos: [],    // { pendiente: bool, texto: string }, por grupo
+    chequeos: null, // null = todavía mirando
+    trabajando: false,
+  };
+  // Si los cortes sugeridos no parten nada (el usuario entró igual desde un día
+  // con una venta suelta), se corta en el primer día que se pueda.
+  if (!estado.cortes.some(Boolean)) {
+    const primero = dias.findIndex((d, i) => i > 0 && !d.sinFecha);
+    if (primero > 0) estado.cortes[primero] = true;
+  }
+
+  const ocupados = numerosOcupados(cierres);
+  // Los números que ya son nuestros de un intento anterior no cuentan como ocupados.
+  idsPropios.forEach(id => ocupados.delete(Number(id)));
+
+  const defectosDeGrupo = (grupos) => {
+    const heredaConteo = !caja.pendiente_conteo && Number(caja.monto_final || 0) > 0;
+    estado.montos = grupos.map((_, i) => (estado.montos[i] !== undefined
+      ? estado.montos[i] : String(Number(caja.monto_inicial || 0))));
+    estado.conteos = grupos.map((_, i) => {
+      if (estado.conteos[i] !== undefined) return estado.conteos[i];
+      const ultimo = i === grupos.length - 1;
+      return (ultimo && heredaConteo)
+        ? { pendiente: false, texto: String(Number(caja.monto_final || 0)) }
+        : { pendiente: true, texto: '' };
+    });
+  };
+
+  // Plan vigente con lo que hay cargado en pantalla. Sin ningún corte no hay
+  // plan: la caja queda como está y no hay nada para escribir.
+  const calcular = () => {
+    const grupos = armarGrupos(dias, estado.cortes);
+    defectosDeGrupo(grupos);
+    if (grupos.length < 2) return { grupos, plan: null };
+    const nuevos = idsLibres(ocupados, proximoNumero(ocupados), Math.max(0, grupos.length - 1));
+    const ids = idsPropios.length >= grupos.length - 1
+      ? idsPropios.slice(0, grupos.length - 1)   // retomar: los mismos de antes
+      : nuevos;
+    const conteos = grupos.map((_, i) => (estado.conteos[i].pendiente
+      ? null : Number(estado.conteos[i].texto)));
+    const plan = planDeSeparacion({
+      caja, grupos, idsNuevos: ids,
+      montosIniciales: grupos.map((_, i) => Number(estado.montos[i])),
+      conteos,
+    });
+    return { grupos, plan };
+  };
+
+  const valoresValidos = () => estado.montos.every(m => m !== '' && Number.isFinite(Number(m)) && Number(m) >= 0)
+    && estado.conteos.every(c => c.pendiente || (c.texto !== '' && Number.isFinite(Number(c.texto)) && Number(c.texto) >= 0));
+
+  // ── Chequeos contra Firestore ───────────────────────────────────────────
+  // Que el número esté libre no se puede saber mirando la lista de cierres: una
+  // PC pudo haber usado ese número sin subir nunca su cierre. Se pregunta por
+  // los renglones y las ventas de verdad.
+  const chequear = async (plan) => {
+    if (!plan) { estado.chequeos = { ok: false, problemas: [] }; pintar(); return; }
+    estado.chequeos = null;
+    pintar();
+    const problemas = [];
+    try {
+      if (verificar) {
+        estado.chequeos = await verificar(plan);
+        pintar();
+        return;
+      }
+      const abierta = await cajaAbiertaAhora(db);
+      if (abierta !== null && plan.cajas.some(c => c.id === abierta)) {
+        problemas.push(`La caja #${abierta} está abierta ahora mismo. Cerrala antes de separarla.`);
+      }
+      for (const nueva of plan.cajas.slice(1)) {
+        if (idsPropios.includes(nueva.id)) continue;
+        const r = await chequearIdLibre(db, nueva.id);
+        if (!r.libre) problemas.push(`El número #${nueva.id} no está libre: ${r.problemas.join(', ')}.`);
+      }
+      estado.chequeos = { ok: problemas.length === 0, problemas };
+    } catch (e) {
+      estado.chequeos = { ok: false, problemas: [`No se pudo verificar contra la base: ${e?.message || e}`] };
+    }
+    pintar();
+  };
+
+  // ── Dibujo ──────────────────────────────────────────────────────────────
+  const pintar = () => {
+    const { plan } = calcular();
+    const mapaDias  = plan ? plan.mapaDias : {};
+    const ymdsDelPlan = new Set(plan ? Object.keys(mapaDias) : []);
+    const idsDelPlan  = plan ? plan.cajas.map(x => x.id) : [caja.register_id];
+    cuerpo.innerHTML = `
+      ${pendiente ? avisoRetomarHTML(pendiente) : ''}
+      ${tablaDiasSeparacionHTML(dias, estado.cortes, mapaDias, caja.register_id)}
+      ${plan
+        ? cajasResultantesHTML(plan, estado)
+          + chequeosHTML(plan, estado, ajenasDeEsosDias(items, ymdsDelPlan, idsDelPlan))
+        : `<div class="sep-nada">Así no se separa nada: todos los días quedan en la caja #${escHtml(caja.register_id)}.
+             Marcá "Caja nueva" en el día que arranca la otra jornada.</div>`}
+      <div class="sep-pie">
+        <div class="sep-progreso" id="sep-progreso"></div>
+        <div style="display:flex;gap:8px">
+          <button id="sep-cancelar" class="sep-btn sep-btn--gris">Cancelar</button>
+          <button id="sep-confirmar" class="sep-btn sep-btn--ok${plan ? '' : ' sep-btn--off'}" ${plan ? '' : 'disabled'}>
+            <span class="material-icons" style="font-size:16px">call_split</span>
+            ${plan ? `Separar en ${plan.cajas.length} cajas` : 'Separar'}
+          </button>
+        </div>
+      </div>`;
+    cablear(plan);
+  };
+
+  const cablear = (plan) => {
+    cuerpo.querySelectorAll('[data-corte]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        const i = Number(btn.dataset.corte);
+        estado.cortes[i] = !estado.cortes[i];
+        // Cambió la cantidad de cajas: los montos y conteos se recalculan.
+        estado.montos = [];
+        estado.conteos = [];
+        pintar();
+        chequear(calcular().plan);
+      });
+    });
+    cuerpo.querySelectorAll('[data-monto]').forEach(input => {
+      input.addEventListener('input', () => {
+        estado.montos[Number(input.dataset.monto)] = input.value;
+        refrescarNumeros();
+      });
+    });
+    cuerpo.querySelectorAll('[data-conteo]').forEach(input => {
+      input.addEventListener('input', () => {
+        estado.conteos[Number(input.dataset.conteo)].texto = input.value;
+        refrescarNumeros();
+      });
+    });
+    cuerpo.querySelectorAll('[data-pendiente]').forEach(chk => {
+      chk.addEventListener('change', () => {
+        const i = Number(chk.dataset.pendiente);
+        estado.conteos[i].pendiente = chk.checked;
+        pintar();
+      });
+    });
+    cuerpo.querySelector('#sep-cancelar')?.addEventListener('click', () => { if (!estado.trabajando) cerrar(); });
+    cuerpo.querySelector('#sep-confirmar')?.addEventListener('click', () => confirmarYSeparar());
+    aplicarEstadoBoton(plan);
+  };
+
+  // Cambiar un monto no cambia los grupos: se actualizan sólo los números que
+  // dependen de él, así el cursor no se sale del input mientras se escribe.
+  const refrescarNumeros = () => {
+    const { plan } = calcular();
+    if (!plan) return;
+    plan.cajas.forEach((c, i) => {
+      const esperado = cuerpo.querySelector(`[data-calc="esperado-${i}"]`);
+      if (esperado) esperado.textContent = `$${fmt(c.monto_esperado)}`;
+      const dif = cuerpo.querySelector(`[data-calc="dif-${i}"]`);
+      if (dif) dif.innerHTML = textoDiferencia(c);
+    });
+    aplicarEstadoBoton(plan);
+  };
+
+  const aplicarEstadoBoton = (plan) => {
+    const btn = cuerpo.querySelector('#sep-confirmar');
+    if (!btn) return;
+    const listo = !!plan && plan.control.ok && valoresValidos()
+      && estado.chequeos !== null && estado.chequeos.ok && !estado.trabajando;
+    btn.disabled = !listo;
+    btn.classList.toggle('sep-btn--off', !listo);
+  };
+
+  const avisar = (texto) => {
+    const el = cuerpo.querySelector('#sep-progreso');
+    if (el) el.textContent = texto;
+  };
+
+  const confirmarYSeparar = async () => {
+    const { plan } = calcular();
+    if (!plan || !plan.control.ok || !valoresValidos() || !estado.chequeos?.ok) return;
+
+    const resumen = plan.cajas.map(c => `
+      <li><b>Caja #${c.id}</b>${c.esNuevo ? ' (nueva)' : ''} · ${c.ymds.map(fmtDia).join(', ')} ·
+      ${c.total_transacciones} ventas · $${fmt(c.total_ventas)}${c.pendiente_conteo ? ' · queda pendiente de conteo' : ''}</li>`).join('');
+    const ok = await confirmDialog({
+      title: `¿Separar la caja #${caja.register_id}?`,
+      message: `Se van a mover las ventas de cada día a su caja:<ul style="margin:8px 0 0;padding-left:18px;line-height:1.7">${resumen}</ul>
+                <div style="margin-top:10px">La caja #${caja.register_id} deja de tener las ventas de los otros días. Se puede volver atrás a mano, pero no con un botón.</div>`,
+      confirmText: 'Sí, separar',
+    });
+    if (!ok) return;
+
+    estado.trabajando = true;
+    aplicarEstadoBoton(plan);
+    cuerpo.querySelector('#sep-cancelar').disabled = true;
+    try {
+      const r = await separar(db, { plan, onProgreso: avisar, idsPropios });
+      invalidateCache('cierres:caja');
+      invalidateCache('historial:ventas_dia:v3');
+      cerrar();
+      if (typeof onDone === 'function') onDone();
+      setTimeout(() => {
+        alertDialog({
+          title: 'Caja separada',
+          message: `Quedaron <b>${plan.cajas.length}</b> cajas: ${plan.cajas.map(c => `#${c.id}`).join(', ')}.<br>
+                    Se movieron <b>${r.renglones.movidos}</b> renglones de venta y <b>${r.ventas.movidos}</b> ventas.
+                    ${r.renglones.sinDia.length || r.ventas.sinDia.length
+                      ? `<br><span style="color:var(--tint-orange-fg)">Quedaron sin mover ${r.renglones.sinDia.length + r.ventas.sinDia.length} registros sin fecha: siguen en la caja #${caja.register_id}.</span>` : ''}`,
+          type: 'success',
+        });
+      }, 250);
+    } catch (e) {
+      estado.trabajando = false;
+      pintar();
+      alertDialog({
+        title: 'No se separó',
+        message: `No se tocó nada de lo que faltaba: ${escHtml(e?.message || e)}`,
+        type: 'error',
+      });
+    }
+  };
+
+  pintar();
+  chequear(calcular().plan);
+}
+
+/** El número que le tocaría a la próxima caja: el más alto usado + 1. */
+function proximoNumero(ocupados) {
+  let max = 0;
+  ocupados.forEach(id => { if (id > max) max = id; });
+  return max + 1;
+}
+
+function avisoRetomarHTML(pendiente) {
+  return `
+    <div style="background:var(--tint-red-bg);border:1px solid #ef4444;border-radius:10px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:var(--tint-red-fg)">
+      Se está retomando una separación que quedó a medias${pendiente.ts ? ` (${fmtDT(pendiente.ts)})` : ''}.
+      Se usan los mismos números de caja: ${pendiente.ids_nuevos.map(i => `#${i}`).join(', ')}.
+    </div>`;
+}
+
+function tablaDiasSeparacionHTML(dias, cortes, mapaDias, idOriginal) {
+  const totalCaja = dias.reduce((s, d) => s + d.total, 0);
+  const filas = dias.map((dia, i) => {
+    const destino = dia.sinFecha ? idOriginal : (mapaDias[dia.ymd] ?? idOriginal);
+    const corta = cortes[i] === true;
+    const flojo = !dia.sinFecha && !diaCompleto(dia, totalCaja);
+    const boton = (i === 0 || dia.sinFecha) ? '' : `
+      <button type="button" data-corte="${i}" class="sep-chip ${corta ? 'sep-chip--nueva' : 'sep-chip--sigue'}"
+              title="${corta ? 'Click para que este día siga en la caja anterior' : 'Click para que este día estrene caja'}">
+        ${corta ? 'Caja nueva' : `Sigue en #${destino}`}
+      </button>`;
+    return `
+      <tr>
+        <td><b>${dia.sinFecha ? 'Sin fecha' : fmtDia(dia.ymd)}</b>${flojo ? ' <span class="sep-flojo">día flojo</span>' : ''}</td>
+        <td class="cj-c">${dia.tx}</td>
+        <td class="cj-n">$${fmt(dia.total)}</td>
+        <td class="cj-n">$${fmt(dia.efectivo)}</td>
+        <td class="cj-n">$${fmt(dia.transferencia)}</td>
+        <td class="cj-n">${dia.primera ? fmtHora(dia.primera) : '—'}${dia.ultima ? ` a ${fmtHora(dia.ultima)}` : ''}</td>
+        <td class="sep-destino">Caja #${destino}${boton}</td>
+      </tr>`;
+  }).join('');
+
+  return `
+    <div class="sep-seccion">Los días que tiene adentro</div>
+    <div class="sep-tabla-wrap">
+      <table class="sep-tabla">
+        <thead><tr>
+          <th>Día</th><th class="cj-c">Ventas</th><th class="cj-n">Total</th>
+          <th class="cj-n">Efectivo</th><th class="cj-n">Transferencia</th>
+          <th class="cj-n">Horario</th><th>Queda en</th>
+        </tr></thead>
+        <tbody>${filas}</tbody>
+      </table>
+    </div>`;
+}
+
+function textoDiferencia(caja) {
+  if (caja.pendiente_conteo) return '<span class="sep-pendiente">Pendiente de conteo</span>';
+  const d = caja.diferencia || 0;
+  if (Math.abs(d) < 0.01) return '<span style="color:var(--tint-green-fg);font-weight:700">Cierra exacto</span>';
+  const color = d > 0 ? 'var(--tint-green-fg)' : 'var(--tint-red-fg)';
+  return `<span style="color:${color};font-weight:700">${d > 0 ? 'Sobra' : 'Falta'} $${fmt(Math.abs(d))}</span>`;
+}
+
+function cajasResultantesHTML(plan, estado) {
+  const tarjetas = plan.cajas.map((c, i) => {
+    const conteo = estado.conteos[i] || { pendiente: true, texto: '' };
+    return `
+      <div class="sep-caja ${c.esNuevo ? 'sep-caja--nueva' : ''}">
+        <div class="sep-caja-top">
+          <div>
+            <span class="sep-caja-id">Caja #${c.id}</span>
+            <span class="sep-caja-tag">${c.esNuevo ? 'Nueva' : 'La de siempre'}</span>
+          </div>
+          <div class="sep-caja-dias">${c.ymds.map(fmtDia).join(' · ') || 'Sin fecha'}</div>
+        </div>
+        <div class="sep-caja-meta">
+          ${fmtDT(c.fecha_apertura)} → ${fmtDT(c.fecha_cierre)} ·
+          ${c.total_transacciones} ventas · $${fmt(c.total_ventas)}
+          (efectivo $${fmt(c.total_efectivo)} · transferencia $${fmt(c.total_transferencia)})
+          ${c.total_retiros > 0 ? ` · retiros -$${fmt(c.total_retiros)}` : ''}
+        </div>
+        <div class="sep-campos">
+          <label class="sep-campo">
+            <span>Monto inicial ($)</span>
+            <input type="number" step="0.01" min="0" data-monto="${i}" value="${escHtml(estado.montos[i] ?? '')}">
+          </label>
+          <label class="sep-campo">
+            <span>Efectivo contado ($)</span>
+            <input type="number" step="0.01" min="0" data-conteo="${i}" value="${escHtml(conteo.texto)}"
+                   ${conteo.pendiente ? 'disabled' : ''} placeholder="${conteo.pendiente ? 'sin contar' : '0.00'}">
+          </label>
+          <label class="sep-check">
+            <input type="checkbox" data-pendiente="${i}" ${conteo.pendiente ? 'checked' : ''}>
+            <span>Nadie la contó</span>
+          </label>
+        </div>
+        <div class="sep-caja-pie">
+          <span>Esperado en el cajón <b data-calc="esperado-${i}">$${fmt(c.monto_esperado)}</b></span>
+          <span data-calc="dif-${i}">${textoDiferencia(c)}</span>
+        </div>
+        ${c.hereda_conteo ? `
+        <div class="sep-nota">El conteo de esa noche ($${fmt(c.monto_final)}) se cargó acá: fue la única vez que se contó la caja.</div>` : ''}
+      </div>`;
+  }).join('');
+  return `<div class="sep-seccion">Cómo queda cada caja</div><div class="sep-cajas">${tarjetas}</div>`;
+}
+
+/** Otras cajas que también tienen ventas de esos días. No se tocan; se avisan. */
+function ajenasDeEsosDias(items, ymds, idsPropios) {
+  const propios = new Set(idsPropios.map(Number));
+  const otras = new Map();
+  for (const it of items || []) {
+    if (!ymds.has(it.fecha_ymd)) continue;
+    const rid = it.cash_register_id;
+    if (rid == null || propios.has(Number(rid))) continue;
+    if (!otras.has(rid)) otras.set(rid, { id: rid, total: 0, ventas: new Set() });
+    const o = otras.get(rid);
+    o.total += it.subtotal;
+    o.ventas.add(`${it.pc_id}|${it.num_venta}`);
+  }
+  return [...otras.values()].map(o => ({ id: o.id, total: o.total, tx: o.ventas.size }));
+}
+
+function chequeosHTML(plan, estado, ajenas) {
+  const linea = (estadoChequeo, texto) => {
+    const icono = { ok: 'check_circle', mal: 'error', mirando: 'hourglass_empty', info: 'info' }[estadoChequeo];
+    const color = { ok: 'var(--tint-green-fg)', mal: 'var(--tint-red-fg)',
+                    mirando: 'var(--text-muted)', info: 'var(--text-muted)' }[estadoChequeo];
+    return `<div class="sep-chequeo" style="color:${color}"><span class="material-icons">${icono}</span><span>${texto}</span></div>`;
+  };
+
+  const c = plan.control;
+  const sumas = c.ok
+    ? linea('ok', `Las ${plan.cajas.length} cajas suman lo mismo que la caja entera: $${fmt(c.ventas.caja)}`)
+    : linea('mal', `Las partes no suman la caja entera ($${fmt(c.ventas.partes)} contra $${fmt(c.ventas.caja)}). No se puede separar así.`);
+
+  const tx = c.txIgual ? '' : linea('info',
+    `La suma de ventas de los días da ${c.tx.partes} y la caja tiene ${c.tx.caja}: hay números de venta repetidos entre días. La plata está bien.`);
+
+  const nuevos = plan.cajas.slice(1).map(x => `#${x.id}`);
+  let numeros;
+  if (estado.chequeos === null) {
+    numeros = linea('mirando', `Verificando que ${nuevos.length === 1 ? 'el número esté libre' : 'los números estén libres'}...`);
+  } else if (estado.chequeos.ok) {
+    numeros = linea('ok', nuevos.length === 1
+      ? `El número ${nuevos[0]} está libre: sin cierre, sin ventas y sin renglones.`
+      : `Los números ${nuevos.join(', ')} están libres: sin cierre, sin ventas y sin renglones.`);
+  } else {
+    numeros = estado.chequeos.problemas.map(p => linea('mal', escHtml(p))).join('');
+  }
+
+  const otras = ajenas.length
+    ? linea('info', `Esos días también tienen ventas en ${ajenas.map(a => `la caja #${a.id} (${a.tx} ${a.tx === 1 ? 'venta' : 'ventas'}, $${fmt(a.total)})`).join(' y ')}. No se tocan.`)
+    : '';
+
+  return `<div class="sep-seccion">Antes de escribir</div><div class="sep-chequeos">${sumas}${tx}${numeros}${otras}</div>`;
+}
+
+/** '2026-09-18' como '18/09'. */
+function fmtDia(ymd) {
+  if (!ymd || ymd.length < 10) return ymd || '—';
+  return `${ymd.slice(8, 10)}/${ymd.slice(5, 7)}`;
+}
+
+function fmtHora(d) {
+  const f = d instanceof Date ? d : new Date(d);
+  if (isNaN(f)) return '—';
+  return f.toLocaleTimeString('es-AR', {
+    timeZone: 'America/Argentina/Buenos_Aires', hour: '2-digit', minute: '2-digit', hour12: false,
+  });
 }
 
 function lineaEf(label, valor, color = 'var(--text-strong)', bold = false) {
