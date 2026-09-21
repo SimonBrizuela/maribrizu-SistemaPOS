@@ -16,6 +16,8 @@ Corre sin pantalla (`QT_QPA_PLATFORM=offscreen`). Si no hay PyQt5, se saltea.
 import os
 import sys
 
+import gc
+
 import pytest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
@@ -24,6 +26,7 @@ os.environ.setdefault('QT_QPA_PLATFORM', 'offscreen')
 
 pytest.importorskip('PyQt5.QtWidgets', reason='el POS necesita PyQt5 para abrir pantallas')
 
+from PyQt5.QtCore import QEvent
 from PyQt5.QtWidgets import QApplication  # noqa: E402
 
 from pos_system.database.db_manager import DatabaseManager  # noqa: E402
@@ -46,11 +49,7 @@ def sin_firebase_de_verdad(monkeypatch):
 
 @pytest.fixture(scope='module')
 def app():
-    """Una sola QApplication para todo el módulo: Qt no admite dos.
-
-    Al terminar se sueltan las pantallas abiertas mientras la aplicación
-    todavía está viva, que es el único orden en el que Qt no se queja.
-    """
+    """Una sola QApplication para todo el módulo: Qt no admite dos."""
     aplicacion = QApplication.instance() or QApplication([])
     yield aplicacion
     try:
@@ -58,7 +57,6 @@ def app():
         plt.close('all')
     except Exception:
         pass
-    _ABIERTAS.clear()
     aplicacion.processEvents()
 
 
@@ -124,22 +122,33 @@ def local(tmp_path_factory):
         mod.DatabaseManager = original
 
 
-# Las pantallas abiertas se guardan acá mientras corre el módulo.
-#
-# Si se las deja al recolector de Python, algunas se destruyen en medio de la
-# corrida o después que la QApplication, y ahí Qt se lleva puesto el proceso
-# entero: la suite moría con STATUS_STACK_BUFFER_OVERRUN sin ninguna prueba en
-# rojo. Sosteniéndolas hasta el final, el orden de destrucción deja de depender
-# de la suerte. (Borrarlas a mano con `sip.delete` es peor: Qt sigue teniendo
-# punteros a ellas y crashea en el acto.)
-_ABIERTAS = []
-
-
 def destruir(app, w):
-    """Cierra la pantalla y la deja guardada hasta que termine el módulo."""
+    """Cierra la pantalla y la suelta del todo antes de abrir la siguiente.
+
+    Cada pantalla se destruye acá, entera, mientras la QApplication está viva.
+
+    Antes se las guardaba en una lista hasta el final del módulo, para que el
+    recolector de Python no las fuera soltando en cualquier orden. Eso evitaba
+    un crash y traía otro: siete ventanas vivas a la vez en un proceso sin
+    pantalla, y Qt se llevaba puesto el proceso entero al abrir la siguiente
+    —sin ninguna prueba en rojo, así que la suite "pasaba" sin haber corrido.
+    Reventaba o no según cuánto tardara la salida por consola, que es la peor
+    forma de fallar que hay. Soltándolas de a una no queda ninguna acumulada.
+
+    Las tres vueltas son necesarias y en este orden: `processEvents` corre los
+    `deleteLater` ya agendados, `sendPostedEvents` fuerza los que esos
+    destructores agendan a su vez (los hijos del widget), y el `gc.collect`
+    saca los envoltorios de Python que quedaron sin dueño. Sacando cualquiera
+    de las tres, vuelve a caerse.
+    """
     w.close()
     app.processEvents()
-    _ABIERTAS.append(w)
+    w.setParent(None)
+    w.deleteLater()
+    app.processEvents()
+    app.sendPostedEvents(None, QEvent.DeferredDelete)
+    app.processEvents()
+    gc.collect()
 
 
 def abrir(app, construir):
