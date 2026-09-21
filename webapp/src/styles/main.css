@@ -4801,6 +4801,101 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
 }
 .cc-row-anotado .cc-anotar.is-on { background: var(--card-bg); }
 
+/* Lo que está en la lista POR LA FECHA del año (Día de la Madre, el 6 de
+   septiembre, las patrias). El pedido del dueño fue poder ver de un vistazo que
+   ese producto no figura porque se esté acabando ni porque haya caído debajo
+   del mínimo, sino por la época. Mismo tratamiento que la marca del cuaderno
+   pero en azul, para que las dos marcas convivan en una misma fila sin pelearse
+   (una fila puede estar anotada Y ser de temporada; gana el verde del cuaderno,
+   que es lo que el dueño está mirando cuando filtra por ahí). */
+.cc-row-epoca { background: color-mix(in srgb, var(--tint-blue-fg) 9%, var(--card-bg)) !important; }
+.cc-row-epoca td { border-top: 1px solid var(--tint-blue-fg); border-bottom: 1px solid var(--tint-blue-fg); }
+.cc-row-epoca td:first-child { border-left: 3px solid var(--tint-blue-fg); }
+.cc-row-epoca td:last-child { border-right: 1px solid var(--tint-blue-fg); }
+.cc-row-anotado.cc-row-epoca { background: color-mix(in srgb, var(--tint-green-fg) 10%, var(--card-bg)) !important; }
+.cc-row-anotado.cc-row-epoca td { border-color: var(--tint-green-fg); }
+
+.cc-chip-epoca {
+  background: var(--card-bg); color: var(--tint-blue-fg);
+  border: 1px solid var(--tint-blue-fg); text-transform: none;
+  display: inline-flex; align-items: center; gap: 4px; cursor: help;
+}
+.cc-chip-epoca .material-icons { font-size: 13px !important; }
+/* Corazonada (todavía no hay ventas viejas de esa fecha): mismo chip, contorno
+   punteado. El dueño tiene que poder distinguir el dato de la suposición. */
+.cc-chip-epoca.es-corazonada { border-style: dashed; color: var(--text-muted); border-color: var(--border-strong); }
+
+/* Franja de las fechas que se vienen, arriba de la lista. */
+.cc-epocas { margin-bottom: 12px; }
+.cc-epocas-wrap { display: flex; flex-direction: column; gap: 8px; }
+.cc-epoca {
+  background: var(--card-bg); border: 1px solid var(--border); border-left: 3px solid var(--tint-blue-fg);
+  border-radius: 10px; padding: 10px 14px;
+}
+.cc-epoca.is-on { border-color: var(--tint-blue-fg); background: var(--tint-blue-bg); }
+.cc-epoca-ya { border-left-color: var(--warning); }
+.cc-epoca-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.cc-epoca-head > .material-icons { font-size: 20px !important; color: var(--tint-blue-fg); flex: none; }
+.cc-epoca-tit { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.cc-epoca-tit b { font-size: 14px; color: var(--text-strong); }
+.cc-epoca-cuando { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.cc-epoca-filtro {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 5px;
+  padding: 4px 10px; border-radius: 999px; cursor: pointer; font-family: inherit;
+  font-size: 12px; font-weight: 600; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border-strong);
+}
+.cc-epoca-filtro .material-icons { font-size: 15px !important; }
+.cc-epoca-filtro:hover { border-color: var(--tint-blue-fg); color: var(--tint-blue-fg); }
+.cc-epoca-filtro.is-on { background: var(--tint-blue-bg); border-color: var(--tint-blue-fg); color: var(--tint-blue-fg); }
+.cc-epoca-vacio { margin-left: auto; font-size: 12px; color: var(--text-muted); }
+.cc-epoca-nota { font-size: 12px; color: var(--text-muted); margin-top: 6px; line-height: 1.45; }
+.cc-epoca-corazonada,
+.cc-epoca-ideas { display: flex; align-items: flex-start; gap: 6px; }
+.cc-epoca-corazonada .material-icons,
+.cc-epoca-ideas .material-icons { font-size: 15px !important; flex: none; margin-top: 1px; }
+.cc-epoca-ideas { margin-top: 6px; font-size: 12px; color: var(--text-muted); line-height: 1.45; }
+.cc-epoca-ideas b { color: var(--text); font-weight: 600; }
+.cc-epoca-estudio {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 8px; padding: 10px 14px; border-radius: 10px;
+  background: var(--surface); border: 1px dashed var(--border-strong);
+  font-size: 12px; color: var(--text-muted);
+}
+.cc-epoca-estudio > .material-icons { font-size: 18px !important; flex: none; }
+.cc-epoca-estudio button { margin-left: auto; }
+/* Aviso de fechas del Dashboard: lo primero que se ve a la mañana. */
+.dash-epocas {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  background: var(--card-bg); border: 1px solid var(--border);
+  border-left: 3px solid var(--tint-blue-fg);
+  border-radius: 12px; padding: 12px 16px; margin-bottom: 16px;
+}
+.dash-epocas > .material-icons { font-size: 20px !important; color: var(--tint-blue-fg); flex: none; }
+.dash-epocas-txt { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; }
+.dash-epocas-tit { font-size: 12px; color: var(--text-muted); text-transform: uppercase; letter-spacing: .04em; }
+.dash-epoca-item { font-size: 13px; color: var(--text); font-variant-numeric: tabular-nums; }
+.dash-epoca-item b { color: var(--text-strong); }
+.dash-epoca-item.is-ya b { color: var(--warning); }
+.dash-epocas-btn {
+  margin-left: auto; display: inline-flex; align-items: center; gap: 2px;
+  padding: 6px 10px 6px 12px; border-radius: 8px; cursor: pointer; font-family: inherit;
+  font-size: 12px; font-weight: 600; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border-strong);
+}
+.dash-epocas-btn .material-icons { font-size: 17px !important; }
+.dash-epocas-btn:hover { border-color: var(--tint-blue-fg); color: var(--tint-blue-fg); }
+@media (max-width: 640px) {
+  .dash-epocas-btn { margin-left: 0; width: 100%; justify-content: center; }
+}
+
+/* Píldora "Por la época" del resumen de niveles. */
+.cc-tier-epoca { --cc-dot: var(--tint-blue-fg); cursor: pointer; font-family: inherit; }
+.cc-tier-epoca .material-icons { font-size: 15px !important; color: var(--text-muted); }
+.cc-tier-epoca:hover { border-color: var(--tint-blue-fg); }
+.cc-tier-epoca.is-on { background: var(--tint-blue-bg); border-color: var(--tint-blue-fg); color: var(--tint-blue-fg); }
+.cc-tier-epoca.is-on span, .cc-tier-epoca.is-on .material-icons { color: var(--tint-blue-fg); }
+
 .cc-check { width: 18px; height: 18px; accent-color: var(--primary); cursor: pointer; }
 .cc-check-off { font-size: 18px !important; color: var(--border-strong); }
 .cc-qty {

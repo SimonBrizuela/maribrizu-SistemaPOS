@@ -9,7 +9,7 @@
  * Lo que se prueba es lo que se hace: buscar, cargar, guardar, y que el número
  * que queda en pantalla sea el que corresponde.
  */
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const { datos } = vi.hoisted(() => ({
   datos: { porColeccion: {}, escrituras: [] },
@@ -824,5 +824,155 @@ describe('Presupuestos', () => {
     const c = await montar('presupuestos', 'renderPresupuestos');
     expect(c.innerHTML.length).toBeGreaterThan(0);
     expect(plano(c)).not.toContain('NaN');
+  });
+});
+
+describe('Centro de Compras · lo que se viene por la época', () => {
+  // Pedido del dueño (21/09/2026): después del 6 de septiembre, en el que voló
+  // todo lo amarillo sin estar previsto, la lista de compras tiene que avisar
+  // con dos meses lo que se viene, y esos productos tienen que verse DISTINTOS
+  // de los que están por quedarse sin stock.
+  //
+  // La fecha se clava: el almanaque depende del día del año y si no, la prueba
+  // pasaría o no según cuándo se corra. El 1 de octubre de 2026 el Día de la
+  // Madre (18/10) está a 17 días, adentro de los dos meses de aviso.
+  const HOY_FIJO = new Date('2026-10-01T12:00:00-03:00');
+  const ventaEl = (diasAtras, producto, cantidad) => {
+    const d = new Date(HOY_FIJO); d.setDate(d.getDate() - diasAtras);
+    return {
+      __id: `vt${diasAtras}_${producto.slice(0, 4)}`, producto, cantidad,
+      fecha: `${dd(d.getDate())}/${dd(d.getMonth() + 1)}/${d.getFullYear()}`,
+      fecha_dt: isoHora(d), subtotal: 9000 * cantidad, categoria: 'REGALERÍA',
+    };
+  };
+
+  beforeEach(() => {
+    // Sólo `Date`: los `setTimeout` con los que la prueba espera a que la
+    // pantalla termine de pintar tienen que seguir corriendo de verdad.
+    vi.useFakeTimers({ toFake: ['Date'] });
+    vi.setSystemTime(HOY_FIJO);
+    sessionStorage.clear();
+
+    datos.porColeccion.catalogo = [
+      ...CATALOGO.map(p => ({ ...p })),
+      // Regalería que se vende: es lo que entra por el Día de la Madre cuando
+      // todavía no hay ventas viejas de esa fecha con las que medirla.
+      { __id: 'r1', doc_id: 'r1', id: 41, nombre: 'PORTARETRATO PLASTICO 13X18',
+        codigo: 'R001', rubro: 'REGALERÍA', sub_rubro: 'PORTARETRATOS',
+        precio_venta: 9000, costo: 5000, stock: 0, estado: 'activo' },
+    ];
+    datos.porColeccion.ventas_por_dia = [
+      ...(datos.porColeccion.ventas_por_dia || []),
+      ...[1, 3, 5, 8, 12, 20].map(n => ventaEl(n, 'PORTARETRATO PLASTICO 13X18', 2)),
+    ];
+  });
+
+  afterEach(() => { vi.useRealTimers(); });
+
+  it('avisa del Día de la Madre con los días que faltan', async () => {
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    const franja = c.querySelector('#cc-epocas');
+    expect(franja).toBeTruthy();
+    expect(franja.textContent).toContain('Día de la Madre');
+    expect(franja.textContent).toContain('17 días');
+  });
+
+  it('lo que entra por la fecha se ve distinto y se puede filtrar', async () => {
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    const filas = [...c.querySelectorAll('#cc-tbody tr.cc-row-epoca')];
+    expect(filas.length).toBeGreaterThan(0);
+
+    // La fila lleva el chip con el nombre de la fecha, no sólo el color.
+    const chip = c.querySelector('.cc-chip-epoca');
+    expect(chip).toBeTruthy();
+    expect(chip.textContent).toContain('Día de la Madre');
+
+    // Y la píldora de arriba filtra la lista a sólo eso.
+    expect(c.querySelector('.cc-tier-epoca')).toBeTruthy();
+    c.querySelector('.cc-epoca-filtro').click();
+    for (let i = 0; i < 6; i++) await esperar();
+
+    const visibles = [...c.querySelectorAll('#cc-tbody tr')]
+      .filter(tr => !tr.className.includes('cc-cutoff') && !tr.querySelector('.cc-empty'));
+    expect(visibles.length).toBeGreaterThan(0);
+    expect(visibles.every(tr => tr.className.includes('cc-row-epoca'))).toBe(true);
+  });
+
+  it('una corazonada se muestra como corazonada, no como dato', async () => {
+    // Sin estudio guardado no hay nada medido: la pantalla tiene que decir que
+    // eso sale del tipo de producto, no de lo que se vendió.
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    expect(c.querySelector('#cc-epocas').textContent).toContain('por el tipo de producto');
+    expect(c.querySelector('.cc-chip-epoca.es-corazonada')).toBeTruthy();
+  });
+
+  it('sin estudio guardado ofrece hacerlo', async () => {
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    expect(c.querySelector('[data-action="estudiar-epocas"]')).toBeTruthy();
+  });
+
+  it('los servicios no entran: no se le compran al mayorista', async () => {
+    datos.porColeccion.catalogo.push({
+      __id: 's1', doc_id: 's1', id: 91, nombre: 'IMPRESION / FOTOCOPIA A4 (B/N)',
+      codigo: 'S001', rubro: 'SERVICIOS', precio_venta: 100, costo: 20,
+      stock: 0, estado: 'activo',
+    });
+    datos.porColeccion.ventas_por_dia.push(
+      ...[1, 2, 3, 4].map(n => ventaEl(n, 'IMPRESION / FOTOCOPIA A4 (B/N)', 50)));
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    const porEpoca = [...c.querySelectorAll('#cc-tbody tr.cc-row-epoca')]
+      .map(tr => tr.textContent).join(' ');
+    expect(porEpoca).not.toContain('IMPRESION / FOTOCOPIA');
+  });
+
+  it('estudiar las ventas guarda lo aprendido para no tener que rehacerlo', async () => {
+    // Es la única lectura cara de la pantalla (recorre el histórico entero), así
+    // que el resultado tiene que quedar guardado. Lo que se escribe es un
+    // agregado chico: medido contra las ventas reales, 33 KB para 36.000
+    // renglones, bien lejos del límite de 1 MB de un documento.
+    //
+    // Para que haya algo que aprender hace falta CONTRASTE: un producto que se
+    // vende todos los días (la línea de base contra la que se compara) y otro
+    // que aparece sólo en la previa de la fecha. Sin eso el motor no marca
+    // nada, que es justamente lo que tiene que hacer.
+    const fondo = [];
+    for (let n = 5; n < 400; n += 2) fondo.push(ventaEl(n, 'CUADERNO RIVADAVIA', 3));
+    const enLaFecha = [356, 354, 352, 350, 348].map(n => ventaEl(n, 'ROSA ARTIFICIAL', 12));
+    datos.porColeccion.ventas_por_dia.push(...fondo, ...enLaFecha);
+    datos.escrituras.length = 0;
+
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    c.querySelector('[data-action="estudiar-epocas"]').click();
+    for (let i = 0; i < 30; i++) await esperar(5);
+
+    const guardado = datos.escrituras.find(e => JSON.stringify(e.ref || {}).includes('temporadas_aprendidas'));
+    expect(guardado, 'tiene que escribir config/temporadas_aprendidas').toBeTruthy();
+    const doc = guardado.datos || {};
+    expect(Object.keys(doc.temporadas || {}), 'el estudio guardado trae fechas').not.toHaveLength(0);
+    expect(doc.hasta, 'guarda hasta qué día miró').toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(JSON.stringify(doc).length).toBeLessThan(1024 * 1024);
+  });
+
+  it('un producto con variedades no se propone dos veces', async () => {
+    // El índice de stock tiene una entrada por variedad Y una por el producto
+    // entero: sin cuidado, la bolsa de organza salía una vez por color y otra
+    // sumando todos los colores, con una cantidad disparatada.
+    datos.porColeccion.catalogo.push({
+      __id: 'b1', doc_id: 'b1', id: 92, nombre: 'BOLSA ORGANZA 12X9',
+      codigo: 'B001', rubro: 'REGALERÍA', precio_venta: 500, costo: 200,
+      es_conjunto: true, conjunto_tipo: 'pack', conjunto_contenido: 10,
+      conjunto_unidad_medida: 'unidades', estado: 'activo',
+      conjunto_colores: [
+        { color: 'Dorada', unidades: 0, restante: 0, contenido: 10 },
+        { color: 'Blanca', unidades: 0, restante: 0, contenido: 10 },
+      ],
+    });
+    datos.porColeccion.ventas_por_dia.push(
+      ...[2, 4, 6].map(n => ventaEl(n, '[Dorada]  BOLSA ORGANZA 12X9  ·  5 u', 5)));
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    const bolsas = [...c.querySelectorAll('#cc-tbody tr.cc-row-epoca')]
+      .filter(tr => tr.textContent.includes('BOLSA ORGANZA'));
+    const sinVariedad = bolsas.filter(tr => !tr.querySelector('.cc-chip-varnt'));
+    expect(sinVariedad.length).toBe(0);
   });
 });

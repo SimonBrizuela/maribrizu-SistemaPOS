@@ -103,6 +103,8 @@ export function tokensBusqueda(busqueda) {
 export function coincideCompra(row, criterios, ignorar = null) {
   const filtros = criterios?.filtros || {};
   if (criterios?.soloAnotados && !(row.anotado && !row.registrado)) return false;
+  // "Ver solo lo de esta fecha", desde la franja de épocas de arriba.
+  if (criterios?.soloTemporada && row.temporada?.id !== criterios.soloTemporada) return false;
   for (const c of CAMPOS_FILTRO) {
     if (c.k === ignorar) continue;
     const elegido = filtros[c.k];

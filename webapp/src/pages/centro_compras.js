@@ -32,7 +32,8 @@
 
 import { doc, updateDoc, serverTimestamp, deleteField } from 'firebase/firestore';
 import { loadBalanceConfig, loadDiasMes, saveDiasMes, loadComprasConfig, saveComprasConfig } from '../config.js';
-import { refrescarAlertas, obtenerCandidatosCompra } from '../notifications.js';
+import { refrescarAlertas, obtenerCandidatosCompra, obtenerVentanasVenta } from '../notifications.js';
+import { peekCacheValue } from '../cache.js';
 import { sugerirCantidad } from '../inventario_resumen.js';
 import { confirmDialog, alertDialog } from '../components/dialogs.js';
 import { listaCuadernoHtml } from '../lista_cuaderno.js';
@@ -44,6 +45,10 @@ import {
   puntajeUrgencia, nivelPorPuntaje, compararUrgencia, motivosUrgencia, explicarUrgencia,
   VENTANA_CORTA_DIAS, COBERTURA_DEFAULT_DIAS as COBERTURA_DEFAULT,
 } from '../urgencia_compra.js';
+import { motivoTemporada, explicarTemporada } from '../temporadas.js';
+import {
+  cargarEstudio, rehacerEstudio, recomendacionesDeTemporada, ideasQueFaltan,
+} from '../temporadas_datos.js';
 
 const MEDIOS = [
   { k: 'efectivo', label: 'Efectivo' },
@@ -443,6 +448,153 @@ function buildRows(alertas, comprasCfg) {
   return rows;
 }
 
+// ── Lo que entra a la lista por la ÉPOCA del año ──────────────────────────────
+// Un producto puede estar en la lista de compras por tres motivos distintos, y
+// el dueño necesita distinguirlos de un vistazo: porque se está acabando,
+// porque cayó debajo del mínimo… o porque se viene la fecha en la que vuela.
+// Lo tercero es lo que agrega esto (pedido del 21/09/2026, después del 6 de
+// septiembre: "vendimos cinta amarilla, limpia pipa amarillo, un montón de
+// cosas amarillas" y no estaba previsto).
+//
+// Las recomendaciones salen de `temporadas.js`. Acá se hacen dos cosas:
+//   · a lo que YA está en la lista se le pega la marca de la fecha, y si por la
+//     fecha urge más de lo que urgía, sube;
+//   · lo que no estaba entra como fila nueva, con la cantidad que falta para
+//     llegar a la fecha con lo mismo que se vendió la vez pasada.
+function normClave(s) {
+  return String(s ?? '')
+    .normalize('NFKD').replace(/[̀-ͯ]/g, '')
+    .toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+/** Clave de cruce entre una recomendación y una fila: producto + variedad. */
+function claveFila(docId, variedad) {
+  return `${String(docId ?? '')}|${normClave(variedad)}`;
+}
+
+/** El nombre tal cual está escrito en el catálogo para una variedad que las
+ *  ventas guardaron normalizada ("amarillo patito" → "Amarillo Patito"). */
+function variedadDelCatalogo(producto, color) {
+  const c = normClave(color);
+  if (!c) return null;
+  const colores = Array.isArray(producto?.conjunto_colores) ? producto.conjunto_colores : [];
+  const hit = colores.find(x => normClave(x.color) === c);
+  return hit ? (hit.color || '') : null;
+}
+
+// Mezcla las recomendaciones de época con las filas que ya venían. Devuelve las
+// filas nuevas que hay que agregar (las existentes se modifican en el lugar).
+function aplicarTemporadas(rows, recomendaciones, comprasCfg) {
+  const anotados = comprasCfg.anotados || {};
+  const porClave = new Map();
+  for (const r of rows) porClave.set(claveFila(r.doc_id, r.variedad), r);
+
+  const nuevas = [];
+  for (const rec of (recomendaciones || [])) {
+    const prod = rec.producto;
+    if (!prod) continue;
+    const variedad = variedadDelCatalogo(prod, rec.color);
+    const existente = porClave.get(claveFila(rec.docId, variedad));
+    if (existente) {
+      // Ya estaba en la lista por otro motivo: se le suma el dato de la fecha.
+      // La urgencia sube sólo si la época apura más que lo que ya la traía, así
+      // nada de lo que hoy se está por agotar queda tapado por una fecha lejana.
+      existente.temporada = rec.temporada;
+      existente.temporada_empuje = rec.empuje;
+      existente.temporada_esperado = rec.esperado;
+      existente.temporada_faltan = rec.faltan;
+      existente.temporada_por_pista = !!rec.porPista;
+      existente.temporada_urgencia = rec.urgencia;
+      if (rec.urgencia > existente.urgencia) {
+        existente.urgencia = rec.urgencia;
+        existente.tier = nivelPorPuntaje(rec.urgencia);
+        existente.porTemporada = true;
+      }
+      continue;
+    }
+
+    // No estaba: entra por la fecha y nada más.
+    const esVariedad = variedad != null;
+    const packSize = packSizeDe(prod, esVariedad ? variedad : null);
+    const costoUnidad = Math.max(0, Number(prod.costo) || 0);
+    const faltanUnidades = Math.max(0, Number(rec.faltan) || 0);
+    let qty, costRow = costoUnidad;
+    if (esVariedad && packSize > 0) {
+      qty = Math.ceil(faltanUnidades / packSize);
+      if (costoUnidad > 0) costRow = costoUnidad * packSize;
+    } else {
+      qty = Math.ceil(faltanUnidades);
+      if (qty > 0 && packSize > 1) qty = Math.ceil(qty / packSize) * packSize;
+    }
+    if (!(qty > 0)) continue;
+
+    const row = {
+      doc_id: rec.docId,
+      nombre: prod.nombre || rec.nombre || '(sin nombre)',
+      codigo: prod.codigo || '',
+      rubro: prod.rubro || '',
+      sub_rubro: prod.sub_rubro || '',
+      proveedor: prod.proveedor || '',
+      marca: prod.marca || '',
+      urgente: false,
+      critico: rec.stock <= 0,
+      urgencia: rec.urgencia,
+      riesgo: 0,
+      importancia: 0,
+      rank_mes: 0,
+      rank_reciente: 0,
+      tier: nivelPorPuntaje(rec.urgencia),
+      // Sin texto de cobertura: este producto no está en la lista porque se
+      // agote, y poner "se agota en X días" al lado de la fecha confunde los
+      // dos motivos, que es justo lo que había que separar.
+      cobertura_texto: '',
+      stock: esVariedad && packSize > 0 ? rec.stock / packSize : rec.stock,
+      stock_min: 0,
+      esVariedad,
+      variedad: esVariedad ? variedad : null,
+      packSize,
+      stockUnits: rec.stock,
+      vel_dia: 0,
+      vel_semana: 0,
+      unidades_ventana: 0,
+      ritmo_dias: 0,
+      unidades_7: 0,
+      dias_con_mov_7: 0,
+      vel_dia_30: 0,
+      vel_dia_7: 0,
+      dias_cobertura: Infinity,
+      perdidaSemana: 0,
+      perdidaHorizonte: 0,
+      producto: prod,
+      busca: '',
+      qty,
+      cost: costRow,
+      subtotal: qty * costRow,
+      sinCosto: !(costRow > 0),
+      qtyManual: false,
+      fits: false,
+      acumulado: 0,
+      checked: false,
+      registrado: false,
+      anotado: null,
+      porTemporada: true,
+      temporada: rec.temporada,
+      temporada_empuje: rec.empuje,
+      temporada_esperado: rec.esperado,
+      temporada_faltan: rec.faltan,
+      temporada_por_pista: !!rec.porPista,
+      temporada_urgencia: rec.urgencia,
+    };
+    row.anotado = anotados[keyAnotado(row)] || null;
+    row.busca = textoBusquedaCompra(row);
+    nuevas.push(row);
+    porClave.set(claveFila(row.doc_id, row.variedad), row);
+  }
+  // La cobertura objetivo no entra en la cuenta de estas filas a propósito: lo
+  // que manda es cuánto se vende en la fecha, no el horizonte de compra normal.
+  return nuevas;
+}
+
 // Cantidad sugerida para cubrir `dias` días de venta (respeta el stock_min).
 // Variedades: packs para cubrir el horizonte según su ritmo por color; sin
 // ritmo/contenido conocido, mantiene la cantidad del rango configurado.
@@ -522,13 +674,19 @@ export async function renderCentroCompras(container, db) {
   container.innerHTML = shellHtml();
 
   const ym = hoyAR().slice(0, 7);
-  let alertas, balCfg, diasDoc, comprasCfg;
+  let alertas, balCfg, diasDoc, comprasCfg, temporadas;
   try {
-    [alertas, balCfg, diasDoc, comprasCfg] = await Promise.all([
+    [alertas, balCfg, diasDoc, comprasCfg, temporadas] = await Promise.all([
       refrescarAlertas({ silent: true }),
       loadBalanceConfig(db),
       loadDiasMes(db, ym),
       loadComprasConfig(db),
+      // El estudio de épocas es UN documento. Si nunca se hizo vuelve null y la
+      // página funciona igual: aparece el cartel para hacerlo.
+      cargarEstudio(db).catch(e => {
+        console.warn('[centro_compras] no se pudo leer el estudio de épocas:', e);
+        return { estudio: null, vigente: false };
+      }),
     ]);
   } catch (e) {
     console.error('[centro_compras] error cargando datos:', e);
@@ -564,7 +722,15 @@ export async function renderCentroCompras(container, db) {
     proveedor: comprasCfg.proveedor_default || '',
     fecha: hoyAR(),
     ajustesOpen: false,
+    // Lo que se viene por almanaque + lo que el sistema aprendió de las ventas
+    // viejas sobre esas fechas.
+    estudio: temporadas?.estudio || null,
+    estudioVigente: !!temporadas?.vigente,
+    proximas: [],
+    estudiando: false,
+    temporadaFiltro: '',     // id de la fecha por la que está filtrada la lista
   };
+  mezclarTemporadas();
 
   const root = container.querySelector('#cc-root');
   if (!root) return;   // navegaron a otra página mientras cargaban los datos
@@ -572,6 +738,64 @@ export async function renderCentroCompras(container, db) {
   bindEvents(root);
   recalc(true);
   limpiarAnotadosViejos();
+}
+
+// ── Época: calcular y mezclar con la lista ────────────────────────────────────
+// Se llama al entrar, al actualizar y después de rehacer el estudio. El catálogo
+// sale de la cache que acaba de llenar `refrescarAlertas` (el mismo listener del
+// store: no agrega lecturas), y el ritmo de venta, de las ventanas que
+// notifications.js ya computó para las alertas.
+function mezclarTemporadas() {
+  const s = _state;
+  s.proximas = [];
+  try {
+    const productos = peekCacheValue('catalogo:all') || [];
+    if (!productos.length) return;
+    const { proximas, recomendaciones } = recomendacionesDeTemporada({
+      estudio: s.estudio,
+      productos,
+      ventanas: obtenerVentanasVenta(),
+      hoy: hoyAR(),
+    });
+    s.proximas = proximas;
+    const nuevas = aplicarTemporadas(s.rows, recomendaciones, s.comprasCfg);
+    if (nuevas.length) s.rows.push(...nuevas);
+    // El orden se rearma entero: las filas nuevas y las que subieron por la
+    // fecha tienen que quedar en su lugar.
+    s.rows.sort(compararUrgencia);
+  } catch (e) {
+    console.warn('[centro_compras] no se pudieron calcular las épocas:', e);
+  }
+}
+
+// Rehace el estudio leyendo TODO el histórico de ventas. Es la única lectura
+// cara de la pantalla y por eso la dispara el usuario a mano (o el cartel de
+// "está viejo"): son 36.000 renglones.
+async function estudiarEpocas() {
+  const s = _state;
+  if (s.estudiando) return;
+  s.estudiando = true;
+  paintTemporadas();
+  try {
+    const productos = peekCacheValue('catalogo:all') || [];
+    s.estudio = await rehacerEstudio(_db, { productos });
+    s.estudioVigente = true;
+    // Las filas que habían entrado por época se rehacen desde cero: con el
+    // estudio nuevo pueden ser otras.
+    s.rows = buildRows(fuentesCompra(s.alertasBase, s.comprasCfg), s.comprasCfg);
+    mezclarTemporadas();
+    recalc(true);
+  } catch (e) {
+    console.error('[centro_compras] estudiar épocas:', e);
+    await alertDialog({
+      title: 'No se pudo estudiar',
+      message: 'No se pudieron leer las ventas para estudiar las fechas. Revisá la conexión e intentá de nuevo.',
+      type: 'error',
+    });
+  } finally {
+    s.estudiando = false;
+    paintTemporadas();
+  }
 }
 
 // ── Marca "ya lo anoté en el cuaderno" ────────────────────────────────────────
@@ -643,6 +867,7 @@ function recalc(resetSelection) {
   paintGauge();
   paintResumen();
   paintWarn();
+  paintTemporadas();
   paintTable();
   paintPlan();
 }
@@ -691,6 +916,7 @@ function pageHtml() {
       </button>
     </div>
     <div id="cc-ajustes" class="cc-ajustes" style="display:none"></div>
+    <div id="cc-epocas" class="cc-epocas"></div>
     <div id="cc-warn"></div>
     <div id="cc-tiers" class="cc-tiers"></div>
 
@@ -866,7 +1092,12 @@ const FILTROS_STORAGE_KEY = 'cc_filtros_lista';
 
 function criteriosLista() {
   const s = _state;
-  return { filtros: s.filtros, busqueda: s.busqueda, soloAnotados: s.filtroAnotados };
+  return {
+    filtros: s.filtros,
+    busqueda: s.busqueda,
+    soloAnotados: s.filtroAnotados,
+    soloTemporada: s.temporadaFiltro || '',
+  };
 }
 
 function leerFiltrosGuardados() {
@@ -1072,7 +1303,7 @@ function paintFiltros(visibles) {
   const cnt = document.getElementById('cc-filtros-count');
   if (cnt) {
     const total = s.rows.length;
-    const acotada = nFiltros > 0 || !!s.busqueda || s.filtroAnotados;
+    const acotada = nFiltros > 0 || !!s.busqueda || s.filtroAnotados || !!s.temporadaFiltro;
     cnt.textContent = !total ? '' : (acotada ? `${visibles} de ${total}` : `${total} en la lista`);
     cnt.classList.toggle('is-on', acotada && visibles < total);
   }
@@ -1128,10 +1359,13 @@ function pintarFilas() {
   paintFiltros(arriba.length + abajo.length);
   if (!arriba.length && !abajo.length) {
     const nFiltros = cantidadFiltros(s.filtros);
+    const epoca = s.temporadaFiltro
+      ? (s.proximas.find(p => p.id === s.temporadaFiltro)?.nombre || 'la fecha elegida') : '';
     const que = [
       s.busqueda ? `la búsqueda "${esc(s.busqueda)}"` : '',
       nFiltros ? (nFiltros === 1 ? 'el filtro puesto' : 'los filtros puestos') : '',
       s.filtroAnotados ? 'lo del cuaderno' : '',
+      epoca ? `lo de ${esc(epoca)}` : '',
     ].filter(Boolean).join(' y ');
     tbody.innerHTML = `<tr><td colspan="10" class="cc-empty">
       <span class="material-icons">search_off</span> Nada en la lista coincide con ${que}.
@@ -1247,9 +1481,14 @@ function rowHtml(r, i, esContinuacion) {
   // Atenuada solo si quedó fuera del plan y el usuario tampoco la marcó a mano.
   const espera = !r.registrado && !r.sinCosto && !r.fits && !r.checked;
   const anotado = !r.registrado && !!r.anotado;
+  // Lo que está por la fecha del año se pinta distinto: era el pedido del
+  // dueño, poder ver de un vistazo que ese producto no figura porque se esté
+  // acabando sino porque se viene el Día de la Madre.
+  const porEpoca = !r.registrado && !!r.temporada;
   const cls = [
     r.registrado ? 'cc-row-reg' : '',
     anotado ? 'cc-row-anotado' : '',
+    porEpoca ? 'cc-row-epoca' : '',
     espera ? 'cc-row-espera' : '',
     esContinuacion ? 'cc-row-varcont' : '',
   ].filter(Boolean).join(' ');
@@ -1260,6 +1499,18 @@ function rowHtml(r, i, esContinuacion) {
   let chip = '';
   if (r.registrado) chip = `<span class="cc-chip cc-chip-ok">registrado</span>`;
   else if (r.tier === 'sisi') chip = `<span class="cc-chip cc-chip-sisi">sí o sí</span>`;
+
+  // El chip de la fecha va SIEMPRE que la haya, aunque el producto ya estuviera
+  // en la lista por otra cosa: son dos motivos distintos y los dos importan.
+  if (porEpoca) {
+    const t = r.temporada;
+    const cuando = t.diasFaltan <= 0 ? 'hoy' : t.diasFaltan === 1 ? 'mañana' : `en ${t.diasFaltan} días`;
+    chip += `<span class="cc-chip cc-chip-epoca${r.temporada_por_pista ? ' es-corazonada' : ''}"
+      data-tip="${esc(explicarTemporada({
+        temporada: t, empuje: r.temporada_empuje, esperado: r.temporada_esperado,
+        stock: r.stockUnits, faltan: r.temporada_faltan, porPista: r.temporada_por_pista,
+      }))}"><span class="material-icons">event</span>${esc(t.nombre)} · ${cuando}</span>`;
+  }
 
   // Marca "ya lo anoté en el cuaderno": chip con la fecha + botón para prender
   // o sacar la marca. No toca la selección ni el presupuesto: es solo para no
@@ -1311,6 +1562,15 @@ function rowHtml(r, i, esContinuacion) {
   const detalles = [];
   if (r.cobertura_texto) detalles.push(esc(r.cobertura_texto));
   for (const m of motivosUrgencia(r)) detalles.push(esc(m));
+  if (porEpoca) {
+    // Sin repetir la fecha ni los días: eso ya está en el chip de arriba.
+    detalles.push(esc(motivoTemporada({
+      temporada: r.temporada, empuje: r.temporada_empuje, porPista: r.temporada_por_pista,
+    }, { conFecha: false })));
+    if (!r.temporada_por_pista && r.temporada_faltan > 0) {
+      detalles.push(`faltan ~${fmt(Math.ceil(r.temporada_faltan), 0)} para llegar igual que la vez pasada`);
+    }
+  }
   if (!r.registrado && r.tier !== 'opcional' && r.perdidaSemana > 0) {
     detalles.push(`dejás de vender ~${money(r.perdidaSemana)}/sem si falta`);
   }
@@ -1439,9 +1699,21 @@ function paintResumen() {
        title="La lista del cuaderno en una hoja para imprimir o guardar como PDF, con columnas para anotar a mano lo comprado y lo pagado">
        <span class="material-icons">print</span> Imprimir lista</button>`;
 
+  // Lo que está por la fecha del año, en su propia píldora: es plata aparte, de
+  // otra decisión. Click para ver sólo eso.
+  const epoca = act.filter(r => r.temporada);
+  const totalEpoca = epoca.filter(r => !r.sinCosto).reduce((t, r) => t + r.qty * r.cost, 0);
+  const epocaOn = !!_state.temporadaFiltro;
+  const pillEpoca = epoca.length === 0 ? '' :
+    `<button type="button" class="cc-tier-pill cc-tier-epoca${epocaOn ? ' is-on' : ''}" data-action="filtro-epoca"
+       data-id="${esc(epocaOn ? _state.temporadaFiltro : (epoca[0].temporada?.id || ''))}"
+       title="${epocaOn ? 'Mostrando solo lo de esa fecha. Click para ver la lista completa.' : 'Productos que están acá por la fecha del año que se viene'}">
+       <span class="material-icons">event</span> Por la época <span>${epoca.length} · ${money(totalEpoca)}</span></button>`;
+
   el.innerHTML = pill('cc-tier-sisi', 'Sí o sí', sisi)
     + pill('cc-tier-imp', 'Importante', imp)
     + pill('cc-tier-opc', 'Puede esperar', opc)
+    + pillEpoca
     + pillAnotados
     + btnImprimir
     + warnCosto;
@@ -1481,6 +1753,84 @@ function imprimirCuaderno() {
   w.document.open();
   w.document.write(html);
   w.document.close();
+}
+
+// ── Pintado: lo que se viene por almanaque ────────────────────────────────────
+// La franja de arriba del todo: qué fecha se aproxima, cuántos días faltan y
+// cuántos productos de la lista son por eso. Aparece a dos meses (lo que pidió
+// el dueño) porque el mayorista no viene todas las semanas.
+function paintTemporadas() {
+  const el = document.getElementById('cc-epocas');
+  if (!el) return;
+  const s = _state;
+  const proximas = s.proximas || [];
+
+  // Nunca se estudiaron las ventas: no hay nada que mostrar todavía, pero sí
+  // algo para ofrecer.
+  if (!proximas.length) {
+    el.innerHTML = s.estudio ? '' : botonEstudiarHtml('Todavía no miré tus ventas viejas para saber qué se vende en cada fecha del año.');
+    return;
+  }
+
+  const partes = [];
+  for (const p of proximas.slice(0, 3)) {
+    const n = s.rows.filter(r => r.temporada?.id === p.id && !r.registrado).length;
+    const cuando = p.diasFaltan <= 0 ? 'es hoy'
+      : p.diasFaltan === 1 ? 'es mañana'
+      : `faltan ${p.diasFaltan} días`;
+    const activo = s.temporadaFiltro === p.id;
+    const ideas = ideasQueFaltan(p.id, peekCacheValue('catalogo:all') || []);
+    partes.push(`
+      <div class="cc-epoca${activo ? ' is-on' : ''}${p.enVenta ? ' cc-epoca-ya' : ''}">
+        <div class="cc-epoca-head">
+          <span class="material-icons">event</span>
+          <div class="cc-epoca-tit">
+            <b>${esc(p.nombre)}</b>
+            <span class="cc-epoca-cuando">${esc(fechaLinda(p.fecha))} · ${cuando}</span>
+          </div>
+          ${n > 0 ? `<button type="button" class="cc-epoca-filtro${activo ? ' is-on' : ''}" data-action="filtro-epoca" data-id="${esc(p.id)}"
+             title="${activo ? 'Ver la lista completa' : 'Ver solo lo de esta fecha'}">
+             <span class="material-icons">${activo ? 'filter_alt_off' : 'filter_alt'}</span> ${n} en la lista</button>`
+            : '<span class="cc-epoca-vacio">nada que reponer para esta fecha</span>'}
+        </div>
+        ${p.nota ? `<div class="cc-epoca-nota">${esc(p.nota)}</div>` : ''}
+        ${(!p.medida && n > 0) ? `<div class="cc-epoca-nota cc-epoca-corazonada">
+            <span class="material-icons">lightbulb</span>
+            Todavía no tengo ventas tuyas de esta fecha para medirla: lo que ves es por el tipo de producto, no por lo que vendiste.
+          </div>` : ''}
+        ${ideas.length ? `<div class="cc-epoca-ideas">
+            <span class="material-icons">shopping_bag</span>
+            <span>Para esta fecha se suele vender, y no lo encontré en tu catálogo:
+              <b>${ideas.slice(0, 6).map(esc).join(' · ')}</b></span>
+          </div>` : ''}
+      </div>`);
+  }
+
+  const viejo = s.estudio && !s.estudioVigente
+    ? botonEstudiarHtml(`Lo que sé de las fechas es de hace un tiempo (última vez, hasta el ${fechaLinda(s.estudio.hasta || '')}).`)
+    : (!s.estudio ? botonEstudiarHtml('Todavía no miré tus ventas viejas para saber qué se vende en cada fecha.') : '');
+
+  el.innerHTML = `<div class="cc-epocas-wrap">${partes.join('')}</div>${viejo}`;
+}
+
+function botonEstudiarHtml(texto) {
+  const estudiando = _state.estudiando;
+  return `<div class="cc-epoca-estudio">
+    <span class="material-icons">auto_graph</span>
+    <span>${esc(texto)}</span>
+    <button type="button" class="cc-btn-ghost" data-action="estudiar-epocas"${estudiando ? ' disabled' : ''}>
+      ${estudiando ? '<span class="material-icons cc-spin">sync</span> Mirando tus ventas…'
+                   : '<span class="material-icons">auto_graph</span> Estudiar mis ventas'}
+    </button>
+  </div>`;
+}
+
+const MESES_LARGOS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+  'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+function fechaLinda(ymdStr) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymdStr || ''));
+  if (!m) return String(ymdStr || '');
+  return `${Number(m[3])} de ${MESES_LARGOS[Number(m[2]) - 1] || ''}`;
 }
 
 // ── Avisos: tope manual + presupuesto corto para lo SÍ O SÍ ───────────────────
@@ -1584,6 +1934,17 @@ function onClick(e) {
       s.filtroAnotados = !s.filtroAnotados;
       paintTable();
       paintResumen();
+      break;
+    case 'filtro-epoca': {
+      const id = btn.dataset.id || '';
+      s.temporadaFiltro = s.temporadaFiltro === id ? '' : id;
+      paintTemporadas();
+      paintTable();
+      paintResumen();
+      break;
+    }
+    case 'estudiar-epocas':
+      estudiarEpocas();
       break;
     case 'imprimir-cuaderno':
       imprimirCuaderno();
@@ -1714,6 +2075,7 @@ async function actualizar(btn) {
     s.balCfg = balCfg || {};
     s.budget = computeBudget(s.balCfg, s.diasDoc, s.comprasCfg, s.ym);
     s.rows = buildRows(fuentesCompra(alertas, s.comprasCfg), s.comprasCfg);
+    mezclarTemporadas();
     recalc(true);
   } catch (e) {
     console.error('[centro_compras] actualizar:', e);
@@ -1744,6 +2106,7 @@ async function guardarAjustes() {
   // La cobertura cambia las cantidades sugeridas → reconstruir filas.
   s.budget = computeBudget(s.balCfg, s.diasDoc, s.comprasCfg, s.ym);
   s.rows = buildRows(fuentesCompra(s.alertasBase, s.comprasCfg), s.comprasCfg);
+  mezclarTemporadas();
   s.ajustesOpen = false;
   paintAjustes();
   recalc(true);
