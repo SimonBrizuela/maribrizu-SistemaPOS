@@ -141,5 +141,28 @@ export function unidadesDelRenglon(item, prod = null) {
   const { descripcion } = parseNombreItem(item?.producto || item?.product_name);
   if (!descripcion || !prod) return cantidad;
   const factor = factorPorUnidad(prod, descripcion);
-  return factor === null ? cantidad : cantidad * factor;
+  if (factor === null) return cantidad;
+
+  // El POS no siempre deja la cantidad fraccionada SÓLO en el nombre: hay
+  // caminos del carrito que la guardan también en `cantidad` ("· 59,5 m" con
+  // cantidad = 59,5). Como el factor ya trae ese 59,5 adentro, multiplicar de
+  // nuevo daba 3.540 metros por una venta de 59,5 — el renglón contaba como
+  // sesenta ventas y le inflaba el ritmo al producto.
+  //
+  // Medido sobre las ventas reales (21/09/2026): 66 renglones de 48 productos
+  // vendidos por metro, con la demanda inflada 26 veces. El lado Python
+  // (`scripts/sugerir_stock_minimos.py`) siempre hizo bien esta cuenta; era el
+  // JS el que discrepaba.
+  const n = _cantidadDeLaPresentacion(descripcion);
+  if (n !== null && !Number.isInteger(n) && Math.abs(cantidad - n) < 1e-9) return factor;
+
+  return cantidad * factor;
+}
+
+/** El número que abre la presentación ("2,5 m" → 2.5), o null si no hay. */
+function _cantidadDeLaPresentacion(descripcion) {
+  const m = String(descripcion || '').trim().match(/^([\d]+(?:[.,][\d]+)?)\s*(.+)$/);
+  if (!m) return null;
+  const n = Number(String(m[1]).replace(',', '.'));
+  return n > 0 ? n : null;
 }

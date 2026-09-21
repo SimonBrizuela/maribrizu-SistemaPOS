@@ -70,6 +70,29 @@ describe('cuántas unidades se llevó el renglón', () => {
       { producto: 'CINTA RASO 10MM  ·  2,5 m', cantidad: 1 }, ROLLO)).toBe(2.5);
   });
 
+  // Hay caminos del POS que dejan la cantidad fraccionada en los DOS lados.
+  // Multiplicar de nuevo contaba 59,5 metros como 3.540: el producto parecía
+  // venderse sesenta veces más de lo que se vende (visto en ventas reales el
+  // 21/09/2026, en 66 renglones de 48 productos vendidos por metro).
+  it('si la cantidad ya trae el decimal, no se multiplica dos veces', () => {
+    expect(unidadesDelRenglon(
+      { producto: 'CINTA RASO 10MM  ·  2,5 m', cantidad: 2.5 }, ROLLO)).toBe(2.5);
+    expect(unidadesDelRenglon(
+      { producto: 'CINTA RASO 10MM  ·  59.5 m', cantidad: 59.5 }, ROLLO)).toBe(59.5);
+  });
+
+  it('dos cortes iguales de medio metro siguen siendo un metro', () => {
+    // Acá la cantidad (2) NO es el número del nombre (0,5): son dos cortes.
+    expect(unidadesDelRenglon(
+      { producto: 'CINTA RASO 10MM  ·  0,5 m', cantidad: 2 }, ROLLO)).toBe(1);
+  });
+
+  it('un entero repetido en los dos lados sigue multiplicando', () => {
+    // "2 pack(s)" con cantidad 2 son dos packs de verdad: 1.000 hojas.
+    expect(unidadesDelRenglon(
+      { producto: 'PAPEL OBRA A4  ·  2 pack(s)', cantidad: 2 }, RESMA)).toBe(1000);
+  });
+
   it('sin el producto no se puede traducir: vale la cantidad', () => {
     expect(unidadesDelRenglon(
       { producto: 'CINTA RASO 10MM  ·  1 rollo(s)', cantidad: 1 })).toBe(1);
