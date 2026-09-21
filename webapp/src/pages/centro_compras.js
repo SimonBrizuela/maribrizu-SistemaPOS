@@ -1591,9 +1591,13 @@ function rowHtml(r, i, esContinuacion) {
   // Un solo chip por fila. El nivel ya lo dice el orden de la lista y las
   // píldoras de arriba; "sin stock" ya se ve en la columna Stock (0 en rojo)
   // y en el texto de cobertura. Repetirlo en cada fila era puro ruido.
+  // Dos grupos: lo que el producto ES (su nivel, su variante) va al lado del
+  // nombre; lo que se puede HACER con él va en su propia línea. Todo junto, el
+  // acomodo cambiaba en cada fila según el largo del nombre.
+  let chipNivel = '';
   let chip = '';
-  if (r.registrado) chip = `<span class="cc-chip cc-chip-ok">registrado</span>`;
-  else if (r.tier === 'sisi') chip = `<span class="cc-chip cc-chip-sisi">sí o sí</span>`;
+  if (r.registrado) chipNivel = `<span class="cc-chip cc-chip-ok">registrado</span>`;
+  else if (r.tier === 'sisi') chipNivel = `<span class="cc-chip cc-chip-sisi">sí o sí</span>`;
 
   // El chip de la fecha va SIEMPRE que la haya, aunque el producto ya estuviera
   // en la lista por otra cosa: son dos motivos distintos y los dos importan.
@@ -1623,6 +1627,7 @@ function rowHtml(r, i, esContinuacion) {
     `<button type="button" class="cc-anotar${anotado ? ' is-on' : ''}" data-action="anotar" data-idx="${i}"
        title="${anotado ? 'Sacar la marca del cuaderno' : 'Marcar que ya lo anotaste en el cuaderno'}">
        <span class="material-icons">edit_note</span></button>`;
+  const chipAcciones = chip + btnAnotar;
 
   const checkbox = r.sinCosto || r.registrado
     ? `<span class="material-icons cc-check-off" title="${r.sinCosto ? 'Sin costo cargado' : 'Ya registrado'}">${r.sinCosto ? 'block' : 'check_circle'}</span>`
@@ -1697,8 +1702,9 @@ function rowHtml(r, i, esContinuacion) {
         ${esContinuacion ? '<span class="material-icons cc-var-arrow" title="Otra variante del producto de arriba">subdirectory_arrow_right</span>' : ''}
         <button type="button" class="cc-prod-btn" data-action="ver-catalogo" data-doc="${esc(String(r.doc_id))}"
                 title="Abrir este producto en el Catálogo">${esc(nombreBase)}<span class="material-icons">open_in_new</span></button>
-        ${varChip}${chip}${btnAnotar}
+        ${varChip}${chipNivel}
       </div>
+      ${chipAcciones ? `<div class="cc-prod-acc">${chipAcciones}</div>` : ''}
       ${detalles.length ? `<div class="cc-cob">${detalles.join(' · ')}</div>` : ''}
     </td>
     <td>

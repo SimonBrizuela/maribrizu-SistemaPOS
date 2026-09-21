@@ -4719,6 +4719,27 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
   white-space: nowrap;
 }
 .cc-table td { padding: 9px 12px; border-top: 1px solid var(--border); vertical-align: middle; font-variant-numeric: tabular-nums; }
+
+/* Las columnas de números nunca parten un importe en dos renglones. Con 1.466
+   filas y montos de siete cifras, "$ 1.062.000" caía como "$" arriba y el
+   número abajo, y cada fila alineaba distinto: la parte derecha de la tabla se
+   veía temblando. Con nowrap y un ancho mínimo por columna, el ancho lo fija la
+   cifra más larga una sola vez y la columna Producto se queda con el resto. */
+.cc-table th:nth-child(n+5),
+.cc-table td:nth-child(n+5) { white-space: nowrap; }
+.cc-table th:nth-child(5),  .cc-table td:nth-child(5)  { min-width: 96px; }   /* stock */
+.cc-table th:nth-child(6),  .cc-table td:nth-child(6)  { min-width: 78px; }   /* ritmo */
+.cc-table th:nth-child(7),  .cc-table td:nth-child(7)  { min-width: 92px; }   /* cantidad */
+.cc-table th:nth-child(8),  .cc-table td:nth-child(8)  { min-width: 92px; }   /* costo */
+.cc-table th:nth-child(9),  .cc-table td:nth-child(9)  { min-width: 100px; }  /* subtotal */
+.cc-table th:nth-child(10), .cc-table td:nth-child(10) { min-width: 104px; }  /* acumulado */
+/* Y Producto absorbe lo que sobre, en vez de repartirlo entre las numéricas. */
+.cc-table th:nth-child(3) { width: 100%; }
+
+/* Lo que se puede HACER con el producto va en su propia línea, siempre en el
+   mismo lugar. Mezclado con el nombre, el acomodo cambiaba en cada fila según
+   cuánto medía el nombre. */
+.cc-prod-acc { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 5px; }
 .cc-table tbody tr:hover { background: var(--surface-hover); }
 .cc-prod { font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .cc-cob {
