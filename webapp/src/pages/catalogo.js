@@ -19,6 +19,14 @@ import { levantarLapida, levantarLapidas } from '../lapidas.js';
 import {
   TIPOS_BULTO, bultoDe, labelTipo, aUnidades, aUnidadesEstable, aBultos, textoBultos, alertaPorBulto,
 } from '../bulto.js';
+import {
+  esUsd, tienePreciosUsd, convertirProducto, precioDesdeCosto,
+  precioEnPesos, costoEnPesos, precioUnidadEnPesos, cotizacionValida,
+} from '../precio_usd.js';
+import {
+  asegurarCotizacion, escucharCotizacion, cotizacionEnMemoria, valorActual as dolarDeHoy,
+  fijarAMano, usarTipo, edadMinutos, TIPOS as TIPOS_DOLAR,
+} from '../cotizacion_usd.js';
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 function fmt(n) {
@@ -851,6 +859,355 @@ export async function renderCatalogo(container, db) {
   let currentPage = 1;
   const PER_PAGE = 50;
 
+  // ── Productos que se compran en dólares ──────────────────────────────────
+  //
+  // El catálogo guarda su precio EN DÓLARES (`precio_usd`) y también el último
+  // en pesos que se calculó. La pantalla muestra siempre el de hoy: apenas se
+  // sabe a cuánto está el dólar, los productos se pasan por `convertirProducto`
+  // y la grilla, el editor y el inventario trabajan con ese número.
+  //
+  // El valor del dólar es el mismo para el panel y las cinco cajas (ver
+  // `cotizacion_usd.js`): si una caja lo acaba de traer, el panel lo usa y no
+  // consulta nada.
+  let _dolar = cotizacionEnMemoria();
+  let _dejarDeEscucharDolar = null;
+
+  /** La lista con los precios en pesos de hoy. Los que no son en dólares pasan igual. */
+  function _conPreciosDeHoy(lista) {
+    const cot = _dolar && cotizacionValida(_dolar.valor) ? _dolar.valor : 0;
+    if (!cot) return lista;
+    return lista.map(p => (esUsd(p) ? convertirProducto(p, cot) : p));
+  }
+
+  /** Cuántos productos del catálogo se manejan en dólares. */
+  function _cuantosEnDolares() {
+    return allProductos.filter(p => esUsd(p)).length;
+  }
+
+  /** "hace 4 min", "hace 2 h", "de ayer". Vacío si no se sabe de cuándo es. */
+  function _edadDolarTexto(cot) {
+    const min = edadMinutos(cot);
+    if (min === null) return '';
+    if (min < 1) return 'recién';
+    if (min < 60) return `hace ${Math.round(min)} min`;
+    const horas = min / 60;
+    if (horas < 24) return `hace ${Math.round(horas)} h`;
+    const dias = Math.round(horas / 24);
+    return dias === 1 ? 'de ayer' : `hace ${dias} días`;
+  }
+
+  /**
+   * La barra que dice a cuánto está el dólar y desde cuándo.
+   *
+   * Aparece sola cuando hay al menos un producto en dólares: al que no los usa
+   * no le ocupa lugar. Es importante que se vea la EDAD del valor — un precio
+   * calculado con el dólar de ayer es un precio viejo, y eso tiene que estar a
+   * la vista y no escondido.
+   */
+  function _pintarBarraDolar() {
+    const host = document.getElementById('barraDolar');
+    if (!host) return;
+    const cuantos = _cuantosEnDolares();
+    const cot = _dolar;
+    if (!cuantos && !cot) { host.style.display = 'none'; host.innerHTML = ''; return; }
+
+    host.style.display = 'flex';
+    const hay = cot && cotizacionValida(cot.valor);
+    const min = hay ? edadMinutos(cot) : null;
+    const vieja = hay && !cot.manual && min !== null && min > (cot.refrescoMinutos || 30) * 3;
+    const color = !hay ? 'var(--danger)' : (vieja ? 'var(--tint-orange-fg)' : 'var(--text-muted)');
+    const nombre = hay ? (TIPOS_DOLAR[cot.tipo] || 'Dólar') : '';
+
+    host.innerHTML = `
+      <span style="display:inline-flex;align-items:center;gap:6px;font-weight:700;font-size:12px;letter-spacing:.4px;color:var(--tint-purple-fg)">
+        <span class="material-icons" style="font-size:16px">currency_exchange</span>U$S
+      </span>
+      ${hay ? `
+        <span style="font-size:13px;color:var(--text)"><b>${nombre} $${fmt(cot.valor)}</b></span>
+        <span style="font-size:12px;color:${color}">${cot.manual ? 'fijado a mano' : _edadDolarTexto(cot)}${vieja ? ' — puede estar viejo' : ''}</span>
+      ` : `
+        <span style="font-size:13px;color:${color}">Todavía no se pudo averiguar a cuánto está el dólar</span>
+      `}
+      ${cuantos ? `<span style="font-size:12px;color:var(--text-muted)">· ${cuantos} ${cuantos === 1 ? 'producto' : 'productos'} en dólares</span>` : ''}
+      <span style="flex:1"></span>
+      <button id="btnDolarRefrescar" title="Buscar la cotización ahora" style="padding:5px 10px;border-radius:7px;border:1px solid var(--border);background:var(--surface);cursor:pointer;color:var(--text-muted);font-size:12px;font-weight:600;display:inline-flex;align-items:center;gap:5px">
+        <span class="material-icons" style="font-size:15px">refresh</span>Actualizar
+      </button>
+      <button id="btnDolarPanel" title="Elegir qué dólar se usa o cargarlo a mano" style="padding:5px 10px;border-radius:7px;border:1px solid var(--border);background:var(--surface);cursor:pointer;color:var(--text-muted);font-size:12px;font-weight:600;display:inline-flex;align-items:center;gap:5px">
+        <span class="material-icons" style="font-size:15px">tune</span>Configurar
+      </button>
+    `;
+
+    host.querySelector('#btnDolarRefrescar').addEventListener('click', async (ev) => {
+      const btn = ev.currentTarget;
+      btn.disabled = true;
+      const antes = btn.innerHTML;
+      btn.innerHTML = '<span class="material-icons" style="font-size:15px">hourglass_empty</span>Buscando...';
+      try {
+        const cot2 = await asegurarCotizacion(db, { forzar: true });
+        if (!cot2) {
+          await alertDialog({
+            title: 'No se pudo averiguar el dólar',
+            message: 'Ni dolarapi ni bluelytics contestaron. Podés cargarlo a mano desde <b>Configurar</b>; los precios en pesos que ya estaban calculados siguen valiendo.',
+            type: 'warning',
+          });
+        }
+        _alCambiarElDolar(cot2);
+      } finally {
+        const vivo = document.getElementById('btnDolarRefrescar');
+        if (vivo) { vivo.disabled = false; vivo.innerHTML = antes; }
+      }
+    });
+    host.querySelector('#btnDolarPanel').addEventListener('click', () => _abrirPanelDolar());
+  }
+
+  /**
+   * Repinta lo que depende del dólar cuando llega un valor nuevo.
+   *
+   * Se llama al abrir la pantalla y cada vez que otra caja (o el propio panel)
+   * actualiza la cotización: los precios de los productos importados cambian en
+   * el momento, sin recargar nada.
+   */
+  function _alCambiarElDolar(cot) {
+    const antes = _dolar?.valor || 0;
+    if (cot) _dolar = cot;
+    _pintarBarraDolar();
+    if (!cot || cot.valor === antes) return;
+    if (_cuantosEnDolares() === 0) return;
+    allProductos = _conPreciosDeHoy(allProductos);
+    const activa = document.querySelector('.tab-btn.active')?.dataset?.tab;
+    if (activa === 'catalogo') {
+      try { aplicarFiltros(); } catch (_) {}
+      try { renderStats(); } catch (_) {}
+    } else if (activa === 'inventario') {
+      const tc = document.getElementById('tabContent');
+      if (tc) { try { renderTabInventario(tc); } catch (_) {} }
+    }
+  }
+
+  /**
+   * Qué dólar se usa, cuánto vale y cada cuánto se busca.
+   *
+   * Lo que se elige acá vale para el panel Y para las cinco cajas: es el mismo
+   * documento. Por eso la pantalla dice de dónde salió el valor.
+   */
+  async function _abrirPanelDolar() {
+    const cot = _dolar;
+    const tipoActual = cot?.manual ? 'manual' : (cot?.tipo || 'blue');
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:2100;display:flex;align-items:center;justify-content:center;padding:12px';
+    const opcion = (id, titulo, detalle) => `
+      <button type="button" data-tipo="${id}" class="dolar-opt" style="display:flex;flex-direction:column;align-items:flex-start;gap:2px;text-align:left;padding:10px 12px;border-radius:10px;border:1.5px solid ${tipoActual === id ? '#7c3aed' : 'var(--border)'};background:${tipoActual === id ? 'var(--tint-purple-bg)' : 'var(--surface)'};cursor:pointer;font-family:inherit;width:100%">
+        <span style="font-size:13px;font-weight:700;color:${tipoActual === id ? 'var(--tint-purple-fg)' : 'var(--text)'}">${titulo}</span>
+        <span style="font-size:11.5px;color:var(--text-muted)">${detalle}</span>
+      </button>`;
+
+    overlay.innerHTML = `
+      <div style="background:var(--surface);border-radius:16px;max-width:460px;width:100%;box-shadow:0 12px 48px rgba(0,0,0,0.22);overflow:hidden;display:flex;flex-direction:column;max-height:92vh">
+        <div style="background:linear-gradient(135deg,#7c3aed,#5b21b6);padding:14px 18px;display:flex;align-items:center;justify-content:space-between">
+          <div>
+            <div style="color:rgba(255,255,255,0.75);font-size:11px;font-weight:700;letter-spacing:1px">COTIZACIÓN</div>
+            <div style="color:#fff;font-size:14px;font-weight:700">El dólar con el que se cobran los importados</div>
+          </div>
+          <button id="dolarCerrar" style="background:rgba(255,255,255,0.15);border:none;cursor:pointer;color:#fff;width:30px;height:30px;border-radius:50%;display:flex;align-items:center;justify-content:center">
+            <span class="material-icons" style="font-size:17px">close</span>
+          </button>
+        </div>
+        <div style="padding:16px 18px;display:flex;flex-direction:column;gap:14px;overflow-y:auto">
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <label style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:.5px">CUÁL SE USA</label>
+            ${opcion('blue', 'Dólar blue', 'El de la calle. Es el que se paga al reponer.')}
+            ${opcion('oficial', 'Dólar oficial', 'El del Banco Nación. Más bajo y más quieto.')}
+            ${opcion('tarjeta', 'Dólar tarjeta', 'Oficial más impuestos. El más alto.')}
+          </div>
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <label style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:.5px">O CARGARLO A MANO</label>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input id="dolarManual" type="number" step="0.01" min="0" placeholder="${cot?.valor ? fmt(cot.valor) : '1550'}" style="flex:1;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit" />
+              <button id="dolarFijar" style="padding:9px 14px;border-radius:8px;border:none;background:#7c3aed;color:#fff;cursor:pointer;font-size:13px;font-weight:700;font-family:inherit;white-space:nowrap">Fijar</button>
+            </div>
+            <span style="font-size:11.5px;color:var(--text-muted)">Queda fijo en ese valor hasta que elijas un dólar de arriba. Sirve cuando el proveedor cobra a un dólar propio.</span>
+          </div>
+          <div style="display:flex;flex-direction:column;gap:7px">
+            <label style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:.5px">CADA CUÁNTO SE BUSCA</label>
+            <div style="display:flex;gap:8px;align-items:center">
+              <input id="dolarMinutos" type="number" step="5" min="1" max="1440" value="${cot?.refrescoMinutos || 30}" style="width:90px;padding:9px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit" />
+              <span style="font-size:12.5px;color:var(--text-muted)">minutos</span>
+              <button id="dolarMinutosOk" style="padding:8px 12px;border-radius:8px;border:1px solid var(--border);background:var(--surface);cursor:pointer;font-size:12.5px;font-weight:600;font-family:inherit;color:var(--text-muted)">Guardar</button>
+            </div>
+            <span style="font-size:11.5px;color:var(--text-muted)">Entre el panel y las cinco cajas se sale a internet una sola vez cada tanto; el valor que consigue una lo ven todas en el acto.</span>
+          </div>
+          <div style="border-top:1px solid var(--border);padding-top:12px;display:flex;flex-direction:column;gap:7px">
+            <label style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:.5px">PASAR LOS PRECIOS AL CATÁLOGO</label>
+            <span style="font-size:11.5px;color:var(--text-muted)">Los productos en dólares ya se cobran al precio de hoy. Esto además deja ese precio escrito en el catálogo: es lo que ve la tienda online, lo que usan los informes y con lo que cobra una caja que se quedó sin internet. Conviene hacerlo antes de imprimir etiquetas.</span>
+            <button id="dolarPasarPrecios" style="padding:9px 14px;border-radius:8px;border:1.5px solid #7c3aed;background:var(--surface);color:#7c3aed;cursor:pointer;font-size:13px;font-weight:700;font-family:inherit;align-self:flex-start">Actualizar los precios en pesos</button>
+          </div>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const cerrar = () => { overlay.remove(); document.removeEventListener('keydown', alEscape); };
+    const alEscape = (e) => { if (e.key === 'Escape') cerrar(); };
+    document.addEventListener('keydown', alEscape);
+    overlay.addEventListener('click', e => { if (e.target === overlay) cerrar(); });
+    overlay.querySelector('#dolarCerrar').addEventListener('click', cerrar);
+
+    overlay.querySelectorAll('.dolar-opt').forEach(btn => {
+      btn.addEventListener('click', async () => {
+        const tipo = btn.dataset.tipo;
+        btn.disabled = true;
+        const nuevo = await usarTipo(db, tipo);
+        cerrar();
+        if (!nuevo) {
+          await alertDialog({
+            title: 'Sin conexión con la cotización',
+            message: 'No se pudo conseguir ese dólar y no había ninguno guardado. Cargalo a mano para poder calcular los precios.',
+            type: 'warning',
+          });
+          return;
+        }
+        _alCambiarElDolar(nuevo);
+      });
+    });
+
+    overlay.querySelector('#dolarFijar').addEventListener('click', async () => {
+      const valor = parseFloat(overlay.querySelector('#dolarManual').value);
+      if (!cotizacionValida(valor)) {
+        await alertDialog({ title: 'Valor inválido', message: 'Cargá a cuánto está el dólar, en pesos.', type: 'warning' });
+        return;
+      }
+      const nuevo = await fijarAMano(db, valor);
+      cerrar();
+      _alCambiarElDolar(nuevo);
+    });
+
+    overlay.querySelector('#dolarMinutosOk').addEventListener('click', async () => {
+      const minutos = parseInt(overlay.querySelector('#dolarMinutos').value, 10);
+      if (!(minutos >= 1 && minutos <= 1440)) {
+        await alertDialog({ title: 'Valor inválido', message: 'Entre 1 minuto y 24 horas.', type: 'warning' });
+        return;
+      }
+      if (!_dolar) {
+        await alertDialog({ title: 'Todavía no hay cotización', message: 'Primero conseguí o cargá un valor.', type: 'warning' });
+        return;
+      }
+      await setDoc(doc(db, 'config', 'cotizacion_usd'), { refresco_minutos: minutos }, { merge: true });
+      _dolar = { ..._dolar, refrescoMinutos: minutos };
+      cerrar();
+      _pintarBarraDolar();
+    });
+
+    overlay.querySelector('#dolarPasarPrecios').addEventListener('click', async () => {
+      cerrar();
+      await _pasarPreciosUsdAlCatalogo();
+    });
+  }
+
+  /**
+   * Deja escrito en el catálogo el precio en pesos de hoy de los importados.
+   *
+   * El POS ya cobra al precio del día sin esto (lo calcula al vender). Esto es
+   * para todo lo demás: la tienda online publica `precio_venta`, los informes
+   * lo suman, y una caja que arranca sin internet vende con lo último escrito.
+   * Se toca únicamente lo que cambió, y solo de los productos en dólares.
+   */
+  async function _pasarPreciosUsdAlCatalogo() {
+    const cot = _dolar && cotizacionValida(_dolar.valor) ? _dolar.valor : 0;
+    if (!cot) {
+      await alertDialog({
+        title: 'Falta la cotización',
+        message: 'Sin saber a cuánto está el dólar no se puede calcular ningún precio.',
+        type: 'warning',
+      });
+      return;
+    }
+
+    // Se compara contra el documento guardado, no contra lo que muestra la
+    // pantalla (que ya está convertido): si no, no habría nunca diferencia.
+    const crudos = peekCacheValue('catalogo:all') || [];
+    const porId = new Map(crudos.map(p => [String(p.doc_id), p]));
+    const cambios = [];
+    for (const p of allProductos) {
+      if (!esUsd(p) || !tienePreciosUsd(p)) continue;
+      const guardado = porId.get(String(p.doc_id)) || p;
+      const alDia = convertirProducto({ ...guardado, doc_id: p.doc_id }, cot);
+      const campos = {};
+      for (const campo of ['precio_venta', 'costo', 'conjunto_precio_unidad']) {
+        const antes = Number(guardado[campo] || 0);
+        const ahora = Number(alDia[campo] || 0);
+        if (ahora > 0 && Math.abs(ahora - antes) > 0.009) campos[campo] = ahora;
+      }
+      if (Array.isArray(alDia.conjunto_colores)
+          && JSON.stringify(alDia.conjunto_colores) !== JSON.stringify(guardado.conjunto_colores || [])) {
+        campos.conjunto_colores = alDia.conjunto_colores;
+      }
+      if (Object.keys(campos).length) {
+        cambios.push({ doc_id: p.doc_id, nombre: p.nombre || '', campos, antes: Number(guardado.precio_venta || 0) });
+      }
+    }
+
+    if (!cambios.length) {
+      await alertDialog({
+        title: 'Ya está todo al día',
+        message: 'Los precios en pesos del catálogo coinciden con el dólar de ahora.',
+        type: 'success',
+      });
+      return;
+    }
+
+    const muestra = cambios.slice(0, 8).map(c => {
+      const nuevo = c.campos.precio_venta ?? c.antes;
+      return `<li style="margin:2px 0">${_escHtml(c.nombre)}: <b>$${fmt(c.antes)}</b> → <b>$${fmt(nuevo)}</b></li>`;
+    }).join('');
+    const ok = await confirmModal({
+      title: 'Actualizar precios en pesos',
+      message: `Se van a reescribir los precios de <b>${cambios.length}</b> ${cambios.length === 1 ? 'producto' : 'productos'} con el dólar a <b>$${fmt(cot)}</b>.<br/><br/>
+        <ul style="margin:0;padding-left:18px;font-size:13px">${muestra}</ul>
+        ${cambios.length > 8 ? `<div style="margin-top:6px;color:var(--text-muted);font-size:12.5px">y ${cambios.length - 8} más</div>` : ''}
+        <div style="margin-top:10px;color:var(--text-muted);font-size:12.5px">El precio en dólares de cada producto no se toca: esto solo deja escrito a cuánto da hoy.</div>`,
+      confirmText: 'Actualizar',
+    });
+    if (!ok) return;
+
+    let escritos = 0;
+    try {
+      for (let i = 0; i < cambios.length; i += 400) {
+        const tanda = cambios.slice(i, i + 400);
+        const batch = writeBatch(db);
+        for (const c of tanda) {
+          batch.update(doc(db, 'catalogo', c.doc_id), {
+            ...c.campos,
+            cotizacion_usada: cot,
+            ultima_actualizacion: serverTimestamp(),
+          });
+        }
+        await batch.commit();
+        escritos += tanda.length;
+      }
+    } catch (e) {
+      console.error('[usd] no se pudieron actualizar los precios:', e);
+      await alertDialog({
+        title: 'Quedó a medias',
+        message: `Se actualizaron ${escritos} de ${cambios.length}. Probá de nuevo: lo que ya se escribió no se vuelve a tocar.`,
+        type: 'error',
+      });
+      return;
+    }
+
+    // Que la tienda lo vea ya, sin esperar al sync de las seis horas.
+    for (const c of cambios) {
+      const p = allProductos.find(x => String(x.doc_id) === String(c.doc_id));
+      if (p) reflejarSiPublicado(db, c.doc_id, { ...p, ...c.campos }).catch(() => {});
+    }
+    invalidateCache('catalogo:all');
+    await alertDialog({
+      title: 'Precios actualizados',
+      message: `${escritos} ${escritos === 1 ? 'producto quedó' : 'productos quedaron'} con el precio en pesos del dólar a $${fmt(cot)}.`,
+      type: 'success',
+    });
+  }
+
   // ── Selección múltiple (borrado en lote) ──
   // selMode: modo activo (muestra checkboxes). selMap: doc_id -> producto
   // completo. Guardar el producto entero permite armar la preview y el
@@ -919,7 +1276,9 @@ export async function renderCatalogo(container, db) {
       // Releer el catálogo desde el store (pinneado) sin re-fetch.
       const fresh = peekCacheValue('catalogo:all');
       if (Array.isArray(fresh)) {
-        allProductos = fresh.map(p => (typeof p.doc_id === 'string') ? p : { ...p, doc_id: String(p.doc_id) });
+        allProductos = _conPreciosDeHoy(
+          fresh.map(p => (typeof p.doc_id === 'string') ? p : { ...p, doc_id: String(p.doc_id) })
+        );
       }
     }
 
@@ -1054,7 +1413,9 @@ export async function renderCatalogo(container, db) {
     // Documentos viejos guardaron un campo `doc_id` numérico que pisa el id de
     // Firestore. Normalizamos a string para que `p.doc_id === btn.dataset.id`
     // (que siempre es string) matchee.
-    allProductos = raw.map(p => (typeof p.doc_id === 'string') ? p : { ...p, doc_id: String(p.doc_id) });
+    allProductos = _conPreciosDeHoy(
+      raw.map(p => (typeof p.doc_id === 'string') ? p : { ...p, doc_id: String(p.doc_id) })
+    );
     filtrados = [...allProductos];
   }
 
@@ -1427,6 +1788,10 @@ export async function renderCatalogo(container, db) {
     const marcas= [...new Set(base.map(p => p.marca).filter(Boolean))].sort();
 
     tc.innerHTML = `
+      <!-- A cuánto está el dólar. Aparece sola cuando hay algún producto en
+           dólares; al que no los usa no le ocupa lugar. -->
+      <div id="barraDolar" style="display:none;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 14px;margin-bottom:10px;border:1px solid var(--border);border-left:3px solid #7c3aed;border-radius:10px;background:var(--surface)"></div>
+
       <div class="cat-toolbar">
         <div class="filter-bar" style="flex-wrap:wrap;gap:8px">
           <div style="position:relative;flex:2;min-width:280px;display:flex;align-items:center">
@@ -1563,6 +1928,7 @@ export async function renderCatalogo(container, db) {
       aplicarFiltros();
     });
     _pintarABC();
+    _pintarBarraDolar();
 
     // ── Selección múltiple ──
     document.getElementById('btnSelMode')?.addEventListener('click', () => toggleSelMode());
@@ -1857,13 +2223,14 @@ export async function renderCatalogo(container, db) {
         <td class="precio-cell" data-id="${p.doc_id}" data-field="costo" style="cursor:pointer" title="Click para editar">
           <div style="display:inline-flex;align-items:center;gap:4px"><span>$${fmt(p.costo)}</span>${costoTipHtml}</div>
         </td>
-        <td class="precio-cell" data-id="${p.doc_id}" data-field="precio_venta" style="cursor:pointer" title="Click para editar">
+        <td class="precio-cell" data-id="${p.doc_id}" data-field="precio_venta" style="cursor:pointer" title="${esUsd(p) ? 'Precio en dólares: se edita desde la ficha' : 'Click para editar'}">
           <div style="display:inline-flex;align-items:center;gap:4px">
             <span>$${fmt(p.precio_venta)}</span>
             ${(() => {
               const margenPct = p.costo > 0 ? Math.round(((p.precio_venta - p.costo)/p.costo)*100) : 0;
               return `<span style="font-size:10px;color:var(--tint-purple-fg);font-weight:700;margin-left:4px">(${margenPct}%)</span>`;
             })()}
+            ${esUsd(p) ? `<span title="Se compra en dólares: U$S ${Number(p.precio_usd) || 0}${_dolar?.valor ? ` × $${fmt(_dolar.valor)}` : ''}. El precio en pesos se recalcula en cada venta." style="font-size:9.5px;font-weight:800;letter-spacing:.3px;color:#fff;background:#7c3aed;border-radius:4px;padding:1px 4px;margin-left:2px">U$S</span>` : ''}
             ${packTipHtml}
           </div>
         </td>
@@ -2449,7 +2816,19 @@ export async function renderCatalogo(container, db) {
     const optsRubro   = ['', ...RUBROS].map(r => `<option value="${r}" ${r === (prod.rubro||'') ? 'selected' : ''}>${r || '— Sin rubro —'}</option>`).join('');
     const optsSubRub  = ['', ...subRubrosDisponibles].map(s => `<option value="${s}" ${s === (prod.sub_rubro||'') ? 'selected' : ''}>${s || '— Sin sub-rubro —'}</option>`).join('');
 
-    const margenActual = prod.costo > 0 ? Math.round(((prod.precio_venta - prod.costo) / prod.costo) * 100) : 0;
+    // Un producto que se compra en dólares carga el costo y el precio EN
+    // dólares; los pesos se calculan y se muestran abajo. El margen es el
+    // mismo número en las dos monedas (es un porcentaje), pero se saca de los
+    // valores en dólares cuando los hay: el costo en pesos que quedó guardado
+    // puede ser de otra cotización.
+    const _empiezaEnUsd  = esUsd(prod);
+    const _costoUsdIni   = Number(prod.costo_usd) || 0;
+    const _precioUsdIni  = Number(prod.precio_usd) || 0;
+    const margenActual = (_empiezaEnUsd && _costoUsdIni > 0)
+      ? Math.round(((_precioUsdIni - _costoUsdIni) / _costoUsdIni) * 100)
+      : (prod.costo > 0 ? Math.round(((prod.precio_venta - prod.costo) / prod.costo) * 100) : 0);
+    const _costoIni  = _empiezaEnUsd ? _costoUsdIni  : (prod.costo || 0);
+    const _precioIni = _empiezaEnUsd ? _precioUsdIni : (prod.precio_venta || 0);
 
     overlay.innerHTML = `
       <style>
@@ -2523,11 +2902,26 @@ export async function renderCatalogo(container, db) {
 
           <!-- Placeholder donde vive el bloque de precio cuando el Conjunto está OFF -->
           <div id="ed_precio_home"></div>
+
+          <!-- En qué moneda se maneja este producto.
+               Con "Dólares" el costo y el precio se cargan en dólares y el
+               precio en pesos se calcula con la cotización del día, cada vez
+               que se vende. El precio en pesos igual queda guardado: es con lo
+               que cobra una caja sin internet y lo que publica la tienda. -->
+          <div id="ed_moneda_bar" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+            <span style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:0.5px">SE COMPRA EN</span>
+            <div style="display:inline-flex;border:1.5px solid var(--border);border-radius:8px;overflow:hidden">
+              <button type="button" id="ed_moneda_ars" style="padding:6px 14px;border:none;background:var(--surface);color:var(--text-muted);cursor:pointer;font-size:12.5px;font-weight:700;font-family:inherit">Pesos</button>
+              <button type="button" id="ed_moneda_usd" style="padding:6px 14px;border:none;border-left:1.5px solid var(--border);background:var(--surface);color:var(--text-muted);cursor:pointer;font-size:12.5px;font-weight:700;font-family:inherit">Dólares</button>
+            </div>
+            <span id="ed_moneda_hint" style="font-size:11.5px;color:var(--text-muted)"></span>
+          </div>
+
           <!-- Costo + Precio venta (se mueve al bloque Conjunto cuando está activo) -->
           <div id="ed_precio_block" style="display:grid;grid-template-columns:repeat(auto-fit,minmax(110px,1fr));gap:12px">
             <div>
               <label id="lbl_ed_costo" style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:0.5px;display:block;margin-bottom:6px">COSTO $</label>
-              <input id="ed_costo" type="number" step="0.01" min="0" value="${prod.costo || 0}" style="width:100%;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit" />
+              <input id="ed_costo" type="number" step="0.01" min="0" value="${_costoIni}" style="width:100%;padding:10px 12px;border:1.5px solid var(--border);border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit" />
             </div>
             <div>
               <label style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:0.5px;display:block;margin-bottom:6px">MARGEN %</label>
@@ -2536,11 +2930,16 @@ export async function renderCatalogo(container, db) {
             <div>
               <label id="lbl_ed_precio" style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:0.5px;display:block;margin-bottom:6px">PRECIO VENTA $</label>
               <div style="display:flex;gap:6px;align-items:center">
-                <input id="ed_precio" type="number" step="0.01" min="0" value="${prod.precio_venta || 0}" style="width:100%;padding:10px 12px;border:1.5px solid #1877f2;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit;font-weight:700" />
+                <input id="ed_precio" type="number" step="0.01" min="0" value="${_precioIni}" style="width:100%;padding:10px 12px;border:1.5px solid #1877f2;border-radius:8px;font-size:14px;box-sizing:border-box;font-family:inherit;font-weight:700" />
                 <button id="btn_redondear" type="button" title="Redondear al centena más cercano" style="flex-shrink:0;padding:10px 10px;border-radius:8px;border:1.5px solid var(--border);background:var(--bg);cursor:pointer;font-size:12px;font-weight:700;color:var(--text);white-space:nowrap;line-height:1">±100</button>
               </div>
             </div>
           </div>
+
+          <!-- La cuenta a la vista: cuánto sale hoy en pesos, con qué dólar y
+               de cuándo es ese dólar. Sin esto, el precio real del producto
+               queda escondido detrás de una multiplicación. -->
+          <div id="ed_usd_resultado" style="display:none;padding:10px 12px;border-radius:10px;background:var(--tint-purple-bg);border:1px solid #c4b5fd;font-size:12.5px;color:var(--tint-purple-fg);line-height:1.5"></div>
 
           <!-- Stock + Alertas.
                Con "Producto Conjunto" activo el campo STOCK se oculta (se calcula
@@ -2681,7 +3080,7 @@ export async function renderCatalogo(container, db) {
               <div>
                 <label id="lbl_titulo_punidad" style="font-size:11px;font-weight:700;color:var(--text-muted);letter-spacing:0.5px;display:block;margin-bottom:4px">PRECIO POR METRO <span style="color:var(--text-muted);font-weight:500">(auto)</span></label>
                 <div style="display:flex;gap:5px;align-items:center">
-                  <input id="ed_conj_precio_unidad" type="number" min="0" step="0.01" value="${prod.conjunto_precio_unidad ?? ''}" placeholder="Auto" style="flex:1 1 auto;min-width:0;width:auto;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
+                  <input id="ed_conj_precio_unidad" type="number" min="0" step="0.01" value="${(_empiezaEnUsd ? prod.conjunto_precio_unidad_usd : prod.conjunto_precio_unidad) ?? ''}" placeholder="Auto" style="flex:1 1 auto;min-width:0;width:auto;padding:8px 10px;border:1.5px solid var(--border);border-radius:8px;font-size:13px;box-sizing:border-box;font-family:inherit" />
                   <button id="btn_redondear_pu" type="button" title="Redondear al centena más cercano" style="flex-shrink:0;padding:8px 10px;border-radius:8px;border:1.5px solid var(--border);background:var(--bg);cursor:pointer;font-size:11px;font-weight:700;color:var(--text);white-space:nowrap;line-height:1">±100</button>
                   <button id="ed_aplicar_precio_var" type="button" title="Aplicar este PRECIO POR METRO a todas las variedades" style="flex-shrink:0;display:inline-flex;align-items:center;justify-content:center;padding:8px;border-radius:8px;border:1.5px solid #7c3aed;background:#7c3aed;color:#fff;cursor:pointer;line-height:1;transition:background .15s,border-color .15s">
                     <span class="material-icons" style="font-size:16px">sync_alt</span>
@@ -2765,6 +3164,132 @@ export async function renderCatalogo(container, db) {
     const inMargen = overlay.querySelector('#ed_margen');
     const inPrecio = overlay.querySelector('#ed_precio');
 
+    // ── Producto que se compra en dólares ──────────────────────────────────
+    //
+    // Con el modo prendido, COSTO y PRECIO se cargan en dólares y los pesos se
+    // calculan con la cotización del día. El margen es el mismo número en las
+    // dos monedas, así que el cálculo costo→precio de abajo no cambia.
+    let monedaUsd = _empiezaEnUsd;
+    const btnMonedaArs = overlay.querySelector('#ed_moneda_ars');
+    const btnMonedaUsd = overlay.querySelector('#ed_moneda_usd');
+    const hintMoneda   = overlay.querySelector('#ed_moneda_hint');
+    const resultadoUsd = overlay.querySelector('#ed_usd_resultado');
+
+    const _dolarEditor = () => (_dolar && cotizacionValida(_dolar.valor) ? _dolar.valor : 0);
+
+    /** El precio del pack en pesos según lo que hay escrito ahora en pantalla. */
+    function _precioPesosEditor() {
+      return precioEnPesos(parseFloat(inPrecio.value) || 0, _dolarEditor());
+    }
+
+    /**
+     * La cuenta, a la vista: dólares × cotización = pesos.
+     *
+     * Muestra también el precio por unidad cuando el producto es fraccionado,
+     * porque es el que se cobra de verdad al que compra un metro.
+     */
+    function _pintarResultadoUsd() {
+      if (!monedaUsd) { resultadoUsd.style.display = 'none'; return; }
+      resultadoUsd.style.display = 'block';
+      const cot = _dolarEditor();
+      const precioUsdVal = parseFloat(inPrecio.value) || 0;
+      const costoUsdVal  = parseFloat(inCosto.value) || 0;
+
+      if (!cot) {
+        resultadoUsd.style.background = 'var(--tint-orange-bg)';
+        resultadoUsd.style.borderColor = 'var(--tint-orange-fg)';
+        resultadoUsd.style.color = 'var(--tint-orange-fg)';
+        resultadoUsd.innerHTML = `
+          <b>Todavía no se sabe a cuánto está el dólar.</b><br/>
+          El precio en dólares se guarda igual, pero hasta que haya cotización no se puede calcular el de pesos.
+          Cargalo a mano desde la barra de arriba del catálogo.`;
+        return;
+      }
+
+      resultadoUsd.style.background = 'var(--tint-purple-bg)';
+      resultadoUsd.style.borderColor = '#c4b5fd';
+      resultadoUsd.style.color = 'var(--tint-purple-fg)';
+      const pesos = precioEnPesos(precioUsdVal, cot);
+      const costoPesos = costoEnPesos(costoUsdVal, cot);
+      const nombreDolar = TIPOS_DOLAR[_dolar.manual ? 'manual' : _dolar.tipo] || 'Dólar';
+
+      // El precio por unidad del conjunto, si está cargado.
+      let porUnidad = '';
+      const inPU = overlay.querySelector('#ed_conj_precio_unidad');
+      const puUsd = parseFloat(inPU?.value) || 0;
+      if (cbConj?.checked && puUsd > 0) {
+        const um = (conjUM?.value === 'metros') ? 'el metro' : 'la unidad';
+        porUnidad = ` · U$S ${puUsd} = <b>$${fmt(precioUnidadEnPesos(puUsd, cot))}</b> ${um}`;
+      }
+
+      resultadoUsd.innerHTML = `
+        <b>U$S ${precioUsdVal || 0} × $${fmt(cot)} = $${fmt(pesos)}</b>${porUnidad}<br/>
+        <span style="opacity:.85">Costo U$S ${costoUsdVal || 0} = $${fmt(costoPesos)} · ${nombreDolar} ${_dolar.manual ? 'fijado a mano' : _edadDolarTexto(_dolar)}</span><br/>
+        <span style="opacity:.85">Se recalcula solo en cada venta: si el dólar se mueve, el precio acompaña.</span>`;
+    }
+
+    /** Prende o apaga el modo dólares en toda la ficha. */
+    function _pintarMoneda() {
+      const prendido = (btn, on) => {
+        btn.style.background = on ? '#7c3aed' : 'var(--surface)';
+        btn.style.color = on ? '#fff' : 'var(--text-muted)';
+      };
+      prendido(btnMonedaArs, !monedaUsd);
+      prendido(btnMonedaUsd, monedaUsd);
+
+      const lblCosto  = overlay.querySelector('#lbl_ed_costo');
+      const lblPrecio = overlay.querySelector('#lbl_ed_precio');
+      const esConjActivo = !!cbConj?.checked;
+      if (lblCosto) {
+        lblCosto.textContent = monedaUsd
+          ? (esConjActivo ? 'COSTO U$S DEL PACK' : 'COSTO U$S')
+          : (esConjActivo ? 'COSTO $ DEL PACK' : 'COSTO $');
+      }
+      if (lblPrecio) {
+        lblPrecio.textContent = monedaUsd
+          ? (esConjActivo ? 'PRECIO U$S DEL PACK' : 'PRECIO U$S')
+          : (esConjActivo ? 'PRECIO $ DEL PACK' : 'PRECIO VENTA $');
+      }
+      // En dólares el redondeo a la centena lo hace la conversión a pesos:
+      // redondear los dólares dejaría precios de U$S 100 en adelante.
+      const btnR = overlay.querySelector('#btn_redondear');
+      if (btnR) btnR.style.display = monedaUsd ? 'none' : '';
+
+      hintMoneda.textContent = monedaUsd
+        ? 'El precio en pesos se calcula con el dólar del día, en cada venta.'
+        : '';
+      hintMoneda.style.color = 'var(--text-muted)';
+
+      _pintarResultadoUsd();
+      if (typeof _aplicarMonedaAVariedades === 'function') _aplicarMonedaAVariedades();
+    }
+
+    /**
+     * Cambiar de moneda convierte lo que hay escrito, no lo borra.
+     *
+     * Un producto que estaba en $4.145 y pasa a dólares queda en U$S 2,67 con
+     * el dólar a 1.550: el mismo producto, contado de otra forma. Sin esto, el
+     * primer paso de cualquiera es quedarse con un costo de "4145 dólares".
+     */
+    function _cambiarMoneda(aUsd) {
+      if (aUsd === monedaUsd) return;
+      const cot = _dolarEditor();
+      const costoV  = parseFloat(inCosto.value) || 0;
+      const precioV = parseFloat(inPrecio.value) || 0;
+      if (cot > 0 && (costoV > 0 || precioV > 0)) {
+        const convertir = (v) => (aUsd ? (v / cot) : (v * cot));
+        if (costoV > 0)  inCosto.value  = aUsd ? (costoV / cot).toFixed(2) : costoEnPesos(costoV, cot);
+        if (precioV > 0) inPrecio.value = aUsd ? (precioV / cot).toFixed(2) : precioEnPesos(precioV, cot);
+        void convertir;
+      }
+      monedaUsd = aUsd;
+      _pintarMoneda();
+      if (typeof _refrescarConjunto === 'function') _refrescarConjunto();
+    }
+
+    btnMonedaArs.addEventListener('click', () => _cambiarMoneda(false));
+    btnMonedaUsd.addEventListener('click', () => _cambiarMoneda(true));
+
     // Cuando se modifica programáticamente inPrecio (desde costo/margen o ±100),
     // hay que avisarle al resumen del Producto Conjunto. Setear .value no dispara
     // 'input' por sí solo, así que disparamos el evento manualmente.
@@ -2778,6 +3303,7 @@ export async function renderCatalogo(container, db) {
         inPrecio.value = (c * (1 + m / 100)).toFixed(2);
         _emitInput(inPrecio);
       }
+      _pintarResultadoUsd();
     });
     inMargen.addEventListener('input', () => {
       const c = parseFloat(inCosto.value) || 0;
@@ -2786,11 +3312,13 @@ export async function renderCatalogo(container, db) {
         inPrecio.value = (c * (1 + m / 100)).toFixed(2);
         _emitInput(inPrecio);
       }
+      _pintarResultadoUsd();
     });
     inPrecio.addEventListener('input', () => {
       const c = parseFloat(inCosto.value) || 0;
       const p = parseFloat(inPrecio.value) || 0;
       if (c > 0 && p > 0) inMargen.value = Math.round(((p - c) / c) * 100);
+      _pintarResultadoUsd();
     });
 
     overlay.querySelector('#btn_redondear').addEventListener('click', () => {
@@ -3021,7 +3549,7 @@ export async function renderCatalogo(container, db) {
       lblTitU.innerHTML    = `${pl} ${enteros} <span style="font-weight:500">(sin contar ${elAbierto})</span>`;
       lblTitC.textContent  = `${um.toUpperCase()} POR ${sg}`;
       lblTitR.innerHTML    = `${um.toUpperCase()} ${sueltos} EN ${sg} ${abierto} <span style="color:var(--text-muted);font-weight:500">(opcional)</span>`;
-      lblTitPU.innerHTML   = `PRECIO POR ${umSg.toUpperCase()} <span style="color:var(--text-muted);font-weight:500">(auto)</span>`;
+      lblTitPU.innerHTML   = `PRECIO POR ${umSg.toUpperCase()}${monedaUsd ? ' U$S' : ''} <span style="color:var(--text-muted);font-weight:500">(auto)</span>`;
       // Los umbrales de alerta se expresan en la misma unidad de medida.
       if (typeof _aplicarEtiquetasAlertaStock === 'function') _aplicarEtiquetasAlertaStock(cbConj.checked);
       _aplicarVisibilidadFraccion();
@@ -3262,6 +3790,8 @@ export async function renderCatalogo(container, db) {
     cbConj.addEventListener('change', () => {
       _aplicarVisibilidadConjunto();
       if (cbConj.checked) _refrescarConjunto();
+      // Las etiquetas del bloque de precio dicen "DEL PACK" o no según esto.
+      _pintarMoneda();
     });
     // Si el producto tiene variedades y el usuario vacía el umbral global, el
     // bloque desaparece (queda solo el mínimo por fila). Se evalúa al salir del
@@ -3300,6 +3830,9 @@ export async function renderCatalogo(container, db) {
     // El precio del rollo y el campo de precio por unidad también disparan recalculo
     if (inPrecio) inPrecio.addEventListener('input', _refrescarConjunto);
     if (conjPU)   conjPU.addEventListener('input', _refrescarConjunto);
+    // El precio por unidad también se carga en dólares: su conversión a pesos
+    // se muestra en el bloque de arriba.
+    if (conjPU)   conjPU.addEventListener('input', _pintarResultadoUsd);
     if (cbConj.checked) _refrescarConjunto();
 
     // ── Stock por color ───────────────────────────────────────────────
@@ -3563,6 +4096,14 @@ export async function renderCatalogo(container, db) {
       `;
       row.appendChild(vincLinea);
 
+      // Sub-fila: a cuánto queda esta variedad EN PESOS cuando el producto se
+      // compra en dólares. Los campos de arriba se cargan en dólares y sin
+      // esto el precio que se va a cobrar de verdad no se ve por ningún lado.
+      const usdLinea = document.createElement('div');
+      usdLinea.className = 'ed_color_usd';
+      usdLinea.style.cssText = 'display:none;align-items:center;gap:6px;padding:2px 4px 0;font-size:10.5px;color:var(--tint-purple-fg);flex-wrap:wrap;font-weight:600';
+      row.appendChild(usdLinea);
+
       const vincListaVar = vincLinea.querySelector('.ed_color_vinc_lista');
       const vincAddVar   = vincLinea.querySelector('.ed_color_vinc_add');
 
@@ -3756,6 +4297,7 @@ export async function renderCatalogo(container, db) {
           if (_userInputs.includes(inp))      _aplicarEstiloAutoManual(inp, 'user');
           else if (_autoInputs.includes(inp)) _aplicarEstiloAutoManual(inp, 'auto');
           _refreshColoresState();
+          _pintarUsdDeFila(row);
         });
       });
 
@@ -3764,6 +4306,7 @@ export async function renderCatalogo(container, db) {
         _refreshColoresState();
       });
       coloresList.appendChild(row);
+      _pintarUsdDeFila(row);
       _aplicarUnidadAVariedad(row);
       _aplicarTogglePrecioARow(row);
     }
@@ -3798,11 +4341,40 @@ export async function renderCatalogo(container, db) {
         // (queda usando el global por fallback). Solo se persiste cuando el
         // usuario lo desvinculó y le puso un valor propio.
         const contenidoLinked = r.dataset.contenidoLinked === '1';
-        if (p  && p  > 0) out.precio       = p;
         if (!contenidoLinked && c && c > 0) out.contenido = c;
-        if (pp && pp > 0) out.precio_pack  = pp;
-        if (co && co > 0) out.costo        = co;
         if (mg !== null && mg >= 0) out.margen = mg;
+        if (monedaUsd) {
+          // Producto en dólares: lo que se cargó en la fila son dólares. Se
+          // guardan los dos números — el de dólares es el que manda y con el
+          // que se recalcula en cada venta; el de pesos es el último calculado,
+          // que es con lo que cobra una caja sin internet y lo que publica la
+          // tienda. Los campos en pesos NO se escriben si la conversión da
+          // cero: antes de llegar acá ya se comprobó que hay cotización.
+          const cotV = _dolarEditor();
+          if (p  && p  > 0) {
+            out.precio_usd = p;
+            const enPesos = precioUnidadEnPesos(p, cotV);
+            if (enPesos > 0) out.precio = enPesos;
+          }
+          if (pp && pp > 0) {
+            out.precio_pack_usd = pp;
+            const enPesos = precioEnPesos(pp, cotV);
+            if (enPesos > 0) out.precio_pack = enPesos;
+          }
+          if (co && co > 0) {
+            out.costo_usd = co;
+            const enPesos = costoEnPesos(co, cotV);
+            if (enPesos > 0) out.costo = enPesos;
+          }
+        } else {
+          // En pesos no queda rastro de dólares: si el producto venía en
+          // dólares y se pasó a pesos, los `*_usd` desaparecen acá (el array
+          // de variedades se reescribe entero en cada guardado) y nadie
+          // vuelve a recalcular nada.
+          if (p  && p  > 0) out.precio       = p;
+          if (pp && pp > 0) out.precio_pack  = pp;
+          if (co && co > 0) out.costo        = co;
+        }
         if (codigoRaw)    out.codigo       = codigoRaw;
         if (sMin !== null && sMin > 0) out.stock_min = sMin;
         if (sMax !== null && sMax > 0) out.stock_max = sMax;
@@ -3862,6 +4434,81 @@ export async function renderCatalogo(container, db) {
 
     function _aplicarTogglePrecioATodas() {
       coloresList.querySelectorAll('[data-color-row]').forEach(_aplicarTogglePrecioARow);
+    }
+
+    /**
+     * Una variedad de un producto en dólares: a cuánto queda en pesos.
+     *
+     * Los campos de la fila (Costo, Pack, Unit.) se cargan en dólares cuando el
+     * producto está en dólares. Esta línea de abajo muestra la conversión, que
+     * es el precio que el cliente va a pagar.
+     */
+    function _pintarUsdDeFila(row) {
+      const linea = row.querySelector('.ed_color_usd');
+      if (!linea) return;
+      if (!monedaUsd) { linea.style.display = 'none'; linea.innerHTML = ''; return; }
+
+      const cot = _dolarEditor();
+      const packUsd  = parseFloat(row.querySelector('.ed_color_precio_pack')?.value) || 0;
+      const unitUsd  = parseFloat(row.querySelector('.ed_color_precio')?.value) || 0;
+      const costoUsd = parseFloat(row.querySelector('.ed_color_costo')?.value) || 0;
+      if (!packUsd && !unitUsd && !costoUsd) {
+        linea.style.display = 'none'; linea.innerHTML = ''; return;
+      }
+
+      linea.style.display = 'flex';
+      if (!cot) {
+        linea.style.color = 'var(--tint-orange-fg)';
+        linea.innerHTML = '<span class="material-icons" style="font-size:12px">error_outline</span>'
+          + 'Sin cotización no se puede calcular el precio en pesos de esta variedad';
+        return;
+      }
+      linea.style.color = 'var(--tint-purple-fg)';
+      const partes = [];
+      if (packUsd)  partes.push(`pack <b>$${fmt(precioEnPesos(packUsd, cot))}</b>`);
+      if (unitUsd)  partes.push(`unidad <b>$${fmt(precioUnidadEnPesos(unitUsd, cot))}</b>`);
+      if (costoUsd) partes.push(`costo <b>$${fmt(costoEnPesos(costoUsd, cot))}</b>`);
+      linea.innerHTML = '<span class="material-icons" style="font-size:12px">currency_exchange</span>'
+        + `En pesos: ${partes.join(' · ')}`;
+    }
+
+    /**
+     * Pone las filas de variedades en la moneda del producto.
+     *
+     * No se agregan campos nuevos: los que ya están cambian de significado y lo
+     * dicen en el título y en el placeholder. Un producto se maneja entero en
+     * una moneda o en la otra, nunca mitad y mitad.
+     */
+    function _aplicarMonedaAVariedades() {
+      const filas = coloresList?.querySelectorAll('[data-color-row]') || [];
+      filas.forEach(row => {
+        const inpCostoF = row.querySelector('.ed_color_costo');
+        const inpPackF  = row.querySelector('.ed_color_precio_pack');
+        const inpUnitF  = row.querySelector('.ed_color_precio');
+        if (inpCostoF) {
+          inpCostoF.placeholder = monedaUsd ? 'U$S' : 'Costo';
+          inpCostoF.title = monedaUsd
+            ? 'Costo del pack de esta variedad, EN DÓLARES.'
+            : 'Costo por pack de esta variedad.';
+        }
+        if (inpPackF) {
+          inpPackF.placeholder = monedaUsd ? 'Pack U$S' : 'Pack $';
+          inpPackF.title = monedaUsd
+            ? 'Precio del pack EN DÓLARES. Auto = Costo × (1 + Margen). El precio en pesos se calcula abajo.'
+            : 'Precio del pack. Auto = Costo × (1 + Margen). Naranja = auto, verde = manual.';
+        }
+        if (inpUnitF) {
+          inpUnitF.placeholder = monedaUsd ? 'Unit U$S' : 'Unit. $';
+          inpUnitF.title = monedaUsd
+            ? 'Precio por unidad EN DÓLARES. Auto = Pack ÷ U/pack × 1.15.'
+            : 'Precio por unidad. Auto = Pack ÷ U/pack × 1.15. Naranja = auto, verde = manual.';
+        }
+        // Los botones ±100 no tienen sentido sobre dólares: el redondeo a la
+        // centena lo hace la conversión a pesos.
+        row.querySelectorAll('.ed_color_redondear, .ed_color_redondear_pack')
+          .forEach(b => { b.style.display = monedaUsd ? 'none' : ''; });
+        _pintarUsdDeFila(row);
+      });
     }
 
     // Recalcula el precio unitario auto de cada fila cuyo dataset.precioUnitManual === '0'.
@@ -4206,14 +4853,21 @@ export async function renderCatalogo(container, db) {
       } else if (c && c.vinculado_a && Number(c.vinculado_cantidad) > 0) {
         vincs = [{ doc_id: c.vinculado_a, cantidad: Number(c.vinculado_cantidad), nombre: c.vinculado_nombre || '' }];
       }
+      // Con el producto en dólares, los campos de precio de la fila muestran
+      // los dólares: son los que se cargan y los que mandan. Los valores en
+      // pesos que hay guardados son el resultado de la última conversión.
+      const _usdFila = _empiezaEnUsd;
+      const _campoPrecio = _usdFila ? 'precio_usd' : 'precio';
+      const _campoPack   = _usdFila ? 'precio_pack_usd' : 'precio_pack';
+      const _campoCosto  = _usdFila ? 'costo_usd' : 'costo';
       _addColorRow(
         c && c.color ? c.color : '',
         c && c.unidades != null ? c.unidades : '',
         c && c.restante != null ? c.restante : '',
-        c && c.precio != null ? c.precio : '',
+        c && c[_campoPrecio] != null ? c[_campoPrecio] : '',
         c && c.contenido != null ? c.contenido : '',
-        c && c.precio_pack != null ? c.precio_pack : '',
-        c && c.costo != null ? c.costo : '',
+        c && c[_campoPack] != null ? c[_campoPack] : '',
+        c && c[_campoCosto] != null ? c[_campoCosto] : '',
         c && c.margen != null ? c.margen : '',
         c && c.codigo ? c.codigo : '',
         c && c.stock_min != null ? c.stock_min : '',
@@ -4224,6 +4878,9 @@ export async function renderCatalogo(container, db) {
     });
     _refreshColoresState();
     _aplicarEstadoPrecioGlobal();
+    // La moneda se pinta acá y no antes: necesita el toggle del conjunto y las
+    // filas de variedades ya armadas.
+    _pintarMoneda();
 
     // ── Vincular a productos (nivel producto): N vinculaciones ──────────────
     // Estado: array de {doc_id, cantidad, nombre} guardado en overlay.dataset.vincs
@@ -4445,8 +5102,50 @@ export async function renderCatalogo(container, db) {
       const nuevoCodigo   = limpiarCodigo(overlay.querySelector('#ed_codigo').value);
       const barraRaw      = limpiarCodigo(overlay.querySelector('#ed_barra').value);
       const nuevoBarra    = /^[A-Za-z0-9\-_]{3,50}$/.test(barraRaw) ? barraRaw : '';
-      const nuevoCosto    = parseFloat(inCosto.value) || 0;
-      const nuevoPrecio   = parseFloat(inPrecio.value) || 0;
+      // ── Precio, según la moneda en la que se compra el producto ──────────
+      //
+      // En dólares, los dos campos de arriba son dólares y los pesos se
+      // calculan con la cotización de hoy. Se guardan LOS DOS: el de dólares
+      // manda y se recalcula en cada venta, el de pesos es el último
+      // calculado y es lo que ve la tienda, los informes, y lo que cobra una
+      // caja que se quedó sin internet.
+      const _cotGuardar = _dolarEditor();
+      const _costoCargado  = parseFloat(inCosto.value) || 0;
+      const _precioCargado = parseFloat(inPrecio.value) || 0;
+      let nuevoCosto, nuevoPrecio;
+      let camposUsd;
+      if (monedaUsd) {
+        if (!_cotGuardar) {
+          alertDialog({
+            title: 'Falta saber a cuánto está el dólar',
+            message: 'Este producto se maneja en dólares y todavía no hay cotización, así que no se puede calcular el precio en pesos.<br/><br/>'
+              + 'Cerrá la ficha y usá <b>Configurar</b> en la barra del dólar (arriba del catálogo) para cargarlo a mano. Después volvé y guardá.',
+            type: 'warning',
+          });
+          btn.disabled = false; btn.innerHTML = _btnLabel;
+          return;
+        }
+        nuevoCosto  = costoEnPesos(_costoCargado, _cotGuardar);
+        nuevoPrecio = precioEnPesos(_precioCargado, _cotGuardar);
+        camposUsd = {
+          moneda_costo:    'USD',
+          costo_usd:       _costoCargado || null,
+          precio_usd:      _precioCargado || null,
+          cotizacion_usada: _cotGuardar,
+        };
+      } else {
+        nuevoCosto  = _costoCargado;
+        nuevoPrecio = _precioCargado;
+        // Volver a pesos borra todo rastro de dólares: si quedara un
+        // `precio_usd` dado vuelta por ahí, el POS seguiría recalculando el
+        // precio con el dólar y pisaría lo que se acaba de cargar a mano.
+        camposUsd = {
+          moneda_costo:    null,
+          costo_usd:       null,
+          precio_usd:      null,
+          cotizacion_usada: null,
+        };
+      }
       let nuevoStock      = Math.max(0, parseInt(overlay.querySelector('#ed_stock').value) || 0);
       const rawSMin       = overlay.querySelector('#ed_stock_min').value.trim();
       const rawSMax       = overlay.querySelector('#ed_stock_max').value.trim();
@@ -4572,7 +5271,12 @@ export async function renderCatalogo(container, db) {
           conjunto_unidades:     cU,
           conjunto_contenido:    cC,
           conjunto_restante:     cR,
-          conjunto_precio_unidad: cP,
+          // En dólares, el precio por unidad también se carga en dólares: se
+          // guarda ese y el que da hoy en pesos.
+          conjunto_precio_unidad: monedaUsd
+            ? (cP ? precioUnidadEnPesos(cP, _cotGuardar) : null)
+            : cP,
+          conjunto_precio_unidad_usd: monedaUsd ? (cP || null) : null,
           conjunto_total:        cTotal,
           conjunto_colores:      tieneColores ? coloresArr : null,
         };
@@ -4590,6 +5294,7 @@ export async function renderCatalogo(container, db) {
           conjunto_contenido:    null,
           conjunto_restante:     null,
           conjunto_precio_unidad: null,
+          conjunto_precio_unidad_usd: null,
           conjunto_total:        null,
           conjunto_colores:      null,
         };
@@ -4633,6 +5338,7 @@ export async function renderCatalogo(container, db) {
         cod_barra:            nuevoBarra,
         costo:                nuevoCosto,
         precio_venta:         nuevoPrecio,
+        ...camposUsd,
         stock:                nuevoStock,
         stock_min:            nuevoStockMin,
         stock_max:            nuevoStockMax,
@@ -4853,6 +5559,21 @@ export async function renderCatalogo(container, db) {
     const prodIdx = allProductos.findIndex(p => p.doc_id === id);
     if (prodIdx === -1) return;
     const prod = allProductos[prodIdx];
+
+    // Un producto que se compra en dólares no se edita en pesos desde acá: el
+    // precio sale de `precio_usd` por la cotización, así que lo que se
+    // escribiera en pesos volvería atrás solo en la primera venta y nadie
+    // entendería por qué. Se edita en la ficha, en dólares.
+    if (esUsd(prod) && (field === 'precio_venta' || field === 'costo')) {
+      await alertDialog({
+        title: 'Este producto se maneja en dólares',
+        message: `<b>${_escHtml(prod.nombre || '')}</b> tiene el precio cargado en dólares y el de pesos se calcula solo con la cotización del día.<br/><br/>`
+          + 'Abrí la ficha (el lápiz) para cambiar el costo o el precio en dólares. Si querés volver a manejarlo en pesos, en la ficha hay un botón para eso.',
+        type: 'info',
+      });
+      return;
+    }
+
     const valorActual = prod[field] || 0;
 
     const input = document.createElement('input');
@@ -9706,7 +10427,7 @@ export async function renderCatalogo(container, db) {
     }, 250);
   });
 
-  onSnapshot(doc(db, 'config', 'catalogo_meta'), async (snap) => {
+  const _pararMeta = onSnapshot(doc(db, 'config', 'catalogo_meta'), async (snap) => {
     if (!snap.exists()) return;
     const ts = snap.data().last_updated;
     if (_lastMetaTs === null) { _lastMetaTs = ts; return; }
@@ -9717,4 +10438,25 @@ export async function renderCatalogo(container, db) {
     if (Date.now() < _localMetaTouchUntil) return;
     refrescarSiCorresponde();
   }, (err) => console.warn('Listener catalogo_meta:', err));
+
+  // ── La cotización del dólar, para los productos importados ───────────────
+  //
+  // Escuchar el documento compartido cuesta una lectura por cambio y hace que
+  // el precio que consiguió una caja se vea acá en el acto. `asegurarCotizacion`
+  // solo sale a internet si nadie lo hizo dentro de la ventana acordada.
+  _dejarDeEscucharDolar = escucharCotizacion(db, (cot) => _alCambiarElDolar(cot));
+  asegurarCotizacion(db)
+    .then(cot => { if (document.body.contains(container)) _alCambiarElDolar(cot); })
+    .catch(e => console.warn('[cotizacion]', e?.message || e));
+
+  // Al irse de la pantalla hay que soltar los listeners: sin esto, entrar y
+  // salir del catálogo deja uno nuevo cada vez y la pantalla se redibuja
+  // tantas veces como visitas lleve la sesión.
+  const _limpiarAnterior = window.__limpiarPagina;
+  window.__limpiarPagina = () => {
+    try { _pararMeta(); } catch (_) {}
+    try { _dejarDeEscucharDolar?.(); } catch (_) {}
+    _dejarDeEscucharDolar = null;
+    try { _limpiarAnterior?.(); } catch (_) {}
+  };
 }
