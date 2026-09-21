@@ -28,6 +28,11 @@ from pos_system.utils.promos import (
 )
 from pos_system.utils.pdf_generator import PDFGenerator
 from pos_system.utils.stock_links import has_links, effective_stock, build_target_index, shown_stock, es_ilimitado
+from pos_system.utils.precio_usd import (
+    es_usd as _es_usd, convertir_producto as _convertir_usd,
+    tiene_precios_usd as _tiene_precios_usd,
+)
+from pos_system.utils.cotizacion_usd import get_cotizacion as _get_cotizacion
 from pos_system.ui.conjunto_dialog import ConjuntoDialog, UNIDADES as _CONJ_UNIDADES, TIPOS as _CONJ_TIPOS, parse_colores as _conj_parse_colores
 from pos_system.models.presupuesto import Presupuesto
 from pos_system.models.pending_cart import PendingCart
@@ -43,6 +48,35 @@ def _fmt_qty(q):
     if q == int(q):
         return str(int(q))
     return f"{q:.2f}".rstrip('0').rstrip('.')
+
+
+def _marca_de_dolar(product):
+    """A cuanto estaba el dolar cuando entro este producto al carrito.
+
+    Viaja con el renglon hasta `ventas_por_dia` (ver `_campos_de_dolar` en
+    firebase_sync). Solo aparece en productos que se compran en dolares; en el
+    resto el renglon queda igual que siempre.
+
+    Es la unica forma de reconstruir despues el margen de lo importado: el
+    costo en pesos del catalogo es el de hoy, no el del dia de la venta.
+    """
+    if not isinstance(product, dict) or not _es_usd(product):
+        return {}
+    try:
+        cot = float(_get_cotizacion().valor() or 0)
+    except Exception:
+        return {}
+    if cot <= 0:
+        return {}
+    salida = {'usd_cotizacion': cot}
+    for origen, destino in (('precio_usd', 'usd_precio'), ('costo_usd', 'usd_costo')):
+        try:
+            v = float(product.get(origen) or 0)
+        except (TypeError, ValueError):
+            v = 0
+        if v > 0:
+            salida[destino] = v
+    return salida
 
 
 def _fmt_money(n):
@@ -970,6 +1004,9 @@ class SalesView(QWidget):
     # el cliente del Modo Fiado. Va por señal porque el listener de Firebase
     # corre en un hilo de red y no puede tocar widgets.
     fiado_cliente_changed = pyqtSignal()
+    # Llegó una cotización nueva del dólar (de internet o de otra caja). Viaja
+    # por señal por lo mismo: la trae un hilo de red.
+    cotizacion_usd_lista = pyqtSignal(float)
 
     def __init__(self, parent=None, current_user: dict = None):
         super().__init__(parent)
@@ -1380,6 +1417,20 @@ class SalesView(QWidget):
             f" border-radius:6px; padding:6px 10px; color:{_T['warning']}; font-size:11px; }}"
         )
         cart_v.addWidget(self._promo_hint_lbl)
+
+        # Cartel del dólar: sale al agregar un producto que se compra en
+        # dólares. Primero "Calculando precio en pesos…" y después la cuenta
+        # hecha, para que el cajero vea de dónde salió el número y pueda
+        # explicárselo al cliente.
+        self._usd_hint_lbl = QLabel('')
+        self._usd_hint_lbl.setWordWrap(True)
+        self._usd_hint_lbl.setVisible(False)
+        self._usd_hint_lbl.setTextFormat(Qt.RichText)
+        cart_v.addWidget(self._usd_hint_lbl)
+        self._usd_hint_timer = QTimer(self)
+        self._usd_hint_timer.setSingleShot(True)
+        self._usd_hint_timer.timeout.connect(self._ocultar_aviso_usd)
+        self._esperando_dolar = False
 
         # Footer carrito: TOTAL + Cobrar
         cart_ft = QFrame()
@@ -3946,6 +3997,135 @@ class SalesView(QWidget):
             str(product.get('name') or ''),
         )
 
+    # ── Productos que se compran en dólares ──────────────────────────────
+    #
+    # El catálogo guarda el precio EN DÓLARES y se cobra en pesos con la
+    # cotización del momento. La cuenta está en pos_system/utils/precio_usd.py
+    # y el valor del dólar lo consigue cotizacion_usd.py, compartido entre las
+    # cinco cajas.
+    #
+    # Lo que se ve acá es lo que pidió el local: al elegir un producto en
+    # dólares aparece "Calculando precio en pesos…" y enseguida el precio, con
+    # la cuenta a la vista. Si el dólar ya está al día (lo normal, porque una
+    # caja lo refresca para todas) no hay espera y el cartel muestra la cuenta
+    # directamente.
+
+    def _aviso_usd(self, texto, tono='info', segundos=6):
+        """Escribe el cartelito del dólar arriba del total del carrito."""
+        lbl = getattr(self, '_usd_hint_lbl', None)
+        if lbl is None:
+            return
+        from pos_system.ui.theme import COLORS as _T
+        colores = {
+            'info':   (_T['accent_soft'], _T['accent'], _T['accent']),
+            'espera': (_T['surface_alt'], _T['text_muted'], _T['text_muted']),
+            'aviso':  (_T['warning_bg'], _T['warning'], _T['warning']),
+        }
+        fondo, borde, letra = colores.get(tono, colores['info'])
+        lbl.setStyleSheet(
+            f"QLabel {{ background:{fondo}; border:1px solid {borde};"
+            f" border-radius:6px; padding:6px 10px; color:{letra};"
+            f" font-size:11px; font-weight:600; }}"
+        )
+        lbl.setTextFormat(Qt.RichText)
+        lbl.setText(texto)
+        lbl.setVisible(True)
+        QApplication.processEvents()
+        timer = getattr(self, '_usd_hint_timer', None)
+        if timer is not None:
+            timer.stop()
+            if segundos:
+                timer.start(int(segundos * 1000))
+
+    def _ocultar_aviso_usd(self):
+        lbl = getattr(self, '_usd_hint_lbl', None)
+        if lbl is not None:
+            lbl.setVisible(False)
+
+    def _texto_precio_usd(self, product, cot_valor):
+        """La cuenta en una línea: dólares × cotización = pesos."""
+        precio_usd = float(product.get('precio_usd') or 0)
+        pesos = float(product.get('price') or 0)
+        nombre = str(product.get('name') or '')[:38]
+        return (f"<b>{nombre}</b> — U$S {_fmt_qty(precio_usd)} × "
+                f"${_fmt_money(cot_valor)} = <b>${_fmt_money(pesos)}</b>")
+
+    def _producto_con_precio_del_dia(self, product, avisar=True):
+        """El producto con el precio en pesos de hoy, listo para cobrar.
+
+        Un producto en pesos vuelve tal cual y no se muestra nada. Uno en
+        dólares se convierte con la cotización del momento; si la que hay
+        quedó vieja, se muestra "Calculando precio en pesos…" y se espera un
+        momento a que llegue la nueva, sin congelar la pantalla.
+
+        Pase lo que pase devuelve un producto vendible: si no se consigue
+        cotización, se cobra el último precio en pesos que bajó del catálogo.
+
+        Con `avisar=False` no muestra nada ni espera: es para cuando el
+        producto se relee de la base por otra razón (cambiar la cantidad de una
+        línea, refrescar un conjunto) y el cartel ya se mostró al agregarlo.
+        """
+        if not isinstance(product, dict) or not _es_usd(product):
+            return product
+
+        cot = _get_cotizacion()
+
+        if not avisar:
+            valor = cot.valor()
+            return _convertir_usd(product, valor) if valor else product
+
+        # Si está al día no hay nada que esperar: se convierte y se muestra la
+        # cuenta hecha, que es lo que el cajero necesita ver.
+        if cot.esta_fresca():
+            convertido = _convertir_usd(product, cot.valor())
+            self._aviso_usd(self._texto_precio_usd(convertido, cot.valor()), 'info')
+            return convertido
+
+        # Vencida: se avisa y se espera un momento. La espera es con un bucle
+        # de eventos propio para que la pantalla siga respondiendo; el timeout
+        # corto es a propósito, una caja no puede quedarse colgada de internet.
+        if getattr(self, '_esperando_dolar', False):
+            return _convertir_usd(product, cot.valor()) if cot.valor() else product
+
+        self._aviso_usd('Calculando precio en pesos…', 'espera', segundos=0)
+        self._esperando_dolar = True
+        try:
+            from PyQt5.QtCore import QEventLoop
+            espera = QEventLoop()
+            llegada = {'valor': 0.0}
+
+            def _cuando_llegue(valor):
+                llegada['valor'] = valor or 0.0
+                # El callback viene del hilo de red: salir del bucle se agenda
+                # en el hilo de Qt con un timer de cero.
+                QTimer.singleShot(0, espera.quit)
+
+            cot.refrescar_en_segundo_plano(cuando_termine=_cuando_llegue, timeout=4)
+            corte = QTimer()
+            corte.setSingleShot(True)
+            corte.timeout.connect(espera.quit)
+            corte.start(5000)
+            espera.exec_()
+            corte.stop()
+        except Exception as e:
+            logger.warning(f"cotizacion: espera fallida: {e}")
+        finally:
+            self._esperando_dolar = False
+
+        valor = cot.valor()
+        if not valor:
+            self._aviso_usd(
+                'No se pudo averiguar a cuánto está el dólar. Se cobra el último '
+                'precio calculado; revisá la conexión o cargá la cotización a mano.',
+                'aviso', segundos=10)
+            return product
+
+        convertido = _convertir_usd(product, valor)
+        extra = '' if cot.esta_fresca() else ' <i>(cotización de hace un rato)</i>'
+        self._aviso_usd(self._texto_precio_usd(convertido, valor) + extra,
+                        'info' if cot.esta_fresca() else 'aviso')
+        return convertido
+
     def _resolve_price_for_product(self, product: dict, quantity: int = 1, color: str = '') -> dict:
         """
         Calcula el precio efectivo aplicando descuentos del producto y promos activas.
@@ -4024,6 +4204,12 @@ class SalesView(QWidget):
             )
             return
 
+        # Si se compra en dólares, acá se pasa a pesos con la cotización del
+        # momento. Es el único lugar por el que entra un producto al carrito,
+        # así que alcanza con hacerlo una vez: lo que sigue —el diálogo del
+        # conjunto, las promos, el descuento— ya trabaja con pesos.
+        product = self._producto_con_precio_del_dia(product)
+
         # Producto Conjunto (rollo / pack / caja / etc.) → diálogo táctil que pregunta cuánto vender
         if int(product.get('es_conjunto') or 0) == 1:
             self._add_conjunto_to_cart(product)
@@ -4067,6 +4253,7 @@ class SalesView(QWidget):
             'max_stock':     product['stock'],
             'category':      product.get('category'),
             **pricing,
+            **_marca_de_dolar(product),
         })
 
         self.update_cart_display()
@@ -4104,7 +4291,12 @@ class SalesView(QWidget):
                     "SELECT * FROM products WHERE id=? LIMIT 1", (int(pid),)
                 ) or []
                 if rows:
-                    fresco = dict(rows[0])
+                    # Ojo: esta fila trae los pesos de la última conversión
+                    # guardada. Si el producto se compra en dólares hay que
+                    # volver a pasarla por la cotización, o el diálogo abriría
+                    # con el precio de la semana pasada.
+                    fresco = self._producto_con_precio_del_dia(
+                        dict(rows[0]), avisar=False)
                     for k, v in fresco.items():
                         product[k] = v
         except Exception as _e:
@@ -4182,6 +4374,7 @@ class SalesView(QWidget):
                 'conjunto_after_unidades': r['after_unidades'],
                 'conjunto_after_restante': r['after_restante'],
                 'conjunto_color':          color,   # '' = legacy
+                **_marca_de_dolar(product),
             }
             # Promos del panel: la mejor que aplique a esta cantidad/modo/color.
             self._reprice_conjunto_line(item, product=product)
@@ -4644,6 +4837,11 @@ class SalesView(QWidget):
         try:
             product = self.product_model.get_by_id(item['product_id'])
             if product:
+                # Releído de la base: si se compra en dólares, el `price` que
+                # trae es el de la última conversión guardada. Se vuelve a
+                # pasar por la cotización, sin cartel: el cajero solo cambió
+                # una cantidad.
+                product = self._producto_con_precio_del_dia(product, avisar=False)
                 old_unit  = item.get('unit_price')
                 old_disc  = item.get('discount_amount', 0)
                 old_promo = item.get('promo_id')

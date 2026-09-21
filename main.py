@@ -57,6 +57,20 @@ def _init_firebase(db=None):
     except Exception as e:
         logger.error(f"Firebase: Error al inicializar: {e}")
 
+    # A cuanto esta el dolar, para los productos que se compran en dolares.
+    #
+    # Va despues de Firebase a proposito: lo primero que hace es escuchar el
+    # documento compartido, que es de donde sale el valor sin que esta PC tenga
+    # que preguntarle nada a internet. Si no hay Firebase, se arregla con la
+    # copia local y con la API. Nunca frena el arranque: todo pasa en un hilo
+    # aparte.
+    try:
+        from pos_system.utils.cotizacion_usd import get_cotizacion
+        get_cotizacion().iniciar(db)
+        logger.info("Cotizacion USD: seguimiento activo.")
+    except Exception as e:
+        logger.warning(f"Cotizacion USD: no se pudo iniciar: {e}")
+
 
 def _reconcile_orphans_on_startup(db):
     """

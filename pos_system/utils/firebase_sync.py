@@ -267,6 +267,35 @@ def minimo_publicado(publicado):
         return 0
 
 
+def _campos_de_dolar(item):
+    """A cuanto estaba el dolar cuando se cobro este renglon.
+
+    Solo sale en los renglones de productos que se compran en dolares; en
+    todos los demas el documento queda exactamente igual que siempre.
+
+    Existe para poder mirar una venta de hace tres meses y saber de donde
+    salio ese precio. Sin esto, el margen de lo importado no se puede
+    reconstruir: el costo en pesos del catalogo es el de HOY, no el del dia de
+    la venta, y no hay forma de deducirlo.
+    """
+    cot = (item or {}).get('usd_cotizacion')
+    try:
+        cot = float(cot or 0)
+    except (TypeError, ValueError):
+        return {}
+    if cot <= 0:
+        return {}
+    salida = {'usd_cotizacion': cot}
+    for campo in ('usd_precio', 'usd_costo'):
+        try:
+            v = float((item or {}).get(campo) or 0)
+        except (TypeError, ValueError):
+            v = 0
+        if v > 0:
+            salida[campo] = v
+    return salida
+
+
 def _campos_de_pedido_tienda(item):
     """Lo que un renglón cobrado de un pedido de la tienda lleva de más en
     `ventas_por_dia`: el pedido, el producto y las unidades base, para poder
@@ -410,6 +439,22 @@ def now_ar_iso() -> str:
     return datetime.now(_TZ_AR).isoformat()
 
 logger = logging.getLogger(__name__)
+
+
+def _to_float_usd(v):
+    """Un precio en dolares del catalogo, o None si no hay.
+
+    Los campos `*_usd` los escribe el panel y pueden venir como texto, como
+    None o directamente no venir. Cero es lo mismo que no tener: un producto
+    marcado en dolares sin precio cargado se cobra con lo que diga en pesos.
+    """
+    if v in (None, '', False):
+        return None
+    try:
+        n = float(v)
+    except (TypeError, ValueError):
+        return None
+    return n if n > 0 else None
 
 # ── Singleton ──
 import threading
@@ -624,6 +669,14 @@ class FirebaseSync:
                     # Servicio sin control de stock: sale de la bandera y de
                     # ningún otro lado (ver delta_sync_products_startup).
                     stock_ilim = 1 if d.get('stock_ilimitado') is True else 0
+                    
+                    # Producto que se compra en dolares. El precio de verdad es el
+                    # de dolares; `price`/`cost` son el ultimo calculado en pesos.
+                    # Ver pos_system/utils/precio_usd.py.
+                    moneda_costo = (str(d.get('moneda_costo') or '').strip().upper() or None)
+                    costo_usd  = _to_float_usd(d.get('costo_usd'))
+                    precio_usd = _to_float_usd(d.get('precio_usd'))
+                    conjunto_precio_unidad_usd = _to_float_usd(d.get('conjunto_precio_unidad_usd'))
 
                     # Producto Conjunto
                     def _to_float(v):
@@ -812,9 +865,11 @@ class FirebaseSync:
                                     conjunto_unidades, conjunto_contenido, conjunto_restante,
                                     conjunto_precio_unidad, conjunto_total, conjunto_colores,
                                     vinculaciones, vinculado_a, vinculado_cantidad, vinculado_nombre,
+                                    moneda_costo, costo_usd, precio_usd, conjunto_precio_unidad_usd,
                                     created_at, updated_at)
                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
                                            ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                                           ?, ?, ?, ?,
                                            ?, ?, ?, ?,
                                            CURRENT_TIMESTAMP, ?)""",
                                 (nombre, categ, precio, costo, stock, barcode,
@@ -823,6 +878,7 @@ class FirebaseSync:
                                  conjunto_unidades, conjunto_contenido, conjunto_restante,
                                  conjunto_precio_unidad, conjunto_total, conjunto_colores,
                                  vinculaciones, vinculado_a, vinculado_cantidad, vinculado_nombre,
+                                 moneda_costo, costo_usd, precio_usd, conjunto_precio_unidad_usd,
                                  now_local_str)
                             )
                             changed_any = True
@@ -864,7 +920,15 @@ class FirebaseSync:
                             (r.get('vinculaciones') or None)     != (vinculaciones or None) or
                             (r.get('vinculado_a') or None)       != vinculado_a or
                             not _eq_float(r.get('vinculado_cantidad'), vinculado_cantidad) or
-                            (r.get('vinculado_nombre') or None)  != vinculado_nombre
+                            (r.get('vinculado_nombre') or None)  != vinculado_nombre or
+                            # Sin esto, marcar un producto en dolares desde el
+                            # panel no bajaba a las cajas: los pesos no cambian
+                            # en el mismo guardado y la fila parecia igual.
+                            (r.get('moneda_costo') or None)      != moneda_costo or
+                            not _eq_float(r.get('costo_usd'),  costo_usd) or
+                            not _eq_float(r.get('precio_usd'), precio_usd) or
+                            not _eq_float(r.get('conjunto_precio_unidad_usd'),
+                                          conjunto_precio_unidad_usd)
                         )
                         if not cambios:
                             continue
@@ -883,6 +947,8 @@ class FirebaseSync:
                                        conjunto_unidades=?, conjunto_contenido=?, conjunto_restante=?,
                                        conjunto_precio_unidad=?, conjunto_total=?, conjunto_colores=?,
                                        vinculaciones=?, vinculado_a=?, vinculado_cantidad=?, vinculado_nombre=?,
+                                       moneda_costo=?, costo_usd=?, precio_usd=?,
+                                       conjunto_precio_unidad_usd=?,
                                        updated_at=?
                                    WHERE id=?""",
                                 (nombre, categ, precio, costo, stock,
@@ -891,6 +957,7 @@ class FirebaseSync:
                                  conjunto_unidades, conjunto_contenido, conjunto_restante,
                                  conjunto_precio_unidad, conjunto_total, conjunto_colores,
                                  vinculaciones, vinculado_a, vinculado_cantidad, vinculado_nombre,
+                                 moneda_costo, costo_usd, precio_usd, conjunto_precio_unidad_usd,
                                  now_local_str, local_id)
                             )
                             changed_any = True
@@ -3046,6 +3113,14 @@ class FirebaseSync:
                     # es lo que hacía que un producto vendido en cero quedara
                     # marcado como servicio y dejara de descontar para siempre.
                     stock_ilim = 1 if d.get('stock_ilimitado') is True else 0
+                    
+                    # Producto que se compra en dolares. El precio de verdad es el
+                    # de dolares; `price`/`cost` son el ultimo calculado en pesos.
+                    # Ver pos_system/utils/precio_usd.py.
+                    moneda_costo = (str(d.get('moneda_costo') or '').strip().upper() or None)
+                    costo_usd  = _to_float_usd(d.get('costo_usd'))
+                    precio_usd = _to_float_usd(d.get('precio_usd'))
+                    conjunto_precio_unidad_usd = _to_float_usd(d.get('conjunto_precio_unidad_usd'))
 
                     # Vínculos consumibles (read-only desde POS; gestionados en webapp)
                     _vincs_raw = d.get('vinculaciones')
@@ -3095,14 +3170,17 @@ class FirebaseSync:
                                     discount_value, firebase_id, rubro,
                                     stock_min, stock_max, stock_ilimitado,
                                     vinculaciones, vinculado_a, vinculado_cantidad, vinculado_nombre,
+                                    moneda_costo, costo_usd, precio_usd, conjunto_precio_unidad_usd,
                                     created_at, updated_at)
                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                                           ?, ?, ?, ?,
                                            ?, ?, ?, ?,
                                            CURRENT_TIMESTAMP, ?)""",
                                 (nombre, categ, precio, costo, stock, barcode,
                                  desc, firebase_id, rubro, stock_min, stock_max,
                                  stock_ilim,
                                  vinculaciones, vinculado_a, vinculado_cantidad, vinculado_nombre,
+                                 moneda_costo, costo_usd, precio_usd, conjunto_precio_unidad_usd,
                                  fb_ts)
                             )
                             n_updated += 1
@@ -3126,12 +3204,15 @@ class FirebaseSync:
                                            barcode=?, discount_value=?, rubro=?,
                                            stock_min=?, stock_max=?, stock_ilimitado=?,
                                            vinculaciones=?, vinculado_a=?, vinculado_cantidad=?, vinculado_nombre=?,
+                                           moneda_costo=?, costo_usd=?, precio_usd=?,
+                                           conjunto_precio_unidad_usd=?,
                                            updated_at=?
                                        WHERE id=?""",
                                     (nombre, categ, precio, costo, stock,
                                      barcode, desc, rubro, stock_min, stock_max,
                                      stock_ilim,
                                      vinculaciones, vinculado_a, vinculado_cantidad, vinculado_nombre,
+                                     moneda_costo, costo_usd, precio_usd, conjunto_precio_unidad_usd,
                                      fb_ts, local_id)
                                 )
                                 n_updated += 1
@@ -3411,6 +3492,7 @@ class FirebaseSync:
                         'monto_efectivo':      _item_ef,
                         'monto_transferencia': _item_tr,
                         **_campos_de_pedido_tienda(item),
+                        **_campos_de_dolar(item),
                     }, merge=True)
                 batch.commit()
                 logger.debug(f"Firebase: Detalle de venta #{sale_id} ({len(items)} items) sincronizado.")
@@ -4989,6 +5071,13 @@ class FirebaseSync:
             c_total    = _to_float(d.get('conjunto_total'))
             c_contenido= _to_float(d.get('conjunto_contenido'))
             c_pu       = _to_float(d.get('conjunto_precio_unidad'))
+            # Precios en dolares: viajan enteros o no viajan. Si no vinieran,
+            # la copia local seguiria pensando que el producto es en pesos y
+            # cobraria el precio de la ultima cotizacion que vio.
+            moneda_costo = (str(d.get('moneda_costo') or '').strip().upper() or None)
+            costo_usd    = _to_float_usd(d.get('costo_usd'))
+            precio_usd   = _to_float_usd(d.get('precio_usd'))
+            c_pu_usd     = _to_float_usd(d.get('conjunto_precio_unidad_usd'))
 
             try:
                 db_manager.execute_update(
@@ -5001,10 +5090,16 @@ class FirebaseSync:
                           conjunto_contenido     = COALESCE(?, conjunto_contenido),
                           conjunto_precio_unidad = COALESCE(?, conjunto_precio_unidad),
                           conjunto_colores       = ?,
+                          moneda_costo = ?,
+                          costo_usd = ?,
+                          precio_usd = ?,
+                          conjunto_precio_unidad_usd = ?,
                           updated_at = (SELECT localtime_now())
                        WHERE firebase_id = ?""",
                     (stock, price, c_unidades, c_restante, c_total,
-                     c_contenido, c_pu, colores_json, str(firebase_id))
+                     c_contenido, c_pu, colores_json,
+                     moneda_costo, costo_usd, precio_usd, c_pu_usd,
+                     str(firebase_id))
                 )
                 return True
             except Exception as ex:

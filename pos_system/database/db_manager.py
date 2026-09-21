@@ -191,6 +191,15 @@ class DatabaseManager:
                 "ALTER TABLE products ADD COLUMN vinculado_a TEXT DEFAULT NULL",
                 "ALTER TABLE products ADD COLUMN vinculado_cantidad REAL DEFAULT NULL",
                 "ALTER TABLE products ADD COLUMN vinculado_nombre TEXT DEFAULT NULL",
+                # Productos que se compran en dolares: el precio se guarda EN
+                # DOLARES y se pasa a pesos con la cotizacion del dia, en cada
+                # venta (ver pos_system/utils/precio_usd.py). `price` y `cost`
+                # siguen siendo pesos: son el ultimo precio calculado y es con
+                # lo que se cobra si la PC se queda sin saber a cuanto esta.
+                "ALTER TABLE products ADD COLUMN moneda_costo TEXT DEFAULT NULL",
+                "ALTER TABLE products ADD COLUMN costo_usd REAL DEFAULT NULL",
+                "ALTER TABLE products ADD COLUMN precio_usd REAL DEFAULT NULL",
+                "ALTER TABLE products ADD COLUMN conjunto_precio_unidad_usd REAL DEFAULT NULL",
             ]:
                 try:
                     cursor.execute(col_def)
