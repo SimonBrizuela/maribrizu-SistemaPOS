@@ -322,3 +322,79 @@ class TestElRolloEnDolares:
         convertido = ventas._producto_con_precio_del_dia(dict(local['rollo']))
         assert convertido['conjunto_precio_unidad'] == 1680
         assert convertido['price'] == 70000
+
+
+class TestLasListasDeLaPantalla:
+    """El precio que se ve en la lista tiene que ser el que se cobra."""
+
+    def test_la_grilla_muestra_el_precio_del_dia(self, app, ventas, local, dolar):
+        # Antes se veia $49.000 en la lista y el carrito decia $54.300: el
+        # mismo producto con dos precios en la misma pantalla.
+        ventas._populate_products_table([dict(local['usd']), dict(local['pesos'])])
+        app.processEvents()
+
+        texto = ' | '.join(
+            ventas.products_table.item(f, c).text()
+            for f in range(ventas.products_table.rowCount())
+            for c in range(ventas.products_table.columnCount())
+            if ventas.products_table.item(f, c)
+        )
+        assert '54300' in texto
+        assert '49000' not in texto
+        assert '3500' in texto           # el de pesos, intacto
+
+    def test_sin_cotizacion_la_grilla_muestra_lo_ultimo_conocido(self, app, ventas, local, sin_dolar):
+        ventas._populate_products_table([dict(local['usd'])])
+        app.processEvents()
+        texto = ' | '.join(
+            ventas.products_table.item(f, c).text()
+            for f in range(ventas.products_table.rowCount())
+            for c in range(ventas.products_table.columnCount())
+            if ventas.products_table.item(f, c)
+        )
+        assert '49000' in texto
+
+    def test_la_fila_guarda_el_producto_ya_convertido(self, app, ventas, local, dolar):
+        # De esa fila sale el producto al carrito: si guardara el viejo, el
+        # precio volveria a bajar al agregarlo.
+        ventas._populate_products_table([dict(local['usd'])])
+        app.processEvents()
+        from PyQt5.QtCore import Qt
+        guardado = ventas.products_table.item(0, 0).data(Qt.UserRole)
+        assert guardado['price'] == 54300
+
+
+class TestLaFichaDelPos:
+    """La pestaña Productos del POS no edita en pesos lo que se compra en dolares."""
+
+    def test_el_precio_queda_de_solo_lectura_y_lo_explica(self, app, local, dolar):
+        from pos_system.ui.products_view import ProductDialog
+        dlg = ProductDialog(None, dict(local['usd']))
+        _ABIERTAS.append(dlg)
+        dlg.show()
+        app.processEvents()
+        try:
+            assert dlg.price_input.isReadOnly()
+            assert dlg.cost_input.isReadOnly()
+            texto = ' '.join(
+                w.text() for w in dlg.findChildren(__import__(
+                    'PyQt5.QtWidgets', fromlist=['QLabel']).QLabel)
+            )
+            assert 'dolares' in texto.lower()
+            assert 'U$S 35' in texto
+        finally:
+            dlg.close()
+            app.processEvents()
+
+    def test_en_un_producto_en_pesos_se_edita_como_siempre(self, app, local, dolar):
+        from pos_system.ui.products_view import ProductDialog
+        dlg = ProductDialog(None, dict(local['pesos']))
+        _ABIERTAS.append(dlg)
+        dlg.show()
+        app.processEvents()
+        try:
+            assert not dlg.price_input.isReadOnly()
+            assert dlg.price_input.value() == 3500
+        finally:
+            dlg.close()
+            app.processEvents()

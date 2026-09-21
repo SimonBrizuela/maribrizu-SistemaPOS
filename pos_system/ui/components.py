@@ -170,6 +170,27 @@ class PriceInput(QFrame):
     def clear_value(self):
         self._edit.clear()
 
+    def setReadOnly(self, valor):
+        """Deja el campo a la vista pero sin poder tipearlo.
+
+        Lo usa la ficha de un producto que se compra en dolares: el precio en
+        pesos es calculado y editarlo aca no serviria de nada. Se pinta en gris
+        para que se note que no es un campo vacio esperando un numero.
+        """
+        self._edit.setReadOnly(bool(valor))
+        if valor:
+            self._edit.setStyleSheet(
+                'QLineEdit { border:1px solid #dcd6c8; border-radius:6px;'
+                ' padding:4px 10px; background:#f2efe9; color:#6b6b6b; }'
+            )
+
+    def isReadOnly(self):
+        return self._edit.isReadOnly()
+
+    def setToolTip(self, texto):
+        self._edit.setToolTip(texto)
+        super().setToolTip(texto)
+
     def setPlaceholderText(self, text):
         self._edit.setPlaceholderText(text)
 

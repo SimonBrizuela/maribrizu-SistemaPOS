@@ -7,7 +7,10 @@ from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QFont, QPixmap, QColor
 from datetime import datetime
 from pos_system.utils.firebase_sync import now_ar
+import logging
 import os
+
+logger = logging.getLogger(__name__)
 
 from pos_system.models.product import Product
 from pos_system.utils.stock_links import has_links, effective_stock, build_target_index, shown_stock, es_ilimitado
@@ -1072,6 +1075,7 @@ class ProductDialog(QDialog):
         self.description_input.setText(self.product['description'] or '')
         self.price_input.setValue(self.product['price'])
         self.cost_input.setValue(self.product['cost'])
+        self._preparar_si_es_en_dolares()
         self.stock_input.setValue(self.product['stock'])
         smin = self.product.get('stock_min')
         self.stock_min_input.setValue(int(smin) if smin is not None else 0)
@@ -1123,6 +1127,52 @@ class ProductDialog(QDialog):
             'Se asignarán al guardar.'
         )
 
+    def _preparar_si_es_en_dolares(self):
+        """Un producto que se compra en dolares no se edita en pesos aca.
+
+        Su precio sale de `precio_usd` por la cotizacion del dia (ver
+        pos_system/utils/precio_usd.py): lo que se escribiera en pesos lo
+        pisaria la primera venta y nadie entenderia por que. El costo y el
+        precio quedan a la vista pero de solo lectura, y se editan en el panel.
+        """
+        from pos_system.utils.precio_usd import es_usd
+        if not es_usd(self.product or {}):
+            return
+        self.price_input.setReadOnly(True)
+        self.cost_input.setReadOnly(True)
+        ayuda = ('Este producto se compra en dolares: el precio en pesos se '
+                 'calcula solo con la cotizacion del dia. Para cambiarlo, '
+                 'edita el precio en dolares desde el panel.')
+        self.price_input.setToolTip(ayuda)
+        self.cost_input.setToolTip(ayuda)
+        try:
+            precio_usd = float(self.product.get('precio_usd') or 0)
+            costo_usd = float(self.product.get('costo_usd') or 0)
+        except (TypeError, ValueError):
+            precio_usd = costo_usd = 0
+        aviso = QLabel(
+            f'Se compra en dolares — U$S {precio_usd:g} de venta, '
+            f'U$S {costo_usd:g} de costo. El precio en pesos se calcula con la '
+            f'cotizacion del dia; se edita desde el panel.'
+        )
+        aviso.setWordWrap(True)
+        aviso.setStyleSheet(
+            'QLabel { background:#f3e8ff; border:1px solid #7c3aed;'
+            ' border-radius:6px; padding:8px 10px; color:#5b21b6;'
+            ' font-size:11px; font-weight:600; }'
+        )
+        # El formulario es un QFormLayout: el aviso entra como una fila que
+        # ocupa las dos columnas, arriba de todo.
+        layout = self.layout()
+        try:
+            from PyQt5.QtWidgets import QFormLayout
+            if isinstance(layout, QFormLayout):
+                layout.insertRow(0, aviso)
+            elif layout is not None:
+                layout.insertWidget(0, aviso)
+        except Exception as e:
+            logger.debug(f'aviso de dolares: no se pudo mostrar: {e}')
+
     def save_product(self):
         # Validar campos
         if not self.name_input.text():
@@ -1145,11 +1195,18 @@ class ProductDialog(QDialog):
         # Preparar datos
         dtype = self.discount_type_combo.currentData() or None
         dval  = self.discount_value_spin.value() if dtype else 0.0
+        # En un producto en dolares, el precio en pesos es calculado: se
+        # reescribe el que ya estaba, para que un guardado desde esta pantalla
+        # no lo mueva ni siquiera por el redondeo del campo.
+        from pos_system.utils.precio_usd import es_usd as _es_usd_prod
+        _en_dolares = _es_usd_prod(self.product or {})
         product_data = {
             'name': self.name_input.text(),
             'description': self.description_input.toPlainText(),
-            'price': self.price_input.value(),
-            'cost': self.cost_input.value(),
+            'price': (float(self.product.get('price') or 0) if _en_dolares
+                      else self.price_input.value()),
+            'cost': (float(self.product.get('cost') or 0) if _en_dolares
+                     else self.cost_input.value()),
             'stock': self.stock_input.value(),
             'barcode': barcode_val or None,
             'category': self.category_input.currentText() or None,

@@ -763,6 +763,16 @@ class ProductSearchDialog(QDialog):
         except Exception:
             results = []
 
+        # Lo que se compra en dolares se lista al precio de hoy, igual que en
+        # la grilla de atras: dos precios distintos para el mismo producto en
+        # dos pantallas es lo que hace que nadie confie en ninguno.
+        _dolar_busqueda = _get_cotizacion().valor()
+        if _dolar_busqueda:
+            results = [
+                _convertir_usd(p, _dolar_busqueda) if _es_usd(p) else p
+                for p in results
+            ]
+
         self.table.clearSpans()
         self.table.setRowCount(0)
         self.table.setRowCount(len(results))
@@ -3726,6 +3736,16 @@ class SalesView(QWidget):
         # (evita N+1 al calcular el stock efectivo fila por fila).
         _tidx = build_target_index(products, self.db)
 
+        # Lo que se compra en dolares se muestra al precio de hoy. Sin esto el
+        # cajero veia $49.000 en la lista, lo agregaba y el carrito decia
+        # $54.300: el mismo producto con dos precios en la misma pantalla.
+        _dolar_lista = _get_cotizacion().valor()
+        if _dolar_lista:
+            products = [
+                _convertir_usd(p, _dolar_lista) if _es_usd(p) else p
+                for p in products
+            ]
+
         for row, product in enumerate(products):
             self.products_table.setRowHeight(row, 42)
             es_conjunto = int(product.get('es_conjunto') or 0) == 1
@@ -4016,8 +4036,12 @@ class SalesView(QWidget):
         if lbl is None:
             return
         from pos_system.ui.theme import COLORS as _T
+        # Violeta y no el naranja del tema: el cartel de promos, que vive
+        # justo arriba, ya usa el naranja. Dos avisos del mismo color pegados
+        # se leen como uno solo. El violeta es ademas el color con el que el
+        # panel marca lo que se compra en dolares.
         colores = {
-            'info':   (_T['accent_soft'], _T['accent'], _T['accent']),
+            'info':   ('#f3e8ff', '#7c3aed', '#5b21b6'),
             'espera': (_T['surface_alt'], _T['text_muted'], _T['text_muted']),
             'aviso':  (_T['warning_bg'], _T['warning'], _T['warning']),
         }
