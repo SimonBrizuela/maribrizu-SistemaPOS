@@ -3004,6 +3004,14 @@ export async function renderCatalogo(container, db) {
                queda escondido detrás de una multiplicación. -->
           <div id="ed_usd_resultado" style="display:none;padding:10px 12px;border-radius:10px;background:var(--tint-purple-bg);border:1px solid #c4b5fd;font-size:12.5px;color:var(--tint-purple-fg);line-height:1.5"></div>
 
+          <!-- Un producto con precio pero sin costo queda en "sin precio" y el
+               POS no lo baja a las cajas: se puede cargar entero, guardar sin
+               un error, y el cajero no lo encuentra nunca. Pasa en pesos y en
+               dólares igual, y hasta ahora no lo decía nada. -->
+          <div id="ed_aviso_sin_costo" style="display:none;padding:9px 12px;border-radius:10px;background:var(--tint-orange-bg);border:1px solid var(--tint-orange-fg);font-size:12.5px;color:var(--tint-orange-fg);line-height:1.45">
+            <b>Falta el costo.</b> Sin costo el producto queda marcado como <b>Sin precio</b> y no baja a las cajas: el cajero no lo va a encontrar. Cargalo aunque sea aproximado.
+          </div>
+
           <!-- Stock + Alertas.
                Con "Producto Conjunto" activo el campo STOCK se oculta (se calcula
                del desglose), pero MÍN/MÁX siguen visibles: se comparan contra el
@@ -3292,6 +3300,15 @@ export async function renderCatalogo(container, db) {
         <span style="opacity:.85">Se recalcula solo en cada venta: si el dólar se mueve, el precio acompaña.</span>`;
     }
 
+    /** Avisa cuando hay precio cargado pero no hay costo. */
+    function _pintarAvisoSinCosto() {
+      const aviso = overlay.querySelector('#ed_aviso_sin_costo');
+      if (!aviso) return;
+      const costo  = parseFloat(inCosto.value) || 0;
+      const precio = parseFloat(inPrecio.value) || 0;
+      aviso.style.display = (precio > 0 && costo <= 0) ? 'block' : 'none';
+    }
+
     /** Prende o apaga el modo dólares en toda la ficha. */
     function _pintarMoneda() {
       const prendido = (btn, on) => {
@@ -3327,6 +3344,7 @@ export async function renderCatalogo(container, db) {
       hintMoneda.style.color = 'var(--text-muted)';
 
       _pintarResultadoUsd();
+      _pintarAvisoSinCosto();
       if (typeof _aplicarMonedaAVariedades === 'function') _aplicarMonedaAVariedades();
     }
 
@@ -3385,6 +3403,7 @@ export async function renderCatalogo(container, db) {
         _emitInput(inPrecio);
       }
       _pintarResultadoUsd();
+      _pintarAvisoSinCosto();
     });
     inMargen.addEventListener('input', () => {
       const c = parseFloat(inCosto.value) || 0;
@@ -3394,12 +3413,14 @@ export async function renderCatalogo(container, db) {
         _emitInput(inPrecio);
       }
       _pintarResultadoUsd();
+      _pintarAvisoSinCosto();
     });
     inPrecio.addEventListener('input', () => {
       const c = parseFloat(inCosto.value) || 0;
       const p = parseFloat(inPrecio.value) || 0;
       if (c > 0 && p > 0) inMargen.value = Math.round(((p - c) / c) * 100);
       _pintarResultadoUsd();
+      _pintarAvisoSinCosto();
     });
 
     overlay.querySelector('#btn_redondear').addEventListener('click', () => {

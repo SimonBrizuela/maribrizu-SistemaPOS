@@ -542,3 +542,55 @@ describe('las etiquetas de la ficha dicen en qué moneda se carga', () => {
     expect(document.getElementById('btn_redondear').style.display).not.toBe('none');
   });
 });
+
+describe('un producto en dólares sin costo cargado', () => {
+  it('queda igual que uno en pesos sin costo: el sistema lo marca sin precio', async () => {
+    // No es del dólar: el `estado` lo decide el costo desde siempre, y un
+    // producto en `sin_precio` no baja a las cajas. Se fija acá para que nadie
+    // lo cambie sin querer al tocar la moneda.
+    await abrirCatalogo();
+    await abrirFicha('ARGOLLITAS');
+    tipear(document.getElementById('ed_costo'), '0');
+    tipear(document.getElementById('ed_precio'), '35');
+    await guardar();
+
+    const d = ultimoGuardado();
+    expect(d.precio_usd).toBe(35);
+    expect(d.costo_usd).toBe(null);
+    expect(d.precio_venta).toBe(54300);   // el precio sí se calcula
+    expect(d.estado).toBe('sin_precio');  // pero el estado lo decide el costo
+  });
+
+  it('la ficha lo avisa antes de guardar, para que no pase de largo', async () => {
+    await abrirCatalogo();
+    await abrirFicha('ARGOLLITAS');
+    const aviso = document.getElementById('ed_aviso_sin_costo');
+    expect(aviso.style.display).toBe('none');       // tiene costo: sin aviso
+
+    tipear(document.getElementById('ed_costo'), '0');
+    await esperar();
+    expect(aviso.style.display).toBe('block');
+    expect(aviso.textContent).toContain('no baja a las cajas');
+
+    tipear(document.getElementById('ed_costo'), '10');
+    await esperar();
+    expect(aviso.style.display).toBe('none');
+  });
+
+  it('el mismo aviso aparece en un producto en pesos', async () => {
+    // La trampa no es del dólar: es de siempre.
+    await abrirCatalogo();
+    await abrirFicha('CUADERNO');
+    tipear(document.getElementById('ed_costo'), '0');
+    await esperar();
+    expect(document.getElementById('ed_aviso_sin_costo').style.display).toBe('block');
+  });
+
+  it('con costo vuelve a quedar activo', async () => {
+    await abrirCatalogo();
+    await abrirFicha('ARGOLLITAS');
+    tipear(document.getElementById('ed_costo'), '10');
+    await guardar();
+    expect(ultimoGuardado().estado).toBe('activo');
+  });
+});
