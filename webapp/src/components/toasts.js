@@ -16,6 +16,11 @@ let _stack = null;
 
 function _asegurarPila() {
   if (_stack && document.body.contains(_stack)) return _stack;
+  // Si la pila ya está en el documento, es esa: puede haberla creado otra
+  // instancia de este módulo. Sin esto quedaban DOS elementos con el mismo id
+  // y `getElementById` devolvía cualquiera de los dos.
+  const yaEsta = document.getElementById('llToastStack');
+  if (yaEsta) { _stack = yaEsta; return _stack; }
   _stack = document.createElement('div');
   _stack.id = 'llToastStack';           // sin la palabra "toast" en la clase: hay
   _stack.setAttribute('aria-live', 'polite');  // pruebas que cuentan .toast en el DOM

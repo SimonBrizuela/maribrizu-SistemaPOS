@@ -12,7 +12,7 @@ import { collection, getDocs, query, orderBy } from 'firebase/firestore';
 import { loadTemporadasEstudio, saveTemporadasEstudio, fechaDMYtoYMD } from './config.js';
 import {
   TEMPORADAS, estudiarTemporadas, temporadasProximas, recomendarParaTemporada,
-  recomendarPorPistas, claveProducto, normTxt, estudioVigente, temporadaPorId,
+  recomendarPorPistas, claveProducto, normTxt, estudioVigente, temporadaPorId, tienePalabra,
 } from './temporadas.js';
 import { ritmoDe } from './urgencia_compra.js';
 import { esServicio, esIlimitado } from './notifications.js';
@@ -226,26 +226,28 @@ export function ideasQueFaltan(idTemporada, productos) {
   const temp = temporadaPorId(idTemporada);
   const ideas = temp?.ideas || [];
   if (!ideas.length || !(productos || []).length) return [];
-  const textos = (productos || []).map(p => normTxt([p?.nombre, p?.sub_rubro].filter(Boolean).join(' ')));
-  return ideas.filter(idea => {
-    // Se busca por la palabra más significativa de la idea (la primera que no
-    // sea una preposición): "bolsas de organza" se busca como "organza", que es
-    // lo que de verdad figura en el nombre del producto.
-    const clave = _palabraClave(idea);
-    if (!clave) return false;
-    return !textos.some(t => t.includes(clave));
-  });
-}
 
-const _VACIAS = new Set(['de', 'del', 'la', 'las', 'el', 'los', 'para', 'y', 'con', 'en', 'un', 'una']);
-function _palabraClave(idea) {
-  const palabras = normTxt(idea).split(' ').filter(w => w && !_VACIAS.has(w));
-  if (!palabras.length) return '';
-  // La más larga suele ser la específica ("organza" sobre "bolsas",
-  // "escarapelas" sobre "cintas"). Se quita el plural para que "moños"
-  // encuentre "MOÑO".
-  const larga = palabras.slice().sort((a, b) => b.length - a.length)[0];
-  return larga.replace(/(es|s)$/, '');
+  // El texto de cada producto incluye los COLORES de sus variedades: "goma eva
+  // naranja" no está en ningún nombre, está en el nombre de uno y en la
+  // variedad del otro. Sin esto, la pantalla decía que faltaba goma eva naranja
+  // teniéndola en tres presentaciones distintas.
+  const textos = (productos || []).map(p => {
+    const colores = Array.isArray(p?.conjunto_colores)
+      ? p.conjunto_colores.map(c => c?.color).filter(Boolean) : [];
+    return normTxt([p?.nombre, p?.sub_rubro, ...colores].filter(Boolean).join(' '));
+  });
+
+  // Una idea está cubierta cuando ALGÚN producto tiene TODOS sus términos.
+  // Los términos los escribe el almanaque a mano (`buscar`) en vez de sacarlos
+  // del texto que se muestra: "bolsas de organza" se busca por "organza", y
+  // adivinar cuál es la palabra importante salía mal seguido.
+  return ideas.filter(idea => {
+    const terminos = (idea?.buscar || []).map(normTxt).filter(Boolean);
+    if (!terminos.length) return false;
+    // Palabra entera: buscando por pedazo, "cartulina fantasia" contenía
+    // "antifaz" y la pantalla daba por cubierto un antifaz que no existe.
+    return !textos.some(t => terminos.every(x => tienePalabra(t, x)));
+  }).map(idea => idea.que);
 }
 
 export { TEMPORADAS, temporadasProximas };

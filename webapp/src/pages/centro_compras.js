@@ -741,6 +741,16 @@ export async function renderCentroCompras(container, db) {
   bindEvents(root);
   recalc(true);
   limpiarAnotadosViejos();
+
+  // Se llegó acá desde el aviso "se viene tal fecha": abrir esa fecha con todo
+  // lo suyo, que es lo que el dueño fue a buscar al tocar el aviso.
+  const pedida = window.__ccAbrirFecha;
+  if (pedida) {
+    window.__ccAbrirFecha = null;
+    _state.fechasOpen = true;
+    abrirFecha(pedida);
+    document.getElementById('cc-fechas')?.scrollIntoView({ block: 'nearest' });
+  }
 }
 
 // ── Época: calcular y mezclar con la lista ────────────────────────────────────

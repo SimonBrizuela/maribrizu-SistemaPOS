@@ -370,6 +370,35 @@ describe('las pistas, para las fechas que todavía no se pudieron medir', () => 
     expect(coincidePorPista(temporadaPorId('reyes'), { nombre: 'MONO REGALO X 10', rubro: 'LIBRERÍA' })).toBe(true);
   });
 
+  // Los tres falsos positivos que aparecieron al revisar la lista real contra
+  // el catálogo del local (21/09/2026). El rubro dice "esto es para regalar"
+  // pero no distingue adentro del rubro.
+  it('no le regala un mouse a la madre', () => {
+    // REGALERÍA tiene los portarretratos y también la informática.
+    expect(coincidePorPista(madre, { nombre: 'MOUSE GTC INALAMBRICO MIG-125', rubro: 'REGALERÍA', subRubro: 'INFORMATICA' })).toBe(false);
+    expect(coincidePorPista(madre, { nombre: 'TECLADO-MOUSE GTC', rubro: 'REGALERÍA', subRubro: 'MOUSE' })).toBe(false);
+    // Pero el portarretrato del mismo rubro sí.
+    expect(coincidePorPista(madre, { nombre: 'PORTARETRATO PLASTICO 13X18', rubro: 'REGALERÍA', subRubro: 'PORTARETRATOS' })).toBe(true);
+  });
+
+  it('la espada de San Martín no es de Halloween', () => {
+    // Los tres son rubro COTILLON: si el rubro mandara solo, Halloween se
+    // llevaba lo patrio y lo de primavera.
+    const hall = temporadaPorId('halloween');
+    expect(coincidePorPista(hall, { nombre: 'ESPADA SABLE SAN MARTIN', rubro: 'COTILLON', subRubro: 'ESPADA' })).toBe(false);
+    expect(coincidePorPista(hall, { nombre: 'BANDERIN DE FLORES PRIMAVERA', rubro: 'COTILLON', subRubro: 'GUIRNALDAS' })).toBe(false);
+    expect(coincidePorPista(hall, { nombre: 'ANTIFAZ HALLOWEEN', rubro: 'COTILLON' })).toBe(true);
+  });
+
+  it('lo propio gana sobre la exclusión cruzada', () => {
+    // "navidad" y "primavera" están en la lista de exclusión para que no se las
+    // lleve la fecha de al lado. Cada una tiene que poder reclamar lo suyo.
+    expect(coincidePorPista(temporadaPorId('navidad'), { nombre: 'ARBOLITO DE NAVIDAD', rubro: 'NAVIDAD' })).toBe(true);
+    expect(coincidePorPista(temporadaPorId('primavera'), { nombre: 'BANDERIN DE FLORES PRIMAVERA', rubro: 'COTILLON', subRubro: 'GUIRNALDAS' })).toBe(true);
+    expect(coincidePorPista(temporadaPorId('egresados'), { nombre: 'CINTA DE EGRESADOS', rubro: 'MERCERÍA' })).toBe(true);
+    expect(coincidePorPista(temporadaPorId('25_mayo'), { nombre: 'ESCARAPELA METAL X1', rubro: 'LIBRERÍA' })).toBe(true);
+  });
+
   it('sólo propone lo que ya se vende', () => {
     const prox = { id: 'dia_madre', nombre: 'Día de la Madre', fecha: '2026-10-18', diasFaltan: 27, plazoAviso: 60 };
     const recs = recomendarPorPistas(prox, {

@@ -86,20 +86,48 @@ export const ESTUDIO_VIGENCIA_DIAS = 30;
 // mide y para la que hay que tener stock. `post` son los días de después que
 // todavía cuentan (el Día del Niño se sigue comprando el lunes).
 //
-// `pistas` son para cuando todavía no hay historia: `palabras` se buscan en el
-// nombre del producto y `colores` en la variedad vendida.
+// `pistas` son para cuando todavía no hay historia: `rubros` y `palabras` se
+// buscan en el producto, `colores` en la variedad vendida y `excluir` saca lo
+// que no corresponde aunque el rubro coincida.
+
+// Lo que NO entra aunque el rubro coincida.
+//
+// El rubro solo alcanza para saber "esto es para regalar", pero no distingue
+// dentro del rubro. Medido contra el catálogo real el 21/09/2026: REGALERÍA
+// tiene los portarretratos y los peluches, pero también mouses, teclados y
+// cartuchos de toner — nadie le regala un mouse a la madre. Y COTILLON, que
+// tiene 24 productos, mezcla los globos con la espada de San Martín y el
+// banderín de primavera, que son de OTRAS fechas.
+const NO_ES_REGALO = ['mouse', 'teclado', 'toner', 'cartucho', 'impresora', 'pendrive',
+  'informatica', 'adaptador', 'cargador', 'lector', 'tripode', 'consola', 'pad'];
+// Cosas que son claramente de otra fecha del almanaque: que no se las lleve la
+// que esté más cerca en el calendario.
+const DE_OTRA_FECHA = ['san martin', 'granadero', 'escarapela', 'bandera', 'patrio',
+  'primavera', 'navidad', 'navideno', 'arbolito', 'egresado', 'diploma', 'birrete'];
+
 export const TEMPORADAS = [
   {
     id: 'reyes', nombre: 'Reyes Magos', cuando: { mes: 1, dia: 6 },
     previa: 14, post: 1, aviso: 45,
-    ideas: ['papel de regalo', 'moños de regalo', 'bolsas de regalo', 'tarjetas', 'juguete chico de mostrador'],
-    pistas: { rubros: ['regaleria', 'jugueteria', 'cotillon'], palabras: ['papel regalo', 'mono', 'mono regalo', 'bolsa regalo', 'bolsa organza', 'tarjeta', 'souvenir'], colores: [] },
+    ideas: [
+      { que: 'papel de regalo', buscar: ['papel regalo'] },
+      { que: 'moños de regalo', buscar: ['mono'] },
+      { que: 'bolsas de regalo', buscar: ['bolsa regalo'] },
+      { que: 'tarjetas', buscar: ['tarjeta'] },
+      { que: 'juguete chico de mostrador', buscar: ['juguete'] },
+    ],
+    pistas: { rubros: ['regaleria', 'jugueteria'], palabras: ['papel regalo', 'mono', 'mono regalo', 'bolsa regalo', 'bolsa organza', 'tarjeta', 'souvenir'], colores: [], excluir: [...NO_ES_REGALO, ...DE_OTRA_FECHA] },
     nota: 'Se arma con lo del envoltorio: papel de regalo, moños y bolsas.',
   },
   {
     id: 'vuelta_clases', nombre: 'Vuelta a clases', cuando: { mes: 3, dia: 1 },
     previa: 50, post: 25, aviso: 75,
-    ideas: ['forros para cuadernos', 'etiquetas escolares', 'cartucheras', 'compases', 'útiles de jardín'],
+    ideas: [
+      { que: 'forros para cuadernos', buscar: ['forro'] },
+      { que: 'etiquetas escolares', buscar: ['etiqueta'] },
+      { que: 'cartucheras', buscar: ['cartuchera'] },
+      { que: 'compases', buscar: ['compas'] },
+    ],
     pistas: {
       rubros: [],
       palabras: ['cuaderno', 'carpeta', 'repuesto', 'mochila', 'cartuchera', 'lapiz', 'lápiz',
@@ -113,129 +141,240 @@ export const TEMPORADAS = [
   {
     id: 'san_valentin', nombre: 'San Valentín', cuando: { mes: 2, dia: 14 },
     previa: 12, post: 0, aviso: 45,
-    ideas: ['tarjetas de amor', 'peluches chicos', 'cajitas de regalo', 'globos de corazón', 'bolsas de organza'],
-    pistas: { rubros: ['regaleria'], palabras: ['corazon', 'corazón', 'peluche', 'tarjeta', 'bolsa organza', 'mono regalo', 'papel regalo', 'celofan', 'celofán'], colores: ['rojo', 'fucsia'] },
+    ideas: [
+      { que: 'tarjetas', buscar: ['tarjeta'] },
+      { que: 'peluches chicos', buscar: ['peluche'] },
+      { que: 'globos de corazón', buscar: ['globo', 'corazon'] },
+      { que: 'bolsas de organza', buscar: ['organza'] },
+    ],
+    pistas: { rubros: ['regaleria'], palabras: ['corazon', 'corazón', 'peluche', 'tarjeta', 'bolsa organza', 'mono regalo', 'papel regalo', 'celofan', 'celofán'], colores: ['rojo', 'fucsia'], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa', 'plancha'], colores: ['rojo', 'fucsia', 'rosa'] }], excluir: [...NO_ES_REGALO, ...DE_OTRA_FECHA] },
   },
   {
     id: 'carnaval', nombre: 'Carnaval', cuando: { pascua: -48 },
     previa: 15, post: 2, aviso: 45,
-    ideas: ['papel picado', 'antifaces', 'espuma en aerosol', 'globos', 'brillantina'],
-    pistas: { rubros: ['cotillon'], palabras: ['papel picado', 'antifaz', 'mascara', 'máscara', 'gorro', 'brillantina', 'purpurina', 'globo', 'serpentina', 'espuma loca'], colores: [] },
+    ideas: [
+      { que: 'papel picado', buscar: ['papel picado'] },
+      { que: 'antifaces', buscar: ['antifaz'] },
+      { que: 'espuma en aerosol', buscar: ['espuma'] },
+      { que: 'brillantina', buscar: ['brillantina'] },
+    ],
+    pistas: { rubros: ['cotillon'], palabras: ['papel picado', 'antifaz', 'mascara', 'máscara', 'gorro', 'brillantina', 'purpurina', 'globo', 'serpentina', 'espuma loca'], colores: [], excluir: [...DE_OTRA_FECHA] },
   },
   {
     id: 'dia_mujer', nombre: 'Día de la Mujer', cuando: { mes: 3, dia: 8 },
     previa: 8, post: 0, aviso: 30,
-    ideas: ['flores artificiales', 'tarjetas', 'souvenirs chicos'],
-    pistas: { rubros: ['regaleria'], palabras: ['flor', 'tarjeta', 'souvenir'], colores: ['violeta', 'lila', 'morado'] },
+    ideas: [
+      { que: 'flores artificiales', buscar: ['flor'] },
+      { que: 'tarjetas', buscar: ['tarjeta'] },
+      { que: 'souvenirs chicos', buscar: ['souvenir'] },
+    ],
+    pistas: { rubros: ['regaleria'], palabras: ['flor', 'tarjeta', 'souvenir'], colores: ['violeta', 'lila', 'morado'], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa', 'plancha'], colores: ['violeta', 'lila', 'morado'] }], excluir: [...NO_ES_REGALO, ...DE_OTRA_FECHA] },
   },
   {
     id: 'pascua', nombre: 'Pascua', cuando: { pascua: 0 },
     previa: 14, post: 1, aviso: 45,
-    ideas: ['papel celofán', 'papel metalizado', 'canastitas', 'moldes de huevo', 'cintas finas'],
-    pistas: { rubros: [], palabras: ['huevo', 'conejo', 'canasta', 'celofan', 'celofán', 'metalizado', 'bolsa organza', 'mono regalo', 'papel regalo'], colores: [] },
+    ideas: [
+      { que: 'papel celofán', buscar: ['celofan'] },
+      { que: 'papel metalizado', buscar: ['metalizado'] },
+      { que: 'canastitas', buscar: ['canasta'] },
+      { que: 'moldes de huevo', buscar: ['huevo'] },
+    ],
+    pistas: { rubros: [], palabras: ['huevo', 'conejo', 'canasta', 'celofan', 'celofán', 'metalizado', 'bolsa organza', 'mono regalo', 'papel regalo'], colores: [], excluir: [...NO_ES_REGALO] },
     nota: 'Lo que se vende es el envoltorio del huevo: celofán, metalizado, cintas.',
   },
   {
     id: '25_mayo', nombre: '25 de Mayo', grupo: 'patrias', cuando: { mes: 5, dia: 25 },
     previa: 14, post: 0, aviso: 45,
-    ideas: ['escarapelas', 'cintas celeste y blanco', 'papel crepé celeste y blanco', 'banderas de mano', 'apliques patrios'],
-    pistas: { rubros: [], palabras: ['escarapela', 'bandera', 'crepe', 'crepé', 'aplique', 'granadero', 'banderin', 'banderín'], colores: ['celeste', 'blanco'] },
+    ideas: [
+      { que: 'escarapelas', buscar: ['escarapela'] },
+      { que: 'cintas celeste y blanco', buscar: ['cinta', 'celeste'] },
+      { que: 'papel crepé celeste', buscar: ['crepe', 'celeste'] },
+      { que: 'banderas de mano', buscar: ['bandera'] },
+    ],
+    pistas: { rubros: [], palabras: ['escarapela', 'bandera', 'crepe', 'crepé', 'aplique', 'granadero', 'banderin', 'banderín'], colores: ['celeste', 'blanco'], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa', 'plancha'], colores: ['celeste', 'blanco', 'blanca'] }] },
     nota: 'Fecha patria: escarapelas y todo lo celeste y blanco para los actos.',
   },
   {
     id: 'jardin', nombre: 'Día de los Jardines y la Maestra Jardinera', cuando: { mes: 5, dia: 28 },
     previa: 14, post: 0, aviso: 45,
-    ideas: ['souvenirs de goma eva', 'pompones', 'limpia pipas', 'imanes', 'apliques de flores'],
-    pistas: { rubros: ['regaleria'], palabras: ['souvenir', 'goma eva', 'flor', 'aplique', 'taza', 'iman', 'imán', 'tarjeta', 'pompon', 'pompones', 'limpia pipa'], colores: [] },
+    ideas: [
+      { que: 'souvenirs de goma eva', buscar: ['goma eva'] },
+      { que: 'pompones', buscar: ['pompon'] },
+      { que: 'limpia pipas', buscar: ['limpia pipa'] },
+      { que: 'imanes', buscar: ['iman'] },
+    ],
+    pistas: { rubros: ['regaleria'], palabras: ['souvenir', 'goma eva', 'flor', 'aplique', 'taza', 'iman', 'imán', 'tarjeta', 'pompon', 'pompones', 'limpia pipa'], colores: [], excluir: [...NO_ES_REGALO, ...DE_OTRA_FECHA] },
   },
   {
     id: 'dia_libro', nombre: 'Día del Libro', cuando: { mes: 6, dia: 15 },
     previa: 12, post: 0, aviso: 30,
-    ideas: ['señaladores', 'agendas', 'diarios íntimos', 'tarjetas'],
+    ideas: [
+      { que: 'señaladores', buscar: ['senalador'] },
+      { que: 'agendas', buscar: ['agenda'] },
+      { que: 'diarios íntimos', buscar: ['diario intimo'] },
+    ],
     pistas: { rubros: [], palabras: ['libro', 'senalador', 'señalador', 'tarjeta', 'agenda', 'diario intimo', 'diario íntimo'], colores: [] },
   },
   {
     id: 'bandera', nombre: 'Día de la Bandera', grupo: 'patrias', cuando: { mes: 6, dia: 20 },
     previa: 14, post: 0, aviso: 45,
-    ideas: ['escarapelas', 'cintas celeste y blanco', 'banderas de mano', 'papel crepé celeste y blanco'],
-    pistas: { rubros: [], palabras: ['escarapela', 'bandera', 'crepe', 'crepé', 'aplique', 'granadero', 'banderin', 'banderín'], colores: ['celeste', 'blanco'] },
+    ideas: [
+      { que: 'escarapelas', buscar: ['escarapela'] },
+      { que: 'cintas celeste y blanco', buscar: ['cinta', 'celeste'] },
+      { que: 'banderas de mano', buscar: ['bandera'] },
+    ],
+    pistas: { rubros: [], palabras: ['escarapela', 'bandera', 'crepe', 'crepé', 'aplique', 'granadero', 'banderin', 'banderín'], colores: ['celeste', 'blanco'], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa', 'plancha'], colores: ['celeste', 'blanco', 'blanca'] }] },
     nota: 'Fecha patria: escarapelas y todo lo celeste y blanco para los actos.',
   },
   {
     id: 'dia_padre', nombre: 'Día del Padre', cuando: { mes: 6, domingo: 3 },
     previa: 16, post: 1, aviso: 45,
-    ideas: ['tazas para sublimar', 'sets materos', 'llaveros', 'tarjetas', 'bolsas de regalo'],
-    pistas: { rubros: ['regaleria'], palabras: ['tarjeta', 'bolsa regalo', 'bolsa organza', 'mono regalo', 'papel regalo', 'souvenir', 'taza', 'mate', 'llavero'], colores: [] },
+    ideas: [
+      { que: 'tazas para sublimar', buscar: ['taza'] },
+      { que: 'sets materos', buscar: ['mate'] },
+      { que: 'llaveros', buscar: ['llavero'] },
+      { que: 'tarjetas', buscar: ['tarjeta'] },
+    ],
+    pistas: { rubros: ['regaleria'], palabras: ['tarjeta', 'bolsa regalo', 'bolsa organza', 'mono regalo', 'papel regalo', 'souvenir', 'taza', 'mate', 'llavero'], colores: [], excluir: [...NO_ES_REGALO, ...DE_OTRA_FECHA] },
   },
   {
     id: 'independencia', nombre: '9 de Julio', grupo: 'patrias', cuando: { mes: 7, dia: 9 },
     previa: 14, post: 0, aviso: 45,
-    ideas: ['escarapelas', 'cintas celeste y blanco', 'banderas de mano', 'apliques patrios'],
-    pistas: { rubros: [], palabras: ['escarapela', 'bandera', 'crepe', 'crepé', 'aplique', 'granadero', 'banderin', 'banderín'], colores: ['celeste', 'blanco'] },
+    ideas: [
+      { que: 'escarapelas', buscar: ['escarapela'] },
+      { que: 'cintas celeste y blanco', buscar: ['cinta', 'celeste'] },
+      { que: 'banderas de mano', buscar: ['bandera'] },
+    ],
+    pistas: { rubros: [], palabras: ['escarapela', 'bandera', 'crepe', 'crepé', 'aplique', 'granadero', 'banderin', 'banderín'], colores: ['celeste', 'blanco'], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa', 'plancha'], colores: ['celeste', 'blanco', 'blanca'] }] },
     nota: 'Fecha patria: escarapelas y todo lo celeste y blanco para los actos.',
   },
   {
     id: 'dia_amigo', nombre: 'Día del Amigo', cuando: { mes: 7, dia: 20 },
     previa: 12, post: 1, aviso: 45,
-    ideas: ['tarjetas', 'peluches chicos', 'bolsas de organza', 'llaveros', 'cajitas'],
-    pistas: { rubros: ['regaleria'], palabras: ['tarjeta', 'bolsa regalo', 'bolsa organza', 'souvenir', 'mono regalo', 'papel regalo', 'peluche', 'llavero'], colores: [] },
+    ideas: [
+      { que: 'tarjetas', buscar: ['tarjeta'] },
+      { que: 'peluches chicos', buscar: ['peluche'] },
+      { que: 'bolsas de organza', buscar: ['organza'] },
+      { que: 'llaveros', buscar: ['llavero'] },
+    ],
+    pistas: { rubros: ['regaleria'], palabras: ['tarjeta', 'bolsa regalo', 'bolsa organza', 'souvenir', 'mono regalo', 'papel regalo', 'peluche', 'llavero'], colores: [], excluir: [...NO_ES_REGALO, ...DE_OTRA_FECHA] },
   },
   {
     id: 'dia_nino', nombre: 'Día del Niño', cuando: { mes: 8, domingo: 3 },
     previa: 20, post: 1, aviso: 60,
-    ideas: ['juguetes de mostrador', 'papel de regalo', 'globos', 'bolsas de regalo', 'burbujeros'],
-    pistas: { rubros: ['jugueteria', 'regaleria', 'cotillon'], palabras: ['juguete', 'papel regalo', 'bolsa regalo', 'mono regalo', 'globo', 'peluche', 'tarjeta'], colores: [] },
+    ideas: [
+      { que: 'juguetes de mostrador', buscar: ['juguete'] },
+      { que: 'papel de regalo', buscar: ['papel regalo'] },
+      { que: 'globos', buscar: ['globo'] },
+      { que: 'burbujeros', buscar: ['burbuj'] },
+    ],
+    pistas: { rubros: ['jugueteria', 'regaleria', 'cotillon'], palabras: ['juguete', 'papel regalo', 'bolsa regalo', 'mono regalo', 'globo', 'peluche', 'tarjeta'], colores: [], excluir: [...NO_ES_REGALO, ...DE_OTRA_FECHA] },
   },
   {
     id: 'amarillo', nombre: 'El 6 de septiembre · todo amarillo', grupo: 'septiembre', cuando: { mes: 9, dia: 6 },
     previa: 12, post: 1, aviso: 60,
-    ideas: ['flores amarillas artificiales', 'limpia pipas amarillos', 'cintas amarillas', 'cartulina amarilla', 'papel celofán amarillo', 'globos amarillos'],
-    pistas: { rubros: [], palabras: ['limpia pipa', 'flor', 'girasol'], colores: ['amarillo'] },
+    ideas: [
+      { que: 'flores artificiales amarillas', buscar: ['flor', 'amarillo'] },
+      { que: 'limpia pipas amarillos', buscar: ['limpia pipa', 'amarillo'] },
+      { que: 'cintas amarillas', buscar: ['cinta', 'amarillo'] },
+      { que: 'cartulina amarilla', buscar: ['cartulina', 'amarillo'] },
+      { que: 'globos amarillos', buscar: ['globo', 'amarillo'] },
+    ],
+    pistas: { rubros: [], palabras: ['limpia pipa', 'flor', 'girasol'], colores: ['amarillo'], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa', 'plancha'], colores: ['amarillo'] }] },
     nota: 'Se regala algo amarillo. Vuela todo lo amarillo: limpia pipa, cintas, cartulinas, flores.',
   },
   {
     id: 'dia_maestro', nombre: 'Día del Maestro', grupo: 'septiembre', cuando: { mes: 9, dia: 11 },
     previa: 14, post: 0, aviso: 45,
-    ideas: ['tazas para sublimar', 'souvenirs de escritorio', 'imanes', 'tarjetas', 'apliques de flores'],
-    pistas: { rubros: ['regaleria'], palabras: ['souvenir', 'tarjeta', 'taza', 'iman', 'imán', 'aplique', 'flor', 'mate', 'llavero', 'bolsa organza'], colores: [] },
+    ideas: [
+      { que: 'tazas para sublimar', buscar: ['taza'] },
+      { que: 'imanes', buscar: ['iman'] },
+      { que: 'tarjetas', buscar: ['tarjeta'] },
+      { que: 'souvenirs de escritorio', buscar: ['souvenir'] },
+    ],
+    pistas: { rubros: ['regaleria'], palabras: ['souvenir', 'tarjeta', 'taza', 'iman', 'imán', 'aplique', 'flor', 'mate', 'llavero', 'bolsa organza'], colores: [], excluir: [...NO_ES_REGALO, ...DE_OTRA_FECHA] },
   },
   {
     id: 'primavera', nombre: 'Día del Estudiante y la Primavera', grupo: 'septiembre', cuando: { mes: 9, dia: 21 },
     previa: 14, post: 1, aviso: 45,
-    ideas: ['flores artificiales', 'vinchas', 'guirnaldas', 'globos', 'banderines'],
-    pistas: { rubros: ['cotillon', 'regaleria'], palabras: ['flor', 'souvenir', 'globo', 'tarjeta', 'vincha', 'banderin', 'banderín', 'guirnalda'], colores: [] },
+    ideas: [
+      { que: 'flores artificiales', buscar: ['flor'] },
+      { que: 'vinchas', buscar: ['vincha'] },
+      { que: 'guirnaldas', buscar: ['guirnalda'] },
+      { que: 'banderines', buscar: ['banderin'] },
+    ],
+    pistas: { rubros: [], palabras: ['primavera', 'flor', 'souvenir', 'globo', 'tarjeta', 'vincha', 'banderin', 'banderín', 'guirnalda'], colores: [], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa', 'plancha'], colores: ['amarillo', 'verde', 'rosa'] }], excluir: [...DE_OTRA_FECHA] },
   },
   {
     id: 'dia_madre', nombre: 'Día de la Madre', cuando: { mes: 10, domingo: 3 },
     previa: 20, post: 1, aviso: 60,
-    ideas: ['portarretratos', 'tazas', 'bolsas de organza', 'papel de regalo', 'moños', 'flores artificiales', 'peluches', 'sets de mate', 'billeteras de dama', 'tarjetas'],
-    pistas: { rubros: ['regaleria'], palabras: ['tarjeta', 'bolsa regalo', 'bolsa organza', 'mono regalo', 'papel regalo', 'souvenir', 'taza', 'flor', 'celofan', 'celofán', 'peluche', 'portaretrato', 'portarretrato'], colores: [] },
+    ideas: [
+      { que: 'portarretratos', buscar: ['portaretrato'] },
+      { que: 'tazas', buscar: ['taza'] },
+      { que: 'bolsas de organza', buscar: ['organza'] },
+      { que: 'papel de regalo', buscar: ['papel regalo'] },
+      { que: 'moños', buscar: ['mono'] },
+      { que: 'flores artificiales', buscar: ['flor'] },
+      { que: 'peluches', buscar: ['peluche'] },
+      { que: 'sets de mate', buscar: ['mate'] },
+      { que: 'tarjetas', buscar: ['tarjeta'] },
+    ],
+    pistas: { rubros: ['regaleria'], palabras: ['tarjeta', 'bolsa regalo', 'bolsa organza', 'mono regalo', 'papel regalo', 'souvenir', 'taza', 'flor', 'celofan', 'celofán', 'peluche', 'portaretrato', 'portarretrato'], colores: [], excluir: [...NO_ES_REGALO, ...DE_OTRA_FECHA] },
     nota: 'De las más fuertes del año para el regalo y el envoltorio.',
   },
   {
     id: 'halloween', nombre: 'Halloween', cuando: { mes: 10, dia: 31 },
     previa: 18, post: 0, aviso: 45,
-    ideas: ['antifaces', 'máscaras', 'telarañas', 'calabazas de plástico', 'goma eva naranja y negra', 'globos negros y naranjas'],
-    pistas: { rubros: ['cotillon'], palabras: ['disfraz', 'calabaza', 'antifaz', 'mascara', 'máscara', 'araña', 'arana', 'esqueleto', 'murcielago', 'murciélago', 'telarana', 'telaraña', 'halloween', 'bruja'], colores: [] },
+    ideas: [
+      { que: 'antifaces', buscar: ['antifaz'] },
+      { que: 'telarañas', buscar: ['telarana'] },
+      { que: 'calabazas de plástico', buscar: ['calabaza'] },
+      { que: 'goma eva naranja', buscar: ['goma eva', 'naranja'] },
+      { que: 'goma eva negra', buscar: ['goma eva', 'negro'] },
+      { que: 'globos negros', buscar: ['globo', 'negro'] },
+      { que: 'globos naranjas', buscar: ['globo', 'naranja'] },
+      { que: 'maquillaje artístico', buscar: ['maquillaje'] },
+      { que: 'sangre falsa', buscar: ['sangre'] },
+    ],
+    pistas: { rubros: [], palabras: ['disfraz', 'calabaza', 'antifaz', 'mascara', 'máscara', 'esqueleto', 'murcielago', 'murciélago', 'telarana', 'telaraña', 'halloween', 'bruja'], colores: [], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa', 'plancha'], colores: ['naranja', 'negro', 'negra'] }], excluir: [...DE_OTRA_FECHA] },
   },
   {
     id: 'egresados', nombre: 'Egresados y fin de cursado', grupo: 'fin_de_anio', cuando: { mes: 11, dia: 25 },
     previa: 30, post: 15, aviso: 60,
-    ideas: ['diplomas y portadiplomas', 'birretes', 'cintas de egresados', 'globos', 'guirnaldas', 'carpetas de presentación'],
-    pistas: { rubros: ['cotillon'], palabras: ['diploma', 'souvenir', 'globo', 'birrete', 'portada', 'aplique', 'medalla', 'guirnalda', 'banderin', 'banderín', 'carpeta'], colores: [] },
+    ideas: [
+      { que: 'diplomas y portadiplomas', buscar: ['diploma'] },
+      { que: 'birretes', buscar: ['birrete'] },
+      { que: 'cintas de egresados', buscar: ['cinta', 'egresado'] },
+      { que: 'medallas', buscar: ['medalla'] },
+      { que: 'guirnaldas', buscar: ['guirnalda'] },
+    ],
+    pistas: { rubros: [], palabras: ['egresado', 'egresados', 'diploma', 'souvenir', 'globo', 'birrete', 'portada', 'aplique', 'medalla', 'guirnalda', 'banderin', 'banderín'], colores: [], excluir: [...DE_OTRA_FECHA] },
     nota: 'Diplomas, souvenirs y actos de fin de año: arranca a mediados de noviembre.',
   },
   {
     id: 'navidad', nombre: 'Navidad', grupo: 'fin_de_anio', cuando: { mes: 12, dia: 25 },
     previa: 28, post: 0, aviso: 60,
-    ideas: ['papel de regalo navideño', 'moños', 'adornos de arbolito', 'guirnaldas', 'bolsas navideñas', 'tarjetas de Navidad'],
-    pistas: { rubros: ['navidad', 'cotillon', 'regaleria'], palabras: ['navidad', 'navideno', 'navideño', 'arbolito', 'guirnalda', 'papel regalo', 'mono regalo', 'bolsa regalo', 'celofan', 'celofán', 'metalizado', 'tarjeta', 'adorno'], colores: ['rojo', 'verde', 'dorado', 'plateado'] },
+    ideas: [
+      { que: 'papel de regalo navideño', buscar: ['papel regalo'] },
+      { que: 'adornos de arbolito', buscar: ['adorno'] },
+      { que: 'guirnaldas', buscar: ['guirnalda'] },
+      { que: 'moños', buscar: ['mono'] },
+      { que: 'bolsas navideñas', buscar: ['bolsa', 'navid'] },
+      { que: 'tarjetas de Navidad', buscar: ['tarjeta'] },
+    ],
+    pistas: { rubros: ['navidad'], palabras: ['navidad', 'navideno', 'navideño', 'arbolito', 'guirnalda', 'papel regalo', 'mono regalo', 'bolsa regalo', 'celofan', 'celofán', 'metalizado', 'tarjeta', 'adorno'], colores: ['rojo', 'verde', 'dorado', 'plateado'], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa', 'plancha'], colores: ['rojo', 'verde', 'dorado', 'plateado'] }], excluir: [...DE_OTRA_FECHA] },
   },
   {
     id: 'fin_anio', nombre: 'Fin de año', grupo: 'fin_de_anio', cuando: { mes: 12, dia: 31 },
     previa: 12, post: 1, aviso: 45,
-    ideas: ['cotillón de fin de año', 'gorros', 'cornetas', 'globos', 'bengalas', 'guirnaldas'],
-    pistas: { rubros: ['cotillon'], palabras: ['globo', 'gorro', 'guirnalda', 'serpentina', 'papel picado', 'bengala', 'vela'], colores: [] },
+    ideas: [
+      { que: 'gorros de fin de año', buscar: ['gorro'] },
+      { que: 'cornetas', buscar: ['corneta'] },
+      { que: 'guirnaldas', buscar: ['guirnalda'] },
+      { que: 'bengalas', buscar: ['bengala'] },
+      { que: 'papel picado', buscar: ['papel picado'] },
+    ],
+    pistas: { rubros: ['cotillon'], palabras: ['globo', 'gorro', 'guirnalda', 'serpentina', 'papel picado', 'bengala', 'vela'], colores: [], excluir: [...DE_OTRA_FECHA] },
   },
 ];
 
@@ -621,6 +760,23 @@ function _sinElDiaDominante(uds, porDia) {
  */
 export function coincidePorPista(temp, { nombre = '', color = '', rubro = '', subRubro = '' } = {}) {
   const pistas = temp?.pistas || {};
+  const texto = normTxt([nombre, subRubro].filter(Boolean).join(' '));
+  const palabras = (pistas.palabras || []).map(normTxt);
+
+  // Lo que se saca aunque el rubro coincida: cosas de OTRA fecha del almanaque
+  // y cosas que nadie regala. Sin esto, medido contra el catálogo real, a
+  // Halloween le entraban la espada de San Martín y el banderín de primavera
+  // (los tres son rubro COTILLON) y al Día de la Madre, los mouses y teclados
+  // (rubro REGALERÍA, subrubro INFORMATICA).
+  //
+  // Lo PROPIO gana: la lista nombra "navidad" y "primavera" para que no se las
+  // lleve la fecha de al lado, así que sin esta salvedad la Navidad se
+  // excluiría a sí misma.
+  for (const x of (pistas.excluir || [])) {
+    const ex = normTxt(x);
+    if (!ex || palabras.includes(ex)) continue;
+    if (_tienePalabra(texto, ex)) return false;
+  }
 
   // El rubro es la pista más limpia que hay: el local ya tiene separadas
   // REGALERÍA, JUGUETERÍA, COTILLON y NAVIDAD, que es justo lo que se vende
@@ -628,16 +784,32 @@ export function coincidePorPista(temp, { nombre = '', color = '', rubro = '', su
   const rub = normTxt(rubro);
   if (rub && (pistas.rubros || []).some(r => rub === normTxt(r))) return true;
 
+  // MATERIAL + COLOR. Para Halloween el local no tiene "cosas de Halloween":
+  // tiene goma eva naranja, cartulina negra, papel afiche negro y globos
+  // naranjas, que es con lo que los chicos arman el disfraz y la decoración.
+  // Buscado de a una pista suelta no aparece nada —"goma eva" sola trae los
+  // doce colores y "negro" solo trae todos los bolígrafos—, pero cruzando las
+  // dos sale exactamente lo que se usa. Medido contra el catálogo real
+  // (21/09/2026): 88 productos con variedad naranja o negra.
+  const col = normTxt(color);
+  for (const combo of (pistas.combinaciones || [])) {
+    if (!col || !(combo.colores || []).some(c => col.includes(normTxt(c)))) continue;
+    if ((combo.palabras || []).some(pal => _tienePalabra(texto, normTxt(pal)))) return true;
+  }
+
   // Los COLORES no entran acá a propósito. Para medir sirven —el amarillo de
   // septiembre salió limpio de las ventas—, pero para adivinar no: pedir
   // "negro" para Halloween devolvía todos los bolígrafos negros del catálogo.
-  const palabras = pistas.palabras || [];
   if (!palabras.length) return false;
-  const texto = normTxt([nombre, subRubro].filter(Boolean).join(' '));
   // Por palabra entera, no por pedazo: buscando "mono" adentro del texto,
   // MONOPOLY y MONOAMBIENTE entraban como artículos de regalo.
-  return palabras.some(p => _tienePalabra(texto, normTxt(p)));
+  return palabras.some(p => _tienePalabra(texto, p));
 }
+
+/** ¿El texto tiene esta palabra (o frase) ENTERA? Buscando por pedazo,
+ *  "fantasia" contenía "antifaz" y el sistema daba por cubierto un antifaz que
+ *  el local no tiene. */
+export function tienePalabra(texto, frase) { return _tienePalabra(texto, frase); }
 
 function _tienePalabra(texto, frase) {
   if (!frase) return false;

@@ -13,6 +13,7 @@ import { initPedidosWatcher, onPedidosCambian } from './pedidos_watcher.js';
 import { initReclamosWatcher, onReclamosCambian } from './reclamos_watcher.js';
 import { initCajaWatcher } from './caja_watcher.js';
 import { initCalendarioBadge, proximosEventos, textoSobre } from './pages/calendario_core.js';
+import { initAvisosTemporada } from './avisos_temporada.js';
 import { renderSkeleton } from './skeletons.js';
 import { initAutostart, getAutostart, setAutostart, isTauriApp } from './autostart.js';
 import { initUpdater } from './updater.js';
@@ -924,6 +925,16 @@ function initApp(session) {
   // Si se está vendiendo sin caja abierta, avisarlo apenas pasa. Lee del store
   // (caja_activa + ventas_por_dia), no agrega lecturas propias.
   initCajaWatcher();
+
+  // "Se viene el Día de la Madre, faltan 27 días." No lee nada: el almanaque es
+  // una cuenta. Sale una vez por día y por fecha, y el botón lleva al Centro de
+  // Compras con esa fecha abierta.
+  initAvisosTemporada({
+    navegarA: (id) => {
+      window.__ccAbrirFecha = id;
+      navigate("centro_compras");
+    },
+  });
 
   // Cuando cualquier colección del store recibe cambios desde el server,
   // re-renderizar la página activa sin spinner (datos ya están en cache).
