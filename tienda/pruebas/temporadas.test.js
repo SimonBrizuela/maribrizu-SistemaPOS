@@ -390,6 +390,45 @@ describe('las pistas, para las fechas que todavía no se pudieron medir', () => 
     expect(coincidePorPista(hall, { nombre: 'ANTIFAZ HALLOWEEN', rubro: 'COTILLON' })).toBe(true);
   });
 
+  // Falsos positivos que aparecieron al revisar el catálogo producto por
+  // producto, fecha por fecha. Cada uno costó una poda de las pistas.
+  it('el insumo para FABRICAR bijouterie no es un regalo de San Valentín', () => {
+    const sv = temporadaPorId('san_valentin');
+    expect(coincidePorPista(sv, { nombre: 'ALAMBRE PARA BIJOU COLOR X 5M', rubro: 'MERCERÍA' })).toBe(false);
+    expect(coincidePorPista(sv, { nombre: 'HILO CHINO BIJOU PARA MANUALIDADES', rubro: 'MERCERÍA' })).toBe(false);
+    expect(coincidePorPista(sv, { nombre: 'PIERCING NARIZ BOLITA', rubro: 'ACCESORIOS' })).toBe(false);
+    // Pero el arito de acero, que es el que de verdad se regala, sí.
+    expect(coincidePorPista(sv, { nombre: 'AROS DE ACERO QUIRURGICO AD', rubro: 'ACCESORIOS' })).toBe(true);
+  });
+
+  it('un cordón de zapatilla no es de egresados', () => {
+    const eg = temporadaPorId('egresados');
+    expect(coincidePorPista(eg, { nombre: 'CORDON ZAPATILLAS-ZAPATOS REDONDO 1,20 MT X PAR', rubro: 'MERCERÍA' })).toBe(false);
+    expect(coincidePorPista(eg, { nombre: 'CUADERNO AMERICA A4 CON ESPIRAL X 80 HOJAS', rubro: 'LIBRERÍA' })).toBe(false);
+    // El birrete se arma con fiselina y el motor de la fecha es el plastificado.
+    expect(coincidePorPista(eg, { nombre: 'FISELINA (NOVOTEC) LISA COMUN', rubro: 'MERCERÍA' })).toBe(true);
+    expect(coincidePorPista(eg, { nombre: 'LAMINA REXON PARA PLASTIFICADO EN FRIO', rubro: 'LIBRERÍA' })).toBe(true);
+  });
+
+  it('un cordón de yute no es una corona de Navidad', () => {
+    expect(coincidePorPista(temporadaPorId('navidad'), { nombre: 'CORDON YUTE CORONA ART 28/4', rubro: 'MERCERÍA' })).toBe(false);
+    expect(coincidePorPista(temporadaPorId('carnaval'), { nombre: 'CORDON YUTE CORONA ART 28/4', rubro: 'MERCERÍA' })).toBe(false);
+  });
+
+  it('el disfraz de carnaval se arma con lo que hay en mercería', () => {
+    const c = temporadaPorId('carnaval');
+    for (const n of ['PLUMA MARABU GRANDE X UNIDAD', 'TULL (1.40) COLOR', 'LENTEJUELA X METRO',
+                     'STRASS ADHESIVO PARA LA CARA Y ACCESORIOS', 'VINCHA LISA NEGRA PLASTICA']) {
+      expect(coincidePorPista(c, { nombre: n, rubro: 'MERCERÍA' }), n).toBe(true);
+    }
+  });
+
+  it('Reyes es el 6 de enero en Córdoba: el juguete es de verano', () => {
+    const r = temporadaPorId('reyes');
+    expect(coincidePorPista(r, { nombre: 'JUEGO DE PLAYA CHICHESS 4 MOLDES', rubro: 'JUGUETERÍA' })).toBe(true);
+    expect(coincidePorPista(r, { nombre: 'ARO HULA HULA GRANDE', rubro: 'JUGUETERÍA' })).toBe(true);
+  });
+
   it('lo propio gana sobre la exclusión cruzada', () => {
     // "navidad" y "primavera" están en la lista de exclusión para que no se las
     // lleve la fecha de al lado. Cada una tiene que poder reclamar lo suyo.
