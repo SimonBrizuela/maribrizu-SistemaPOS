@@ -49,7 +49,7 @@ describe('cuándo avisar', () => {
 
   it('insiste todos los días mientras se está vendiendo', () => {
     const hoy = fecha('halloween', 3, { enVenta: true });
-    localStorage.setItem('temporadas:avisadas', JSON.stringify({ halloween: '2026-10-27' }));
+    localStorage.setItem('temporadas:avisadas:v2', JSON.stringify({ halloween: '2026-10-27' }));
     // Ayer se avisó, pero la venta ya arrancó: vuelve a salir igual.
     expect(avisosPendientes('2026-10-28', [hoy])).toHaveLength(1);
   });
@@ -57,7 +57,7 @@ describe('cuándo avisar', () => {
   it('en el medio afloja a una vez por semana', () => {
     // Entró al plazo hace rato (faltan 40 de 60) y se avisó anteayer.
     const t = fecha('halloween', 40);
-    localStorage.setItem('temporadas:avisadas', JSON.stringify({ halloween: '2026-09-19' }));
+    localStorage.setItem('temporadas:avisadas:v2', JSON.stringify({ halloween: '2026-09-19' }));
     expect(avisosPendientes('2026-09-21', [t])).toHaveLength(0);
     // Pasada la semana, vuelve.
     expect(avisosPendientes('2026-09-27', [t])).toHaveLength(1);

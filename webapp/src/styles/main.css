@@ -4836,7 +4836,15 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
 .cc-epoca-ya { border-left-color: var(--warning); }
 .cc-epoca-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .cc-epoca-head > .material-icons { font-size: 20px !important; color: var(--tint-blue-fg); flex: none; }
-.cc-epoca-tit { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; min-width: 0; }
+.cc-epoca-head > .cc-taco { align-self: center; }
+.cc-epoca-tit {
+  display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; min-width: 0;
+  background: none; border: 0; padding: 2px 6px; margin-left: -6px; border-radius: 6px;
+  font-family: inherit; text-align: left; cursor: pointer; color: inherit;
+}
+.cc-epoca-tit:hover b { text-decoration: underline; text-underline-offset: 3px; }
+.cc-epoca-tit:hover { background: var(--surface); }
+.cc-epoca-tit:focus-visible { outline: 2px solid var(--tint-blue-fg); outline-offset: 0; }
 .cc-epoca-tit b { font-size: 14px; color: var(--text-strong); }
 .cc-epoca-cuando { font-size: 12px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .cc-epoca-filtro {
@@ -4885,16 +4893,43 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
 .cc-fechas-hint { font-size: 12px; color: var(--text-muted); flex: 1 1 260px; }
 .cc-fechas-head .cc-icon-btn { margin-left: auto; }
 
-.cc-fechas-grid {
-  display: grid; gap: 8px;
-  grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+/* Agrupadas por mes: el dueño no compra "para el Día de la Madre", compra
+   "lo de octubre", y con 22 fechas seguidas no se ve dónde empieza cada mes. */
+.cc-fechas-meses { display: flex; flex-direction: column; gap: 14px; }
+.cc-mes-tit {
+  font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: .08em;
+  color: var(--text-muted); padding-bottom: 5px; margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
 }
+.cc-mes-tit span { font-weight: 400; opacity: .7; }
+.cc-mes-grid {
+  display: grid; gap: 8px;
+  grid-template-columns: repeat(auto-fill, minmax(215px, 1fr));
+}
+
+/* Taquito de almanaque: el mes arriba y el día abajo, para ver de lejos para
+   cuándo es. Una línea que dice "18 de octubre" se lee; esto se ve. */
+.cc-taco {
+  flex: none; width: 34px; border-radius: 6px; overflow: hidden;
+  border: 1px solid var(--border-strong); background: var(--card-bg);
+  display: flex; flex-direction: column; text-align: center; line-height: 1;
+}
+.cc-taco-mes {
+  font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: .06em;
+  padding: 2px 0; background: var(--border-strong); color: var(--card-bg);
+}
+.cc-taco-dia { font-size: 15px; font-weight: 700; padding: 3px 0 4px; font-variant-numeric: tabular-nums; }
+.cc-epoca .cc-taco-mes { background: var(--tint-blue-fg); color: #fff; }
+.cc-epoca-ya .cc-taco-mes { background: var(--warning); color: #fff; }
+.cc-fecha.is-ya .cc-taco-mes { background: var(--warning); color: #fff; }
+.cc-fecha.is-cerca .cc-taco-mes { background: var(--tint-blue-fg); color: #fff; }
 .cc-fecha {
-  display: flex; flex-direction: column; gap: 2px; align-items: flex-start;
+  display: flex; gap: 10px; align-items: center;
   padding: 9px 12px; border-radius: 10px; cursor: pointer; text-align: left;
   font-family: inherit; background: var(--surface);
   border: 1px solid var(--border-strong); border-left-width: 3px;
 }
+.cc-fecha-txt { display: flex; flex-direction: column; gap: 1px; min-width: 0; }
 .cc-fecha:hover { border-color: var(--tint-blue-fg); }
 .cc-fecha-nom { font-size: 13px; font-weight: 600; color: var(--text-strong); line-height: 1.25; }
 .cc-fecha-cuando { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }

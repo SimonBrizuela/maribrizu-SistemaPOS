@@ -953,6 +953,38 @@ describe('Centro de Compras · lo que se viene por la época', () => {
     expect(JSON.stringify(doc).length).toBeLessThan(1024 * 1024);
   });
 
+  it('tocar el nombre de la fecha abre lo que recomienda', async () => {
+    // El dueño pedía apretar el nombre, no sólo el botón de la derecha.
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    const tit = [...c.querySelectorAll('.cc-epoca-tit')]
+      .find(b => b.textContent.includes('Día de la Madre'));
+    expect(tit, 'el nombre es un botón').toBeTruthy();
+    expect(tit.tagName).toBe('BUTTON');
+    tit.click();
+    for (let i = 0; i < 10; i++) await esperar();
+    expect(c.querySelector('.cc-fecha-det')).toBeTruthy();
+    expect(c.querySelector('.cc-fecha-det').textContent).toContain('Día de la Madre');
+  });
+
+  it('se ve para qué mes es cada fecha', async () => {
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    // Taquito de almanaque en la franja: mes arriba, día abajo.
+    const taco = c.querySelector('.cc-epoca .cc-taco');
+    expect(taco).toBeTruthy();
+    expect(taco.querySelector('.cc-taco-mes').textContent).toBe('oct');
+    expect(taco.querySelector('.cc-taco-dia').textContent).toBe('18');
+
+    // Y el panel de fechas agrupa por mes, con el mes escrito.
+    c.querySelector('[data-action="fechas"]').click();
+    for (let i = 0; i < 6; i++) await esperar();
+    const meses = [...c.querySelectorAll('.cc-mes-tit')].map(m => m.textContent.trim());
+    expect(meses.length).toBeGreaterThan(5);
+    expect(meses[0]).toContain('octubre');
+    expect(meses.some(m => m.includes('diciembre'))).toBe(true);
+    // El año sólo se escribe cuando no es el corriente.
+    expect(meses.some(m => m.includes('2027'))).toBe(true);
+  });
+
   it('el botón "Próximas fechas" abre todas las fechas del año, no sólo las de dos meses', async () => {
     const c = await montar('centro_compras', 'renderCentroCompras');
     expect(c.querySelector('#cc-fechas').style.display).toBe('none');

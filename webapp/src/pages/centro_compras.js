@@ -1808,11 +1808,12 @@ function paintTemporadas() {
     partes.push(`
       <div class="cc-epoca${activo ? ' is-on' : ''}${p.enVenta ? ' cc-epoca-ya' : ''}">
         <div class="cc-epoca-head">
-          <span class="material-icons">event</span>
-          <div class="cc-epoca-tit">
+          ${taquitoHtml(p.fecha)}
+          <button type="button" class="cc-epoca-tit" data-action="abrir-fecha" data-id="${esc(p.id)}"
+                  title="Abrir ${esc(p.nombre)} y ver qué conviene comprar">
             <b>${esc(p.nombre)}</b>
             <span class="cc-epoca-cuando">${esc(fechaLinda(p.fecha))} · ${cuando}</span>
-          </div>
+          </button>
           ${n > 0 ? `<button type="button" class="cc-epoca-filtro${activo ? ' is-on' : ''}" data-action="filtro-epoca" data-id="${esc(p.id)}"
              title="${activo ? 'Ver la lista completa' : 'Ver solo lo de esta fecha'}">
              <span class="material-icons">${activo ? 'filter_alt_off' : 'filter_alt'}</span> ${n} en la lista</button>`
@@ -1865,7 +1866,10 @@ function paintFechas() {
     porFecha.set(r.temporada.id, e);
   }
 
-  const botones = todas.map(t => {
+  // Agrupadas por mes, con el mes escrito: es lo que el dueño mira para armar
+  // el viaje al mayorista — no compra "para el Día de la Madre", compra "lo de
+  // octubre".
+  const botonHtml = (t) => {
     const est = estadoDeFecha(s.estudio, t);
     const datos = porFecha.get(t.id);
     const abierta = s.fechasAbiertas.includes(t.id);
@@ -1887,11 +1891,28 @@ function paintFechas() {
         title="${esc(est.medida
           ? `Medido con tus ventas${est.veces > 1 ? ` (${est.veces} pasadas)` : ''}${est.colores?.length ? ` · colores que vuelan: ${est.colores.join(', ')}` : ''}`
           : 'Todavía no hay ventas tuyas de esta fecha: lo que salga es por el tipo de producto')}">
-      <span class="cc-fecha-nom">${esc(t.nombre)}</span>
-      <span class="cc-fecha-cuando">${esc(fechaLinda(t.fecha))} · ${cuando}</span>
-      <span class="cc-fecha-pie">${esc(pie)}</span>
+      ${taquitoHtml(t.fecha)}
+      <span class="cc-fecha-txt">
+        <span class="cc-fecha-nom">${esc(t.nombre)}</span>
+        <span class="cc-fecha-cuando">${cuando}</span>
+        <span class="cc-fecha-pie">${esc(pie)}</span>
+      </span>
     </button>`;
-  }).join('');
+  };
+
+  const porMes = [];
+  for (const t of todas) {
+    const mes = mesDe(t.fecha);
+    const ultimo = porMes[porMes.length - 1];
+    if (ultimo && ultimo.mes === mes) ultimo.items.push(t);
+    else porMes.push({ mes, anio: t.fecha.slice(0, 4), items: [t] });
+  }
+  const anioHoy = hoyAR().slice(0, 4);
+  const botones = porMes.map(g => `
+    <div class="cc-mes">
+      <div class="cc-mes-tit">${esc(g.mes)}${g.anio !== anioHoy ? ` <span>${esc(g.anio)}</span>` : ''}</div>
+      <div class="cc-mes-grid">${g.items.map(botonHtml).join('')}</div>
+    </div>`).join('');
 
   const elegida = s.temporadaFiltro
     ? todas.find(t => t.id === s.temporadaFiltro) : null;
@@ -1905,7 +1926,7 @@ function paintFechas() {
         <span class="material-icons">close</span>
       </button>
     </div>
-    <div class="cc-fechas-grid">${botones}</div>
+    <div class="cc-fechas-meses">${botones}</div>
     ${elegida ? detalleFechaHtml(elegida, porFecha.get(elegida.id)) : ''}
     <div class="cc-fechas-leyenda">
       <span><i class="cc-pt is-ya"></i> ya se está vendiendo</span>
@@ -1964,6 +1985,10 @@ function abrirFecha(id) {
     paintResumen();
     return;
   }
+  // Abrir una fecha muestra lo que recomienda para ella, venga el click del
+  // panel o del nombre en la franja de arriba: si el panel está cerrado, se
+  // abre. Sin esto, tocar el nombre filtraba la lista y no se veía por qué.
+  s.fechasOpen = true;
   s.temporadaFiltro = id;
   // Una fecha lejana no se calcula sola: recién cuando se la pide.
   if (!s.fechasAbiertas.includes(id) && !s.proximas.some(p => p.id === id)) {
@@ -1991,10 +2016,28 @@ function botonEstudiarHtml(texto) {
 
 const MESES_LARGOS = ['enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
   'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre'];
+const MESES_CORTOS = ['ene', 'feb', 'mar', 'abr', 'may', 'jun',
+  'jul', 'ago', 'sep', 'oct', 'nov', 'dic'];
 function fechaLinda(ymdStr) {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymdStr || ''));
   if (!m) return String(ymdStr || '');
   return `${Number(m[3])} de ${MESES_LARGOS[Number(m[2]) - 1] || ''}`;
+}
+function mesDe(ymdStr) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymdStr || ''));
+  return m ? MESES_LARGOS[Number(m[2]) - 1] || '' : '';
+}
+
+// Taquito de almanaque: el mes arriba y el día abajo. El dueño pidió ver "para
+// qué mes son" de un vistazo, y una línea de texto que dice "18 de octubre ·
+// faltan 27 días" se lee, no se ve. Esto se ve de lejos.
+function taquitoHtml(ymdStr) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymdStr || ''));
+  if (!m) return '<span class="material-icons">event</span>';
+  return `<span class="cc-taco" aria-hidden="true">
+    <span class="cc-taco-mes">${esc(MESES_CORTOS[Number(m[2]) - 1] || '')}</span>
+    <span class="cc-taco-dia">${Number(m[3])}</span>
+  </span>`;
 }
 
 // ── Avisos: tope manual + presupuesto corto para lo SÍ O SÍ ───────────────────

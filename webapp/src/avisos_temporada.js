@@ -13,7 +13,10 @@
 import { mostrarToast } from './components/toasts.js';
 import { temporadasProximas } from './temporadas.js';
 
-const LS_VISTOS = 'temporadas:avisadas';
+// La v1 marcaba el aviso como visto antes de mostrarlo, y como no era
+// prioritario la pila lo podaba enseguida: quedaban marcadas fechas que nadie
+// llegó a leer. La clave nueva descarta esas marcas inválidas.
+const LS_VISTOS = 'temporadas:avisadas:v2';
 /** Cuántas fechas se avisan de una. Más que esto es una pila que nadie lee. */
 const MAX_AVISOS = 2;
 /** Los primeros días son para enterarse; después ya lo sabe y molesta. */
@@ -104,7 +107,6 @@ export function mostrarAvisosTemporada({ navegar = null, hoy = null, proximas = 
     return [];
   }
   for (const t of pendientes) {
-    marcarVisto(t.id, dia);
     mostrarToast({
       // Naranja cuando ya arrancó la venta (hay que moverse), violeta cuando
       // todavía hay tiempo: el rojo queda para lo que se está quedando sin
@@ -116,12 +118,19 @@ export function mostrarAvisosTemporada({ navegar = null, hoy = null, proximas = 
       detalleHtml: `${detalleAviso(t)}${t.nota ? ` <span class="ll-toast-sep">·</span>${_escape(t.nota)}` : ''}`,
       acciones: [{ id: 'ver', texto: 'Ver qué conviene comprar', principal: true }],
       duracion: 0,          // queda hasta que lo cierren: es para decidir, no para mirar de reojo
+      // Prioritario, si no no se ve: la pila muestra cuatro avisos y poda
+      // primero los comunes. Al arrancar el panel entran los de stock bajo, que
+      // son muchos, y se llevaban puesto el de la fecha antes de que nadie lo
+      // leyera — y encima quedaba marcado como visto por el resto del día.
+      prioritario: true,
       onAccion: (accion, api) => {
         if (accion !== 'ver') return;
         api.cerrar();
         if (typeof navegar === 'function') navegar(t.id);
       },
     });
+    // Se marca recién cuando el aviso ya está en pantalla.
+    marcarVisto(t.id, dia);
   }
   return pendientes;
 }
