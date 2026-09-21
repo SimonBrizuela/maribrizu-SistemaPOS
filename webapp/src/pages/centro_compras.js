@@ -42,11 +42,11 @@ import {
   coincideCompra, opcionesCompras, filtrarOpciones, campoTieneValores, textoBusquedaCompra,
 } from '../filtros_compras.js';
 import {
-  puntajeUrgencia, nivelPorPuntaje, compararUrgencia, motivosUrgencia, explicarUrgencia,
+  puntajeUrgencia, nivelPorPuntaje, compararUrgencia, motivosUrgencia, explicarUrgencia, ritmoDe,
   VENTANA_CORTA_DIAS, COBERTURA_DEFAULT_DIAS as COBERTURA_DEFAULT,
 } from '../urgencia_compra.js';
 import {
-  motivoTemporada, explicarTemporada, claveProducto, ajustesDeFecha,
+  motivoTemporada, explicarTemporada, claveProducto, ajustesDeFecha, temporadaPorId, estaExcluido,
 } from '../temporadas.js';
 import {
   cargarEstudio, rehacerEstudio, recomendacionesDeTemporada, ideasQueFaltan,
@@ -1605,11 +1605,13 @@ function rowHtml(r, i, esContinuacion) {
         temporada: t, empuje: r.temporada_empuje, esperado: r.temporada_esperado,
         stock: r.stockUnits, faltan: r.temporada_faltan, porPista: r.temporada_por_pista,
       }) + (r.temporada_a_mano ? '\nLo agregaste vos a esta fecha.' : ''))}"><span class="material-icons">event</span>${esc(t.nombre)} · ${cuando}</span>`;
-    // Sacarlo de la fecha: el dueño sabe cuándo el sistema se equivocó, y la
-    // corrección queda para las próximas veces.
+    // Sacarlo de la fecha, pegado al chip: es la acción de ESE chip y así se
+    // entiende sin explicación. El dueño sabe cuándo el sistema se equivocó, y
+    // la corrección queda para las próximas veces.
     chip += `<button type="button" class="cc-quitar-fecha" data-action="sacar-de-fecha"
-      data-idx="${i}" title="Sacar este producto de ${esc(t.nombre)}. Queda guardado para la próxima.">
-      <span class="material-icons">event_busy</span></button>`;
+      data-idx="${i}" aria-label="Sacar de ${esc(t.nombre)}"
+      title="Sacar este producto de ${esc(t.nombre)}. Queda guardado para la próxima.">
+      <span class="material-icons">close</span><span class="cc-quitar-txt">sacar</span></button>`;
   }
 
   // Marca "ya lo anoté en el cuaderno": chip con la fecha + botón para prender
@@ -2077,33 +2079,99 @@ function agregarAFechaHtml(t) {
   const s = _state;
   const texto = s.buscarFecha.trim();
   const productos = peekCacheValue('catalogo:all') || [];
+  const aj = ajustesDeFecha(s.ajustes, t.id);
+  // Lo que ya está en la lista de esa fecha: no tiene sentido ofrecerlo.
+  const enLaFecha = new Set(s.rows
+    .filter(r => r.temporada?.id === t.id)
+    .map(r => claveProducto(r.producto?.nombre || r.nombre, '')));
+
+  const opcion = (p) => {
+    const clave = claveProducto(p.nombre, '');
+    return {
+      nombre: p.nombre, clave, rubro: p.rubro || '',
+      ya: !!aj.suma[clave] || enLaFecha.has(clave),
+    };
+  };
+
   let resultados = [];
+  let sugeridas = false;
   if (texto.length >= 2) {
     const toks = normClave(texto).split(' ').filter(Boolean);
-    const aj = ajustesDeFecha(s.ajustes, t.id);
     for (const p of productos) {
       const hay = normClave([p.nombre, p.codigo, p.rubro, p.sub_rubro].filter(Boolean).join(' '));
       if (!toks.every(x => hay.includes(x))) continue;
-      const clave = claveProducto(p.nombre, '');
-      resultados.push({ nombre: p.nombre, clave, ya: !!aj.suma[clave], rubro: p.rubro || '' });
-      if (resultados.length >= 8) break;
+      resultados.push(opcion(p));
+      if (resultados.length >= 10) break;
     }
+  } else {
+    // Sin escribir nada ya hay algo para tocar. Se ofrece lo que se parece a lo
+    // que la fecha ya mueve, del más vendido para abajo.
+    //
+    // Por SUBRUBRO, no por rubro: los rubros del local son LIBRERÍA (3.592
+    // fichas) y MERCERÍA (1.866), así que sugerir "del mismo rubro" para el Día
+    // de la Madre devolvía palitos de helado y folios. El subrubro —
+    // PORTARETRATOS, BOLSA ORGANZA, TAZA— sí dice algo. El rubro sólo entra
+    // cuando la fecha lo declara en sus pistas, y esos son los chicos y
+    // específicos: REGALERÍA, JUGUETERÍA, COTILLON, NAVIDAD.
+    sugeridas = true;
+    const subrubros = new Set();
+    for (const r of s.rows) {
+      if (r.temporada?.id === t.id && r.sub_rubro) subrubros.add(normClave(r.sub_rubro));
+    }
+    const rubros = new Set((temporadaPorId(t.id)?.pistas?.rubros || []).map(normClave));
+    const ventanas = obtenerVentanasVenta();
+    // El rubro que la fecha declara manda sobre el subrubro heredado: para el
+    // Día de la Madre, REGALERÍA antes que el papel que entró por PAPELERÍA.
+    const delRubro = [], delSubrubro = [];
+    const temp = temporadaPorId(t.id);
+    for (const p of productos) {
+      if (!p?.nombre) continue;
+      // Lo que la fecha veta no se ofrece: un mouse no deja de ser un mouse
+      // porque lo esté sugiriendo otra pantalla.
+      if (estaExcluido(temp, { nombre: p.nombre, subRubro: p.sub_rubro || '' })) continue;
+      const esRubro = rubros.has(normClave(p.rubro));
+      const esSub = !esRubro && p.sub_rubro && subrubros.has(normClave(p.sub_rubro));
+      if (!esRubro && !esSub) continue;
+      const clave = claveProducto(p.nombre, '');
+      if (enLaFecha.has(clave) || aj.suma[clave] || aj.saca[clave]) continue;
+      const r = ritmoDe(ventanas, { nombre: normClave(p.nombre), color: '', docId: String(p.doc_id ?? '') });
+      // Del rubro propio de la fecha entra aunque no haya vendido este mes: la
+      // regalería rota despacio y el dueño igual la quiere a la vista. Del
+      // subrubro heredado, sólo lo que se está vendiendo.
+      if (esRubro) delRubro.push({ p, uds: r.unidades });
+      else if (r.unidades > 0) delSubrubro.push({ p, uds: r.unidades });
+    }
+    const porVenta = (a, b) => b.uds - a.uds;
+    delRubro.sort(porVenta);
+    delSubrubro.sort(porVenta);
+    resultados = [...delRubro, ...delSubrubro].slice(0, 6).map(x => opcion(x.p));
   }
-  return `<div class="cc-agregar">
-    <div class="cc-agregar-campo">
-      <span class="material-icons">add_circle_outline</span>
-      <input id="cc-buscar-fecha" type="text" autocomplete="off" value="${esc(s.buscarFecha)}"
-             placeholder="Agregar un producto a ${esc(t.nombre)}…" aria-label="Buscar producto para agregar" />
-      ${s.buscarFecha ? `<button type="button" class="cc-buscar-x" data-action="buscar-fecha-clear"><span class="material-icons">close</span></button>` : ''}
-    </div>
-    ${texto.length >= 2 ? (resultados.length ? `<div class="cc-agregar-res">
+
+  const lista = resultados.length ? `<div class="cc-agregar-res">
       ${resultados.map(r => `<button type="button" class="cc-agregar-opt" data-action="sumar-a-fecha"
           data-id="${esc(t.id)}" data-clave="${esc(r.clave)}" data-nombre="${esc(r.nombre)}"${r.ya ? ' disabled' : ''}>
-          <span>${esc(r.nombre)}</span>
-          <span class="cc-agregar-rub">${esc(r.rubro)}</span>
           <span class="material-icons">${r.ya ? 'check' : 'add'}</span>
+          <span class="cc-agregar-nom">${esc(r.nombre)}</span>
+          <span class="cc-agregar-rub">${esc(r.rubro)}</span>
         </button>`).join('')}
-    </div>` : `<div class="cc-agregar-vacio">Nada del catálogo coincide con "${esc(texto)}"</div>`) : ''}
+    </div>`
+    : (texto.length >= 2
+        ? `<div class="cc-agregar-vacio">Nada del catálogo coincide con "${esc(texto)}"</div>`
+        : '');
+
+  return `<div class="cc-agregar">
+    <div class="cc-agregar-tope">
+      <span class="et-agregar">Sumale productos a esta fecha</span>
+      ${sugeridas && resultados.length ? '<span class="cc-agregar-hint">lo que más se vende de los rubros de esta fecha</span>' : ''}
+    </div>
+    <div class="cc-agregar-campo">
+      <span class="material-icons">search</span>
+      <input id="cc-buscar-fecha" type="text" autocomplete="off" value="${esc(s.buscarFecha)}"
+             placeholder="Buscar en el catálogo…" aria-label="Buscar producto para agregar a ${esc(t.nombre)}" />
+      ${s.buscarFecha ? `<button type="button" class="cc-buscar-x" data-action="buscar-fecha-clear"
+          aria-label="Limpiar"><span class="material-icons">close</span></button>` : ''}
+    </div>
+    ${lista}
   </div>`;
 }
 
@@ -2141,13 +2209,21 @@ function abrirFecha(id) {
 // Al abrir una fecha, llevar la vista a la lista: el dueño toca el nombre para
 // VER los productos, y si la tabla queda tres pantallas más abajo no los ve.
 function bajarALaLista() {
-  try {
-    // Con el panel abierto, lo primero que hay que ver es el detalle de la
-    // fecha; si está cerrado, la lista ya filtrada.
-    const destino = document.querySelector('.cc-fecha-det')
-      || document.querySelector('.cc-table-card');
-    destino?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
-  } catch (_) { /* sin scroll no pasa nada grave */ }
+  // Dos frames después de pintar, no antes: `paintTable` corrige el scroll por
+  // su cuenta cuando la lista se achica (`window.scrollBy`), y si se scrollea
+  // primero, esa corrección pisa el movimiento y la página no se mueve.
+  const ir = () => {
+    try {
+      // A la tabla: el dueño toca la fecha para VER los productos.
+      document.querySelector('.cc-table-card')
+        ?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+    } catch (_) { /* sin scroll no pasa nada grave */ }
+  };
+  if (typeof requestAnimationFrame === 'function') {
+    requestAnimationFrame(() => requestAnimationFrame(ir));
+  } else {
+    setTimeout(ir, 0);
+  }
 }
 
 function botonEstudiarHtml(texto) {

@@ -860,10 +860,16 @@ describe('Centro de Compras · lo que se viene por la época', () => {
       { __id: 'r1', doc_id: 'r1', id: 41, nombre: 'PORTARETRATO PLASTICO 13X18',
         codigo: 'R001', rubro: 'REGALERÍA', sub_rubro: 'PORTARETRATOS',
         precio_venta: 9000, costo: 5000, stock: 0, estado: 'activo' },
+      // Del mismo rubro y con ventas, pero con stock de sobra: no entra a la
+      // lista de compras y por eso sirve para probar las sugerencias.
+      { __id: 'r2', doc_id: 'r2', id: 42, nombre: 'TAZA PARA SUBLIMAR BLANCA',
+        codigo: 'R002', rubro: 'REGALERÍA', sub_rubro: 'TAZA',
+        precio_venta: 6000, costo: 3200, stock: 400, estado: 'activo' },
     ];
     datos.porColeccion.ventas_por_dia = [
       ...(datos.porColeccion.ventas_por_dia || []),
       ...[1, 3, 5, 8, 12, 20].map(n => ventaEl(n, 'PORTARETRATO PLASTICO 13X18', 2)),
+      ...[2, 4, 7, 11].map(n => ventaEl(n, 'TAZA PARA SUBLIMAR BLANCA', 3)),
     ];
   });
 
@@ -1136,6 +1142,50 @@ describe('Centro de Compras · lo que se viene por la época', () => {
     const esc = datos.escrituras.find(e => JSON.stringify(e.ref || {}).includes('temporadas_manual'));
     expect(esc).toBeTruthy();
     expect(JSON.stringify(esc.datos || {})).toContain('suma');
+  });
+
+  it('ofrece qué agregar sin que haya que escribir nada', async () => {
+    // Abrir la fecha y tener que adivinar qué buscar es una pared. Se ofrecen
+    // los productos de los mismos rubros que la fecha ya mueve.
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    const tit = [...c.querySelectorAll('.cc-epoca-tit')].find(b => b.textContent.includes('Día de la Madre'));
+    tit.click();
+    for (let i = 0; i < 12; i++) await esperar();
+
+    const opts = [...c.querySelectorAll('.cc-agregar-opt')];
+    expect(opts.length, 'hay sugerencias sin escribir').toBeGreaterThan(0);
+    expect(c.querySelector('.cc-agregar-hint')).toBeTruthy();
+    // Y lo que ya está en esa fecha no se vuelve a ofrecer.
+    const yaEnLista = [...c.querySelectorAll('#cc-tbody tr.cc-row-epoca')]
+      .map(tr => tr.querySelector('.cc-prod-btn')?.textContent.replace('open_in_new', '').trim());
+    const ofrecidos = opts.filter(o => !o.disabled).map(o => o.querySelector('.cc-agregar-nom').textContent.trim());
+    for (const n of ofrecidos) expect(yaEnLista, n).not.toContain(n);
+  });
+
+  it('al abrir una fecha la vista baja hasta los productos', async () => {
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    const vistos = [];
+    // jsdom no scrollea: se espía que se le pida a la tabla, que es el destino.
+    const orig = Element.prototype.scrollIntoView;
+    Element.prototype.scrollIntoView = function (opts) { vistos.push({ el: this, opts }); };
+    try {
+      const tit = [...c.querySelectorAll('.cc-epoca-tit')].find(b => b.textContent.includes('Día de la Madre'));
+      tit.click();
+      for (let i = 0; i < 14; i++) await esperar(8);
+    } finally {
+      Element.prototype.scrollIntoView = orig;
+    }
+    expect(vistos.length, 'se pidió scroll').toBeGreaterThan(0);
+    expect(vistos.some(v => v.el.classList?.contains('cc-table-card')),
+      'el destino es la lista de productos').toBe(true);
+  });
+
+  it('el botón de sacar dice qué hace, no es sólo un aspa', async () => {
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    const btn = c.querySelector('[data-action="sacar-de-fecha"]');
+    expect(btn).toBeTruthy();
+    expect(btn.textContent).toContain('sacar');
+    expect(btn.getAttribute('aria-label')).toMatch(/Sacar de /);
   });
 
   it('lo corregido a mano se ve en el detalle y se puede devolver', async () => {

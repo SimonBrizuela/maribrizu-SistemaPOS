@@ -749,6 +749,25 @@ function _sinElDiaDominante(uds, porDia) {
  * ¿El producto pinta para esta temporada según las pistas? Es el camino de la
  * corazonada, para las fechas de las que todavía no hay historia.
  */
+/**
+ * ¿Este producto está vetado para esta fecha?
+ *
+ * Es la mitad "negativa" de `coincidePorPista`, expuesta aparte porque también
+ * la necesitan las SUGERENCIAS de qué agregar a mano: un mouse no deja de ser
+ * un mouse porque lo esté ofreciendo otra pantalla.
+ */
+export function estaExcluido(temp, { nombre = '', subRubro = '' } = {}) {
+  const pistas = temp?.pistas || {};
+  const texto = normTxt([nombre, subRubro].filter(Boolean).join(' '));
+  const palabras = (pistas.palabras || []).map(normTxt);
+  for (const x of (pistas.excluir || [])) {
+    const ex = normTxt(x);
+    if (!ex || palabras.includes(ex)) continue;
+    if (_tienePalabra(texto, ex)) return true;
+  }
+  return false;
+}
+
 export function coincidePorPista(temp, { nombre = '', color = '', rubro = '', subRubro = '' } = {}) {
   const pistas = temp?.pistas || {};
   const texto = normTxt([nombre, subRubro].filter(Boolean).join(' '));
