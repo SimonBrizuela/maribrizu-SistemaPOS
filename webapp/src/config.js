@@ -223,6 +223,32 @@ export async function saveTemporadasEstudio(db, estudio) {
   invalidateCache(TEMPORADAS_KEY);
 }
 
+// ── Correcciones a mano del almanaque (control_config/temporadas_manual) ─────
+// Lo que el dueño agrega o saca de una fecha desde el Centro de Compras. Es lo
+// único del almanaque que NO se recalcula: gana siempre sobre lo que mide el
+// sistema, y sobrevive a rehacer el estudio.
+//
+//   { "<id de la fecha>": { suma: { "<clave>": {n, c, u} }, saca: { "<clave>": true } } }
+const TEMP_MANUAL_KEY = 'control_config:temporadas_manual';
+
+/** Carga las correcciones a mano (o {} si nunca se tocó nada). */
+export async function loadTemporadasManual(db) {
+  return getCached(TEMP_MANUAL_KEY,
+    () => leerConfigDoc(db, 'temporadas_manual', TEMP_MANUAL_KEY, {}),
+    { ttl: 15 * 60 * 1000 });
+}
+
+/** Guarda (merge) las correcciones. El merge es recursivo: se puede tocar una
+ *  sola clave de una sola fecha sin pisar el resto. */
+export async function saveTemporadasManual(db, partial) {
+  await setDoc(
+    doc(db, 'control_config', 'temporadas_manual'),
+    { ...partial, updatedAt: serverTimestamp() },
+    { merge: true }
+  );
+  invalidateCache(TEMP_MANUAL_KEY);
+}
+
 /** Devuelve la fecha de inicio como string "YYYY-MM-DD" */
 export async function getFechaInicio(db) {
   const cfg = await loadControlConfig(db);

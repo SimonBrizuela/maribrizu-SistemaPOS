@@ -45,10 +45,12 @@ import {
   puntajeUrgencia, nivelPorPuntaje, compararUrgencia, motivosUrgencia, explicarUrgencia,
   VENTANA_CORTA_DIAS, COBERTURA_DEFAULT_DIAS as COBERTURA_DEFAULT,
 } from '../urgencia_compra.js';
-import { motivoTemporada, explicarTemporada } from '../temporadas.js';
+import {
+  motivoTemporada, explicarTemporada, claveProducto, ajustesDeFecha,
+} from '../temporadas.js';
 import {
   cargarEstudio, rehacerEstudio, recomendacionesDeTemporada, ideasQueFaltan,
-  fechasDelAnio, estadoDeFecha,
+  fechasDelAnio, estadoDeFecha, guardarAjusteManual, borrarAjusteManual,
 } from '../temporadas_datos.js';
 
 const MEDIOS = [
@@ -505,6 +507,7 @@ function aplicarTemporadas(rows, recomendaciones, comprasCfg) {
       existente.temporada_esperado = rec.esperado;
       existente.temporada_faltan = rec.faltan;
       existente.temporada_por_pista = !!rec.porPista;
+      existente.temporada_a_mano = !!rec.aMano;
       existente.temporada_urgencia = rec.urgencia;
       if (rec.urgencia > existente.urgencia) {
         existente.urgencia = rec.urgencia;
@@ -527,7 +530,13 @@ function aplicarTemporadas(rows, recomendaciones, comprasCfg) {
       qty = Math.ceil(faltanUnidades);
       if (qty > 0 && packSize > 1) qty = Math.ceil(qty / packSize) * packSize;
     }
-    if (!(qty > 0)) continue;
+    // Lo que el dueño agregó a mano se muestra aunque hoy tenga stock de sobra:
+    // lo puso él para verlo, y la cantidad la decide él. El resto, si no falta
+    // nada, no tiene por qué ocupar un renglón.
+    if (!(qty > 0)) {
+      if (!rec.aMano) continue;
+      qty = 1;
+    }
 
     const row = {
       doc_id: rec.docId,
@@ -584,6 +593,7 @@ function aplicarTemporadas(rows, recomendaciones, comprasCfg) {
       temporada_esperado: rec.esperado,
       temporada_faltan: rec.faltan,
       temporada_por_pista: !!rec.porPista,
+      temporada_a_mano: !!rec.aMano,
       temporada_urgencia: rec.urgencia,
     };
     row.anotado = anotados[keyAnotado(row)] || null;
@@ -726,6 +736,9 @@ export async function renderCentroCompras(container, db) {
     // Lo que se viene por almanaque + lo que el sistema aprendió de las ventas
     // viejas sobre esas fechas.
     estudio: temporadas?.estudio || null,
+    ajustes: temporadas?.ajustes || {},   // lo que el dueño corrigió a mano
+    buscarFecha: '',                      // texto del buscador de "agregar a esta fecha"
+    verSacados: '',                       // id de la fecha cuyo listado de sacados está desplegado
     estudioVigente: !!temporadas?.vigente,
     proximas: [],
     estudiando: false,
@@ -773,6 +786,7 @@ function mezclarTemporadas() {
       hoy: hoyAR(),
       // Las fechas lejanas que el dueño abrió a mano desde "Próximas fechas".
       extraIds: s.fechasAbiertas,
+      ajustes: s.ajustes,
     });
     s.proximas = proximas;
     const nuevas = aplicarTemporadas(s.rows, recomendaciones, s.comprasCfg);
@@ -813,6 +827,64 @@ async function estudiarEpocas() {
     s.estudiando = false;
     paintTemporadas();
   }
+}
+
+// ── Corregir a mano qué va en cada fecha ──────────────────────────────────────
+// El sistema mide y adivina; el que atiende el mostrador sabe cosas que no
+// están en ningún dato. Lo que se corrige acá gana sobre lo calculado y queda
+// para las próximas veces: es lo único del almanaque que no se recalcula.
+
+/** Aplica el cambio en memoria, repinta y guarda. Si el guardado falla, avisa
+ *  y vuelve atrás: no puede quedar en pantalla algo que no se guardó. */
+async function guardarAjuste(idFecha, clave, accion, datos) {
+  const s = _state;
+  const antes = JSON.parse(JSON.stringify(s.ajustes || {}));
+  const aj = s.ajustes[idFecha] || { suma: {}, saca: {} };
+  const suma = { ...(aj.suma || {}) };
+  const saca = { ...(aj.saca || {}) };
+  if (accion === 'sacar') { saca[clave] = true; delete suma[clave]; }
+  else if (accion === 'sumar') { suma[clave] = datos; delete saca[clave]; }
+  else { delete suma[clave]; delete saca[clave]; }
+  s.ajustes = { ...s.ajustes, [idFecha]: { suma, saca } };
+
+  // Recalcular la lista entera: un producto agregado puede no estar todavía.
+  s.rows = buildRows(fuentesCompra(s.alertasBase, s.comprasCfg), s.comprasCfg);
+  mezclarTemporadas();
+  recalc(false);
+
+  try {
+    if (accion === 'borrar') await borrarAjusteManual(_db, idFecha, clave);
+    else await guardarAjusteManual(_db, idFecha, clave, { accion, datos });
+  } catch (e) {
+    console.error('[centro_compras] guardar ajuste de fecha:', e);
+    s.ajustes = antes;
+    s.rows = buildRows(fuentesCompra(s.alertasBase, s.comprasCfg), s.comprasCfg);
+    mezclarTemporadas();
+    recalc(false);
+    await alertDialog({
+      title: 'No se pudo guardar',
+      message: 'El cambio no llegó a la nube. Revisá la conexión e intentá de nuevo.',
+      type: 'error',
+    });
+  }
+}
+
+function sacarDeFecha(i) {
+  const r = _state.rows[i];
+  if (!r || !r.temporada) return;
+  guardarAjuste(r.temporada.id, claveProducto(r.producto?.nombre || r.nombre, r.variedad || ''), 'sacar');
+}
+
+function sumarAFecha(idFecha, clave, nombre) {
+  if (!idFecha || !clave) return;
+  const [n, c] = String(clave).split('||');
+  _state.buscarFecha = '';
+  guardarAjuste(idFecha, clave, 'sumar', { n: n || nombre, c: c || '' });
+}
+
+function devolverAFecha(idFecha, clave) {
+  if (!idFecha || !clave) return;
+  guardarAjuste(idFecha, clave, 'borrar');
 }
 
 // ── Marca "ya lo anoté en el cuaderno" ────────────────────────────────────────
@@ -1528,11 +1600,16 @@ function rowHtml(r, i, esContinuacion) {
   if (porEpoca) {
     const t = r.temporada;
     const cuando = t.diasFaltan <= 0 ? 'hoy' : t.diasFaltan === 1 ? 'mañana' : `en ${t.diasFaltan} días`;
-    chip += `<span class="cc-chip cc-chip-epoca${r.temporada_por_pista ? ' es-corazonada' : ''}"
+    chip += `<span class="cc-chip cc-chip-epoca${r.temporada_por_pista ? ' es-corazonada' : ''}${r.temporada_a_mano ? ' es-amano' : ''}"
       data-tip="${esc(explicarTemporada({
         temporada: t, empuje: r.temporada_empuje, esperado: r.temporada_esperado,
         stock: r.stockUnits, faltan: r.temporada_faltan, porPista: r.temporada_por_pista,
-      }))}"><span class="material-icons">event</span>${esc(t.nombre)} · ${cuando}</span>`;
+      }) + (r.temporada_a_mano ? '\nLo agregaste vos a esta fecha.' : ''))}"><span class="material-icons">event</span>${esc(t.nombre)} · ${cuando}</span>`;
+    // Sacarlo de la fecha: el dueño sabe cuándo el sistema se equivocó, y la
+    // corrección queda para las próximas veces.
+    chip += `<button type="button" class="cc-quitar-fecha" data-action="sacar-de-fecha"
+      data-idx="${i}" title="Sacar este producto de ${esc(t.nombre)}. Queda guardado para la próxima.">
+      <span class="material-icons">event_busy</span></button>`;
   }
 
   // Marca "ya lo anoté en el cuaderno": chip con la fecha + botón para prender
@@ -1926,8 +2003,8 @@ function paintFechas() {
         <span class="material-icons">close</span>
       </button>
     </div>
-    <div class="cc-fechas-meses">${botones}</div>
     ${elegida ? detalleFechaHtml(elegida, porFecha.get(elegida.id)) : ''}
+    <div class="cc-fechas-meses">${botones}</div>
     <div class="cc-fechas-leyenda">
       <span><i class="cc-pt is-ya"></i> ya se está vendiendo</span>
       <span><i class="cc-pt is-cerca"></i> hay que encargarlo</span>
@@ -1957,6 +2034,10 @@ function detalleFechaHtml(t, datos) {
       Se suele vender y no lo encontré en tu catálogo: <b>${ideas.slice(0, 8).map(esc).join(' · ')}</b></div>`);
   }
   const n = datos?.n || 0;
+  const aj = ajustesDeFecha(s.ajustes, t.id);
+  const nSuma = Object.keys(aj.suma).length;
+  const nSaca = Object.keys(aj.saca).length;
+  const sacados = Object.entries(aj.saca).map(([clave]) => clave);
   return `<div class="cc-fecha-det">
     <div class="cc-fecha-det-head">
       <b>${esc(t.nombre)}</b>
@@ -1969,6 +2050,60 @@ function detalleFechaHtml(t, datos) {
       </button>
     </div>
     ${partes.join('')}
+    ${(nSuma || nSaca) ? `<div class="cc-fecha-det-linea">
+      <span class="material-icons">edit</span>
+      <span>Lo corregiste vos: ${nSuma ? `<b>${nSuma}</b> agregado${nSuma === 1 ? '' : 's'}` : ''}${(nSuma && nSaca) ? ' · ' : ''}${nSaca ? `<b>${nSaca}</b> sacado${nSaca === 1 ? '' : 's'}` : ''}.
+      ${nSaca ? `<button type="button" class="cc-linkcito" data-action="ver-sacados" data-id="${esc(t.id)}">ver lo sacado</button>` : ''}</span>
+    </div>` : ''}
+    ${s.verSacados === t.id && sacados.length ? `<div class="cc-sacados">
+      ${sacados.map(clave => `<span class="cc-sacado">${esc(nombreDeClave(clave))}
+        <button type="button" data-action="devolver-a-fecha" data-id="${esc(t.id)}" data-clave="${esc(clave)}"
+                title="Devolverlo a esta fecha">Devolver</button></span>`).join('')}
+    </div>` : ''}
+    ${agregarAFechaHtml(t)}
+  </div>`;
+}
+
+// La clave es "nombre||color": para mostrarla alcanza con darla vuelta.
+function nombreDeClave(clave) {
+  const [nombre, color] = String(clave || '').split('||');
+  return color ? `${nombre} · ${color}` : nombre;
+}
+
+// Buscador para sumar un producto a esta fecha. Busca en el catálogo entero,
+// no sólo en la lista de compras: lo que hay que agregar es justamente lo que
+// el sistema no trajo.
+function agregarAFechaHtml(t) {
+  const s = _state;
+  const texto = s.buscarFecha.trim();
+  const productos = peekCacheValue('catalogo:all') || [];
+  let resultados = [];
+  if (texto.length >= 2) {
+    const toks = normClave(texto).split(' ').filter(Boolean);
+    const aj = ajustesDeFecha(s.ajustes, t.id);
+    for (const p of productos) {
+      const hay = normClave([p.nombre, p.codigo, p.rubro, p.sub_rubro].filter(Boolean).join(' '));
+      if (!toks.every(x => hay.includes(x))) continue;
+      const clave = claveProducto(p.nombre, '');
+      resultados.push({ nombre: p.nombre, clave, ya: !!aj.suma[clave], rubro: p.rubro || '' });
+      if (resultados.length >= 8) break;
+    }
+  }
+  return `<div class="cc-agregar">
+    <div class="cc-agregar-campo">
+      <span class="material-icons">add_circle_outline</span>
+      <input id="cc-buscar-fecha" type="text" autocomplete="off" value="${esc(s.buscarFecha)}"
+             placeholder="Agregar un producto a ${esc(t.nombre)}…" aria-label="Buscar producto para agregar" />
+      ${s.buscarFecha ? `<button type="button" class="cc-buscar-x" data-action="buscar-fecha-clear"><span class="material-icons">close</span></button>` : ''}
+    </div>
+    ${texto.length >= 2 ? (resultados.length ? `<div class="cc-agregar-res">
+      ${resultados.map(r => `<button type="button" class="cc-agregar-opt" data-action="sumar-a-fecha"
+          data-id="${esc(t.id)}" data-clave="${esc(r.clave)}" data-nombre="${esc(r.nombre)}"${r.ya ? ' disabled' : ''}>
+          <span>${esc(r.nombre)}</span>
+          <span class="cc-agregar-rub">${esc(r.rubro)}</span>
+          <span class="material-icons">${r.ya ? 'check' : 'add'}</span>
+        </button>`).join('')}
+    </div>` : `<div class="cc-agregar-vacio">Nada del catálogo coincide con "${esc(texto)}"</div>`) : ''}
   </div>`;
 }
 
@@ -2000,6 +2135,19 @@ function abrirFecha(id) {
   paintTemporadas();
   paintTable();
   paintResumen();
+  bajarALaLista();
+}
+
+// Al abrir una fecha, llevar la vista a la lista: el dueño toca el nombre para
+// VER los productos, y si la tabla queda tres pantallas más abajo no los ve.
+function bajarALaLista() {
+  try {
+    // Con el panel abierto, lo primero que hay que ver es el detalle de la
+    // fecha; si está cerrado, la lista ya filtrada.
+    const destino = document.querySelector('.cc-fecha-det')
+      || document.querySelector('.cc-table-card');
+    destino?.scrollIntoView?.({ behavior: 'smooth', block: 'start' });
+  } catch (_) { /* sin scroll no pasa nada grave */ }
 }
 
 function botonEstudiarHtml(texto) {
@@ -2158,6 +2306,24 @@ function onClick(e) {
     case 'abrir-fecha':
       abrirFecha(btn.dataset.id || '');
       break;
+    case 'sacar-de-fecha':
+      sacarDeFecha(Number(btn.dataset.idx));
+      break;
+    case 'sumar-a-fecha':
+      sumarAFecha(btn.dataset.id || '', btn.dataset.clave || '', btn.dataset.nombre || '');
+      break;
+    case 'devolver-a-fecha':
+      devolverAFecha(btn.dataset.id || '', btn.dataset.clave || '');
+      break;
+    case 'ver-sacados':
+      s.verSacados = s.verSacados === btn.dataset.id ? '' : btn.dataset.id;
+      paintFechas();
+      break;
+    case 'buscar-fecha-clear':
+      s.buscarFecha = '';
+      paintFechas();
+      document.getElementById('cc-buscar-fecha')?.focus();
+      break;
     case 'estudiar-epocas':
       estudiarEpocas();
       break;
@@ -2248,6 +2414,7 @@ function onChange(e) {
 
 let _topeTimer = null;
 let _buscarTimer = null;
+let _buscarFechaTimer = null;
 function onInput(e) {
   const s = _state;
   if (e.target.id === 'cc-tope') {
@@ -2266,6 +2433,17 @@ function onInput(e) {
       guardarFiltros();
       paintTable();
     }, 150);
+    return;
+  }
+  if (e.target.id === 'cc-buscar-fecha') {
+    clearTimeout(_buscarFechaTimer);
+    _buscarFechaTimer = setTimeout(() => {
+      s.buscarFecha = e.target.value;
+      paintFechas();
+      // El repintado reemplaza el input: hay que devolverle el foco y el cursor.
+      const inp = document.getElementById('cc-buscar-fecha');
+      if (inp) { inp.focus(); inp.setSelectionRange(inp.value.length, inp.value.length); }
+    }, 200);
     return;
   }
   if (e.target.id === 'cc-prov') { s.proveedor = e.target.value; return; }

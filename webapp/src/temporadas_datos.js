@@ -8,11 +8,15 @@
 // dueño lo pide, o cuando lo guardado ya tiene más de un mes, y el resultado
 // —un agregado chico— queda en `config/temporadas_aprendidas`.
 
-import { collection, getDocs, query, orderBy } from 'firebase/firestore';
-import { loadTemporadasEstudio, saveTemporadasEstudio, fechaDMYtoYMD } from './config.js';
+import { collection, getDocs, query, orderBy, deleteField } from 'firebase/firestore';
+import {
+  loadTemporadasEstudio, saveTemporadasEstudio, fechaDMYtoYMD,
+  loadTemporadasManual, saveTemporadasManual,
+} from './config.js';
 import {
   TEMPORADAS, estudiarTemporadas, temporadasProximas, recomendarParaTemporada,
   recomendarPorPistas, claveProducto, normTxt, estudioVigente, temporadaPorId, tienePalabra,
+  aplicarAjustes, ajustesDeFecha,
 } from './temporadas.js';
 import { ritmoDe } from './urgencia_compra.js';
 import { esServicio, esIlimitado } from './notifications.js';
@@ -49,10 +53,37 @@ export async function rehacerEstudio(db, { productos = [], onProgreso = null } =
   return estudio;
 }
 
-/** El estudio guardado, con la marca de si conviene rehacerlo. */
+/** El estudio guardado y las correcciones a mano, con la marca de si conviene
+ *  rehacer el estudio. Las correcciones no caducan nunca. */
 export async function cargarEstudio(db) {
-  const estudio = await loadTemporadasEstudio(db);
-  return { estudio, vigente: estudioVigente(estudio, hoyAR()) };
+  const [estudio, ajustes] = await Promise.all([
+    loadTemporadasEstudio(db),
+    loadTemporadasManual(db).catch(() => ({})),
+  ]);
+  return { estudio, ajustes: ajustes || {}, vigente: estudioVigente(estudio, hoyAR()) };
+}
+
+/**
+ * Agrega o saca un producto de una fecha, a mano.
+ *
+ * `datos` lleva el nombre y el color para poder volver a encontrarlo, y las
+ * unidades que el dueño espera vender si las sabe. Pasar `null` en `datos`
+ * borra la marca (vuelve a lo que diga el sistema).
+ */
+export async function guardarAjusteManual(db, idFecha, clave, { accion, datos = null } = {}) {
+  const campo = accion === 'sacar' ? 'saca' : 'suma';
+  const otro = accion === 'sacar' ? 'suma' : 'saca';
+  const valor = accion === 'sacar' ? true : (datos || { n: '', c: '' });
+  // Poner una marca saca la contraria: no se puede estar agregado y sacado.
+  const partial = { [idFecha]: { [campo]: { [clave]: valor }, [otro]: { [clave]: deleteField() } } };
+  await saveTemporadasManual(db, partial);
+}
+
+/** Saca cualquier marca de ese producto en esa fecha. */
+export async function borrarAjusteManual(db, idFecha, clave) {
+  await saveTemporadasManual(db, {
+    [idFecha]: { suma: { [clave]: deleteField() }, saca: { [clave]: deleteField() } },
+  });
 }
 
 // ── Stock del catálogo, indexado como lo indexan las ventas ──────────────────
@@ -123,6 +154,7 @@ export function indiceDeStock(productos) {
  */
 export function recomendacionesDeTemporada({
   estudio, productos, ventanas, hoy = null, topePorFecha = 25, extraIds = [],
+  ajustes = null,
 } = {}) {
   const hoyYmd = hoy || hoyAR();
   const proximas = temporadasProximas(hoyYmd);
@@ -174,9 +206,11 @@ export function recomendacionesDeTemporada({
   const mejorPorClave = new Map();
   for (const prox of proximas) {
     const medido = !!estudio?.temporadas?.[prox.grupo || prox.id];
-    const recs = medido
+    const calculadas = medido
       ? recomendarParaTemporada(prox, estudio, { stockDe, tope: topePorFecha })
       : recomendarPorPistas(prox, { candidatos: armarCandidatos(), tope: topePorFecha });
+    // Lo que el dueño corrigió a mano manda sobre lo calculado.
+    const recs = aplicarAjustes(calculadas, ajustes, prox, { stockDe });
     for (const r of recs) {
       const previo = mejorPorClave.get(r.clave);
       if (!previo || r.urgencia > previo.urgencia) mejorPorClave.set(r.clave, r);

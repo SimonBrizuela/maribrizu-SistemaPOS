@@ -1074,6 +1074,109 @@ describe('Centro de Compras · lo que se viene por la época', () => {
     expect(c.querySelector('#cc-fechas').style.display).toBe('none');
   });
 
+  // ── Corregir a mano qué va en cada fecha ─────────────────────────────────
+  // El dueño sabe cosas que no están en ningún dato: que tal producto se vende
+  // para Halloween aunque el nombre no lo diga, o que tal otro no tiene nada
+  // que ver. Lo que corrige gana sobre lo calculado y queda para la próxima.
+
+  it('sacar un producto de una fecha lo quita y lo guarda', async () => {
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    const fila = c.querySelector('#cc-tbody tr.cc-row-epoca');
+    expect(fila, 'hay alguna fila por época').toBeTruthy();
+    const nombre = fila.querySelector('.cc-prod-btn').textContent.replace('open_in_new', '').trim();
+    const cuantas = c.querySelectorAll('#cc-tbody tr.cc-row-epoca').length;
+
+    datos.escrituras.length = 0;
+    fila.querySelector('[data-action="sacar-de-fecha"]').click();
+    for (let i = 0; i < 14; i++) await esperar();
+
+    // Se fue de la lista de esa fecha.
+    const quedan = [...c.querySelectorAll('#cc-tbody tr.cc-row-epoca')]
+      .map(tr => tr.querySelector('.cc-prod-btn')?.textContent.replace('open_in_new', '').trim());
+    expect(quedan).not.toContain(nombre);
+    expect(quedan.length).toBe(cuantas - 1);
+
+    // Y quedó guardado en la nube, no sólo en la pantalla.
+    const esc = datos.escrituras.find(e => JSON.stringify(e.ref || {}).includes('temporadas_manual'));
+    expect(esc, 'escribe control_config/temporadas_manual').toBeTruthy();
+    const guardado = JSON.stringify(esc.datos || {});
+    expect(guardado).toContain('saca');
+  });
+
+  it('agregar un producto a una fecha lo busca en TODO el catálogo', async () => {
+    // Lo que hay que agregar es justo lo que el sistema no trajo, así que el
+    // buscador no puede limitarse a la lista de compras.
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    const tit = [...c.querySelectorAll('.cc-epoca-tit')].find(b => b.textContent.includes('Día de la Madre'));
+    tit.click();
+    for (let i = 0; i < 10; i++) await esperar();
+
+    const inp = c.querySelector('#cc-buscar-fecha');
+    expect(inp, 'hay buscador para agregar').toBeTruthy();
+    // El cuaderno está por encima de su mínimo, así que NO está en la lista de
+    // compras: si aparece, es porque se buscó en el catálogo entero.
+    tipear(inp, 'CUADERNO');
+    await esperar(260);                 // el buscador espera 200 ms antes de filtrar
+    for (let i = 0; i < 8; i++) await esperar();
+
+    const opts = [...c.querySelectorAll('.cc-agregar-opt')];
+    expect(opts.length, 'encuentra el cuaderno, que no está en la lista de compras').toBeGreaterThan(0);
+    expect(opts[0].textContent).toContain('CUADERNO');
+
+    datos.escrituras.length = 0;
+    opts[0].click();
+    for (let i = 0; i < 16; i++) await esperar();
+
+    // Aparece en la lista, marcado como puesto a mano.
+    const aMano = c.querySelector('.cc-chip-epoca.es-amano');
+    expect(aMano, 'el chip dice que lo pusiste vos').toBeTruthy();
+    const texto = [...c.querySelectorAll('#cc-tbody tr.cc-row-epoca')].map(t => t.textContent).join(' ');
+    expect(texto).toContain('CUADERNO');
+
+    const esc = datos.escrituras.find(e => JSON.stringify(e.ref || {}).includes('temporadas_manual'));
+    expect(esc).toBeTruthy();
+    expect(JSON.stringify(esc.datos || {})).toContain('suma');
+  });
+
+  it('lo corregido a mano se ve en el detalle y se puede devolver', async () => {
+    // El flujo real: abrís la fecha, ves su lista, sacás lo que no va.
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    const tit = [...c.querySelectorAll('.cc-epoca-tit')].find(b => b.textContent.includes('Día de la Madre'));
+    tit.click();
+    for (let i = 0; i < 10; i++) await esperar();
+
+    const fila = c.querySelector('#cc-tbody tr.cc-row-epoca');
+    expect(fila, 'la fecha abierta muestra sus productos').toBeTruthy();
+    fila.querySelector('[data-action="sacar-de-fecha"]').click();
+    for (let i = 0; i < 16; i++) await esperar();
+
+    // El detalle de la fecha lleva la cuenta de lo corregido.
+    const det = c.querySelector('.cc-fecha-det');
+    expect(det).toBeTruthy();
+    expect(det.textContent).toContain('Lo corregiste vos');
+    expect(det.textContent).toContain('sacado');
+
+    // Y se puede devolver.
+    det.querySelector('[data-action="ver-sacados"]').click();
+    for (let i = 0; i < 8; i++) await esperar();
+    const devolver = c.querySelector('[data-action="devolver-a-fecha"]');
+    expect(devolver, 'se puede devolver lo sacado').toBeTruthy();
+    devolver.click();
+    for (let i = 0; i < 16; i++) await esperar();
+    expect(c.querySelector('.cc-fecha-det')?.textContent || '').not.toContain('Lo corregiste vos');
+  });
+
+  it('lo que el dueño corrigió sobrevive al recálculo', async () => {
+    // Un producto sacado a mano no puede volver porque el motor insista.
+    datos.porColeccion.control_config = [
+      { __id: 'temporadas_manual', dia_madre: { saca: { 'portaretrato plastico 13x18': true }, suma: {} } },
+      ...(datos.porColeccion.control_config || []),
+    ];
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    const texto = [...c.querySelectorAll('#cc-tbody tr.cc-row-epoca')].map(t => t.textContent).join(' ');
+    expect(texto).not.toContain('PORTARETRATO PLASTICO 13X18');
+  });
+
   it('un producto con variedades no se propone dos veces', async () => {
     // El índice de stock tiene una entrada por variedad Y una por el producto
     // entero: sin cuidado, la bolsa de organza salía una vez por color y otra

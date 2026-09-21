@@ -1037,6 +1037,94 @@ function _fechaLinda(ymdStr) {
   return `${Number(m[3])} de ${MESES[Number(m[2]) - 1] || ''}`;
 }
 
+// ── Lo que el dueño corrige a mano ───────────────────────────────────────────
+// El sistema mide y adivina, pero el que atiende el mostrador sabe cosas que no
+// están en ningún dato: que tal producto se vende para Halloween aunque el
+// nombre no lo diga, o que tal otro no tiene nada que ver con la fecha aunque
+// el ritmo lo haya puesto ahí.
+//
+// Esas dos decisiones se guardan por fecha y ganan siempre sobre lo calculado:
+//
+//   { "<id de la fecha>": { suma: { "<clave>": {...} }, saca: { "<clave>": true } } }
+//
+// La clave es la misma que usa todo lo demás (`claveProducto`), así que sigue
+// valiendo cuando se rehace el estudio o cambia el catálogo. Sobrevive a todo:
+// es lo único del almanaque que no se recalcula.
+
+/** Los ajustes de UNA fecha, con la forma completa aunque estén vacíos. */
+export function ajustesDeFecha(ajustes, idFecha) {
+  const a = (ajustes || {})[String(idFecha || '')] || {};
+  return { suma: a.suma || {}, saca: a.saca || {} };
+}
+
+/** ¿Este producto está sacado a mano de esta fecha? */
+export function estaSacado(ajustes, idFecha, clave) {
+  return !!ajustesDeFecha(ajustes, idFecha).saca[clave];
+}
+
+/** ¿Está agregado a mano? */
+export function estaSumado(ajustes, idFecha, clave) {
+  return !!ajustesDeFecha(ajustes, idFecha).suma[clave];
+}
+
+/**
+ * Aplica las correcciones del dueño a lo que calculó el sistema.
+ *
+ * Lo sacado se va aunque el motor insista; lo agregado entra aunque el motor no
+ * lo haya visto, con la urgencia que le corresponda por su stock — y marcado
+ * como puesto a mano, para que se distinga de lo que salió de los datos.
+ *
+ * `stockDe(clave, {nombre, color})` es el mismo de `recomendarParaTemporada`.
+ */
+export function aplicarAjustes(recomendaciones, ajustes, proxima, { stockDe } = {}) {
+  const { suma, saca } = ajustesDeFecha(ajustes, proxima?.id);
+  const out = (recomendaciones || []).filter(r => !saca[r.clave]);
+  const yaEstan = new Set(out.map(r => r.clave));
+
+  for (const [clave, datos] of Object.entries(suma)) {
+    if (yaEstan.has(clave)) {
+      // Ya lo trajo el motor: sólo se marca que además está confirmado a mano.
+      const r = out.find(x => x.clave === clave);
+      if (r) r.aMano = true;
+      continue;
+    }
+    if (typeof stockDe !== 'function') continue;
+    const info = stockDe(clave, { nombre: datos?.n || '', color: datos?.c || '' });
+    if (!info) continue;   // ya no está en el catálogo
+    const stock = Math.max(0, Number(info.stock) || 0);
+    // Lo que se espera vender: lo que el dueño anotó, o lo que se vendió la vez
+    // pasada si el estudio lo sabe. Sin ninguno de los dos, el stock de hoy
+    // alcanza para que figure y él decide la cantidad.
+    const esperado = Math.max(0, Number(datos?.u) || 0);
+    out.push({
+      clave,
+      nombre: info.producto?.nombre || datos?.n || '',
+      color: datos?.c || info.color || '',
+      docId: info.docId,
+      producto: info.producto || null,
+      stock,
+      esperado,
+      empuje: 0,
+      faltan: Math.max(0, esperado - stock),
+      urgencia: urgenciaDeTemporada({
+        empuje: EMPUJE_MINIMO,
+        esperado: esperado > 0 ? esperado : Math.max(1, stock),
+        stock,
+        diasFaltan: proxima?.diasFaltan,
+        plazoAviso: proxima?.plazoAviso,
+      }),
+      porPista: false,
+      aMano: true,
+      temporada: {
+        id: proxima?.id, nombre: proxima?.nombre,
+        fecha: proxima?.fecha, diasFaltan: proxima?.diasFaltan,
+      },
+    });
+  }
+  out.sort((a, b) => b.urgencia - a.urgencia || b.faltan - a.faltan);
+  return out;
+}
+
 /** ¿El estudio guardado sirve todavía, o conviene rehacerlo? */
 export function estudioVigente(estudio, hoyYmd, { vigenciaDias = ESTUDIO_VIGENCIA_DIAS } = {}) {
   if (!estudio || !estudio.hasta) return false;
