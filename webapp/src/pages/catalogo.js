@@ -3280,8 +3280,9 @@ export async function renderCatalogo(container, db) {
       let porUnidad = '';
       const inPU = overlay.querySelector('#ed_conj_precio_unidad');
       const puUsd = parseFloat(inPU?.value) || 0;
-      if (cbConj?.checked && puUsd > 0) {
-        const um = (conjUM?.value === 'metros') ? 'el metro' : 'la unidad';
+      if (overlay.querySelector('#ed_es_conjunto')?.checked && puUsd > 0) {
+        const um = (overlay.querySelector('#ed_conj_unidad_medida')?.value === 'metros')
+          ? 'el metro' : 'la unidad';
         porUnidad = ` · U$S ${puUsd} = <b>$${fmt(precioUnidadEnPesos(puUsd, cot))}</b> ${um}`;
       }
 
@@ -3302,7 +3303,9 @@ export async function renderCatalogo(container, db) {
 
       const lblCosto  = overlay.querySelector('#lbl_ed_costo');
       const lblPrecio = overlay.querySelector('#lbl_ed_precio');
-      const esConjActivo = !!cbConj?.checked;
+      // Query directo y no la variable: esta función se llama desde
+      // `_aplicarUbicacionPrecio`, que corre antes de que `cbConj` exista.
+      const esConjActivo = !!overlay.querySelector('#ed_es_conjunto')?.checked;
       if (lblCosto) {
         lblCosto.textContent = monedaUsd
           ? (esConjActivo ? 'COSTO U$S DEL PACK' : 'COSTO U$S')
@@ -3749,13 +3752,13 @@ export async function renderCatalogo(container, db) {
     function _aplicarUbicacionPrecio(on) {
       if (on) {
         if (precioBlock.parentElement !== precioAnchor) precioAnchor.appendChild(precioBlock);
-        if (lblEdCosto)  lblEdCosto.textContent  = 'COSTO DEL PACK $';
-        if (lblEdPrecio) lblEdPrecio.textContent = 'PRECIO DEL PACK $';
       } else {
         if (precioBlock.parentElement !== precioHome) precioHome.appendChild(precioBlock);
-        if (lblEdCosto)  lblEdCosto.textContent  = 'COSTO $';
-        if (lblEdPrecio) lblEdPrecio.textContent = 'PRECIO VENTA $';
       }
+      // Las etiquetas las escribe `_pintarMoneda`, que además sabe si el
+      // producto se compra en dólares. Cuando estaban acá, abrir la ficha de
+      // uno importado mostraba "COSTO $" arriba de un número en dólares.
+      _pintarMoneda();
     }
 
     // Cuando el conjunto está activo y "Mismo precio del pack" está OFF, el
@@ -4558,7 +4561,8 @@ export async function renderCatalogo(container, db) {
      * una moneda o en la otra, nunca mitad y mitad.
      */
     function _aplicarMonedaAVariedades() {
-      const filas = coloresList?.querySelectorAll('[data-color-row]') || [];
+      const lista = overlay.querySelector('#ed_colores_list');
+      const filas = lista?.querySelectorAll('[data-color-row]') || [];
       filas.forEach(row => {
         const inpCostoF = row.querySelector('.ed_color_costo');
         const inpPackF  = row.querySelector('.ed_color_precio_pack');

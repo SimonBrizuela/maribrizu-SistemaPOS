@@ -491,3 +491,54 @@ describe('un catálogo sin ningún producto en dólares', () => {
     expect(document.getElementById('ed_usd_resultado').textContent).toContain('1.550');
   });
 });
+
+describe('las etiquetas de la ficha dicen en qué moneda se carga', () => {
+  // Abrir la ficha de un importado mostraba "COSTO $" arriba de un número en
+  // dólares: el que lo veía cargaba pesos en el campo de dólares.
+  const lbl = (id) => document.getElementById(id).textContent.trim();
+
+  it('en dólares dicen U$S', async () => {
+    await abrirCatalogo();
+    await abrirFicha('ARGOLLITAS');
+    expect(lbl('lbl_ed_costo')).toBe('COSTO U$S');
+    expect(lbl('lbl_ed_precio')).toBe('PRECIO U$S');
+  });
+
+  it('en pesos siguen diciendo $', async () => {
+    await abrirCatalogo();
+    await abrirFicha('CUADERNO');
+    expect(lbl('lbl_ed_costo')).toBe('COSTO $');
+    expect(lbl('lbl_ed_precio')).toBe('PRECIO VENTA $');
+  });
+
+  it('y cambian al tocar el botón, sin cerrar la ficha', async () => {
+    await abrirCatalogo();
+    await abrirFicha('CUADERNO');
+    document.getElementById('ed_moneda_usd').click();
+    await esperar();
+    expect(lbl('lbl_ed_costo')).toBe('COSTO U$S');
+
+    document.getElementById('ed_moneda_ars').click();
+    await esperar();
+    expect(lbl('lbl_ed_costo')).toBe('COSTO $');
+  });
+
+  it('en un producto fraccionado aclaran que es el pack', async () => {
+    await abrirCatalogo();
+    await abrirFicha('CINTA IMPORTADA');
+    expect(lbl('lbl_ed_costo')).toBe('COSTO U$S DEL PACK');
+    expect(lbl('lbl_ed_precio')).toBe('PRECIO U$S DEL PACK');
+  });
+
+  it('el ±100 no aparece sobre un precio en dólares', async () => {
+    // Redondear dólares a la centena dejaría precios de U$S 100 en adelante:
+    // el redondeo va sobre los pesos, y lo hace la conversión.
+    await abrirCatalogo();
+    await abrirFicha('ARGOLLITAS');
+    expect(document.getElementById('btn_redondear').style.display).toBe('none');
+
+    document.getElementById('ed_moneda_ars').click();
+    await esperar();
+    expect(document.getElementById('btn_redondear').style.display).not.toBe('none');
+  });
+});
