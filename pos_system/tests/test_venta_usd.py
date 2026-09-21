@@ -398,3 +398,62 @@ class TestLaFichaDelPos:
         finally:
             dlg.close()
             app.processEvents()
+
+
+class TestElBuscadorDelCajero:
+    """El Spotlight: lo que se abre al tipear y donde el cajero elige."""
+
+    def _abrir(self, app, ventas, texto='ARGOLL'):
+        from pos_system.ui.sales_view import SpotlightDialog
+        dlg = SpotlightDialog(parent=ventas, db=ventas.db, initial_text=texto)
+        _ABIERTAS.append(dlg)
+        dlg.show()
+        for _ in range(6):
+            app.processEvents()
+        return dlg
+
+    def test_muestra_el_precio_del_dia(self, app, ventas, local, dolar):
+        # Es la lista donde el cajero elige: si mostrara el precio guardado,
+        # elegiria viendo un numero y el carrito le pondria otro.
+        dlg = self._abrir(app, ventas, 'ARGOLLITAS')
+        try:
+            encontrado = [p for p in dlg._results
+                          if 'ARGOLLITAS' in (p.get('name') or '')]
+            assert encontrado, 'el buscador no encontro el producto'
+            assert encontrado[0]['price'] == 54300      # 35 x 1550
+        finally:
+            dlg.close()
+            app.processEvents()
+
+    def test_el_de_pesos_no_cambia(self, app, ventas, local, dolar):
+        dlg = self._abrir(app, ventas, 'CUADERNO')
+        try:
+            encontrado = [p for p in dlg._results
+                          if 'CUADERNO' in (p.get('name') or '')]
+            assert encontrado[0]['price'] == 3500
+        finally:
+            dlg.close()
+            app.processEvents()
+
+    def test_sin_cotizacion_muestra_lo_ultimo_conocido(self, app, ventas, local, sin_dolar):
+        dlg = self._abrir(app, ventas, 'ARGOLLITAS')
+        try:
+            encontrado = [p for p in dlg._results
+                          if 'ARGOLLITAS' in (p.get('name') or '')]
+            assert encontrado[0]['price'] == 49000
+        finally:
+            dlg.close()
+            app.processEvents()
+
+    def test_lo_que_elige_el_cajero_ya_viene_convertido(self, app, ventas, local, dolar):
+        # De esta lista sale el producto al carrito: tiene que llevar el
+        # precio del dia y no el viejo.
+        dlg = self._abrir(app, ventas, 'ARGOLLITAS')
+        try:
+            elegido = [p for p in dlg._results if 'ARGOLLITAS' in (p.get('name') or '')][0]
+            ventas.add_to_cart(dict(elegido))
+            app.processEvents()
+            assert ventas.cart[0]['unit_price'] == 54300
+        finally:
+            dlg.close()
+            app.processEvents()

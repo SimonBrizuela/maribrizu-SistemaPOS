@@ -6450,6 +6450,17 @@ class SpotlightDialog(QDialog):
                 results = []
             results = [r for r in results if r.get('id', 0) > 0][:200]
 
+        # Lo que se compra en dólares, al precio de hoy. Este es el buscador
+        # que usa el cajero: si mostrara el último precio en pesos que bajó del
+        # catálogo, elegiría un producto viendo un número y el carrito le
+        # pondría otro.
+        _dolar_spot = _get_cotizacion().valor()
+        if _dolar_spot:
+            results = [
+                _convertir_usd(p, _dolar_spot) if _es_usd(p) else p
+                for p in results
+            ]
+
         # Lo que hay arriba, lo que no hay abajo. El orden dentro de cada grupo
         # se mantiene (favoritos y alfabético del cache), así que la lista sigue
         # siendo predecible: sólo se hunden los que no sirven para vender.
