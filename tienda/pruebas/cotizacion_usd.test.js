@@ -179,16 +179,27 @@ describe('conseguir la cotización', () => {
     // Las seis puntas ven el documento vencido en el mismo segundo. Cada una
     // espera un rato distinto; en ese rato, la primera escribe y las demás
     // tienen que darse cuenta al releer.
-    nube.doc = { valor: 1400, tipo: 'blue', actualizado: HACE(120) };
-    const llamadas = apiQueDevuelve(1600);
-    setTimeout(() => {
-      nube.doc = { valor: 1550, tipo: 'blue', fuente: 'dolarapi', actualizado: new Date().toISOString() };
-    }, 5);
+    //
+    // La espera es `Math.random() * desfasajeMs`, así que se la fija: con un
+    // setTimeout compitiendo contra el azar, el test fallaba una de cada tres
+    // corridas cuando el azar salía más corto que la escritura de la otra caja
+    // —y no por un error del código, que es lo peor que puede hacer un test.
+    const azar = vi.spyOn(Math, 'random').mockReturnValue(1);
+    try {
+      nube.doc = { valor: 1400, tipo: 'blue', actualizado: HACE(120) };
+      const llamadas = apiQueDevuelve(1600);
+      setTimeout(() => {
+        nube.doc = { valor: 1550, tipo: 'blue', fuente: 'dolarapi', actualizado: new Date().toISOString() };
+      }, 5);
 
-    const cot = await asegurarCotizacion(DB, { desfasajeMs: 60 });
+      // Espera entera (60 ms), con la otra caja escribiendo a los 5.
+      const cot = await asegurarCotizacion(DB, { desfasajeMs: 60 });
 
-    expect(cot.valor).toBe(1550);
-    expect(llamadas).toEqual([]);
+      expect(cot.valor).toBe(1550);
+      expect(llamadas).toEqual([]);
+    } finally {
+      azar.mockRestore();
+    }
   });
 
   it('si la API no contesta, queda el último valor bueno', async () => {
