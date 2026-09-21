@@ -144,7 +144,7 @@ export const TEMPORADAS = [
       { que: 'cajitas de regalo para el arito', buscar: ['caja regalo'] },
       { que: 'globos con forma de corazon', buscar: ['globo', 'corazon'] },
     ],
-    pistas: { rubros: ['regaleria'], palabras: ['corazon', 'peluche', 'tarjeta', 'bolsa organza', 'organza', 'mono regalo', 'papel regalo', 'celofan', 'arito', 'acero quirurgico', 'collar', 'dije', 'pulsera', 'osito'], colores: ['rojo', 'fucsia'], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa', 'plancha'], colores: ['rojo', 'fucsia', 'rosa'] }], excluir: [...NO_ES_REGALO, ...DE_OTRA_FECHA] },
+    pistas: { rubros: ['regaleria'], palabras: ['corazon', 'peluche', 'tarjeta', 'bolsa organza', 'organza', 'mono regalo', 'papel regalo', 'celofan', 'arito', 'acero quirurgico', 'collar', 'dije', 'pulsera', 'osito'], colores: ['rojo', 'fucsia'], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa'], colores: ['rojo', 'fucsia', 'rosa'] }], excluir: [...NO_ES_REGALO, ...DE_OTRA_FECHA] },
   },
   {
     id: 'carnaval', nombre: 'Carnaval', cuando: { pascua: -48 },
@@ -157,7 +157,7 @@ export const TEMPORADAS = [
       { que: 'talco perfumado', buscar: ['talco'] },
       { que: 'maquillaje artistico de colores', buscar: ['pinturita'] },
     ],
-    pistas: { rubros: ['cotillon'], palabras: ['tull', 'papel picado', 'antifaz', 'mascara', 'gorro', 'brillantina', 'purpurina', 'gibre', 'globo', 'serpentina', 'espuma loca', 'pluma marabu', 'marabu', 'tul', 'lentejuela', 'fiselina', 'goma eva', 'strass', 'vincha', 'tiara', 'colita', 'peluca', 'talco'], colores: [], excluir: [...DE_OTRA_FECHA] },
+    pistas: { rubros: ['cotillon'], palabras: ['tull', 'papel picado', 'antifaz', 'mascara', 'gorro', 'serpentina', 'espuma loca', 'pluma marabu', 'marabu', 'tul', 'lentejuela', 'strass', 'vincha', 'tiara', 'colita', 'peluca', 'talco'], colores: [], excluir: [...DE_OTRA_FECHA] },
   },
   {
     id: 'dia_mujer', nombre: 'Día de la Mujer', cuando: { mes: 3, dia: 8 },
@@ -167,7 +167,7 @@ export const TEMPORADAS = [
       { que: 'tarjetas', buscar: ['tarjeta'] },
       { que: 'souvenirs chicos', buscar: ['souvenir'] },
     ],
-    pistas: { rubros: ['regaleria'], palabras: ['flor', 'tarjeta', 'souvenir', 'arito', 'acero quirurgico', 'collar', 'dije', 'pulsera', 'billetera', 'portacosmetico', 'scrunchy', 'scunzi', 'vincha', 'mono de pelo'], colores: ['violeta', 'lila', 'morado'], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa', 'plancha'], colores: ['violeta', 'lila', 'morado'] }], excluir: [...NO_ES_REGALO, ...DE_OTRA_FECHA] },
+    pistas: { rubros: ['regaleria'], palabras: ['flor', 'tarjeta', 'souvenir', 'arito', 'acero quirurgico', 'collar', 'dije', 'pulsera', 'billetera', 'portacosmetico', 'scrunchy', 'scunzi', 'vincha', 'mono de pelo'], colores: ['violeta', 'lila', 'morado'], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa'], colores: ['violeta', 'lila', 'morado'] }], excluir: [...NO_ES_REGALO, ...DE_OTRA_FECHA] },
   },
   {
     id: 'pascua', nombre: 'Pascua', cuando: { pascua: 0 },
@@ -189,7 +189,7 @@ export const TEMPORADAS = [
       { que: 'guirnalda de banderines patrios', buscar: ['guirnalda', 'banderin'] },
       { que: 'banderas de mano', buscar: ['bandera', 'mano'] },
     ],
-    pistas: { rubros: [], palabras: ['escarapela', 'bandera', 'aplique', 'granadero', 'revolucion mayo', 'belgrano', 'colon', 'asta', 'tahali', 'panuelo', 'constitucion', 'peineton', 'cucarda', 'cocarda'], colores: ['celeste', 'blanco'], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa', 'plancha'], colores: ['celeste', 'blanco', 'blanca'] }] },
+    pistas: { rubros: [], palabras: ['escarapela', 'bandera', 'aplique', 'granadero', 'revolucion mayo', 'belgrano', 'colon', 'asta', 'tahali', 'panuelo', 'constitucion', 'peineton', 'cucarda', 'cocarda'], colores: ['celeste', 'blanco'], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa'], colores: ['celeste', 'blanco', 'blanca'] }] },
     nota: 'Fecha patria: escarapelas y todo lo celeste y blanco para los actos.',
   },
   {
@@ -222,7 +222,7 @@ export const TEMPORADAS = [
       { que: 'guirnalda de banderines patrios', buscar: ['guirnalda', 'banderin'] },
       { que: 'banderas de mano', buscar: ['bandera', 'mano'] },
     ],
-    pistas: { rubros: [], palabras: ['escarapela', 'bandera', 'aplique', 'granadero', 'revolucion mayo', 'belgrano', 'colon', 'asta', 'tahali', 'panuelo', 'constitucion', 'peineton', 'cucarda', 'cocarda'], colores: ['celeste', 'blanco'], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa', 'plancha'], colores: ['celeste', 'blanco', 'blanca'] }] },
+    pistas: { rubros: [], palabras: ['escarapela', 'bandera', 'aplique', 'granadero', 'revolucion mayo', 'belgrano', 'colon', 'asta', 'tahali', 'panuelo', 'constitucion', 'peineton', 'cucarda', 'cocarda'], colores: ['celeste', 'blanco'], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa'], colores: ['celeste', 'blanco', 'blanca'] }] },
     nota: 'Fecha patria: escarapelas y todo lo celeste y blanco para los actos.',
   },
   {
@@ -245,7 +245,7 @@ export const TEMPORADAS = [
       { que: 'guirnalda de banderines patrios', buscar: ['guirnalda', 'banderin'] },
       { que: 'banderas de mano', buscar: ['bandera', 'mano'] },
     ],
-    pistas: { rubros: [], palabras: ['escarapela', 'bandera', 'aplique', 'granadero', 'revolucion mayo', 'belgrano', 'colon', 'asta', 'tahali', 'panuelo', 'constitucion', 'peineton', 'cucarda', 'cocarda'], colores: ['celeste', 'blanco'], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa', 'plancha'], colores: ['celeste', 'blanco', 'blanca'] }] },
+    pistas: { rubros: [], palabras: ['escarapela', 'bandera', 'aplique', 'granadero', 'revolucion mayo', 'belgrano', 'colon', 'asta', 'tahali', 'panuelo', 'constitucion', 'peineton', 'cucarda', 'cocarda'], colores: ['celeste', 'blanco'], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa'], colores: ['celeste', 'blanco', 'blanca'] }] },
     nota: 'Fecha patria: escarapelas y todo lo celeste y blanco para los actos.',
   },
   {
@@ -279,7 +279,7 @@ export const TEMPORADAS = [
       { que: 'mates amarillos economicos', buscar: ['mate', 'amarillo'] },
       { que: 'globos amarillos', buscar: ['globo', 'amarillo'] },
     ],
-    pistas: { rubros: [], palabras: ['girasol'], colores: ['amarillo'], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'tull', 'cinta', 'papel', 'bolsa', 'plancha', 'limpia pipa', 'flor', 'pompon', 'mate', 'pluma marabu'], colores: ['amarillo'] }] },
+    pistas: { rubros: [], palabras: ['girasol'], colores: ['amarillo'], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'tull', 'cinta', 'papel', 'bolsa', 'limpia pipa', 'flor', 'pompon', 'mate', 'pluma marabu'], colores: ['amarillo'] }] },
     nota: 'Se regala algo amarillo. Vuela todo lo amarillo: limpia pipa, cintas, cartulinas, flores.',
   },
   {
@@ -302,7 +302,7 @@ export const TEMPORADAS = [
       { que: 'guirnaldas', buscar: ['guirnalda'] },
       { que: 'vinchas de flores', buscar: ['vincha', 'flor'] },
     ],
-    pistas: { rubros: [], palabras: ['primavera', 'flor', 'souvenir', 'globo', 'tarjeta', 'vincha', 'banderin', 'banderín', 'guirnalda'], colores: [], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa', 'plancha'], colores: ['amarillo', 'verde', 'rosa'] }], excluir: [...DE_OTRA_FECHA] },
+    pistas: { rubros: [], palabras: ['primavera', 'flor', 'souvenir', 'globo', 'tarjeta', 'vincha', 'banderin', 'banderín', 'guirnalda'], colores: [], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa'], colores: ['amarillo', 'verde', 'rosa'] }], excluir: [...DE_OTRA_FECHA] },
   },
   {
     id: 'dia_madre', nombre: 'Día de la Madre', cuando: { mes: 10, domingo: 3 },
@@ -328,7 +328,7 @@ export const TEMPORADAS = [
       { que: 'maquillaje artistico y sangre falsa', buscar: ['pintafan'] },
       { que: 'globos con forma de fantasma o calabaza', buscar: ['globo', 'halloween'] },
     ],
-    pistas: { rubros: [], palabras: ['disfraz', 'calabaza', 'antifaz', 'esqueleto', 'murcielago', 'telarana', 'halloween', 'bruja', 'zombie', 'vampiro', 'ojos moviles', 'anilina', 'sangre', 'maquillaje artistico'], colores: [], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa', 'plancha'], colores: ['naranja', 'negro', 'negra'] }], excluir: [...DE_OTRA_FECHA] },
+    pistas: { rubros: [], palabras: ['disfraz', 'calabaza', 'antifaz', 'esqueleto', 'murcielago', 'telarana', 'halloween', 'bruja', 'zombie', 'vampiro', 'sangre', 'maquillaje artistico'], colores: [], combinaciones: [{ palabras: ['anilina', 'ojos moviles', 'goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa'], colores: ['naranja', 'negro', 'negra'] }], excluir: [...DE_OTRA_FECHA] },
   },
   {
     id: 'egresados', nombre: 'Egresados y fin de cursado', grupo: 'fin_de_anio', cuando: { mes: 11, dia: 25 },
@@ -340,7 +340,7 @@ export const TEMPORADAS = [
       { que: 'cintas de egresados', buscar: ['cinta', 'egresado'] },
       { que: 'laminas para plastificar', buscar: ['plastificar'] },
     ],
-    pistas: { rubros: [], palabras: ['egresado', 'egresados', 'diploma', 'souvenir', 'globo', 'birrete', 'portada', 'aplique', 'medalla', 'guirnalda', 'banderin', 'fiselina', 'plastificar', 'plastificado', 'anillado'], colores: [], excluir: [...DE_OTRA_FECHA] },
+    pistas: { rubros: [], palabras: ['egresado', 'egresados', 'diploma', 'souvenir', 'birrete', 'portada', 'aplique', 'medalla', 'guirnalda', 'banderin', 'plastificar', 'plastificado', 'anillado'], colores: [], excluir: [...DE_OTRA_FECHA] },
     nota: 'Diplomas, souvenirs y actos de fin de año: arranca a mediados de noviembre.',
   },
   {
@@ -354,7 +354,7 @@ export const TEMPORADAS = [
       { que: 'bolsas navidenas', buscar: ['bolsa', 'navid'] },
       { que: 'tarjetas de Navidad', buscar: ['tarjeta', 'navid'] },
     ],
-    pistas: { rubros: ['navidad'], palabras: ['navidad', 'navideno', 'arbolito', 'guirnalda', 'papel regalo', 'mono regalo', 'bolsa regalo', 'celofan', 'metalizado', 'tarjeta', 'adorno', 'luces', 'pesebre', 'bota'], colores: ['rojo', 'verde', 'dorado', 'plateado'], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa', 'plancha'], colores: ['rojo', 'verde', 'dorado', 'plateado'] }], excluir: [...DE_OTRA_FECHA] },
+    pistas: { rubros: ['navidad'], palabras: ['navidad', 'navideno', 'arbolito', 'guirnalda', 'papel regalo', 'mono regalo', 'bolsa regalo', 'celofan', 'metalizado', 'tarjeta', 'adorno', 'luces', 'pesebre', 'bota'], colores: ['rojo', 'verde', 'dorado', 'plateado'], combinaciones: [{ palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'globo', 'brillantina', 'barrilete', 'fieltro', 'panolenci', 'tul', 'cinta', 'papel', 'bolsa'], colores: ['rojo', 'verde', 'dorado', 'plateado'] }], excluir: [...DE_OTRA_FECHA] },
   },
   {
     id: 'fin_anio', nombre: 'Fin de año', grupo: 'fin_de_anio', cuando: { mes: 12, dia: 31 },

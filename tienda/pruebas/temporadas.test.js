@@ -405,9 +405,13 @@ describe('las pistas, para las fechas que todavía no se pudieron medir', () => 
     const eg = temporadaPorId('egresados');
     expect(coincidePorPista(eg, { nombre: 'CORDON ZAPATILLAS-ZAPATOS REDONDO 1,20 MT X PAR', rubro: 'MERCERÍA' })).toBe(false);
     expect(coincidePorPista(eg, { nombre: 'CUADERNO AMERICA A4 CON ESPIRAL X 80 HOJAS', rubro: 'LIBRERÍA' })).toBe(false);
-    // El birrete se arma con fiselina y el motor de la fecha es el plastificado.
-    expect(coincidePorPista(eg, { nombre: 'FISELINA (NOVOTEC) LISA COMUN', rubro: 'MERCERÍA' })).toBe(true);
+    // El birrete se arma con fiselina, pero la fiselina viene en veinte colores
+    // y recomendarlos todos era ruido: eso queda como idea para el mostrador,
+    // no como orden de compra. Lo que sí entra es el insumo del servicio, que
+    // es el motor real de la fecha.
+    expect(coincidePorPista(eg, { nombre: 'BOLSA FISELINA 45X40CM', rubro: 'MERCERÍA', color: 'Rosa' })).toBe(false);
     expect(coincidePorPista(eg, { nombre: 'LAMINA REXON PARA PLASTIFICADO EN FRIO', rubro: 'LIBRERÍA' })).toBe(true);
+    expect(coincidePorPista(eg, { nombre: 'ANILLADO A4 1 (HASTA 85 HJS)', rubro: 'SERVICIOS' })).toBe(true);
   });
 
   it('un cordón de yute no es una corona de Navidad', () => {
@@ -427,6 +431,20 @@ describe('las pistas, para las fechas que todavía no se pudieron medir', () => 
     const r = temporadaPorId('reyes');
     expect(coincidePorPista(r, { nombre: 'JUEGO DE PLAYA CHICHESS 4 MOLDES', rubro: 'JUGUETERÍA' })).toBe(true);
     expect(coincidePorPista(r, { nombre: 'ARO HULA HULA GRANDE', rubro: 'JUGUETERÍA' })).toBe(true);
+  });
+
+  it('un material que viene en veinte colores no entra suelto', () => {
+    // La regla que hubo que aplicar en todas las fechas: puesto en `palabras`,
+    // "fiselina" le metia veinte colores de bolsa a egresados y "goma eva" las
+    // flores de goma eva a carnaval. Va en `combinaciones` con el color, o no va.
+    expect(coincidePorPista(temporadaPorId('egresados'), { nombre: 'BOLSA FISELINA 45X40CM CON MANIJA', rubro: 'MERCERÍA', color: 'Rosa' })).toBe(false);
+    expect(coincidePorPista(temporadaPorId('carnaval'), { nombre: 'GOMA EVA MAGIC FLORES MAXI X5', rubro: 'MERCERÍA' })).toBe(false);
+    // Y "plancha", que estaba por "plancha de goma eva", traia el parche de jogging.
+    expect(coincidePorPista(temporadaPorId('halloween'), { nombre: 'PARCHE PLANCHA JOGGING DE ALGODON', rubro: 'MERCERÍA', subRubro: 'PARCHE', color: 'Negro' })).toBe(false);
+    // Lo que sí tiene que entrar por color sigue entrando.
+    expect(coincidePorPista(temporadaPorId('halloween'), { nombre: 'CARTULINA LUMA COMUN', rubro: 'LIBRERÍA', color: 'Negro' })).toBe(true);
+    expect(coincidePorPista(temporadaPorId('halloween'), { nombre: 'ANILINA COLIBRI COMUN', rubro: 'LIBRERÍA', color: 'Negro' })).toBe(true);
+    expect(coincidePorPista(temporadaPorId('halloween'), { nombre: 'ANILINA COLIBRI COMUN', rubro: 'LIBRERÍA', color: 'Azul Marino' })).toBe(false);
   });
 
   it('lo propio gana sobre la exclusión cruzada', () => {

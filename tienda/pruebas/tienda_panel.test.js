@@ -104,6 +104,21 @@ beforeEach(() => {
 
 const esperar = (ms = 0) => new Promise(r => setTimeout(r, ms));
 
+/**
+ * Espera a que algo pase, en vez de una cantidad fija de vueltas.
+ *
+ * Pintar los usos de un cupón encadena varias lecturas, y con la máquina
+ * cargada no siempre terminan en las mismas ocho vueltas del bucle de eventos:
+ * el test fallaba de a ratos sin que nada del código hubiera cambiado.
+ */
+const hasta = async (condicion, vueltas = 400) => {
+  for (let i = 0; i < vueltas; i++) {
+    if (condicion()) return true;
+    await esperar();
+  }
+  return condicion();
+};
+
 const CARGAR = {
   tienda_catalogo: () => import('../../webapp/src/pages/tienda_catalogo.js'),
   tienda_descuentos: () => import('../../webapp/src/pages/tienda_descuentos.js'),
@@ -718,7 +733,7 @@ describe('Cupones de la Tienda', () => {
   it('"Ver usos" muestra quién lo usó y en qué', async () => {
     const c = await montar('tienda_cupones', 'renderTiendaCupones');
     c.querySelector('[data-accion="usos"][data-id="BIENVENIDA"]').click();
-    for (let i = 0; i < 8; i++) await esperar();
+    await hasta(() => plano(document.body).includes('Marta Gómez'));
     const t = plano(document.body);
     expect(t).toContain('Marta Gómez');
     expect(t).toContain('K7M2');
@@ -730,6 +745,7 @@ describe('Cupones de la Tienda', () => {
   it('sin cupones muestra el vacío sin NaN', async () => {
     datos.porColeccion.tienda_cupones = [];
     const c = await montar('tienda_cupones', 'renderTiendaCupones');
+    await hasta(() => plano(c).includes('Todavía no hay cupones'));
     expect(plano(c)).toContain('Todavía no hay cupones');
     expect(plano(c)).not.toContain('NaN');
   });
