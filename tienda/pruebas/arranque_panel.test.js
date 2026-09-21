@@ -71,6 +71,68 @@ vi.mock('../../webapp/src/pages/login.js', () => ({
 
 const esperar = (ms = 0) => new Promise(r => setTimeout(r, ms));
 
+/*
+ * Los arranques de los tests anteriores, desenchufados.
+ *
+ * Cada test vuelve a importar `main.js` con los módulos reseteados, pero el
+ * `DOMContentLoaded` que el módulo anterior dejó enganchado sigue ahí: el
+ * `document` es uno solo para todo el archivo. Al disparar el evento del test
+ * número diez arrancaban diez paneles a la vez, cada uno cargando su pantalla
+ * y reescribiendo el documento encima del que estaba probándose. De ahí los
+ * fallos que aparecían una corrida sí y otra no, nunca en el mismo test.
+ */
+const oyentesArranque = [];
+const agregarOriginal = document.addEventListener.bind(document);
+document.addEventListener = (tipo, fn, opciones) => {
+  if (tipo === 'DOMContentLoaded') oyentesArranque.push(fn);
+  return agregarOriginal(tipo, fn, opciones);
+};
+function soltarArranquesViejos() {
+  while (oyentesArranque.length) {
+    document.removeEventListener('DOMContentLoaded', oyentesArranque.pop());
+  }
+}
+
+/**
+ * Espera a que algo pase, en vez de esperar una cantidad de ticks.
+ *
+ * Con la suite entera corriendo, un solo tick no siempre alcanza para que el
+ * cambio de tema llegue a pintarse y a guardarse: el test fallaba uno de cada
+ * tantos, y sólo acompañado. La condición es la misma; lo que cambia es que se
+ * la deja cumplirse.
+ */
+async function hasta(condicion, vueltas = 200) {
+  for (let i = 0; i < vueltas; i++) {
+    if (condicion()) return true;
+    await esperar(5);
+  }
+  return condicion();
+}
+
+/**
+ * Espera a que el arranque deje de mover el DOM.
+ *
+ * Cada test vuelve a montar `main.js` entero, y el arranque anterior sigue
+ * vivo: sus cargas de pantalla terminan más tarde y reescriben el documento
+ * del test que está corriendo. Contando ticks eso no se ve; esperando a que el
+ * documento quede quieto, sí. Es la diferencia entre una suite que falla una
+ * de cada tantas corridas y una que no.
+ */
+async function quieto({ quietas = 10, tope = 500 } = {}) {
+  const foto = () => {
+    const pc = document.getElementById('pageContent');
+    return `${document.body.innerHTML.length}|${pc ? pc.childElementCount : -1}`;
+  };
+  let anterior = foto();
+  let iguales = 0;
+  for (let i = 0; i < tope && iguales < quietas; i++) {
+    await esperar(5);
+    const ahora = foto();
+    iguales = ahora === anterior ? iguales + 1 : 0;
+    anterior = ahora;
+  }
+}
+
 /** El shell del panel tal como está en el HTML que se publica. */
 const HTML = readFileSync(join(process.cwd(), '..', 'webapp', 'index.html'), 'utf8');
 const CUERPO = HTML.slice(HTML.indexOf('<body>') + 6, HTML.indexOf('</body>'))
@@ -79,12 +141,19 @@ const CUERPO = HTML.slice(HTML.indexOf('<body>') + 6, HTML.indexOf('</body>'))
 /** Levanta el panel: pone el HTML real y dispara el arranque. */
 async function arrancar() {
   document.body.innerHTML = CUERPO;
+  soltarArranquesViejos();
   vi.resetModules();
   estado.pintadas = [];
   estado.oyentesStore = [];
   await import('../../webapp/src/main.js');
   document.dispatchEvent(new Event('DOMContentLoaded'));
-  for (let i = 0; i < 16; i++) await esperar();
+  // Se espera a que el arranque termine de verdad, no una cantidad fija de
+  // vueltas: con la suite entera corriendo, el panel tarda segundos en montar
+  // el tablero y dieciséis ticks se quedaban cortos — el archivo completo
+  // fallaba una de cada tantas corridas, y sólo acompañado.
+  await hasta(() => estado.pintadas.includes('login')
+    || !!document.getElementById('themeToggleBtn'), 600);
+  await quieto();
   return document.getElementById('app');
 }
 
@@ -251,18 +320,18 @@ describe('el tema', () => {
     expect(tema()).not.toBe('dark');       // arranca en claro
 
     boton.click();
-    await esperar();
+    await hasta(() => tema() === 'dark');
     expect(tema()).toBe('dark');
 
     boton.click();
-    await esperar();
+    await hasta(() => tema() !== 'dark');
     expect(tema()).not.toBe('dark');
   });
 
   it('la elección queda guardada', async () => {
     await arrancar();
     document.getElementById('themeToggleBtn').click();
-    await esperar();
+    await hasta(() => !!localStorage.getItem('ll-theme'));
     expect(localStorage.getItem('ll-theme')).toBeTruthy();
   });
 });
@@ -297,7 +366,12 @@ describe('los refrescos en vivo', () => {
   it.each(TIENDA)('%s no se vuelve a dibujar entera con cada venta del POS', async (pagina) => {
     localStorage.setItem('lastPage', pagina);
     await arrancar();
-    for (let i = 0; i < 10; i++) await esperar();
+    // Se espera a que la pantalla esté montada de verdad. Tomándola después de
+    // una cantidad fija de vueltas, con la suite cargada a veces se agarraba lo
+    // que había a mitad de camino: la pantalla real lo reemplazaba enseguida y
+    // la prueba lo leía como "se dibujó entera de nuevo".
+    await hasta(() => !!document.getElementById('pageContent')?.firstElementChild, 600);
+    await quieto();
     const pantalla = document.getElementById('pageContent')?.firstElementChild;
     expect(pantalla, 'la pantalla no llegó a abrirse').toBeTruthy();
     // Nadie ocupado: sin esto el refresco se posterga y la prueba pasaría igual.
@@ -305,7 +379,8 @@ describe('los refrescos en vivo', () => {
 
     estado.oyentesStore.forEach(cb => cb('catalogo'));
     estado.oyentesStore.forEach(cb => cb('ventas'));
-    await esperar(600);
+    await esperar(600);   // el refresco está demorado a propósito: hay que dejarlo pasar
+    await quieto();
 
     expect(pantalla.isConnected, 'se dibujó entera de nuevo').toBe(true);
   });
