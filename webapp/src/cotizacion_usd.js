@@ -239,7 +239,11 @@ export async function asegurarCotizacion(db, { forzar = false, desfasajeMs = VEN
     // Desfasaje: si el panel y las cajas ven el documento vencido al mismo
     // tiempo, sin esto salen todos juntos. Al volver se mira de nuevo por si
     // alguno se adelantó. En el forzado no se espera: lo pidió una persona.
-    if (!forzar && desfasajeMs > 0) {
+    //
+    // Si no hay NINGUNA cotización todavía (primera vez, documento vacío)
+    // tampoco se espera: no hay ningún valor que se pueda estar pisando y
+    // alguien tiene que traer el primero.
+    if (!forzar && cot && desfasajeMs > 0) {
       await new Promise(r => setTimeout(r, Math.random() * desfasajeMs));
       const denuevo = await leerCotizacion(db);
       if (denuevo && !estaVencida(denuevo)) return denuevo;

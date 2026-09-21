@@ -421,3 +421,73 @@ describe('cuando no se sabe a cuánto está el dólar', () => {
     expect(ultimoGuardado().precio_venta).toBe(3900);
   });
 });
+
+describe('lo que escribe precios en pesos deja afuera a los de dólares', () => {
+  const esperarUnPoco = async (n = 10) => { for (let i = 0; i < n; i++) await esperar(); };
+
+  it('el detalle no deja guardar un precio en pesos', async () => {
+    await abrirCatalogo();
+    filaDe('ARGOLLITAS').querySelector('.btn-detalle').click();
+    await esperarUnPoco();
+
+    const btn = document.getElementById('det_guardar_precio');
+    expect(btn).toBeTruthy();
+    btn.click();
+    await esperarUnPoco();
+
+    expect(document.body.textContent).toContain('se maneja en dólares');
+    expect(enCatalogo().length).toBe(0);
+  });
+
+  it('en uno de pesos el detalle guarda como siempre', async () => {
+    await abrirCatalogo();
+    filaDe('CUADERNO').querySelector('.btn-detalle').click();
+    await esperarUnPoco();
+
+    const precio = document.getElementById('det_precio');
+    tipear(precio, '3900');
+    document.getElementById('det_guardar_precio').click();
+    await esperarUnPoco();
+
+    expect(ultimoGuardado().precio_venta).toBe(3900);
+  });
+
+  it('redondear todos los precios no toca los de dólares', async () => {
+    // El precio de uno en dólares ya sale redondeado de la conversión;
+    // escribirle otro en pesos no duraría hasta la primera venta.
+    await abrirCatalogo();
+    const btn = document.getElementById('btnRedondearTodos');
+    expect(btn).toBeTruthy();
+    btn.click();
+    await esperarUnPoco(20);
+
+    const tocados = enCatalogo().map(e => e.ref.id);
+    expect(tocados).not.toContain('p2');       // ARGOLLITAS, en dólares
+    expect(tocados).not.toContain('p3');       // CINTA, en dólares
+  });
+});
+
+describe('un catálogo sin ningún producto en dólares', () => {
+  beforeEach(() => {
+    datos.porColeccion.catalogo = [JSON.parse(JSON.stringify(CATALOGO[0]))];
+  });
+
+  it('no gasta una lectura en la cotización', async () => {
+    // Abrir el catálogo es la pantalla más pesada del panel: pedirle el dólar
+    // a la base cuando no hay nada que convertir es tiempo regalado.
+    await abrirCatalogo();
+    const pedidos = datos.escrituras.filter(e => e.ref?.id === 'cotizacion_usd');
+    expect(pedidos.length).toBe(0);
+    expect(document.getElementById('barraDolar').style.display).toBe('none');
+  });
+
+  it('pero el primero que se marca en dólares la consigue igual', async () => {
+    await abrirCatalogo();
+    await abrirFicha('CUADERNO');
+    document.getElementById('ed_moneda_usd').click();
+    for (let i = 0; i < 12; i++) await esperar();
+
+    // El documento existe en la base: se lee al tocar el botón, no antes.
+    expect(document.getElementById('ed_usd_resultado').textContent).toContain('1.550');
+  });
+});
