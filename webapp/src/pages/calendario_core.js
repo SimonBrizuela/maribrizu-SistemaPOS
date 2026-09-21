@@ -10,6 +10,11 @@
  */
 import { doc, onSnapshot, setDoc } from 'firebase/firestore';
 import { loadBalanceConfig, loadDiasMes } from '../config.js';
+// Las cuentas de las fechas que se mueven (Pascua, "tercer domingo de") viven
+// aparte porque las comparte con `temporadas.js`, que decide qué comprar para
+// cada fecha. Con dos copias, el almanaque y el aviso de compra podían terminar
+// marcando días distintos para el mismo Día de la Madre.
+import { addDays, ymd, pascua, domingoN } from '../fechas_ar.js';
 
 const EVENTOS_DOC = ['config', 'calendario_eventos'];   // doc Firestore compartido
 export let _custom = [];    // [{id, nombre, tipo, anual, fecha}]  fecha = 'YYYY-MM-DD' o 'MM-DD' (anual)
@@ -65,34 +70,9 @@ function _fecha(y, mmdd) {
 }
 function _dm(d) { return `${d.getDate()}/${String(d.getMonth() + 1).padStart(2, '0')}`; }
 
-// Domingo de Pascua (algoritmo de Meeus/Jones/Butcher).
-function pascua(y) {
-  const a = y % 19, b = Math.floor(y / 100), c = y % 100;
-  const d = Math.floor(b / 4), e = b % 4, f = Math.floor((b + 8) / 25);
-  const g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;
-  const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7;
-  const m = Math.floor((a + 11 * h + 22 * l) / 451);
-  const mes = Math.floor((h + l - 7 * m + 114) / 31);
-  const dia = ((h + l - 7 * m + 114) % 31) + 1;
-  return new Date(y, mes - 1, dia);
-}
-
-export function addDays(date, n) {
-  const x = new Date(date);
-  x.setDate(x.getDate() + n);
-  return x;
-}
-
-// N-ésimo domingo de un mes (month 0-indexado). n=1 → primer domingo.
-function domingoN(y, month, n) {
-  const first = new Date(y, month, 1);
-  const offset = (7 - first.getDay()) % 7;   // días hasta el primer domingo
-  return new Date(y, month, 1 + offset + (n - 1) * 7);
-}
-
-export function ymd(d) {
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-}
+// `pascua`, `domingoN`, `addDays` y `ymd` vienen de `fechas_ar.js`. Se
+// reexportan las dos que usa la página del calendario, para no tocarla.
+export { addDays, ymd };
 
 // Tipos → color + ícono. Pensado para que las fechas comerciales (las que mueven
 // ventas en la librería) destaquen sobre los feriados.
@@ -174,6 +154,8 @@ export function eventosDeAnio(y) {
   add(new Date(y, 6, 20), 'Día del Amigo', 'comercial');
   add(domingoN(y, 7, 3),  'Día del Niño', 'comercial');
   add(new Date(y, 8, 4),  'Día de la Secretaria', 'comercial');
+  add(new Date(y, 8, 6),  'El 6 de septiembre · todo amarillo', 'comercial',
+      'Se regala algo amarillo. En 2026 voló todo lo amarillo: limpia pipa, cintas, cartulinas, flores.');
   add(new Date(y, 8, 11), 'Día del Maestro', 'comercial');
   add(new Date(y, 8, 13), 'Día del Bibliotecario', 'comercial');
   add(new Date(y, 8, 17), 'Día del Profesor', 'comercial');
