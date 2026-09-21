@@ -483,6 +483,125 @@ describe('Centro de Compras: en qué orden hay que comprar', () => {
   });
 });
 
+describe('Centro de Compras: lo anotado en el cuaderno se va al fondo', () => {
+  // Pedido del dueño (21/09/2026), sobre una lista de 1.470 productos: "los que
+  // ya fui marcando que vayan para abajo y arriba los que no revisé todavía".
+  // Recorrerla es ir decidiendo producto por producto, y lo ya decidido
+  // ocupando las primeras filas obliga a saltearlo de nuevo en cada pasada.
+  const prod = (id, nombre, extra) => ({
+    __id: id, doc_id: id, id, nombre, codigo: id.toUpperCase(), rubro: 'LIBRERIA',
+    precio_venta: 1000, costo: 500, stock: 0, stock_min: 5, estado: 'activo', ...extra,
+  });
+
+  beforeEach(() => {
+    datos.porColeccion.catalogo = [
+      prod('a', 'AAA PRIMERO', { stock_min: 50 }),
+      prod('b', 'BBB SEGUNDO', { stock_min: 40 }),
+      prod('c', 'CCC TERCERO', { stock_min: 30 }),
+      prod('d', 'DDD CUARTO', { stock_min: 20 }),
+    ];
+    datos.porColeccion.ventas_por_dia = [];
+    datos.porColeccion.control_config = [];
+  });
+
+  const enPantalla = () => [...document.querySelectorAll('#cc-tbody tr[data-idx] .cc-prod-btn')]
+    .map(b => (b.firstChild?.textContent || '').trim());
+  const corteCuaderno = () => document.querySelector('.cc-cutoff-cuaderno');
+
+  async function anotar(nombre) {
+    const fila = [...document.querySelectorAll('#cc-tbody tr[data-idx]')]
+      .find(tr => tr.textContent.includes(nombre));
+    fila.querySelector('[data-action="anotar"]').click();
+    for (let i = 0; i < 12; i++) await esperar();
+  }
+
+  it('sin nada anotado no aparece ningún corte de cuaderno', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    expect(enPantalla().length).toBe(4);
+    expect(corteCuaderno()).toBeNull();
+  });
+
+  it('lo que se anota cae al fondo y lo que falta mirar queda arriba', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    const antes = enPantalla();
+    expect(antes[0]).toBe('AAA PRIMERO');
+
+    await anotar('AAA PRIMERO');
+    const despues = enPantalla();
+    // Sigue estando (la marca se saca desde la fila), pero al final.
+    expect(despues).toHaveLength(4);
+    expect(despues.at(-1)).toBe('AAA PRIMERO');
+    // Y los otros tres suben, en el mismo orden que tenían.
+    expect(despues.slice(0, 3)).toEqual(antes.slice(1));
+  });
+
+  it('el corte avisa cuántos ya están anotados', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    await anotar('AAA PRIMERO');
+    expect(corteCuaderno().textContent).toContain('(1)');
+    await anotar('BBB SEGUNDO');
+    expect(corteCuaderno().textContent).toContain('(2)');
+    expect(corteCuaderno().textContent).toMatch(/cuaderno/i);
+  });
+
+  it('los anotados guardan entre ellos el orden de urgencia', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    await anotar('BBB SEGUNDO');
+    await anotar('AAA PRIMERO');
+    // Se anotó el segundo primero, pero abajo mandan las urgencias, no el
+    // orden en que se los fue marcando.
+    expect(enPantalla().slice(-2)).toEqual(['AAA PRIMERO', 'BBB SEGUNDO']);
+  });
+
+  it('sacarle la marca lo devuelve a su lugar', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    const antes = enPantalla();
+    await anotar('AAA PRIMERO');
+    expect(enPantalla().at(-1)).toBe('AAA PRIMERO');
+    await anotar('AAA PRIMERO');
+    expect(enPantalla()).toEqual(antes);
+    expect(corteCuaderno()).toBeNull();
+  });
+
+  it('con el filtro del cuaderno puesto no se separa nada', async () => {
+    // Ahí TODO lo que se ve está anotado: el bloque se quedaría con la lista
+    // entera adentro y el corte no diría nada.
+    await montar('centro_compras', 'renderCentroCompras');
+    await anotar('AAA PRIMERO');
+    await anotar('BBB SEGUNDO');
+    document.querySelector('[data-action="filtro-anotados"]').click();
+    for (let i = 0; i < 12; i++) await esperar();
+    expect(enPantalla().sort()).toEqual(['AAA PRIMERO', 'BBB SEGUNDO']);
+    expect(corteCuaderno()).toBeNull();
+  });
+
+  it('anotar algo no le cambia lo que hay que comprar', async () => {
+    // El reparto de la plata se calcula sobre el orden por urgencia, antes de
+    // mover nada. Lo anotado es justamente lo que ya decidió comprar: sería al
+    // revés de lo que hay que hacer que anotarlo lo deje sin plata asignada.
+    await montar('centro_compras', 'renderCentroCompras');
+    const fila = (nombre) => [...document.querySelectorAll('#cc-tbody tr[data-idx]')]
+      .find(tr => tr.textContent.includes(nombre));
+    const datosDe = (nombre) => {
+      const tr = fila(nombre);
+      return {
+        cantidad: tr.querySelector('.cc-qty').value,
+        urgencia: tr.querySelector('.cc-urg').textContent.trim(),
+        celdas: [...tr.querySelectorAll('td')].map(td => td.textContent.trim()).join('|'),
+      };
+    };
+    const antes = datosDe('AAA PRIMERO');
+    await anotar('AAA PRIMERO');
+    const despues = datosDe('AAA PRIMERO');
+    expect(despues.cantidad).toBe(antes.cantidad);
+    expect(despues.urgencia).toBe(antes.urgencia);
+    // La única diferencia tiene que ser la marca del cuaderno, no los números.
+    expect(fila('AAA PRIMERO').classList.contains('cc-row-anotado')).toBe(true);
+    expect(despues.celdas.replace(/en el cuaderno \d\d\/\d\d/, '').replace(/\s+/g, ' '))
+      .toBe(antes.celdas.replace(/\s+/g, ' '));
+  });
+});
+
 describe('Centro de Compras: filtros de la lista', () => {
   // En la lista: RESMA (PAPELERIA · PAPELERA CBA), TIJERA (LIBRERIA · DISTRI
   // SUR, sin marca) y GOMA (LIBRERIA · ESCRITURA · PAPELERA CBA · MAPED).

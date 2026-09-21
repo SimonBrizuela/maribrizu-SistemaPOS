@@ -5123,6 +5123,15 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
   border-top: 2px dashed var(--border-strong); border-bottom: 2px dashed var(--border-strong);
 }
 .cc-cutoff .material-icons { font-size: 15px !important; vertical-align: -3px; margin-right: 4px; }
+/* El corte de lo ya anotado va en el verde del cuaderno, no en el gris del
+   corte de presupuesto: son dos cosas distintas y en una lista larga los dos
+   separadores se ven de lejos. */
+.cc-cutoff-cuaderno td {
+  background: color-mix(in srgb, var(--tint-green-fg) 8%, var(--surface-2));
+  color: var(--tint-green-fg);
+  border-color: var(--tint-green-fg);
+}
+.cc-cutoff-cuaderno .material-icons { color: var(--tint-green-fg); }
 .cc-empty { text-align: center; padding: 40px !important; color: var(--text-muted); }
 .cc-empty .material-icons { font-size: 20px !important; vertical-align: -4px; margin-right: 6px; color: var(--success); }
 

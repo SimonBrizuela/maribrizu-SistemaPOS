@@ -1451,10 +1451,29 @@ function pintarFilas() {
   // siempre apunta al índice real en s.rows, así los handlers no dependen del
   // orden visual. Las variantes consecutivas del mismo producto se marcan como
   // "continuación" para que se vea que van juntas.
-  const arriba = [], abajo = [];
-  s.rows.forEach((r, i) => { if (visible(r)) ((r.registrado || r.fits) ? arriba : abajo).push(i); });
-  paintFiltros(arriba.length + abajo.length);
-  if (!arriba.length && !abajo.length) {
+  //
+  // Lo que ya está anotado en el cuaderno se va al fondo, en su propio bloque.
+  // Pedido del dueño (21/09/2026): "los que ya fui marcando que vayan para
+  // abajo y arriba los que no revisé todavía". Recorrer la lista es ir
+  // decidiendo producto por producto, y lo ya decidido ocupando las primeras
+  // filas obliga a saltearlo de nuevo en cada pasada.
+  //
+  // Sigue en la lista (no se esconde) porque la marca se saca desde ahí, y
+  // sigue contando para el presupuesto: `fits` se calculó antes, sobre el orden
+  // por urgencia, así que anotar algo no lo empuja fuera de la plata. Acá sólo
+  // cambia dónde se lo dibuja.
+  //
+  // Con el filtro "en el cuaderno" puesto no se separa nada: ahí TODO lo que se
+  // ve está anotado, y el bloque quedaría con la lista entera adentro.
+  const arriba = [], abajo = [], enElCuaderno = [];
+  const revisado = r => !!r.anotado && !r.registrado && !s.filtroAnotados;
+  s.rows.forEach((r, i) => {
+    if (!visible(r)) return;
+    if (revisado(r)) enElCuaderno.push(i);
+    else ((r.registrado || r.fits) ? arriba : abajo).push(i);
+  });
+  paintFiltros(arriba.length + abajo.length + enElCuaderno.length);
+  if (!arriba.length && !abajo.length && !enElCuaderno.length) {
     const nFiltros = cantidadFiltros(s.filtros);
     const epoca = s.temporadaFiltro
       ? (s.proximas.find(p => p.id === s.temporadaFiltro)?.nombre || 'la fecha elegida') : '';
@@ -1484,6 +1503,13 @@ function pintarFilas() {
       Acá se acaba la plata (${money(disp)}) · lo de abajo no entra en el presupuesto</td></tr>`);
     prevDoc = null;
     abajo.forEach(emit);
+  }
+  if (enElCuaderno.length) {
+    parts.push(`<tr class="cc-cutoff cc-cutoff-cuaderno"><td colspan="10">
+      <span class="material-icons">edit_note</span>
+      Esto ya lo anotaste en el cuaderno (${enElCuaderno.length}) · queda abajo para no taparte lo que falta mirar</td></tr>`);
+    prevDoc = null;
+    enElCuaderno.forEach(emit);
   }
   tbody.innerHTML = parts.join('');
 }
