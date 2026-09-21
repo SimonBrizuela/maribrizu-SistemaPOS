@@ -1012,6 +1012,9 @@ export function motivoTemporada(rec, { conFecha = true } = {}) {
     : t.diasFaltan === 1 ? 'es mañana'
     : `faltan ${t.diasFaltan} días`;
   const donde = conFecha ? `${t.nombre} (${cuando})` : 'esta fecha';
+  // Lo que el dueño sumó a mano no tiene cuenta que mostrar: decir "se vende 0
+  // veces más que el resto del año" es peor que no decir nada.
+  if (rec.porMano) return conFecha ? `lo sumaste vos a ${donde}` : 'lo sumaste vos a esta fecha';
   if (rec.porPista) return `suele venderse para ${donde}`;
   const e = Number(rec.empuje) || 0;
   const veces = e >= EMPUJE_TOPE ? 'casi solo se vende en esta fecha'
@@ -1033,7 +1036,10 @@ export function explicarTemporada(rec) {
     return Number.isInteger(v) ? String(v) : String(Math.round(v * 10) / 10).replace('.', ',');
   };
   const lineas = [`${t.nombre} · ${_fechaLinda(t.fecha)}`];
-  if (rec.porPista) {
+  if (rec.porMano) {
+    lineas.push('· Lo sumaste vos a esta fecha');
+    lineas.push('· No sale de tus ventas: está acá porque lo pediste');
+  } else if (rec.porPista) {
     lineas.push('· Todavía no hay ventas viejas de esta fecha para medir');
     lineas.push(`· Entra por el tipo de producto, no por lo que vendió`);
   } else {
@@ -1042,9 +1048,11 @@ export function explicarTemporada(rec) {
   }
   lineas.push(`· Stock de hoy: ${n(rec.stock)}`);
   if (rec.faltan > 0) lineas.push(`· Faltarían ${n(rec.faltan)} para llegar igual que la vez pasada`);
-  lineas.push(rec.porPista
-    ? 'Es una corazonada por el tipo de producto: revisalo antes de comprar.'
-    : 'Sale de tus propias ventas de esa misma fecha.');
+  lineas.push(rec.porMano
+    ? 'Va a seguir apareciendo en esta fecha hasta que lo saques.'
+    : rec.porPista
+      ? 'Es una corazonada por el tipo de producto: revisalo antes de comprar.'
+      : 'Sale de tus propias ventas de esa misma fecha.');
   return lineas.join('\n');
 }
 
@@ -1134,6 +1142,8 @@ export function aplicarAjustes(recomendaciones, ajustes, proxima, { stockDe } = 
       }),
       porPista: false,
       aMano: true,
+      // Lo trajo el dueño, no el motor: no hay empuje ni pista que explicar.
+      porMano: true,
       temporada: {
         id: proxima?.id, nombre: proxima?.nombre,
         fecha: proxima?.fecha, diasFaltan: proxima?.diasFaltan,

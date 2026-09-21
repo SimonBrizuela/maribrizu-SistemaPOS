@@ -22,7 +22,7 @@ import {
   fechaDeTemporada, ventanaDeTemporada, temporadasProximas,
   estudiarTemporadas, recomendarParaTemporada, recomendarPorPistas,
   coincidePorPista, urgenciaDeTemporada, motivoTemporada, explicarTemporada,
-  estudioVigente, claveProducto, normTxt,
+  estudioVigente, claveProducto, normTxt, aplicarAjustes,
   EMPUJE_MINIMO, AVISO_DEFAULT_DIAS,
 } from '../../webapp/src/temporadas.js';
 import { pascua, domingoN, diasEntre, sumarDiasYmd, deYmd } from '../../webapp/src/fechas_ar.js';
@@ -534,5 +534,72 @@ describe('normalizar', () => {
   it('la clave junta producto y variedad', () => {
     expect(claveProducto('LIMPIA PIPA', 'Amarillo')).toBe('limpia pipa||amarillo');
     expect(claveProducto('LIMPIA PIPA', '')).toBe('limpia pipa');
+  });
+});
+
+describe('las correcciones del dueño', () => {
+  // El motor se equivoca y él lo sabe: saca lo que no va y suma lo que falta.
+  // La corrección tiene que quedar para las próximas veces, y notarse que fue
+  // suya y no del sistema.
+  const madre = { id: 'dia_madre', nombre: 'Día de la Madre', fecha: '2026-10-18', diasFaltan: 27, plazoAviso: 60 };
+  const stockDe = (clave, { nombre }) => ({
+    docId: 'doc-' + clave, color: '', stock: 4,
+    producto: { nombre: nombre || 'VELA TORNEADA CHICA', rubro: 'REGALERÍA' },
+  });
+
+  it('lo sacado desaparece de la lista', () => {
+    const recs = [
+      { clave: 'vela torneada chica', nombre: 'VELA TORNEADA CHICA', urgencia: 50, faltan: 3 },
+      { clave: 'bolsa organza', nombre: 'BOLSA ORGANZA', urgencia: 40, faltan: 2 },
+    ];
+    const out = aplicarAjustes(recs, { dia_madre: { saca: { 'vela torneada chica': true } } }, madre, { stockDe });
+    expect(out.map(r => r.clave)).toEqual(['bolsa organza']);
+  });
+
+  it('lo sumado entra marcado como puesto a mano', () => {
+    const ajustes = { dia_madre: { suma: { 'vela torneada chica': { n: 'VELA TORNEADA CHICA', c: '' } } } };
+    const out = aplicarAjustes([], ajustes, madre, { stockDe });
+    expect(out).toHaveLength(1);
+    expect(out[0].aMano).toBe(true);
+    expect(out[0].porMano).toBe(true);
+    expect(out[0].temporada.id).toBe('dia_madre');
+  });
+
+  it('lo que el motor ya traía queda confirmado, no duplicado', () => {
+    const recs = [{ clave: 'vela torneada chica', nombre: 'VELA TORNEADA CHICA', urgencia: 50, faltan: 3, empuje: 6 }];
+    const ajustes = { dia_madre: { suma: { 'vela torneada chica': { n: 'VELA TORNEADA CHICA' } } } };
+    const out = aplicarAjustes(recs, ajustes, madre, { stockDe });
+    expect(out).toHaveLength(1);
+    expect(out[0].aMano).toBe(true);
+    // No es "por mano": lo trajo el motor y su empuje medido sigue valiendo.
+    expect(out[0].porMano).toBeUndefined();
+    expect(out[0].empuje).toBe(6);
+  });
+
+  it('un producto que ya no está en el catálogo no se inventa', () => {
+    const ajustes = { dia_madre: { suma: { 'lo que sea': { n: 'LO QUE SEA' } } } };
+    expect(aplicarAjustes([], ajustes, madre, { stockDe: () => null })).toEqual([]);
+  });
+
+  it('lo puesto a mano no dice que se vende cero veces más', () => {
+    // El bug real: con empuje 0, el motivo salía "se vende 0 veces más que el
+    // resto del año", que suena a que el sistema lo desaconseja.
+    const rec = { temporada: madre, porMano: true, empuje: 0 };
+    expect(motivoTemporada(rec, { conFecha: false })).toBe('lo sumaste vos a esta fecha');
+    expect(motivoTemporada(rec)).toContain('lo sumaste vos a Día de la Madre');
+    expect(motivoTemporada(rec)).not.toContain('0 veces');
+  });
+
+  it('la explicación de lo puesto a mano no habla de ventas', () => {
+    const txt = explicarTemporada({ temporada: madre, porMano: true, empuje: 0, esperado: 0, stock: 4 });
+    expect(txt).toContain('Lo sumaste vos a esta fecha');
+    expect(txt).not.toContain('veces más que el resto del año');
+    expect(txt).toContain('hasta que lo saques');
+  });
+
+  it('sin correcciones la lista queda igual', () => {
+    const recs = [{ clave: 'a', urgencia: 10, faltan: 1 }, { clave: 'b', urgencia: 20, faltan: 1 }];
+    // Ordenada por urgencia, que es como la mira el dueño.
+    expect(aplicarAjustes(recs, {}, madre, { stockDe }).map(r => r.clave)).toEqual(['b', 'a']);
   });
 });

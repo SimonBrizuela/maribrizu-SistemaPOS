@@ -508,6 +508,7 @@ function aplicarTemporadas(rows, recomendaciones, comprasCfg) {
       existente.temporada_faltan = rec.faltan;
       existente.temporada_por_pista = !!rec.porPista;
       existente.temporada_a_mano = !!rec.aMano;
+      existente.temporada_por_mano = !!rec.porMano;
       existente.temporada_urgencia = rec.urgencia;
       if (rec.urgencia > existente.urgencia) {
         existente.urgencia = rec.urgencia;
@@ -594,6 +595,7 @@ function aplicarTemporadas(rows, recomendaciones, comprasCfg) {
       temporada_faltan: rec.faltan,
       temporada_por_pista: !!rec.porPista,
       temporada_a_mano: !!rec.aMano,
+      temporada_por_mano: !!rec.porMano,
       temporada_urgencia: rec.urgencia,
     };
     row.anotado = anotados[keyAnotado(row)] || null;
@@ -1608,7 +1610,8 @@ function rowHtml(r, i, esContinuacion) {
       data-tip="${esc(explicarTemporada({
         temporada: t, empuje: r.temporada_empuje, esperado: r.temporada_esperado,
         stock: r.stockUnits, faltan: r.temporada_faltan, porPista: r.temporada_por_pista,
-      }) + (r.temporada_a_mano ? '\nLo agregaste vos a esta fecha.' : ''))}"><span class="material-icons">event</span>${esc(t.nombre)} · ${cuando}</span>`;
+        porMano: r.temporada_por_mano,
+      }) + (r.temporada_a_mano && !r.temporada_por_mano ? '\nLo agregaste vos a esta fecha.' : ''))}"><span class="material-icons">event</span>${esc(t.nombre)} · ${cuando}</span>`;
     // Sacarlo de la fecha, pegado al chip: es la acción de ESE chip y así se
     // entiende sin explicación. El dueño sabe cuándo el sistema se equivocó, y
     // la corrección queda para las próximas veces.
@@ -1673,6 +1676,7 @@ function rowHtml(r, i, esContinuacion) {
     // Sin repetir la fecha ni los días: eso ya está en el chip de arriba.
     detalles.push(esc(motivoTemporada({
       temporada: r.temporada, empuje: r.temporada_empuje, porPista: r.temporada_por_pista,
+      porMano: r.temporada_por_mano,
     }, { conFecha: false })));
     if (!r.temporada_por_pista && r.temporada_faltan > 0) {
       detalles.push(`faltan ~${fmt(Math.ceil(r.temporada_faltan), 0)} para llegar igual que la vez pasada`);
