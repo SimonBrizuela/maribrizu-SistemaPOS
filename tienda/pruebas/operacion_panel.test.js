@@ -575,6 +575,48 @@ describe('Centro de Compras: lo anotado en el cuaderno se va al fondo', () => {
     expect(corteCuaderno()).toBeNull();
   });
 
+  it('el corte de la plata no queda colgado arriba cuando lo anotado se fue abajo', async () => {
+    // El corte separa lo que entra en el presupuesto de lo que no. Si todo lo
+    // que entraba está anotado y se fue al fondo, arriba del corte no queda
+    // nada y la línea aparece pegada al encabezado, separando el vacío de la
+    // lista. Lo encontró el dueño mirándolo en producción.
+    await montar('centro_compras', 'renderCentroCompras');
+    const tope = document.getElementById('cc-tope');
+    tipear(tope, '60000');           // entran los primeros nomás
+    await esperar(320);              // el tope se aplica con 250 ms de espera
+    for (let i = 0; i < 12; i++) await esperar();
+    const corteDePlata = () => document.querySelector('.cc-cutoff:not(.cc-cutoff-cuaderno)');
+    expect(corteDePlata(), 'con el tope puesto tiene que haber corte').toBeTruthy();
+
+    // La primera fila de la tabla es un producto, no el corte.
+    const primeraEsCorte = () => document.querySelector('#cc-tbody tr')
+      ?.classList.contains('cc-cutoff');
+    expect(primeraEsCorte()).toBe(false);
+
+    // Se anota todo lo que estaba arriba del corte.
+    let vueltas = 0;
+    while (vueltas++ < 6) {
+      const fila = document.querySelector('#cc-tbody tr[data-idx]:not(.cc-row-anotado)');
+      const corte = corteDePlata();
+      if (!fila || !corte || (corte.compareDocumentPosition(fila) & Node.DOCUMENT_POSITION_FOLLOWING)) break;
+      fila.querySelector('[data-action="anotar"]').click();
+      for (let i = 0; i < 12; i++) await esperar();
+    }
+    expect(primeraEsCorte(), 'el corte quedó colgado arriba de todo').toBe(false);
+    // En su lugar queda un aviso, que dice lo que de verdad pasa.
+    const aviso = document.querySelector('.cc-sinplata');
+    expect(aviso, 'sin nada que entre, tiene que avisar por qué').toBeTruthy();
+    // Y dice el motivo verdadero: la plata alcanzaba, lo que entraba está
+    // anotado más abajo. "No entra nada" sería mentira.
+    expect(aviso.textContent).toMatch(/ya lo anotaste/i);
+    expect(aviso.textContent).not.toMatch(/no entra nada/i);
+
+    // El tope se deja como estaba: es lo único de esta prueba que sobrevive al
+    // `beforeEach`, y con él puesto el de al lado ve otras cantidades.
+    tipear(tope, '');
+    await esperar(320);
+  });
+
   it('anotar algo no le cambia lo que hay que comprar', async () => {
     // El reparto de la plata se calcula sobre el orden por urgencia, antes de
     // mover nada. Lo anotado es justamente lo que ya decidió comprar: sería al
@@ -582,23 +624,21 @@ describe('Centro de Compras: lo anotado en el cuaderno se va al fondo', () => {
     await montar('centro_compras', 'renderCentroCompras');
     const fila = (nombre) => [...document.querySelectorAll('#cc-tbody tr[data-idx]')]
       .find(tr => tr.textContent.includes(nombre));
-    const datosDe = (nombre) => {
+    // Los números de la fila: los que deciden qué y cuánto comprar.
+    const numerosDe = (nombre) => {
       const tr = fila(nombre);
+      const celda = (n) => tr.querySelectorAll('td')[n]?.textContent.trim();
       return {
         cantidad: tr.querySelector('.cc-qty').value,
         urgencia: tr.querySelector('.cc-urg').textContent.trim(),
-        celdas: [...tr.querySelectorAll('td')].map(td => td.textContent.trim()).join('|'),
+        stock: celda(4), costo: celda(7), subtotal: celda(8), acumulado: celda(9),
       };
     };
-    const antes = datosDe('AAA PRIMERO');
+    const antes = numerosDe('AAA PRIMERO');
     await anotar('AAA PRIMERO');
-    const despues = datosDe('AAA PRIMERO');
-    expect(despues.cantidad).toBe(antes.cantidad);
-    expect(despues.urgencia).toBe(antes.urgencia);
-    // La única diferencia tiene que ser la marca del cuaderno, no los números.
+    expect(numerosDe('AAA PRIMERO')).toEqual(antes);
+    // Lo único que cambia es la marca.
     expect(fila('AAA PRIMERO').classList.contains('cc-row-anotado')).toBe(true);
-    expect(despues.celdas.replace(/en el cuaderno \d\d\/\d\d/, '').replace(/\s+/g, ' '))
-      .toBe(antes.celdas.replace(/\s+/g, ' '));
   });
 });
 
@@ -1018,7 +1058,7 @@ describe('Centro de Compras · lo que se viene por la época', () => {
     for (let i = 0; i < 6; i++) await esperar();
 
     const visibles = [...c.querySelectorAll('#cc-tbody tr')]
-      .filter(tr => !tr.className.includes('cc-cutoff') && !tr.querySelector('.cc-empty'));
+      .filter(tr => tr.hasAttribute('data-idx'));
     expect(visibles.length).toBeGreaterThan(0);
     expect(visibles.every(tr => tr.className.includes('cc-row-epoca'))).toBe(true);
   });
@@ -1148,7 +1188,7 @@ describe('Centro de Compras · lo que se viene por la época', () => {
     expect(det.textContent).toMatch(/faltan \d+ días/);
     // Y la lista queda filtrada a esa fecha (o dice que no hay nada).
     const visibles = [...c.querySelectorAll('#cc-tbody tr')]
-      .filter(tr => !tr.className.includes('cc-cutoff') && !tr.querySelector('.cc-empty'));
+      .filter(tr => tr.hasAttribute('data-idx'));
     expect(visibles.every(tr => tr.className.includes('cc-row-epoca'))).toBe(true);
   });
 
@@ -1188,7 +1228,7 @@ describe('Centro de Compras · lo que se viene por la época', () => {
     expect(det).toBeTruthy();
     expect(det.textContent).toContain('Día de la Madre');
     const visibles = [...c.querySelectorAll('#cc-tbody tr')]
-      .filter(tr => !tr.className.includes('cc-cutoff') && !tr.querySelector('.cc-empty'));
+      .filter(tr => tr.hasAttribute('data-idx'));
     expect(visibles.length).toBeGreaterThan(0);
     expect(visibles.every(tr => tr.className.includes('cc-row-epoca'))).toBe(true);
   });

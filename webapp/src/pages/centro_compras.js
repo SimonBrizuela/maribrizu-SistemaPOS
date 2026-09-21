@@ -1498,16 +1498,38 @@ function pintarFilas() {
   };
   arriba.forEach(emit);
   if (abajo.length) {
-    parts.push(`<tr class="cc-cutoff"><td colspan="10">
-      <span class="material-icons">content_cut</span>
-      Acá se acaba la plata (${money(disp)}) · lo de abajo no entra en el presupuesto</td></tr>`);
+    // El corte separa lo que entra en la plata de lo que no. Sin nada arriba no
+    // hay nada que separar y la línea quedaba pegada al encabezado, cortando el
+    // vacío. Eso pasa por dos motivos distintos y el cartel tiene que decir
+    // cuál es: o la plata no alcanza para nada de la lista, o alcanza pero lo
+    // que entraba ya está anotado y se fue al fondo. Decir "no entra nada"
+    // cuando entran veintisiete y están más abajo es peor que no decir nada.
+    const anotadosQueEntran = enElCuaderno.filter(i => s.rows[i].fits).length;
+    parts.push(arriba.length
+      ? `<tr class="cc-cutoff"><td colspan="10">
+          <span class="material-icons">content_cut</span>
+          Acá se acaba la plata (${money(disp)}) · lo de abajo no entra en el presupuesto</td></tr>`
+      : anotadosQueEntran
+      ? `<tr class="cc-sinplata"><td colspan="10">
+          <span class="material-icons">edit_note</span>
+          Todo lo que entra en ${money(disp)} ya lo anotaste · está abajo, en el cuaderno</td></tr>`
+      : `<tr class="cc-sinplata"><td colspan="10">
+          <span class="material-icons">info</span>
+          Con ${money(disp)} no entra nada de esta lista</td></tr>`);
     prevDoc = null;
     abajo.forEach(emit);
   }
   if (enElCuaderno.length) {
+    // Cuántos de los anotados entran en la plata. Sin esto quedan dibujados
+    // debajo del corte del presupuesto y parece que se quedaron afuera, cuando
+    // el reparto los cuenta igual: son los que ya decidió comprar.
+    const contados = enElCuaderno.filter(i => s.rows[i].fits).length;
+    const nota = contados
+      ? `${contados === enElCuaderno.length ? 'ya están' : `${contados} ya ${contados === 1 ? 'está' : 'están'}`} contados en el presupuesto`
+      : 'queda abajo para no taparte lo que falta mirar';
     parts.push(`<tr class="cc-cutoff cc-cutoff-cuaderno"><td colspan="10">
       <span class="material-icons">edit_note</span>
-      Esto ya lo anotaste en el cuaderno (${enElCuaderno.length}) · queda abajo para no taparte lo que falta mirar</td></tr>`);
+      Esto ya lo anotaste en el cuaderno (${enElCuaderno.length}) · ${nota}</td></tr>`);
     prevDoc = null;
     enElCuaderno.forEach(emit);
   }

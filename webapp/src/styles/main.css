@@ -5132,6 +5132,13 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
   border-color: var(--tint-green-fg);
 }
 .cc-cutoff-cuaderno .material-icons { color: var(--tint-green-fg); }
+/* Sin nada que entre en la plata no hay dos grupos que separar: es un aviso,
+   no un corte, y va sin las líneas punteadas que parten la tabla en dos. */
+.cc-sinplata td {
+  background: var(--surface-2); color: var(--text-muted);
+  font-weight: 600; font-size: 12px; padding: 6px 12px; text-align: center;
+}
+.cc-sinplata .material-icons { font-size: 15px !important; vertical-align: -3px; margin-right: 4px; }
 .cc-empty { text-align: center; padding: 40px !important; color: var(--text-muted); }
 .cc-empty .material-icons { font-size: 20px !important; vertical-align: -4px; margin-right: 6px; color: var(--success); }
 
