@@ -194,6 +194,35 @@ export async function saveComprasConfig(db, partial) {
   invalidateCache(COMPRAS_KEY);
 }
 
+// ── Temporadas de venta (config/temporadas_aprendidas) ────────────────────────
+// Lo que el sistema aprendió de las ventas viejas sobre cada fecha del año: qué
+// productos y qué colores se despegan de su ritmo normal para el Día de la
+// Madre, para el 6 de septiembre o para las patrias.
+//
+// Es un AGREGADO, no datos crudos: sacarlo pide recorrer las 36.000 ventas del
+// histórico, así que se calcula de vez en cuando (una vez por mes alcanza) y se
+// guarda acá. La lógica vive en `temporadas.js`; esto es sólo el guardado.
+//
+// Va en `config` y no en `control_config` a propósito: lo lee cualquiera con
+// sesión (el aviso del Centro de Compras) y lo escribe sólo admin, que es
+// exactamente lo que dice la regla de esa colección.
+const TEMPORADAS_KEY = 'config:temporadas_aprendidas';
+
+/** Carga el estudio de temporadas guardado (o null si nunca se hizo). */
+export async function loadTemporadasEstudio(db) {
+  return getCached(TEMPORADAS_KEY,
+    () => leerDocRapido(doc(db, 'config', 'temporadas_aprendidas'),
+      { cacheKey: TEMPORADAS_KEY, vacio: null, etiqueta: 'temporadas_aprendidas' }),
+    { ttl: 60 * 60 * 1000 });
+}
+
+/** Guarda el estudio de temporadas. Pisa el anterior: es un recálculo entero. */
+export async function saveTemporadasEstudio(db, estudio) {
+  await setDoc(doc(db, 'config', 'temporadas_aprendidas'),
+    { ...estudio, updatedAt: serverTimestamp() });
+  invalidateCache(TEMPORADAS_KEY);
+}
+
 /** Devuelve la fecha de inicio como string "YYYY-MM-DD" */
 export async function getFechaInicio(db) {
   const cfg = await loadControlConfig(db);

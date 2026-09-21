@@ -205,6 +205,17 @@ const _RE_INSUMO = /hoja|resma|papel|cartulina|opalina|acetato|etiqueta/i;
  * cualquier producto vendido estando en cero, así que por sí solo no alcanza
  * para decidir, pero mientras queden fichas viejas se lo respeta.
  */
+export function esIlimitado(p) { return _esIlimitado(p); }
+/**
+ * Un servicio no se repone: lo que se compra es su insumo.
+ *
+ * Se exporta para que el Centro de Compras aplique la MISMA regla en las
+ * recomendaciones por época. Sin esto, "IMPRESIÓN / FOTOCOPIA A4" entraba a la
+ * lista de compras con 637 unidades para el Día del Estudiante, que es algo que
+ * no se le compra a ningún mayorista.
+ */
+export function esServicio(p) { return _esServicio(p); }
+
 function _esIlimitado(p) {
   if (!p) return false;
   if (p.stock_ilimitado === true || p.stock_ilimitado === 1) return true;
@@ -940,6 +951,15 @@ export function obtenerCandidatosCompra(dias = 30) {
     }));
   }
   return out;
+}
+
+// Las dos ventanas de venta ya computadas (30 y 7 días), para que otra pantalla
+// pueda medir el ritmo de un producto sin volver a leer `ventas_por_dia`. Lo usa
+// el Centro de Compras para las recomendaciones por época: ahí hace falta el
+// ritmo de CUALQUIER producto del catálogo, no sólo el de los que están en
+// alerta. Devuelve la estructura de `computarVentanas`, que es de sólo lectura.
+export function obtenerVentanasVenta() {
+  return _ventanas;
 }
 
 export function onAlertasCambian(cb) {
