@@ -39,6 +39,8 @@ import { conTilde } from '../../tienda/src/formato.js';
 // pedido, tocar una foto) escribía el precio de lista y el producto perdía la
 // rebaja hasta la próxima corrida.
 import { aplicarDescuento, descuentosVigentes } from './tienda_descuentos_regla.js';
+import { esUsd, convertirProducto, cotizacionValida } from './precio_usd.js';
+import { valorActual as dolarConocido } from './cotizacion_memoria.js';
 
 /* ── Texto ────────────────────────────────────────────────────────────────
  * Copias de `normalizar`, `nombre_bonito` y `tokenizar` de sync_tienda.py.
@@ -287,7 +289,47 @@ export function imagenesDe(datos) {
 }
 
 /** El documento tal cual va a `tienda_productos`. Gemelo de armar_documento(). */
-export function documentoEspejo(datos) {
+// A cuánto está el dólar, para los productos que se compran en dólares.
+//
+// Vive acá y no se lee de Firebase a propósito: este módulo lo importan las
+// pruebas de la tienda y no puede depender de la base al importarse. El panel
+// lo deja puesto cuando consigue la cotización; el sync hace lo mismo del lado
+// de Python. Si nadie lo pone, queda en cero y el espejo publica el último
+// precio en pesos que quedó guardado en el catálogo, que es un precio válido.
+let _cotizacionUsd = 0;
+
+/** Deja la cotización con la que se arma el espejo de acá en adelante. */
+export function fijarCotizacionUsd(valor) {
+  _cotizacionUsd = cotizacionValida(valor) ? Number(valor) : 0;
+}
+
+/**
+ * Con qué dólar se está armando el espejo ahora mismo.
+ *
+ * Si nadie lo fijó a mano, el último que consiguió el panel: así una pantalla
+ * que espeja un producto sin saber nada de dólares igual publica el precio
+ * del día. `cotizacion_memoria.js` no toca Firebase, justamente para poder
+ * leerlo desde acá.
+ */
+export function cotizacionDelEspejo() {
+  if (_cotizacionUsd) return _cotizacionUsd;
+  try { return dolarConocido(); } catch (_) { return 0; }
+}
+
+/**
+ * El producto con el precio en pesos de hoy, si se compra en dólares.
+ *
+ * Sin esto, la vidriera publica el precio de la última vez que alguien tocó la
+ * ficha: el cliente ve uno y la caja le cobra otro.
+ */
+function conElPrecioDelDia(datos, cotizacion) {
+  if (!esUsd(datos)) return datos;
+  const cot = cotizacionValida(cotizacion) ? Number(cotizacion) : cotizacionDelEspejo();
+  return cot ? convertirProducto(datos, cot) : datos;
+}
+
+export function documentoEspejo(datos, cotizacion = 0) {
+  datos = conElPrecioDelDia(datos, cotizacion);
   const nombre = String(datos?.tienda_nombre ?? '').trim() || nombreBonito(datos?.nombre);
 
   let marca = String(datos?.marca ?? '').trim();

@@ -10,7 +10,7 @@
  * Esta prueba corre las dos sobre los mismos casos y compara campo por campo.
  * Es la única forma de que la duplicación sea segura.
  */
-import { describe, it, expect, beforeAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, afterEach, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
@@ -26,13 +26,19 @@ const casos = JSON.parse(readFileSync(join(AQUI, 'casos_espejo.json'), 'utf-8'))
 
 let documentoEspejo;
 let motivoDeNoPublicar;
+let fijarCotizacionUsd;
+let cotizacionDelEspejo;
+let recordarCotizacion;
+let olvidarCotizacion;
 let delSync = null;      // documentos armados por el sync
 let publicacionSync = null; // decisiones de se_publica() en el sync
 let porQueNo = '';
 
 beforeAll(async () => {
-  ({ documentoEspejo, motivoDeNoPublicar } =
+  ({ documentoEspejo, motivoDeNoPublicar, fijarCotizacionUsd, cotizacionDelEspejo } =
     await import('../../webapp/src/tienda_espejo.js'));
+  ({ recordarCotizacion, olvidarCotizacion } =
+    await import('../../webapp/src/cotizacion_memoria.js'));
 
   const { casos: crudo, porQueNo: motivo } =
     correrGuionDePython(GUION_ESPEJO, ['documentos', 'publicacion']);
@@ -73,7 +79,7 @@ describe('el documento del panel contra el del sync', () => {
       const esperado = exigirElSync().find(x => x.doc_id === caso.doc_id)?.documento;
       expect(esperado, `el sync no devolvió ${caso.doc_id}`).toBeDefined();
 
-      const obtenido = { ...documentoEspejo(caso.datos) };
+      const obtenido = { ...documentoEspejo(caso.datos, caso.cotizacion) };
       // `actualizado` es un centinela de cada SDK, no un valor comparable.
       delete obtenido.actualizado;
 
@@ -350,5 +356,59 @@ describe('rubros y subrubros, panel contra sync', () => {
     // Y "no publicar" le sigue ganando a todo, rubro prendido incluido.
     expect(motivoDeNoPublicar({ ...base, tienda_publicar: false }, ['COTILLON'], {}))
       .toBe('excluido a mano');
+  });
+});
+
+describe('los productos que se compran en dólares', () => {
+  const enDolares = () => casos.find(c => c.doc_id === 'p20').datos;
+  const rollo = () => casos.find(c => c.doc_id === 'p21').datos;
+
+  afterEach(() => {
+    fijarCotizacionUsd(0);
+    olvidarCotizacion();
+  });
+
+  it('salen al precio de hoy, no al que quedó guardado en la ficha', () => {
+    // El catálogo tiene $49.000 (dólar a 1.400). Con el dólar a 1.550 la
+    // vidriera tiene que mostrar $54.300, o el cliente ve un precio y la caja
+    // le cobra otro.
+    expect(documentoEspejo(enDolares(), 1550).precio).toBe(54300);
+  });
+
+  it('el panel no necesita pasar la cotización: usa la que ya consiguió', () => {
+    recordarCotizacion({ valor: 1550, tipo: 'blue', ts: Date.now() });
+    expect(cotizacionDelEspejo()).toBe(1550);
+    expect(documentoEspejo(enDolares()).precio).toBe(54300);
+  });
+
+  it('fijarla a mano le gana a la que hay en memoria', () => {
+    recordarCotizacion({ valor: 1550, tipo: 'blue', ts: Date.now() });
+    fijarCotizacionUsd(1600);
+    expect(documentoEspejo(enDolares()).precio).toBe(56000);
+  });
+
+  it('sin cotización sale el último precio en pesos, nunca cero', () => {
+    expect(documentoEspejo(enDolares()).precio).toBe(49000);
+    expect(documentoEspejo(enDolares(), 0).precio).toBe(49000);
+    expect(documentoEspejo(enDolares(), 'cualquier cosa').precio).toBe(49000);
+  });
+
+  it('en un rollo, el metro y el pack tienen cada uno su cuenta', () => {
+    const d = documentoEspejo(rollo(), 1550);
+    expect(d.precio).toBe(1860);          // el metro: 1,2 × 1550, sin centena
+    expect(d.precio_pack).toBe(77500);    // el rollo entero: 50 × 1550
+    expect(d.pack_contenido).toBe(50);
+  });
+
+  it('un producto en pesos no cambia aunque haya cotización', () => {
+    const enPesos = casos.find(c => c.doc_id === 'p1').datos;
+    expect(documentoEspejo(enPesos, 1550)).toEqual(documentoEspejo(enPesos, 0));
+  });
+
+  it('el producto que entra no se toca', () => {
+    const datos = enDolares();
+    const antes = JSON.stringify(datos);
+    documentoEspejo(datos, 1550);
+    expect(JSON.stringify(datos)).toBe(antes);
   });
 });

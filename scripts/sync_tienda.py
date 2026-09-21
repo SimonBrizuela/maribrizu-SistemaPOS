@@ -33,6 +33,10 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import firebase_admin
 from firebase_admin import credentials, firestore
 
+from pos_system.utils.precio_usd import (  # noqa: E402
+    convertir_producto, cotizacion_valida, es_usd,
+)
+
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # Productos internos del POS que no son mercaderia y no deben salir a la web.
@@ -535,7 +539,8 @@ def se_publica(datos, rubros_habilitados=None, subrubros_excluidos=None):
     return True, 'rubro habilitado'
 
 
-def armar_documento(doc_id, datos):
+def armar_documento(doc_id, datos, cotizacion=None):
+    datos = con_el_precio_del_dia(datos, cotizacion)
     nombre_publico = str(datos.get('tienda_nombre') or '').strip()
     nombre = nombre_publico or nombre_bonito(datos.get('nombre'))
 
@@ -717,6 +722,53 @@ def descuento_para(doc_id, doc, descuentos):
         elif d['alcance'] == 'producto' and d['objetivo'] == id_:
             elegido = d
     return elegido
+
+
+# ── A cuanto esta el dolar, para los productos que se compran en dolares ──
+#
+# Se lee de `config/cotizacion_usd` al empezar la corrida y queda puesto para
+# todo lo que se arme despues. Gemelo de `fijarCotizacionUsd()` en
+# webapp/src/tienda_espejo.js.
+#
+# Si no hay cotizacion, el espejo publica el ultimo precio en pesos que quedo
+# guardado en el catalogo: viejo, pero un precio valido. Nunca cero.
+_COTIZACION_USD = 0.0
+
+
+def fijar_cotizacion_usd(valor):
+    """Deja la cotizacion con la que se arma el espejo de aca en adelante."""
+    global _COTIZACION_USD
+    _COTIZACION_USD = float(valor) if cotizacion_valida(valor) else 0.0
+    return _COTIZACION_USD
+
+
+def cotizacion_del_espejo():
+    return _COTIZACION_USD
+
+
+def leer_cotizacion_usd(db):
+    """La cotizacion compartida, de Firestore. 0 si no hay o no se puede."""
+    try:
+        snap = db.collection('config').document('cotizacion_usd').get()
+        if not snap.exists:
+            return 0.0
+        valor = (snap.to_dict() or {}).get('valor')
+        return float(valor) if cotizacion_valida(valor) else 0.0
+    except Exception as e:
+        print(f'  No se pudo leer la cotizacion del dolar: {e}')
+        return 0.0
+
+
+def con_el_precio_del_dia(datos, cotizacion=None):
+    """El producto con el precio en pesos de hoy, si se compra en dolares.
+
+    Sin esto, la vidriera publica el precio de la ultima vez que alguien toco
+    la ficha: el cliente ve uno y la caja le cobra otro.
+    """
+    if not es_usd(datos):
+        return datos
+    cot = cotizacion if cotizacion_valida(cotizacion) else _COTIZACION_USD
+    return convertir_producto(datos, cot) if cot else datos
 
 
 def redondear_centena(v):
@@ -1188,6 +1240,14 @@ def main():
         for d in descuentos:
             signo = '%' if d['tipo'] == 'porcentaje' else '$'
             print(f"  {d['nombre']}: {d['valor']:g}{signo} en {d['alcance']} {d['objetivo']}")
+
+    # Lo importado se publica al precio de hoy. Si no hay cotizacion, sale con
+    # el ultimo precio en pesos que quedo guardado en el catalogo.
+    dolar = fijar_cotizacion_usd(leer_cotizacion_usd(db))
+    if dolar:
+        print(f'Dolar para los productos importados: ${dolar:,.2f}')
+    else:
+        print('Sin cotizacion del dolar: los importados salen con su ultimo precio en pesos')
 
     for doc in db.collection('catalogo').stream():
         total += 1

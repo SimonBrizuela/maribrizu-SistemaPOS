@@ -51,9 +51,22 @@
       "conjunto_precio_unidad": 600,
       "precio_venta": 5600,
       "conjunto_colores": [
-        { "color": "CELESTE", "unidades": 1, "restante": 2 },
-        { "color": "ROSA VIEJO", "unidades": 0, "restante": 5, "precio": 900 },
-        { "color": "DORADA", "unidades": 2, "restante": 0 }
+        {
+          "color": "CELESTE",
+          "unidades": 1,
+          "restante": 2
+        },
+        {
+          "color": "ROSA VIEJO",
+          "unidades": 0,
+          "restante": 5,
+          "precio": 900
+        },
+        {
+          "color": "DORADA",
+          "unidades": 2,
+          "restante": 0
+        }
       ]
     }
   },
@@ -73,8 +86,16 @@
       "conjunto_precio_unidad": 420,
       "precio_venta": 18000,
       "conjunto_colores": [
-        { "color": "PLATA", "unidades": 1, "restante": 0 },
-        { "color": "ORO VIEJO", "unidades": 0, "restante": 12 }
+        {
+          "color": "PLATA",
+          "unidades": 1,
+          "restante": 0
+        },
+        {
+          "color": "ORO VIEJO",
+          "unidades": 0,
+          "restante": 12
+        }
       ],
       "tienda_nombre": "Cordón de Lurex 6 mm",
       "tienda_descripcion": "Se corta del rollo, el largo que necesites.",
@@ -82,10 +103,18 @@
       "tienda_ofrecer_pack": true,
       "tienda_pack_nombre": "Rollo",
       "tienda_destacado": true,
-      "tienda_imagenes": ["https://ejemplo/cordon.webp"],
+      "tienda_imagenes": [
+        "https://ejemplo/cordon.webp"
+      ],
       "tienda_variedades": {
-        "plata": { "publicar": true, "nombre": "Plateado" },
-        "oro viejo": { "publicar": false, "nombre": null }
+        "plata": {
+          "publicar": true,
+          "nombre": "Plateado"
+        },
+        "oro viejo": {
+          "publicar": false,
+          "nombre": null
+        }
       }
     }
   },
@@ -187,9 +216,21 @@
       "conjunto_precio_unidad": 500,
       "precio_venta": 5400,
       "conjunto_colores": [
-        { "color": "ROJO", "unidades": 1, "restante": 3 },
-        { "color": "AZUL", "unidades": 0, "restante": 7 },
-        { "color": "VERDE", "unidades": 2, "restante": 0 }
+        {
+          "color": "ROJO",
+          "unidades": 1,
+          "restante": 3
+        },
+        {
+          "color": "AZUL",
+          "unidades": 0,
+          "restante": 7
+        },
+        {
+          "color": "VERDE",
+          "unidades": 2,
+          "restante": 0
+        }
       ],
       "tienda_imagenes": [
         "https://ejemplo/lapiz-portada.webp",
@@ -197,9 +238,21 @@
         "https://ejemplo/lapiz-caja.webp"
       ],
       "tienda_variedades": {
-        "rojo": { "publicar": true, "nombre": null, "imagen": "https://ejemplo/lapiz-rojo.webp" },
-        "azul": { "publicar": true, "nombre": "Azul Francia", "imagen": "  " },
-        "verde": { "publicar": true, "nombre": null, "imagen": null }
+        "rojo": {
+          "publicar": true,
+          "nombre": null,
+          "imagen": "https://ejemplo/lapiz-rojo.webp"
+        },
+        "azul": {
+          "publicar": true,
+          "nombre": "Azul Francia",
+          "imagen": "  "
+        },
+        "verde": {
+          "publicar": true,
+          "nombre": null,
+          "imagen": null
+        }
       }
     }
   },
@@ -261,9 +314,68 @@
       "conjunto_precio_unidad": 312.5,
       "precio_venta": 3125.5,
       "conjunto_colores": [
-        { "color": "CELESTE", "unidades": 2, "restante": 0, "precio": 1874.5 },
-        { "color": "PLATEADO", "unidades": 1, "restante": 3, "precio": 126.5 }
+        {
+          "color": "CELESTE",
+          "unidades": 2,
+          "restante": 0,
+          "precio": 1874.5
+        },
+        {
+          "color": "PLATEADO",
+          "unidades": 1,
+          "restante": 3,
+          "precio": 126.5
+        }
       ]
+    }
+  },
+  {
+    "que_prueba": "Producto que se compra en dolares: sale al precio de hoy, no al guardado",
+    "doc_id": "p20",
+    "cotizacion": 1550,
+    "datos": {
+      "nombre": "ARGOLLITAS CHIQUITAS DE PLATA",
+      "codigo": "988155",
+      "marca": "SIN MARCA",
+      "rubro": "ACCESORIOS",
+      "categoria": "AROS",
+      "sub_rubro": "AROS",
+      "estado": "activo",
+      "moneda_costo": "USD",
+      "costo_usd": 10,
+      "precio_usd": 35,
+      "precio_venta": 49000,
+      "costo": 14000,
+      "stock": 3
+    }
+  },
+  {
+    "que_prueba": "Rollo en dolares: el metro y el rollo entero, cada uno con su cuenta",
+    "doc_id": "p21",
+    "cotizacion": 1550,
+    "datos": {
+      "nombre": "CINTA IMPORTADA 20 MM",
+      "codigo": "988200",
+      "marca": "SIN MARCA",
+      "rubro": "MERCERIA",
+      "categoria": "CINTAS",
+      "sub_rubro": "CINTAS",
+      "estado": "activo",
+      "moneda_costo": "USD",
+      "costo_usd": 20,
+      "precio_usd": 50,
+      "conjunto_precio_unidad_usd": 1.2,
+      "precio_venta": 70000,
+      "costo": 28000,
+      "conjunto_precio_unidad": 1680,
+      "es_conjunto": true,
+      "conjunto_tipo": "rollo",
+      "conjunto_unidad_medida": "metros",
+      "conjunto_contenido": 50,
+      "conjunto_unidades": 2,
+      "conjunto_restante": 0,
+      "conjunto_total": 100,
+      "stock": 2
     }
   }
 ]

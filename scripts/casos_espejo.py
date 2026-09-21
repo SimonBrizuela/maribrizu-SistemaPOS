@@ -656,7 +656,10 @@ def main():
 
     salida = []
     for caso in casos:
-        doc = armar_documento(caso['doc_id'], caso['datos'])
+        # La cotizacion viaja en el caso: los productos que se compran en
+        # dolares se publican al precio del dia, y el panel tiene que llegar
+        # al mismo numero con el mismo dolar.
+        doc = armar_documento(caso['doc_id'], caso['datos'], caso.get('cotizacion'))
         doc.pop('actualizado', None)
         salida.append({'doc_id': caso['doc_id'], 'documento': doc})
 

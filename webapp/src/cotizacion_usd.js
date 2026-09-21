@@ -28,6 +28,14 @@
  */
 import { doc, getDoc, setDoc, onSnapshot } from 'firebase/firestore';
 import { cotizacionValida } from './precio_usd.js';
+import {
+  cotizacionEnMemoria, valorActual, recordarCotizacion, olvidarCotizacion,
+} from './cotizacion_memoria.js';
+
+// El último valor conocido vive en `cotizacion_memoria.js`, sin Firebase, para
+// que lo pueda leer `tienda_espejo.js` (que lo importan las pruebas de la
+// tienda). Se reexporta desde acá para no tener que saber eso en cada pantalla.
+export { cotizacionEnMemoria, valorActual };
 
 // De dónde sale cada dólar. Dos proveedores y no uno: el día que el primero
 // deje de andar, el local no se queda sin poder actualizar los precios de lo
@@ -67,10 +75,6 @@ const VENTANA_DESFASAJE_MS = 4000;
 // Cuánto se espera a la API antes de dejarlo por imposible.
 const TIMEOUT_MS = 6000;
 
-// Para poder abrir el panel y ver un valor sin esperar a Firestore.
-const CLAVE_LOCAL = 'cotizacion_usd';
-
-let _enMemoria = null;       // lo último que se leyó o escribió
 let _pidiendo = null;        // promesa en curso, para no salir dos veces
 
 /** Lo que venga leído como número. */
@@ -134,31 +138,7 @@ export function estaVencida(cot) {
   return edad > (cot.refrescoMinutos || REFRESCO_MINUTOS);
 }
 
-/** Lo último que se sabe, sin pedirle nada a nadie. */
-export function cotizacionEnMemoria() {
-  if (_enMemoria) return _enMemoria;
-  try {
-    const guardado = JSON.parse(localStorage.getItem(CLAVE_LOCAL) || 'null');
-    if (guardado && cotizacionValida(guardado.valor)) {
-      _enMemoria = guardado;
-      return guardado;
-    }
-  } catch (_) { /* el navegador puede tener el almacenamiento bloqueado */ }
-  return null;
-}
-
-/** El valor de ahora para calcular un precio. 0 si todavía no hay ninguno. */
-export function valorActual() {
-  const c = cotizacionEnMemoria();
-  return c && cotizacionValida(c.valor) ? Number(c.valor) : 0;
-}
-
-function recordar(cot) {
-  if (!cot) return cot;
-  _enMemoria = cot;
-  try { localStorage.setItem(CLAVE_LOCAL, JSON.stringify(cot)); } catch (_) { /* privado */ }
-  return cot;
-}
+const recordar = recordarCotizacion;
 
 /** El documento de Firestore. null si no existe o no se pudo leer. */
 export async function leerCotizacion(db) {
@@ -319,7 +299,6 @@ export async function usarTipo(db, tipo) {
 
 /** Solo para las pruebas: vuelve a empezar de cero. */
 export function _olvidarTodo() {
-  _enMemoria = null;
   _pidiendo = null;
-  try { localStorage.removeItem(CLAVE_LOCAL); } catch (_) { /* privado */ }
+  olvidarCotizacion();
 }
