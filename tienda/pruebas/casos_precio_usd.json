@@ -1,0 +1,308 @@
+{
+  "_lea_esto": [
+    "Los casos con los que se comparan las dos cuentas del precio en dolares:",
+    "`webapp/src/precio_usd.js` (panel y espejo de la tienda) y",
+    "`pos_system/utils/precio_usd.py` (POS y sync). Cada caso trae lo que tiene",
+    "que dar; `precio_usd.test.js` corre el JS contra eso Y contra lo que",
+    "devuelve el Python por `scripts/casos_precio_usd.py`. Si alguna de las dos",
+    "se desvia, la prueba falla y dice cual.",
+    "",
+    "Caso nuevo: agregarlo aca. No hace falta tocar nada mas."
+  ],
+  "casos": [
+    {
+      "que": "un producto en pesos no se toca, aunque la cotizacion este cargada",
+      "cotizacion": 1420,
+      "producto": {
+        "nombre": "CUADERNO RIVADAVIA",
+        "costo": 4145,
+        "precio_venta": 14500
+      },
+      "espera": {
+        "costo": 4145,
+        "precio_venta": 14500
+      }
+    },
+    {
+      "que": "el precio en dolares por la cotizacion, redondeado a la centena",
+      "cotizacion": 1420,
+      "producto": {
+        "nombre": "ARGOLLITAS CHIQUITAS DE PLATA",
+        "moneda_costo": "USD",
+        "costo_usd": 10,
+        "precio_usd": 35,
+        "costo": 0,
+        "precio_venta": 0
+      },
+      "espera": {
+        "costo": 14200,
+        "precio_venta": 49700
+      }
+    },
+    {
+      "que": "un precio que no cae redondo baja a la centena de abajo",
+      "cotizacion": 1420,
+      "producto": {
+        "moneda_costo": "USD",
+        "costo_usd": 2.9057,
+        "precio_usd": 10.17,
+        "costo": 1,
+        "precio_venta": 1
+      },
+      "espera": {
+        "costo": 4126.09,
+        "precio_venta": 14400
+      }
+    },
+    {
+      "que": "y uno que pasa la mitad sube a la de arriba",
+      "cotizacion": 1420,
+      "producto": {
+        "moneda_costo": "USD",
+        "precio_usd": 10.25,
+        "precio_venta": 1
+      },
+      "espera": {
+        "precio_venta": 14600
+      }
+    },
+    {
+      "que": "sin cotizacion se vende con el ultimo precio en pesos, nunca en cero",
+      "cotizacion": 0,
+      "producto": {
+        "moneda_costo": "USD",
+        "costo_usd": 10,
+        "precio_usd": 35,
+        "costo": 13000,
+        "precio_venta": 45500
+      },
+      "espera": {
+        "costo": 13000,
+        "precio_venta": 45500
+      }
+    },
+    {
+      "que": "una cotizacion absurda no multiplica los precios del local",
+      "cotizacion": 2000000,
+      "producto": {
+        "moneda_costo": "USD",
+        "precio_usd": 35,
+        "precio_venta": 45500
+      },
+      "espera": {
+        "precio_venta": 45500
+      }
+    },
+    {
+      "que": "una cotizacion negativa tampoco",
+      "cotizacion": -1420,
+      "producto": {
+        "moneda_costo": "USD",
+        "precio_usd": 35,
+        "precio_venta": 45500
+      },
+      "espera": {
+        "precio_venta": 45500
+      }
+    },
+    {
+      "que": "marcado en dolares pero sin precio cargado: queda como estaba",
+      "cotizacion": 1420,
+      "producto": {
+        "moneda_costo": "USD",
+        "costo": 4145,
+        "precio_venta": 14500
+      },
+      "espera": {
+        "costo": 4145,
+        "precio_venta": 14500
+      }
+    },
+    {
+      "que": "'usd' en minuscula tambien es un producto en dolares",
+      "cotizacion": 1420,
+      "producto": {
+        "moneda_costo": "usd",
+        "precio_usd": 35,
+        "precio_venta": 1
+      },
+      "espera": {
+        "precio_venta": 49700
+      }
+    },
+    {
+      "que": "los numeros cargados como texto se leen igual",
+      "cotizacion": "1420",
+      "producto": {
+        "moneda_costo": "USD",
+        "costo_usd": "10",
+        "precio_usd": "35",
+        "costo": 0,
+        "precio_venta": 0
+      },
+      "espera": {
+        "costo": 14200,
+        "precio_venta": 49700
+      }
+    },
+    {
+      "que": "un precio de centavos cae a la decena en vez de saltar a 100",
+      "cotizacion": 1420,
+      "producto": {
+        "moneda_costo": "USD",
+        "precio_usd": 0.03,
+        "precio_venta": 1
+      },
+      "espera": {
+        "precio_venta": 40
+      }
+    },
+    {
+      "que": "la fila de SQLite del POS (price/cost) se convierte igual",
+      "cotizacion": 1420,
+      "producto": {
+        "name": "ARGOLLITAS",
+        "moneda_costo": "USD",
+        "costo_usd": 10,
+        "precio_usd": 35,
+        "price": 45500,
+        "cost": 13000
+      },
+      "espera": {
+        "price": 49700,
+        "cost": 14200
+      }
+    },
+    {
+      "que": "el precio por metro de un rollo NO se redondea a la centena",
+      "cotizacion": 1420,
+      "producto": {
+        "moneda_costo": "USD",
+        "es_conjunto": true,
+        "conjunto_tipo": "rollo",
+        "conjunto_unidad_medida": "metros",
+        "conjunto_contenido": 50,
+        "precio_usd": 35,
+        "conjunto_precio_unidad_usd": 0.85,
+        "precio_venta": 1,
+        "conjunto_precio_unidad": 1
+      },
+      "espera": {
+        "precio_venta": 49700,
+        "conjunto_precio_unidad": 1207
+      }
+    },
+    {
+      "que": "cada variedad se convierte con sus propios precios en dolares",
+      "cotizacion": 1420,
+      "producto": {
+        "moneda_costo": "USD",
+        "es_conjunto": true,
+        "conjunto_tipo": "pack",
+        "conjunto_contenido": 12,
+        "precio_usd": 35,
+        "precio_venta": 1,
+        "conjunto_colores": [
+          {
+            "color": "Plata",
+            "unidades": 3,
+            "restante": 2,
+            "costo_usd": 10,
+            "precio_pack_usd": 35,
+            "precio_usd": 3.4,
+            "costo": 1,
+            "precio_pack": 1,
+            "precio": 1
+          },
+          {
+            "color": "Dorado",
+            "unidades": 1,
+            "restante": 0,
+            "precio_pack_usd": 41.5,
+            "precio_pack": 1
+          },
+          {
+            "color": "Bronce",
+            "unidades": 2,
+            "restante": 0,
+            "precio_pack": 22000
+          }
+        ]
+      },
+      "espera": {
+        "precio_venta": 49700,
+        "conjunto_colores": [
+          {
+            "color": "Plata",
+            "unidades": 3,
+            "restante": 2,
+            "costo_usd": 10,
+            "precio_pack_usd": 35,
+            "precio_usd": 3.4,
+            "costo": 14200,
+            "precio_pack": 49700,
+            "precio": 4828
+          },
+          {
+            "color": "Dorado",
+            "unidades": 1,
+            "restante": 0,
+            "precio_pack_usd": 41.5,
+            "precio_pack": 58900
+          },
+          {
+            "color": "Bronce",
+            "unidades": 2,
+            "restante": 0,
+            "precio_pack": 22000
+          }
+        ]
+      }
+    },
+    {
+      "que": "una variedad sin precio propio se queda con el que tenia en pesos",
+      "cotizacion": 1420,
+      "producto": {
+        "moneda_costo": "USD",
+        "es_conjunto": true,
+        "precio_usd": 35,
+        "precio_venta": 1,
+        "conjunto_colores": [
+          { "color": "Unico", "unidades": 5, "restante": 0 }
+        ]
+      },
+      "espera": {
+        "precio_venta": 49700,
+        "conjunto_colores": [
+          { "color": "Unico", "unidades": 5, "restante": 0 }
+        ]
+      }
+    },
+    {
+      "que": "un producto en dolares con variedades pero sin cotizacion no cambia nada",
+      "cotizacion": 0,
+      "producto": {
+        "moneda_costo": "USD",
+        "es_conjunto": true,
+        "precio_usd": 35,
+        "precio_venta": 45500,
+        "conjunto_colores": [
+          { "color": "Plata", "precio_pack_usd": 35, "precio_pack": 45500 }
+        ]
+      },
+      "espera": {
+        "precio_venta": 45500,
+        "conjunto_colores": [
+          { "color": "Plata", "precio_pack_usd": 35, "precio_pack": 45500 }
+        ]
+      }
+    }
+  ],
+  "precio_desde_costo": [
+    { "que": "costo por margen", "costo_usd": 10, "margen": 250, "espera": 35 },
+    { "que": "margen cero es el costo", "costo_usd": 12.5, "margen": 0, "espera": 12.5 },
+    { "que": "sin costo no hay precio", "costo_usd": 0, "margen": 250, "espera": 0 },
+    { "que": "con decimales, a cuatro", "costo_usd": 2.9057, "margen": 250, "espera": 10.17 },
+    { "que": "un margen raro no rompe", "costo_usd": 3.33, "margen": 37.5, "espera": 4.5788 }
+  ]
+}
