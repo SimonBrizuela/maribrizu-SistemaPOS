@@ -10,6 +10,9 @@ import { partesDeVenta } from '../medios_de_pago.js';
 // Los renglones fraccionados llegan con el nombre decorado y no cruzan contra
 // el catálogo si se los busca tal cual.
 import { buscarPorNombre, parseNombreItem } from '../nombre_item.js';
+// El almanaque de fechas que mueven venta. Es una cuenta, no una lectura: no
+// agrega nada al arranque del Dashboard.
+import { temporadasProximas } from '../temporadas.js';
 
 /** El nombre del producto de un renglón, sin la variedad ni la presentación. */
 function nombreBaseDelItem(it) {
@@ -76,6 +79,12 @@ export async function renderDashboard(container, db) {
   // parchean en el shell con stagger — los datos parecen "llegar" uno por uno
   // en lugar de aparecer todos a la vez.
   container.innerHTML = renderDashboardShell();
+
+  // "Ver qué conviene comprar" del aviso de fechas: lleva al Centro de Compras,
+  // que es donde está la lista.
+  container.querySelector('[data-action="ir-compras"]')?.addEventListener('click', () => {
+    if (typeof window.navigateToPage === 'function') window.navigateToPage('centro_compras');
+  });
 
   const hoyStr = todayAR();
   const hoy = new Date(hoyStr + 'T00:00:00-03:00');
@@ -1428,8 +1437,44 @@ function chartCardShell(title, sub, canvasId, height) {
     </div>`;
 }
 
+// ── Aviso de las fechas que se vienen ─────────────────────────────────────────
+// El dueño pidió (21/09/2026) que el sistema le recuerde DOS MESES ANTES las
+// fechas que mueven venta, para llegar a encargarle al mayorista. El Centro de
+// Compras ya arma la lista; esto es lo que hace que se entere sin ir a buscarla:
+// el Dashboard es la primera pantalla que abre a la mañana.
+//
+// No hace ninguna lectura extra: el almanaque es una cuenta, no un dato.
+function avisoTemporadasHtml() {
+  let proximas = [];
+  try {
+    proximas = temporadasProximas(todayAR()).slice(0, 2);
+  } catch (e) {
+    return '';
+  }
+  if (!proximas.length) return '';
+  const chips = proximas.map(p => {
+    const cuando = p.diasFaltan <= 0 ? 'es hoy'
+      : p.diasFaltan === 1 ? 'es mañana'
+      : `faltan ${p.diasFaltan} días`;
+    return `<span class="dash-epoca-item${p.enVenta ? ' is-ya' : ''}">
+      <b>${escapeHtml(p.nombre)}</b> · ${cuando}</span>`;
+  }).join('');
+  return `
+    <div class="dash-epocas">
+      <span class="material-icons">event</span>
+      <div class="dash-epocas-txt">
+        <span class="dash-epocas-tit">Se viene</span>
+        ${chips}
+      </div>
+      <button type="button" class="dash-epocas-btn" data-action="ir-compras">
+        Ver qué conviene comprar <span class="material-icons">chevron_right</span>
+      </button>
+    </div>`;
+}
+
 function renderDashboardShell() {
   return `
+    ${avisoTemporadasHtml()}
     <div class="dash-kpis">
       ${kpiCardShell('ventas-hoy',       'Ventas Hoy',         'today',           'kpi-blue')}
       ${kpiCardShell('efectivo-hoy',     'Efectivo Hoy',       'payments',        'kpi-green')}
