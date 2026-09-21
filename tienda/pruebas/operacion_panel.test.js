@@ -1013,6 +1013,35 @@ describe('Centro de Compras · lo que se viene por la época', () => {
     expect(c.querySelectorAll('#cc-tbody tr').length).toBe(todas);
   });
 
+  it('el aviso abre el Centro de Compras directamente en esa fecha', async () => {
+    // El camino completo de lo que pidió el dueño: "que clickee y se le abra
+    // con toda la info". El aviso deja la fecha en `window.__ccAbrirFecha` y
+    // navega; la pantalla tiene que levantarla al montarse, abrir el panel y
+    // dejar la lista filtrada a eso.
+    window.__ccAbrirFecha = 'dia_madre';
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    for (let i = 0; i < 10; i++) await esperar();
+
+    expect(window.__ccAbrirFecha, 'se consume, no queda pegada').toBeFalsy();
+    expect(c.querySelector('#cc-fechas').style.display).not.toBe('none');
+    const abierta = c.querySelector('.cc-fecha.is-on');
+    expect(abierta, 'la fecha queda marcada').toBeTruthy();
+    expect(abierta.textContent).toContain('Día de la Madre');
+    const det = c.querySelector('.cc-fecha-det');
+    expect(det).toBeTruthy();
+    expect(det.textContent).toContain('Día de la Madre');
+    const visibles = [...c.querySelectorAll('#cc-tbody tr')]
+      .filter(tr => !tr.className.includes('cc-cutoff') && !tr.querySelector('.cc-empty'));
+    expect(visibles.length).toBeGreaterThan(0);
+    expect(visibles.every(tr => tr.className.includes('cc-row-epoca'))).toBe(true);
+  });
+
+  it('entrar sin pedir fecha no abre el panel solo', async () => {
+    window.__ccAbrirFecha = null;
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    expect(c.querySelector('#cc-fechas').style.display).toBe('none');
+  });
+
   it('un producto con variedades no se propone dos veces', async () => {
     // El índice de stock tiene una entrada por variedad Y una por el producto
     // entero: sin cuidado, la bolsa de organza salía una vez por color y otra

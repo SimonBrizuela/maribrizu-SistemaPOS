@@ -146,6 +146,10 @@ export function initAvisosTemporada({ navegarA = null, demoraMs = 2500 } = {}) {
   if (_timer) return;
   _timer = setTimeout(() => {
     _timer = null;
+    // Sólo si el panel sigue en pantalla. Entre que se agenda y que dispara
+    // pueden pasar cosas —cerrar sesión, recargar— y un aviso pegado a un
+    // documento que ya no es el del panel no le sirve a nadie.
+    if (!document.getElementById('app')) return;
     mostrarAvisosTemporada({ navegar: navegarA });
   }, demoraMs);
 }

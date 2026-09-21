@@ -120,6 +120,7 @@ describe('el aviso en pantalla', () => {
 
   it('el arranque no avisa al instante: espera a que la pantalla cargue', () => {
     vi.useFakeTimers();
+    document.body.innerHTML = '<div id="app"></div>';
     initAvisosTemporada({ demoraMs: 2500 });
     expect(document.querySelector('.ll-toast')).toBeNull();
     vi.advanceTimersByTime(2600);
@@ -131,6 +132,7 @@ describe('el aviso en pantalla', () => {
     // los avisos se apilaban y, en las pruebas, el temporizador sobrevivía a la
     // prueba y agregaba la pila de avisos a un documento que ya era otro.
     vi.useFakeTimers();
+    document.body.innerHTML = '<div id="app"></div>';
     initAvisosTemporada({ demoraMs: 2500 });
     initAvisosTemporada({ demoraMs: 2500 });
     initAvisosTemporada({ demoraMs: 2500 });
@@ -138,8 +140,19 @@ describe('el aviso en pantalla', () => {
     expect(document.querySelectorAll('#llToastStack')).toHaveLength(1);
   });
 
+  it('si el panel ya no está en pantalla, no pinta nada', () => {
+    // El temporizador vive 2,5 s: en el medio se puede cerrar sesión o recargar,
+    // y el aviso no tiene que aparecer pegado a un documento que ya es otro.
+    vi.useFakeTimers();
+    document.body.innerHTML = '';          // sin #app
+    initAvisosTemporada({ demoraMs: 2500 });
+    vi.advanceTimersByTime(3000);
+    expect(document.querySelector('.ll-toast')).toBeNull();
+  });
+
   it('se puede cancelar antes de que salga', () => {
     vi.useFakeTimers();
+    document.body.innerHTML = '<div id="app"></div>';
     initAvisosTemporada({ demoraMs: 2500 });
     detenerAvisosTemporada();
     vi.advanceTimersByTime(3000);

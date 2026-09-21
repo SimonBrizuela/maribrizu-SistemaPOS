@@ -749,7 +749,9 @@ export async function renderCentroCompras(container, db) {
     window.__ccAbrirFecha = null;
     _state.fechasOpen = true;
     abrirFecha(pedida);
-    document.getElementById('cc-fechas')?.scrollIntoView({ block: 'nearest' });
+    // Acomodar la vista es lo último y lo menos importante: si falla no puede
+    // llevarse puesta la pantalla entera, que es lo que el dueño vino a ver.
+    try { document.getElementById('cc-fechas')?.scrollIntoView?.({ block: 'nearest' }); } catch (_) {}
   }
 }
 
