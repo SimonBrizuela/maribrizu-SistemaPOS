@@ -289,8 +289,14 @@ export function temporadasProximas(hoyYmd, { avisoDias = null, temporadas = TEMP
       if (!v) continue;
       if (v.hasta < hoy) continue;               // ya pasó: no hay nada que comprar
       const faltan = diasEntre(hoy, v.fecha);
-      const plazo = avisoDias != null ? Number(avisoDias) : (Number(t.aviso) || AVISO_DEFAULT_DIAS);
-      if (faltan > plazo) continue;              // todavía falta demasiado
+      // El plazo de aviso es de la FECHA: cuántos días antes hay que empezar a
+      // comprarla. `avisoDias` sólo estira hasta dónde se mira para listar (el
+      // panel "Próximas fechas" pide el año entero) y no lo reemplaza: si lo
+      // pisara, todas las fechas parecerían urgentes y la cercanía con la que
+      // se calcula la urgencia saldría medida contra un año.
+      const plazo = Number(t.aviso) || AVISO_DEFAULT_DIAS;
+      const hastaDonde = avisoDias != null ? Number(avisoDias) : plazo;
+      if (faltan > hastaDonde) continue;          // todavía falta demasiado
       out.push({
         id: t.id, grupo: grupoDe(t), nombre: t.nombre, nota: t.nota || '',
         anio: y, fecha: v.fecha, desde: v.desde, hasta: v.hasta,

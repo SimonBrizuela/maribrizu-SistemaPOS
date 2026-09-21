@@ -134,6 +134,18 @@ describe('qué fechas se vienen', () => {
     expect(prox.find(p => p.id === 'dia_madre').enVenta).toBe(true);
   });
 
+  it('mirar el año entero no convierte todo en urgente', () => {
+    // El panel "Próximas fechas" pide las fechas de los doce meses. El plazo de
+    // aviso tiene que seguir siendo el de CADA fecha: si el override lo pisara,
+    // la Navidad en abril figuraría igual de urgente que lo de la semana que
+    // viene, y la cercanía se mediría contra un año entero.
+    const todas = temporadasProximas('2026-10-01', { avisoDias: 366 });
+    expect(todas.length).toBeGreaterThan(15);
+    const navidad = todas.find(p => p.id === 'navidad');
+    expect(navidad.plazoAviso).toBe(temporadaPorId('navidad').aviso);
+    expect(navidad.diasFaltan).toBeGreaterThan(navidad.plazoAviso);
+  });
+
   it('una fecha vacía no rompe nada', () => {
     expect(temporadasProximas('')).toEqual([]);
     expect(temporadasProximas(null)).toEqual([]);

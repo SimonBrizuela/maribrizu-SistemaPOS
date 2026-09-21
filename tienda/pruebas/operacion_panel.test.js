@@ -953,6 +953,66 @@ describe('Centro de Compras · lo que se viene por la época', () => {
     expect(JSON.stringify(doc).length).toBeLessThan(1024 * 1024);
   });
 
+  it('el botón "Próximas fechas" abre todas las fechas del año, no sólo las de dos meses', async () => {
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    expect(c.querySelector('#cc-fechas').style.display).toBe('none');
+
+    c.querySelector('[data-action="fechas"]').click();
+    for (let i = 0; i < 6; i++) await esperar();
+
+    const botones = [...c.querySelectorAll('.cc-fecha')];
+    // Las 22 del almanaque: el aviso es a dos meses, pero acá se ven todas.
+    expect(botones.length).toBeGreaterThan(15);
+    const textos = botones.map(b => b.textContent).join(' | ');
+    expect(textos).toContain('Día de la Madre');
+    expect(textos).toContain('Navidad');          // a casi tres meses
+    expect(textos).toContain('Vuelta a clases');  // recién en marzo
+
+    // El color dice en qué está cada una.
+    expect(c.querySelector('.cc-fecha.is-cerca'), 'alguna dentro del aviso').toBeTruthy();
+    expect(c.querySelector('.cc-fecha.is-lejos'), 'alguna todavía lejos').toBeTruthy();
+  });
+
+  it('abrir una fecha lejana calcula qué comprar y filtra la lista', async () => {
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    c.querySelector('[data-action="fechas"]').click();
+    for (let i = 0; i < 6; i++) await esperar();
+
+    // Reyes es el 6 de enero: a más de tres meses, fuera del aviso automático.
+    const reyes = [...c.querySelectorAll('.cc-fecha')]
+      .find(b => b.textContent.includes('Reyes'));
+    expect(reyes).toBeTruthy();
+    reyes.click();
+    for (let i = 0; i < 10; i++) await esperar();
+
+    const det = c.querySelector('.cc-fecha-det');
+    expect(det, 'se abre el detalle de la fecha').toBeTruthy();
+    expect(det.textContent).toContain('Reyes');
+    expect(det.textContent).toMatch(/faltan \d+ días/);
+    // Y la lista queda filtrada a esa fecha (o dice que no hay nada).
+    const visibles = [...c.querySelectorAll('#cc-tbody tr')]
+      .filter(tr => !tr.className.includes('cc-cutoff') && !tr.querySelector('.cc-empty'));
+    expect(visibles.every(tr => tr.className.includes('cc-row-epoca'))).toBe(true);
+  });
+
+  it('volver a tocar la fecha abierta saca el filtro', async () => {
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    c.querySelector('[data-action="fechas"]').click();
+    for (let i = 0; i < 6; i++) await esperar();
+    const madre = [...c.querySelectorAll('.cc-fecha')]
+      .find(b => b.textContent.includes('Día de la Madre'));
+    const todas = c.querySelectorAll('#cc-tbody tr').length;
+
+    madre.click();
+    for (let i = 0; i < 8; i++) await esperar();
+    expect(c.querySelector('.cc-fecha.is-on')).toBeTruthy();
+
+    c.querySelector('.cc-fecha.is-on').click();
+    for (let i = 0; i < 8; i++) await esperar();
+    expect(c.querySelector('.cc-fecha.is-on')).toBeNull();
+    expect(c.querySelectorAll('#cc-tbody tr').length).toBe(todas);
+  });
+
   it('un producto con variedades no se propone dos veces', async () => {
     // El índice de stock tiene una entrada por variedad Y una por el producto
     // entero: sin cuidado, la bolsa de organza salía una vez por color y otra

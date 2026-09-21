@@ -122,10 +122,19 @@ export function indiceDeStock(productos) {
  * ahí sale el ritmo de venta que necesitan las corazonadas.
  */
 export function recomendacionesDeTemporada({
-  estudio, productos, ventanas, hoy = null, topePorFecha = 25,
+  estudio, productos, ventanas, hoy = null, topePorFecha = 25, extraIds = [],
 } = {}) {
   const hoyYmd = hoy || hoyAR();
   const proximas = temporadasProximas(hoyYmd);
+  // Fechas que el dueño abrió a mano desde "Próximas fechas", aunque todavía
+  // falte más que el plazo de aviso: si las quiere mirar en abril, se calculan.
+  const pedidas = new Set((extraIds || []).filter(Boolean));
+  if (pedidas.size) {
+    const yaEstan = new Set(proximas.map(p => p.id));
+    for (const t of fechasDelAnio(hoyYmd)) {
+      if (pedidas.has(t.id) && !yaEstan.has(t.id)) proximas.push(t);
+    }
+  }
   if (!proximas.length) return { proximas: [], recomendaciones: [] };
 
   const idx = indiceDeStock(productos);
@@ -176,6 +185,31 @@ export function recomendacionesDeTemporada({
   return {
     proximas: proximas.map(p => ({ ...p, medida: !!estudio?.temporadas?.[p.grupo || p.id] })),
     recomendaciones: [...mejorPorClave.values()].sort((a, b) => b.urgencia - a.urgencia),
+  };
+}
+
+/**
+ * TODAS las fechas del almanaque que vienen en los próximos doce meses, no sólo
+ * las que están a dos meses.
+ *
+ * Es lo que muestra el botón "Próximas fechas" del Centro de Compras: el dueño
+ * quiso poder abrir cualquiera —aunque falte medio año— y ver qué convendría
+ * comprar para esa. El aviso automático sigue siendo a dos meses; esto es para
+ * ir a mirar.
+ */
+export function fechasDelAnio(hoy = null) {
+  return temporadasProximas(hoy || hoyAR(), { avisoDias: 366 });
+}
+
+/** Qué sabe el estudio de una fecha: si está medida y con cuántas pasadas. */
+export function estadoDeFecha(estudio, temp) {
+  const datos = estudio?.temporadas?.[temp?.grupo || temp?.id];
+  if (!datos) return { medida: false, veces: 0, productos: 0 };
+  return {
+    medida: true,
+    veces: Number(datos.veces) || 1,
+    productos: (datos.productos || []).length,
+    colores: (datos.colores || []).map(c => c.c),
   };
 }
 

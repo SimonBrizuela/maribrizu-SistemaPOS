@@ -48,6 +48,7 @@ import {
 import { motivoTemporada, explicarTemporada } from '../temporadas.js';
 import {
   cargarEstudio, rehacerEstudio, recomendacionesDeTemporada, ideasQueFaltan,
+  fechasDelAnio, estadoDeFecha,
 } from '../temporadas_datos.js';
 
 const MEDIOS = [
@@ -729,6 +730,8 @@ export async function renderCentroCompras(container, db) {
     proximas: [],
     estudiando: false,
     temporadaFiltro: '',     // id de la fecha por la que está filtrada la lista
+    fechasOpen: false,       // panel "Próximas fechas" desplegado
+    fechasAbiertas: [],      // fechas lejanas que el dueño pidió ver igual
   };
   mezclarTemporadas();
 
@@ -756,6 +759,8 @@ function mezclarTemporadas() {
       productos,
       ventanas: obtenerVentanasVenta(),
       hoy: hoyAR(),
+      // Las fechas lejanas que el dueño abrió a mano desde "Próximas fechas".
+      extraIds: s.fechasAbiertas,
     });
     s.proximas = proximas;
     const nuevas = aplicarTemporadas(s.rows, recomendaciones, s.comprasCfg);
@@ -868,6 +873,7 @@ function recalc(resetSelection) {
   paintResumen();
   paintWarn();
   paintTemporadas();
+  paintFechas();
   paintTable();
   paintPlan();
 }
@@ -908,6 +914,10 @@ function pageHtml() {
         </button>
       </div>
       <div class="cc-spacer"></div>
+      <button class="cc-btn-fechas" data-action="fechas"
+              title="Todas las fechas del año que mueven venta: abrí una y mirá qué convendría comprar">
+        <span class="material-icons">event</span> Próximas fechas
+      </button>
       <button class="cc-icon-btn" data-action="actualizar" title="Actualizar stock y ritmo">
         <span class="material-icons">refresh</span>
       </button>
@@ -916,6 +926,7 @@ function pageHtml() {
       </button>
     </div>
     <div id="cc-ajustes" class="cc-ajustes" style="display:none"></div>
+    <div id="cc-fechas" class="cc-fechas" style="display:none"></div>
     <div id="cc-epocas" class="cc-epocas"></div>
     <div id="cc-warn"></div>
     <div id="cc-tiers" class="cc-tiers"></div>
@@ -1763,6 +1774,8 @@ function paintTemporadas() {
   const el = document.getElementById('cc-epocas');
   if (!el) return;
   const s = _state;
+  // Con el panel de fechas abierto, la franja diría lo mismo dos veces.
+  if (s.fechasOpen) { el.innerHTML = ''; return; }
   const proximas = s.proximas || [];
 
   // Nunca se estudiaron las ventas: no hay nada que mostrar todavía, pero sí
@@ -1811,6 +1824,145 @@ function paintTemporadas() {
     : (!s.estudio ? botonEstudiarHtml('Todavía no miré tus ventas viejas para saber qué se vende en cada fecha.') : '');
 
   el.innerHTML = `<div class="cc-epocas-wrap">${partes.join('')}</div>${viejo}`;
+}
+
+// ── Panel "Próximas fechas" ───────────────────────────────────────────────────
+// Todas las fechas del año que mueven venta, como botones. Pedido del dueño
+// (21/09): además del aviso automático a dos meses, quiso poder abrir cualquier
+// fecha —aunque falte medio año— y ver qué convendría comprar y cuánto falta.
+//
+// El color dice de un vistazo en qué está cada una:
+//   · naranja → ya se está vendiendo, la fecha es inminente;
+//   · azul    → entra en los dos meses de aviso: es hora de encargar;
+//   · gris    → todavía falta; se puede abrir igual, para ir mirando.
+// Y el contorno punteado, que de esa fecha todavía no hay ventas para medirla.
+function paintFechas() {
+  const el = document.getElementById('cc-fechas');
+  if (!el) return;
+  const s = _state;
+  if (!s.fechasOpen) { el.style.display = 'none'; el.innerHTML = ''; return; }
+  el.style.display = 'block';
+
+  const todas = fechasDelAnio(hoyAR());
+  const porFecha = new Map();
+  for (const r of s.rows) {
+    if (r.registrado || !r.temporada) continue;
+    const e = porFecha.get(r.temporada.id) || { n: 0, plata: 0 };
+    e.n++;
+    if (!r.sinCosto) e.plata += r.qty * r.cost;
+    porFecha.set(r.temporada.id, e);
+  }
+
+  const botones = todas.map(t => {
+    const est = estadoDeFecha(s.estudio, t);
+    const datos = porFecha.get(t.id);
+    const abierta = s.fechasAbiertas.includes(t.id);
+    const elegida = s.temporadaFiltro === t.id;
+    const cerca = t.diasFaltan <= t.plazoAviso;
+    const clase = [
+      'cc-fecha',
+      t.enVenta ? 'is-ya' : (cerca ? 'is-cerca' : 'is-lejos'),
+      est.medida ? '' : 'is-corazonada',
+      elegida ? 'is-on' : '',
+    ].filter(Boolean).join(' ');
+    const cuando = t.diasFaltan <= 0 ? 'es hoy'
+      : t.diasFaltan === 1 ? 'es mañana'
+      : `faltan ${t.diasFaltan} días`;
+    const pie = datos
+      ? `${datos.n} para comprar${datos.plata > 0 ? ` · ${money(datos.plata)}` : ''}`
+      : (abierta || cerca ? 'nada para reponer' : 'tocá para ver');
+    return `<button type="button" class="${clase}" data-action="abrir-fecha" data-id="${esc(t.id)}"
+        title="${esc(est.medida
+          ? `Medido con tus ventas${est.veces > 1 ? ` (${est.veces} pasadas)` : ''}${est.colores?.length ? ` · colores que vuelan: ${est.colores.join(', ')}` : ''}`
+          : 'Todavía no hay ventas tuyas de esta fecha: lo que salga es por el tipo de producto')}">
+      <span class="cc-fecha-nom">${esc(t.nombre)}</span>
+      <span class="cc-fecha-cuando">${esc(fechaLinda(t.fecha))} · ${cuando}</span>
+      <span class="cc-fecha-pie">${esc(pie)}</span>
+    </button>`;
+  }).join('');
+
+  const elegida = s.temporadaFiltro
+    ? todas.find(t => t.id === s.temporadaFiltro) : null;
+
+  el.innerHTML = `
+    <div class="cc-fechas-head">
+      <span class="material-icons">event</span>
+      <b>Las fechas que mueven venta</b>
+      <span class="cc-fechas-hint">Tocá una para ver qué convendría comprar. El aviso solo sale a dos meses; acá podés mirar cualquiera.</span>
+      <button type="button" class="cc-icon-btn" data-action="fechas" title="Cerrar">
+        <span class="material-icons">close</span>
+      </button>
+    </div>
+    <div class="cc-fechas-grid">${botones}</div>
+    ${elegida ? detalleFechaHtml(elegida, porFecha.get(elegida.id)) : ''}
+    <div class="cc-fechas-leyenda">
+      <span><i class="cc-pt is-ya"></i> ya se está vendiendo</span>
+      <span><i class="cc-pt is-cerca"></i> hay que encargarlo</span>
+      <span><i class="cc-pt is-lejos"></i> todavía falta</span>
+      <span><i class="cc-pt is-corazonada"></i> sin ventas para medirla</span>
+    </div>`;
+}
+
+// El renglón de abajo cuando hay una fecha abierta: qué es, qué se vende y qué
+// se suele vender que el catálogo no tiene.
+function detalleFechaHtml(t, datos) {
+  const s = _state;
+  const est = estadoDeFecha(s.estudio, t);
+  const ideas = ideasQueFaltan(t.id, peekCacheValue('catalogo:all') || []);
+  const partes = [];
+  if (est.medida) {
+    partes.push(`<div class="cc-fecha-det-linea"><span class="material-icons">insights</span>
+      Sale de tus ventas${est.veces > 1 ? ` (medida ${est.veces} veces)` : ''}${
+        est.colores?.length ? `. Lo que vuela: <b>${est.colores.map(esc).join(' · ')}</b>` : ''}</div>`);
+  } else {
+    partes.push(`<div class="cc-fecha-det-linea"><span class="material-icons">lightbulb</span>
+      Todavía no tengo ventas tuyas de esta fecha: lo que aparece es por el tipo de producto, no por lo que vendiste.</div>`);
+  }
+  if (t.nota) partes.push(`<div class="cc-fecha-det-linea"><span class="material-icons">info</span>${esc(t.nota)}</div>`);
+  if (ideas.length) {
+    partes.push(`<div class="cc-fecha-det-linea"><span class="material-icons">shopping_bag</span>
+      Se suele vender y no lo encontré en tu catálogo: <b>${ideas.slice(0, 8).map(esc).join(' · ')}</b></div>`);
+  }
+  const n = datos?.n || 0;
+  return `<div class="cc-fecha-det">
+    <div class="cc-fecha-det-head">
+      <b>${esc(t.nombre)}</b>
+      <span>${esc(fechaLinda(t.fecha))} · ${t.diasFaltan <= 0 ? 'es hoy' : `faltan ${t.diasFaltan} días`}</span>
+      ${n > 0
+        ? `<span class="cc-fecha-det-n">${n} producto${n === 1 ? '' : 's'} en la lista${datos.plata > 0 ? ` · ${money(datos.plata)}` : ''}</span>`
+        : '<span class="cc-fecha-det-n">no encontré nada que reponer para esta fecha</span>'}
+      <button type="button" class="cc-btn-ghost" data-action="abrir-fecha" data-id="${esc(t.id)}">
+        <span class="material-icons">filter_alt_off</span> Ver la lista completa
+      </button>
+    </div>
+    ${partes.join('')}
+  </div>`;
+}
+
+// Abre (o cierra) una fecha: calcula sus recomendaciones aunque todavía falte
+// mucho, y deja la lista filtrada a eso.
+function abrirFecha(id) {
+  const s = _state;
+  if (!id) return;
+  if (s.temporadaFiltro === id) {      // ya estaba abierta: se cierra
+    s.temporadaFiltro = '';
+    paintFechas();
+    paintTemporadas();
+    paintTable();
+    paintResumen();
+    return;
+  }
+  s.temporadaFiltro = id;
+  // Una fecha lejana no se calcula sola: recién cuando se la pide.
+  if (!s.fechasAbiertas.includes(id) && !s.proximas.some(p => p.id === id)) {
+    s.fechasAbiertas = [...s.fechasAbiertas, id];
+    mezclarTemporadas();
+    recalc(false);
+  }
+  paintFechas();
+  paintTemporadas();
+  paintTable();
+  paintResumen();
 }
 
 function botonEstudiarHtml(texto) {
@@ -1939,10 +2091,18 @@ function onClick(e) {
       const id = btn.dataset.id || '';
       s.temporadaFiltro = s.temporadaFiltro === id ? '' : id;
       paintTemporadas();
+      paintFechas();
       paintTable();
       paintResumen();
       break;
     }
+    case 'fechas':
+      s.fechasOpen = !s.fechasOpen;
+      paintFechas();
+      break;
+    case 'abrir-fecha':
+      abrirFecha(btn.dataset.id || '');
+      break;
     case 'estudiar-epocas':
       estudiarEpocas();
       break;
