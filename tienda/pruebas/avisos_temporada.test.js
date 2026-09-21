@@ -40,11 +40,26 @@ describe('cuándo avisar', () => {
     expect(avisosPendientes('2026-09-21', lista)).toHaveLength(0);
   });
 
-  it('no avisa de más de dos fechas juntas', () => {
+  it('avisa de una fecha por vez, no de todas las que se vienen', () => {
+    // El dueño dijo que le parecían muchos mensajes. Con cuatro fechas encima
+    // se entraba al panel con una pila de carteles para cerrar antes de
+    // trabajar: sale la más cercana y las otras quedan en la franja del
+    // Tablero y en el Centro de Compras, que no interrumpen nada.
     const p = avisosPendientes('2026-09-21', [
       fecha('a', 10), fecha('b', 20), fecha('c', 30), fecha('d', 40),
     ]);
-    expect(p).toHaveLength(2);
+    expect(p).toHaveLength(1);
+    expect(p[0].id).toBe('a');
+  });
+
+  it('deja de insistir todos los días al tercero', () => {
+    // Antes insistía una semana entera con la misma fecha. Con el plazo de 60
+    // días, una que entró hace tres (faltan 57) ya no sale todos los días.
+    const recien = fecha('halloween', 59);
+    const vieja = fecha('halloween', 57);
+    localStorage.setItem('temporadas:avisadas:v2', JSON.stringify({ halloween: '2026-09-20' }));
+    expect(avisosPendientes('2026-09-21', [recien]), 'recién entrada, insiste').toHaveLength(1);
+    expect(avisosPendientes('2026-09-21', [vieja]), 'pasados los dos días, afloja').toHaveLength(0);
   });
 
   it('insiste todos los días mientras se está vendiendo', () => {

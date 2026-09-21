@@ -17,10 +17,23 @@ import { temporadasProximas } from './temporadas.js';
 // prioritario la pila lo podaba enseguida: quedaban marcadas fechas que nadie
 // llegó a leer. La clave nueva descarta esas marcas inválidas.
 const LS_VISTOS = 'temporadas:avisadas:v2';
-/** Cuántas fechas se avisan de una. Más que esto es una pila que nadie lee. */
-const MAX_AVISOS = 2;
-/** Los primeros días son para enterarse; después ya lo sabe y molesta. */
-const DIAS_INSISTIR = 7;
+/**
+ * Cuántas fechas se avisan de una.
+ *
+ * Una. El dueño dijo que le parecían muchos mensajes, y tenía razón: con dos
+ * fechas encima se entraba al panel con dos carteles que hay que cerrar antes
+ * de trabajar. La que viene primero es la que importa; la otra está en la
+ * franja del Tablero y en el Centro de Compras, sin interrumpir nada.
+ */
+const MAX_AVISOS = 1;
+/**
+ * Los primeros días son para enterarse; después ya lo sabe y molesta.
+ *
+ * Eran siete, o sea una semana entera de cartel todos los días por la misma
+ * fecha. Con dos alcanza para que no se le pase, y a partir del tercero pasa a
+ * una vez por semana como el resto.
+ */
+const DIAS_INSISTIR = 2;
 
 function hoyAR() {
   return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
