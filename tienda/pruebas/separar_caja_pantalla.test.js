@@ -149,6 +149,22 @@ const esperar = async (veces = 6) => {
   for (let i = 0; i < veces; i++) await new Promise(r => setTimeout(r, 0));
 };
 
+/**
+ * Espera a que algo pase, en vez de esperar una cantidad fija de vueltas.
+ *
+ * Separar una caja son varias escrituras encadenadas, y con la máquina cargada
+ * no siempre terminan en las mismas veinte vueltas: el test fallaba una de cada
+ * cuatro corridas por eso, incluso corriendo solo. Se espera la condición y se
+ * corta al cumplirse.
+ */
+const hasta = async (condicion, vueltas = 400) => {
+  for (let i = 0; i < vueltas; i++) {
+    if (condicion()) return true;
+    await new Promise(r => setTimeout(r, 0));
+  }
+  return condicion();
+};
+
 async function pantalla() {
   const mod = await import('../../webapp/src/pages/cierres.js');
   await mod.renderCierres(contenedor, {});
@@ -282,7 +298,8 @@ describe('separar desde la pantalla', () => {
     await pantalla();
     await abrirElSeparar();
     boton('Separar en 2 cajas').click();
-    await esperar(20);
+    // El aviso es lo último de la cadena: cuando está, ya se escribió todo.
+    await hasta(() => nube.avisos.some(a => a.title === 'Caja separada'));
 
     expect(nube.confirmaciones).toHaveLength(1);
     expect(nube.confirmaciones[0].title).toContain('#138');
