@@ -5139,6 +5139,16 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
   font-weight: 600; font-size: 12px; padding: 6px 12px; text-align: center;
 }
 .cc-sinplata .material-icons { font-size: 15px !important; vertical-align: -3px; margin-right: 4px; }
+/* La fila yéndose al cuaderno. Se mueve hacia abajo y a la derecha, que es a
+   dónde va a parar, y se va apagando: al soltarla la tabla ya se repintó. */
+.cc-row-yendose td {
+  transition: transform .2s ease-in, opacity .2s ease-in;
+  transform: translate(26px, 10px);
+  opacity: 0;
+}
+@media (prefers-reduced-motion: reduce) {
+  .cc-row-yendose td { transition: none; transform: none; opacity: 1; }
+}
 .cc-empty { text-align: center; padding: 40px !important; color: var(--text-muted); }
 .cc-empty .material-icons { font-size: 20px !important; vertical-align: -4px; margin-right: 6px; color: var(--success); }
 

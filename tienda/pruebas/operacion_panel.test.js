@@ -508,11 +508,25 @@ describe('Centro de Compras: lo anotado en el cuaderno se va al fondo', () => {
     .map(b => (b.firstChild?.textContent || '').trim());
   const corteCuaderno = () => document.querySelector('.cc-cutoff-cuaderno');
 
+  /**
+   * Toca el cuaderno de una fila y espera a que la tabla termine de moverse.
+   *
+   * Al anotar, la fila se va viendo antes de que la tabla se repinte, así que
+   * no alcanza con unos ticks: se espera a que la animación termine y la fila
+   * quede marcada en su lugar nuevo.
+   */
   async function anotar(nombre) {
     const fila = [...document.querySelectorAll('#cc-tbody tr[data-idx]')]
       .find(tr => tr.textContent.includes(nombre));
+    const estaba = fila.classList.contains('cc-row-anotado');
     fila.querySelector('[data-action="anotar"]').click();
-    for (let i = 0; i < 12; i++) await esperar();
+    for (let i = 0; i < 120; i++) {
+      await esperar(5);
+      const ahora = [...document.querySelectorAll('#cc-tbody tr[data-idx]')]
+        .find(tr => tr.textContent.includes(nombre));
+      if (ahora && !ahora.classList.contains('cc-row-yendose')
+          && ahora.classList.contains('cc-row-anotado') !== estaba) return;
+    }
   }
 
   it('sin nada anotado no aparece ningún corte de cuaderno', async () => {
@@ -575,6 +589,44 @@ describe('Centro de Compras: lo anotado en el cuaderno se va al fondo', () => {
     expect(corteCuaderno()).toBeNull();
   });
 
+  it('la fila se ve irse antes de que la tabla se reacomode', async () => {
+    // Sin esto el producto se esfuma: la tabla se repinta entera y la fila
+    // reaparece cientos de filas más abajo, fuera de la pantalla.
+    await montar('centro_compras', 'renderCentroCompras');
+    const fila = document.querySelector('#cc-tbody tr[data-idx]');
+    const nombre = fila.querySelector('.cc-prod-btn').firstChild.textContent.trim();
+    fila.querySelector('[data-action="anotar"]').click();
+    await esperar();                       // el repintado todavía no pasó
+    expect(fila.classList.contains('cc-row-yendose'), 'la fila tiene que irse viéndose').toBe(true);
+
+    // Y termina sola: la fila queda abajo, marcada y sin rastro de la animación.
+    const buscar = () => [...document.querySelectorAll('#cc-tbody tr[data-idx]')]
+      .find(tr => tr.textContent.includes(nombre));
+    for (let i = 0; i < 120; i++) {
+      const f = buscar();
+      if (f && f.classList.contains('cc-row-anotado') && !f.classList.contains('cc-row-yendose')) break;
+      await esperar(5);
+    }
+    const final = buscar();
+    expect(final.classList.contains('cc-row-anotado')).toBe(true);
+    expect(final.classList.contains('cc-row-yendose')).toBe(false);
+    // Y quedó al fondo, que es de lo que se trataba.
+    const todas = [...document.querySelectorAll('#cc-tbody tr[data-idx]')];
+    expect(todas.at(-1)).toBe(final);
+  });
+
+  it('sacarle la marca no la hace irse: vuelve directo', async () => {
+    // Al devolverla arriba no hay nada que mostrar yéndose; animarla sería
+    // media espera de más en cada corrección.
+    await montar('centro_compras', 'renderCentroCompras');
+    await anotar('AAA PRIMERO');
+    const fila = [...document.querySelectorAll('#cc-tbody tr[data-idx]')]
+      .find(tr => tr.textContent.includes('AAA PRIMERO'));
+    fila.querySelector('[data-action="anotar"]').click();
+    await esperar();
+    expect(fila.classList.contains('cc-row-yendose')).toBe(false);
+  });
+
   it('el corte de la plata no queda colgado arriba cuando lo anotado se fue abajo', async () => {
     // El corte separa lo que entra en el presupuesto de lo que no. Si todo lo
     // que entraba está anotado y se fue al fondo, arriba del corte no queda
@@ -599,8 +651,8 @@ describe('Centro de Compras: lo anotado en el cuaderno se va al fondo', () => {
       const fila = document.querySelector('#cc-tbody tr[data-idx]:not(.cc-row-anotado)');
       const corte = corteDePlata();
       if (!fila || !corte || (corte.compareDocumentPosition(fila) & Node.DOCUMENT_POSITION_FOLLOWING)) break;
-      fila.querySelector('[data-action="anotar"]').click();
-      for (let i = 0; i < 12; i++) await esperar();
+      const nombre = fila.querySelector('.cc-prod-btn').firstChild.textContent.trim();
+      await anotar(nombre);
     }
     expect(primeraEsCorte(), 'el corte quedó colgado arriba de todo').toBe(false);
     // En su lugar queda un aviso, que dice lo que de verdad pasa.

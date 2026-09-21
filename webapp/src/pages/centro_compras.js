@@ -894,6 +894,36 @@ function devolverAFecha(idFecha, clave) {
 // ya está en el cuaderno": la fila queda resaltada y NO se saca de la lista (si
 // el proveedor no lo tiene, el faltante sigue vivo semanas). Queda guardada en
 // control_config/compras, así se ve igual desde cualquier PC.
+/**
+ * La fila se va viendo hacia el cuaderno antes de que la tabla se reacomode.
+ *
+ * Sin esto el producto se esfuma: la tabla se repinta entera y la fila
+ * reaparece cientos de filas más abajo, fuera de la pantalla. En una lista de
+ * mil y pico, el dueño toca el cuaderno y lo que ve es que algo desapareció.
+ *
+ * Un cuarto de segundo alcanza para entender que se fue para abajo y no molesta
+ * al que ya lo sabe y va marcando de a varios seguidos. Con las animaciones
+ * apagadas en el sistema no se espera nada: el repintado sale igual de bien,
+ * sólo que instantáneo.
+ */
+function verLaFilaIrse(i) {
+  const fila = document.querySelector(`#cc-tbody tr[data-idx="${i}"]`);
+  if (!fila) return Promise.resolve();
+  try {
+    if (window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches) return Promise.resolve();
+  } catch (_) { /* sin matchMedia (jsdom): se anima igual, no molesta a nadie */ }
+  fila.classList.add('cc-row-yendose');
+  return new Promise(listo => {
+    let cerrado = false;
+    const terminar = () => { if (!cerrado) { cerrado = true; listo(); } };
+    // El `transitionend` puede no llegar (la fila se saca antes, la pestaña
+    // está en segundo plano): el plazo lo cierra igual, así el repintado nunca
+    // queda colgado esperando un evento.
+    fila.addEventListener('transitionend', terminar, { once: true });
+    setTimeout(terminar, 260);
+  });
+}
+
 async function toggleAnotado(i) {
   const s = _state;
   const r = s.rows[i];
@@ -903,6 +933,7 @@ async function toggleAnotado(i) {
   const mapa = { ...(s.comprasCfg.anotados || {}) };
   if (r.anotado) mapa[k] = r.anotado; else delete mapa[k];
   s.comprasCfg = { ...s.comprasCfg, anotados: mapa };
+  if (r.anotado) await verLaFilaIrse(i);
   paintTable();
   paintResumen();
   try {
