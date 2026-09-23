@@ -500,19 +500,31 @@ class MainWindow(QMainWindow):
         """Compara la caja local con `caja_activa/current`. Red en hilo de fondo."""
         def _do():
             aviso = None
+            adoptada = None
             try:
-                from pos_system.utils.caja_guard import estado_de_caja
+                from pos_system.utils.caja_guard import estado_de_caja, caja_a_adoptar
                 from pos_system.utils.firebase_sync import get_firebase_sync
                 fb = get_firebase_sync()
                 if not fb or not fb.enabled:
                     return   # sin Firebase no hay con qué comparar: no inventamos avisos
                 snap = fb.db.collection('caja_activa').document('current').get()
                 remoto = snap.to_dict() if snap.exists else None
-                aviso = estado_de_caja(self.cash_register.get_current(), remoto,
-                                       puede_abrir=self._puede_abrir_caja)
+                local = self.cash_register.get_current()
+                # Si en Firebase hay una caja más nueva que la de esta PC, se
+                # toma sola: es lo mismo que hace un reinicio, sin pedírselo a
+                # nadie. Una PC que quedó prendida de noche se acomoda en el
+                # próximo tic en vez de vender la mañana en la caja de ayer.
+                if caja_a_adoptar(local, remoto) is not None:
+                    adoptada = fb._create_local_register_from_data(self.db, dict(remoto))
+                    if adoptada:
+                        logger.info(f"Revisión de caja: esta PC tomó sola la caja #{adoptada}.")
+                        local = self.cash_register.get_current()
+                aviso = estado_de_caja(local, remoto, puede_abrir=self._puede_abrir_caja)
             except Exception as e:
                 logger.debug(f"Revisión de caja: {e}")
                 return   # un corte de red no debe pintar un cartel falso
+            if adoptada:
+                self._sig_caja_open.emit(int(adoptada))   # refresca las vistas en el hilo de Qt
             self._sig_caja_guard.emit(aviso)
 
         threading.Thread(target=_do, daemon=True).start()

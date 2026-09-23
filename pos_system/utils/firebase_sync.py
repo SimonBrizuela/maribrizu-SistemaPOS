@@ -4228,6 +4228,7 @@ class FirebaseSync:
                 row = existing[0]
                 if row['status'] == 'open':
                     logger.info(f"Firebase: Caja #{remote_id} ya está abierta localmente.")
+                    self._cerrar_cajas_locales_viejas(db_manager, remote_id)
                     return remote_id
                 # Existe pero localmente cerrada: NO re-abrir automáticamente.
                 # El estado local es la fuente de verdad del cierre (evita que
@@ -4244,10 +4245,39 @@ class FirebaseSync:
                     (remote_id, initial, opening_date_str, notes)
                 )
                 logger.info(f"Firebase: Caja #{remote_id} creada localmente (desde snapshot).")
+            self._cerrar_cajas_locales_viejas(db_manager, remote_id)
             return remote_id
         except Exception as e:
             logger.error(f"Firebase: Error creando caja local desde datos: {e}")
             return None
+
+    def _cerrar_cajas_locales_viejas(self, db_manager, remote_id) -> int:
+        """Cierra en la SQLite las cajas abiertas con número MENOR que la remota.
+
+        Tomar la caja nueva sin cerrar la vieja deja dos abiertas, y cuál usa
+        la próxima venta depende de cómo quedó escrita cada `opening_date`
+        (`get_current_cash_register` ordena por ese texto). El 23/09/2026 tres
+        PCs vendieron en la 141 con la 142 ya abierta desde el panel.
+
+        Solo las de número menor: son cajas que ya se cerraron en otro lado.
+        Una local más nueva que la remota es de esta PC y todavía no subió.
+        No se sube ningún reporte de cierre: ese cierre ya lo hizo quien la
+        cerró, igual que el caso C del arranque en main_window.
+        """
+        try:
+            viejas = db_manager.execute_query(
+                "SELECT id FROM cash_register WHERE status = 'open' AND id < ?", (int(remote_id),)
+            )
+            for row in viejas or []:
+                db_manager.execute_update(
+                    "UPDATE cash_register SET status='closed', closing_date=?, notes=? WHERE id=?",
+                    (now_ar_iso(), f'Cerrada al tomar la caja #{remote_id}', row['id'])
+                )
+                logger.info(f"Firebase: Caja local #{row['id']} cerrada — la abierta ahora es #{remote_id}.")
+            return len(viejas or [])
+        except Exception as e:
+            logger.error(f"Firebase: No se pudieron cerrar cajas locales viejas: {e}")
+            return 0
 
     def ensure_local_register(self, db_manager) -> Optional[int]:
         """

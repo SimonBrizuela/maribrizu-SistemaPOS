@@ -64,6 +64,31 @@ def _a_dt(val):
     return None
 
 
+def caja_a_adoptar(local, remoto):
+    """El número de la caja remota que esta PC tiene que tomar sola, o None.
+
+    Pasó el 23/09/2026: la 142 se abrió desde el panel a las 20:32 y tres PCs
+    que quedaron prendidas toda la noche siguieron con la 141. A la mañana la
+    primera venta de cada una cayó en la caja vieja; recién al reiniciar el POS
+    tomaron la nueva. El cartel pedía justamente eso, reiniciar, pero el
+    reinicio no hace nada que el POS no pueda hacer solo: cerrar la vieja y
+    tomar la que está abierta en Firebase.
+
+    Solo hacia adelante: se adopta si la remota es MÁS NUEVA que la local (o si
+    no hay local). Una remota más vieja es un `caja_activa/current` atrasado y
+    adoptarla revolvería una caja recién abierta en esta PC: ahí queda el cartel.
+    """
+    if (remoto or {}).get('status') != 'open':
+        return None
+    id_remoto = _id_de(remoto)
+    if id_remoto is None:
+        return None
+    id_local = _id_de(local)
+    if id_local is None or id_remoto > id_local:
+        return id_remoto
+    return None
+
+
 def estado_de_caja(local, remoto, ahora=None, puede_abrir=True):
     """Qué está mal con la caja de esta PC, si algo está mal.
 
