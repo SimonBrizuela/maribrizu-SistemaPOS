@@ -214,7 +214,7 @@ export function recomendacionesDeTemporada({
 
   const mejorPorClave = new Map();
   for (const prox of proximas) {
-    const medido = !!estudio?.temporadas?.[prox.grupo || prox.id];
+    const medido = !!medidoDe(estudio, prox);
     const calculadas = medido
       ? recomendarParaTemporada(prox, estudio, { stockDe, tope: topePorFecha })
       : recomendarPorPistas(prox, { candidatos: armarCandidatos(), tope: topePorFecha });
@@ -226,7 +226,7 @@ export function recomendacionesDeTemporada({
     }
   }
   return {
-    proximas: proximas.map(p => ({ ...p, medida: !!estudio?.temporadas?.[p.grupo || p.id] })),
+    proximas: proximas.map(p => ({ ...p, medida: !!medidoDe(estudio, p) })),
     recomendaciones: [...mejorPorClave.values()].sort((a, b) => b.urgencia - a.urgencia),
   };
 }
@@ -245,8 +245,21 @@ export function fechasDelAnio(hoy = null) {
 }
 
 /** Qué sabe el estudio de una fecha: si está medida y con cuántas pasadas. */
+/**
+ * Lo que el estudio midió de una fecha, o null.
+ *
+ * Una época larga devuelve null SIEMPRE, aunque el estudio guardado traiga
+ * algo: el del 23/09/2026 alcanzó a guardar una "comunión" medida con todo lo
+ * de septiembre antes de que se decidiera no medirlas, y hasta que se rehaga
+ * ese dato sigue ahí.
+ */
+export function medidoDe(estudio, temp) {
+  if (temp?.larga || temporadaPorId(temp?.id)?.larga) return null;
+  return estudio?.temporadas?.[temp?.grupo || temp?.id] || null;
+}
+
 export function estadoDeFecha(estudio, temp) {
-  const datos = estudio?.temporadas?.[temp?.grupo || temp?.id];
+  const datos = medidoDe(estudio, temp);
   if (!datos) return { medida: false, veces: 0, productos: 0 };
   return {
     medida: true,

@@ -94,9 +94,9 @@ export const HORIZONTE_LARGA = 30;
 //
 // `larga` es una ÉPOCA, no una fecha: las comuniones van de septiembre a
 // noviembre, un domingo cada parroquia. `cuando` es el día en que arranca y
-// `post` lo que dura. No compite por los días con las fechas cortas —octubre
-// es a la vez comuniones y Día de la Madre, y las dos venden— y no se compra
-// entera de una: se compra lo del próximo mes (`HORIZONTE_LARGA`).
+// `post` lo que dura. No se compra entera de una: se compra lo del próximo mes
+// (`HORIZONTE_LARGA`). Y NO SE MIDE con las ventas: va siempre por pistas
+// (ver `estudiarTemporadas`).
 //
 // `pistas` son para cuando todavía no hay historia: `rubros` y `palabras` se
 // buscan en el producto, `colores` en la variedad vendida y `excluir` saca lo
@@ -307,7 +307,10 @@ export const TEMPORADAS = [
     ],
     pistas: {
       rubros: [],
-      palabras: ['comunion', 'rosario', 'denario', 'decenario', 'estampita', 'recordatorio', 'cirio', 'caliz', 'cruz', 'vela torneada', 'vela larga', 'tarjeta', 'souvenir', 'pastillero', 'bolsa organza', 'media perla', 'perla'],
+      // Sin "vela torneada" ni "vela larga": son velitas de torta del rubro
+      // cotillón (las hay celestes). La vela de comunión es el cirio, que el
+      // catálogo no tiene y por eso está en `ideas`.
+      palabras: ['comunion', 'rosario', 'denario', 'decenario', 'estampita', 'recordatorio', 'cirio', 'caliz', 'cruz', 'tarjeta', 'souvenir', 'pastillero', 'bolsa organza', 'media perla', 'perla'],
       colores: ['amarillo', 'blanco', 'blanca'],
       combinaciones: [
         { palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'barrilete', 'globo', 'brillantina', 'fieltro', 'panolenci', 'tul', 'tull', 'cinta', 'limpia pipa', 'flor', 'pompon', 'pluma marabu'], colores: ['amarillo'] },
@@ -578,7 +581,7 @@ export function claveProducto(nombre, color) {
 function _indiceDeVentanas(temporadas, anios) {
   const por = new Map();   // 'YYYY-MM-DD' → { id, dist, ancho }
   for (const t of temporadas) {
-    if (t.larga) continue;   // las épocas largas no compiten: ver `_diasDeLargas`
+    if (t.larga) continue;   // las épocas largas no se miden: ver `estudiarTemporadas`
     const ancho = (Number(t.previa) || 0) + (Number(t.post) || 0);
     const id = grupoDe(t);
     for (const y of anios) {
@@ -593,32 +596,6 @@ function _indiceDeVentanas(temporadas, anios) {
             || (dist === actual.dist && ancho === actual.ancho && id < actual.id)) {
           por.set(d, { id, dist, ancho });
         }
-      }
-    }
-  }
-  return por;
-}
-
-/**
- * Índice fecha → las épocas largas que lo incluyen.
- *
- * Van aparte del índice de las fechas cortas porque no se reparten los días:
- * la primera semana de octubre es comuniones Y Día de la Madre, y lo que se
- * vende ahí cuenta para las dos. Si compitieran, la época de tres meses se
- * quedaría con los días sueltos entre fecha y fecha, o les robaría los suyos.
- */
-function _diasDeLargas(temporadas, anios) {
-  const por = new Map();   // 'YYYY-MM-DD' → [grupo, ...]
-  for (const t of temporadas) {
-    if (!t.larga) continue;
-    const id = grupoDe(t);
-    for (const y of anios) {
-      const v = ventanaDeTemporada(t, y);
-      if (!v) continue;
-      for (let d = v.desde; d <= v.hasta; d = sumarDiasYmd(d, 1)) {
-        const l = por.get(d) || [];
-        if (!l.includes(id)) l.push(id);
-        por.set(d, l);
       }
     }
   }
@@ -701,29 +678,28 @@ export function estudiarTemporadas(items, {
   const dias = [...diasVistos].sort();
   const desde = dias[0], hasta = dias[dias.length - 1];
   const anios = [...new Set(dias.map(d => Number(d.slice(0, 4))))].sort();
+  // Las épocas largas NO se miden. Probado el 23/09/2026 con las comuniones:
+  // "lo que se vendió de septiembre a noviembre contra el resto del año" no
+  // mide la comunión, mide septiembre —el mes más cargado de la escuela, con
+  // el 6, el Maestro y la Primavera adentro—. Salieron la silicona, los
+  // palitos de helado, las fotocopias y el limpia pipa de todos los colores; y
+  // lo que sí era de la época, el amarillo, venía inflado por el 6 (376 limpia
+  // pipas). Con un año de ventas no hay forma de separar las dos cosas: van por
+  // pistas, que se revisaron producto por producto contra el catálogo.
   const ventanas = _indiceDeVentanas(temporadas, anios);
-  const largas = _diasDeLargas(temporadas, anios);
-  // A qué grupos pertenece un día: la fecha corta que se lo quedó, más las
-  // épocas largas que lo cubren.
-  const gruposDelDia = (d) => {
-    const due = ventanas.get(d);
-    const l = largas.get(d);
-    if (!due) return l || [];
-    return l ? [due.id, ...l] : [due.id];
-  };
 
   // Días de cada grupo y años en los que se lo pudo medir.
   const diasDeTemp = new Map();      // grupo → Set de días
   const aniosDeTemp = new Map();     // grupo → Set de años
   for (const d of dias) {
-    for (const g of gruposDelDia(d)) {
-      let s = diasDeTemp.get(g);
-      if (!s) { s = new Set(); diasDeTemp.set(g, s); }
-      s.add(d);
-      let a = aniosDeTemp.get(g);
-      if (!a) { a = new Set(); aniosDeTemp.set(g, a); }
-      a.add(Number(d.slice(0, 4)));
-    }
+    const due = ventanas.get(d);
+    if (!due) continue;
+    let s = diasDeTemp.get(due.id);
+    if (!s) { s = new Set(); diasDeTemp.set(due.id, s); }
+    s.add(d);
+    let a = aniosDeTemp.get(due.id);
+    if (!a) { a = new Set(); aniosDeTemp.set(due.id, a); }
+    a.add(Number(d.slice(0, 4)));
   }
 
   // Cuántas veces se pudo medir cada grupo: una por fecha y por año con venta
@@ -760,19 +736,19 @@ export function estudiarTemporadas(items, {
     const clave = claveProducto(f.nombre, f.color);
     total.set(clave, (total.get(clave) || 0) + f.uds);
     if (f.color) totalColor.set(f.color, (totalColor.get(f.color) || 0) + f.uds);
-    for (const g of gruposDelDia(f.dia)) {
-      let m = porTemp.get(g);
-      if (!m) { m = new Map(); porTemp.set(g, m); }
-      const e = m.get(clave);
-      if (e) { e.u += f.uds; e.d.set(f.dia, (e.d.get(f.dia) || 0) + f.uds); }
-      else m.set(clave, { n: f.nombre, c: f.color, u: f.uds, d: new Map([[f.dia, f.uds]]) });
-      if (!f.color) continue;
-      let mc = porTempColor.get(g);
-      if (!mc) { mc = new Map(); porTempColor.set(g, mc); }
-      const ec = mc.get(f.color);
-      if (ec) { ec.u += f.uds; ec.d.set(f.dia, (ec.d.get(f.dia) || 0) + f.uds); }
-      else mc.set(f.color, { u: f.uds, d: new Map([[f.dia, f.uds]]) });
-    }
+    const due = ventanas.get(f.dia);
+    if (!due) continue;
+    let m = porTemp.get(due.id);
+    if (!m) { m = new Map(); porTemp.set(due.id, m); }
+    const e = m.get(clave);
+    if (e) { e.u += f.uds; e.d.set(f.dia, (e.d.get(f.dia) || 0) + f.uds); }
+    else m.set(clave, { n: f.nombre, c: f.color, u: f.uds, d: new Map([[f.dia, f.uds]]) });
+    if (!f.color) continue;
+    let mc = porTempColor.get(due.id);
+    if (!mc) { mc = new Map(); porTempColor.set(due.id, mc); }
+    const ec = mc.get(f.color);
+    if (ec) { ec.u += f.uds; ec.d.set(f.dia, (ec.d.get(f.dia) || 0) + f.uds); }
+    else mc.set(f.color, { u: f.uds, d: new Map([[f.dia, f.uds]]) });
   }
 
   const diasTotales = dias.length;
@@ -1001,13 +977,17 @@ export function recomendarPorPistas(proxima, {
   const temp = temporadaPorId(proxima?.id);
   if (!temp) return [];
   const dias = diasDeCompra(proxima);
+  // Con una época larga ya en curso, el ritmo de hoy YA es el de la época:
+  // multiplicarlo por el empuje contaba la época dos veces (las comuniones del
+  // 23/09 pedían el doble de lo que se estaba vendiendo).
+  const factor = temp.larga && proxima.enVenta ? 1 : empujeSupuesto;
   const out = [];
   for (const c of candidatos) {
     const velDia = Math.max(0, Number(c.velDia) || 0);
     if (!(velDia > 0)) continue;                   // si no se vende, no se compra
     if (!coincidePorPista(temp, c)) continue;
     // Lo que se vendería si la fecha lo empuja como empuja a las demás.
-    const esperado = velDia * dias * empujeSupuesto;
+    const esperado = velDia * dias * factor;
     const stock = Math.max(0, Number(c.stock) || 0);
     const urgencia = urgenciaDeTemporada({
       empuje: empujeSupuesto,
@@ -1030,11 +1010,18 @@ export function recomendarPorPistas(proxima, {
       urgencia,
       porPista: true,
       temporada: _datosDeFecha(proxima),
+      // Entra por lo que ES (cordón de comunión, cruz, tarjeta), no solo por
+      // el color del material.
+      ...(temp.larga && coincidePorPista(temp, { nombre: c.nombre, subRubro: c.subRubro })
+        ? { propio: true } : {}),
     });
   }
   // Primero lo que más se mueve: de una corazonada, lo único sólido es que el
-  // producto ya se vende.
-  out.sort((a, b) => b.esperado - a.esperado || b.urgencia - a.urgencia);
+  // producto ya se vende. En una época larga, antes que eso lo propio: el 23/09
+  // el cordón de comunión, las cruces y las tarjetas quedaban fuera de las 30
+  // filas, tapados por el volumen de la cinta y el limpia pipa amarillos.
+  out.sort((a, b) => (b.propio === true) - (a.propio === true)
+    || b.esperado - a.esperado || b.urgencia - a.urgencia);
   return out.slice(0, tope);
 }
 
@@ -1098,22 +1085,21 @@ export function recomendarParaTemporada(proxima, estudio, {
   tope = 40,
 } = {}) {
   if (!proxima || typeof stockDe !== 'function') return [];
+  // Una época larga no usa lo medido aunque el estudio guardado lo traiga: ver
+  // `estudiarTemporadas`.
+  if (proxima.larga || temporadaPorId(proxima.id)?.larga) return [];
   const datos = estudio?.temporadas?.[proxima.grupo || proxima.id];
   if (!datos || !Array.isArray(datos.productos)) return [];
   // Lo medido puede venir de varias pasadas de la misma fecha (dos años) o de
   // fechas hermanas (las tres patrias). Lo que se espera para ESTA vez es el
   // promedio, no la suma de todas.
   const veces = Math.max(1, Number(datos.veces) || (datos.anios || []).length || 1);
-  // Una época larga se mide por día —el estudio puede haber visto tres semanas
-  // de tres meses— y se compra para los días que dice `diasDeCompra`.
-  const porDiaMedido = proxima.larga && Number(datos.dias) > 0
-    ? diasDeCompra(proxima) / Number(datos.dias) : null;
   const out = [];
   for (const p of datos.productos) {
     const clave = claveProducto(p.n, p.c);
     const info = stockDe(clave, { nombre: p.n, color: p.c });
     if (!info) continue;
-    const esperado = porDiaMedido != null ? p.u * porDiaMedido : p.u / veces;
+    const esperado = p.u / veces;
     const urgencia = urgenciaDeTemporada({
       empuje: p.e,
       esperado,
@@ -1185,14 +1171,16 @@ export function explicarTemporada(rec) {
   if (rec.porMano) {
     lineas.push('· Lo sumaste vos a esta fecha');
     lineas.push('· No sale de tus ventas: está acá porque lo pediste');
+  } else if (rec.porPista && t.larga) {
+    lineas.push('· Una época de meses no se puede medir contra el resto del año');
+    lineas.push(`· Entra por el tipo de producto; la cantidad sale de lo que vende hoy`);
+    lineas.push(`· Para los próximos ${t.diasCompra} días harían falta ${n(rec.esperado)}`);
   } else if (rec.porPista) {
     lineas.push('· Todavía no hay ventas viejas de esta fecha para medir');
     lineas.push(`· Entra por el tipo de producto, no por lo que vendió`);
   } else {
-    lineas.push(`· En ${t.larga ? 'la época' : 'la fecha'} se vende ${n(rec.empuje)} veces más que el resto del año`);
-    lineas.push(t.larga
-      ? `· Al ritmo de la época, en ${t.diasCompra} días se venden ${n(rec.esperado)} unidades`
-      : `· La última vez se vendieron ${n(rec.esperado)} unidades`);
+    lineas.push(`· En la fecha se vende ${n(rec.empuje)} veces más que el resto del año`);
+    lineas.push(`· La última vez se vendieron ${n(rec.esperado)} unidades`);
   }
   lineas.push(`· Stock de hoy: ${n(rec.stock)}`);
   if (rec.faltan > 0) {

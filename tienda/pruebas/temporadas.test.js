@@ -654,17 +654,19 @@ describe('las comuniones: una época de tres meses, no una fecha', () => {
     expect(diasDeCompra(fin)).toBe(7);
   });
 
-  it('no les roba los días a las fechas cortas: octubre cuenta para las dos', () => {
-    // Tarjetas vendidas la semana antes del Día de la Madre: son de la Madre
-    // Y de la época de comuniones.
-    const dias = ['2026-10-05', '2026-10-07', '2026-10-09', '2026-10-12', '2026-10-14'];
+  it('no se mide: septiembre entero no es la comunión', () => {
+    // 23/09/2026: medida contra el resto del año, la "comunión" se llenó de lo
+    // que se vende más en septiembre por la escuela.
+    const sept = ['2026-09-09', '2026-09-12', '2026-09-15', '2026-09-18', '2026-09-24'];
     const items = [
-      ...repartido(dias, 'TARJETA OPALINA', 6),
-      ...repartido(['2026-05-04', '2026-06-10', '2026-07-15'], 'TARJETA OPALINA', 1),
+      ...repartido(sept, 'BARRITA DE SILICONA FINA PARA PISTOLITA', 15),
+      ...repartido(sept, 'PALITO HELADO NATURAL COMUN', 40),
+      ...repartido(['2026-05-04', '2026-06-10', '2026-07-15'], 'BARRITA DE SILICONA FINA PARA PISTOLITA', 1),
     ];
     const est = estudiarTemporadas(items, { aYmd });
-    expect(est.temporadas.dia_madre?.productos.some(p => p.n === 'tarjeta opalina')).toBe(true);
-    expect(est.temporadas.comuniones?.productos.some(p => p.n === 'tarjeta opalina')).toBe(true);
+    expect(est.temporadas.comuniones).toBeUndefined();
+    // Pero figura entre las miradas, para que no pida rehacer el estudio cada vez.
+    expect(est.grupos).toContain('comuniones');
   });
 
   it('las fechas cortas se estudian igual que antes de que existiera', () => {
@@ -677,21 +679,57 @@ describe('las comuniones: una época de tres meses, no una fecha', () => {
     expect(con.temporadas.septiembre).toEqual(sin.temporadas.septiembre);
   });
 
-  it('lo medido se lleva a los días que se compran, no a los que se midieron', () => {
-    // El estudio vio 20 días de la época con 40 unidades: 2 por día. Para el
-    // próximo mes se esperan 60, no 40.
-    const estudio = {
-      temporadas: { comuniones: { anios: [2026], veces: 1, dias: 20, productos: [{ n: 'vela torneada', c: '', u: 40, b: 0.1, e: 8, d: 12 }] } },
-    };
+  it('aunque el estudio guardado traiga una comunión medida, no se usa', () => {
+    // El estudio del 23/09 alcanzó a guardar la lista mala antes del arreglo.
+    const estudio = { temporadas: { comuniones: { veces: 1, dias: 20, productos: [
+      { n: 'barrita de silicona fina para pistolita', c: '', u: 199, b: 0.1, e: 30, d: 14 },
+    ] } } };
     const prox = temporadasProximas('2026-09-23').find(x => x.id === 'comuniones');
-    const recs = recomendarParaTemporada(prox, estudio, {
-      stockDe: () => ({ stock: 10, docId: 'x', producto: null }),
+    const recs = recomendarParaTemporada(prox, estudio, { stockDe: () => ({ stock: 0, docId: 'x' }) });
+    expect(recs).toEqual([]);
+  });
+
+  it('antes de que arranque, sí se estira por la época', () => {
+    const prox = temporadasProximas('2026-07-15').find(x => x.id === 'comuniones');
+    const [r] = recomendarPorPistas(prox, {
+      candidatos: [{ nombre: 'CORDON COMUNION KB POLYESTER ART 025', color: '', rubro: 'MERCERIA',
+                     subRubro: '', stock: 0, velDia: 2, docId: 'c' }],
     });
-    expect(recs).toHaveLength(1);
-    expect(recs[0].esperado).toBe(60);
-    expect(recs[0].faltan).toBe(50);
-    expect(explicarTemporada(recs[0])).toContain('del 1 de septiembre al 30 de noviembre');
-    expect(explicarTemporada(recs[0])).toContain('en 30 días se venden 60 unidades');
+    expect(r.esperado).toBe(2 * HORIZONTE_LARGA * EMPUJE_MINIMO);
+  });
+
+  it('de lo que se vendió en septiembre, entra solo lo que es de la comunión', () => {
+    const prox = temporadasProximas('2026-09-23').find(x => x.id === 'comuniones');
+    const cand = (nombre, color = '') => ({
+      nombre, color, rubro: 'MERCERIA', subRubro: '', stock: 0, velDia: 2, docId: nombre,
+    });
+    const recs = recomendarPorPistas(prox, {
+      candidatos: [
+        cand('BARRITA DE SILICONA FINA PARA PISTOLITA'),
+        cand('PALITO HELADO NATURAL COMUN'),
+        cand('IMPRESION / FOTOCOPIA A4 (B/N) DOBLE FAZ O DNI'),
+        cand('LIMPIA PIPA CBX', 'CELESTE'),
+        cand('BANDERIN DE FLORES PRIMAVERA'),
+        cand('LIMPIA PIPA CBX', 'AMARILLO'),
+        cand('CORDON COMUNION KB POLYESTER ART 025'),
+        cand('CINTA RASO Nº 9', 'BLANCO'),
+      ],
+    });
+    // Lo propio de la comunión primero; después el material por color.
+    expect(recs[0].nombre).toBe('CORDON COMUNION KB POLYESTER ART 025');
+    expect(recs.map(r => `${r.nombre}${r.color ? ` [${r.color}]` : ''}`).sort()).toEqual([
+      'CINTA RASO Nº 9 [BLANCO]',
+      'CORDON COMUNION KB POLYESTER ART 025',
+      'LIMPIA PIPA CBX [AMARILLO]',
+    ]);
+    // Con la época en curso, el ritmo de hoy ya es el de la época: el próximo
+    // mes es lo que vende por día por 30, sin multiplicar de nuevo.
+    expect(diasDeCompra(prox)).toBe(HORIZONTE_LARGA);
+    expect(recs[0].esperado).toBe(2 * HORIZONTE_LARGA);
+    const tip = explicarTemporada(recs[0]);
+    expect(tip).toContain('del 1 de septiembre al 30 de noviembre');
+    expect(tip).toContain('no se puede medir');
+    expect(tip).not.toContain('Todavía no hay ventas viejas');
   });
 
   it('el motivo en la fila no dice "es hoy" durante tres meses', () => {
@@ -706,7 +744,6 @@ describe('las comuniones: una época de tres meses, no una fecha', () => {
     const si = (nombre, extra = {}) => coincidePorPista(com, { nombre, ...extra });
     expect(si('CORDON COMUNION KB POLYESTER ART 025')).toBe(true);
     expect(si('CRUZ MADERA CBX 2,5CM X 4CM')).toBe(true);
-    expect(si('VELA TORNEADA GRANDE')).toBe(true);
     expect(si('TARJETA OPALINA COLOR')).toBe(true);
     expect(si('TUL QUEBRADO 1,50MT DE ANCHO X MT', { color: 'BLANCO' })).toBe(true);
     expect(si('CARTULINA', { color: 'AMARILLO' })).toBe(true);
@@ -718,6 +755,9 @@ describe('las comuniones: una época de tres meses, no una fecha', () => {
     expect(si('GALON YUTE CRUZ 20MM XMT')).toBe(false);
     expect(si('BOLSO FASHION CRUZADO 241254')).toBe(false);
     expect(si('PORTA TARJETA EM CAPIBARA')).toBe(false);
+    // Velitas de torta: la de comunión es el cirio.
+    expect(si('VELA TORNEADA CHICA', { color: 'CELESTE' })).toBe(false);
+    expect(si('VELA LARGA METALIZADA X UN')).toBe(false);
     // La cartulina blanca se vende todo el año para la escuela.
     expect(si('CARTULINA', { color: 'BLANCO' })).toBe(false);
     // Costura y oficina que vienen en blanco o amarillo.
