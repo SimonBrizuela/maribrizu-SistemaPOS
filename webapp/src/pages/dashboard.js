@@ -12,7 +12,7 @@ import { partesDeVenta } from '../medios_de_pago.js';
 import { buscarPorNombre, parseNombreItem } from '../nombre_item.js';
 // El almanaque de fechas que mueven venta. Es una cuenta, no una lectura: no
 // agrega nada al arranque del Dashboard.
-import { temporadasProximas } from '../temporadas.js';
+import { temporadasProximas, cuandoEs } from '../temporadas.js';
 
 /** El nombre del producto de un renglón, sin la variedad ni la presentación. */
 function nombreBaseDelItem(it) {
@@ -1453,9 +1453,7 @@ function avisoTemporadasHtml() {
   }
   if (!proximas.length) return '';
   const chips = proximas.map(p => {
-    const cuando = p.diasFaltan <= 0 ? 'es hoy'
-      : p.diasFaltan === 1 ? 'es mañana'
-      : `faltan ${p.diasFaltan} días`;
+    const cuando = cuandoEs(p);
     return `<span class="dash-epoca-item${p.enVenta ? ' is-ya' : ''}">
       <b>${escapeHtml(p.nombre)}</b> · ${cuando}</span>`;
   }).join('');

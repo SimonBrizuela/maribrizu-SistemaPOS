@@ -75,6 +75,10 @@ export const EMPUJE_TOPE = 30;
 export const TOPE_PRODUCTOS = 80;
 /** Cada cuánto conviene rehacer el estudio. */
 export const ESTUDIO_VIGENCIA_DIAS = 30;
+/** Cuántos días de una época larga se compran por vez. Tres meses de
+ *  comuniones no se encargan de una: se compra lo del mes que viene y el
+ *  Centro de Compras lo vuelve a pedir cuando se va vendiendo. */
+export const HORIZONTE_LARGA = 30;
 
 // ── El almanaque ─────────────────────────────────────────────────────────────
 // `cuando` dice en qué día cae:
@@ -85,6 +89,12 @@ export const ESTUDIO_VIGENCIA_DIAS = 30;
 // `previa` son los días de venta ANTES de la fecha: es la ventana en la que se
 // mide y para la que hay que tener stock. `post` son los días de después que
 // todavía cuentan (el Día del Niño se sigue comprando el lunes).
+//
+// `larga` es una ÉPOCA, no una fecha: las comuniones van de septiembre a
+// noviembre, un domingo cada parroquia. `cuando` es el día en que arranca y
+// `post` lo que dura. No compite por los días con las fechas cortas —octubre
+// es a la vez comuniones y Día de la Madre, y las dos venden— y no se compra
+// entera de una: se compra lo del próximo mes (`HORIZONTE_LARGA`).
 //
 // `pistas` son para cuando todavía no hay historia: `rubros` y `palabras` se
 // buscan en el producto, `colores` en la variedad vendida y `excluir` saca lo
@@ -271,6 +281,43 @@ export const TEMPORADAS = [
     pistas: { rubros: ['jugueteria', 'regaleria', 'cotillon'], palabras: ['juguete', 'papel regalo', 'bolsa regalo', 'mono regalo', 'globo', 'peluche', 'tarjeta'], colores: [], excluir: [...NO_ES_REGALO, ...DE_OTRA_FECHA] },
   },
   {
+    // Pedido del encargado el 22/09/2026: "septiembre, octubre y noviembre es
+    // época de comunión. También todo amarillo y blanco. Tarjetas, velas,
+    // rosarios." El catálogo no tiene rosarios ni estampitas; sí el cordón de
+    // comunión, las cruces de madera, las velas torneadas y toda la mercería
+    // blanca con la que se arma el souvenir.
+    id: 'comuniones', nombre: 'Comuniones', larga: true, cuando: { mes: 9, dia: 1 },
+    previa: 0, post: 90, aviso: 60,
+    ideas: [
+      { que: 'rosarios y denarios', buscar: ['denario'] },
+      { que: 'estampitas y recordatorios', buscar: ['estampita'] },
+      { que: 'tarjetas de comunión', buscar: ['tarjeta', 'comunion'] },
+      { que: 'cirios y velas de comunión', buscar: ['cirio'] },
+      { que: 'cálices y cruces para souvenir', buscar: ['caliz'] },
+    ],
+    pistas: {
+      rubros: [],
+      palabras: ['comunion', 'rosario', 'denario', 'estampita', 'recordatorio', 'cirio', 'caliz', 'cruz', 'vela torneada', 'vela larga', 'tarjeta', 'souvenir', 'bolsa organza', 'media perla', 'perla'],
+      colores: ['amarillo', 'blanco', 'blanca'],
+      combinaciones: [
+        { palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'barrilete', 'globo', 'brillantina', 'fieltro', 'panolenci', 'tul', 'tull', 'cinta', 'limpia pipa', 'flor', 'pompon', 'pluma marabu'], colores: ['amarillo'] },
+        // El blanco solo en lo que se usa para decorar: la cartulina y el papel
+        // afiche blancos se venden todo el año para la escuela.
+        { palabras: ['tul', 'tull', 'organza', 'cinta', 'puntilla', 'perla', 'raso', 'goma eva', 'brillantina', 'celofan', 'globo', 'flor', 'pompon', 'limpia pipa', 'pluma marabu', 'cordon', 'feston'], colores: ['blanco', 'blanca'] },
+      ],
+      // "pinza rosario" es una pinza de bijouterie, el galón "yute cruz" es un
+      // tejido y el "porta tarjeta" es un llavero: ninguno es de la comunión
+      // aunque la palabra coincida. Lo de la segunda línea es costura y
+      // oficina que viene en blanco y amarillo: medido contra el catálogo real
+      // (23/09/2026), la cinta mochilera, el bies y el bretel entraban como
+      // cinta blanca, y la carpeta y el contac como cartulina amarilla.
+      excluir: [...NO_ES_REGALO, ...DE_OTRA_FECHA, 'pinza', 'yute', 'bolso', 'cruzado', 'porta tarjeta', 'cumpleanos',
+        'mochilera', 'bies', 'bretel', 'brotel', 'elastico', 'corsetera', 'hilera', 'asargada', 'pijama', 'reflex',
+        'aisladora', 'multiproposito', 'carpeta', 'contac', 'forrar', 'carbonico', 'zapatilla', 'zapatos', 'block'],
+    },
+    nota: 'De septiembre a noviembre: todo amarillo y blanco, tarjetas, velas y rosarios.',
+  },
+  {
     id: 'amarillo', nombre: 'El 6 de septiembre · todo amarillo', grupo: 'septiembre', cuando: { mes: 9, dia: 6 },
     previa: 12, post: 1, aviso: 60,
     ideas: [
@@ -434,12 +481,58 @@ export function temporadasProximas(hoyYmd, { avisoDias = null, temporadas = TEMP
         // Ya arrancó la venta: la ventana empezó y la fecha no pasó.
         enVenta: hoy >= v.desde && hoy <= v.hasta,
         plazoAviso: plazo,
+        larga: !!t.larga,
+        // Lo que le queda a la ventana desde hoy (o desde que arranque).
+        diasRestan: diasEntre(hoy > v.desde ? hoy : v.desde, v.hasta) + 1,
+        // El día que la representa en pantalla: con el que se ordena, se pinta
+        // el taquito y se agrupa por mes. Para una época ya arrancada es el día
+        // en que termina; si fuera el de inicio, en octubre las comuniones
+        // saldrían primeras con un "1 sep" que parece vencido, por delante del
+        // Día de la Madre.
+        referencia: t.larga && hoy >= v.desde ? v.hasta : v.fecha,
       });
       break;   // la ocurrencia más cercana alcanza
     }
   }
-  out.sort((a, b) => a.diasFaltan - b.diasFaltan || a.nombre.localeCompare(b.nombre, 'es'));
+  out.sort((a, b) => a.referencia.localeCompare(b.referencia) || a.nombre.localeCompare(b.nombre, 'es'));
   return out;
+}
+
+/**
+ * Cuándo es, en pocas palabras: "faltan 12 días", "es mañana", "es hoy".
+ *
+ * Una época larga que ya arrancó no "es hoy" durante tres meses: dice hasta
+ * cuándo sigue. Recibe una próxima de `temporadasProximas` o el `temporada` de
+ * una recomendación, que traen los mismos campos.
+ */
+export function cuandoEs(t) {
+  const d = Number(t?.diasFaltan) || 0;
+  if (t?.larga && d <= 0) return `hasta el ${_fechaLinda(t.hasta)}`;
+  return d <= 0 ? 'es hoy' : d === 1 ? 'es mañana' : `faltan ${d} días`;
+}
+
+/**
+ * Para cuántos días se compra.
+ *
+ * Una fecha corta, para toda su ventana. Una época larga, para lo que le queda
+ * con un tope de `HORIZONTE_LARGA`: en octubre se compran las comuniones de
+ * octubre, no las de noviembre.
+ */
+export function diasDeCompra(proxima) {
+  const temp = temporadaPorId(proxima?.id);
+  const ventana = Math.max(1, (Number(temp?.previa) || 0) + (Number(temp?.post) || 0));
+  if (!temp?.larga) return ventana;
+  const restan = Number(proxima?.diasRestan);
+  return Math.max(1, Math.min(HORIZONTE_LARGA, Number.isFinite(restan) && restan > 0 ? restan : ventana));
+}
+
+/** Lo que viaja pegado a cada recomendación para poder explicarla. */
+function _datosDeFecha(proxima) {
+  return {
+    id: proxima?.id, nombre: proxima?.nombre, fecha: proxima?.fecha,
+    diasFaltan: proxima?.diasFaltan,
+    ...(proxima?.larga ? { larga: true, hasta: proxima.hasta, diasCompra: diasDeCompra(proxima) } : {}),
+  };
 }
 
 // ── Normalización ────────────────────────────────────────────────────────────
@@ -475,6 +568,7 @@ export function claveProducto(nombre, color) {
 function _indiceDeVentanas(temporadas, anios) {
   const por = new Map();   // 'YYYY-MM-DD' → { id, dist, ancho }
   for (const t of temporadas) {
+    if (t.larga) continue;   // las épocas largas no compiten: ver `_diasDeLargas`
     const ancho = (Number(t.previa) || 0) + (Number(t.post) || 0);
     const id = grupoDe(t);
     for (const y of anios) {
@@ -489,6 +583,32 @@ function _indiceDeVentanas(temporadas, anios) {
             || (dist === actual.dist && ancho === actual.ancho && id < actual.id)) {
           por.set(d, { id, dist, ancho });
         }
+      }
+    }
+  }
+  return por;
+}
+
+/**
+ * Índice fecha → las épocas largas que lo incluyen.
+ *
+ * Van aparte del índice de las fechas cortas porque no se reparten los días:
+ * la primera semana de octubre es comuniones Y Día de la Madre, y lo que se
+ * vende ahí cuenta para las dos. Si compitieran, la época de tres meses se
+ * quedaría con los días sueltos entre fecha y fecha, o les robaría los suyos.
+ */
+function _diasDeLargas(temporadas, anios) {
+  const por = new Map();   // 'YYYY-MM-DD' → [grupo, ...]
+  for (const t of temporadas) {
+    if (!t.larga) continue;
+    const id = grupoDe(t);
+    for (const y of anios) {
+      const v = ventanaDeTemporada(t, y);
+      if (!v) continue;
+      for (let d = v.desde; d <= v.hasta; d = sumarDiasYmd(d, 1)) {
+        const l = por.get(d) || [];
+        if (!l.includes(id)) l.push(id);
+        por.set(d, l);
       }
     }
   }
@@ -572,19 +692,28 @@ export function estudiarTemporadas(items, {
   const desde = dias[0], hasta = dias[dias.length - 1];
   const anios = [...new Set(dias.map(d => Number(d.slice(0, 4))))].sort();
   const ventanas = _indiceDeVentanas(temporadas, anios);
+  const largas = _diasDeLargas(temporadas, anios);
+  // A qué grupos pertenece un día: la fecha corta que se lo quedó, más las
+  // épocas largas que lo cubren.
+  const gruposDelDia = (d) => {
+    const due = ventanas.get(d);
+    const l = largas.get(d);
+    if (!due) return l || [];
+    return l ? [due.id, ...l] : [due.id];
+  };
 
   // Días de cada grupo y años en los que se lo pudo medir.
   const diasDeTemp = new Map();      // grupo → Set de días
   const aniosDeTemp = new Map();     // grupo → Set de años
   for (const d of dias) {
-    const due = ventanas.get(d);
-    if (!due) continue;
-    let s = diasDeTemp.get(due.id);
-    if (!s) { s = new Set(); diasDeTemp.set(due.id, s); }
-    s.add(d);
-    let a = aniosDeTemp.get(due.id);
-    if (!a) { a = new Set(); aniosDeTemp.set(due.id, a); }
-    a.add(Number(d.slice(0, 4)));
+    for (const g of gruposDelDia(d)) {
+      let s = diasDeTemp.get(g);
+      if (!s) { s = new Set(); diasDeTemp.set(g, s); }
+      s.add(d);
+      let a = aniosDeTemp.get(g);
+      if (!a) { a = new Set(); aniosDeTemp.set(g, a); }
+      a.add(Number(d.slice(0, 4)));
+    }
   }
 
   // Cuántas veces se pudo medir cada grupo: una por fecha y por año con venta
@@ -621,19 +750,19 @@ export function estudiarTemporadas(items, {
     const clave = claveProducto(f.nombre, f.color);
     total.set(clave, (total.get(clave) || 0) + f.uds);
     if (f.color) totalColor.set(f.color, (totalColor.get(f.color) || 0) + f.uds);
-    const due = ventanas.get(f.dia);
-    if (!due) continue;
-    let m = porTemp.get(due.id);
-    if (!m) { m = new Map(); porTemp.set(due.id, m); }
-    const e = m.get(clave);
-    if (e) { e.u += f.uds; e.d.set(f.dia, (e.d.get(f.dia) || 0) + f.uds); }
-    else m.set(clave, { n: f.nombre, c: f.color, u: f.uds, d: new Map([[f.dia, f.uds]]) });
-    if (!f.color) continue;
-    let mc = porTempColor.get(due.id);
-    if (!mc) { mc = new Map(); porTempColor.set(due.id, mc); }
-    const ec = mc.get(f.color);
-    if (ec) { ec.u += f.uds; ec.d.set(f.dia, (ec.d.get(f.dia) || 0) + f.uds); }
-    else mc.set(f.color, { u: f.uds, d: new Map([[f.dia, f.uds]]) });
+    for (const g of gruposDelDia(f.dia)) {
+      let m = porTemp.get(g);
+      if (!m) { m = new Map(); porTemp.set(g, m); }
+      const e = m.get(clave);
+      if (e) { e.u += f.uds; e.d.set(f.dia, (e.d.get(f.dia) || 0) + f.uds); }
+      else m.set(clave, { n: f.nombre, c: f.color, u: f.uds, d: new Map([[f.dia, f.uds]]) });
+      if (!f.color) continue;
+      let mc = porTempColor.get(g);
+      if (!mc) { mc = new Map(); porTempColor.set(g, mc); }
+      const ec = mc.get(f.color);
+      if (ec) { ec.u += f.uds; ec.d.set(f.dia, (ec.d.get(f.dia) || 0) + f.uds); }
+      else mc.set(f.color, { u: f.uds, d: new Map([[f.dia, f.uds]]) });
+    }
   }
 
   const diasTotales = dias.length;
@@ -858,7 +987,7 @@ export function recomendarPorPistas(proxima, {
 } = {}) {
   const temp = temporadaPorId(proxima?.id);
   if (!temp) return [];
-  const dias = Math.max(1, (Number(temp.previa) || 0) + (Number(temp.post) || 0));
+  const dias = diasDeCompra(proxima);
   const out = [];
   for (const c of candidatos) {
     const velDia = Math.max(0, Number(c.velDia) || 0);
@@ -887,7 +1016,7 @@ export function recomendarPorPistas(proxima, {
       faltan: Math.max(0, esperado - stock),
       urgencia,
       porPista: true,
-      temporada: { id: proxima.id, nombre: proxima.nombre, fecha: proxima.fecha, diasFaltan: proxima.diasFaltan },
+      temporada: _datosDeFecha(proxima),
     });
   }
   // Primero lo que más se mueve: de una corazonada, lo único sólido es que el
@@ -962,12 +1091,16 @@ export function recomendarParaTemporada(proxima, estudio, {
   // fechas hermanas (las tres patrias). Lo que se espera para ESTA vez es el
   // promedio, no la suma de todas.
   const veces = Math.max(1, Number(datos.veces) || (datos.anios || []).length || 1);
+  // Una época larga se mide por día —el estudio puede haber visto tres semanas
+  // de tres meses— y se compra para los días que dice `diasDeCompra`.
+  const porDiaMedido = proxima.larga && Number(datos.dias) > 0
+    ? diasDeCompra(proxima) / Number(datos.dias) : null;
   const out = [];
   for (const p of datos.productos) {
     const clave = claveProducto(p.n, p.c);
     const info = stockDe(clave, { nombre: p.n, color: p.c });
     if (!info) continue;
-    const esperado = p.u / veces;
+    const esperado = porDiaMedido != null ? p.u * porDiaMedido : p.u / veces;
     const urgencia = urgenciaDeTemporada({
       empuje: p.e,
       esperado,
@@ -988,7 +1121,7 @@ export function recomendarParaTemporada(proxima, estudio, {
       faltan: Math.max(0, esperado - Math.max(0, Number(info.stock) || 0)),
       urgencia,
       porPista: false,
-      temporada: { id: proxima.id, nombre: proxima.nombre, fecha: proxima.fecha, diasFaltan: proxima.diasFaltan },
+      temporada: _datosDeFecha(proxima),
     });
   }
   out.sort((a, b) => b.urgencia - a.urgencia || b.faltan - a.faltan);
@@ -1008,9 +1141,7 @@ export function recomendarParaTemporada(proxima, estudio, {
 export function motivoTemporada(rec, { conFecha = true } = {}) {
   if (!rec?.temporada) return '';
   const t = rec.temporada;
-  const cuando = t.diasFaltan <= 0 ? 'es hoy'
-    : t.diasFaltan === 1 ? 'es mañana'
-    : `faltan ${t.diasFaltan} días`;
+  const cuando = cuandoEs(t);
   const donde = conFecha ? `${t.nombre} (${cuando})` : 'esta fecha';
   // Lo que el dueño sumó a mano no tiene cuenta que mostrar: decir "se vende 0
   // veces más que el resto del año" es peor que no decir nada.
@@ -1035,7 +1166,9 @@ export function explicarTemporada(rec) {
     const v = Number(x) || 0;
     return Number.isInteger(v) ? String(v) : String(Math.round(v * 10) / 10).replace('.', ',');
   };
-  const lineas = [`${t.nombre} · ${_fechaLinda(t.fecha)}`];
+  const lineas = [t.larga
+    ? `${t.nombre} · del ${_fechaLinda(t.fecha)} al ${_fechaLinda(t.hasta)}`
+    : `${t.nombre} · ${_fechaLinda(t.fecha)}`];
   if (rec.porMano) {
     lineas.push('· Lo sumaste vos a esta fecha');
     lineas.push('· No sale de tus ventas: está acá porque lo pediste');
@@ -1043,11 +1176,17 @@ export function explicarTemporada(rec) {
     lineas.push('· Todavía no hay ventas viejas de esta fecha para medir');
     lineas.push(`· Entra por el tipo de producto, no por lo que vendió`);
   } else {
-    lineas.push(`· En la fecha se vende ${n(rec.empuje)} veces más que el resto del año`);
-    lineas.push(`· La última vez se vendieron ${n(rec.esperado)} unidades`);
+    lineas.push(`· En ${t.larga ? 'la época' : 'la fecha'} se vende ${n(rec.empuje)} veces más que el resto del año`);
+    lineas.push(t.larga
+      ? `· Al ritmo de la época, en ${t.diasCompra} días se venden ${n(rec.esperado)} unidades`
+      : `· La última vez se vendieron ${n(rec.esperado)} unidades`);
   }
   lineas.push(`· Stock de hoy: ${n(rec.stock)}`);
-  if (rec.faltan > 0) lineas.push(`· Faltarían ${n(rec.faltan)} para llegar igual que la vez pasada`);
+  if (rec.faltan > 0) {
+    lineas.push(t.larga
+      ? `· Faltarían ${n(rec.faltan)} para cubrir esos ${t.diasCompra} días`
+      : `· Faltarían ${n(rec.faltan)} para llegar igual que la vez pasada`);
+  }
   lineas.push(rec.porMano
     ? 'Va a seguir apareciendo en esta fecha hasta que lo saques.'
     : rec.porPista
@@ -1144,10 +1283,7 @@ export function aplicarAjustes(recomendaciones, ajustes, proxima, { stockDe } = 
       aMano: true,
       // Lo trajo el dueño, no el motor: no hay empuje ni pista que explicar.
       porMano: true,
-      temporada: {
-        id: proxima?.id, nombre: proxima?.nombre,
-        fecha: proxima?.fecha, diasFaltan: proxima?.diasFaltan,
-      },
+      temporada: _datosDeFecha(proxima),
     });
   }
   out.sort((a, b) => b.urgencia - a.urgencia || b.faltan - a.faltan);

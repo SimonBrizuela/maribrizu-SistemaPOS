@@ -23,7 +23,7 @@ import {
   estudiarTemporadas, recomendarParaTemporada, recomendarPorPistas,
   coincidePorPista, urgenciaDeTemporada, motivoTemporada, explicarTemporada,
   estudioVigente, claveProducto, normTxt, aplicarAjustes,
-  EMPUJE_MINIMO, AVISO_DEFAULT_DIAS,
+  EMPUJE_MINIMO, AVISO_DEFAULT_DIAS, HORIZONTE_LARGA, cuandoEs, diasDeCompra,
 } from '../../webapp/src/temporadas.js';
 import { pascua, domingoN, diasEntre, sumarDiasYmd, deYmd } from '../../webapp/src/fechas_ar.js';
 
@@ -47,7 +47,9 @@ describe('el almanaque', () => {
       expect(t.id, 'id').toBeTruthy();
       expect(t.nombre, `nombre de ${t.id}`).toBeTruthy();
       expect(t.cuando, `cuando de ${t.id}`).toBeTruthy();
-      expect(t.previa, `previa de ${t.id}`).toBeGreaterThan(0);
+      // Una época larga arranca el día que dice `cuando` y dura `post`.
+      if (t.larga) expect(t.post, `post de ${t.id}`).toBeGreaterThan(0);
+      else expect(t.previa, `previa de ${t.id}`).toBeGreaterThan(0);
       expect(fechaDeTemporada(t, 2026), `fecha de ${t.id}`).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     }
   });
@@ -124,9 +126,12 @@ describe('qué fechas se vienen', () => {
   });
 
   it('salen ordenadas de la más cercana a la más lejana', () => {
+    // Por el día que las representa: la fecha, o el cierre de una época ya
+    // arrancada (las comuniones del 21/09 van hasta el 30/11).
     const prox = temporadasProximas('2026-09-21');
-    const dias = prox.map(p => p.diasFaltan);
+    const dias = prox.map(p => diasEntre('2026-09-21', p.referencia));
     expect(dias).toEqual([...dias].sort((a, b) => a - b));
+    for (const p of prox.filter(x => !x.larga)) expect(diasEntre('2026-09-21', p.referencia)).toBe(p.diasFaltan);
   });
 
   it('marca la que ya arrancó a venderse', () => {
@@ -601,5 +606,126 @@ describe('las correcciones del dueño', () => {
     const recs = [{ clave: 'a', urgencia: 10, faltan: 1 }, { clave: 'b', urgencia: 20, faltan: 1 }];
     // Ordenada por urgencia, que es como la mira el dueño.
     expect(aplicarAjustes(recs, {}, madre, { stockDe }).map(r => r.clave)).toEqual(['b', 'a']);
+  });
+});
+
+describe('las comuniones: una época de tres meses, no una fecha', () => {
+  // Pedido del encargado (22/09/2026): "septiembre, octubre y noviembre es
+  // época de comunión. También todo amarillo y blanco. Tarjetas, velas,
+  // rosarios."
+  const com = temporadaPorId('comuniones');
+
+  it('va del 1 de septiembre al 30 de noviembre', () => {
+    const v = ventanaDeTemporada(com, 2026);
+    expect(v.desde).toBe('2026-09-01');
+    expect(v.hasta).toBe('2026-11-30');
+  });
+
+  it('en plena época figura como en venta y dice hasta cuándo sigue', () => {
+    const p = temporadasProximas('2026-10-05').find(x => x.id === 'comuniones');
+    expect(p.enVenta).toBe(true);
+    expect(p.larga).toBe(true);
+    expect(cuandoEs(p)).toBe('hasta el 30 de noviembre');
+  });
+
+  it('ya arrancada va detrás de las fechas cortas que se vienen', () => {
+    // El 1 de octubre lo que apura es el Día de la Madre; la época sigue hasta
+    // fin de noviembre y se ordena por ese día.
+    const ids = temporadasProximas('2026-10-01').map(x => x.id);
+    expect(ids.indexOf('dia_madre')).toBeLessThan(ids.indexOf('comuniones'));
+    expect(temporadasProximas('2026-10-01').find(x => x.id === 'comuniones').referencia).toBe('2026-11-30');
+  });
+
+  it('antes de arrancar cuenta los días como cualquier fecha', () => {
+    const p = temporadasProximas('2026-07-15').find(x => x.id === 'comuniones');
+    expect(p.diasFaltan).toBe(48);
+    expect(cuandoEs(p)).toBe('faltan 48 días');
+  });
+
+  it('en diciembre ya pasó y no vuelve hasta que falten dos meses', () => {
+    expect(temporadasProximas('2026-12-05').some(x => x.id === 'comuniones')).toBe(false);
+  });
+
+  it('se compra lo del próximo mes, no los tres de una', () => {
+    const p = temporadasProximas('2026-09-23').find(x => x.id === 'comuniones');
+    expect(diasDeCompra(p)).toBe(HORIZONTE_LARGA);
+    // Con una semana por delante, se compra la semana.
+    const fin = temporadasProximas('2026-11-24').find(x => x.id === 'comuniones');
+    expect(diasDeCompra(fin)).toBe(7);
+  });
+
+  it('no les roba los días a las fechas cortas: octubre cuenta para las dos', () => {
+    // Tarjetas vendidas la semana antes del Día de la Madre: son de la Madre
+    // Y de la época de comuniones.
+    const dias = ['2026-10-05', '2026-10-07', '2026-10-09', '2026-10-12', '2026-10-14'];
+    const items = [
+      ...repartido(dias, 'TARJETA OPALINA', 6),
+      ...repartido(['2026-05-04', '2026-06-10', '2026-07-15'], 'TARJETA OPALINA', 1),
+    ];
+    const est = estudiarTemporadas(items, { aYmd });
+    expect(est.temporadas.dia_madre?.productos.some(p => p.n === 'tarjeta opalina')).toBe(true);
+    expect(est.temporadas.comuniones?.productos.some(p => p.n === 'tarjeta opalina')).toBe(true);
+  });
+
+  it('las fechas cortas se estudian igual que antes de que existiera', () => {
+    const items = [
+      ...repartido(['2026-09-01', '2026-09-02', '2026-09-03', '2026-09-04', '2026-09-05'], 'LIMPIA PIPA', 20, 'amarillo'),
+      ...repartido(['2026-05-04', '2026-06-10', '2026-07-15'], 'LIMPIA PIPA', 1, 'amarillo'),
+    ];
+    const con = estudiarTemporadas(items, { aYmd });
+    const sin = estudiarTemporadas(items, { aYmd, temporadas: TEMPORADAS.filter(t => !t.larga) });
+    expect(con.temporadas.septiembre).toEqual(sin.temporadas.septiembre);
+  });
+
+  it('lo medido se lleva a los días que se compran, no a los que se midieron', () => {
+    // El estudio vio 20 días de la época con 40 unidades: 2 por día. Para el
+    // próximo mes se esperan 60, no 40.
+    const estudio = {
+      temporadas: { comuniones: { anios: [2026], veces: 1, dias: 20, productos: [{ n: 'vela torneada', c: '', u: 40, b: 0.1, e: 8, d: 12 }] } },
+    };
+    const prox = temporadasProximas('2026-09-23').find(x => x.id === 'comuniones');
+    const recs = recomendarParaTemporada(prox, estudio, {
+      stockDe: () => ({ stock: 10, docId: 'x', producto: null }),
+    });
+    expect(recs).toHaveLength(1);
+    expect(recs[0].esperado).toBe(60);
+    expect(recs[0].faltan).toBe(50);
+    expect(explicarTemporada(recs[0])).toContain('del 1 de septiembre al 30 de noviembre');
+    expect(explicarTemporada(recs[0])).toContain('en 30 días se venden 60 unidades');
+  });
+
+  it('el motivo en la fila no dice "es hoy" durante tres meses', () => {
+    const prox = temporadasProximas('2026-10-20').find(x => x.id === 'comuniones');
+    const [r] = recomendarPorPistas(prox, {
+      candidatos: [{ nombre: 'CORDON COMUNION KB POLYESTER ART 025', color: '', rubro: 'MERCERIA', subRubro: 'CORDON', stock: 0, velDia: 1, docId: 'c' }],
+    });
+    expect(motivoTemporada(r)).toBe('suele venderse para Comuniones (hasta el 30 de noviembre)');
+  });
+
+  it('reconoce lo de la comunión que hay en el catálogo', () => {
+    const si = (nombre, extra = {}) => coincidePorPista(com, { nombre, ...extra });
+    expect(si('CORDON COMUNION KB POLYESTER ART 025')).toBe(true);
+    expect(si('CRUZ MADERA CBX 2,5CM X 4CM')).toBe(true);
+    expect(si('VELA TORNEADA GRANDE')).toBe(true);
+    expect(si('TARJETA OPALINA COLOR')).toBe(true);
+    expect(si('TUL QUEBRADO 1,50MT DE ANCHO X MT', { color: 'BLANCO' })).toBe(true);
+    expect(si('CARTULINA', { color: 'AMARILLO' })).toBe(true);
+  });
+
+  it('pero no lo que solo comparte la palabra', () => {
+    const si = (nombre, extra = {}) => coincidePorPista(com, { nombre, ...extra });
+    expect(si('PINZA ROSARIO CON CORTE ART 1676')).toBe(false);
+    expect(si('GALON YUTE CRUZ 20MM XMT')).toBe(false);
+    expect(si('BOLSO FASHION CRUZADO 241254')).toBe(false);
+    expect(si('PORTA TARJETA EM CAPIBARA')).toBe(false);
+    // La cartulina blanca se vende todo el año para la escuela.
+    expect(si('CARTULINA', { color: 'BLANCO' })).toBe(false);
+    // Costura y oficina que vienen en blanco o amarillo.
+    expect(si('CINTA MOCHILERA POLY 2 CM', { color: 'BLANCO' })).toBe(false);
+    expect(si('CINTA BIES RASO 20MM', { color: 'BLANCO' })).toBe(false);
+    expect(si('CARPETA PH A4 CARTULINA CARATULA', { color: 'AMARILLO' })).toBe(false);
+    expect(si('CORDON ZAPATILLAS-ZAPATOS REDONDO / OVALADO 1,50 MT X PAR', { color: 'BLANCO' })).toBe(false);
+    // La cinta de raso blanca sí es de la comunión.
+    expect(si('CINTA RASO Nº 0', { color: 'BLANCO' })).toBe(true);
   });
 });

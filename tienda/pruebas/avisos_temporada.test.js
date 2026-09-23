@@ -174,3 +174,29 @@ describe('el aviso en pantalla', () => {
     expect(document.querySelector('.ll-toast')).toBeNull();
   });
 });
+
+describe('una época larga (comuniones)', () => {
+  const epoca = (diasFaltan, extra = {}) => ({
+    id: 'comuniones', nombre: 'Comuniones', larga: true, hasta: '2026-11-30',
+    diasFaltan, plazoAviso: 60, enVenta: diasFaltan <= 0, nota: '', ...extra,
+  });
+
+  it('en curso dice hasta cuándo sigue, no "es hoy"', () => {
+    expect(textoAviso(epoca(-20))).toBe('Es época de Comuniones: sigue hasta el 30 de noviembre');
+  });
+
+  it('en curso no insiste todos los días: una vez por semana', () => {
+    const lista = [epoca(-20)];
+    mostrarAvisosTemporada({ hoy: '2026-09-21', proximas: lista });
+    expect(avisosPendientes('2026-09-22', lista)).toHaveLength(0);
+    expect(avisosPendientes('2026-09-28', lista)).toHaveLength(1);
+  });
+
+  it('no le tapa el aviso al Día de la Madre', () => {
+    // Las dos en la lista, la época primero porque ya arrancó. Avisada ayer,
+    // hoy le toca a la Madre, que está en venta.
+    const lista = [epoca(-37), fecha('dia_madre', 10, { enVenta: true })];
+    mostrarAvisosTemporada({ hoy: '2026-10-07', proximas: lista });
+    expect(avisosPendientes('2026-10-08', lista).map(x => x.id)).toEqual(['dia_madre']);
+  });
+});

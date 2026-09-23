@@ -11,7 +11,7 @@
 // fecha, que es donde está la lista y la explicación.
 
 import { mostrarToast } from './components/toasts.js';
-import { temporadasProximas } from './temporadas.js';
+import { temporadasProximas, cuandoEs } from './temporadas.js';
 
 // La v1 marcaba el aviso como visto antes de mostrarlo, y como no era
 // prioritario la pila lo podaba enseguida: quedaban marcadas fechas que nadie
@@ -78,7 +78,11 @@ export function avisosPendientes(hoy = null, proximas = null) {
     const ultimo = vistos[t.id] || '';
     if (ultimo === dia) continue;                 // ya se avisó hoy
     const reciénEntró = (t.plazoAviso - t.diasFaltan) <= DIAS_INSISTIR;
-    const insiste = reciénEntró || t.enVenta;
+    // Una época larga en curso (tres meses de comuniones) no insiste todos los
+    // días: taparía a las fechas cortas que caen adentro, y con un aviso por
+    // vez el Día de la Madre no saldría nunca.
+    const enCursoLarga = t.larga && t.diasFaltan <= 0;
+    const insiste = reciénEntró || (t.enVenta && !enCursoLarga);
     if (!insiste && ultimo) {
       // Fuera de esos tramos, una vez por semana alcanza para no olvidarse.
       const hace = Math.round((Date.parse(dia) - Date.parse(ultimo)) / 86400000);
@@ -92,6 +96,7 @@ export function avisosPendientes(hoy = null, proximas = null) {
 
 /** El texto del aviso, en criollo y sin sonar a cartel automático. */
 export function textoAviso(t) {
+  if (t.larga && t.enVenta && t.diasFaltan <= 0) return `Es época de ${t.nombre}: sigue ${cuandoEs(t)}`;
   if (t.enVenta) {
     return t.diasFaltan <= 0
       ? `${t.nombre} es hoy`
@@ -101,6 +106,7 @@ export function textoAviso(t) {
 }
 
 function detalleAviso(t) {
+  if (t.larga && t.enVenta) return 'Todavía llegás a reponer lo que se va vendiendo.';
   if (t.enVenta) return 'Fijate qué te queda en el depósito; para encargar ya es tarde.';
   return 'Preparate mirando qué artículos conviene tener. Todavía llegás a encargar.';
 }

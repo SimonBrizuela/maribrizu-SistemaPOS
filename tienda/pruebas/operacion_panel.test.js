@@ -1220,6 +1220,14 @@ describe('Centro de Compras · lo que se viene por la época', () => {
     // El color dice en qué está cada una.
     expect(c.querySelector('.cc-fecha.is-cerca'), 'alguna dentro del aviso').toBeTruthy();
     expect(c.querySelector('.cc-fecha.is-lejos'), 'alguna todavía lejos').toBeTruthy();
+
+    // Las comuniones ya arrancaron el 1 de octubre: se ven en venta, dicen
+    // hasta cuándo siguen y quedan en noviembre, que es cuando terminan.
+    const com = botones.find(b => b.textContent.includes('Comuniones'));
+    expect(com).toBeTruthy();
+    expect(com.classList.contains('is-ya')).toBe(true);
+    expect(com.querySelector('.cc-fecha-cuando').textContent).toBe('hasta el 30 de noviembre');
+    expect(com.closest('.cc-mes').querySelector('.cc-mes-tit').textContent).toContain('noviembre');
   });
 
   it('abrir una fecha lejana calcula qué comprar y filtra la lista', async () => {

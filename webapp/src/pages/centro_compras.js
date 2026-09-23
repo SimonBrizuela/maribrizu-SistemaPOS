@@ -46,7 +46,7 @@ import {
   VENTANA_CORTA_DIAS, COBERTURA_DEFAULT_DIAS as COBERTURA_DEFAULT,
 } from '../urgencia_compra.js';
 import {
-  motivoTemporada, explicarTemporada, claveProducto, ajustesDeFecha, temporadaPorId, estaExcluido,
+  motivoTemporada, explicarTemporada, claveProducto, ajustesDeFecha, temporadaPorId, estaExcluido, cuandoEs,
 } from '../temporadas.js';
 import {
   cargarEstudio, rehacerEstudio, recomendacionesDeTemporada, ideasQueFaltan,
@@ -1684,7 +1684,8 @@ function rowHtml(r, i, esContinuacion) {
   // en la lista por otra cosa: son dos motivos distintos y los dos importan.
   if (porEpoca) {
     const t = r.temporada;
-    const cuando = t.diasFaltan <= 0 ? 'hoy' : t.diasFaltan === 1 ? 'mañana' : `en ${t.diasFaltan} días`;
+    const cuando = t.larga && t.diasFaltan <= 0 ? cuandoEs(t)
+      : t.diasFaltan <= 0 ? 'hoy' : t.diasFaltan === 1 ? 'mañana' : `en ${t.diasFaltan} días`;
     chip += `<span class="cc-chip cc-chip-epoca${r.temporada_por_pista ? ' es-corazonada' : ''}${r.temporada_a_mano ? ' es-amano' : ''}"
       data-tip="${esc(explicarTemporada({
         temporada: t, empuje: r.temporada_empuje, esperado: r.temporada_esperado,
@@ -1968,15 +1969,13 @@ function paintTemporadas() {
   const partes = [];
   for (const p of proximas.slice(0, 3)) {
     const n = s.rows.filter(r => r.temporada?.id === p.id && !r.registrado).length;
-    const cuando = p.diasFaltan <= 0 ? 'es hoy'
-      : p.diasFaltan === 1 ? 'es mañana'
-      : `faltan ${p.diasFaltan} días`;
+    const cuando = cuandoEs(p);
     const activo = s.temporadaFiltro === p.id;
     const ideas = ideasQueFaltan(p.id, peekCacheValue('catalogo:all') || []);
     partes.push(`
       <div class="cc-epoca${activo ? ' is-on' : ''}${p.enVenta ? ' cc-epoca-ya' : ''}">
         <div class="cc-epoca-head">
-          ${taquitoHtml(p.fecha)}
+          ${taquitoHtml(p.referencia || p.fecha)}
           <button type="button" class="cc-epoca-tit" data-action="abrir-fecha" data-id="${esc(p.id)}"
                   title="Abrir ${esc(p.nombre)} y ver qué conviene comprar">
             <b>${esc(p.nombre)}</b>
@@ -2049,9 +2048,7 @@ function paintFechas() {
       est.medida ? '' : 'is-corazonada',
       elegida ? 'is-on' : '',
     ].filter(Boolean).join(' ');
-    const cuando = t.diasFaltan <= 0 ? 'es hoy'
-      : t.diasFaltan === 1 ? 'es mañana'
-      : `faltan ${t.diasFaltan} días`;
+    const cuando = cuandoEs(t);
     const pie = datos
       ? `${datos.n} para comprar${datos.plata > 0 ? ` · ${money(datos.plata)}` : ''}`
       : (abierta || cerca ? 'nada para reponer' : 'tocá para ver');
@@ -2059,7 +2056,7 @@ function paintFechas() {
         title="${esc(est.medida
           ? `Medido con tus ventas${est.veces > 1 ? ` (${est.veces} pasadas)` : ''}${est.colores?.length ? ` · colores que vuelan: ${est.colores.join(', ')}` : ''}`
           : 'Todavía no hay ventas tuyas de esta fecha: lo que salga es por el tipo de producto')}">
-      ${taquitoHtml(t.fecha)}
+      ${taquitoHtml(t.referencia || t.fecha)}
       <span class="cc-fecha-txt">
         <span class="cc-fecha-nom">${esc(t.nombre)}</span>
         <span class="cc-fecha-cuando">${cuando}</span>
@@ -2070,10 +2067,11 @@ function paintFechas() {
 
   const porMes = [];
   for (const t of todas) {
-    const mes = mesDe(t.fecha);
+    const ref = t.referencia || t.fecha;
+    const mes = mesDe(ref);
     const ultimo = porMes[porMes.length - 1];
     if (ultimo && ultimo.mes === mes) ultimo.items.push(t);
-    else porMes.push({ mes, anio: t.fecha.slice(0, 4), items: [t] });
+    else porMes.push({ mes, anio: ref.slice(0, 4), items: [t] });
   }
   const anioHoy = hoyAR().slice(0, 4);
   const botones = porMes.map(g => `
@@ -2132,7 +2130,7 @@ function detalleFechaHtml(t, datos) {
   return `<div class="cc-fecha-det">
     <div class="cc-fecha-det-head">
       <b>${esc(t.nombre)}</b>
-      <span>${esc(fechaLinda(t.fecha))} · ${t.diasFaltan <= 0 ? 'es hoy' : `faltan ${t.diasFaltan} días`}</span>
+      <span>${esc(fechaLinda(t.fecha))} · ${esc(cuandoEs(t))}</span>
       ${n > 0
         ? `<span class="cc-fecha-det-n">${n} producto${n === 1 ? '' : 's'} en la lista${datos.plata > 0 ? ` · ${money(datos.plata)}` : ''}</span>`
         : '<span class="cc-fecha-det-n">no encontré nada que reponer para esta fecha</span>'}
