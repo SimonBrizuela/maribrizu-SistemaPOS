@@ -288,16 +288,24 @@ export const TEMPORADAS = [
     // blanca con la que se arma el souvenir.
     id: 'comuniones', nombre: 'Comuniones', larga: true, cuando: { mes: 9, dia: 1 },
     previa: 0, post: 90, aviso: 60,
+    // Las ideas salen de lo que se ofrece para comuniones en Argentina
+    // (Mercado Libre, mayoristas de cotillón, santerías; 23/09/2026): el
+    // souvenir más vendido es el decenario —un rosario chico— con cruz calada,
+    // acompañado de tarjeta, y se arma en lata pastillera o bolsita.
     ideas: [
       { que: 'rosarios y denarios', buscar: ['denario'] },
+      { que: 'decenarios para souvenir', buscar: ['decenario'] },
       { que: 'estampitas y recordatorios', buscar: ['estampita'] },
       { que: 'tarjetas de comunión', buscar: ['tarjeta', 'comunion'] },
       { que: 'cirios y velas de comunión', buscar: ['cirio'] },
-      { que: 'cálices y cruces para souvenir', buscar: ['caliz'] },
+      { que: 'cálices y cruces caladas para souvenir', buscar: ['caliz'] },
+      { que: 'moños armados para souvenirs', buscar: ['mono', 'souvenir'] },
+      { que: 'latas pastilleras', buscar: ['pastillero'] },
+      { que: 'banderines y kit de decoración "Mi primera comunión"', buscar: ['banderin', 'comunion'] },
     ],
     pistas: {
       rubros: [],
-      palabras: ['comunion', 'rosario', 'denario', 'estampita', 'recordatorio', 'cirio', 'caliz', 'cruz', 'vela torneada', 'vela larga', 'tarjeta', 'souvenir', 'bolsa organza', 'media perla', 'perla'],
+      palabras: ['comunion', 'rosario', 'denario', 'decenario', 'estampita', 'recordatorio', 'cirio', 'caliz', 'cruz', 'vela torneada', 'vela larga', 'tarjeta', 'souvenir', 'pastillero', 'bolsa organza', 'media perla', 'perla'],
       colores: ['amarillo', 'blanco', 'blanca'],
       combinaciones: [
         { palabras: ['goma eva', 'cartulina', 'papel afiche', 'papel crepe', 'crepe', 'celofan', 'barrilete', 'globo', 'brillantina', 'fieltro', 'panolenci', 'tul', 'tull', 'cinta', 'limpia pipa', 'flor', 'pompon', 'pluma marabu'], colores: ['amarillo'] },
