@@ -12,7 +12,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
 const { datos } = vi.hoisted(() => ({
-  datos: { porColeccion: {}, escrituras: [] },
+  datos: { porColeccion: {}, escrituras: [], avisosStore: new Set() },
 }));
 
 vi.mock('firebase/firestore', async () => {
@@ -54,7 +54,10 @@ vi.mock('../../webapp/src/auth.js', () => ({
   hasSessionHint: () => true, logout: async () => {},
 }));
 vi.mock('../../webapp/src/store.js', () => ({
-  ensureCollections: () => {}, onStoreChange: () => () => {},
+  ensureCollections: () => {},
+  // Guarda a quién avisar, para que una prueba pueda simular "llegaron las
+  // ventas" como lo hace el listener real.
+  onStoreChange: (cb) => { datos.avisosStore.add(cb); return () => datos.avisosStore.delete(cb); },
   initStore: async () => {}, storeListo: async () => {},
 }));
 
@@ -1190,6 +1193,34 @@ describe('Centro de Compras · lo que se viene por la época', () => {
       const doc = guardado.datos || {};
       expect(Object.keys(doc.temporadas || {}), 'aprendió de las ventas en memoria').not.toHaveLength(0);
       expect(doc.grupos, 'guarda qué fechas miró').toContain('comuniones');
+    } finally {
+      invalidateCache('historial:ventas_dia:v3');
+    }
+  });
+
+  it('si entra antes de que lleguen las ventas, espera y estudia igual', async () => {
+    // Apenas iniciada la sesión el store todavía no trajo las ventas. Antes,
+    // ese día no se estudiaba; ahora se espera al aviso del store.
+    const { setCacheValue, invalidateCache } = await import('../../webapp/src/cache.js');
+    invalidateCache('historial:ventas_dia:v3');
+    datos.porColeccion.ventas_por_dia = [];
+    datos.escrituras.length = 0;
+    const estudio = () => datos.escrituras.find(e => JSON.stringify(e.ref || {}).includes('temporadas_aprendidas'));
+    try {
+      await montar('centro_compras', 'renderCentroCompras');
+      for (let i = 0; i < 10; i++) await esperar(5);
+      expect(estudio(), 'sin ventas en memoria todavía no estudia').toBeFalsy();
+
+      // Llegan las ventas del listener.
+      const fondo = [];
+      for (let n = 5; n < 400; n += 2) fondo.push(ventaEl(n, 'CUADERNO RIVADAVIA', 3));
+      const enLaFecha = [356, 354, 352, 350, 348].map(n => ventaEl(n, 'ROSA ARTIFICIAL', 12));
+      setCacheValue('historial:ventas_dia:v3', [...fondo, ...enLaFecha]);
+      for (const cb of [...datos.avisosStore]) cb('ventas_por_dia');
+      for (let i = 0; i < 30; i++) await esperar(5);
+
+      expect(estudio(), 'apenas llegan, estudia').toBeTruthy();
+      expect(Object.keys(estudio().datos?.temporadas || {})).not.toHaveLength(0);
     } finally {
       invalidateCache('historial:ventas_dia:v3');
     }

@@ -34,6 +34,7 @@ import { doc, updateDoc, serverTimestamp, deleteField } from 'firebase/firestore
 import { loadBalanceConfig, loadDiasMes, saveDiasMes, loadComprasConfig, saveComprasConfig } from '../config.js';
 import { refrescarAlertas, obtenerCandidatosCompra, obtenerVentanasVenta } from '../notifications.js';
 import { peekCacheValue, isHydrated } from '../cache.js';
+import { onStoreChange } from '../store.js';
 import { sugerirCantidad } from '../inventario_resumen.js';
 import { confirmDialog, alertDialog } from '../components/dialogs.js';
 import { listaCuadernoHtml } from '../lista_cuaderno.js';
@@ -772,7 +773,30 @@ export async function renderCentroCompras(container, db) {
   // El estudio se rehace solo si está viejo o no conoce alguna fecha. Va
   // después de pintar: la pantalla se usa con el estudio guardado mientras
   // tanto y se actualiza cuando termina.
-  if (temporadas?.motivo && ventasEnMemoria()) estudiarEpocas({ auto: true });
+  if (temporadas?.motivo) {
+    if (ventasEnMemoria()) estudiarEpocas({ auto: true });
+    else estudiarCuandoLleguenLasVentas();
+  }
+}
+
+/**
+ * Espera a que el store traiga las ventas y recién ahí estudia.
+ *
+ * Entrando apenas se inicia sesión, las ventas todavía no llegaron (o lo que
+ * hay es el snapshot de la sesión anterior). Sin esperar, ese día no se
+ * estudiaba. El Centro de Compras pide `ventas_por_dia` al entrar, así que el
+ * aviso del store llega siempre. Si mientras tanto se van a otra pantalla, el
+ * estudio se hace igual y queda guardado: no depende de que se vea.
+ */
+let _esperaVentas = null;
+function estudiarCuandoLleguenLasVentas() {
+  if (_esperaVentas) return;   // ya hay una espera en curso
+  _esperaVentas = onStoreChange(col => {
+    if (col !== 'ventas_por_dia' || !ventasEnMemoria()) return;
+    _esperaVentas?.();
+    _esperaVentas = null;
+    estudiarEpocas({ auto: true });
+  });
 }
 
 /**
