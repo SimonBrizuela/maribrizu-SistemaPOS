@@ -1170,6 +1170,31 @@ describe('Centro de Compras · lo que se viene por la época', () => {
     expect(JSON.stringify(doc).length).toBeLessThan(1024 * 1024);
   });
 
+  it('sin estudio, se estudia solo al entrar y con las ventas que ya están en memoria', async () => {
+    // Pedido del 23/09/2026: que no dependa de apretar el botón. Y sin leer
+    // de nuevo las 36.000 filas: el store del panel ya las tiene. Firestore
+    // queda VACÍO a propósito; si el estudio saliera a leerlo, no aprendería
+    // nada.
+    const { setCacheValue, invalidateCache } = await import('../../webapp/src/cache.js');
+    const fondo = [];
+    for (let n = 5; n < 400; n += 2) fondo.push(ventaEl(n, 'CUADERNO RIVADAVIA', 3));
+    const enLaFecha = [356, 354, 352, 350, 348].map(n => ventaEl(n, 'ROSA ARTIFICIAL', 12));
+    setCacheValue('historial:ventas_dia:v3', [...fondo, ...enLaFecha]);
+    datos.porColeccion.ventas_por_dia = [];
+    datos.escrituras.length = 0;
+    try {
+      await montar('centro_compras', 'renderCentroCompras');
+      for (let i = 0; i < 30; i++) await esperar(5);
+      const guardado = datos.escrituras.find(e => JSON.stringify(e.ref || {}).includes('temporadas_aprendidas'));
+      expect(guardado, 'se estudió sin que nadie apriete nada').toBeTruthy();
+      const doc = guardado.datos || {};
+      expect(Object.keys(doc.temporadas || {}), 'aprendió de las ventas en memoria').not.toHaveLength(0);
+      expect(doc.grupos, 'guarda qué fechas miró').toContain('comuniones');
+    } finally {
+      invalidateCache('historial:ventas_dia:v3');
+    }
+  });
+
   it('tocar el nombre de la fecha abre lo que recomienda', async () => {
     // El dueño pedía apretar el nombre, no sólo el botón de la derecha.
     const c = await montar('centro_compras', 'renderCentroCompras');

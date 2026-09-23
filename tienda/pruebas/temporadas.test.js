@@ -22,7 +22,7 @@ import {
   fechaDeTemporada, ventanaDeTemporada, temporadasProximas,
   estudiarTemporadas, recomendarParaTemporada, recomendarPorPistas,
   coincidePorPista, urgenciaDeTemporada, motivoTemporada, explicarTemporada,
-  estudioVigente, claveProducto, normTxt, aplicarAjustes,
+  estudioVigente, claveProducto, normTxt, aplicarAjustes, motivoParaRehacer,
   EMPUJE_MINIMO, AVISO_DEFAULT_DIAS, HORIZONTE_LARGA, cuandoEs, diasDeCompra,
 } from '../../webapp/src/temporadas.js';
 import { pascua, domingoN, diasEntre, sumarDiasYmd, deYmd } from '../../webapp/src/fechas_ar.js';
@@ -727,5 +727,38 @@ describe('las comuniones: una época de tres meses, no una fecha', () => {
     expect(si('CORDON ZAPATILLAS-ZAPATOS REDONDO / OVALADO 1,50 MT X PAR', { color: 'BLANCO' })).toBe(false);
     // La cinta de raso blanca sí es de la comunión.
     expect(si('CINTA RASO Nº 0', { color: 'BLANCO' })).toBe(true);
+  });
+});
+
+describe('cuándo se rehace el estudio solo', () => {
+  const todas = [...new Set(TEMPORADAS.map(grupoDe))];
+  const fresco = { hasta: '2026-09-20', grupos: todas, temporadas: {} };
+
+  it('si nunca se hizo', () => {
+    expect(motivoParaRehacer(null, '2026-09-23')).toBe('nunca');
+  });
+
+  it('uno de hace tres días que conoce todas las fechas sirve', () => {
+    expect(motivoParaRehacer(fresco, '2026-09-23')).toBe(null);
+  });
+
+  it('a la semana ya se rehace: con un mes se perdía una fecha entera', () => {
+    expect(motivoParaRehacer(fresco, '2026-09-28')).toBe('viejo');
+  });
+
+  it('si el almanaque sumó una fecha que el estudio no miró, se rehace aunque sea de ayer', () => {
+    // El estudio del 21/09 no conocía las comuniones, que se sumaron el 23/09.
+    const sinComuniones = { ...fresco, grupos: todas.filter(g => g !== 'comuniones') };
+    expect(motivoParaRehacer(sinComuniones, '2026-09-23')).toBe('fechas_nuevas');
+  });
+
+  it('un estudio viejo sin la lista de fechas pide rehacerse una vez', () => {
+    expect(motivoParaRehacer({ hasta: '2026-09-21', temporadas: { septiembre: {} } }, '2026-09-23'))
+      .toBe('fechas_nuevas');
+  });
+
+  it('el estudio guarda todas las fechas que miró, dieran algo o no', () => {
+    const est = estudiarTemporadas([venta('2026-05-04', 'CUADERNO', 1)], { aYmd });
+    expect(est.grupos).toEqual(todas);
   });
 });

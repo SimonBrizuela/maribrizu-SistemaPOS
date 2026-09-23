@@ -33,7 +33,7 @@
 import { doc, updateDoc, serverTimestamp, deleteField } from 'firebase/firestore';
 import { loadBalanceConfig, loadDiasMes, saveDiasMes, loadComprasConfig, saveComprasConfig } from '../config.js';
 import { refrescarAlertas, obtenerCandidatosCompra, obtenerVentanasVenta } from '../notifications.js';
-import { peekCacheValue } from '../cache.js';
+import { peekCacheValue, isHydrated } from '../cache.js';
 import { sugerirCantidad } from '../inventario_resumen.js';
 import { confirmDialog, alertDialog } from '../components/dialogs.js';
 import { listaCuadernoHtml } from '../lista_cuaderno.js';
@@ -698,7 +698,7 @@ export async function renderCentroCompras(container, db) {
       // página funciona igual: aparece el cartel para hacerlo.
       cargarEstudio(db).catch(e => {
         console.warn('[centro_compras] no se pudo leer el estudio de épocas:', e);
-        return { estudio: null, vigente: false };
+        return { estudio: null, vigente: false, motivo: null };
       }),
     ]);
   } catch (e) {
@@ -768,6 +768,25 @@ export async function renderCentroCompras(container, db) {
     // llevarse puesta la pantalla entera, que es lo que el dueño vino a ver.
     try { document.getElementById('cc-fechas')?.scrollIntoView?.({ block: 'nearest' }); } catch (_) {}
   }
+
+  // El estudio se rehace solo si está viejo o no conoce alguna fecha. Va
+  // después de pintar: la pantalla se usa con el estudio guardado mientras
+  // tanto y se actualiza cuando termina.
+  if (temporadas?.motivo && ventasEnMemoria()) estudiarEpocas({ auto: true });
+}
+
+/**
+ * Las ventas que el store ya tiene, o null si todavía no están listas.
+ *
+ * El listener de `ventas_por_dia` cubre desde la fecha de inicio del negocio,
+ * que es todo lo que el estudio necesita. Al arrancar el store se rellena con
+ * el snapshot de la sesión anterior (`isHydrated`): con eso no se estudia,
+ * porque le faltan los días que pasaron desde entonces.
+ */
+function ventasEnMemoria() {
+  if (isHydrated('historial:ventas_dia:v3')) return null;
+  const items = peekCacheValue('historial:ventas_dia:v3');
+  return Array.isArray(items) && items.length ? items : null;
 }
 
 // ── Época: calcular y mezclar con la lista ────────────────────────────────────
@@ -801,18 +820,25 @@ function mezclarTemporadas() {
   }
 }
 
-// Rehace el estudio leyendo TODO el histórico de ventas. Es la única lectura
-// cara de la pantalla y por eso la dispara el usuario a mano (o el cartel de
-// "está viejo"): son 36.000 renglones.
-async function estudiarEpocas() {
+// Rehace el estudio con las ventas que el panel ya tiene en memoria; si no
+// están, las lee de Firestore (36.000 renglones). Se dispara solo al entrar
+// cuando lo guardado está viejo (`auto`) o a mano con el botón.
+async function estudiarEpocas({ auto = false } = {}) {
   const s = _state;
   if (s.estudiando) return;
+  const items = ventasEnMemoria();
+  // Solo no se sale a leer 36.000 renglones: si las ventas no están en
+  // memoria, queda para la próxima vez que se entre.
+  if (auto && !items) return;
   s.estudiando = true;
   paintTemporadas();
   try {
     const productos = peekCacheValue('catalogo:all') || [];
-    s.estudio = await rehacerEstudio(_db, { productos });
+    s.estudio = await rehacerEstudio(_db, { productos, items });
     s.estudioVigente = true;
+    // Si mientras estudiaba se fueron a otra pantalla, lo nuevo ya quedó
+    // guardado y se ve la próxima vez: no hay nada que repintar.
+    if (!document.getElementById('cc-root')) return;
     // Las filas que habían entrado por época se rehacen desde cero: con el
     // estudio nuevo pueden ser otras.
     s.rows = buildRows(fuentesCompra(s.alertasBase, s.comprasCfg), s.comprasCfg);
@@ -820,6 +846,10 @@ async function estudiarEpocas() {
     recalc(true);
   } catch (e) {
     console.error('[centro_compras] estudiar épocas:', e);
+    // Solo, falla en silencio: la pantalla sigue con el estudio que tenía y
+    // lo intenta de nuevo la próxima vez. Un cartel de error por algo que
+    // nadie pidió es ruido.
+    if (auto) return;
     await alertDialog({
       title: 'No se pudo estudiar',
       message: 'No se pudieron leer las ventas para estudiar las fechas. Revisá la conexión e intentá de nuevo.',

@@ -73,8 +73,10 @@ export const EMPUJE_TOPE = 30;
 /** Cuántos productos se guardan por temporada. El estudio entero no entra en
  *  un documento de Firestore (1 MB) y la cola no se compra nunca. */
 export const TOPE_PRODUCTOS = 80;
-/** Cada cuánto conviene rehacer el estudio. */
-export const ESTUDIO_VIGENCIA_DIAS = 30;
+/** Cada cuánto se rehace el estudio solo. Una semana: sale de las ventas que
+ *  el panel ya tiene en memoria, así que rehacerlo no cuesta lecturas, y con
+ *  un mes se perdía una fecha entera (el 6 de septiembre dura doce días). */
+export const ESTUDIO_VIGENCIA_DIAS = 7;
 /** Cuántos días de una época larga se compran por vez. Tres meses de
  *  comuniones no se encargan de una: se compra lo del mes que viene y el
  *  Centro de Compras lo vuelve a pedir cuando se va vendiendo. */
@@ -693,7 +695,7 @@ export function estudiarTemporadas(items, {
   }
 
   if (!filas.length) {
-    return { desde: '', hasta: '', dias: 0, anios: [], temporadas: {} };
+    return { desde: '', hasta: '', dias: 0, anios: [], grupos: [], temporadas: {} };
   }
 
   const dias = [...diasVistos].sort();
@@ -862,7 +864,10 @@ export function estudiarTemporadas(items, {
     };
   }
 
-  return { desde, hasta, dias: diasTotales, anios, temporadas: out };
+  // `grupos` son TODAS las fechas que se miraron, hayan dado algo o no: es lo
+  // que permite saber, cuando el almanaque suma una fecha, que el estudio
+  // guardado todavía no la conoce.
+  return { desde, hasta, dias: diasTotales, anios, grupos, temporadas: out };
 }
 
 /**
@@ -1296,6 +1301,26 @@ export function aplicarAjustes(recomendaciones, ajustes, proxima, { stockDe } = 
   }
   out.sort((a, b) => b.urgencia - a.urgencia || b.faltan - a.faltan);
   return out;
+}
+
+/**
+ * Por qué hay que rehacer el estudio, o null si el guardado sirve.
+ *
+ *   'nunca'         no hay estudio;
+ *   'fechas_nuevas' el almanaque tiene fechas que el estudio no miró (pasó con
+ *                   las comuniones: se agregaron el 23/09 y el estudio del
+ *                   21/09 no las conocía, así que iban por corazonada);
+ *   'viejo'         tiene más de `ESTUDIO_VIGENCIA_DIAS`.
+ */
+export function motivoParaRehacer(estudio, hoyYmd, { temporadas = TEMPORADAS } = {}) {
+  if (!estudio || !estudio.hasta) return 'nunca';
+  // Un estudio de antes de este campo solo lista las fechas que dieron algo:
+  // pide rehacerse una vez y de ahí en más queda la lista completa.
+  const miradas = new Set(Array.isArray(estudio.grupos)
+    ? estudio.grupos : Object.keys(estudio.temporadas || {}));
+  if (temporadas.some(t => !miradas.has(grupoDe(t)))) return 'fechas_nuevas';
+  if (!estudioVigente(estudio, hoyYmd)) return 'viejo';
+  return null;
 }
 
 /** ¿El estudio guardado sirve todavía, o conviene rehacerlo? */

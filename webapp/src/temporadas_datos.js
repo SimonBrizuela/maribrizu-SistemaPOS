@@ -4,9 +4,11 @@
 // con el que se cruzan las recomendaciones.
 //
 // El estudio recorre TODO el histórico de ventas (36.000 renglones a septiembre
-// de 2026). Es caro, así que no se hace al abrir la pantalla: se hace cuando el
-// dueño lo pide, o cuando lo guardado ya tiene más de un mes, y el resultado
-// —un agregado chico— queda en `config/temporadas_aprendidas`.
+// de 2026). Desde el 23/09/2026 se rehace solo al abrir el Centro de Compras
+// cuando lo guardado tiene más de una semana o no conoce alguna fecha del
+// almanaque, y sale de las ventas que el store del panel ya tiene en memoria:
+// no lee nada de Firestore. El resultado —un agregado chico— queda en
+// `config/temporadas_aprendidas`.
 
 import { collection, getDocs, query, orderBy, deleteField } from 'firebase/firestore';
 import {
@@ -16,7 +18,7 @@ import {
 import {
   TEMPORADAS, estudiarTemporadas, temporadasProximas, recomendarParaTemporada,
   recomendarPorPistas, claveProducto, normTxt, estudioVigente, temporadaPorId, tienePalabra,
-  aplicarAjustes, ajustesDeFecha,
+  aplicarAjustes, ajustesDeFecha, motivoParaRehacer,
 } from './temporadas.js';
 import { ritmoDe } from './urgencia_compra.js';
 import { esServicio, esIlimitado } from './notifications.js';
@@ -27,14 +29,20 @@ export function hoyAR() {
 }
 
 /**
- * Rehace el estudio leyendo todas las ventas y lo guarda.
+ * Rehace el estudio y lo guarda.
  *
- * `onProgreso(n)` se llama con la cantidad de renglones leídos, para poder
- * mostrar que la cosa avanza: son veinte megas y tarda.
+ * `items` son los renglones de `ventas_por_dia`. Quien llama pasa los que el
+ * store ya tiene en memoria (el listener del panel cubre desde la fecha de
+ * inicio del negocio): así el estudio no cuesta ni una lectura. Sin `items`
+ * se leen todos de Firestore, que son veinte megas y tarda.
+ *
+ * `onProgreso(n)` se llama con la cantidad de renglones, para mostrar avance.
  */
-export async function rehacerEstudio(db, { productos = [], onProgreso = null } = {}) {
-  const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('fecha_dt', 'desc')));
-  const items = snap.docs.map(d => d.data());
+export async function rehacerEstudio(db, { productos = [], items = null, onProgreso = null } = {}) {
+  if (!Array.isArray(items)) {
+    const snap = await getDocs(query(collection(db, 'ventas_por_dia'), orderBy('fecha_dt', 'desc')));
+    items = snap.docs.map(d => d.data());
+  }
   onProgreso?.(items.length);
 
   // Catálogo por nombre normalizado: hace falta para traducir las
@@ -60,7 +68,8 @@ export async function cargarEstudio(db) {
     loadTemporadasEstudio(db),
     loadTemporadasManual(db).catch(() => ({})),
   ]);
-  return { estudio, ajustes: ajustes || {}, vigente: estudioVigente(estudio, hoyAR()) };
+  const motivo = motivoParaRehacer(estudio, hoyAR());
+  return { estudio, ajustes: ajustes || {}, vigente: estudioVigente(estudio, hoyAR()), motivo };
 }
 
 /**
