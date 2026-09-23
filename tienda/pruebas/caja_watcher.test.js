@@ -243,6 +243,42 @@ describe('la PC colgada de una caja vieja', () => {
     expect(evaluarCaja({ cajaActiva: abierta, items, ahora: AHORA })).toBe(null);
   });
 
+  it('la que se equivocó y después se acomodó ya no está colgada', () => {
+    // 23/09/2026: la primera venta de la mañana cayó en la caja vieja y, tras
+    // reiniciar, todo lo demás entró en la de hoy. La plata mal anotada sigue
+    // contando; reiniciar esa PC ya no arregla nada.
+    const items = [
+      item({ num_venta: 30, pc_id: 'DESKTOP8', cash_register_id: 126, subtotal: 7300,
+             fecha_dt: new Date('2026-09-05T09:31:00-03:00') }),
+      item({ num_venta: 31, pc_id: 'DESKTOP8', cash_register_id: 127,
+             fecha_dt: new Date('2026-09-05T09:41:00-03:00') }),
+      item({ num_venta: 40, pc_id: 'LIBRERIA-ed82', cash_register_id: 126, subtotal: 1400,
+             fecha_dt: new Date('2026-09-05T09:34:00-03:00') }),
+    ];
+    const a = evaluarCaja({ cajaActiva: abierta, items, ahora: AHORA });
+    expect(a.ventas).toBe(2);
+    expect(a.total).toBe(8700);
+    expect(a.pcs).toEqual(['DESKTOP8', 'LIBRERIA-ed82']);
+    expect(a.colgadas).toEqual(['LIBRERIA-ed82']);
+    expect(textoDelAviso(a).cuerpo).toBe(
+      '$8.700 están cayendo en una caja vieja en vez de la 127. Reiniciá el POS en LIBRERIA-ed82.');
+  });
+
+  it('si todas ya volvieron, no pide reiniciar: pide pasar las ventas', () => {
+    const items = [
+      item({ num_venta: 30, pc_id: 'DESKTOP8', cash_register_id: 126,
+             fecha_dt: new Date('2026-09-05T09:31:00-03:00') }),
+      item({ num_venta: 31, pc_id: 'DESKTOP8', cash_register_id: 127,
+             fecha_dt: new Date('2026-09-05T09:41:00-03:00') }),
+    ];
+    const a = evaluarCaja({ cajaActiva: abierta, items, ahora: AHORA });
+    expect(a.colgadas).toEqual([]);
+    const t = textoDelAviso(a);
+    expect(t.titulo).toMatch(/^1 venta quedó en otra caja desde las 09:31/);
+    expect(t.cuerpo).not.toMatch(/Reiniciá/);
+    expect(t.cuerpo).toContain('pasar esas ventas a la 127');
+  });
+
   it('los renglones viejos sin número de caja no acusan a ninguna PC', () => {
     const items = [item({ cash_register_id: null, fecha_dt: new Date('2026-09-05T09:00:00-03:00') })];
     expect(evaluarCaja({ cajaActiva: abierta, items, ahora: AHORA })).toBe(null);

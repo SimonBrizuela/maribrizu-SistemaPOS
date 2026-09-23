@@ -134,6 +134,26 @@ export function evaluarCaja({ cajaActiva, items = [], ahora = Date.now() } = {})
       });
   if (sospechosos.length === 0) return null;
 
+  // Cuáles PCs SIGUEN colgadas: las que tienen su última venta en otra caja.
+  // Una PC que se equivocó en la primera venta de la mañana y después se
+  // acomodó (23/09/2026: tres PCs, una venta cada una, y todo lo demás en la
+  // 142) ya no necesita que la reinicien; lo que queda es esa plata mal
+  // anotada. Pedirle "reiniciá" a una PC que anda bien es mandar a alguien a
+  // hacer algo que no arregla nada.
+  const colgadas = [];
+  if (abierta !== null) {
+    const ultimaPorPc = new Map();   // pc → { t, rid }
+    for (const it of posteriores) {
+      const pc = it._pc_id || it.pc_id || '';
+      const t = aMillis(it.fecha_dt);
+      if (!pc || t === null) continue;
+      const u = ultimaPorPc.get(pc);
+      if (!u || t > u.t) ultimaPorPc.set(pc, { t, rid: _num(it.cash_register_id) });
+    }
+    for (const [pc, u] of ultimaPorPc) if (u.rid !== null && u.rid !== abierta) colgadas.push(pc);
+    colgadas.sort();
+  }
+
   const ventas = new Set();
   const pcs = new Set();
   let total = 0;
@@ -152,6 +172,7 @@ export function evaluarCaja({ cajaActiva, items = [], ahora = Date.now() } = {})
     ventas: ventas.size,
     total,
     pcs: [...pcs].sort(),
+    colgadas,
     caja: abierta,
     desde: primera,
   };
@@ -185,12 +206,22 @@ export function textoDelAviso(a) {
       cuerpo: `Van ${_pesos(a.total)} que no van a entrar en ningún cierre. Abrí la caja del día.`,
     };
   }
-  const cuales = a.pcs.length ? a.pcs.join(', ') : 'una PC';
+  const colgadas = Array.isArray(a.colgadas) ? a.colgadas : a.pcs;
+  if (!colgadas.length) {
+    // Las PCs ya volvieron solas a la caja de hoy: queda la plata de antes
+    // anotada en la vieja, que hay que pasar para que el cierre dé.
+    return {
+      etiqueta: 'Ventas fuera de la caja de hoy',
+      titulo: `${cuantas} ${a.ventas === 1 ? 'quedó' : 'quedaron'} en otra caja${desde}`,
+      cuerpo: `${_pesos(a.total)} quedaron anotados en una caja vieja. Las PCs ya volvieron `
+            + `solas a la ${a.caja}, no hace falta reiniciar: falta pasar esas ventas a la ${a.caja}.`,
+    };
+  }
   return {
     etiqueta: 'Ventas fuera de la caja de hoy',
     titulo: `${cuantas} con otro número de caja${desde}`,
     cuerpo: `${_pesos(a.total)} están cayendo en una caja vieja en vez de la ${a.caja}. `
-          + `Reiniciá el POS en ${cuales}.`,
+          + `Reiniciá el POS en ${colgadas.join(', ')}.`,
   };
 }
 
