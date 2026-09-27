@@ -12,6 +12,8 @@
  * pedido, igual que cuando el pedido entra por telefono.
  */
 
+import { evaluarZona, zonaActiva } from './zona_reparto.js';
+
 const FUNCION = '/.netlify/functions/envio';
 
 /** Tramos de menor a mayor, saneados. */
@@ -32,12 +34,27 @@ export function rangoDeTramos(entrega) {
 
 /**
  * Precio del tramo que le toca a una distancia.
- * Devuelve null si queda fuera de la tabla, que es lo mismo que fuera de radio.
+ *
+ * Sin zona dibujada, pasarse de la tabla es lo mismo que pasarse del radio y
+ * devuelve null. Con la zona prendida, hasta dónde se llega lo decide el mapa y
+ * no la tabla: una dirección de adentro que queda más lejos que el último
+ * tramo paga el último tramo, en vez de quedarse sin envío.
  */
 export function precioPorDistancia(km, entrega) {
   const lista = tramos(entrega);
   const tramo = lista.find(t => km <= t.hasta_km);
-  return tramo ? tramo.precio : null;
+  if (tramo) return tramo.precio;
+  return zonaActiva(entrega) && lista.length ? lista[lista.length - 1].precio : null;
+}
+
+/**
+ * Si una distancia de manejo se pasa del radio en km. Con la zona prendida el
+ * radio no se usa: la zona ya dijo que sí.
+ */
+export function superaElRadio(km, entrega) {
+  if (zonaActiva(entrega)) return false;
+  const radio = Number(entrega?.radio_max_km) || 0;
+  return radio > 0 && km > radio;
 }
 
 /** Los pedidos grandes no pagan envío, cuando el local lo tiene configurado. */
@@ -52,10 +69,18 @@ export function llegaAEnvioGratis(subtotal, entrega) {
  * @param {{lat:number, lng:number}} destino
  * @param {object} entrega  el bloque `entrega` de la config
  * @param {number} subtotal para resolver el envío gratis
- * @returns {Promise<{estado:'ok'|'gratis'|'fuera_de_radio'|'a_confirmar',
+ * @returns {Promise<{estado:'ok'|'gratis'|'fuera_de_radio'|'fuera_de_zona'
+ *                            |'sin_ubicacion'|'a_confirmar',
  *                    precio:number, km:number|null, motivo?:string}>}
  */
 export async function cotizar(destino, entrega, subtotal = 0) {
+  // La zona va primero, antes que el envío gratis: un pedido grande no hace
+  // que el repartidor llegue más lejos. Y sin preguntarle a Google: afuera de
+  // la zona no hay distancia que medir.
+  const zona = evaluarZona(destino, entrega);
+  if (zona === 'afuera') return { estado: 'fuera_de_zona', precio: 0, km: null };
+  if (zona === 'sin_ubicacion') return { estado: 'sin_ubicacion', precio: 0, km: null };
+
   if (llegaAEnvioGratis(subtotal, entrega)) {
     return { estado: 'gratis', precio: 0, km: null };
   }
@@ -83,6 +108,7 @@ export async function cotizar(destino, entrega, subtotal = 0) {
       return { estado: 'a_confirmar', precio: 0, km: null, motivo: datos?.motivo || 'respuesta_invalida' };
     }
 
+    if (datos.fuera_de_zona) return { estado: 'fuera_de_zona', precio: 0, km: null };
     if (datos.fuera_de_radio) return { estado: 'fuera_de_radio', precio: 0, km };
 
     // El precio que manda el servidor manda. Se recalcula acá solo si no vino:

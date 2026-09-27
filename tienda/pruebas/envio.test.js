@@ -7,7 +7,7 @@
  */
 import { describe, it, expect, vi, afterEach } from 'vitest';
 import {
-  rangoDeTramos, precioPorDistancia, llegaAEnvioGratis, cotizar,
+  rangoDeTramos, precioPorDistancia, llegaAEnvioGratis, cotizar, superaElRadio,
 } from '../src/envio.js';
 
 const ENTREGA = {
@@ -109,5 +109,53 @@ describe('cotizar contra el servidor', () => {
   it('si el servidor manda una distancia que no es numero, no inventa', async () => {
     respondiendo({ km: 'lejos' });
     expect((await cotizar(CERCA, ENTREGA)).estado).toBe('a_confirmar');
+  });
+});
+
+describe('con la zona de reparto dibujada', () => {
+  // Un triángulo alrededor de CERCA y un punto claramente afuera.
+  const ZONA = {
+    activa: true,
+    areas: [{ tipo: 'incluir', puntos: [
+      { lat: -31.30, lng: -64.25 }, { lat: -31.30, lng: -64.15 }, { lat: -31.40, lng: -64.20 },
+    ] }],
+  };
+  const CON_ZONA = { ...ENTREGA, zona: ZONA };
+  const LEJOS = { lat: -31.50, lng: -64.40 };
+
+  it('afuera de la zona no cotiza ni le pregunta al servidor', async () => {
+    respondiendo({ km: 2, precio: 1500 });
+    expect(await cotizar(LEJOS, CON_ZONA)).toEqual({ estado: 'fuera_de_zona', precio: 0, km: null });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('afuera de la zona tampoco hay envío gratis', async () => {
+    const gratisDesde = { ...CON_ZONA, envio_gratis_desde: 1000 };
+    expect((await cotizar(LEJOS, gratisDesde, 50000)).estado).toBe('fuera_de_zona');
+  });
+
+  it('sin coordenadas no se puede saber si se llega', async () => {
+    expect((await cotizar(null, CON_ZONA)).estado).toBe('sin_ubicacion');
+  });
+
+  it('adentro cotiza como siempre', async () => {
+    respondiendo({ km: 2.1, precio: 1500 });
+    expect(await cotizar(CERCA, CON_ZONA)).toEqual({ estado: 'ok', precio: 1500, km: 2.1 });
+  });
+
+  it('el servidor puede decir que queda afuera', async () => {
+    respondiendo({ km: null, precio: null, fuera_de_zona: true });
+    expect((await cotizar(CERCA, CON_ZONA)).estado).toBe('fuera_de_zona');
+  });
+
+  it('adentro pero más lejos que el último tramo paga el último tramo', () => {
+    expect(precioPorDistancia(14.83, CON_ZONA)).toBe(3500);
+    expect(precioPorDistancia(14.83, ENTREGA)).toBeNull();
+  });
+
+  it('con la zona el radio no corta; sin la zona, sí', () => {
+    expect(superaElRadio(20, CON_ZONA)).toBe(false);
+    expect(superaElRadio(20, ENTREGA)).toBe(true);
+    expect(superaElRadio(20, { ...ENTREGA, zona: { ...ZONA, activa: false } })).toBe(true);
   });
 });

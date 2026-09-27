@@ -97,6 +97,8 @@ const MOTIVOS = {
   sin_delivery: 'El envío a domicilio no está disponible. Podés retirarlo del local.',
   sin_retiro: 'El retiro en el local no está disponible por ahora.',
   fuera_de_radio: 'Tu dirección queda fuera del radio de reparto.',
+  fuera_de_zona: 'Tu dirección queda fuera de la zona de reparto. Podés retirarlo del local.',
+  sin_ubicacion: 'Elegí tu dirección de la lista para saber si llegamos. Si no aparece, podés retirarlo del local.',
   vacio: 'Se agotó todo lo que tenías en el pedido.',
   ya_existe: 'Este pedido ya lo teníamos cargado.',
 };

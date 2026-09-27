@@ -2822,6 +2822,12 @@
   background: var(--surface-2);
 }
 .checkout__nota-envio svg { flex: none; margin-top: 1px; }
+/* La dirección cae afuera de la zona de reparto: es lo que explica por qué el
+   botón de confirmar está apagado, así que tiene que verse. */
+.checkout__nota-envio--fuera {
+  color: var(--alerta);
+  background: var(--alerta-bg);
+}
 
 /* Falta plata para el pedido mínimo. Va en el color de aviso y no en el de
    error: no está mal lo que hizo el cliente, le falta algo. Y dice cuánto,
@@ -3570,6 +3576,7 @@
 .direccion-estado svg { flex: none; margin-top: 1px; }
 .direccion-estado--ok { color: var(--exito); }
 .direccion-estado--aprox { color: var(--alerta); }
+.direccion-estado--fuera { color: var(--alerta); font-weight: var(--peso-medio, 500); }
 
 /* ── Mapa del envío ───────────────────────────────────────────────────────────
    El fondo es una imagen de la Static API de Google; los marcadores los pone
@@ -3643,6 +3650,35 @@
 
 .mapa__marcador--local .mapa__globo { background: var(--primary); color: var(--primary-ink); }
 .mapa__marcador--destino .mapa__globo { background: var(--liceo-rosa); color: #FFF; }
+/* Afuera de la zona el pin pierde el color de marca: no es un destino al que
+   se vaya a llegar. */
+.mapa__marcador--fuera .mapa__globo { background: var(--text-3); }
+
+/* La zona de reparto dibujada en el panel. Tenue: el mapa sigue siendo para
+   ubicar la dirección, el borde es la referencia de hasta dónde se llega. */
+.mapa__zona {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.mapa__zona-incluir {
+  fill: var(--primary);
+  fill-opacity: .08;
+  stroke: var(--primary);
+  stroke-width: 2;
+  stroke-opacity: .7;
+  stroke-linejoin: round;
+}
+.mapa__zona-excluir {
+  fill: var(--alerta);
+  fill-opacity: .14;
+  stroke: var(--alerta);
+  stroke-width: 1.5;
+  stroke-dasharray: 4 3;
+  stroke-opacity: .8;
+}
 
 .mapa__pie {
   display: flex;
@@ -3654,7 +3690,10 @@
   color: var(--text-2);
 }
 
-.mapa__leyenda { display: flex; align-items: center; gap: var(--e-2); }
+.mapa__leyenda { display: flex; align-items: center; flex-wrap: wrap; gap: var(--e-1) var(--e-3); }
+/* Cada referencia entera en su renglón: con la zona son tres, y en un
+   celular partían "Tu dirección" y los kilómetros en dos líneas. */
+.mapa__item { display: inline-flex; align-items: center; gap: var(--e-2); white-space: nowrap; }
 .mapa__punto {
   width: 9px;
   height: 9px;
@@ -3662,7 +3701,12 @@
   display: inline-block;
 }
 .mapa__punto--local { background: var(--primary); }
-.mapa__punto--destino { background: var(--liceo-rosa); margin-left: var(--e-2); }
+.mapa__punto--destino { background: var(--liceo-rosa); }
+.mapa__punto--zona {
+  border-radius: 2px;
+  background: transparent;
+  border: 2px solid var(--primary);
+}
 
 .mapa__km {
   font-weight: var(--peso-semi);

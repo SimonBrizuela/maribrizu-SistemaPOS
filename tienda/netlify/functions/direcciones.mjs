@@ -23,6 +23,8 @@
  * confirmar sin tocar el desplegable. Antes ese pedido entraba sin coordenadas y
  * el envio quedaba "a confirmar" aunque la direccion fuera perfecta.
  */
+import { aplanar } from './lib/firestore.mjs';
+import { alcanceKm } from '../../src/zona_reparto.js';
 
 const PROYECTO = 'mari-d7c71';
 
@@ -298,8 +300,10 @@ async function areaDeReparto() {
     if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
 
     const entrega = crudo?.fields?.entrega?.mapValue?.fields;
-    const radioKm = Number(entrega?.radio_max_km?.doubleValue
-                        ?? entrega?.radio_max_km?.integerValue);
+    // Con la zona dibujada, lo que manda es su punto más lejano y no el radio.
+    const zonaKm = alcanceKm({ lat, lng }, aplanar(crudo.fields).entrega);
+    const radioKm = zonaKm ?? Number(entrega?.radio_max_km?.doubleValue
+                                  ?? entrega?.radio_max_km?.integerValue);
 
     // El doble del radio de reparto: alcanza para que el que vive afuera vea su
     // direccion y reciba un "fuera de radio" en vez de una lista vacia.

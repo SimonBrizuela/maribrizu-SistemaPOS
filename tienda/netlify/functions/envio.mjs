@@ -18,7 +18,8 @@
  */
 import { leerConfigTienda } from './lib/firestore.mjs';
 import { coordenadaValida, medirMetros, kmDeMetros } from './lib/rutas.mjs';
-import { precioPorDistancia } from '../../src/envio.js';
+import { precioPorDistancia, superaElRadio } from '../../src/envio.js';
+import { evaluarZona } from '../../src/zona_reparto.js';
 
 export default async (peticion) => {
   if (peticion.method !== 'POST') {
@@ -61,6 +62,14 @@ export default async (peticion) => {
     return new Response('No se pudo leer la configuración', { status: 502 });
   }
 
+  const entrega = config.entrega || {};
+
+  // La zona dibujada se decide acá, sin gastar una consulta de Routes: afuera
+  // no hay distancia que valga.
+  if (evaluarZona(destino, entrega) === 'afuera') {
+    return Response.json({ km: null, precio: null, fuera_de_zona: true });
+  }
+
   const origen = config.origen;
   if (!coordenadaValida(origen)) {
     console.error('[envio] la configuración no tiene un origen válido');
@@ -82,10 +91,8 @@ export default async (peticion) => {
   }
 
   const km = kmDeMetros(metros);
-  const entrega = config.entrega || {};
-  const radio = Number(entrega.radio_max_km) || 0;
 
-  if (radio > 0 && km > radio) {
+  if (superaElRadio(km, entrega)) {
     return Response.json({ km, precio: null, fuera_de_radio: true });
   }
 

@@ -215,6 +215,99 @@ describe('el envío', () => {
     expect(fetch.mock.calls.some(c => String(c[0]).includes('routes.googleapis')))
       .toBe(false);
   });
+
+  /* ── La zona de reparto dibujada en el panel ── */
+
+  // Un cuadrado alrededor del local. La dirección de prueba (-31.4, -64.19)
+  // queda a 0,046° al sur: adentro del grande, afuera del chico.
+  const cuadrado = (lado, tipo = 'incluir', centro = { lat: -31.354, lng: -64.173 }) => ({
+    tipo,
+    puntos: [
+      { lat: centro.lat - lado, lng: centro.lng - lado },
+      { lat: centro.lat - lado, lng: centro.lng + lado },
+      { lat: centro.lat + lado, lng: centro.lng + lado },
+      { lat: centro.lat + lado, lng: centro.lng - lado },
+    ],
+  });
+  const conZona = (...areas) => { mundo.config.entrega.zona = { activa: true, areas }; };
+  const preguntoARoutes = () => fetch.mock.calls.some(c => String(c[0]).includes('routes.googleapis'));
+
+  it('adentro de la zona el pedido entra y el envío sale del tramo', async () => {
+    conZona(cuadrado(0.06));
+    mundo.metros = 2500;
+    const crear = await cargar();
+    const res = await crear(pedir(conEnvio()));
+
+    expect(res.status).toBe(200);
+    expect(guardado().envio).toBe(1500);
+  });
+
+  it('afuera de la zona no entra, y ni se le pregunta a Google', async () => {
+    conZona(cuadrado(0.03));
+    const crear = await cargar();
+    const res = await crear(pedir(conEnvio()));
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe('fuera_de_zona');
+    expect(mundo.guardados).toHaveLength(0);
+    expect(preguntoARoutes()).toBe(false);
+  });
+
+  it('el envío gratis no hace que se llegue más lejos', async () => {
+    conZona(cuadrado(0.03));
+    mundo.config.entrega.envio_gratis_desde = 10000;
+    const crear = await cargar();
+    const res = await crear(pedir(conEnvio()));
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe('fuera_de_zona');
+  });
+
+  it('un recorte adentro de la zona también deja afuera', async () => {
+    conZona(cuadrado(0.06), cuadrado(0.01, 'excluir', { lat: -31.4, lng: -64.19 }));
+    const crear = await cargar();
+    const res = await crear(pedir(conEnvio()));
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe('fuera_de_zona');
+  });
+
+  it('sin coordenadas, con la zona prendida, no entra: no se sabe si se llega', async () => {
+    conZona(cuadrado(0.06));
+    const crear = await cargar();
+    const res = await crear(pedir(conEnvio({ coordenadas: null })));
+
+    expect(res.status).toBe(409);
+    expect((await res.json()).error).toBe('sin_ubicacion');
+  });
+
+  it('con la zona prendida manda el mapa y no el radio: lejos pero adentro paga el último tramo', async () => {
+    conZona(cuadrado(0.06));
+    mundo.metros = 30000;   // 30 km de manejo, con radio de 12
+    const crear = await cargar();
+    const res = await crear(pedir(conEnvio()));
+
+    expect(res.status).toBe(200);
+    expect(guardado().envio).toBe(3500);
+  });
+
+  it('con la zona apagada vuelve a mandar el radio', async () => {
+    mundo.config.entrega.zona = { activa: false, areas: [cuadrado(0.03)] };
+    mundo.metros = 2500;
+    const crear = await cargar();
+    const res = await crear(pedir(conEnvio()));
+
+    expect(res.status).toBe(200);
+    expect(guardado().envio).toBe(1500);
+  });
+
+  it('la zona no le importa al retiro en el local', async () => {
+    conZona(cuadrado(0.001));
+    const crear = await cargar();
+    const res = await crear(pedir(retiro([{ id: 'resma', cantidad: 1 }])));
+
+    expect(res.status).toBe(200);
+  });
 });
 
 describe('lo que el panel puede apagar', () => {

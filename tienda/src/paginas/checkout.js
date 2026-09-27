@@ -26,6 +26,7 @@ import { olvidar } from '../cliente.js';
 import { cotizar, rangoDeTramos, llegaAEnvioGratis } from '../envio.js';
 import { montarDirecciones } from '../direcciones.js';
 import { montarMapa } from '../mapa.js';
+import { zonaActiva, sanearZona } from '../zona_reparto.js';
 import { cuponGuardado, guardarCupon, quitarCupon, validarCupon } from '../cupon.js';
 import { normalizarCodigo, describirCupon } from '../cupones.js';
 
@@ -168,6 +169,9 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
   let soltarMapa = null;
 
   const rango = rangoDeTramos(entrega);
+  // Con la zona dibujada en el panel, hasta dónde se llega lo dice el mapa y
+  // no un radio en km. Se lee una vez: la config no cambia con la página abierta.
+  const conZona = zonaActiva(entrega);
 
   // El cupón puesto, con lo último que contestó el servidor (cuánto
   // descuenta). Se vuelve a comprobar con cada cambio del pedido, porque lo
@@ -243,7 +247,9 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
                   <span class="opcion__texto">
                     <span class="opcion__titulo">Me lo llevan a casa</span>
                     <span class="opcion__detalle">
-                      Córdoba, hasta ${entrega.radio_max_km || 12} km del local · demora ${esc(entrega.demora_texto || '24 a 48 hs')}
+                      ${conZona
+                        ? 'Córdoba, dentro de nuestra zona de reparto'
+                        : `Córdoba, hasta ${entrega.radio_max_km || 12} km del local`} · demora ${esc(entrega.demora_texto || '24 a 48 hs')}
                     </span>
                   </span>
                   <span class="opcion__precio">${
@@ -364,7 +370,11 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
           ? `<strong class="cifra">${pesos(envio)}</strong>`
           : cotizacion.estado === 'fuera_de_radio'
             ? '<strong style="color:var(--alerta)">Fuera de radio</strong>'
-            : '<strong style="color:var(--text-2)">A confirmar</strong>';
+            : cotizacion.estado === 'fuera_de_zona'
+              ? '<strong style="color:var(--alerta)">Fuera de la zona</strong>'
+              : cotizacion.estado === 'sin_ubicacion'
+                ? '<strong style="color:var(--text-2)">Falta la dirección</strong>'
+                : '<strong style="color:var(--text-2)">A confirmar</strong>';
 
     const ahorroDe = r => (r.es_pack ? carrito.ahorroDePack({
       precioSuelto: r.precio_suelto, precioPack: r.precio,
@@ -372,7 +382,19 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
     }) : null);
     const ahorroTotal = renglones.reduce((acc, r) => acc + (ahorroDe(r)?.pesos || 0), 0);
 
-    const nota = modo === 'delivery' && cotizacion.estado === 'a_confirmar'
+    // Con la zona prendida no hay pedido con envío sin saber que se llega: ni
+    // afuera de la zona, ni con una dirección que no se pudo ubicar.
+    const sinEnvioPosible = modo === 'delivery'
+      && (cotizacion.estado === 'fuera_de_zona' || cotizacion.estado === 'sin_ubicacion');
+
+    const nota = sinEnvioPosible
+      ? `<p class="checkout__nota-envio checkout__nota-envio--fuera">
+           ${icono('atencion', { tam: 15 })}
+           <span>${cotizacion.estado === 'fuera_de_zona'
+             ? 'No llegamos a esa dirección. Podés retirarlo del local sin cargo.'
+             : 'Elegí tu dirección de la lista para saber si llegamos.'}</span>
+         </p>`
+      : modo === 'delivery' && cotizacion.estado === 'a_confirmar'
       ? `<p class="checkout__nota-envio">
            ${icono('atencion', { tam: 15 })}
            <span>Calculamos el envío por la distancia real cuando preparemos el pedido y te lo
@@ -479,7 +501,7 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
 
         <button type="button" class="boton boton--primario boton--grande boton--bloque${
                   enviando ? ' boton--cargando' : ''}"
-                data-confirmar ${enviando || cerrada || falta > 0 ? 'disabled' : ''}>
+                data-confirmar ${enviando || cerrada || falta > 0 || sinEnvioPosible ? 'disabled' : ''}>
           ${cerrada ? 'La tienda está cerrada'
                     : falta > 0 ? `Faltan ${pesos(falta)}`
                     : enviando ? 'Enviando el pedido…' : 'Confirmar el pedido'}
@@ -675,7 +697,7 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
     soltarMapa?.();
     soltarMapa = null;
 
-    const aviso = AVISOS_DIRECCION[ubicacion];
+    const aviso = avisoDeDireccion();
     cajaEstado.hidden = !aviso;
     if (aviso) {
       cajaEstado.className = `direccion-estado ${aviso.clase}`;
@@ -689,7 +711,20 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
       direccionLocal: cfg.direccion,
       direccionDestino: valor('direccion'),
       km: cotizacion.estado === 'ok' ? cotizacion.km : null,
+      zona: conZona ? sanearZona(entrega.zona) : null,
+      fuera: cotizacion.estado === 'fuera_de_zona',
     });
+  }
+
+  /**
+   * El cartel debajo de la dirección. Con la zona prendida, el resultado de la
+   * zona le gana al de la ubicación: "Dirección ubicada" en verde arriba de
+   * una dirección a la que no se llega se lee como un sí.
+   */
+  function avisoDeDireccion() {
+    if (conZona && cotizacion.estado === 'fuera_de_zona') return AVISO_FUERA_DE_ZONA;
+    if (conZona && ubicacion === 'no_ubicada') return AVISO_NO_UBICADA_CON_ZONA;
+    return AVISOS_DIRECCION[ubicacion];
   }
 
   // Al elegir una dirección del desplegable llegan sus coordenadas y se cotiza
@@ -809,6 +844,18 @@ function pintarFormulario({ montar, cfg, cambios, avisos }) {
 
     if (modo === 'delivery' && cotizacion.estado === 'fuera_de_radio') {
       avisar('Tu dirección queda fuera del radio de reparto. Podés retirarlo del local.',
+             { tipo: 'error', duracion: 6000 });
+      return;
+    }
+    if (modo === 'delivery' && cotizacion.estado === 'fuera_de_zona') {
+      avisar('Tu dirección queda fuera de la zona de reparto. Podés retirarlo del local.',
+             { tipo: 'error', duracion: 6000 });
+      return;
+    }
+    if (modo === 'delivery' && cotizacion.estado === 'sin_ubicacion') {
+      marcarError('direccion', 'Elegí tu dirección de la lista para saber si llegamos.');
+      document.getElementById('direccion')?.focus();
+      avisar('Elegí tu dirección de la lista para saber si llegamos.',
              { tipo: 'error', duracion: 6000 });
       return;
     }
@@ -1132,6 +1179,22 @@ const AVISOS_DIRECCION = {
     texto: 'No la encontramos en el mapa. El pedido entra igual y el envío ' +
            'te lo confirmamos por teléfono.',
   },
+};
+
+const AVISO_FUERA_DE_ZONA = {
+  clase: 'direccion-estado--fuera',
+  icono: 'atencion',
+  texto: 'Esta dirección queda fuera de nuestra zona de reparto. ' +
+         'Podés retirarlo del local, o probar con otra dirección.',
+};
+
+// Con la zona prendida, "el pedido entra igual" deja de ser cierto: sin
+// ubicarla no se sabe si se llega.
+const AVISO_NO_UBICADA_CON_ZONA = {
+  clase: 'direccion-estado--aprox',
+  icono: 'pin',
+  texto: 'No la encontramos en el mapa. Probá escribirla de otra forma y ' +
+         'elegila de la lista, o retiralo del local.',
 };
 
 function bloque(numero, titulo, contenido) {

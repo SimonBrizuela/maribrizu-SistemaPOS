@@ -63,7 +63,8 @@ import {
 import { coordenadaValida, medirMetros, kmDeMetros } from './lib/rutas.mjs';
 import { armarRenglones, stockComprometido, excedidosTrasEscribir } from './lib/renglones.mjs';
 import { evaluarCuponDelPedido, cuponExcedidoTrasEscribir } from './lib/cupon_servidor.mjs';
-import { precioPorDistancia, llegaAEnvioGratis } from '../../src/envio.js';
+import { precioPorDistancia, llegaAEnvioGratis, superaElRadio } from '../../src/envio.js';
+import { evaluarZona } from '../../src/zona_reparto.js';
 import { estadoDelLocal } from '../../src/horarios.js';
 import { normalizarCodigo, telefonoClave } from '../../src/cupones.js';
 
@@ -143,6 +144,15 @@ export default async (peticion) => {
   }
   if (modo === 'retiro' && entrega.retiro_habilitado === false) {
     return Response.json({ error: 'sin_retiro' }, { status: 409 });
+  }
+  // La zona dibujada en el panel. Se controla antes que el envío gratis, que
+  // se saltea la medición: un pedido grande no hace que el repartidor llegue
+  // más lejos. Sin coordenadas no hay forma de saber si se llega, así que con
+  // la zona prendida tampoco entra.
+  if (modo === 'delivery') {
+    const zona = evaluarZona(cuerpo.entrega.coordenadas, entrega);
+    if (zona === 'afuera') return Response.json({ error: 'fuera_de_zona' }, { status: 409 });
+    if (zona === 'sin_ubicacion') return Response.json({ error: 'sin_ubicacion' }, { status: 409 });
   }
   // El efectivo se prende y se apaga desde el panel. Sin este control, alguien
   // que dejó el checkout abierto desde ayer puede confirmar pagando de una
@@ -404,8 +414,7 @@ async function calcularEnvio({ cfg, entrega, destino, subtotal }) {
   }
 
   const km = kmDeMetros(metros);
-  const radio = Number(entrega.radio_max_km) || 0;
-  if (radio > 0 && km > radio) {
+  if (superaElRadio(km, entrega)) {
     return { precio: 0, km, a_confirmar: false, fuera_de_radio: true };
   }
 

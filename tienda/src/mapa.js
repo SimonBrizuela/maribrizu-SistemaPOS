@@ -48,6 +48,9 @@ const AIRE = { arriba: 54, abajo: 26, costado: 40 };
  * @param {string} [opciones.direccionLocal]
  * @param {string} [opciones.direccionDestino]
  * @param {number} [opciones.km]  distancia de manejo, si ya se cotizo
+ * @param {{areas: Array<{tipo:string, puntos:Array<{lat:number,lng:number}>}>}} [opciones.zona]
+ *        la zona de reparto ya saneada, para dibujar su borde
+ * @param {boolean} [opciones.fuera]  el destino quedó afuera de la zona
  * @returns {() => void} para desenganchar
  */
 export function montarMapa(contenedor, opciones) {
@@ -92,7 +95,7 @@ export function montarMapa(contenedor, opciones) {
 
 /* ── Dibujo ───────────────────────────────────────────────────────────────── */
 
-function pintar(ancho, { local, destino, direccionLocal, direccionDestino, km }) {
+function pintar(ancho, { local, destino, direccionLocal, direccionDestino, km, zona, fuera }) {
   // El alto que se querria, y el tamaño que se le pide de verdad a Google. La
   // proporcion sale del pedido y no al reves, asi la imagen entra exacta y los
   // marcadores caen donde tienen que caer y no medio pixel al costado.
@@ -128,19 +131,21 @@ function pintar(ancho, { local, destino, direccionLocal, direccionDestino, km })
       <div class="mapa__lienzo">
         <img class="mapa__fondo" data-fondo src="${fondo}" alt="" aria-hidden="true"
              width="${pedidoAncho}" height="${pedidoAlto}" decoding="async">
+        ${zona?.areas?.length ? dibujarZona(zona, enPantalla, zoom) : ''}
         <svg class="mapa__vinculo" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
           <line x1="${enPantalla(a).x}" y1="${enPantalla(a).y}"
                 x2="${enPantalla(b).x}" y2="${enPantalla(b).y}"
                 vector-effect="non-scaling-stroke"/>
         </svg>
-        ${marcador(enPantalla(b), 'casa', 'destino', direccionDestino || 'Tu dirección')}
+        ${marcador(enPantalla(b), 'casa', fuera ? 'destino mapa__marcador--fuera' : 'destino', direccionDestino || 'Tu dirección')}
         ${marcador(enPantalla(a), 'local', 'local', direccionLocal || 'El local')}
       </div>
 
       <figcaption class="mapa__pie">
         <span class="mapa__leyenda">
-          <i class="mapa__punto mapa__punto--local" aria-hidden="true"></i> El local
-          <i class="mapa__punto mapa__punto--destino" aria-hidden="true"></i> Tu dirección
+          <span class="mapa__item"><i class="mapa__punto mapa__punto--local" aria-hidden="true"></i> El local</span>
+          <span class="mapa__item"><i class="mapa__punto mapa__punto--destino" aria-hidden="true"></i> Tu dirección</span>
+          ${zona?.areas?.length ? '<span class="mapa__item"><i class="mapa__punto mapa__punto--zona" aria-hidden="true"></i> Zona de reparto</span>' : ''}
           ${Number.isFinite(km) ? `<span class="mapa__km">${distancia(km)}</span>` : ''}
         </span>
         <a class="mapa__enlace" target="_blank" rel="noopener"
@@ -149,6 +154,23 @@ function pintar(ancho, { local, destino, direccionLocal, direccionDestino, km })
         </a>
       </figcaption>
     </figure>`;
+}
+
+/**
+ * El borde de la zona de reparto, encima del fondo y debajo de los marcadores.
+ * En el mismo sistema de porcentajes que los marcadores, así se estira con la
+ * imagen. Los recortes van arriba de las áreas, en el color de aviso.
+ */
+function dibujarZona(zona, enPantalla, zoom) {
+  const trazo = puntos => puntos
+    .map(p => enPantalla(aPixeles(p, zoom)))
+    .map(q => `${q.x.toFixed(3)},${q.y.toFixed(3)}`).join(' ');
+  const areas = [...zona.areas].sort((a, b) => (a.tipo === 'excluir') - (b.tipo === 'excluir'));
+  return `
+    <svg class="mapa__zona" viewBox="0 0 100 100" preserveAspectRatio="none" aria-hidden="true">
+      ${areas.map(a => `<polygon class="mapa__zona-${a.tipo}" points="${trazo(a.puntos)}"
+                                 vector-effect="non-scaling-stroke"/>`).join('')}
+    </svg>`;
 }
 
 function marcador(punto, nombre, tipo, titulo) {

@@ -33,6 +33,7 @@
  * otras funciones cuando les falta su clave.
  */
 import { normalizar, despiezar as despiezarBase } from '../../src/formato.js';
+import { zonaActiva } from '../../src/zona_reparto.js';
 
 const PROYECTO = 'mari-d7c71';
 const MODELO = 'gemini-3.5-flash-lite';
@@ -298,7 +299,13 @@ Horarios: ${cfg.horarios_texto}
 Retiro en el local: ${entrega.retiro_habilitado === false ? 'no disponible' : 'sí, sin costo'}
 Envíos: ${entrega.delivery_habilitado === false
   ? 'no hacemos por ahora'
-  : `a Córdoba, hasta ${entrega.radio_max_km} km${tramos ? ` (${tramos})` : ''}`}
+  : zonaActiva(entrega)
+    // Con la zona dibujada no hay un número de km que prometer: el asistente
+    // no puede mirar el mapa, así que manda a probar la dirección.
+    ? `a Córdoba, dentro de nuestra zona de reparto${tramos ? ` (${tramos})` : ''}. `
+      + 'Si preguntan si llegamos a una dirección, deciles que la escriban al '
+      + 'cerrar el pedido y la tienda les dice en el momento si entra'
+    : `a Córdoba, hasta ${entrega.radio_max_km} km${tramos ? ` (${tramos})` : ''}`}
 Demora del envío: ${entrega.demora_texto}
 Formas de pago: efectivo o transferencia, al recibir el pedido.`;
 }
