@@ -70,7 +70,6 @@ function crearEditor({ db, zona, origen, radioKm, tramos, resolver }) {
   // donde no hay clic derecho.
   let sacandoEsquinas = false;
   let trazo = [];
-  let ultimaEsquinaPorMouseup = 0;
   let deshacer = [];
   let ultimo = foto();
 
@@ -91,6 +90,7 @@ function crearEditor({ db, zona, origen, radioKm, tramos, resolver }) {
   overlay.setAttribute('role', 'dialog');
   overlay.setAttribute('aria-modal', 'true');
   overlay.setAttribute('aria-label', 'Zona de reparto');
+  overlay.dataset.modo = 'editar';
 
   /* ── Estado ─────────────────────────────────────────────────────────────── */
 
@@ -122,7 +122,7 @@ function crearEditor({ db, zona, origen, radioKm, tramos, resolver }) {
           <span class="material-icons" aria-hidden="true">map</span>
           <div>
             <h3>Zona de reparto</h3>
-            <p>Hasta dónde llega el envío. Afuera de la zona la tienda no deja pedir con envío.</p>
+            <p>Adentro de lo violeta se puede pedir con envío. Afuera, la tienda solo ofrece retirarlo del local.</p>
           </div>
         </div>
         <div class="zona-editor__acciones">
@@ -136,6 +136,12 @@ function crearEditor({ db, zona, origen, radioKm, tramos, resolver }) {
         <aside class="zona-editor__lateral" data-lateral></aside>
         <div class="zona-editor__mapa-caja">
           <div class="zona-editor__mapa" data-mapa></div>
+          <div class="zona-editor__barra" data-barra hidden></div>
+          <div class="zona-editor__leyenda" aria-hidden="true">
+            <span><i class="zona-editor__muestra zona-editor__muestra--incluir"></i> Llegamos</span>
+            <span><i class="zona-editor__muestra zona-editor__muestra--excluir"></i> No llegamos</span>
+            <span><i class="zona-editor__punto-local"></i> El local</span>
+          </div>
           <div class="zona-editor__cartel" data-cartel hidden></div>
           <div class="zona-editor__cargando" data-cargando>
             <span class="material-icons">map</span> Cargando el mapa…
@@ -192,30 +198,56 @@ function crearEditor({ db, zona, origen, radioKm, tramos, resolver }) {
     });
 
     mapa.addListener('click', alTocarElMapa);
-    // Al dibujar, la esquina sale del mouseup y no del click: dos toques
-    // rápidos en dos esquinas distintas Google los toma como un doble clic y
-    // no manda ni el segundo click ni el dblclick (medido: cuatro toques cada
-    // 250 ms dejaban dos esquinas). Si el puntero se movió, era un arrastre
-    // del mapa y no suma nada.
-    // En el celular llegan eventos táctiles, con la posición en otro lado.
-    // Sin posición no se puede saber si fue un toque o un arrastre: ahí
-    // decide el click, que Google solo manda para los toques.
-    let apretado = null;
-    mapa.addListener('mousedown', (ev) => {
-      apretado = modo === 'dibujar' ? posicionDe(ev.domEvent) : null;
-    });
-    mapa.addListener('mouseup', (ev) => {
-      const desde = apretado;
-      apretado = null;
-      const hasta = posicionDe(ev.domEvent);
-      if (modo !== 'dibujar' || !desde || !hasta) return;
-      if (Math.hypot(hasta.x - desde.x, hasta.y - desde.y) > 6) return;
-      ultimaEsquinaPorMouseup = Date.now();
-      sumarEsquina(aPunto(ev.latLng));
-    });
+    escucharToquesParaDibujar(caja);
 
     dibujarPoligonos();
     encuadrar();
+  }
+
+  /**
+   * Al dibujar, cada punto sale de soltar el dedo o el botón sobre el mapa,
+   * escuchado en el contenedor ANTES que Google.
+   *
+   * Los eventos de Google no alcanzan: dos toques rápidos en dos esquinas los
+   * toma como un doble toque y no manda nada del segundo, ni click, ni
+   * mouseup, ni dblclick (medido: cuatro clics cada 250 ms dejaban dos
+   * puntos, y en el celular tres toques cercanos dejaban dos). Si el puntero
+   * se movió, era un arrastre del mapa; con dos dedos, un pellizco. Ninguno
+   * de los dos suma un punto.
+   */
+  function escucharToquesParaDibujar(caja) {
+    const capa = new gm.OverlayView();
+    capa.onAdd = () => {};
+    capa.draw = () => {};
+    capa.onRemove = () => {};
+    capa.setMap(mapa);
+
+    const apoyados = new Set();
+    let toque = null;
+
+    caja.addEventListener('pointerdown', (ev) => {
+      apoyados.add(ev.pointerId);
+      const sobreControl = ev.target.closest?.('button, a, .gmnoprint, .gm-style-cc');
+      toque = modo === 'dibujar' && apoyados.size === 1 && ev.button === 0 && !sobreControl
+        ? { id: ev.pointerId, x: ev.clientX, y: ev.clientY }
+        : null;
+    }, true);
+
+    const soltar = (ev) => {
+      apoyados.delete(ev.pointerId);
+      const inicio = toque;
+      if (!inicio || inicio.id !== ev.pointerId) return;
+      toque = null;
+      if (ev.type !== 'pointerup' || modo !== 'dibujar') return;
+      if (Math.hypot(ev.clientX - inicio.x, ev.clientY - inicio.y) > 6) return;
+
+      const r = caja.getBoundingClientRect();
+      const lugar = capa.getProjection()
+        ?.fromContainerPixelToLatLng(new gm.Point(ev.clientX - r.left, ev.clientY - r.top));
+      if (lugar) sumarEsquina(aPunto(lugar));
+    };
+    caja.addEventListener('pointerup', soltar, true);
+    caja.addEventListener('pointercancel', soltar, true);
   }
 
   function mostrarFallaDelMapa(mensaje) {
@@ -310,7 +342,7 @@ function crearEditor({ db, zona, origen, radioKm, tramos, resolver }) {
   function sacarEsquina(poligono, indice) {
     const camino = poligono.getPath();
     if (camino.getLength() <= 3) {
-      mostrarCartel('Un área necesita al menos tres esquinas. Para sacarla entera, usá Borrar.');
+      mostrarCartel('Tiene que quedar con al menos tres puntos. Para sacarla entera, usá Borrar.');
       return;
     }
     camino.removeAt(indice);
@@ -356,7 +388,7 @@ function crearEditor({ db, zona, origen, radioKm, tramos, resolver }) {
 
   function agregarArea(tipo, puntos) {
     if (areas.length >= MAX_AREAS) {
-      mostrarCartel(`Hay un tope de ${MAX_AREAS} áreas.`);
+      mostrarCartel(`Hay un tope de ${MAX_AREAS} zonas y recortes.`);
       return;
     }
     antesDeCambiar();
@@ -376,19 +408,24 @@ function crearEditor({ db, zona, origen, radioKm, tramos, resolver }) {
       entrada?.focus();
       return;
     }
-    // El primero va alrededor del local, que es lo que se busca casi siempre.
-    // Los siguientes, donde se está mirando: son barrios sueltos.
-    const hayDeReparto = areas.some(a => a.tipo === 'incluir');
-    const centro = hayDeReparto && mapa ? aPunto(mapa.getCenter()) : origen;
-    agregarArea('incluir', circulo(centro, radio, 36));
-    if (!hayDeReparto) encuadrar();
+    // Es el primer paso: siempre alrededor del local. Los barrios sueltos
+    // salen de "Otro lugar donde llegamos", en el centro de lo que se ve.
+    agregarArea('incluir', circulo(origen, radio, 36));
+    encuadrar();
   }
 
   /** Un recorte chico en el centro de lo que se ve, para llevarlo a su lugar. */
   function agregarRecorte() {
     const centro = mapa ? aPunto(mapa.getCenter()) : origen;
     agregarArea('excluir', circulo(centro, radioSegunVista(), 12));
-    mostrarCartel('Arrastrá el recorte hasta la parte a la que no se llega y ajustá sus esquinas.');
+    mostrarCartel('Llevá el recorte rojo hasta donde no se llega y ajustale los puntos.');
+  }
+
+  /** Otro lugar donde se llega: un círculo en el centro de lo que se ve. */
+  function agregarOtraZona() {
+    const centro = mapa ? aPunto(mapa.getCenter()) : origen;
+    agregarArea('incluir', circulo(centro, radioSegunVista() * 1.6, 24));
+    mostrarCartel('Llevá la zona nueva hasta el barrio y ajustale los puntos.');
   }
 
   /** Un radio de un catorceavo del ancho que se ve: ni un punto perdido ni media ciudad. */
@@ -424,9 +461,9 @@ function crearEditor({ db, zona, origen, radioKm, tramos, resolver }) {
   async function borrarTodo() {
     if (!areas.length) return;
     const ok = await confirmDialog({
-      title: 'Borrar toda la zona',
-      message: 'Se sacan todas las áreas y los recortes. Se puede deshacer mientras el editor siga abierto.',
-      confirmText: 'Borrar todo',
+      title: 'Empezar de nuevo',
+      message: 'Se borran todas las zonas y los recortes del mapa. Se puede deshacer mientras el editor siga abierto.',
+      confirmText: 'Borrar y empezar',
       danger: true,
     });
     if (!ok) return;
@@ -456,6 +493,9 @@ function crearEditor({ db, zona, origen, radioKm, tramos, resolver }) {
     if (modo === 'dibujar') limpiarTrazo();
     if (modo === 'probar') limpiarPrueba();
     modo = nuevo;
+    // En el celular, mientras se dibuja o se prueba, el mapa ocupa todo: la
+    // barra de arriba del mapa ya tiene lo que hace falta.
+    overlay.dataset.modo = modo;
     mapa?.setOptions({
       draggableCursor: modo === 'editar' ? null : 'crosshair',
       disableDoubleClickZoom: modo === 'dibujar',
@@ -467,18 +507,13 @@ function crearEditor({ db, zona, origen, radioKm, tramos, resolver }) {
   function empezarDibujo(tipo) {
     tipoDibujo = tipo;
     cambiarModo('dibujar');
-    mostrarCartel(tipo === 'excluir'
-      ? 'Tocá el mapa para marcar las esquinas del recorte. Después, Terminar.'
-      : 'Tocá el mapa para marcar las esquinas del área. Después, Terminar.');
   }
 
   function alTocarElMapa(ev) {
     const punto = aPunto(ev.latLng);
-    if (modo === 'dibujar') {
-      // Respaldo por si algún navegador no manda el mouseup; si ya lo mandó,
-      // este click es el mismo toque.
-      if (Date.now() - ultimaEsquinaPorMouseup > 500) sumarEsquina(punto);
-    } else if (modo === 'probar') {
+    // Al dibujar, los puntos los pone escucharToquesParaDibujar().
+    if (modo === 'dibujar') return;
+    if (modo === 'probar') {
       probarEn(punto);
     } else if (seleccion !== null) {
       // Tocar afuera suelta el área elegida, así se puede mover el mapa sin
@@ -524,7 +559,7 @@ function crearEditor({ db, zona, origen, radioKm, tramos, resolver }) {
 
   function terminarDibujo() {
     if (trazo.length < 3) {
-      mostrarCartel('Faltan esquinas: un área necesita al menos tres.');
+      mostrarCartel('Faltan puntos: hacen falta al menos tres.');
       return;
     }
     const puntos = [...trazo];
@@ -559,7 +594,11 @@ function crearEditor({ db, zona, origen, radioKm, tramos, resolver }) {
     resultadoPrueba = null;
   }
 
-  /* ── Lateral ────────────────────────────────────────────────────────────── */
+  /* ── Lateral y barra del mapa ───────────────────────────────────────────── */
+
+  // "incluir" y "excluir" dicho como lo dice el local: dónde llegamos y dónde no.
+  const NOMBRE = { incluir: 'Zona', excluir: 'Recorte' };
+  const DICE = { incluir: 'Llegamos', excluir: 'No llegamos' };
 
   function pintarLateral() {
     const lateral = overlay.querySelector('[data-lateral]');
@@ -567,7 +606,6 @@ function crearEditor({ db, zona, origen, radioKm, tramos, resolver }) {
     const radioAnterior = lateral.querySelector('[data-radio]')?.value;
 
     const deReparto = areas.filter(a => a.tipo === 'incluir');
-    const recortes = areas.filter(a => a.tipo === 'excluir');
     const elegida = areaSeleccionada();
     const localAdentro = dentroDeZona(origen, { activa: true, areas });
     const alcance = deReparto.length
@@ -577,138 +615,206 @@ function crearEditor({ db, zona, origen, radioKm, tramos, resolver }) {
       .sort((a, b) => a.hasta_km - b.hasta_km).pop();
 
     const avisos = [];
-    if (!deReparto.length) {
-      avisos.push(`Sin áreas de reparto la zona no se usa y la tienda sigue con el radio de ${km(radioKm || 12)} km.`);
-    } else if (!localAdentro) {
-      avisos.push('El local queda afuera de la zona. Si no es a propósito, agrandala o movela.');
+    if (areas.length && !deReparto.length) {
+      avisos.push(`Solo hay recortes. Sin una zona violeta no se usa el mapa y la tienda sigue con el radio de ${km(radioKm || 12)} km.`);
+    } else if (deReparto.length && !localAdentro) {
+      avisos.push('El local quedó afuera de la zona. Si no es a propósito, agrandala o movela.');
     }
     if (deReparto.length && ultimoTramo && alcance > ultimoTramo.hasta_km) {
-      avisos.push(`La zona llega hasta ${km(alcance)} km en línea recta y el último tramo es hasta `
+      avisos.push(`La zona llega a ${km(alcance)} km y el último precio es hasta `
         + `${km(ultimoTramo.hasta_km)} km: lo que quede más lejos paga ${pesos(ultimoTramo.precio)}.`);
     }
 
-    const filaDeArea = (area) => {
-      const indice = areas.filter(a => a.tipo === area.tipo).indexOf(area) + 1;
-      const nombre = area.tipo === 'excluir' ? `Recorte ${indice}` : `Área ${indice}`;
-      return `
-        <button class="zona-editor__area ${area.id === seleccion ? 'es-elegida' : ''}"
-                data-elegir="${area.id}" aria-pressed="${area.id === seleccion}">
-          <i class="zona-editor__muestra zona-editor__muestra--${area.tipo}" aria-hidden="true"></i>
-          <span class="zona-editor__area-nombre">${nombre}</span>
-          <span class="zona-editor__area-dato">${km(areaKm2(area.puntos))} km² · ${area.puntos.length} esquinas</span>
-        </button>`;
-    };
+    const numero = (area) => areas.filter(a => a.tipo === area.tipo).indexOf(area) + 1;
+    const nombreDe = (area) => `${NOMBRE[area.tipo]} ${numero(area)}`;
 
-    lateral.innerHTML = modo === 'dibujar' ? `
-      <section class="zona-editor__seccion">
-        <h4>${tipoDibujo === 'excluir' ? 'Dibujando un recorte' : 'Dibujando un área'}</h4>
-        <p class="zona-editor__pista">
-          Tocá el mapa para marcar cada esquina, en orden. El primer punto es el más grande.
-          Se cierra solo al terminar.
-        </p>
-        <p class="zona-editor__contador"><b>${trazo.length}</b> ${trazo.length === 1 ? 'esquina' : 'esquinas'}</p>
-        <div class="zona-editor__fila">
+    const filaDeArea = (area) => `
+      <button class="zona-editor__area zona-editor__area--${area.tipo} ${area.id === seleccion ? 'es-elegida' : ''}"
+              data-elegir="${area.id}" aria-pressed="${area.id === seleccion}">
+        <i class="zona-editor__muestra zona-editor__muestra--${area.tipo}" aria-hidden="true"></i>
+        <span class="zona-editor__area-nombre">${nombreDe(area)}</span>
+        <span class="zona-editor__area-dice zona-editor__area-dice--${area.tipo}">${DICE[area.tipo]}</span>
+        <span class="zona-editor__area-dato">${km(areaKm2(area.puntos))} km²</span>
+      </button>`;
+
+    // En una pantalla táctil no hay clic derecho: la ayuda nombra el botón.
+    const tactil = window.matchMedia?.('(pointer: coarse)').matches;
+
+    const ayuda = (icono, texto) => `
+      <li><span class="material-icons" aria-hidden="true">${icono}</span><span>${texto}</span></li>`;
+
+    let html;
+
+    if (modo === 'dibujar') {
+      html = `
+        <section class="zona-editor__seccion">
+          <h4>${tipoDibujo === 'excluir' ? 'Dibujando un recorte' : 'Dibujando una zona'}</h4>
+          <ul class="zona-editor__ayuda">
+            ${ayuda('touch_app', 'Tocá el mapa en cada esquina, una después de la otra.')}
+            ${ayuda('check', 'Con tres o más, tocá <b>Terminar</b>. Se cierra sola.')}
+            ${ayuda('undo', 'Si marcaste mal, <b>Sacar la última</b>.')}
+          </ul>
+        </section>`;
+    } else if (!areas.length) {
+      // El primer paso, guiado: casi siempre es un círculo alrededor del local.
+      html = `
+        <section class="zona-editor__seccion zona-editor__inicio">
+          <span class="zona-editor__paso">Paso 1</span>
+          <h3>Marcá hasta dónde llevan los pedidos</h3>
+          <p>Empezá con un círculo alrededor del local. Después le cambiás la forma para que siga las calles.</p>
+          <label class="zona-editor__circulo" for="zonaRadio">
+            <span>Radio</span>
+            <input type="number" id="zonaRadio" data-radio min="0.1" max="60" step="0.5"
+                   value="${esc(radioAnterior ?? radioKm ?? 5)}">
+            <span>km</span>
+          </label>
+          <button class="pc-btn zona-editor__principal zona-editor__ancho" data-accion="circulo">
+            <span class="material-icons">radio_button_checked</span> Crear la zona
+          </button>
+          <button class="zona-editor__enlace" data-accion="dibujar-area">o dibujala punto por punto</button>
+        </section>`;
+    } else {
+      html = `
+        <section class="zona-editor__seccion">
+          <h4>Tu zona</h4>
+          ${deReparto.length ? `
+          <div class="zona-editor__resumen">
+            <div><span>Llega hasta</span><b>${km(alcance)} km</b></div>
+            <div><span>Superficie</span><b>${km(deReparto.reduce((t, a) => t + areaKm2(a.puntos), 0))} km²</b></div>
+          </div>` : ''}
+          <div class="zona-editor__areas">${areas.map(filaDeArea).join('')}</div>
+        </section>
+
+        <section class="zona-editor__seccion zona-editor__caja">
+          ${elegida ? `
+            <h4>Cambiar ${nombreDe(elegida).toLowerCase()}</h4>
+            <div class="zona-editor__grilla">
+              <button class="pc-btn" data-accion="agrandar"><span class="material-icons">add</span> Agrandar</button>
+              <button class="pc-btn" data-accion="achicar"><span class="material-icons">remove</span> Achicar</button>
+              <button class="pc-btn ${sacandoEsquinas ? 'active' : ''}" data-accion="sacar-esquinas"
+                      aria-pressed="${sacandoEsquinas}">
+                <span class="material-icons">${sacandoEsquinas ? 'check' : 'highlight_off'}</span>
+                ${sacandoEsquinas ? 'Listo' : 'Sacar puntos'}
+              </button>
+              <button class="pc-btn danger" data-accion="borrar"><span class="material-icons">delete_outline</span> Borrar</button>
+            </div>
+            <ul class="zona-editor__ayuda">
+              ${ayuda('open_with', 'Arrastrá un <b>punto blanco</b> para mover esa esquina.')}
+              ${ayuda('add_circle_outline', 'Tirá del <b>punto chiquito</b> entre dos esquinas para sumar una.')}
+              ${sacandoEsquinas
+                ? ayuda('touch_app', 'Tocá los puntos que quieras sacar.')
+                : (tactil
+                    ? ayuda('highlight_off', 'Para sacar un punto, tocá <b>Sacar puntos</b> y después el punto.')
+                    : ayuda('mouse', '<b>Clic derecho</b> sobre un punto para sacarlo.'))}
+              ${ayuda('pan_tool', 'Arrastrá desde adentro para mover todo.')}
+            </ul>` : `
+            <h4>Cambiar la forma</h4>
+            <p class="zona-editor__pista">Tocá una zona en el mapa o en la lista de arriba para agrandarla, achicarla o moverle los puntos.</p>`}
+        </section>
+
+        <section class="zona-editor__seccion">
+          <h4>Agregar</h4>
+          <div class="zona-editor__agregar zona-editor__agregar--incluir">
+            <div>
+              <b>Otro lugar donde llegamos</b>
+              <span>Un barrio suelto, lejos de la zona.</span>
+            </div>
+            <div class="zona-editor__fila">
+              <button class="pc-btn" data-accion="otra-zona" title="Un círculo en el centro de lo que se ve">
+                <span class="material-icons">radio_button_unchecked</span> Círculo
+              </button>
+              <button class="pc-btn" data-accion="dibujar-area" title="Marcando las esquinas en el mapa">
+                <span class="material-icons">gesture</span> A mano
+              </button>
+            </div>
+          </div>
+          <div class="zona-editor__agregar zona-editor__agregar--excluir">
+            <div>
+              <b>Una parte donde no llegamos</b>
+              <span>Adentro de la zona, pero ahí no se entrega.</span>
+            </div>
+            <div class="zona-editor__fila">
+              <button class="pc-btn" data-accion="recorte" title="Un círculo en el centro de lo que se ve">
+                <span class="material-icons">radio_button_unchecked</span> Círculo
+              </button>
+              <button class="pc-btn" data-accion="dibujar-recorte" title="Marcando las esquinas en el mapa">
+                <span class="material-icons">gesture</span> A mano
+              </button>
+            </div>
+          </div>
+        </section>
+
+        <section class="zona-editor__seccion">
+          <button class="pc-btn zona-editor__ancho ${modo === 'probar' ? 'active' : ''}" data-accion="probar"
+                  aria-pressed="${modo === 'probar'}">
+            <span class="material-icons">${modo === 'probar' ? 'check' : 'where_to_vote'}</span>
+            ${modo === 'probar' ? 'Terminar la prueba' : 'Probar un lugar del mapa'}
+          </button>
+        </section>
+
+        ${avisos.map(a => `
+          <p class="zona-editor__aviso"><span class="material-icons">warning_amber</span><span>${esc(a)}</span></p>`).join('')}
+
+        <div class="zona-editor__pie">
+          <button class="pc-btn" data-accion="deshacer" ${deshacer.length ? '' : 'disabled'}>
+            <span class="material-icons">undo</span> Deshacer
+          </button>
+          <button class="pc-btn" data-accion="encuadrar">
+            <span class="material-icons">zoom_out_map</span> Ver todo
+          </button>
+          <button class="pc-btn danger" data-accion="borrar-todo">
+            <span class="material-icons">layers_clear</span> Empezar de nuevo
+          </button>
+        </div>`;
+    }
+
+    lateral.innerHTML = html;
+    pintarBarra();
+  }
+
+  /**
+   * La barra de arriba del mapa mientras se dibuja o se prueba: lo que hay que
+   * hacer y los botones para terminar, al lado de donde se está tocando.
+   */
+  function pintarBarra() {
+    const barra = overlay.querySelector('[data-barra]');
+    if (!barra) return;
+
+    if (modo === 'dibujar') {
+      barra.hidden = false;
+      barra.className = `zona-editor__barra zona-editor__barra--${tipoDibujo}`;
+      barra.innerHTML = `
+        <span class="zona-editor__barra-texto">
+          <span class="material-icons">touch_app</span>
+          <span>Tocá el mapa en cada esquina · <b>${trazo.length}</b> ${trazo.length === 1 ? 'punto' : 'puntos'}</span>
+        </span>
+        <span class="zona-editor__barra-botones">
+          <button class="pc-btn" data-accion="quitar-esquina" ${trazo.length ? '' : 'disabled'}>Sacar la última</button>
+          <button class="pc-btn" data-accion="modo-editar">Cancelar</button>
           <button class="pc-btn zona-editor__principal" data-accion="terminar" ${trazo.length < 3 ? 'disabled' : ''}>
             <span class="material-icons">check</span> Terminar
           </button>
-          <button class="pc-btn" data-accion="quitar-esquina" ${trazo.length ? '' : 'disabled'}>
-            <span class="material-icons">undo</span> Sacar la última
-          </button>
-          <button class="pc-btn" data-accion="modo-editar">Cancelar</button>
-        </div>
-      </section>` : `
-      <section class="zona-editor__seccion">
-        <h4>Empezar</h4>
-        <div class="zona-editor__circulo">
-          <label for="zonaRadio">Círculo de</label>
-          <input type="number" id="zonaRadio" data-radio min="0.1" max="60" step="0.5"
-                 value="${esc(radioAnterior ?? radioKm ?? 5)}">
-          <span>km</span>
-          <button class="pc-btn" data-accion="circulo">
-            <span class="material-icons">add_circle_outline</span>
-            ${deReparto.length ? 'Agregar' : 'Alrededor del local'}
-          </button>
-        </div>
-        <div class="zona-editor__fila">
-          <button class="pc-btn" data-accion="dibujar-area">
-            <span class="material-icons">gesture</span> Dibujar un área
-          </button>
-          <button class="pc-btn" data-accion="recorte">
-            <span class="material-icons">content_cut</span> Recortar una parte
-          </button>
-          <button class="pc-btn" data-accion="dibujar-recorte">
-            <span class="material-icons">draw</span> Dibujar un recorte
-          </button>
-        </div>
-      </section>
-
-      <section class="zona-editor__seccion">
-        <h4>Áreas ${areas.length ? `<span class="zona-editor__cuenta">${deReparto.length} de reparto${recortes.length ? ` · ${recortes.length} ${recortes.length === 1 ? 'recorte' : 'recortes'}` : ''}</span>` : ''}</h4>
-        ${areas.length
-          ? `<div class="zona-editor__areas">${areas.map(filaDeArea).join('')}</div>`
-          : '<p class="zona-editor__pista">Todavía no hay nada dibujado. Empezá con un círculo alrededor del local.</p>'}
-        ${elegida ? `
-          <div class="zona-editor__elegida">
-            <div class="zona-editor__fila">
-              <button class="pc-btn" data-accion="agrandar" title="Agrandar un 10%">
-                <span class="material-icons">zoom_out_map</span> Agrandar
-              </button>
-              <button class="pc-btn" data-accion="achicar" title="Achicar un 10%">
-                <span class="material-icons">zoom_in_map</span> Achicar
-              </button>
-              <button class="pc-btn ${sacandoEsquinas ? 'active' : ''}" data-accion="sacar-esquinas"
-                      aria-pressed="${sacandoEsquinas}" title="Tocando una esquina se la saca">
-                <span class="material-icons">remove_circle_outline</span>
-                ${sacandoEsquinas ? 'Listo' : 'Sacar esquinas'}
-              </button>
-              <button class="pc-btn danger" data-accion="borrar">
-                <span class="material-icons">delete</span> Borrar
-              </button>
-            </div>
-            <p class="zona-editor__pista">
-              Arrastrá las esquinas para deformarla. Tirando del punto chico del medio de un lado
-              se agrega una esquina; con clic derecho sobre una esquina se saca. Para moverla
-              entera, arrastrala desde adentro.
-            </p>
-          </div>` : (areas.length ? '<p class="zona-editor__pista">Tocá un área en el mapa o en la lista para editarla.</p>' : '')}
-      </section>
-
-      <section class="zona-editor__seccion">
-        <h4>Probar</h4>
-        <button class="pc-btn ${modo === 'probar' ? 'active' : ''}" data-accion="probar"
-                aria-pressed="${modo === 'probar'}">
-          <span class="material-icons">ads_click</span>
-          ${modo === 'probar' ? 'Dejar de probar' : 'Tocar un punto del mapa'}
-        </button>
-        ${modo === 'probar' ? (resultadoPrueba ? `
-          <p class="zona-editor__prueba ${resultadoPrueba.adentro ? 'es-adentro' : 'es-afuera'}">
-            <span class="material-icons">${resultadoPrueba.adentro ? 'check_circle' : 'block'}</span>
-            <span><b>${resultadoPrueba.adentro ? 'Llegamos.' : 'No llegamos.'}</b>
-            ${resultadoPrueba.adentro ? 'La tienda deja pedir con envío.' : 'La tienda ofrece solo el retiro.'}
-            A ${km(resultadoPrueba.km)} km del local en línea recta.</span>
-          </p>` : '<p class="zona-editor__pista">Tocá cualquier punto y te digo si la tienda deja pedir con envío ahí.</p>') : ''}
-      </section>
-
-      ${deReparto.length ? `
-      <section class="zona-editor__seccion zona-editor__resumen">
-        <div><span>Llega hasta</span><b>${km(alcance)} km</b></div>
-        <div><span>Superficie</span><b>${km(deReparto.reduce((t, a) => t + areaKm2(a.puntos), 0))} km²</b></div>
-      </section>` : ''}
-
-      ${avisos.map(a => `
-        <p class="zona-editor__aviso"><span class="material-icons">warning_amber</span><span>${esc(a)}</span></p>`).join('')}
-
-      <div class="zona-editor__pie">
-        <button class="pc-btn" data-accion="deshacer" ${deshacer.length ? '' : 'disabled'}>
-          <span class="material-icons">undo</span> Deshacer
-        </button>
-        <button class="pc-btn" data-accion="encuadrar">
-          <span class="material-icons">center_focus_strong</span> Ver toda la zona
-        </button>
-        <button class="pc-btn danger" data-accion="borrar-todo" ${areas.length ? '' : 'disabled'}>
-          <span class="material-icons">layers_clear</span> Borrar todo
-        </button>
-      </div>`;
+        </span>`;
+    } else if (modo === 'probar') {
+      barra.hidden = false;
+      const r = resultadoPrueba;
+      barra.className = `zona-editor__barra ${r ? (r.adentro ? 'zona-editor__barra--si' : 'zona-editor__barra--no') : ''}`;
+      barra.innerHTML = `
+        <span class="zona-editor__barra-texto">
+          <span class="material-icons">${r ? (r.adentro ? 'check_circle' : 'block') : 'where_to_vote'}</span>
+          <span>${r
+            ? (r.adentro
+                ? `<b>Llegamos.</b> La tienda deja pedir con envío. A ${km(r.km)} km del local.`
+                : `<b>No llegamos.</b> La tienda solo ofrece retirarlo. A ${km(r.km)} km del local.`)
+            : 'Tocá cualquier lugar del mapa y te digo si la tienda deja pedir con envío ahí.'}</span>
+        </span>
+        <span class="zona-editor__barra-botones">
+          <button class="pc-btn" data-accion="probar">Terminar</button>
+        </span>`;
+    } else {
+      barra.hidden = true;
+      barra.innerHTML = '';
+    }
   }
 
   let temporizadorCartel = null;
@@ -745,6 +851,7 @@ function crearEditor({ db, zona, origen, radioKm, tramos, resolver }) {
       aplicar: aplicar,
       circulo: agregarCirculo,
       recorte: agregarRecorte,
+      'otra-zona': agregarOtraZona,
       'dibujar-area': () => empezarDibujo('incluir'),
       'dibujar-recorte': () => empezarDibujo('excluir'),
       terminar: terminarDibujo,
@@ -758,7 +865,7 @@ function crearEditor({ db, zona, origen, radioKm, tramos, resolver }) {
       'sacar-esquinas': () => {
         sacandoEsquinas = !sacandoEsquinas;
         pintarLateral();
-        if (sacandoEsquinas) mostrarCartel('Tocá las esquinas que quieras sacar.');
+        if (sacandoEsquinas) mostrarCartel('Tocá los puntos blancos que quieras sacar.');
       },
       deshacer: deshacerUltimo,
       encuadrar: encuadrar,
@@ -822,14 +929,6 @@ function crearEditor({ db, zona, origen, radioKm, tramos, resolver }) {
   }
 
   return { abrir };
-}
-
-/** Dónde se tocó, con mouse o con el dedo. null si el evento no lo dice. */
-function posicionDe(evento) {
-  const toque = evento?.changedTouches?.[0] || evento?.touches?.[0];
-  const x = evento?.clientX ?? toque?.clientX;
-  const y = evento?.clientY ?? toque?.clientY;
-  return Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
 }
 
 function aPunto(latLng) {

@@ -753,7 +753,12 @@
 
 body.zona-editor-abierto { overflow: hidden; }
 
+/* Los dos colores del editor, los mismos que se dibujan en el mapa. */
 .zona-editor {
+  --zona-si: #7b3fa6;
+  --zona-si-bg: rgba(123, 63, 166, .10);
+  --zona-no: #d32f2f;
+  --zona-no-bg: rgba(211, 47, 47, .08);
   position: fixed;
   inset: 0;
   z-index: 990;
@@ -773,23 +778,27 @@ body.zona-editor-abierto { overflow: hidden; }
   flex-wrap: wrap;
 }
 .zona-editor__titulo { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1 1 260px; }
-.zona-editor__titulo > .material-icons { color: var(--primary); font-size: 26px; }
+.zona-editor__titulo > .material-icons { color: var(--zona-si); font-size: 26px; }
 .zona-editor__titulo h3 { margin: 0; font-size: 16px; }
-.zona-editor__titulo p { margin: 2px 0 0; font-size: 12px; color: var(--text-muted); }
+.zona-editor__titulo p { margin: 2px 0 0; font-size: 12.5px; color: var(--text-muted); }
 .zona-editor__acciones { display: flex; gap: 8px; }
 .zona-editor__aplicar,
 .zona-editor__principal {
-  background: var(--primary);
-  border-color: var(--primary);
+  background: var(--zona-si);
+  border-color: var(--zona-si);
   color: #fff;
   font-weight: 600;
 }
 .zona-editor__aplicar:hover:not(:disabled),
 .zona-editor__principal:hover:not(:disabled) {
-  background: var(--primary-dark, var(--primary));
-  border-color: var(--primary-dark, var(--primary));
+  background: var(--primary-dark, var(--zona-si));
+  border-color: var(--primary-dark, var(--zona-si));
   color: #fff;
 }
+.zona-editor__principal:disabled { opacity: .45; }
+.zona-editor .pc-btn { min-height: 34px; }
+.zona-editor__ancho { width: 100%; justify-content: center; }
+.zona-editor .pc-btn.active { background: var(--zona-si-bg); color: var(--zona-si); border-color: var(--zona-si); }
 
 .zona-editor__cuerpo {
   flex: 1;
@@ -797,59 +806,84 @@ body.zona-editor-abierto { overflow: hidden; }
   min-height: 0;
 }
 .zona-editor__lateral {
-  width: 340px;
+  width: 348px;
   flex: none;
   overflow-y: auto;
-  padding: 14px 16px 18px;
+  padding: 16px 16px 18px;
   background: var(--surface);
   border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 18px;
 }
 .zona-editor__seccion h4 {
-  margin: 0 0 8px;
-  font-size: 12px;
+  margin: 0 0 10px;
+  font-size: 11.5px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: .04em;
+  letter-spacing: .05em;
   color: var(--text-muted);
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
 }
-.zona-editor__cuenta { text-transform: none; letter-spacing: 0; font-weight: 500; }
 .zona-editor__fila { display: flex; flex-wrap: wrap; gap: 6px; }
-.zona-editor__pista { margin: 8px 0 0; font-size: 12px; line-height: 1.5; color: var(--text-muted); }
-.zona-editor__contador { margin: 10px 0; font-size: 13px; }
+.zona-editor__pista { margin: 0; font-size: 12.5px; line-height: 1.5; color: var(--text-muted); }
 
+/* El primer paso, cuando todavía no hay nada dibujado. */
+.zona-editor__inicio { display: flex; flex-direction: column; gap: 12px; }
+.zona-editor__paso {
+  align-self: flex-start;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  color: var(--zona-si);
+  background: var(--zona-si-bg);
+  padding: 3px 8px;
+  border-radius: 99px;
+}
+.zona-editor__inicio h3 { margin: 0; font-size: 17px; line-height: 1.3; }
+.zona-editor__inicio p { margin: 0; font-size: 13px; line-height: 1.5; color: var(--text-muted); }
 .zona-editor__circulo {
   display: flex;
   align-items: center;
-  gap: 6px;
-  flex-wrap: wrap;
-  margin-bottom: 8px;
-  font-size: 13px;
+  gap: 8px;
+  font-size: 13.5px;
+  font-weight: 600;
 }
 .zona-editor__circulo input {
-  width: 70px;
-  padding: 6px 8px;
+  width: 84px;
+  padding: 8px 10px;
   border: 1.5px solid var(--border);
-  border-radius: 7px;
+  border-radius: 8px;
   background: var(--surface);
   color: var(--text);
   font: inherit;
+  font-weight: 600;
 }
-.zona-editor__circulo input:focus { border-color: var(--primary); outline: none; }
+.zona-editor__circulo input:focus { border-color: var(--zona-si); outline: none; }
+.zona-editor__inicio .zona-editor__principal { min-height: 42px; font-size: 14px; }
+.zona-editor__enlace {
+  align-self: center;
+  border: none;
+  background: none;
+  padding: 4px;
+  font: inherit;
+  font-size: 12.5px;
+  color: var(--text-muted);
+  text-decoration: underline;
+  cursor: pointer;
+}
+.zona-editor__enlace:hover { color: var(--text); }
 
-.zona-editor__areas { display: flex; flex-direction: column; gap: 4px; }
+/* La lista de lo dibujado. */
+.zona-editor__areas { display: flex; flex-direction: column; gap: 6px; margin-top: 10px; }
 .zona-editor__area {
   display: grid;
-  grid-template-columns: 14px 1fr;
+  grid-template-columns: 16px 1fr auto;
   column-gap: 10px;
   align-items: center;
   text-align: left;
   width: 100%;
-  padding: 8px 10px;
+  padding: 9px 11px;
   border: 1px solid var(--border);
   border-radius: 8px;
   background: var(--surface);
@@ -858,34 +892,24 @@ body.zona-editor-abierto { overflow: hidden; }
   cursor: pointer;
 }
 .zona-editor__area:hover { border-color: var(--text-muted); }
-.zona-editor__area.es-elegida { border-color: var(--primary); box-shadow: inset 3px 0 0 var(--primary); }
-.zona-editor__area.es-elegida:has(.zona-editor__muestra--excluir) { border-color: #d32f2f; box-shadow: inset 3px 0 0 #d32f2f; }
-.zona-editor__area-nombre { font-size: 13px; font-weight: 600; }
-.zona-editor__area-dato { grid-column: 2; font-size: 11.5px; color: var(--text-muted); }
+.zona-editor__area.es-elegida { border-color: var(--zona-si); background: var(--zona-si-bg); }
+.zona-editor__area--excluir.es-elegida { border-color: var(--zona-no); background: var(--zona-no-bg); }
+.zona-editor__area-nombre { font-size: 13.5px; font-weight: 600; }
+.zona-editor__area-dice { font-size: 11.5px; font-weight: 600; justify-self: end; }
+.zona-editor__area-dice--incluir { color: var(--zona-si); }
+.zona-editor__area-dice--excluir { color: var(--zona-no); }
+.zona-editor__area-dato { grid-column: 2 / 4; font-size: 11.5px; color: var(--text-muted); }
 .zona-editor__muestra {
+  display: inline-block;
   grid-row: span 2;
   width: 14px;
   height: 14px;
   border-radius: 3px;
   border: 2px solid;
+  flex: none;
 }
-.zona-editor__muestra--incluir { border-color: #7b3fa6; background: rgba(123, 63, 166, .18); }
-.zona-editor__muestra--excluir { border-color: #d32f2f; background: rgba(211, 47, 47, .25); }
-.zona-editor__elegida { margin-top: 10px; }
-
-.zona-editor__prueba {
-  display: flex;
-  gap: 8px;
-  align-items: flex-start;
-  margin: 10px 0 0;
-  padding: 10px;
-  border-radius: 8px;
-  font-size: 12.5px;
-  line-height: 1.45;
-}
-.zona-editor__prueba .material-icons { font-size: 18px; }
-.zona-editor__prueba.es-adentro { background: var(--tint-green-bg); color: var(--tint-green-fg); }
-.zona-editor__prueba.es-afuera { background: var(--tint-red-bg); color: var(--tint-red-fg); }
+.zona-editor__muestra--incluir { border-color: var(--zona-si); background: rgba(123, 63, 166, .22); }
+.zona-editor__muestra--excluir { border-color: var(--zona-no); background: rgba(211, 47, 47, .28); }
 
 .zona-editor__resumen {
   display: grid;
@@ -894,11 +918,60 @@ body.zona-editor-abierto { overflow: hidden; }
 }
 .zona-editor__resumen div {
   padding: 8px 10px;
-  border: 1px solid var(--border);
   border-radius: 8px;
+  background: var(--bg);
 }
 .zona-editor__resumen span { display: block; font-size: 11px; color: var(--text-muted); }
-.zona-editor__resumen b { font-size: 15px; }
+.zona-editor__resumen b { font-size: 16px; }
+
+/* Lo que se puede hacer con la zona elegida. */
+.zona-editor__caja {
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg);
+}
+.zona-editor__grilla {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+.zona-editor__grilla .pc-btn { justify-content: center; background: var(--surface); }
+.zona-editor__ayuda {
+  list-style: none;
+  margin: 12px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.zona-editor__ayuda li {
+  display: grid;
+  grid-template-columns: 20px 1fr;
+  gap: 8px;
+  align-items: start;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+.zona-editor__ayuda b { color: var(--text); font-weight: 600; }
+.zona-editor__ayuda .material-icons { font-size: 18px; color: var(--text-muted); }
+
+/* Agregar: una fila por color, así se sabe qué se está agregando. */
+.zona-editor__agregar {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-left: 3px solid;
+  border-radius: 0 8px 8px 0;
+  margin-bottom: 8px;
+}
+.zona-editor__agregar--incluir { border-color: var(--zona-si); background: var(--zona-si-bg); }
+.zona-editor__agregar--excluir { border-color: var(--zona-no); background: var(--zona-no-bg); }
+.zona-editor__agregar b { display: block; font-size: 13px; }
+.zona-editor__agregar span { display: block; font-size: 12px; color: var(--text-muted); margin-top: 1px; }
+.zona-editor__agregar .pc-btn { background: var(--surface); }
 
 .zona-editor__aviso {
   display: flex;
@@ -922,6 +995,7 @@ body.zona-editor-abierto { overflow: hidden; }
   gap: 6px;
 }
 
+/* El mapa y lo que va encima. */
 .zona-editor__mapa-caja { position: relative; flex: 1; min-width: 0; min-height: 0; }
 .zona-editor__mapa { position: absolute; inset: 0; }
 .zona-editor__cargando,
@@ -940,15 +1014,74 @@ body.zona-editor-abierto { overflow: hidden; }
 }
 .zona-editor__falla b { color: var(--text); font-size: 15px; }
 .zona-editor__falla .material-icons { font-size: 34px; color: var(--tint-red-fg); }
+
+.zona-editor__leyenda {
+  position: absolute;
+  left: 10px;
+  top: 10px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 14px;
+  padding: 7px 11px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, .95);
+  color: #1c1c1c;
+  font-size: 12px;
+  font-weight: 600;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, .18);
+  max-width: calc(100% - 80px);
+}
+.zona-editor__leyenda span { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.zona-editor__punto-local {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: #1c1c1c;
+  border: 2px solid #fff;
+  box-shadow: 0 0 0 1px #1c1c1c;
+}
+
+/* Mientras se dibuja o se prueba: qué hacer y cómo terminar, arriba del mapa. */
+.zona-editor__barra {
+  position: absolute;
+  left: 50%;
+  top: 52px;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100% - 20px);
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 14px;
+  padding: 8px 8px 8px 14px;
+  border-radius: 10px;
+  background: #fff;
+  color: #1c1c1c;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, .22);
+  border-left: 4px solid #1c1c1c;
+  font-size: 13px;
+}
+.zona-editor__barra[hidden] { display: none; }
+.zona-editor__barra--incluir { border-left-color: var(--zona-si); }
+.zona-editor__barra--excluir { border-left-color: var(--zona-no); }
+.zona-editor__barra--si { border-left-color: #2e7d32; background: #eef7ef; }
+.zona-editor__barra--no { border-left-color: var(--zona-no); background: #fdeeee; }
+.zona-editor__barra-texto { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.zona-editor__barra-texto .material-icons { font-size: 20px; }
+.zona-editor__barra--si .zona-editor__barra-texto .material-icons { color: #2e7d32; }
+.zona-editor__barra--no .zona-editor__barra-texto .material-icons { color: var(--zona-no); }
+.zona-editor__barra-botones { display: flex; gap: 6px; margin-left: auto; }
+.zona-editor__barra .pc-btn:not(.zona-editor__principal) { background: #fff; color: #1c1c1c; border-color: #d0d0d0; }
+
 .zona-editor__cartel {
   position: absolute;
   left: 50%;
-  top: 12px;
+  bottom: 28px;
   transform: translateX(-50%);
   max-width: calc(100% - 32px);
   padding: 9px 14px;
   border-radius: 8px;
-  background: rgba(28, 28, 28, .88);
+  background: rgba(28, 28, 28, .9);
   color: #fff;
   font-size: 12.5px;
   line-height: 1.4;
@@ -962,11 +1095,21 @@ body.zona-editor-abierto { overflow: hidden; }
   .zona-editor__cuerpo { flex-direction: column-reverse; }
   .zona-editor__lateral {
     width: auto;
-    max-height: 46vh;
+    max-height: 48vh;
     border-right: none;
     border-top: 1px solid var(--border);
+    gap: 14px;
   }
-  .zona-editor__mapa-caja { min-height: 44vh; }
+  .zona-editor__mapa-caja { min-height: 42vh; }
   .zona-editor__titulo p { display: none; }
   .zona-editor__cabecera { padding: 8px 12px; }
+  .zona-editor__leyenda { font-size: 11px; gap: 3px 10px; padding: 5px 8px; }
+  .zona-editor__barra { top: auto; bottom: 10px; width: calc(100% - 20px); }
+  .zona-editor__barra-botones { width: 100%; justify-content: flex-end; }
+  .zona-editor__cartel { bottom: auto; top: 48px; }
+  .zona-editor[data-modo="dibujar"] .zona-editor__lateral,
+  .zona-editor[data-modo="probar"] .zona-editor__lateral { display: none; }
+  .zona-editor__barra { font-size: 12.5px; padding: 7px 7px 7px 11px; }
+  .zona-editor[data-modo="probar"] .zona-editor__barra { flex-wrap: nowrap; }
+  .zona-editor[data-modo="probar"] .zona-editor__barra-botones { width: auto; }
 }
