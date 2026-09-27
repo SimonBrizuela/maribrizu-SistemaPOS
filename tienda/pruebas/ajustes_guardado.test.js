@@ -397,7 +397,7 @@ describe('lo que se guarda es lo que se tildó', () => {
     });
     expect(Object.keys(escrito.campos.entrega).sort()).toEqual([
       'delivery_habilitado', 'demora_texto', 'envio_gratis_desde', 'pedido_minimo',
-      'radio_max_km', 'retiro_habilitado', 'tramos',
+      'radio_max_km', 'retiro_habilitado', 'tramos', 'zona',
     ]);
   });
 
@@ -738,5 +738,62 @@ describe('cancelar el aviso', () => {
     expect(nube.tienda_config.publicacion.rubros).toEqual(['LIBRERIA', 'PAPELERIA']);
     expect(nube.tienda_config.settings.pago.alias).toBeNull();
     expect(document.getElementById('cfgEstado').textContent).toBe('');
+  });
+});
+
+describe('la zona de reparto dibujada', () => {
+  const AREA = {
+    tipo: 'incluir',
+    puntos: [{ lat: -31.30, lng: -64.25 }, { lat: -31.30, lng: -64.17 }, { lat: -31.36, lng: -64.20 }],
+  };
+  const RECORTE = {
+    tipo: 'excluir',
+    puntos: [{ lat: -31.31, lng: -64.22 }, { lat: -31.31, lng: -64.21 }, { lat: -31.32, lng: -64.215 }],
+  };
+
+  it('sin zona dibujada se guarda apagada y vacía, y el radio sigue mandando', async () => {
+    await montar();
+    expect(document.getElementById('cfgZonaActiva').disabled).toBe(true);
+    expect(document.getElementById('cfgRadio').disabled).toBe(false);
+    await guardar();
+    expect(nube.tienda_config.settings.entrega.zona).toEqual({ activa: false, areas: [] });
+  });
+
+  it('una zona prendida vuelve entera al guardar, con sus recortes', async () => {
+    nube.tienda_config.settings.entrega.zona = { activa: true, areas: [AREA, RECORTE] };
+    await montar();
+
+    expect(document.getElementById('cfgZonaActiva').getAttribute('aria-checked')).toBe('true');
+    expect(document.getElementById('cfgZona').textContent).toContain('1 área de reparto');
+    expect(document.getElementById('cfgZona').textContent).toContain('1 recorte');
+    // Con la zona prendida el radio no se usa, y se ve.
+    expect(document.getElementById('cfgRadio').disabled).toBe(true);
+    expect(document.getElementById('cfgTramosResumen').textContent).toContain('dentro de la zona');
+
+    await guardar();
+    expect(nube.tienda_config.settings.entrega.zona).toEqual({ activa: true, areas: [AREA, RECORTE] });
+  });
+
+  it('la llave la apaga sin borrar lo dibujado, y avisa que falta guardar', async () => {
+    nube.tienda_config.settings.entrega.zona = { activa: true, areas: [AREA] };
+    await montar();
+
+    document.getElementById('cfgZonaActiva').click();
+    expect(document.getElementById('cfgZona').textContent).toContain('Tocá Guardar');
+    expect(document.getElementById('cfgRadio').disabled).toBe(false);
+
+    await guardar();
+    expect(nube.tienda_config.settings.entrega.zona).toEqual({ activa: false, areas: [AREA] });
+    expect(document.getElementById('cfgZona').textContent).not.toContain('Tocá Guardar');
+  });
+
+  it('un área rota en el documento no se vuelve a escribir', async () => {
+    nube.tienda_config.settings.entrega.zona = {
+      activa: true,
+      areas: [AREA, { tipo: 'incluir', puntos: [{ lat: 1, lng: 1 }, { lat: 'x', lng: 2 }] }],
+    };
+    await montar();
+    await guardar();
+    expect(nube.tienda_config.settings.entrega.zona.areas).toEqual([AREA]);
   });
 });

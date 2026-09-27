@@ -26,6 +26,8 @@ import { espejarLote, recomputarRubros, motivoDeNoPublicar, nombreBonito,
          claveDeRubro, actualizarDoc, reemplazarDoc,
          olvidarPublicacion } from '../tienda_espejo.js';
 import { textoDeHorarios } from '../../../tienda/src/horarios.js';
+import { sanearZona, alcanceKm } from '../../../tienda/src/zona_reparto.js';
+import { abrirEditorZona } from '../components/zona_reparto_editor.js';
 import '../styles/tienda.css';
 
 const POR_DEFECTO = {
@@ -60,6 +62,10 @@ let _habilitados = [];
 let _subExcluidos = {};
 let _catalogo = [];
 let _horarios = null;
+// La zona de reparto dibujada: { activa, areas }. Se edita en el mapa y se
+// guarda con el resto al tocar "Guardar".
+let _zona = { activa: false, areas: [] };
+let _zonaSinGuardar = false;
 // Si alguien ya empezó a editar, la revalidación contra el server no repinta.
 let _tocado = false;
 
@@ -162,10 +168,91 @@ function pintarTramosResumen(tramos) {
         return `<div>De ${String(desde).replace('.', ',')} a
                 ${String(t.hasta_km).replace('.', ',')} km · <b>${pesos(t.precio)}</b></div>`;
       }).join('')
-      + `<div style="margin-top:5px;color:var(--tint-red-fg)">
-           Más de ${String(ordenados[ordenados.length - 1].hasta_km).replace('.', ',')} km ·
-           fuera de reparto</div>`
+      + (zonaManda()
+        // Con la zona prendida, pasarse de la tabla no deja afuera: decide el
+        // mapa, y lo de más lejos paga el último tramo.
+        ? `<div style="margin-top:5px">
+             Más de ${String(ordenados[ordenados.length - 1].hasta_km).replace('.', ',')} km,
+             dentro de la zona · <b>${pesos(ordenados[ordenados.length - 1].precio)}</b></div>`
+        : `<div style="margin-top:5px;color:var(--tint-red-fg)">
+             Más de ${String(ordenados[ordenados.length - 1].hasta_km).replace('.', ',')} km ·
+             fuera de reparto</div>`)
     : '<div>Sin tramos cargados: la tienda cotiza "a confirmar".</div>';
+}
+
+/* ── Zona de reparto ──────────────────────────────────────────────────────── */
+
+const hayAreasDeReparto = () => _zona.areas.some(a => a.tipo === 'incluir');
+const zonaManda = () => _zona.activa && hayAreasDeReparto();
+
+/**
+ * El resumen de la zona en el bloque de Entrega: si está prendida, qué tiene
+ * dibujado y el botón que abre el mapa.
+ */
+function pintarZona() {
+  const caja = document.getElementById('cfgZona');
+  if (!caja) return;
+
+  const deReparto = _zona.areas.filter(a => a.tipo === 'incluir').length;
+  const recortes = _zona.areas.filter(a => a.tipo === 'excluir').length;
+  const alcance = alcanceKm(_config.origen, { zona: { activa: true, areas: _zona.areas } });
+
+  const detalle = !_zona.areas.length
+    ? 'Sin dibujar. Mientras tanto se reparte hasta el radio en km de abajo.'
+    : [
+        `${deReparto} ${deReparto === 1 ? 'área' : 'áreas'} de reparto`,
+        recortes ? `${recortes} ${recortes === 1 ? 'recorte' : 'recortes'}` : '',
+        alcance ? `llega hasta ${String(alcance).replace('.', ',')} km del local` : '',
+      ].filter(Boolean).join(' · ');
+
+  caja.innerHTML = `
+    <div class="zona-resumen">
+      <div class="zona-resumen__fila">
+        <button class="tienda-switch" id="cfgZonaActiva" aria-checked="${zonaManda()}"
+                aria-label="Usar la zona dibujada" ${hayAreasDeReparto() ? '' : 'disabled'}></button>
+        <div class="zona-resumen__estado">
+          <b>${zonaManda() ? 'Se reparte dentro de la zona dibujada' : 'Zona de reparto apagada'}</b>
+          <span>${escHtml(detalle)}</span>
+        </div>
+        <button class="pc-btn" id="cfgZonaEditar">
+          <span class="material-icons">edit_location_alt</span>
+          ${_zona.areas.length ? 'Editar en el mapa' : 'Dibujar en el mapa'}
+        </button>
+      </div>
+      ${_zonaSinGuardar ? `
+        <p class="zona-resumen__sin-guardar">
+          <span class="material-icons">info</span>
+          La zona cambió. Tocá Guardar, abajo de todo, para que llegue a la tienda.
+        </p>` : ''}
+    </div>`;
+
+  const radio = document.getElementById('cfgRadio');
+  if (radio) {
+    radio.disabled = zonaManda();
+    radio.title = zonaManda() ? 'Con la zona dibujada prendida, el radio no se usa.' : '';
+  }
+  pintarTramosResumen(_tramos);
+}
+
+async function editarZona(db) {
+  const e = _config.entrega || {};
+  const resultado = await abrirEditorZona({
+    db,
+    zona: _zona,
+    origen: _config.origen,
+    radioKm: Number(document.getElementById('cfgRadio')?.value) || Number(e.radio_max_km) || 5,
+    tramos: _tramos,
+  });
+  if (!resultado) return;
+
+  const antes = JSON.stringify(_zona.areas);
+  _zona = { ..._zona, areas: resultado.areas };
+  // La primera vez que se dibuja algo, se prende sola: nadie dibuja una zona
+  // para dejarla apagada. Si se borró todo, se apaga.
+  if (!antes || antes === '[]') _zona.activa = hayAreasDeReparto();
+  if (!hayAreasDeReparto()) _zona.activa = false;
+  if (JSON.stringify(_zona.areas) !== antes) _zonaSinGuardar = true;
+  pintarZona();
 }
 
 const DIAS = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
@@ -511,6 +598,8 @@ export async function renderTiendaAjustes(container, db) {
     hasta_km: Number(t.hasta_km) || 0, precio: Number(t.precio) || 0,
   }));
   _horarios = normalizarHorarios(config.horarios);
+  _zona = sanearZona(config.entrega.zona);
+  _zonaSinGuardar = false;
   _habilitados = Array.isArray(publicacion?.rubros)
     ? publicacion.rubros.map(r => String(r).trim().toUpperCase()) : [];
   _subExcluidos = normalizarExcluidos(publicacion?.subrubros_excluidos);
@@ -566,6 +655,9 @@ export async function renderTiendaAjustes(container, db) {
             Envío a domicilio
           </label>
         </div>
+
+        <h4 style="margin-top:4px">Hasta dónde se reparte</h4>
+        <div id="cfgZona"></div>
 
         <div class="tienda-dos">
           ${campo('cfgRadio', 'Radio máximo (km)', e.radio_max_km, { tipo: 'number' })}
@@ -645,6 +737,7 @@ export async function renderTiendaAjustes(container, db) {
     </div>`;
 
   pintarTramos();
+  pintarZona();
   pintarHorarios();
   pintarRubros();
   // Del contenedor y no de `document`: si la página ya se reemplazó, el de
@@ -665,6 +758,19 @@ export async function renderTiendaAjustes(container, db) {
     const abierta = $('#cfgAbierta').getAttribute('aria-checked') !== 'true';
     $('#cfgAbierta').setAttribute('aria-checked', String(abierta));
     $('#cfgAbiertaTexto').textContent = abierta ? 'La tienda toma pedidos' : 'Tienda cerrada';
+  });
+
+  $('#cfgZona').addEventListener('click', ev => {
+    if (ev.target.closest('#cfgZonaEditar')) {
+      editarZona(db);
+      return;
+    }
+    const llave = ev.target.closest('#cfgZonaActiva');
+    if (llave && !llave.disabled) {
+      _zona.activa = !zonaManda();
+      _zonaSinGuardar = true;
+      pintarZona();
+    }
   });
 
   $('#cfgTramos').addEventListener('click', ev => {
@@ -835,6 +941,12 @@ async function guardarTodo(container) {
         retiro_habilitado: $('#cfgRetiro').checked,
         delivery_habilitado: $('#cfgDelivery').checked,
         radio_max_km: numero('#cfgRadio') ?? 12,
+        // Saneada otra vez al guardar: es lo que leen el checkout y el
+        // servidor, y un área rota ahí dejaría a alguien sin poder pedir.
+        zona: {
+          activa: zonaManda(),
+          areas: sanearZona({ areas: _zona.areas }).areas,
+        },
         demora_texto: texto('#cfgDemora') || '24 a 48 hs',
         envio_gratis_desde: numero('#cfgGratis'),
         pedido_minimo: numero('#cfgMinimo') ?? 0,
@@ -904,6 +1016,10 @@ async function guardarTodo(container) {
     }
 
     _config = { ...(_config || {}), ...ajustes };
+    if (_zonaSinGuardar) {
+      _zonaSinGuardar = false;
+      pintarZona();
+    }
   } catch (err) {
     console.error('[tienda] configuración:', err);
     estado.textContent = 'No se pudo guardar.';

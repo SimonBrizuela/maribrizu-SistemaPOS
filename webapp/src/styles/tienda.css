@@ -719,3 +719,254 @@
 }
 .tienda-grupo-candidato:hover,
 .tienda-grupo-item:hover { border-color: #4361ee; }
+
+/* ── Zona de reparto ──────────────────────────────────────────────────────────
+   El resumen en Configuración > Entrega y el editor a pantalla completa. El
+   editor queda debajo de los diálogos del panel (1000) para que "¿Descartar
+   los cambios?" se vea encima del mapa. */
+
+.zona-resumen {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 12px 14px;
+  margin-bottom: 12px;
+  background: var(--surface-2, var(--bg));
+}
+.zona-resumen__fila {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+.zona-resumen__estado { font-size: 13.5px; flex: 1 1 180px; min-width: 0; }
+.zona-resumen__estado b { display: block; }
+.zona-resumen__estado span { display: block; font-size: 11.5px; color: var(--text-muted); margin-top: 2px; }
+.zona-resumen__sin-guardar {
+  margin: 10px 0 0;
+  font-size: 12px;
+  color: var(--tint-orange-fg, #b45309);
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+.zona-resumen__sin-guardar .material-icons { font-size: 16px; }
+
+body.zona-editor-abierto { overflow: hidden; }
+
+.zona-editor {
+  position: fixed;
+  inset: 0;
+  z-index: 990;
+  display: flex;
+  flex-direction: column;
+  background: var(--bg);
+  color: var(--text);
+}
+.zona-editor__cabecera {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 10px 16px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.zona-editor__titulo { display: flex; align-items: center; gap: 12px; min-width: 0; flex: 1 1 260px; }
+.zona-editor__titulo > .material-icons { color: var(--primary); font-size: 26px; }
+.zona-editor__titulo h3 { margin: 0; font-size: 16px; }
+.zona-editor__titulo p { margin: 2px 0 0; font-size: 12px; color: var(--text-muted); }
+.zona-editor__acciones { display: flex; gap: 8px; }
+.zona-editor__aplicar,
+.zona-editor__principal {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  font-weight: 600;
+}
+.zona-editor__aplicar:hover:not(:disabled),
+.zona-editor__principal:hover:not(:disabled) {
+  background: var(--primary-dark, var(--primary));
+  border-color: var(--primary-dark, var(--primary));
+  color: #fff;
+}
+
+.zona-editor__cuerpo {
+  flex: 1;
+  display: flex;
+  min-height: 0;
+}
+.zona-editor__lateral {
+  width: 340px;
+  flex: none;
+  overflow-y: auto;
+  padding: 14px 16px 18px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.zona-editor__seccion h4 {
+  margin: 0 0 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: .04em;
+  color: var(--text-muted);
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+.zona-editor__cuenta { text-transform: none; letter-spacing: 0; font-weight: 500; }
+.zona-editor__fila { display: flex; flex-wrap: wrap; gap: 6px; }
+.zona-editor__pista { margin: 8px 0 0; font-size: 12px; line-height: 1.5; color: var(--text-muted); }
+.zona-editor__contador { margin: 10px 0; font-size: 13px; }
+
+.zona-editor__circulo {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+.zona-editor__circulo input {
+  width: 70px;
+  padding: 6px 8px;
+  border: 1.5px solid var(--border);
+  border-radius: 7px;
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+.zona-editor__circulo input:focus { border-color: var(--primary); outline: none; }
+
+.zona-editor__areas { display: flex; flex-direction: column; gap: 4px; }
+.zona-editor__area {
+  display: grid;
+  grid-template-columns: 14px 1fr;
+  column-gap: 10px;
+  align-items: center;
+  text-align: left;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.zona-editor__area:hover { border-color: var(--text-muted); }
+.zona-editor__area.es-elegida { border-color: var(--primary); box-shadow: inset 3px 0 0 var(--primary); }
+.zona-editor__area.es-elegida:has(.zona-editor__muestra--excluir) { border-color: #d32f2f; box-shadow: inset 3px 0 0 #d32f2f; }
+.zona-editor__area-nombre { font-size: 13px; font-weight: 600; }
+.zona-editor__area-dato { grid-column: 2; font-size: 11.5px; color: var(--text-muted); }
+.zona-editor__muestra {
+  grid-row: span 2;
+  width: 14px;
+  height: 14px;
+  border-radius: 3px;
+  border: 2px solid;
+}
+.zona-editor__muestra--incluir { border-color: #7b3fa6; background: rgba(123, 63, 166, .18); }
+.zona-editor__muestra--excluir { border-color: #d32f2f; background: rgba(211, 47, 47, .25); }
+.zona-editor__elegida { margin-top: 10px; }
+
+.zona-editor__prueba {
+  display: flex;
+  gap: 8px;
+  align-items: flex-start;
+  margin: 10px 0 0;
+  padding: 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+.zona-editor__prueba .material-icons { font-size: 18px; }
+.zona-editor__prueba.es-adentro { background: var(--tint-green-bg); color: var(--tint-green-fg); }
+.zona-editor__prueba.es-afuera { background: var(--tint-red-bg); color: var(--tint-red-fg); }
+
+.zona-editor__resumen {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+.zona-editor__resumen div {
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+.zona-editor__resumen span { display: block; font-size: 11px; color: var(--text-muted); }
+.zona-editor__resumen b { font-size: 15px; }
+
+.zona-editor__aviso {
+  display: flex;
+  gap: 8px;
+  margin: 0;
+  padding: 9px 10px;
+  border-radius: 8px;
+  background: var(--tint-orange-bg, #fff4e5);
+  color: var(--tint-orange-fg, #b45309);
+  font-size: 12px;
+  line-height: 1.45;
+}
+.zona-editor__aviso .material-icons { font-size: 17px; }
+
+.zona-editor__pie {
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.zona-editor__mapa-caja { position: relative; flex: 1; min-width: 0; min-height: 0; }
+.zona-editor__mapa { position: absolute; inset: 0; }
+.zona-editor__cargando,
+.zona-editor__falla {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  color: var(--text-muted);
+  font-size: 13px;
+  text-align: center;
+  padding: 24px;
+}
+.zona-editor__falla b { color: var(--text); font-size: 15px; }
+.zona-editor__falla .material-icons { font-size: 34px; color: var(--tint-red-fg); }
+.zona-editor__cartel {
+  position: absolute;
+  left: 50%;
+  top: 12px;
+  transform: translateX(-50%);
+  max-width: calc(100% - 32px);
+  padding: 9px 14px;
+  border-radius: 8px;
+  background: rgba(28, 28, 28, .88);
+  color: #fff;
+  font-size: 12.5px;
+  line-height: 1.4;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .2);
+  pointer-events: none;
+}
+.zona-editor__cartel[hidden] { display: none; }
+
+/* En el celular el mapa va arriba y los controles abajo, con su propio scroll. */
+@media (max-width: 760px) {
+  .zona-editor__cuerpo { flex-direction: column-reverse; }
+  .zona-editor__lateral {
+    width: auto;
+    max-height: 46vh;
+    border-right: none;
+    border-top: 1px solid var(--border);
+  }
+  .zona-editor__mapa-caja { min-height: 44vh; }
+  .zona-editor__titulo p { display: none; }
+  .zona-editor__cabecera { padding: 8px 12px; }
+}
