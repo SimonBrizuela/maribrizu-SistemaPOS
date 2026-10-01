@@ -7,7 +7,8 @@ import { getCached, invalidateCache, invalidateCacheByPrefix, peekCacheValue } f
 import { ensureCollections, onStoreChange } from '../store.js';
 import { initCatalogoHistory, fieldLabel } from '../catalogo_history.js';
 import { registrarMovimiento, movimientosDe, MOTIVOS } from '../stock_ledger.js';
-import { avisarStockALaTienda, reflejarSiPublicado, sacarDeLaTienda, usarCatalogoParaRecontar }
+import { avisarStockALaTienda, reflejarSiPublicado, sacarDeLaTienda, usarCatalogoParaRecontar,
+  leerDocRest, escribirLote, actualizarDoc, esDocumentoYaExistente }
   from '../tienda_espejo.js';
 import { camposStockRapido, num as numConj } from '../conjunto.js';
 import {
@@ -15,7 +16,6 @@ import {
   sugerirCantidad, valorizarStock, validarInventario,
 } from '../inventario_resumen.js';
 import { alertDialog, promptDialog } from '../components/dialogs.js';
-import { levantarLapida, levantarLapidas } from '../lapidas.js';
 import {
   TIPOS_BULTO, bultoDe, labelTipo, aUnidades, aUnidadesEstable, aBultos, textoBultos, alertaPorBulto,
 } from '../bulto.js';
@@ -415,31 +415,30 @@ function parseCatalogoCSV(text) {
 // la nube (la lista de "nuevos" se arma contra la memoria, que puede estar
 // vieja): un batch.set los habría pisado enteros.
 async function subirCatalogoFirebase(db, productos, onProgress) {
-  const BATCH_SIZE = 400;
+  // 200 altas + sus 200 lápidas = 400 escrituras: entra en un commit (≤ 500).
+  const POR_LOTE = 200;
   let count = 0;
   const salteados = [];
-  for (let i = 0; i < productos.length; i += BATCH_SIZE) {
-    const batch = writeBatch(db);
-    const chunk = productos.slice(i, i + BATCH_SIZE);
-    const idsSubidos = [];
-    for (const p of chunk) {
-      const id = p.codigo || slugify(p.nombre) || `prod-${i}-${count}`;
-      let existente = null;
-      try { existente = await productoEnNube(db, id); } catch (_) {}
+  for (let i = 0; i < productos.length; i += POR_LOTE) {
+    const chunk = productos.slice(i, i + POR_LOTE).map((p, j) => ({
+      p, id: p.codigo || slugify(p.nombre) || `prod-${i}-${count + j}`,
+    }));
+    // Las consultas van en paralelo y por REST (ver productoEnNube).
+    const existentes = await Promise.all(chunk.map(({ id }) =>
+      productoEnNube(db, id).catch(() => null)));
+    const escrituras = [];
+    chunk.forEach(({ p, id }, j) => {
+      const existente = existentes[j];
       if (existente) {
         salteados.push({ codigo: id, nombre: p.nombre || '', existente: existente.nombre || '' });
-        continue;
+        return;
       }
-      const ref = doc(collection(db, 'catalogo'), id);
-      batch.set(ref, { ...p, doc_id: id });
-      idsSubidos.push(id);
-    }
-    if (idsSubidos.length) {
-      await batch.commit();
-      // Si alguno de estos códigos ya tuvo lápida, el POS borraría el producto
-      // recién subido en cuanto lo baje.
-      await levantarLapidas(db, idsSubidos);
-    }
+      escrituras.push({ tipo: 'crear', col: 'catalogo', id, datos: { ...p, doc_id: id } });
+      // Si este código ya tuvo lápida, el POS borraría el producto recién
+      // subido en cuanto lo baje.
+      escrituras.push({ tipo: 'borrar', col: 'catalogo_deleted', id });
+    });
+    if (escrituras.length) await escribirLote(db, escrituras);
     count += chunk.length;
     if (onProgress) onProgress(count, productos.length);
   }
@@ -508,11 +507,44 @@ function generarCodigosUnicos(productosExistentes, pendientesNuevos = []) {
 // del panel reusaron los códigos 988066/67/68, que ya eran de tres productos
 // creados la noche anterior, y los pisaron enteros. Antes de crear se le
 // pregunta a la nube: devuelve el producto que ya tiene ese código, o null.
+//
+// Se pregunta por REST: un getDoc del SDK queda encolado detrás de los
+// listeners del catálogo y de ventas_por_dia, y el 01-10 "Generar" tardó 49 s
+// en contestar (el botón quedaba apagado y parecía que no generaba nada). Si
+// la REST no está se cae al SDK, pero con tope: mejor avisar que colgarse.
+const ESPERA_NUBE_MS = 10000;
+
 async function productoEnNube(db, codigo) {
   const c = limpiarCodigo(codigo);
   if (!c) return null;
-  const snap = await getDoc(doc(db, 'catalogo', c));
+  const porRest = await leerDocRest('catalogo', c, ['nombre', 'codigo', 'cod_barra'], { conSesion: true });
+  if (porRest) return porRest.existe ? { doc_id: c, ...porRest.datos } : null;
+  const snap = await conTope(getDoc(doc(db, 'catalogo', c)), ESPERA_NUBE_MS);
   return snap.exists() ? { doc_id: snap.id, ...snap.data() } : null;
+}
+
+function conTope(promesa, ms) {
+  let reloj;
+  const tope = new Promise((_, rechazar) => {
+    reloj = setTimeout(() => rechazar(new Error('La nube no respondió a tiempo')), ms);
+  });
+  return Promise.race([promesa, tope]).finally(() => clearTimeout(reloj));
+}
+
+// Próximo `id` numérico (el que usa el POS). Lectura y escritura por REST por
+// lo mismo que productoEnNube.
+async function reservarIdPos(db) {
+  let ultimo = null;
+  const porRest = await leerDocRest('config', 'pos_id_counter', ['last_id'], { conSesion: true });
+  if (porRest) {
+    ultimo = porRest.existe ? porRest.datos?.last_id : null;
+  } else {
+    const snap = await conTope(getDoc(doc(db, 'config', 'pos_id_counter')), ESPERA_NUBE_MS);
+    ultimo = snap.exists() ? snap.data().last_id : null;
+  }
+  const id = (Number(ultimo) || 12938) + 1;
+  await actualizarDoc(db, 'config', 'pos_id_counter', { last_id: id }, { crearSiFalta: true });
+  return id;
 }
 
 // Código de 6 dígitos libre en memoria Y en la nube. Si el candidato ya está
@@ -5147,7 +5179,7 @@ export async function renderCatalogo(container, db) {
     let _codigoAutogenerado = '';
     overlay.querySelector('#ed_gen_codes')?.addEventListener('click', async () => {
       const genBtn = overlay.querySelector('#ed_gen_codes');
-      if (genBtn) genBtn.disabled = true;
+      if (genBtn) { genBtn.disabled = true; genBtn.textContent = 'Buscando…'; }
       let par;
       try {
         par = await generarCodigoLibreEnNube(db, allProductos);
@@ -5155,7 +5187,7 @@ export async function renderCatalogo(container, db) {
         console.warn('Generar: sin respuesta de la nube, uso la memoria:', e?.message || e);
         par = generarCodigosUnicos(allProductos);
       }
-      if (genBtn) genBtn.disabled = false;
+      if (genBtn) { genBtn.disabled = false; genBtn.textContent = 'Generar'; }
       const inpCod = overlay.querySelector('#ed_codigo');
       const inpBar = overlay.querySelector('#ed_barra');
       if (inpCod) inpCod.value = par.codigo;
@@ -5487,17 +5519,12 @@ export async function renderCatalogo(container, db) {
           // 01-09 con tres altas seguidas). Se pregunta a Firestore y, si el
           // código está tomado, no se crea nada. Un código generado se
           // reemplaza solo; uno tipeado a mano es de un producto que ya está.
-          let enNube = null;
-          try {
-            enNube = await productoEnNube(db, nuevoCodigo);
-          } catch (e3) {
-            console.warn('No se pudo consultar la nube antes de crear:', e3?.message || e3);
-          }
-          if (enNube) {
-            let msg = `En la nube ya hay un producto con el código <b>"${_escHtml(nuevoCodigo)}"</b>: <b>${_escHtml(enNube.nombre || '')}</b>. No se creó nada.`;
+          const avisarCodigoTomado = async (enNube) => {
+            let msg = `En la nube ya hay un producto con el código <b>"${_escHtml(nuevoCodigo)}"</b>${enNube?.nombre ? `: <b>${_escHtml(enNube.nombre)}</b>` : ''}. No se creó nada.`;
             if (nuevoCodigo === _codigoAutogenerado) {
               try {
-                const libre = await generarCodigoLibreEnNube(db, [...allProductos, enNube]);
+                const tomado = enNube || { codigo: nuevoCodigo, cod_barra: nuevoCodigo };
+                const libre = await generarCodigoLibreEnNube(db, [...allProductos, tomado]);
                 const inpCod = overlay.querySelector('#ed_codigo');
                 const inpBar = overlay.querySelector('#ed_barra');
                 if (inpCod) inpCod.value = libre.codigo;
@@ -5511,16 +5538,20 @@ export async function renderCatalogo(container, db) {
               msg += ' Buscalo en el catálogo y editalo desde su ficha.';
             }
             alertDialog({ title: 'Código repetido en la nube', message: msg, type: 'warning' });
-            btn.disabled = false; btn.innerHTML = _btnLabel; return;
+            btn.disabled = false; btn.innerHTML = _btnLabel;
+          };
+          let enNube = null;
+          try {
+            enNube = await productoEnNube(db, nuevoCodigo);
+          } catch (e3) {
+            console.warn('No se pudo consultar la nube antes de crear:', e3?.message || e3);
           }
+          if (enNube) { await avisarCodigoTomado(enNube); return; }
 
           // Reservar próximo pos_id_counter (ID numérico que el POS usa).
           idNumFinal = Date.now();
           try {
-            const cfgRef = doc(db, 'config', 'pos_id_counter');
-            const cfgSnap = await getDoc(cfgRef);
-            idNumFinal = (cfgSnap.exists() ? (cfgSnap.data().last_id || 12938) : 12938) + 1;
-            await setDoc(cfgRef, { last_id: idNumFinal });
+            idNumFinal = await reservarIdPos(db);
           } catch(e2) {
             console.warn('pos_id_counter no disponible, uso timestamp:', e2.message);
           }
@@ -5532,10 +5563,19 @@ export async function renderCatalogo(container, db) {
             fecha_creacion:      serverTimestamp(),
             duplicado:           false,
           };
-          await setDoc(doc(db, 'catalogo', docIdFinal), createDoc);
-          // El código pudo ser de un producto borrado: si queda su lápida, el
-          // POS borra este producto nuevo apenas lo baja.
-          await levantarLapida(db, docIdFinal);
+          // Un solo commit por REST: el alta (que se rechaza si el código ya
+          // existe, por si otra PC lo tomó entre la consulta y ahora) y la
+          // lápida del código, si fue de un producto borrado: si queda, el POS
+          // borra este producto nuevo apenas lo baja.
+          try {
+            await escribirLote(db, [
+              { tipo: 'crear',  col: 'catalogo',         id: docIdFinal, datos: createDoc },
+              { tipo: 'borrar', col: 'catalogo_deleted', id: docIdFinal },
+            ]);
+          } catch (e4) {
+            if (esDocumentoYaExistente(e4)) { await avisarCodigoTomado(null); return; }
+            throw e4;
+          }
         } else {
           docIdFinal = prod.doc_id;
           idNumFinal = prod.id || docIdFinal;
@@ -5574,7 +5614,7 @@ export async function renderCatalogo(container, db) {
           if (nuevoStock !== undefined)  invUpdate.stock  = nuevoStock;
           if (nuevoCosto !== undefined)  invUpdate.costo  = nuevoCosto;
           invUpdate.id = parseInt(invDocId) || invDocId;
-          await setDoc(doc(db, 'inventario', invDocId), invUpdate, { merge: true });
+          await actualizarDoc(db, 'inventario', invDocId, invUpdate, { crearSiFalta: true });
         } catch(e2) {
           console.warn('No se pudo actualizar inventario:', e2.message);
         }
@@ -8573,14 +8613,22 @@ export async function renderCatalogo(container, db) {
         _bindInput('nv_pv',  'precio_venta', v => parseFloat(v) || 0);
         _bindInput('nv_cat', 'categoria', v => v);
 
+        // Libre en memoria y en la nube; sin nube, el de la memoria (al subir
+        // igual se saltea el que ya esté tomado).
+        const codigoLibre = (poolPend) =>
+          generarCodigoLibreEnNube(db, allProductos, poolPend)
+            .catch(() => generarCodigosUnicos(allProductos, poolPend));
+
         // Generar código + barra para una fila
         document.querySelectorAll('.nv_gen').forEach(btn => {
-          btn.addEventListener('click', () => {
+          btn.addEventListener('click', async () => {
             const idx = parseInt(btn.dataset.idx);
             if (isNaN(idx) || !pendientes.nuevos[idx]) return;
             // Excluir la fila actual del pool de colisiones para permitir regenerar
             const poolPend = pendientes.nuevos.filter((_, i) => i !== idx);
-            const { codigo, cod_barra } = generarCodigosUnicos(allProductos, poolPend);
+            btn.disabled = true;
+            const { codigo, cod_barra } = await codigoLibre(poolPend);
+            btn.disabled = false;
             pendientes.nuevos[idx].codigo = codigo;
             pendientes.nuevos[idx].cod_barra = cod_barra;
             const codInput = document.querySelector(`.nv_cod[data-idx="${idx}"]`);
@@ -8591,13 +8639,15 @@ export async function renderCatalogo(container, db) {
         });
 
         // Generar códigos a todas las filas que no tengan
-        document.getElementById('btnGenCodigosTodos')?.addEventListener('click', () => {
+        document.getElementById('btnGenCodigosTodos')?.addEventListener('click', async () => {
+          const btnTodos = document.getElementById('btnGenCodigosTodos');
+          if (btnTodos) { btnTodos.disabled = true; btnTodos.textContent = 'Generando…'; }
           const poolPend = [];
-          pendientes.nuevos.forEach((p, idx) => {
+          for (const [idx, p] of pendientes.nuevos.entries()) {
             const tieneCod = (p.codigo || '').toString().trim();
             const tieneBar = (p.cod_barra || '').toString().trim();
-            if (tieneCod && tieneBar) { poolPend.push(p); return; }
-            const { codigo, cod_barra } = generarCodigosUnicos(allProductos, poolPend);
+            if (tieneCod && tieneBar) { poolPend.push(p); continue; }
+            const { codigo, cod_barra } = await codigoLibre(poolPend);
             if (!tieneCod) p.codigo = codigo;
             if (!tieneBar) p.cod_barra = cod_barra;
             poolPend.push(p);
@@ -8605,7 +8655,8 @@ export async function renderCatalogo(container, db) {
             const barInput = document.querySelector(`.nv_bar[data-idx="${idx}"]`);
             if (codInput && !tieneCod) codInput.value = p.codigo;
             if (barInput && !tieneBar) barInput.value = p.cod_barra;
-          });
+          }
+          if (btnTodos) { btnTodos.disabled = false; btnTodos.textContent = 'Generar códigos a todos'; }
         });
 
         document.getElementById('btnAprobarNuevos')?.addEventListener('click', async () => {
@@ -8615,15 +8666,15 @@ export async function renderCatalogo(container, db) {
           try {
             // Asegurar que todos tengan código (sino, subirCatalogoFirebase puede colisionar con slugify)
             const poolPend = [];
-            pendientes.nuevos.forEach(p => {
+            for (const p of pendientes.nuevos) {
               if (!(p.codigo || '').toString().trim()) {
-                const { codigo } = generarCodigosUnicos(allProductos, poolPend);
+                const { codigo } = await codigoLibre(poolPend);
                 p.codigo = codigo;
               }
               // Sanitizar: Firestore no permite '/' en doc IDs
               p.codigo = (p.codigo || '').toString().replace(/\//g, '-').trim();
               poolPend.push(p);
-            });
+            }
             const total = pendientes.nuevos.length;
             const salteados = await subirCatalogoFirebase(db, pendientes.nuevos, (done) => {
               btn.textContent = `Agregando ${done}/${total}...`;

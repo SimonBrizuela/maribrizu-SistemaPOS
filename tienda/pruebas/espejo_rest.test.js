@@ -32,7 +32,7 @@ vi.mock('firebase/firestore', () => ({
 
 import {
   aplicarCambios, decodificarValor, decodificarCampos, codificarValor,
-  leerDocEspejoRest, consultarEspejoRest, armarEscrituras, escribirLote,
+  leerDocEspejoRest, consultarEspejoRest, armarEscrituras, escribirLote, esDocumentoYaExistente,
   espejar, espejarLote, destacadoQueQueda, olvidarDescuentosVigentes,
 } from '../../webapp/src/tienda_espejo.js';
 
@@ -198,6 +198,34 @@ describe('cómo se arma el commit', () => {
     });
   });
 
+  /*
+   * El alta del catálogo (01-10): Generar y Crear producto esperaban 49 s en
+   * la cola del SDK. Ahora el alta va por REST como `crear`, que no pisa un
+   * producto que ya tenga ese código aunque la consulta previa no lo haya visto.
+   */
+  it('crear: pisa como reemplazar pero exige que el documento NO exista', () => {
+    const [w] = armarEscrituras([{ tipo: 'crear', col: 'catalogo', id: '988300',
+      datos: { nombre: 'A', stock: 3 } }]);
+    expect(w).toEqual({
+      update: { name: `${BASE}/catalogo/988300`,
+                fields: { nombre: { stringValue: 'A' }, stock: { integerValue: '3' } } },
+      currentDocument: { exists: false },
+    });
+  });
+
+  it('un serverTimestamp() en cualquier campo viaja como transformación, no como valor', () => {
+    const hora = { _methodName: 'serverTimestamp' };
+    const [alta] = armarEscrituras([{ tipo: 'crear', col: 'catalogo', id: 'p',
+      datos: { nombre: 'A', fecha_creacion: hora, ultima_actualizacion: hora } }]);
+    expect(alta.update.fields).toEqual({ nombre: { stringValue: 'A' } });
+    expect(alta.updateTransforms.map(t => t.fieldPath)).toEqual(['fecha_creacion', 'ultima_actualizacion']);
+
+    const [cambio] = armarEscrituras([{ tipo: 'actualizar', col: 'inventario', id: '1',
+      datos: { stock: 2, ultima_actualizacion: hora }, crearSiFalta: true }]);
+    expect(cambio.updateMask).toEqual({ fieldPaths: ['stock'] });
+    expect(cambio.updateTransforms).toEqual([{ fieldPath: 'ultima_actualizacion', setToServerValue: 'REQUEST_TIME' }]);
+  });
+
   it('borrar', () => {
     expect(armarEscrituras([{ tipo: 'borrar', col: 'tienda_fotos_pedidas', id: 'x' }]))
       .toEqual([{ delete: `${BASE}/tienda_fotos_pedidas/x` }]);
@@ -233,6 +261,15 @@ describe('escribir: REST primero, SDK si la REST no está', () => {
     globalThis.fetch = vi.fn(() => RESPUESTA(403, { error: { message: 'Missing or insufficient permissions.' } }));
     await expect(escribirLote({}, [{ tipo: 'borrar', col: 'c', id: 'i' }]))
       .rejects.toThrow('Missing or insufficient permissions.');
+    expect(lote.commit).not.toHaveBeenCalled();
+  });
+
+  it('un crear sobre un código tomado tira un error que se reconoce como "ya existe"', async () => {
+    globalThis.fetch = vi.fn(() => RESPUESTA(409, { error: { status: 'ALREADY_EXISTS', message: 'Document already exists' } }));
+    const err = await escribirLote({}, [{ tipo: 'crear', col: 'catalogo', id: 'p', datos: { nombre: 'A' } }])
+      .catch(e => e);
+    expect(esDocumentoYaExistente(err)).toBe(true);
+    expect(esDocumentoYaExistente(new Error('otra cosa'))).toBe(false);
     expect(lote.commit).not.toHaveBeenCalled();
   });
 

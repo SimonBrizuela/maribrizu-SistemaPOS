@@ -1293,7 +1293,8 @@ async function recontarAhora(db) {
  *   actualizarDoc   campos sueltos (undefined = borrar el campo)
  *   reemplazarDoc   el documento entero, con marca de tiempo del servidor
  *   borrarDoc
- *   escribirLote    varias de las anteriores en un solo commit (≤ 500)
+ *   escribirLote    varias de las anteriores en un solo commit (≤ 500); acepta
+ *                   además `crear`, que es reemplazar pero falla si ya existe
  */
 
 /**
@@ -1332,31 +1333,53 @@ export function armarEscrituras(escrituras) {
     const name = `${BASE}/${e.col}/${e.id}`;
     if (e.tipo === 'borrar') return { delete: name };
 
+    // Un serverTimestamp() en los datos se manda como transformación: la REST
+    // no acepta el centinela del SDK y el que escribe no tiene por qué saberlo.
+    const marcas = [];
+
     if (e.tipo === 'actualizar') {
       const fields = {};
       const fieldPaths = [];
       for (const [clave, valor] of Object.entries(e.datos || {})) {
+        if (esHoraDelServidor(valor)) { marcas.push(clave); continue; }
         fieldPaths.push(rutaDeCampo(clave));
         // En la máscara pero sin valor: eso es borrar el campo.
         if (valor !== undefined) fields[clave] = codificarValor(valor);
       }
       const w = { update: { name, fields }, updateMask: { fieldPaths } };
       if (!e.crearSiFalta) w.currentDocument = { exists: true };
+      if (marcas.length) w.updateTransforms = marcas.map(transformacionDeHora);
       return w;
     }
 
-    // reemplazar
-    const { [e.marcaTiempo]: _ignorada, ...resto } = e.datos || {};
+    // reemplazar / crear
+    if (e.marcaTiempo) marcas.push(e.marcaTiempo);
     const fields = {};
-    for (const [clave, valor] of Object.entries(e.marcaTiempo ? resto : (e.datos || {}))) {
+    for (const [clave, valor] of Object.entries(e.datos || {})) {
+      if (clave === e.marcaTiempo) continue;
+      if (esHoraDelServidor(valor)) { marcas.push(clave); continue; }
       if (valor !== undefined) fields[clave] = codificarValor(valor);
     }
     const w = { update: { name, fields } };
-    if (e.marcaTiempo) {
-      w.updateTransforms = [{ fieldPath: e.marcaTiempo, setToServerValue: 'REQUEST_TIME' }];
-    }
+    // `crear` no pisa: si el documento ya existe, el commit entero se rechaza.
+    if (e.tipo === 'crear') w.currentDocument = { exists: false };
+    if (marcas.length) w.updateTransforms = marcas.map(transformacionDeHora);
     return w;
   });
+}
+
+function esHoraDelServidor(valor) {
+  return valor?._methodName === 'serverTimestamp';
+}
+
+function transformacionDeHora(campo) {
+  return { fieldPath: rutaDeCampo(campo), setToServerValue: 'REQUEST_TIME' };
+}
+
+/** El commit se rechazó porque un `crear` encontró el documento ya hecho. */
+export function esDocumentoYaExistente(err) {
+  return err?.estado === 'ALREADY_EXISTS' || err?.estado === 'FAILED_PRECONDITION'
+    || err?.code === 'already-exists';
 }
 
 // Los nombres de campo con caracteres raros van entre acentos graves en la
@@ -1391,7 +1414,9 @@ async function commitRest(writes) {
     return false;
   }
   const cuerpo = await r.json().catch(() => ({}));
-  throw new Error(cuerpo?.error?.message || `Firestore respondió ${r.status}`);
+  const error = new Error(cuerpo?.error?.message || `Firestore respondió ${r.status}`);
+  error.estado = cuerpo?.error?.status || null;
+  throw error;
 }
 
 async function tokenDeSesion() {
