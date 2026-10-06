@@ -16,7 +16,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
 
 from pos_system.models.conjunto import (
     contenido_de, descontar_de_total, packs_a_guardar, packs_a_mostrar,
-    repartir_total, total_conjunto, total_variedad,
+    precio_desde_variedades, precio_vendible, repartir_total, total_conjunto,
+    total_variedad,
 )
 from pos_system.ui.conjunto_dialog import aplicar_venta
 
@@ -160,6 +161,43 @@ def test_el_pack_fantasma_del_papel():
     # mostrar 3 packs (2 cerrados + el abierto).
     u, r = repartir_total(535, 250)
     assert packs_a_mostrar(u, r) == 3
+
+
+# ── Conjunto con precio solo en las variedades (06-10) ──────────────────────
+
+REPUESTO_DOBLE_OFICIO = {
+    'nombre': 'REPUESTO DIBUJO DOBLE OFICIO', 'es_conjunto': True,
+    'precio_venta': 0, 'costo': 0, 'estado': 'sin_precio',
+    'conjunto_colores': [
+        {'color': 'Blanco x 8', 'precio': 1800, 'precio_pack': 1800, 'costo': 1013},
+        {'color': 'Color x 6', 'precio': 2300, 'precio_pack': 2300, 'costo': 1241},
+        {'color': 'Sueltas Color', 'precio': 400, 'precio_pack': 400, 'costo': 237.86},
+    ],
+}
+
+
+def test_precio_desde_variedades_toma_la_mas_barata():
+    assert precio_desde_variedades(REPUESTO_DOBLE_OFICIO['conjunto_colores']) == (400, 237.86)
+    assert precio_desde_variedades([{'precio': 250}, {'precio_pack': 0, 'precio': 300}]) == (250, 250)
+    assert precio_desde_variedades([{'precio': 0}, None]) is None
+    assert precio_desde_variedades(None) is None
+
+
+def test_conjunto_sin_precio_con_variedades_llega_a_la_caja():
+    assert precio_vendible(REPUESTO_DOBLE_OFICIO) == (400, 237.86)
+
+
+def test_producto_sin_precio_sigue_afuera():
+    assert precio_vendible({'precio_venta': 0, 'estado': 'sin_precio'}) is None
+    assert precio_vendible({'precio_venta': 500, 'estado': 'sin_precio'}) is None
+    sin_precios = dict(REPUESTO_DOBLE_OFICIO, conjunto_colores=[{'color': 'Rojo'}])
+    assert precio_vendible(sin_precios) is None
+
+
+def test_producto_con_precio_no_cambia():
+    assert precio_vendible({'precio_venta': 1500, 'costo': 800, 'estado': 'activo'}) == (1500, 800)
+    con_precio = dict(REPUESTO_DOBLE_OFICIO, precio_venta=1800, costo=1013, estado='activo')
+    assert precio_vendible(con_precio) == (1800, 1013)
 
 
 if __name__ == '__main__':

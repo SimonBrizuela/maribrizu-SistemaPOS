@@ -10,6 +10,8 @@ from PyQt5.QtCore import Qt, pyqtSignal, QThread, QTimer, QElapsedTimer
 from PyQt5.QtGui import QFont, QColor, QTextCursor
 import logging
 
+from pos_system.models.conjunto import precio_vendible
+
 logger = logging.getLogger(__name__)
 
 
@@ -274,9 +276,12 @@ class DownloadWorker(QThread):
                 if firebase_id:
                     firebase_ids_seen.add(firebase_id)
 
-                # Saltar productos sin precio o inactivos (no insertar/actualizar localmente)
-                if precio <= 0 or estado == 'sin_precio':
+                # Saltar productos sin precio o inactivos (no insertar/actualizar
+                # localmente). El conjunto con precio solo en las variedades pasa.
+                vendible = precio_vendible(p)
+                if vendible is None:
                     continue
+                precio, costo = vendible
 
                 # NOTA: NO insertar cat en categories — esa tabla es solo para RUBROS.
 

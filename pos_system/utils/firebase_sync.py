@@ -17,7 +17,7 @@ import uuid as _uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Callable
 
-from pos_system.models.conjunto import total_conjunto
+from pos_system.models.conjunto import precio_vendible, total_conjunto
 from pos_system.utils import stock_links as _stock_links
 from pos_system.utils import medios_de_pago
 
@@ -652,11 +652,10 @@ class FirebaseSync:
                     nombre = str(d.get('nombre') or d.get('name') or '').strip()
                     if not nombre:
                         continue
-                    estado = str(d.get('estado') or 'activo').lower()
-                    precio = float(d.get('precio_venta') or d.get('precio') or d.get('price') or 0)
-                    if precio <= 0 or estado == 'sin_precio':
+                    vendible = precio_vendible(d)
+                    if vendible is None:
                         continue
-                    costo   = float(d.get('costo') or d.get('cost') or 0)
+                    precio, costo = vendible
                     stock   = int(d.get('stock') or 0)
                     categ   = str(d.get('categoria') or d.get('category') or '').strip() or 'Sin categoría'
                     rubro   = str(d.get('rubro') or '').strip() or None
@@ -1328,10 +1327,7 @@ class FirebaseSync:
 
                 # Mismo criterio que el delta sync para saltear productos.
                 nombre = str(d.get('nombre') or d.get('name') or '').strip()
-                precio = float(d.get('precio_venta') or d.get('precio')
-                               or d.get('price') or 0)
-                estado = str(d.get('estado') or 'activo').lower()
-                if nombre and precio > 0 and estado != 'sin_precio':
+                if nombre and precio_vendible(d) is not None:
                     vendibles[doc.id] = codigos_doc
 
             # 2. Todos los productos locales con algun identificador.
@@ -3092,13 +3088,12 @@ class FirebaseSync:
                     if not nombre:
                         continue
 
-                    estado = str(d.get('estado') or 'activo').lower()
-                    precio = float(d.get('precio_venta') or d.get('precio') or d.get('price') or 0)
-                    if precio <= 0 or estado == 'sin_precio':
+                    vendible = precio_vendible(d)
+                    if vendible is None:
                         continue
+                    precio, costo = vendible
 
                     fb_ts  = str(d.get('ultima_actualizacion', '') or '')
-                    costo  = float(d.get('costo') or d.get('cost') or 0)
                     stock  = int(d.get('stock') or 0)
                     categ  = str(d.get('categoria') or d.get('category') or '').strip() or 'Sin categoría'
                     rubro  = str(d.get('rubro') or '').strip() or None

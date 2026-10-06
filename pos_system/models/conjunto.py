@@ -158,3 +158,47 @@ def packs_a_mostrar(cerrados, sueltos):
     """Inversa de `packs_a_guardar`, historica igual que ella."""
     c = max(0.0, _num(cerrados))
     return c + 1 if _num(sueltos) > 0 else c
+
+
+def precio_desde_variedades(colores):
+    """
+    Precio y costo del producto sacados de sus variedades: la mas barata
+    (precio del pack, o el unitario si no hay pack) y el costo de esa misma.
+    None si ninguna tiene precio. Espejo de `precioDesdeVariedades()` en
+    `webapp/src/conjunto.js`.
+    """
+    con_precio = []
+    for c in colores or []:
+        if not isinstance(c, dict):
+            continue
+        precio = _num(c.get('precio_pack')) or _num(c.get('precio'))
+        if precio > 0:
+            con_precio.append((precio, _num(c.get('costo'))))
+    if not con_precio:
+        return None
+    precio, costo = min(con_precio, key=lambda pc: pc[0])
+    return precio, (costo if costo > 0 else precio)
+
+
+def precio_vendible(doc):
+    """
+    (precio, costo) con que la caja guarda un producto del catalogo, o None si
+    no se vende.
+
+    Un producto en 0 o 'sin_precio' se descarta, salvo el conjunto que tiene el
+    precio cargado solo en sus variedades: ese antes quedaba afuera de todas
+    las cajas (REPUESTO DIBUJO DOBLE OFICIO, 2026-10-06) aunque cada variedad
+    se cobra con su propio precio.
+    """
+    d = doc or {}
+    precio = _num(d.get('precio_venta') or d.get('precio') or d.get('price'))
+    costo = _num(d.get('costo') or d.get('cost'))
+    estado = str(d.get('estado') or 'activo').lower()
+    if precio > 0 and estado != 'sin_precio':
+        return precio, costo
+    if not d.get('es_conjunto'):
+        return None
+    desde = precio_desde_variedades(d.get('conjunto_colores'))
+    if desde is None:
+        return None
+    return (precio if precio > 0 else desde[0]), (costo if costo > 0 else desde[1])
