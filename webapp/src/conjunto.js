@@ -104,3 +104,26 @@ export function camposStockRapido(producto, valor) {
     conjunto_packs_cerrados: true,
   };
 }
+
+/**
+ * Precio y costo del producto sacados de sus variedades, para cuando la ficha
+ * se guarda con los campos de arriba vacíos y el precio cargado solo por
+ * variedad. Las cajas descartan todo producto con `precio_venta` 0 o
+ * `estado: 'sin_precio'`, así que ese conjunto no llegaba nunca al POS (caso
+ * real: REPUESTO DIBUJO DOBLE OFICIO, 06-10).
+ *
+ * Toma la variedad más barata (precio del pack, o el unitario si no hay pack)
+ * y el costo de esa misma variedad. Devuelve null si ninguna tiene precio.
+ */
+export function precioDesdeVariedades(colores) {
+  const conPrecio = (Array.isArray(colores) ? colores : [])
+    .filter(c => c && typeof c === 'object')
+    .map(c => ({ precio: num(c.precio_pack) || num(c.precio), costo: num(c.costo) }))
+    .filter(c => c.precio > 0);
+  if (conPrecio.length === 0) return null;
+  const masBarata = conPrecio.reduce((a, c) => (c.precio < a.precio ? c : a));
+  return {
+    precio_venta: masBarata.precio,
+    costo: masBarata.costo > 0 ? masBarata.costo : masBarata.precio,
+  };
+}

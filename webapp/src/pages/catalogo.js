@@ -10,7 +10,7 @@ import { registrarMovimiento, movimientosDe, MOTIVOS } from '../stock_ledger.js'
 import { avisarStockALaTienda, reflejarSiPublicado, sacarDeLaTienda, usarCatalogoParaRecontar,
   leerDocRest, escribirLote, actualizarDoc, esDocumentoYaExistente }
   from '../tienda_espejo.js';
-import { camposStockRapido, num as numConj } from '../conjunto.js';
+import { camposStockRapido, precioDesdeVariedades, num as numConj } from '../conjunto.js';
 import {
   recomputarResumenInventario, resumenEstaVencido, computarResumen,
   sugerirCantidad, valorizarStock, validarInventario,
@@ -5419,6 +5419,17 @@ export async function renderCatalogo(container, db) {
         // Así el POS que aún no soporta "Producto Conjunto" sigue viendo un stock
         // razonable, y el campo no queda con basura del input oculto.
         nuevoStock = Math.max(0, Math.floor(Number(cTotal) || 0));
+
+        // Precio cargado solo en las variedades: sin esto el producto queda en
+        // 0 y 'sin_precio', y las cajas lo descartan entero. En dólares no se
+        // completa: las variedades guardan pesos y el producto manda en USD.
+        if (tieneColores && !monedaUsd && nuevoPrecio <= 0) {
+          const desdeVariedades = precioDesdeVariedades(coloresArr);
+          if (desdeVariedades) {
+            nuevoPrecio = desdeVariedades.precio_venta;
+            if (nuevoCosto <= 0) nuevoCosto = desdeVariedades.costo;
+          }
+        }
       } else {
         conjuntoFields = {
           es_conjunto:           false,
