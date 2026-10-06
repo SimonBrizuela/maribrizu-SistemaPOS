@@ -75,14 +75,50 @@ TIPO_COMP_MAP = {
     'NOTA CRED. C': 13,
 }
 
-# Mapeo condición IVA receptor → tipo documento receptor
-COND_IVA_TIPO_DOC = {
-    'Responsable Inscripto': 80,   # CUIT
-    'Monotributista':        80,
-    'Exento':                80,
-    'Consumidor Final':      99,   # sin identificar
-    'No Categorizado':       99,
+# Condición frente al IVA del receptor → código de ARCA (RG 5616, tabla de
+# FEParamGetCondicionIvaReceptor). ARCA lo exige en cada comprobante; sin él
+# rechaza con el error 10242.
+COND_IVA_RECEPTOR_ID = {
+    'Responsable Inscripto': 1,
+    'Exento':                4,
+    'Consumidor Final':      5,
+    'Monotributista':        6,
+    'No Categorizado':       7,
 }
+
+
+def condicion_iva_receptor_id(condicion: str) -> int:
+    """Código de ARCA para la condición IVA del receptor; Consumidor Final si no se reconoce."""
+    return COND_IVA_RECEPTOR_ID.get(str(condicion or '').strip(), 5)
+
+
+def documento_receptor(numero) -> tuple:
+    """
+    (DocTipo, DocNro) según lo que se cargó en el campo del cliente:
+    11 dígitos es CUIT (80), 7 u 8 es DNI (96), vacío es sin identificar (99, 0).
+
+    Antes se decidía por la condición IVA: "Consumidor Final" con un CUIT
+    cargado mandaba DocTipo 99 con ese CUIT y ARCA rechazaba (error 10015).
+    """
+    limpio = ''.join(ch for ch in str(numero or '') if ch.isdigit())
+    if not limpio or int(limpio) == 0:
+        return 99, 0
+    if len(limpio) == 11:
+        return 80, int(limpio)
+    if len(limpio) in (7, 8):
+        return 96, int(limpio)
+    raise AFIPError(
+        f'El documento del cliente "{numero}" no es válido: '
+        'tiene que ser un CUIT de 11 dígitos o un DNI de 7 u 8.'
+    )
+
+
+def iva_contenido_de(tipo_comprobante: str, iva: float) -> float:
+    """IVA contenido que va en el comprobante: en una factura C es siempre 0.
+    El monotributista no discrimina IVA (no está alcanzado por la ley 27.743)."""
+    if str(tipo_comprobante or '').upper().endswith(' C'):
+        return 0.0
+    return float(iva or 0)
 
 
 class AFIPError(Exception):
@@ -98,6 +134,15 @@ class AFIPAuthError(AFIPError):
 class AFIPWSFEError(AFIPError):
     """Error devuelto por el WebService WSFE."""
     pass
+
+
+class AFIPSinRespuesta(AFIPWSFEError):
+    """El pedido de CAE salió pero no volvió respuesta (corte, timeout, 503).
+    No se sabe si ARCA lo autorizó: hay que consultar el número antes de
+    volver a pedir, o se emiten dos comprobantes por la misma venta."""
+    def __init__(self, mensaje, nro_comprobante=None):
+        super().__init__(mensaje)
+        self.nro_comprobante = nro_comprobante
 
 
 class AfipWsfe:
@@ -468,14 +513,8 @@ class AfipWsfe:
         if fecha_comprobante is None:
             fecha_comprobante = datetime.now().strftime('%Y%m%d')
 
-        # Tipo y nro de doc receptor
-        cuit_recep_clean = str(cuit_receptor or '').replace('-', '').replace(' ', '')
-        if cuit_recep_clean and cuit_recep_clean != '0':
-            tipo_doc_rec = COND_IVA_TIPO_DOC.get(condicion_iva_receptor, 80)
-            nro_doc_rec  = int(cuit_recep_clean)
-        else:
-            tipo_doc_rec = 99
-            nro_doc_rec  = 0
+        # Tipo y nro de doc receptor: lo decide el número cargado, no el combo
+        tipo_doc_rec, nro_doc_rec = documento_receptor(cuit_receptor)
 
         client = self._get_wsfe_client()
         auth = {'Token': token, 'Sign': sign, 'Cuit': int(self.cuit)}
@@ -498,6 +537,7 @@ class AfipWsfe:
             'FchVtoPago':    None,
             'MonId':         moneda,
             'MonCotiz':      cotizacion,
+            'CondicionIVAReceptorId': condicion_iva_receptor_id(condicion_iva_receptor),
             'Iva': {
                 'AlicIva': [{
                     'Id':     5,      # 5=21%, 4=10.5%, 6=27%
@@ -542,7 +582,8 @@ class AfipWsfe:
         try:
             resp = client.service.FECAESolicitar(Auth=auth, FeCAEReq=req)
         except Exception as e:
-            raise AFIPWSFEError(f'Error al llamar WSFE FECAESolicitar: {e}')
+            raise AFIPSinRespuesta(f'Error al llamar WSFE FECAESolicitar: {e}',
+                                   nro_comprobante=nro_comprobante)
 
         # Verificar errores de cabecera
         if hasattr(resp, 'Errors') and resp.Errors:
@@ -567,6 +608,43 @@ class AfipWsfe:
             'vto_cae':         det.CAEFchVto,   # AAAAMMDD
             'nro_comprobante': int(det.CbteDesde),
             'resultado':       det.Resultado,
+        }
+
+    def consultar_comprobante(self, tipo_comprobante: str, punto_venta: int, nro: int):
+        """
+        Lo que ARCA tiene registrado para ese número (FECompConsultar), o None
+        si no existe. Sirve para saber si un pedido de CAE que se cortó quedó
+        autorizado igual.
+
+        Devuelve {'cae', 'vto_cae', 'total', 'doc_tipo', 'doc_nro', 'fecha', 'resultado'}.
+        """
+        token, sign = self._get_ticket_acceso()
+        cod_tipo = TIPO_COMP_MAP.get(tipo_comprobante.upper(), 6)
+        client = self._get_wsfe_client()
+        auth = {'Token': token, 'Sign': sign, 'Cuit': int(self.cuit)}
+        resp = client.service.FECompConsultar(
+            Auth=auth,
+            FeCompConsReq={'CbteTipo': cod_tipo, 'CbteNro': int(nro), 'PtoVta': int(punto_venta)},
+        )
+        if getattr(resp, 'Errors', None):
+            errs = resp.Errors.Err
+            errs = errs if hasattr(errs, '__iter__') else [errs]
+            # 602: "No existen datos en nuestros registros para los parametros ingresados"
+            if any(int(getattr(e, 'Code', 0) or 0) == 602 for e in errs):
+                return None
+            msg = '; '.join(f"[{e.Code}] {e.Msg}" for e in errs)
+            raise AFIPWSFEError(f'WSFE FECompConsultar: {msg}')
+        r = resp.ResultGet
+        if r is None:
+            return None
+        return {
+            'cae':       r.CodAutorizacion,
+            'vto_cae':   r.FchVto,
+            'total':     float(r.ImpTotal or 0),
+            'doc_tipo':  int(r.DocTipo or 0),
+            'doc_nro':   int(r.DocNro or 0),
+            'fecha':     r.CbteFch,
+            'resultado': r.Resultado,
         }
 
 

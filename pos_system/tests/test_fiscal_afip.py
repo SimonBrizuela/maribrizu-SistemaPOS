@@ -102,3 +102,132 @@ class TestCondicionFrenteAlIva:
             datosMonotributo = 'no es un objeto'
             datosRegimenGeneral = 12345
         assert _mapear_condicion_iva_constancia(Rara()) == 'Consumidor Final'
+
+
+# ── Lo que viaja a ARCA en cada comprobante (06-10) ─────────────────────────
+
+from types import SimpleNamespace
+
+from pos_system.utils.afip_wsfe import (
+    AfipWsfe, AFIPError, AFIPSinRespuesta, condicion_iva_receptor_id,
+    documento_receptor, iva_contenido_de,
+)
+
+
+class TestDocumentoDelCliente:
+    def test_sin_documento_es_consumidor_final_sin_identificar(self):
+        assert documento_receptor(None) == (99, 0)
+        assert documento_receptor('') == (99, 0)
+        assert documento_receptor('0') == (99, 0)
+
+    def test_cuit_con_guiones(self):
+        assert documento_receptor('20-12345678-9') == (80, 20123456789)
+
+    def test_dni(self):
+        assert documento_receptor('35108063') == (96, 35108063)
+        assert documento_receptor('1234567') == (96, 1234567)
+
+    def test_consumidor_final_con_cuit_va_como_cuit(self):
+        """El caso del error 10015: lo decide el número, no el combo."""
+        assert documento_receptor('30710106319') == (80, 30710106319)
+
+    def test_numero_que_no_es_cuit_ni_dni_avisa(self):
+        with pytest.raises(AFIPError):
+            documento_receptor('12345')
+
+
+class TestCondicionIvaReceptor:
+    def test_codigos_de_arca(self):
+        assert condicion_iva_receptor_id('Consumidor Final') == 5
+        assert condicion_iva_receptor_id('Responsable Inscripto') == 1
+        assert condicion_iva_receptor_id('Monotributista') == 6
+        assert condicion_iva_receptor_id('Exento') == 4
+
+    def test_lo_desconocido_es_consumidor_final(self):
+        assert condicion_iva_receptor_id('CF') == 5
+        assert condicion_iva_receptor_id(None) == 5
+
+
+class TestIvaContenido:
+    def test_factura_c_siempre_cero(self):
+        assert iva_contenido_de('FAC. ELEC. C', 5519.01) == 0.0
+        assert iva_contenido_de('NOTA CRED. C', 100) == 0.0
+
+    def test_factura_b_conserva_el_iva(self):
+        assert iva_contenido_de('FAC. ELEC. B', 173.55) == 173.55
+
+
+class _Wsfe:
+    """Cliente WSFE falso: guarda el pedido y contesta lo que se le diga."""
+    def __init__(self, falla=None):
+        self.pedidos = []
+        self.falla = falla
+        self.service = self
+
+    def FECAESolicitar(self, Auth, FeCAEReq):
+        self.pedidos.append(FeCAEReq)
+        if self.falla:
+            raise self.falla
+        det = FeCAEReq['FeDetReq']['FECAEDetRequest'][0]
+        return SimpleNamespace(Errors=None, FeDetResp=SimpleNamespace(FECAEDetResponse=[SimpleNamespace(
+            Resultado='A', CAE='86400000000001', CAEFchVto='20261016', CbteDesde=det['CbteDesde'])]))
+
+
+def _afip(wsfe):
+    a = AfipWsfe(cuit='20149210408', cert_path='x', key_path='y', produccion=False)
+    a._get_ticket_acceso = lambda: ('t', 's')
+    a._get_wsfe_client = lambda: wsfe
+    return a
+
+
+class TestPedidoDeCae:
+    def test_manda_la_condicion_iva_y_el_documento(self):
+        wsfe = _Wsfe()
+        _afip(wsfe).solicitar_cae('FAC. ELEC. C', 1990, 197, 4800.0, 4800.0, 0.0,
+                                  cuit_receptor='30717003477', condicion_iva_receptor='Consumidor Final')
+        det = wsfe.pedidos[0]['FeDetReq']['FECAEDetRequest'][0]
+        assert det['CondicionIVAReceptorId'] == 5
+        assert (det['DocTipo'], det['DocNro']) == (80, 30717003477)
+        assert det['Iva'] is None
+
+    def test_consumidor_final_sin_documento(self):
+        wsfe = _Wsfe()
+        _afip(wsfe).solicitar_cae('FAC. ELEC. C', 2, 252, 1000.0, 1000.0, 0.0)
+        det = wsfe.pedidos[0]['FeDetReq']['FECAEDetRequest'][0]
+        assert (det['DocTipo'], det['DocNro'], det['CondicionIVAReceptorId']) == (99, 0, 5)
+
+    def test_corte_sin_respuesta_avisa_con_el_numero(self):
+        wsfe = _Wsfe(falla=TimeoutError('Read timed out'))
+        with pytest.raises(AFIPSinRespuesta) as e:
+            _afip(wsfe).solicitar_cae('FAC. ELEC. C', 2, 252, 1000.0, 1000.0, 0.0)
+        assert e.value.nro_comprobante == 252
+        assert 'Error al llamar WSFE FECAESolicitar' in str(e.value)
+
+
+def test_el_pedido_es_valido_para_el_wsdl_de_arca():
+    """Arma el XML real contra el WSDL de producción (sin mandarlo): si un
+    campo no existiera, zeep lo rechaza acá y no en el mostrador."""
+    try:
+        import zeep
+        from zeep.transports import Transport
+        from pos_system.utils.afip_wsfe import WSFE_URL_PROD, _make_afip_session
+        cliente = zeep.Client(WSFE_URL_PROD, transport=Transport(session=_make_afip_session(), timeout=20))
+    except Exception as e:
+        pytest.skip(f'sin acceso al WSDL de ARCA: {e}')
+    capturado = {}
+
+    class _Capturador:
+        def __init__(self):
+            self.service = self
+
+        def FECAESolicitar(self, Auth, FeCAEReq):
+            capturado['xml'] = cliente.create_message(cliente.service, 'FECAESolicitar', Auth=Auth, FeCAEReq=FeCAEReq)
+            raise RuntimeError('no se manda')
+
+    with pytest.raises(AFIPSinRespuesta):
+        _afip(_Capturador()).solicitar_cae('FAC. ELEC. C', 2, 252, 1000.0, 1000.0, 0.0,
+                                           cuit_receptor='35108063', condicion_iva_receptor='Consumidor Final')
+    from lxml import etree
+    xml = etree.tostring(capturado['xml']).decode()
+    assert 'CondicionIVAReceptorId>5<' in xml
+    assert 'DocTipo>96<' in xml

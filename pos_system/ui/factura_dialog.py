@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
     QPlainTextEdit, QTableWidget, QTableWidgetItem, QHeaderView,
     QAbstractItemView
 )
-from PyQt5.QtCore import Qt, QThread, pyqtSignal
+from PyQt5.QtCore import Qt, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont
 from datetime import datetime
 import os
@@ -18,6 +18,7 @@ import platform
 import subprocess
 import logging
 from pos_system.utils.firebase_sync import now_ar
+from pos_system.utils.afip_wsfe import iva_contenido_de
 
 logger = logging.getLogger(__name__)
 
@@ -43,8 +44,10 @@ class _CaeWorker(QThread):
     ok = pyqtSignal(dict)
     fail = pyqtSignal(object)   # emite la excepción completa (con traceback)
 
-    def __init__(self, afip, tipo, pv, total, neto, iva_send, otros_send, cuit_rec, cond_iva_rec):
+    def __init__(self, afip, tipo, pv, total, neto, iva_send, otros_send, cuit_rec, cond_iva_rec,
+                 pendiente=None):
         super().__init__()
+        self.pendiente = pendiente
         self.afip = afip
         self.tipo = tipo
         self.pv = pv
@@ -58,16 +61,49 @@ class _CaeWorker(QThread):
     def run(self):
         try:
             self.ok.emit(pedir_cae(self.afip, self.tipo, self.pv, self.total, self.neto,
-                                   self.iva_send, self.otros_send, self.cuit_rec, self.cond_iva_rec))
+                                   self.iva_send, self.otros_send, self.cuit_rec, self.cond_iva_rec,
+                                   pendiente=self.pendiente))
         except Exception as e:
             self.fail.emit(e)
 
 
+def recuperar_cae(afip, tipo, pv, nro, total, cuit_rec):
+    """
+    Si un pedido de CAE se cortó sin respuesta, ARCA pudo haberlo autorizado
+    igual. Consulta ese número y, si es esta misma venta (mismo total y mismo
+    cliente), devuelve su CAE como si hubiera salido bien. None si no quedó
+    o si el número lo tiene otro comprobante.
+    """
+    from pos_system.utils.afip_wsfe import documento_receptor
+    try:
+        reg = afip.consultar_comprobante(tipo, pv, nro)
+    except Exception as e:
+        logger.warning(f'ARCA: no se pudo consultar el comprobante {pv}-{nro}: {e}')
+        return None
+    if not reg or not reg.get('cae'):
+        return None
+    _tipo_doc, doc_nro = documento_receptor(cuit_rec)
+    if abs(float(reg.get('total') or 0) - float(total)) > 0.01 or int(reg.get('doc_nro') or 0) != doc_nro:
+        return None
+    logger.warning(f'ARCA: el comprobante {pv}-{nro} había quedado autorizado sin respuesta; se recupera su CAE')
+    return {'cae': reg['cae'], 'vto_cae': reg['vto_cae'], 'nro_comprobante': int(nro),
+            'resultado': 'A', 'recuperado': True}
+
+
 def pedir_cae(afip, tipo, pv, total, neto, iva, otros, cuit_rec, cond_iva_rec,
-              reintentos=REINTENTOS_NUMERO, esperar=None):
-    """Pide el próximo número y el CAE, reintentando si otra caja ganó el número."""
+              reintentos=REINTENTOS_NUMERO, esperar=None, pendiente=None):
+    """Pide el próximo número y el CAE, reintentando si otra caja ganó el número.
+
+    `pendiente` es el número de un intento anterior que quedó sin respuesta:
+    antes de pedir uno nuevo se fija si ese quedó autorizado.
+    """
     import time
+    from pos_system.utils.afip_wsfe import AFIPSinRespuesta
     esperar = esperar or time.sleep
+    if pendiente:
+        recuperado = recuperar_cae(afip, tipo, pv, pendiente, total, cuit_rec)
+        if recuperado:
+            return recuperado
     for vuelta in range(reintentos + 1):
         nro = int(afip.ultimo_comprobante(tipo, pv)) + 1
         try:
@@ -83,6 +119,11 @@ def pedir_cae(afip, tipo, pv, total, neto, iva, otros, cuit_rec, cond_iva_rec,
                 cuit_receptor=cuit_rec,
                 condicion_iva_receptor=cond_iva_rec,
             )
+        except AFIPSinRespuesta as e:
+            recuperado = recuperar_cae(afip, tipo, pv, nro, total, cuit_rec)
+            if recuperado:
+                return recuperado
+            raise
         except Exception as e:
             if not es_rechazo_de_numero(e) or vuelta == reintentos:
                 raise
@@ -380,7 +421,11 @@ class FacturaDialog(QDialog):
         iva_auto_btn.setToolTip('Calcular IVA 21% incluido')
         iva_auto_btn.clicked.connect(self._calc_iva_21)
         iva_row.addWidget(iva_auto_btn)
+        self._iva_auto_btn = iva_auto_btn
         afip_layout.addRow('IVA Contenido ($):', iva_row)
+        # Factura C: el monotributista no discrimina IVA, el campo queda en 0
+        self.tipo_combo.currentTextChanged.connect(self._ajustar_iva_por_tipo)
+        self._ajustar_iva_por_tipo(self.tipo_combo.currentText())
 
         main.addWidget(afip_group)
 
@@ -537,8 +582,12 @@ class FacturaDialog(QDialog):
         if not cuit:
             self.cuit_status_lbl.setText('')
             return
+        if cuit.isdigit() and len(cuit) in (7, 8):
+            self.cuit_status_lbl.setText('DNI: se factura con DNI (sin consulta al padron)')
+            self.cuit_status_lbl.setStyleSheet('color:#3d7a3a; padding-left:2px;')
+            return
         if not cuit.isdigit() or len(cuit) != 11:
-            self.cuit_status_lbl.setText('CUIT invalido (11 digitos)')
+            self.cuit_status_lbl.setText('CUIT invalido (11 digitos) o DNI (7-8)')
             self.cuit_status_lbl.setStyleSheet('color:#a01616; padding-left:2px;')
             return
         # Evitar re-lookup si el usuario sale y vuelve al mismo CUIT
@@ -708,6 +757,14 @@ class FacturaDialog(QDialog):
         self.cuit_cliente_input.clear()
         self._aplicar_tipo_factura_default()
 
+    def _ajustar_iva_por_tipo(self, tipo):
+        """En factura C el IVA contenido va en 0 y no se puede editar."""
+        es_c = str(tipo or '').upper().endswith(' C')
+        if es_c:
+            self.iva_spin.setValue(0.0)
+        self.iva_spin.setEnabled(not es_c)
+        self._iva_auto_btn.setEnabled(not es_c)
+
     def _calc_iva_21(self):
         """Calcula IVA 21% incluido sobre el total."""
         total = float(self.sale.get('total_amount', 0))
@@ -760,7 +817,7 @@ class FacturaDialog(QDialog):
             'condicion_iva_receptor': self.condicion_iva_cliente.currentText(),
             'items':              self._build_items_factura(),
             'total':              float(self.sale.get('total_amount', 0)),
-            'iva_contenido':      self.iva_spin.value(),
+            'iva_contenido':      iva_contenido_de(tipo, self.iva_spin.value()),
             'otros_impuestos':    0.0,
             'cae':                self.cae_input.text().strip(),
             'vto_cae':            self.vto_cae_input.text().strip(),
@@ -886,21 +943,28 @@ class FacturaDialog(QDialog):
         cert_path = self.emisor.get('cert_path', '')
         key_path  = self.emisor.get('key_path', '')
 
-        # Si ya hay CAE manual o no hay certs, ir directo al PDF
-        if cae or not (cert_path and key_path):
+        # CAE cargado a mano (comprobante hecho en la web de ARCA): directo al PDF
+        if cae:
             self._do_generate_pdf(cae, self.vto_cae_input.text().strip(), nro_from_afip=None)
+            return
+
+        # Sin CAE no hay factura: un PDF sin CAE no vale como comprobante y su
+        # número choca después con uno real (pasó con la #175 y la #160 en agosto).
+        if not (cert_path and key_path):
+            QMessageBox.warning(
+                self, 'Sin certificado de ARCA',
+                'Este perfil no tiene el certificado de ARCA cargado, así que no se '
+                'puede pedir el CAE.\n\nElegí otro perfil o, si la factura la hiciste '
+                'en la web de ARCA, cargá el CAE a mano.'
+            )
             return
 
         # Con certs: pedir CAE en thread (consulta nro a AFIP también)
         try:
-            from pos_system.utils.afip_wsfe import AfipWsfe, calcular_iva_neto
-        except ImportError:
-            QMessageBox.warning(
-                self, 'Dependencia faltante',
-                'Para CAE automatico instala: pip install zeep pyOpenSSL\n\n'
-                'Se generara la factura sin CAE.'
-            )
-            self._do_generate_pdf('', '', nro_from_afip=None)
+            from pos_system.utils.afip_wsfe import AfipWsfe, AFIPSinRespuesta, calcular_iva_neto
+        except ImportError as e:
+            QMessageBox.critical(self, 'Dependencia faltante',
+                                 f'No se puede pedir el CAE a ARCA:\n{e}')
             return
 
         tipo = self.tipo_combo.currentText()
@@ -950,14 +1014,22 @@ class FacturaDialog(QDialog):
         pb_lbl.setStyleSheet('color:#6f6a5d;font-size:11px;')
         pl.addWidget(pb_lbl)
 
+        pv_emisor = int(self.emisor.get('punto_venta', 1))
+        # Número de un intento anterior que quedó sin respuesta de ARCA, si es
+        # el mismo comprobante: el worker se fija primero si quedó autorizado.
+        pend = getattr(self, '_cae_pendiente', None)
+        pendiente = pend[3] if pend and pend[:3] == (tipo, pv_emisor, total) else None
+
         worker = _CaeWorker(
-            afip, tipo, int(self.emisor.get('punto_venta', 1)),
+            afip, tipo, pv_emisor,
             total, neto, iva_send, otros_send,
             cuit_cliente or None, cond_iva_cliente,
+            pendiente=pendiente,
         )
         self._cae_worker = worker  # evitar GC
 
         def _ok(res):
+            self._cae_pendiente = None
             prog.accept()
             self.cae_input.setText(str(res['cae']))
             self.vto_cae_input.setText(str(res['vto_cae']))
@@ -983,14 +1055,19 @@ class FacturaDialog(QDialog):
                 })
             except Exception:
                 pass
+            if isinstance(exc, AFIPSinRespuesta) and exc.nro_comprobante:
+                self._cae_pendiente = (tipo, pv_emisor, total, int(exc.nro_comprobante))
+                aclaracion = ('ARCA no respondió. Al reintentar se fija primero si la '
+                              'factura quedó hecha, así no sale dos veces.')
+            else:
+                aclaracion = 'La factura no se emitió.'
             resp = QMessageBox.question(
-                self, 'Error AFIP',
-                f'No se pudo obtener el CAE de AFIP:\n{exc}\n\n'
-                'Generar igualmente la factura sin CAE?',
-                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+                self, 'Error ARCA',
+                f'No se pudo obtener el CAE de ARCA:\n{exc}\n\n{aclaracion}\n\n¿Reintentar?',
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.Yes
             )
             if resp == QMessageBox.Yes:
-                self._do_generate_pdf('', '', nro_from_afip=None)
+                QTimer.singleShot(0, self._emit_factura)
 
         worker.ok.connect(_ok)
         worker.fail.connect(_fail)
@@ -1009,7 +1086,7 @@ class FacturaDialog(QDialog):
         dom_cliente = self.domicilio_cliente_input.text().strip()
         cond_iva_cliente = self.condicion_iva_cliente.currentText()
         total = float(self.sale.get('total_amount', 0))
-        iva = self.iva_spin.value()
+        iva = iva_contenido_de(tipo, self.iva_spin.value())
         nro = int(nro_from_afip) if nro_from_afip else self._get_next_nro_comprobante(tipo)
 
         nombre_perfil = self.emisor.get('nombre_perfil', self.emisor.get('razon_social', ''))

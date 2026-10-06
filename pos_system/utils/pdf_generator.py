@@ -8,6 +8,7 @@ from reportlab.pdfgen import canvas
 from datetime import datetime, timezone, timedelta
 import os
 import sys
+from pos_system.utils.afip_wsfe import iva_contenido_de
 
 _TZ_AR = timezone(timedelta(hours=-3))
 
@@ -1557,7 +1558,9 @@ class PDFGenerator:
         # ── Transparencia Fiscal (ley 27.743) ────────────────────────────────
         story.append(Paragraph('Régimen de Transparencia Fiscal', sty_footer))
         story.append(Paragraph('al Consumidor (ley 27.743)', sty_footer))
-        story.append(Paragraph(f'IVA Contenido:  ${factura.get("iva_contenido", 0):,.2f}', sty_footer))
+        story.append(Paragraph(
+            f'IVA Contenido:  ${iva_contenido_de(factura.get("tipo_comprobante"), factura.get("iva_contenido", 0)):,.2f}',
+            sty_footer))
         story.append(Paragraph(f'Otros Imp. Nac. Indirectos:  ${factura.get("otros_impuestos", 0):,.2f}', sty_footer))
         story.append(Spacer(1, 2*mm))
 
@@ -2030,7 +2033,7 @@ class PDFGenerator:
 
         # ── TOTALES ───────────────────────────────────────────────────────────
         total    = float(factura.get('total', 0))
-        iva_cont = float(factura.get('iva_contenido', 0))
+        iva_cont = iva_contenido_de(factura.get('tipo_comprobante'), factura.get('iva_contenido', 0))
         otros    = float(factura.get('otros_impuestos', 0))
 
         sT_lbl = S('TL', fontSize=8,  fontName='Helvetica',      alignment=TA_LEFT,  leading=11)

@@ -351,3 +351,62 @@ def test_la_subida_y_la_sincronizacion_completa_arman_la_misma_venta():
                   encoding='utf-8').read()
     assert 'documento_de_venta(s, _pc_id' in fuente and 'merge=True' in fuente
 
+
+
+# ── Corte sin respuesta de ARCA (06-10) ────────────────────────────────────
+
+class _ArcaQueSeCorta(_Arca):
+    """Autoriza el comprobante (o no) pero la respuesta nunca llega."""
+    def __init__(self, autoriza=True, total=100.0):
+        super().__init__([])
+        self.registrados = {}
+        self.autoriza = autoriza
+        self.total = total
+
+    def solicitar_cae(self, **kw):
+        from pos_system.utils.afip_wsfe import AFIPSinRespuesta
+        nro = kw['nro_comprobante']
+        self.pedidos.append(nro)
+        if self.autoriza:
+            self.registrados[nro] = {'cae': '777', 'vto_cae': '20261016', 'total': self.total,
+                                     'doc_tipo': 99, 'doc_nro': 0, 'fecha': '20261006', 'resultado': 'A'}
+            self.ultimo = nro
+        raise AFIPSinRespuesta('Error al llamar WSFE FECAESolicitar: Read timed out', nro_comprobante=nro)
+
+    def consultar_comprobante(self, tipo, pv, nro):
+        return self.registrados.get(nro)
+
+
+def test_autorizada_sin_respuesta_se_recupera_sin_emitir_otra():
+    from pos_system.ui.factura_dialog import pedir_cae
+    arca = _ArcaQueSeCorta(autoriza=True)
+    r = pedir_cae(arca, 'FAC. ELEC. C', 1, 100, 100, 0, 0, None, 'Consumidor Final', esperar=lambda s: None)
+    assert (r['cae'], r['nro_comprobante'], r.get('recuperado')) == ('777', 41, True)
+    assert arca.pedidos == [41]
+
+
+def test_no_autorizada_avisa_con_el_numero_pendiente():
+    from pos_system.ui.factura_dialog import pedir_cae
+    from pos_system.utils.afip_wsfe import AFIPSinRespuesta
+    arca = _ArcaQueSeCorta(autoriza=False)
+    with pytest.raises(AFIPSinRespuesta) as e:
+        pedir_cae(arca, 'FAC. ELEC. C', 1, 100, 100, 0, 0, None, 'Consumidor Final', esperar=lambda s: None)
+    assert e.value.nro_comprobante == 41
+
+
+def test_reintento_con_pendiente_que_quedo_hecho_no_emite_otra():
+    from pos_system.ui.factura_dialog import pedir_cae
+    arca = _ArcaQueSeCorta(autoriza=False)
+    arca.registrados[41] = {'cae': '888', 'vto_cae': '20261016', 'total': 100.0, 'doc_tipo': 99,
+                            'doc_nro': 0, 'fecha': '20261006', 'resultado': 'A'}
+    r = pedir_cae(arca, 'FAC. ELEC. C', 1, 100, 100, 0, 0, None, 'Consumidor Final',
+                  esperar=lambda s: None, pendiente=41)
+    assert r['cae'] == '888' and arca.pedidos == []
+
+
+def test_numero_con_otra_venta_no_se_toma_como_propio():
+    from pos_system.ui.factura_dialog import recuperar_cae
+    arca = _ArcaQueSeCorta()
+    arca.registrados[41] = {'cae': '999', 'vto_cae': '20261016', 'total': 5400.0, 'doc_tipo': 99,
+                            'doc_nro': 0, 'fecha': '20261006', 'resultado': 'A'}
+    assert recuperar_cae(arca, 'FAC. ELEC. C', 1, 41, 100, None) is None
