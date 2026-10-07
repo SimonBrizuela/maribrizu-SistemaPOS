@@ -965,7 +965,7 @@ def test_la_tarjeta_del_cliente_muestra_todo_y_abre_whatsapp(pantalla, monkeypat
     vista._whatsapp_app = None
     monkeypatch.setattr(pwv, 'whatsapp_de_escritorio', lambda: False)
     boton('WhatsApp').click()
-    assert abiertos[-1].startswith('https://wa.me/5493516194411?text=Hola%20Mar')
+    assert abiertos[-1].startswith('https://web.whatsapp.com/send?phone=5493516194411&text=Hola%20Mar')
 
     boton('Mapa').click()
     assert abiertos[-1] == 'https://maps.google.com/?q=-31.4,-64.18'
@@ -983,9 +983,9 @@ def test_si_la_app_no_abre_cae_a_whatsapp_web(pantalla, monkeypatch):
                         or not url.toString().startswith('whatsapp:'))
     t = pantalla([pedido('n1')])
     t['vista']._abrir_whatsapp('5493516194411', 'Hola')
-    assert abiertos == ['whatsapp://send?phone=5493516194411&text=Hola', 'https://wa.me/5493516194411?text=Hola']
+    assert abiertos == ['whatsapp://send?phone=5493516194411&text=Hola', 'https://web.whatsapp.com/send?phone=5493516194411&text=Hola']
     t['vista']._abrir_whatsapp('5493516194411', 'Hola')
-    assert abiertos[-1].startswith('https://wa.me/')
+    assert abiertos[-1].startswith('https://web.whatsapp.com/send?')
 
 
 def test_un_fijo_se_puede_copiar_pero_no_tiene_whatsapp(pantalla):

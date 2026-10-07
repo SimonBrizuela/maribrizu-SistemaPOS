@@ -77,9 +77,9 @@ def hace(marca, ahora=None):
 
 
 def whatsapp_de_escritorio():
-    """¿Esta PC tiene la app de WhatsApp? La del local sí; se pregunta a Windows
-    quién abre los enlaces `whatsapp:` (encuentra también la de la Microsoft
-    Store). Sin la app, el chat se abre en WhatsApp Web."""
+    """¿Esta PC tiene la app de WhatsApp? Se pregunta a Windows quién abre los
+    enlaces `whatsapp:` (encuentra también la de la Microsoft Store). Sin la
+    app, el chat se abre en WhatsApp Web."""
     if sys.platform != 'win32':
         return False
     try:
@@ -99,10 +99,13 @@ def whatsapp_de_escritorio():
 
 
 def enlace_whatsapp(numero, texto, app):
+    """Con la app, la app. Sin ella, `web.whatsapp.com/send`, que abre el chat
+    del cliente de una: `wa.me` pasaba antes por una página intermedia de
+    "Continuar al chat" y había que elegir WhatsApp Web a mano (07/10/2026)."""
     mensaje = QUrl.toPercentEncoding(texto or '').data().decode()
     if app:
         return f'whatsapp://send?phone={numero}&text={mensaje}'
-    return f'https://wa.me/{numero}?text={mensaje}'
+    return f'https://web.whatsapp.com/send?phone={numero}&text={mensaje}'
 
 
 def es_url_de_comprobante(url):
@@ -465,6 +468,25 @@ class PedidosWebView(QWidget):
         if self._redibujo_pendiente:
             QTimer.singleShot(0, self._redibujar)
 
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        QTimer.singleShot(0, self._ajustar_alto_detalle)
+
+    def _ajustar_alto_detalle(self):
+        """El área con scroll no respeta el alto que piden los textos de varias
+        líneas: con poco lugar achicaba las tarjetas y el nombre del cliente
+        quedaba debajo del teléfono. Se le dice cuánto mide el contenido para
+        ese ancho y, si no entra, scrollea."""
+        try:
+            host = self.detalle_scroll.widget()
+            ancho = self.detalle_scroll.viewport().width()
+            if host is None or ancho <= 0:
+                return
+            alto = self.detalle_v.totalHeightForWidth(ancho) if self.detalle_v.hasHeightForWidth() else -1
+            host.setMinimumHeight(max(0, alto if alto > 0 else self.detalle_v.totalSizeHint().height()))
+        except RuntimeError:
+            pass        # la vista se está cerrando
+
     def _elegir_primero(self):
         """Con la pestaña abierta y nada elegido, se abre el primero de la lista:
         un toque menos, y el pedido nuevo ya queda a la vista."""
@@ -656,13 +678,16 @@ class PedidosWebView(QWidget):
             self.detalle_v.addStretch(1)
             return
 
-        self.detalle_v.addWidget(self._tarjeta_encabezado(p))
-        for aviso in self._avisos_del_pedido(p):
-            self.detalle_v.addWidget(aviso)
+        # Los avisos van adentro del encabezado: sueltos eran franjas de colores
+        # distintos apiladas y la pantalla se veía cortada en pedazos. Los
+        # productos suben arriba del cliente: es lo que se prepara y se controla
+        # al entregar (pedido del 07/10/2026).
+        self.detalle_v.addWidget(self._tarjeta_encabezado(p, self._avisos_del_pedido(p)))
         self.detalle_v.addWidget(self._tarjeta_acciones(p))
-        self.detalle_v.addWidget(self._tarjeta_cliente(p))
         self.detalle_v.addWidget(self._tarjeta_renglones(p))
+        self.detalle_v.addWidget(self._tarjeta_cliente(p))
         self.detalle_v.addStretch(1)
+        QTimer.singleShot(0, self._ajustar_alto_detalle)
 
     def _tarjeta(self, nombre, color_borde=None):
         f = QFrame()
@@ -670,10 +695,20 @@ class PedidosWebView(QWidget):
         izquierda = f" border-left:4px solid {color_borde};" if color_borde else ''
         f.setStyleSheet(f"QFrame#{nombre} {{ background:{_T['surface']}; border:1px solid {_T['border']};"
                         f"{izquierda} border-radius:8px; }}")
+        # Que no se achique por debajo de lo que ocupa: en 1366x768 la tarjeta
+        # del cliente se aplastaba y el nombre quedaba debajo del teléfono. Si
+        # no entra todo, scrollea.
+        f.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Minimum)
         v = QVBoxLayout(f)
-        v.setContentsMargins(16, 12, 16, 12)
-        v.setSpacing(6)
+        v.setContentsMargins(18, 14, 18, 14)
+        v.setSpacing(8)
         return f, v
+
+    def _titulo_tarjeta(self, texto):
+        """El rótulo chico de arriba de cada tarjeta (CLIENTE, PRODUCTOS)."""
+        l = self._texto(texto, 11, _T['text_muted'], 800, envolver=False)
+        l.setStyleSheet(l.styleSheet() + ' letter-spacing:1px;')
+        return l
 
     def _texto(self, texto, tam=13, color=None, peso=400, mono=False, envolver=True):
         l = QLabel(texto)
@@ -683,7 +718,7 @@ class PedidosWebView(QWidget):
                         f" background:transparent; border:none; {MONO if mono else ''}")
         return l
 
-    def _tarjeta_encabezado(self, p):
+    def _tarjeta_encabezado(self, p, avisos=()):
         color = COLOR_COBRAR if reglas.grupo(p) == 'cobrar' else COLOR_ESTADO.get(p.get('estado'), _T['text_muted'])
         f, v = self._tarjeta('pwEnc', color)
         top = QHBoxLayout()
@@ -698,12 +733,16 @@ class PedidosWebView(QWidget):
         if tomado:
             linea.append(f"lo aceptó {reglas.quien_texto(tomado)}")
         v.addWidget(self._texto(' · '.join(linea), 12, _T['text_muted']))
+        if avisos:
+            v.addSpacing(2)
+            for aviso in avisos:
+                v.addWidget(aviso)
         return f
 
     def _aviso(self, texto, fondo, color):
         l = QLabel(texto)
         l.setWordWrap(True)
-        l.setStyleSheet(f"color:{color}; background:{fondo}; border-radius:8px; padding:9px 12px;"
+        l.setStyleSheet(f"color:{color}; background:{fondo}; border-radius:6px; padding:7px 12px;"
                         " font-size:13px; font-weight:600;")
         return l
 
@@ -726,7 +765,8 @@ class PedidosWebView(QWidget):
             if p.get('venta_pendiente') is True:
                 texto += '. Descontando el stock…'
             avisos.append(self._aviso(texto + '.', _T['surface_alt'], _T['text']))
-        if reglas.a_cobrar(p) and not reglas.marca_vigente(marca, ahora, yo):
+        if (reglas.a_cobrar(p) and not reglas.marca_vigente(marca, ahora, yo)
+                and accion_principal(p)[0] != 'cobrar'):
             avisos.append(self._aviso('Falta cobrarlo en la caja.', _T['accent_soft'], _T['accent']))
         if reglas.cobrado(p):
             venta = f" · venta #{marca.get('venta_local')}" if marca.get('venta_local') else ''
@@ -850,10 +890,15 @@ class PedidosWebView(QWidget):
         v.addLayout(otras)
         return f
 
-    def _boton_chico(self, texto, color=None):
+    def _boton_chico(self, texto, color=None, lleno=False):
         color = color or _T['text']
         b = QPushButton(texto)
         b.setCursor(Qt.PointingHandCursor)
+        if lleno:
+            b.setStyleSheet(f"QPushButton {{ background:{color}; color:white; border:1px solid {color};"
+                            f" border-radius:7px; padding:5px 14px; min-height:18px; font-size:12px; font-weight:700; }}"
+                            f" QPushButton:hover {{ background:#17663a; border-color:#17663a; }}")
+            return b
         b.setStyleSheet(f"QPushButton {{ background:{_T['surface']}; color:{color}; border:1px solid {_T['border']};"
                         f" border-radius:7px; padding:5px 12px; min-height:18px; font-size:12px; font-weight:700; }}"
                         f" QPushButton:hover {{ border-color:{color}; background:{_T['surface_alt']}; }}")
@@ -870,7 +915,7 @@ class PedidosWebView(QWidget):
         entrega = p.get('entrega') or {}
         pago = p.get('pago') or {}
 
-        v.addWidget(self._texto('CLIENTE', 10, _T['text_muted'], 800, envolver=False))
+        v.addWidget(self._titulo_tarjeta('CLIENTE'))
         v.addWidget(self._seleccionable(self._texto(str(cliente.get('nombre') or 'Sin nombre'), 16, peso=800)))
 
         telefono = str(cliente.get('telefono') or '').strip()
@@ -883,7 +928,7 @@ class PedidosWebView(QWidget):
                 texto = (reglas.mensaje_whatsapp(p, reglas.DIRECCION_LOCAL)
                          or f"Hola {reglas.nombre_corto(p)}, te escribimos de Librería Liceo por tu pedido "
                             f"{p.get('codigo', '')}.")
-                wa = self._boton_chico('WhatsApp', COLOR_WHATSAPP)
+                wa = self._boton_chico('WhatsApp', COLOR_WHATSAPP, lleno=True)
                 wa.setToolTip(f"Abre el chat con este mensaje (se puede cambiar antes de mandarlo):\n{texto}")
                 wa.clicked.connect(lambda _c, n=numero, t=texto: self._abrir_whatsapp(n, t))
                 fila.addWidget(wa)
@@ -920,14 +965,20 @@ class PedidosWebView(QWidget):
             v.addWidget(self._seleccionable(self._texto(str(entrega.get('direccion') or 'Sin dirección'), 14)))
             if entrega.get('referencia'):
                 v.addWidget(self._seleccionable(self._texto(str(entrega.get('referencia')), 13, _T['text_muted'])))
-        else:
-            v.addWidget(self._texto('Retira en el local', 13, peso=700))
-
         if pago.get('modo') == 'efectivo':
             medio = 'Paga en efectivo' + (' · el repartidor marcó que cobró' if pago.get('pagado') else '')
         else:
             medio = 'Paga con transferencia'
-        v.addWidget(self._texto(medio, 13, _T['text_muted']))
+        if reglas.es_envio(p):
+            v.addWidget(self._texto(medio, 13, _T['text_muted']))
+        else:
+            fila = QHBoxLayout()
+            fila.setSpacing(6)
+            fila.addWidget(self._texto('Retira en el local', 13, peso=700, envolver=False))
+            fila.addWidget(self._texto('·', 13, _T['text_dim'], envolver=False))
+            fila.addWidget(self._texto(medio, 13, _T['text_muted'], envolver=False))
+            fila.addStretch(1)
+            v.addLayout(fila)
         if p.get('nota'):
             v.addWidget(self._aviso(f"Nota del cliente: {p.get('nota')}", _T['warning_bg'], _T['warning']))
         return f
@@ -955,13 +1006,19 @@ class PedidosWebView(QWidget):
 
     def _tarjeta_renglones(self, p):
         f, v = self._tarjeta('pwRen')
-        for it in p.get('items') or []:
+        items = p.get('items') or []
+        unidades = sum(int(round(reglas.num(it.get('cantidad')))) for it in items if it.get('unidad') != 'metro')
+        rotulo = f"PRODUCTOS · {len(items)}"
+        if unidades and unidades != len(items):
+            rotulo += f" · {unidades} unidades"
+        v.addWidget(self._titulo_tarjeta(rotulo))
+        for it in items:
             fila = QHBoxLayout()
-            fila.setSpacing(8)
+            fila.setSpacing(10)
             cant = (f"{reglas.num(it.get('cantidad')):.1f} m".replace('.', ',') if it.get('unidad') == 'metro'
                     else str(int(round(reglas.num(it.get('cantidad'))))))
-            c = self._texto(cant, 13, _T['text_muted'], 700, mono=True, envolver=False)
-            c.setMinimumWidth(44)
+            c = self._texto(cant, 14, _T['accent'], 800, mono=True, envolver=False)
+            c.setMinimumWidth(40)
             fila.addWidget(c, 0, Qt.AlignTop)
             detalle = str(it.get('nombre') or '')
             extras = []
@@ -969,10 +1026,10 @@ class PedidosWebView(QWidget):
                 extras.append(str(it['variedad']))
             if it.get('es_pack'):
                 extras.append(f"pack de {int(reglas.num(it.get('pack_contenido'), 1))}")
-            nombre = self._texto(detalle + (f"  ·  {' · '.join(extras)}" if extras else ''), 13)
+            nombre = self._texto(detalle + (f"  ·  {' · '.join(extras)}" if extras else ''), 14, peso=600)
             fila.addWidget(nombre, 1)
             sub = it.get('subtotal') if it.get('subtotal') is not None else reglas.num(it.get('precio')) * reglas.num(it.get('cantidad'))
-            fila.addWidget(self._texto(pesos(sub), 13, peso=700, mono=True, envolver=False), 0, Qt.AlignTop)
+            fila.addWidget(self._texto(pesos(sub), 14, peso=700, mono=True, envolver=False), 0, Qt.AlignTop)
             v.addLayout(fila)
 
         sep = QFrame()
@@ -983,14 +1040,18 @@ class PedidosWebView(QWidget):
 
         def total(etiqueta, valor, fuerte=False):
             fila = QHBoxLayout()
-            fila.addWidget(self._texto(etiqueta, 15 if fuerte else 13, None if fuerte else _T['text_muted'],
+            fila.addWidget(self._texto(etiqueta, 17 if fuerte else 13, None if fuerte else _T['text_muted'],
                                        800 if fuerte else 400, envolver=False))
             fila.addStretch(1)
-            fila.addWidget(self._texto(valor, 15 if fuerte else 13, None, 800 if fuerte else 600,
+            fila.addWidget(self._texto(valor, 17 if fuerte else 13, None, 800 if fuerte else 600,
                                        mono=True, envolver=False))
             v.addLayout(fila)
 
-        total('Productos', pesos(p.get('subtotal')))
+        # "Productos" solo cuando hay algo más que sumar o restar: igual al
+        # total, era el mismo número dos veces seguidas.
+        if (reglas.es_envio(p) or reglas.num(p.get('descuento')) > 0
+                or abs(reglas.num(p.get('subtotal')) - reglas.num(p.get('total'))) > 0.009):
+            total('Productos', pesos(p.get('subtotal')))
         if reglas.es_envio(p):
             total('Envío', 'sin cargo (cupón)' if entrega.get('envio_gratis')
                   else 'a confirmar' if entrega.get('envio_a_confirmar') else pesos(p.get('envio')))
