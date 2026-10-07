@@ -37,6 +37,8 @@ import { peekCacheValue, isHydrated } from '../cache.js';
 import { onStoreChange } from '../store.js';
 import { sugerirCantidad } from '../inventario_resumen.js';
 import { confirmDialog, alertDialog } from '../components/dialogs.js';
+import { mostrarToast } from '../components/toasts.js';
+import { sumarDiasYmd } from '../fechas_ar.js';
 import { listaCuadernoHtml } from '../lista_cuaderno.js';
 import {
   CAMPOS_FILTRO, SIN_VALOR, filtrosVacios, sanearFiltros, cantidadFiltros,
@@ -510,6 +512,7 @@ function aplicarTemporadas(rows, recomendaciones, comprasCfg) {
       existente.temporada_por_pista = !!rec.porPista;
       existente.temporada_a_mano = !!rec.aMano;
       existente.temporada_por_mano = !!rec.porMano;
+      existente.temporada_estacion = rec.estacion || null;
       existente.temporada_urgencia = rec.urgencia;
       if (rec.urgencia > existente.urgencia) {
         existente.urgencia = rec.urgencia;
@@ -597,6 +600,7 @@ function aplicarTemporadas(rows, recomendaciones, comprasCfg) {
       temporada_por_pista: !!rec.porPista,
       temporada_a_mano: !!rec.aMano,
       temporada_por_mano: !!rec.porMano,
+      temporada_estacion: rec.estacion || null,
       temporada_urgencia: rec.urgencia,
     };
     row.anotado = anotados[keyAnotado(row)] || null;
@@ -683,6 +687,7 @@ let _state = null;
 export async function renderCentroCompras(container, db) {
   _db = db;
   cerrarDropdown();   // un panel abierto de la visita anterior no puede quedar colgado
+  cerrarMenuTemporada();
   ocultarTip();
   // Shell sincrónico (cancela el skeleton diferido de main.js y da feedback ya).
   container.innerHTML = shellHtml();
@@ -1085,6 +1090,7 @@ function pageHtml() {
         </button>
       </div>
       <div class="cc-spacer"></div>
+      <div id="cc-estaciones" class="cc-estaciones" role="group" aria-label="Temporada del año"></div>
       <button class="cc-btn-fechas" data-action="fechas"
               title="Todas las fechas del año que mueven venta: abrí una y mirá qué convendría comprar">
         <span class="material-icons">event</span> Próximas fechas
@@ -1744,7 +1750,7 @@ function rowHtml(r, i, esContinuacion) {
       data-tip="${esc(explicarTemporada({
         temporada: t, empuje: r.temporada_empuje, esperado: r.temporada_esperado,
         stock: r.stockUnits, faltan: r.temporada_faltan, porPista: r.temporada_por_pista,
-        porMano: r.temporada_por_mano,
+        porMano: r.temporada_por_mano, estacion: r.temporada_estacion,
       }) + (r.temporada_a_mano && !r.temporada_por_mano ? '\nLo agregaste vos a esta fecha.' : ''))}"><span class="material-icons">event</span>${esc(t.nombre)} · ${cuando}</span>`;
     // Sacarlo de la fecha, pegado al chip: es la acción de ESE chip y así se
     // entiende sin explicación. El dueño sabe cuándo el sistema se equivocó, y
@@ -1764,7 +1770,13 @@ function rowHtml(r, i, esContinuacion) {
     `<button type="button" class="cc-anotar${anotado ? ' is-on' : ''}" data-action="anotar" data-idx="${i}"
        title="${anotado ? 'Sacar la marca del cuaderno' : 'Marcar que ya lo anotaste en el cuaderno'}">
        <span class="material-icons">edit_note</span></button>`;
-  const chipAcciones = chip + btnAnotar;
+  // Sumar el producto a una temporada o fecha, desde la misma fila: el dueño
+  // ve guantes en la lista y con dos toques quedan en el Invierno para siempre.
+  const btnTemporada = r.registrado ? '' :
+    `<button type="button" class="cc-anotar cc-btn-temp" data-action="menu-temporada" data-idx="${i}"
+       aria-haspopup="menu" title="Sumar a una temporada (Invierno, Verano) o a una fecha">
+       <span class="material-icons">event_available</span></button>`;
+  const chipAcciones = chip + btnTemporada + btnAnotar;
 
   const checkbox = r.sinCosto || r.registrado
     ? `<span class="material-icons cc-check-off" title="${r.sinCosto ? 'Sin costo cargado' : 'Ya registrado'}">${r.sinCosto ? 'block' : 'check_circle'}</span>`
@@ -1810,9 +1822,11 @@ function rowHtml(r, i, esContinuacion) {
     // Sin repetir la fecha ni los días: eso ya está en el chip de arriba.
     detalles.push(esc(motivoTemporada({
       temporada: r.temporada, empuje: r.temporada_empuje, porPista: r.temporada_por_pista,
-      porMano: r.temporada_por_mano,
+      porMano: r.temporada_por_mano, estacion: r.temporada_estacion,
     }, { conFecha: false })));
-    if (!r.temporada_por_pista && r.temporada_faltan > 0) {
+    if (r.temporada_estacion && r.temporada_estacion.fuente !== 'exhibir' && r.temporada_faltan > 0) {
+      detalles.push(`faltan ~${fmt(Math.ceil(r.temporada_faltan), 0)} para los próximos ${r.temporada.diasCompra || 30} días`);
+    } else if (!r.temporada_estacion && !r.temporada_por_pista && r.temporada_faltan > 0) {
       detalles.push(`faltan ~${fmt(Math.ceil(r.temporada_faltan), 0)} para llegar igual que la vez pasada`);
     }
   }
@@ -2006,6 +2020,7 @@ function imprimirCuaderno() {
 // cuántos productos de la lista son por eso. Aparece a dos meses (lo que pidió
 // el dueño) porque el mayorista no viene todas las semanas.
 function paintTemporadas() {
+  paintEstaciones();
   const el = document.getElementById('cc-epocas');
   if (!el) return;
   const s = _state;
@@ -2043,7 +2058,9 @@ function paintTemporadas() {
         ${p.nota ? `<div class="cc-epoca-nota">${esc(p.nota)}</div>` : ''}
         ${(!p.medida && n > 0) ? `<div class="cc-epoca-nota cc-epoca-corazonada">
             <span class="material-icons">lightbulb</span>
-            Todavía no tengo ventas tuyas de esta fecha para medirla: lo que ves es por el tipo de producto, no por lo que vendiste.
+            ${p.estacion
+              ? `Todavía no hay un ${esc(p.nombre.toLowerCase())} anterior registrado para medirlo: te marco lo que es de la temporada y está en cero, o lo que ya se está vendiendo.`
+              : 'Todavía no tengo ventas tuyas de esta fecha para medirla: lo que ves es por el tipo de producto, no por lo que vendiste.'}
           </div>` : ''}
         ${ideas.length ? `<div class="cc-epoca-ideas">
             <span class="material-icons">shopping_bag</span>
@@ -2058,6 +2075,199 @@ function paintTemporadas() {
     : (!s.estudio ? botonEstudiarHtml('Todavía no miré tus ventas viejas para saber qué se vende en cada fecha.') : '');
 
   el.innerHTML = `<div class="cc-epocas-wrap">${partes.join('')}</div>${viejo}`;
+}
+
+// ── Filtro Invierno / Verano ─────────────────────────────────────────────────
+// Pedido del dueño (07/10/2026). Las dos estaciones siempre a la vista en la
+// barra de arriba, con la que corresponde marcada sola: "en curso" si ya
+// arrancó, "arranca en N días" cuando entra en los dos meses de aviso. Tocar
+// una abre su detalle y deja la lista con lo que hace falta para esa
+// temporada; volver a tocarla, la lista completa.
+function paintEstaciones() {
+  const el = document.getElementById('cc-estaciones');
+  if (!el) return;
+  const s = _state;
+  const estaciones = fechasDelAnio(hoyAR()).filter(t => t.estacion);
+  el.innerHTML = estaciones.map(t => {
+    const temp = temporadaPorId(t.id);
+    const on = s.temporadaFiltro === t.id;
+    const cerca = !t.enVenta && t.diasFaltan <= t.plazoAviso;
+    const estado = t.enVenta ? 'en curso'
+      : cerca ? (t.diasFaltan === 1 ? 'arranca mañana' : `arranca en ${t.diasFaltan} días`)
+        : `desde ${mesDe(t.fecha)}`;
+    const n = s.rows.filter(r => r.temporada?.id === t.id && !r.registrado).length;
+    const clase = ['cc-estacion', t.enVenta ? 'is-ya' : (cerca ? 'is-cerca' : ''), on ? 'is-on' : '']
+      .filter(Boolean).join(' ');
+    const titulo = on ? 'Ver la lista completa'
+      : `${t.nombre}: ${t.enVenta ? `en curso hasta el ${fechaLinda(t.hasta)}` : `del ${fechaLinda(t.fecha)} al ${fechaLinda(t.hasta)}`}. Tocá para ver qué hace falta comprar.`;
+    return `<button type="button" class="${clase}" data-action="abrir-fecha" data-id="${esc(t.id)}"
+        aria-pressed="${on}" title="${esc(titulo)}">
+      <span class="material-icons">${esc(temp?.icono || 'event')}</span>
+      <span class="cc-estacion-txt"><b>${esc(t.nombre)}</b><span>${esc(estado)}</span></span>
+      ${n > 0 ? `<span class="cc-estacion-n">${n}</span>` : ''}
+    </button>`;
+  }).join('');
+}
+
+// ── Menú "Sumar a una temporada" de cada fila ─────────────────────────────────
+// El dueño ve un producto en la lista, toca el almanaque de la fila, elige la
+// temporada y listo: queda guardado y la próxima vez que se acerque esa época
+// el sistema lo trae solo. Primero las estaciones, después las fechas que se
+// vienen en el año.
+const _menuTemp = { idx: -1, el: null, boton: null };
+
+function claveDeFila(r) {
+  return claveProducto(r.producto?.nombre || r.nombre, r.variedad || '');
+}
+
+function abrirMenuTemporada(btn) {
+  const i = Number(btn.dataset.idx);
+  if (_menuTemp.el && _menuTemp.idx === i) { cerrarMenuTemporada(); return; }
+  cerrarMenuTemporada();
+  const s = _state;
+  const r = s.rows[i];
+  if (!r || !document.getElementById('cc-root')) return;
+  const clave = claveDeFila(r);
+  const todas = fechasDelAnio(hoyAR());
+  const estaciones = todas.filter(t => t.estacion);
+  const fechas = todas.filter(t => !t.estacion && !t.larga).slice(0, 6);
+
+  const opcion = (t, icono) => {
+    const manual = !!ajustesDeFecha(s.ajustes, t.id).suma[clave];
+    const calculada = !manual && r.temporada?.id === t.id;
+    const marcada = manual || calculada;
+    const estado = manual ? 'sumado · tocá para sacarlo'
+      : calculada ? 'ya está por sus ventas'
+        : t.enVenta ? 'en curso' : cuandoEs(t);
+    return `<button type="button" role="menuitemcheckbox" aria-checked="${marcada}"
+        class="cc-mt-opt${marcada ? ' is-sel' : ''}" data-action="${manual ? 'quitar-fila-de-fecha' : 'sumar-fila-a-fecha'}"
+        data-id="${esc(t.id)}" data-idx="${i}"${calculada ? ' disabled' : ''}>
+      <span class="material-icons">${marcada ? 'check' : esc(icono)}</span>
+      <span class="cc-mt-txt"><b>${esc(t.nombre)}</b><span>${esc(estado)}</span></span>
+    </button>`;
+  };
+
+  const nombre = r.esVariedad && r.variedad ? `${r.producto?.nombre || r.nombre} · ${r.variedad}` : r.nombre;
+  const menu = document.createElement('div');
+  menu.className = 'cc-menu-temp';
+  menu.setAttribute('role', 'menu');
+  menu.setAttribute('aria-label', 'Sumar a una temporada');
+  menu.innerHTML = `
+    <div class="cc-mt-tit">Sumar a una temporada<span>${esc(nombre)}</span></div>
+    ${estaciones.map(t => opcion(t, temporadaPorId(t.id)?.icono || 'event')).join('')}
+    ${fechas.length ? `<div class="cc-mt-sep">Fechas que se vienen</div>${fechas.map(t => opcion(t, 'event')).join('')}` : ''}`;
+  // Colgado del body: adentro de la página, un ancestro con `transform` hace
+  // que `position: fixed` se mida contra él y el menú quedaba corrido y debajo
+  // de la barra lateral. Los clics van al mismo manejador que el resto.
+  document.body.appendChild(menu);
+  menu.addEventListener('click', onClick);
+  _menuTemp.idx = i;
+  _menuTemp.el = menu;
+  _menuTemp.boton = btn;
+  btn.setAttribute('aria-expanded', 'true');
+  ubicarMenuTemporada();
+  menu.querySelector('.cc-mt-opt:not([disabled])')?.focus({ preventScroll: true });
+  document.addEventListener('mousedown', onMenuTempFuera, true);
+  document.addEventListener('keydown', onMenuTempTecla, true);
+  document.addEventListener('scroll', cerrarMenuTemporada, { capture: true, passive: true });
+  window.addEventListener('resize', cerrarMenuTemporada);
+}
+
+// Pegado debajo del botón; si no entra abajo, arriba; nunca afuera de la
+// pantalla por los costados (en el celular la fila ocupa todo el ancho).
+function ubicarMenuTemporada() {
+  const { el, boton } = _menuTemp;
+  if (!el || !boton) return;
+  const b = boton.getBoundingClientRect();
+  const ancho = window.innerWidth || document.documentElement.clientWidth || 0;
+  // En el celular la barra de navegación de abajo tapa el final de la
+  // pantalla: el menú termina donde ella empieza.
+  const barra = document.getElementById('bottomNav');
+  const tapa = barra && getComputedStyle(barra).display !== 'none' ? barra.getBoundingClientRect().height : 0;
+  const alto = (window.innerHeight || document.documentElement.clientHeight || 0) - tapa;
+  if (alto > 0) el.style.maxHeight = `${Math.min(440, alto - 16)}px`;
+  const m = el.getBoundingClientRect();
+  let left = b.left;
+  if (ancho && left + m.width > ancho - 8) left = ancho - 8 - m.width;
+  if (left < 8) left = 8;
+  let top = b.bottom + 6;
+  if (alto && top + m.height > alto - 8) {
+    // No entra abajo: arriba del botón, y si tampoco, lo más abajo posible
+    // sin salirse (el menú tiene scroll propio).
+    top = b.top - 6 - m.height > 8 ? b.top - 6 - m.height : Math.max(8, alto - 8 - m.height);
+  }
+  el.style.left = `${Math.round(left)}px`;
+  el.style.top = `${Math.round(top)}px`;
+}
+
+function cerrarMenuTemporada() {
+  document.removeEventListener('mousedown', onMenuTempFuera, true);
+  document.removeEventListener('keydown', onMenuTempTecla, true);
+  document.removeEventListener('scroll', cerrarMenuTemporada, { capture: true });
+  window.removeEventListener('resize', cerrarMenuTemporada);
+  _menuTemp.boton?.setAttribute('aria-expanded', 'false');
+  _menuTemp.el?.remove();
+  _menuTemp.el = null;
+  _menuTemp.boton = null;
+  _menuTemp.idx = -1;
+}
+
+function onMenuTempFuera(e) {
+  if (_menuTemp.el?.contains(e.target) || _menuTemp.boton?.contains(e.target)) return;
+  cerrarMenuTemporada();
+}
+
+function onMenuTempTecla(e) {
+  if (!_menuTemp.el) return;
+  if (e.key === 'Escape') {
+    e.preventDefault();
+    const btn = _menuTemp.boton;
+    cerrarMenuTemporada();
+    btn?.focus({ preventScroll: true });
+    return;
+  }
+  if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp') return;
+  const opciones = [..._menuTemp.el.querySelectorAll('.cc-mt-opt:not([disabled])')];
+  if (!opciones.length) return;
+  e.preventDefault();
+  const i = opciones.indexOf(document.activeElement);
+  const sig = e.key === 'ArrowDown' ? (i + 1) % opciones.length : (i <= 0 ? opciones.length - 1 : i - 1);
+  opciones[sig].focus();
+}
+
+/** Suma (o saca) el producto de la fila a una temporada y avisa qué va a pasar. */
+function sumarFilaAFecha(idFecha, i, quitar = false) {
+  const s = _state;
+  const r = s.rows[i];
+  cerrarMenuTemporada();
+  if (!r || !idFecha) return;
+  const t = fechasDelAnio(hoyAR()).find(x => x.id === idFecha);
+  const clave = claveDeFila(r);
+  const nombre = r.producto?.nombre || r.nombre;
+  if (quitar) {
+    guardarAjuste(idFecha, clave, 'borrar');
+    mostrarToast({
+      tono: 'violeta', icono: 'event_busy', etiqueta: t?.nombre || 'Temporada',
+      titulo: `${nombre} ya no está en ${t?.nombre || 'esa fecha'}`, duracion: 4000,
+    });
+    return;
+  }
+  const [n, c] = clave.split('||');
+  guardarAjuste(idFecha, clave, 'sumar', { n: n || normClave(nombre), c: c || '' });
+  // Si la temporada ya está a la vista, la fila aparece marcada al instante.
+  // Si no, se dice desde cuándo la va a traer: sin esto, sumar algo al
+  // invierno en octubre parece que no hizo nada.
+  const visible = !!t && (t.enVenta || t.diasFaltan <= t.plazoAviso || s.fechasAbiertas.includes(t.id));
+  const desde = t ? sumarDiasYmd(t.fecha, -(Number(t.plazoAviso) || 60)) : '';
+  mostrarToast({
+    tono: 'verde', icono: temporadaPorId(idFecha)?.icono || 'event_available',
+    etiqueta: `Sumado a ${t?.nombre || 'la fecha'}`,
+    titulo: nombre,
+    detalleHtml: visible
+      ? 'Ya figura en la lista con la marca de la temporada.'
+      : `Te lo voy a traer solo a partir del ${esc(fechaLinda(desde))}, cuando haya que encargarlo.`,
+    duracion: 5000,
+  });
 }
 
 // ── Panel "Próximas fechas" ───────────────────────────────────────────────────
@@ -2163,7 +2373,13 @@ function detalleFechaHtml(t, datos) {
   const est = estadoDeFecha(s.estudio, t);
   const ideas = ideasQueFaltan(t.id, peekCacheValue('catalogo:all') || []);
   const partes = [];
-  if (est.medida) {
+  if (est.estacion) {
+    partes.push(`<div class="cc-fecha-det-linea"><span class="material-icons">insights</span>
+      La cantidad sale de lo que vendiste en el ${esc(t.nombre.toLowerCase())} de ${esc(String(est.estacion.anio))}, llevado al próximo mes. Lo que tenés de sobra no aparece.</div>`);
+  } else if (t.estacion) {
+    partes.push(`<div class="cc-fecha-det-linea"><span class="material-icons">lightbulb</span>
+      Todavía no hay un ${esc(t.nombre.toLowerCase())} anterior registrado: te marco lo que es de la temporada y está en cero, o lo que ya se está vendiendo.</div>`);
+  } else if (est.medida) {
     partes.push(`<div class="cc-fecha-det-linea"><span class="material-icons">insights</span>
       Sale de tus ventas${est.veces > 1 ? ` (medida ${est.veces} veces)` : ''}${
         est.colores?.length ? `. Lo que vuela: <b>${est.colores.map(esc).join(' · ')}</b>` : ''}</div>`);
@@ -2528,6 +2744,15 @@ function onClick(e) {
       break;
     case 'sumar-a-fecha':
       sumarAFecha(btn.dataset.id || '', btn.dataset.clave || '', btn.dataset.nombre || '');
+      break;
+    case 'menu-temporada':
+      abrirMenuTemporada(btn);
+      break;
+    case 'sumar-fila-a-fecha':
+      sumarFilaAFecha(btn.dataset.id || '', Number(btn.dataset.idx));
+      break;
+    case 'quitar-fila-de-fecha':
+      sumarFilaAFecha(btn.dataset.id || '', Number(btn.dataset.idx), true);
       break;
     case 'devolver-a-fecha':
       devolverAFecha(btn.dataset.id || '', btn.dataset.clave || '');

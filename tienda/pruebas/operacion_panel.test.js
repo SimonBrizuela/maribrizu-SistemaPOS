@@ -1437,6 +1437,79 @@ describe('Centro de Compras · lo que se viene por la época', () => {
     for (const n of ofrecidos) expect(yaEnLista, n).not.toContain(n);
   });
 
+  // ── Invierno y Verano (pedido del 07/10/2026) ────────────────────────────
+  // Las estaciones siempre a la vista en la barra, con la que corresponde
+  // marcada sola, y un botón en cada fila para sumar el producto a una.
+
+  it('Invierno y Verano están siempre en la barra, con cuándo arranca cada uno', async () => {
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    const botones = [...c.querySelectorAll('#cc-estaciones .cc-estacion')];
+    const textos = botones.map(b => b.textContent.replace(/\s+/g, ' ').trim());
+    expect(textos.some(t => t.includes('Invierno') && t.includes('desde junio'))).toBe(true);
+    // El 1 de octubre el verano (1 de diciembre) está a 61 días: todavía no
+    // entra en los dos meses de aviso.
+    expect(textos.some(t => t.includes('Verano') && t.includes('desde diciembre'))).toBe(true);
+  });
+
+  it('tocar Verano trae lo de la temporada que está en cero y filtra la lista', async () => {
+    datos.porColeccion.catalogo.push({
+      __id: 'v1', doc_id: 'v1', id: 61, nombre: 'ANTIPARRA BESTWAY INFANTIL',
+      codigo: 'V001', rubro: 'JUGUETERÍA', sub_rubro: 'VERANO',
+      precio_venta: 8000, costo: 4000, stock: 0, estado: 'activo',
+    });
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    const verano = [...c.querySelectorAll('.cc-estacion')].find(b => b.textContent.includes('Verano'));
+    verano.click();
+    for (let i = 0; i < 12; i++) await esperar();
+
+    const marcado = [...c.querySelectorAll('.cc-estacion.is-on')].map(b => b.textContent);
+    expect(marcado.join(' ')).toContain('Verano');
+    const visibles = [...c.querySelectorAll('#cc-tbody tr')].filter(tr => tr.hasAttribute('data-idx'));
+    expect(visibles.map(tr => tr.textContent).join(' ')).toContain('ANTIPARRA BESTWAY INFANTIL');
+    expect(visibles.every(tr => tr.className.includes('cc-row-epoca'))).toBe(true);
+    // Sin un verano anterior registrado lo dice: no es un dato medido.
+    expect(c.querySelector('.cc-fecha-det').textContent).toContain('no hay un verano anterior');
+  });
+
+  it('desde la fila se suma un producto a Invierno con dos toques y queda guardado', async () => {
+    const c = await montar('centro_compras', 'renderCentroCompras');
+    const fila = c.querySelector('#cc-tbody tr[data-idx]');
+    const nombre = fila.querySelector('.cc-prod-btn').textContent.replace('open_in_new', '').trim();
+    fila.querySelector('[data-action="menu-temporada"]').click();
+    await esperar();
+
+    const menu = document.querySelector('.cc-menu-temp');
+    expect(menu, 'se abre el menú de temporadas').toBeTruthy();
+    const opciones = [...menu.querySelectorAll('.cc-mt-opt')].map(o => o.textContent);
+    expect(opciones.join(' ')).toContain('Invierno');
+    expect(opciones.join(' ')).toContain('Verano');
+
+    datos.escrituras.length = 0;
+    [...menu.querySelectorAll('.cc-mt-opt')].find(o => o.textContent.includes('Invierno')).click();
+    for (let i = 0; i < 12; i++) await esperar();
+
+    expect(document.querySelector('.cc-menu-temp'), 'el menú se cierra').toBeFalsy();
+    const esc = datos.escrituras.find(e => JSON.stringify(e.ref || {}).includes('temporadas_manual'));
+    expect(esc, 'escribe control_config/temporadas_manual').toBeTruthy();
+    const guardado = JSON.stringify(esc.datos || {});
+    expect(guardado).toContain('invierno');
+    expect(guardado).toContain('suma');
+    // El invierno está lejos: avisa desde cuándo lo va a traer solo.
+    const aviso = [...document.querySelectorAll('.ll-toast')].map(t => t.textContent).join(' ');
+    expect(aviso).toContain('Sumado a Invierno');
+    expect(aviso).toContain(nombre);
+    expect(aviso).toContain('2 de abril');
+
+    // Abierto de nuevo, la opción dice que ya está y deja sacarlo.
+    c.querySelector('#cc-tbody tr[data-idx] [data-action="menu-temporada"]').click();
+    await esperar();
+    const inv = [...document.querySelectorAll('.cc-menu-temp .cc-mt-opt')].find(o => o.textContent.includes('Invierno'));
+    expect(inv.dataset.action).toBe('quitar-fila-de-fecha');
+    expect(inv.textContent).toContain('sumado');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(document.querySelector('.cc-menu-temp')).toBeFalsy();
+  });
+
   it('al abrir una fecha la vista baja hasta los productos', async () => {
     const c = await montar('centro_compras', 'renderCentroCompras');
     const vistos = [];

@@ -5099,6 +5099,76 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
 .cc-tier-epoca.is-on { background: var(--tint-blue-bg); border-color: var(--tint-blue-fg); color: var(--tint-blue-fg); }
 .cc-tier-epoca.is-on span, .cc-tier-epoca.is-on .material-icons { color: var(--tint-blue-fg); }
 
+/* Filtro Invierno / Verano en la barra de arriba. Mismo código de color que el
+   panel de fechas: naranja = en curso, azul = hay que encargarlo, gris = falta. */
+.cc-estaciones { display: inline-flex; gap: 6px; flex-wrap: wrap; }
+.cc-estaciones:empty { display: none; }
+.cc-estacion {
+  display: inline-flex; align-items: center; gap: 8px; padding: 5px 10px 5px 9px;
+  border-radius: 10px; cursor: pointer; font-family: inherit; text-align: left; color: var(--text);
+  background: var(--surface); border: 1px solid var(--border-strong);
+}
+.cc-estacion > .material-icons { font-size: 19px !important; color: var(--text-muted); flex: none; }
+.cc-estacion-txt { display: flex; flex-direction: column; line-height: 1.15; min-width: 0; }
+.cc-estacion-txt b { font-size: 13px; font-weight: 600; color: var(--text-strong); }
+.cc-estacion-txt span { font-size: 11px; color: var(--text-muted); white-space: nowrap; }
+.cc-estacion:hover { border-color: var(--tint-blue-fg); }
+.cc-estacion:focus-visible { outline: 2px solid var(--tint-blue-fg); outline-offset: 1px; }
+.cc-estacion.is-cerca { border-left: 3px solid var(--tint-blue-fg); }
+.cc-estacion.is-cerca > .material-icons,
+.cc-estacion.is-cerca .cc-estacion-txt span { color: var(--tint-blue-fg); }
+.cc-estacion.is-ya { border-left: 3px solid var(--warning); }
+.cc-estacion.is-ya > .material-icons,
+.cc-estacion.is-ya .cc-estacion-txt span { color: var(--warning); font-weight: 600; }
+.cc-estacion.is-on { background: var(--tint-blue-bg); border-color: var(--tint-blue-fg); }
+.cc-estacion-n {
+  display: inline-flex; align-items: center; justify-content: center;
+  min-width: 20px; height: 20px; padding: 0 6px; border-radius: 999px;
+  background: var(--tint-blue-fg); color: #fff; font-size: 11px; font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+@media (max-width: 640px) {
+  .cc-estaciones { width: 100%; }
+  .cc-estacion { flex: 1 1 0; min-width: 0; }
+}
+
+/* Menú "Sumar a una temporada" de cada fila. Va fijo a la pantalla, pegado al
+   botón que lo abrió: dentro de la tabla lo cortaría el scroll horizontal. */
+.cc-btn-temp .material-icons { font-size: 18px !important; }
+.cc-btn-temp[aria-expanded="true"] { border-color: var(--tint-blue-fg); color: var(--tint-blue-fg); }
+.cc-menu-temp {
+  position: fixed; top: 0; left: 0; z-index: 1400;
+  width: 270px; max-width: calc(100vw - 16px); max-height: min(440px, calc(100vh - 16px)); overflow-y: auto;
+  background: var(--card-bg); border: 1px solid var(--border); border-radius: 12px;
+  box-shadow: 0 12px 32px rgba(0, 0, 0, .18); padding: 6px;
+}
+.cc-mt-tit {
+  display: flex; flex-direction: column; gap: 2px; padding: 6px 8px 8px; margin-bottom: 4px;
+  border-bottom: 1px solid var(--border); font-size: 13px; font-weight: 600; color: var(--text-strong);
+}
+.cc-mt-tit span {
+  font-size: 12px; font-weight: 400; color: var(--text-muted);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.cc-mt-sep {
+  padding: 10px 8px 4px; font-size: 11px; font-weight: 600; letter-spacing: .04em;
+  text-transform: uppercase; color: var(--text-muted);
+}
+.cc-mt-opt {
+  display: flex; align-items: center; gap: 10px; width: 100%; text-align: left;
+  border: none; background: none; border-radius: 8px; padding: 7px 8px;
+  font-family: inherit; color: var(--text); cursor: pointer;
+}
+.cc-mt-opt:hover, .cc-mt-opt:focus-visible { background: var(--surface-hover); outline: none; }
+.cc-mt-opt > .material-icons { font-size: 18px !important; width: 18px; color: var(--tint-blue-fg); flex: none; }
+.cc-mt-txt { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+.cc-mt-txt b { font-size: 13px; font-weight: 600; }
+.cc-mt-txt span { font-size: 11.5px; color: var(--text-muted); }
+.cc-mt-opt.is-sel > .material-icons { color: var(--tint-green-fg); }
+.cc-mt-opt.is-sel .cc-mt-txt span { color: var(--tint-green-fg); }
+.cc-mt-opt[disabled] { cursor: default; }
+.cc-mt-opt[disabled]:hover { background: none; }
+
 .cc-check { width: 18px; height: 18px; accent-color: var(--primary); cursor: pointer; }
 .cc-check-off { font-size: 18px !important; color: var(--border-strong); }
 .cc-qty {
