@@ -1026,3 +1026,105 @@ def test_ver_pedido_desde_la_franja_abre_la_lista_y_el_pedido(pantalla):
     vista._filtro = 'hechos'
     vista.abrir_pedido('')
     assert vista._filtro == 'hacer'
+
+
+# ── Retoques del 07/10/2026 ──────────────────────────────────────────────────
+
+def test_mientras_se_arma_cada_producto_se_tilda_al_guardarlo(pantalla):
+    from PyQt5.QtWidgets import QLabel
+    items = [{'id': 'GOMA', 'nombre': 'Goma', 'cantidad': 2, 'precio': 500, 'subtotal': 1000},
+             {'id': 'LAPIZ', 'nombre': 'Lápiz', 'cantidad': 1, 'precio': 300, 'subtotal': 300}]
+    t = pantalla([pedido('n1', estado='preparando', items=items, subtotal=1300, total=1300)])
+    vista = t['vista']
+    vista._seleccionar('n1')
+    textos = lambda: ' | '.join(l.text() for l in visibles(vista, QLabel))
+    assert 'Tocá cada producto cuando lo guardes' in textos()
+    from PyQt5.QtCore import Qt as _Qt
+    from PyQt5.QtTest import QTest
+    from PyQt5.QtWidgets import QFrame
+    filas = lambda v: [f for f in visibles(v, QFrame) if f.objectName() == 'pwItem' and 'bolsa' in f.toolTip()]
+    assert len(filas(vista)) == 2
+    # Se toca la fila entera, también sobre el nombre del producto.
+    nombre = [l for l in filas(vista)[0].findChildren(QLabel) if l.text() == 'Goma'][0]
+    QTest.mouseClick(nombre, _Qt.LeftButton)
+    assert '1 de 2 en la bolsa' in textos()
+    QTest.mouseClick(filas(vista)[1], _Qt.LeftButton)
+    assert 'Todo en la bolsa' in textos()
+    QTest.mouseClick(filas(vista)[0], _Qt.LeftButton)
+    assert '1 de 2 en la bolsa' in textos()
+    # Un pedido ya entregado no se arma: no se tilda nada.
+    t2 = pantalla([pedido('e1', estado='entregado', entregado_en=AHORA, entregado_por='pos', items=items,
+                          cobro={'estado': 'hecho', 'pc_id': 'otra'})])
+    t2['vista']._seleccionar('e1')
+    assert not filas(t2['vista'])
+
+
+def test_si_subio_el_comprobante_se_ve_sin_abrirlo_y_sin_rearmar_los_botones(pantalla, monkeypatch):
+    from PyQt5.QtWidgets import QLabel
+    t = pantalla([pedido('n1', pago={'modo': 'transferencia'})])
+    vista = t['vista']
+    vista._seleccionar('n1')
+    esperar(lambda: vista._comprobantes.get('n1') == 'no')
+    textos = lambda: ' '.join(l.text() for l in visibles(vista, QLabel))
+    assert 'Todavía no subió el comprobante' in textos()
+    botones_antes = [id(b) for b in visibles(vista, type(vista._boton('x')))]
+
+    # El cliente lo sube con el pedido abierto: el reloj lo vuelve a mirar.
+    class Subido:
+        exists = True
+
+        def to_dict(self):
+            return {'url': 'https://firebasestorage.googleapis.com/v0/b/x/o/c.webp'}
+    monkeypatch.setattr(t['nube'].db, 'get', lambda: Subido())
+    vista._comprobante_mirado.clear()
+    vista._revisar_comprobante_abierto()
+    assert esperar(lambda: vista._comprobantes.get('n1') == 'si')
+    assert 'Comprobante subido' in textos()
+    assert [id(b) for b in visibles(vista, type(vista._boton('x')))] == botones_antes
+
+
+def test_en_pantalla_ancha_productos_y_cliente_van_lado_a_lado(pantalla):
+    from PyQt5.QtWidgets import QApplication
+    t = pantalla([pedido('n1')])
+    vista = t['vista']
+    vista.resize(1900, 900)
+    QApplication.processEvents()
+    vista._seleccionar('n1')
+    esperar(lambda: vista._dos_columnas is True)
+    assert vista._dos_columnas is True
+    vista.resize(1100, 800)
+    assert esperar(lambda: vista._dos_columnas is False)
+
+
+def test_la_entrega_va_como_texto_del_encabezado(pantalla):
+    from PyQt5.QtWidgets import QLabel
+    t = pantalla([pedido('c1', estado='entregado', entregado_en=AHORA, entregado_por='panel',
+                         stock_descontado=True, cobro_pendiente=True)])
+    vista = t['vista']
+    vista._filtro = 'cobrar'
+    vista._seleccionar('c1')
+    textos = [l.text() for l in visibles(vista, QLabel)]
+    assert any('Entró' in x and 'entregado recién por el panel' in x for x in textos)
+    # El botón grande ya dice cobrar: no hace falta otra franja que lo repita.
+    assert not any('Falta cobrarlo' in x for x in textos)
+
+
+def test_en_una_pantalla_chica_ningun_boton_se_sale(pantalla):
+    # En 1024 px la fila de botones de un envío listo empujaba el detalle y
+    # el total y "Cancelar pedido" quedaban cortados a la derecha.
+    from PyQt5.QtCore import QPoint
+    from PyQt5.QtWidgets import QApplication
+    t = pantalla([pedido('l1', estado='listo', entrega={'modo': 'delivery', 'direccion': 'Colón 1200'},
+                         pago={'modo': 'transferencia'})])
+    vista = t['vista']
+    vista.resize(1024, 600)
+    QApplication.processEvents()
+    vista._seleccionar('l1')
+    for _ in range(4):
+        QApplication.processEvents()
+    viewport = vista.detalle_scroll.viewport()
+    botones = visibles(vista, type(vista._boton('x')))
+    assert {'Entregado, cobrar después', 'Entregar y cobrar', 'Imprimir', 'Cancelar pedido'} <= {b.text() for b in botones}
+    for b in botones:
+        derecha = b.mapTo(viewport, QPoint(b.width(), 0)).x()
+        assert derecha <= viewport.width(), f'{b.text()} se sale: {derecha} > {viewport.width()}'

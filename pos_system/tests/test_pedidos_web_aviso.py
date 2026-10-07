@@ -162,3 +162,16 @@ def test_el_boton_abre_el_pedido_o_la_lista(franja):
     f.actualizar(reglas.pendientes_de_aviso([pedido('a'), pedido('b')]))
     f._boton.click()
     assert pedidos_vistos == ['k7m2', '']
+
+
+def test_la_franja_dice_cuantos_esperan_y_el_atajo_va_en_el_boton(franja):
+    # Retoque del 07/10/2026: el círculo con la cantidad reemplazó la etiqueta
+    # "TIENDA", y el F9 suelto quedaba flotando lejos del botón.
+    f, _, _ = franja
+    f.actualizar(reglas.pendientes_de_aviso([pedido('a'), pedido('b'), pedido('c', **A_COBRAR)]))
+    assert f._marca.text() == '2'
+    assert f._boton.text() == 'Ver pedidos  ·  F9'
+    f.actualizar(reglas.pendientes_de_aviso([pedido('c', **A_COBRAR)]))
+    assert f._marca.text() == '1'
+    assert f._boton.text() == 'Ver pedido  ·  F9'
+    assert f._titulo.text() == 'Pedido web para cobrar'

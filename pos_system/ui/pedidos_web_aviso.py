@@ -86,11 +86,14 @@ class FranjaPedidos(QWidget):
         self.setVisible(False)
 
         fila = QHBoxLayout(self)
-        fila.setContentsMargins(18, 8, 14, 8)
-        fila.setSpacing(14)
+        fila.setContentsMargins(16, 9, 16, 9)
+        fila.setSpacing(12)
 
-        self._marca = QLabel('TIENDA')
+        # Cuántos pedidos esperan, en un círculo: dice más que la etiqueta
+        # "TIENDA" que había antes (retoque del 07/10/2026).
+        self._marca = QLabel('1')
         self._marca.setAlignment(Qt.AlignCenter)
+        self._marca.setFixedSize(30, 30)
         fila.addWidget(self._marca, 0, Qt.AlignVCenter)
 
         textos = QVBoxLayout()
@@ -103,8 +106,6 @@ class FranjaPedidos(QWidget):
         textos.addWidget(self._detalle)
         fila.addLayout(textos, 1)
 
-        self._atajo = QLabel('F9')
-        fila.addWidget(self._atajo, 0, Qt.AlignVCenter)
         self._boton = QPushButton('Ver pedido')
         self._boton.setCursor(Qt.PointingHandCursor)
         self._boton.clicked.connect(self._al_tocar)
@@ -152,33 +153,37 @@ class FranjaPedidos(QWidget):
             self.setVisible(False)
             return
         titulo, detalle, tono, boton = textos
+        cuantos = len(self._pendientes['nuevos']) or len(self._pendientes['cobrar'])
+        self._marca.setText(str(cuantos) if cuantos < 100 else '99+')
         self._titulo.setText(titulo)
         self._detalle.setText(detalle)
         self._detalle.setToolTip(detalle)
-        self._boton.setText(boton)
+        # El atajo va en el botón: suelto, el "F9" quedaba flotando lejos.
+        self._boton.setText(f'{boton}  ·  F9')
         self._pintar_tono(tono)
         self.setVisible(True)
 
     def _pintar_tono(self, tono):
+        # Pedido nuevo: naranja lleno, es lo urgente. Solo falta cobrar: blanco
+        # con el canto naranja, como las tarjetas del POS; el salmón lleno de
+        # antes pesaba demasiado para un aviso que puede esperar al cliente.
         if tono == 'nuevo':
-            fondo, borde, texto, suave = _T['accent'], _T['accent_hover'], '#ffffff', '#fbe3d5'
+            fondo, borde, canto, texto, suave = _T['accent'], _T['accent_hover'], _T['accent_hover'], '#ffffff', '#fde9dd'
             marca = f"background:#ffffff; color:{_T['accent']};"
-            boton = (f"QPushButton {{ background:#ffffff; color:{_T['accent']}; border:none; border-radius:7px;"
-                     f" padding:7px 18px; font-size:13px; font-weight:800; min-height:18px; }}"
+            boton = (f"QPushButton {{ background:#ffffff; color:{_T['accent']}; border:none; border-radius:8px;"
+                     f" padding:8px 18px; font-size:13px; font-weight:800; min-height:18px; }}"
                      f" QPushButton:hover {{ background:{_T['accent_soft']}; }}")
         else:
-            fondo, borde, texto, suave = _T['accent_soft'], '#efd3c0', _T['text'], _T['text_muted']
+            fondo, borde, canto, texto, suave = _T['surface'], _T['border'], _T['accent'], _T['text'], _T['text_muted']
             marca = f"background:{_T['accent']}; color:#ffffff;"
-            boton = (f"QPushButton {{ background:{_T['accent']}; color:#ffffff; border:none; border-radius:7px;"
-                     f" padding:7px 18px; font-size:13px; font-weight:800; min-height:18px; }}"
+            boton = (f"QPushButton {{ background:{_T['accent']}; color:#ffffff; border:none; border-radius:8px;"
+                     f" padding:8px 18px; font-size:13px; font-weight:800; min-height:18px; }}"
                      f" QPushButton:hover {{ background:{_T['accent_hover']}; }}")
-        self.setStyleSheet(f"QWidget#franjaPedidos {{ background:{fondo}; border-bottom:1px solid {borde}; }}")
-        self._marca.setStyleSheet(f"{marca} border-radius:5px; padding:3px 8px; font-size:10px;"
-                                  " font-weight:800; letter-spacing:1px;")
+        self.setStyleSheet(f"QWidget#franjaPedidos {{ background:{fondo}; border-bottom:1px solid {borde};"
+                           f" border-left:5px solid {canto}; }}")
+        self._marca.setStyleSheet(f"{marca} border-radius:15px; font-size:13px; font-weight:800;")
         self._titulo.setStyleSheet(f"color:{texto}; background:transparent; font-size:14px; font-weight:800;")
         self._detalle.setStyleSheet(f"color:{suave}; background:transparent; font-size:12px; font-weight:600;")
-        self._atajo.setStyleSheet(f"color:{suave}; background:transparent; border:1px solid {suave};"
-                                  " border-radius:4px; padding:1px 5px; font-size:10px; font-weight:700;")
         self._boton.setStyleSheet(boton)
 
     def _al_tocar(self):

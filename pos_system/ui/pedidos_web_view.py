@@ -20,10 +20,10 @@ import sys
 import threading
 from datetime import datetime, timedelta
 
-from PyQt5.QtCore import QObject, Qt, QTimer, QUrl, pyqtSignal
+from PyQt5.QtCore import QObject, QPoint, QRect, QSize, Qt, QTimer, QUrl, pyqtSignal
 from PyQt5.QtGui import QDesktopServices, QFont
 from PyQt5.QtWidgets import (
-    QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QLineEdit, QMessageBox,
+    QApplication, QDialog, QFrame, QHBoxLayout, QLabel, QLayout, QLineEdit, QMessageBox,
     QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
@@ -120,6 +120,36 @@ def enlace_whatsapp(numero, texto, app):
     return f'https://web.whatsapp.com/send?phone={numero}&text={mensaje}'
 
 
+def _icono_tilde(marcado, escala=1.0, tam=22):
+    """Círculo para tildar un producto: vacío, o naranja con la tilde blanca.
+    Dibujado, no con un caracter: así sale igual en todas las PCs."""
+    from PyQt5.QtGui import QColor, QPainter, QPainterPath, QPen, QPixmap
+    pix = QPixmap(int(tam * escala), int(tam * escala))
+    pix.setDevicePixelRatio(escala)
+    pix.fill(Qt.transparent)
+    g = QPainter(pix)
+    g.setRenderHint(QPainter.Antialiasing)
+    if marcado:
+        g.setPen(Qt.NoPen)
+        g.setBrush(QColor(_T['accent']))
+        g.drawEllipse(1, 1, tam - 2, tam - 2)
+        lapiz = QPen(QColor('#ffffff'), 2.4)
+        lapiz.setCapStyle(Qt.RoundCap)
+        lapiz.setJoinStyle(Qt.RoundJoin)
+        g.setPen(lapiz)
+        trazo = QPainterPath()
+        trazo.moveTo(tam * 0.29, tam * 0.52)
+        trazo.lineTo(tam * 0.44, tam * 0.66)
+        trazo.lineTo(tam * 0.72, tam * 0.37)
+        g.drawPath(trazo)
+    else:
+        g.setPen(QPen(QColor(_T['text_dim']), 2))
+        g.setBrush(Qt.NoBrush)
+        g.drawEllipse(2, 2, tam - 4, tam - 4)
+    g.end()
+    return pix
+
+
 def es_url_de_comprobante(url):
     """Solo el Storage de Firebase: la URL la escribe el cliente."""
     from urllib.parse import urlparse
@@ -168,6 +198,65 @@ def accion_principal(pedido):
     if reglas.a_cobrar(p):
         return 'cobrar', f"Cobrar {pesos(p.get('total'))}"
     return None, ''
+
+
+class _RenglonQueBaja(QLayout):
+    """Pone los widgets uno al lado del otro y, si no entran, sigue en el
+    renglón de abajo (el "flow layout" de los ejemplos de Qt)."""
+
+    def __init__(self, espacio=8):
+        super().__init__()
+        self._items = []
+        self._espacio = espacio
+        self.setContentsMargins(0, 0, 0, 0)
+
+    def addItem(self, item):
+        self._items.append(item)
+
+    def count(self):
+        return len(self._items)
+
+    def itemAt(self, i):
+        return self._items[i] if 0 <= i < len(self._items) else None
+
+    def takeAt(self, i):
+        return self._items.pop(i) if 0 <= i < len(self._items) else None
+
+    def expandingDirections(self):
+        return Qt.Orientations(0)
+
+    def hasHeightForWidth(self):
+        return True
+
+    def heightForWidth(self, ancho):
+        return self._acomodar(QRect(0, 0, ancho, 0), probar=True)
+
+    def setGeometry(self, rect):
+        super().setGeometry(rect)
+        self._acomodar(rect, probar=False)
+
+    def sizeHint(self):
+        return self.minimumSize()
+
+    def minimumSize(self):
+        tam = QSize()
+        for item in self._items:
+            tam = tam.expandedTo(item.minimumSize())
+        return tam
+
+    def _acomodar(self, rect, probar):
+        x, y, alto_renglon = rect.x(), rect.y(), 0
+        for item in self._items:
+            hint = item.sizeHint()
+            if x + hint.width() > rect.right() + 1 and alto_renglon > 0:
+                x = rect.x()
+                y += alto_renglon + self._espacio
+                alto_renglon = 0
+            if not probar:
+                item.setGeometry(QRect(QPoint(x, y), hint))
+            x += hint.width() + self._espacio
+            alto_renglon = max(alto_renglon, hint.height())
+        return y + alto_renglon - rect.y()
 
 
 class _Tarea(QObject):
@@ -280,7 +369,7 @@ class PedidosWebView(QWidget):
 
         izq = QFrame()
         izq.setObjectName('pwLista')
-        izq.setMinimumWidth(300)
+        izq.setMinimumWidth(260)
         izq.setMaximumWidth(380)
         izq.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Expanding)
         izq.setStyleSheet(f"QFrame#pwLista {{ background:{_T['surface']}; border:1px solid {_T['border']};"
@@ -355,6 +444,13 @@ class PedidosWebView(QWidget):
         self._reloj_lista = QTimer(self)
         self._reloj_lista.timeout.connect(self._redibujar_lista)
         self._reloj_lista.start(60_000)
+
+        # Si el cliente sube el comprobante con el pedido abierto, la línea se
+        # actualiza sola: antes seguía diciendo "todavía no" hasta cambiar de
+        # pedido. Pregunta solo con la pestaña a la vista y mientras falte.
+        self._reloj_comprobante = QTimer(self)
+        self._reloj_comprobante.timeout.connect(self._revisar_comprobante_abierto)
+        self._reloj_comprobante.start(REVISAR_COMPROBANTE_S * 1000)
 
     # ══════════════════════════════════════════════════
     #  DATOS QUE LLEGAN
@@ -630,7 +726,10 @@ class PedidosWebView(QWidget):
         v.addLayout(top)
 
         mid = QHBoxLayout()
-        nombre = QLabel(str((p.get('cliente') or {}).get('nombre') or 'Sin nombre'))
+        completo = str((p.get('cliente') or {}).get('nombre') or 'Sin nombre')
+        # Un nombre largo quedaba pegado al total en pantallas chicas.
+        nombre = QLabel(completo if len(completo) <= 26 else completo[:25].rstrip() + '…')
+        nombre.setToolTip(completo)
         nombre.setStyleSheet(f"color:{_T['text']}; font-size:12px; font-weight:600; background:transparent; border:none;")
         mid.addWidget(nombre, 1)
         total = QLabel(pesos(p.get('total')))
@@ -757,6 +856,13 @@ class PedidosWebView(QWidget):
                 self._comprobantes[pid] = r
                 self._pintar_comprobante(pid)
         self._en_fondo(mirar, listo)
+
+    def _revisar_comprobante_abierto(self):
+        if not self.isVisible() or self._modal or not self._seleccion:
+            return
+        p = self._pedidos.get(self._seleccion)
+        if p and self._comprobantes.get(self._seleccion) != 'si':
+            self._consultar_comprobante(p)
 
     def _pintar_comprobante(self, pid):
         """Actualiza solo la línea del comprobante. Rearmar el detalle entero
@@ -952,8 +1058,10 @@ class PedidosWebView(QWidget):
             fila.addWidget(principal, 1)
         v.addLayout(fila)
 
-        otras = QHBoxLayout()
-        otras.setSpacing(8)
+        # Los botones comunes bajan de renglón si no entran (en 1024 px se
+        # salían de la pantalla); el de peligro va aparte, a la derecha.
+        otras = _RenglonQueBaja(espacio=8)
+        peligro = None
         if p.get('estado') in ('listo', 'en_camino'):
             b = self._boton('Entregado, cobrar después')
             b.setEnabled(not ocupado and self._nube is not None)
@@ -978,20 +1086,24 @@ class PedidosWebView(QWidget):
             comp.setEnabled(self._nube is not None)
             comp.clicked.connect(lambda _c, pid=pid: self._accion('comprobante', pid))
             otras.addWidget(comp)
-        otras.addStretch(1)
         if p.get('estado') in reglas.ESTADOS_EN_CURSO:
             cancelar = self._boton('Cancelar pedido', peligro=True)
             cancelar.setEnabled(not ocupado and not ajeno and self._nube is not None)
             cancelar.clicked.connect(lambda _c, pid=pid: self._accion('cancelar', pid))
-            otras.addWidget(cancelar)
+            peligro = cancelar
         elif (p.get('estado') == 'entregado' and not reglas.registrado_por_el_panel(p)
               and self.current_user.get('role') == 'admin'):
             anular = self._boton('Anular entrega', peligro=True)
             anular.setToolTip('Lo devolvieron o se marcó entregado por error: vuelve el stock y se cancela.')
             anular.setEnabled(not ocupado and not ajeno and self._nube is not None)
             anular.clicked.connect(lambda _c, pid=pid: self._accion('anular', pid))
-            otras.addWidget(anular)
-        v.addLayout(otras)
+            peligro = anular
+        abajo = QHBoxLayout()
+        abajo.setSpacing(8)
+        abajo.addLayout(otras, 1)
+        if peligro is not None:
+            abajo.addWidget(peligro, 0, Qt.AlignTop)
+        v.addLayout(abajo)
         return f
 
     def _boton_chico(self, texto, color=None, lleno=False):
@@ -1073,13 +1185,11 @@ class PedidosWebView(QWidget):
             medio = 'Paga en efectivo' + (' · el repartidor marcó que cobró' if pago.get('pagado') else '')
         else:
             medio = 'Paga con transferencia'
-        fila = QHBoxLayout()
-        fila.setSpacing(6)
+        fila = _RenglonQueBaja(espacio=6)
         if not reglas.es_envio(p):
             fila.addWidget(self._texto('Retira en el local', 13, peso=700, envolver=False))
             fila.addWidget(self._texto('·', 13, _T['text_dim'], envolver=False))
         fila.addWidget(self._texto(medio, 13, _T['text_muted'], envolver=False))
-        fila.addStretch(1)
         v.addLayout(fila)
         if pago.get('modo') == 'transferencia':
             # Lo primero que necesita saber la caja antes de entregar: antes
@@ -1136,27 +1246,39 @@ class PedidosWebView(QWidget):
             # Pedido del mostrador: ir tildando lo que ya está en la bolsa. Es de
             # esta PC y de este momento; no se guarda en la nube.
             listos = len([i for i in tildados if i < len(items)])
-            cab.addWidget(self._texto(
+            ayuda = self._texto(
                 'Tocá cada producto cuando lo guardes' if not listos
                 else ('Todo en la bolsa' if listos == len(items) else f'{listos} de {len(items)} en la bolsa'),
-                12, _T['success'] if listos == len(items) else _T['text_muted'], 600, envolver=False))
+                12, _T['success'] if listos == len(items) else _T['text_muted'], 600)
+            # Puede partirse en dos renglones: sin eso, en pantallas chicas
+            # ensanchaba la tarjeta y el detalle se salía por la derecha.
+            ayuda.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            cab.addWidget(ayuda, 1)
         v.addLayout(cab)
         for i, it in enumerate(items):
-            fila = QHBoxLayout()
-            fila.setSpacing(10)
             tilde = i in tildados
+            # Toda la fila se toca (en pantalla táctil un casillero chico no se
+            # acierta). El círculo se dibuja a mano: la tilde como letra salía
+            # torcida y el verde lleno desentonaba con el resto del POS.
+            renglon = QFrame()
+            renglon.setObjectName('pwItem')
+            renglon.setStyleSheet(
+                f"QFrame#pwItem {{ background:{_T['accent_soft'] if tilde else 'transparent'};"
+                " border:none; border-radius:6px; }"
+                + (f" QFrame#pwItem:hover {{ background:{_T['border_soft']}; }}" if armando and not tilde else ''))
+            fila = QHBoxLayout(renglon)
+            fila.setContentsMargins(6 if armando else 0, 4, 6 if armando else 0, 4)
+            fila.setSpacing(10)
             if armando:
-                marca = QPushButton('✓' if tilde else '')
-                marca.setCursor(Qt.PointingHandCursor)
-                marca.setToolTip('Ya está en la bolsa' if tilde else 'Marcar que ya está en la bolsa')
-                marca.setStyleSheet(
-                    f"QPushButton {{ background:{_T['success'] if tilde else _T['surface']}; color:white;"
-                    f" border:2px solid {_T['success'] if tilde else _T['border']}; border-radius:5px;"
-                    " min-width:20px; max-width:20px; min-height:20px; max-height:20px; padding:0;"
-                    " font-size:13px; font-weight:900; }"
-                    f" QPushButton:hover {{ border-color:{_T['success']}; }}")
-                marca.clicked.connect(lambda _c, pid=pid, i=i: self._tildar(pid, i))
-                fila.addWidget(marca, 0, Qt.AlignVCenter)
+                renglon.setCursor(Qt.PointingHandCursor)
+                renglon.setToolTip('Ya está en la bolsa: tocá para desmarcarlo' if tilde
+                                   else 'Tocá cuando lo guardes en la bolsa')
+                renglon.mousePressEvent = lambda _e, pid=pid, i=i: self._tildar(pid, i)
+                circulo = QLabel()
+                circulo.setPixmap(_icono_tilde(tilde, self.devicePixelRatioF()))
+                circulo.setFixedSize(22, 22)
+                circulo.setStyleSheet('background:transparent; border:none;')
+                fila.addWidget(circulo, 0, Qt.AlignVCenter)
             cant = (f"{reglas.num(it.get('cantidad')):.1f} m".replace('.', ',') if it.get('unidad') == 'metro'
                     else str(int(round(reglas.num(it.get('cantidad'))))))
             c = self._texto(cant, 14, _T['text_dim'] if tilde else _T['accent'], 800, mono=True, envolver=False)
@@ -1169,13 +1291,19 @@ class PedidosWebView(QWidget):
             if it.get('es_pack'):
                 extras.append(f"pack de {int(reglas.num(it.get('pack_contenido'), 1))}")
             nombre = self._texto(detalle + (f"  ·  {' · '.join(extras)}" if extras else ''), 14,
-                                 _T['text_dim'] if tilde else None, peso=600)
+                                 _T['text_muted'] if tilde else None, peso=600)
+            # Seleccionable, el texto se come el clic: la fila no se tildaba.
+            nombre.setTextInteractionFlags(Qt.NoTextInteraction)
             if tilde:
                 nombre.setStyleSheet(nombre.styleSheet() + ' text-decoration: line-through;')
             fila.addWidget(nombre, 1)
             sub = it.get('subtotal') if it.get('subtotal') is not None else reglas.num(it.get('precio')) * reglas.num(it.get('cantidad'))
-            fila.addWidget(self._texto(pesos(sub), 14, peso=700, mono=True, envolver=False), 0, Qt.AlignVCenter)
-            v.addLayout(fila)
+            precio = self._texto(pesos(sub), 14, _T['text_muted'] if tilde else None, peso=700, mono=True,
+                                 envolver=False)
+            precio.setTextInteractionFlags(Qt.NoTextInteraction)
+            c.setTextInteractionFlags(Qt.NoTextInteraction)
+            fila.addWidget(precio, 0, Qt.AlignVCenter)
+            v.addWidget(renglon)
 
         sep = QFrame()
         sep.setFrameShape(QFrame.HLine)
