@@ -81,6 +81,16 @@ export const ESTUDIO_VIGENCIA_DIAS = 7;
  *  comuniones no se encargan de una: se compra lo del mes que viene y el
  *  Centro de Compras lo vuelve a pedir cuando se va vendiendo. */
 export const HORIZONTE_LARGA = 30;
+/** Lo mínimo que conviene tener de un producto de la estación cuando todavía
+ *  no hay una temporada pasada con la que medirlo: uno en la góndola. Con
+ *  esto la lista trae sólo lo que está en cero, que es lo que de verdad hace
+ *  falta; inventar una cantidad más grande sería adivinar. */
+export const MINIMO_ESTACION_SIN_HISTORIA = 1;
+/** Cuánto puede pesar UN día de la temporada pasada al medir una estación:
+ *  como mucho lo mismo que todos los demás días juntos (y nunca menos de
+ *  esto). Un colegio que se llevó cincuenta guantes de una vez no es el ritmo
+ *  del invierno; un gorro suelto vendido una sola vez, sí cuenta entero. */
+export const PISO_DIA_ESTACION = 3;
 
 // ── El almanaque ─────────────────────────────────────────────────────────────
 // `cuando` dice en qué día cae:
@@ -427,6 +437,61 @@ export const TEMPORADAS = [
     ],
     pistas: { rubros: ['cotillon'], palabras: ['globo', 'gorro', 'guirnalda', 'serpentina', 'papel picado', 'bengala', 'vela', 'corneta', 'matasuegra', 'peluca', 'confeti'], colores: [], excluir: [...DE_OTRA_FECHA] },
   },
+
+  // ── Las estaciones ───────────────────────────────────────────────────────
+  // Pedido del dueño (07/10/2026): además de las fechas, Invierno y Verano.
+  // El catálogo ya las tiene separadas: subrubro INVIERNO (guantes, gorros,
+  // bufandas, cuellos) y VERANO (juegos de playa, antiparras, inflables,
+  // pilusos), más lo que quedó cargado en subrubros sueltos (PARAGUAS,
+  // CHALINA, PILUSO, GORRA, LANA).
+  //
+  // Son épocas largas (`larga`) que además son `estacion`: no se miden contra
+  // el resto del año —todo el invierno contra el resto no separa nada— sino
+  // con lo que cada producto vendió LA TEMPORADA PASADA (`estudio.estaciones`).
+  // Eso es lo que permite recomendar "si hace falta y si no no": si el
+  // invierno pasado se vendieron 12 guantes y hay 3, faltan; si hay 15, no.
+  {
+    id: 'invierno', nombre: 'Invierno', larga: true, estacion: true, icono: 'ac_unit',
+    cuando: { mes: 6, dia: 1 }, previa: 0, post: 91, aviso: 60,
+    ideas: [
+      { que: 'termos', buscar: ['termo'] },
+      { que: 'bolsas de agua caliente', buscar: ['bolsa', 'agua', 'caliente'] },
+      { que: 'agujas de tejer', buscar: ['aguja', 'tejer'] },
+      { que: 'medias térmicas', buscar: ['media', 'termica'] },
+    ],
+    pistas: {
+      rubros: [],
+      palabras: ['invierno', 'bufanda', 'bufamanta', 'bufandon', 'chalina', 'pashmina', 'guante', 'guantes',
+        'orejera', 'polaina', 'polainas', 'pasamontanas', 'cuello polar', 'cuello tejido', 'gorro tejido',
+        'gorro polar', 'paraguas', 'paragua', 'piloto lluvia', 'piloto', 'lana'],
+      colores: [],
+      // Los guantes blancos de algodón son de los actos, el de arquero es de
+      // fútbol y la "lana de acero" es la virulana: medido contra el catálogo
+      // real (07/10/2026), los tres entraban por la palabra.
+      excluir: [...DE_OTRA_FECHA, 'algodon', 'arquero', 'futbol', 'acero', 'virulana', 'cotillon'],
+    },
+    nota: 'De junio a agosto: guantes, gorros, bufandas, cuellos, paraguas y lana.',
+  },
+  {
+    id: 'verano', nombre: 'Verano', larga: true, estacion: true, icono: 'wb_sunny',
+    cuando: { mes: 12, dia: 1 }, previa: 0, post: 89, aviso: 60,
+    ideas: [
+      { que: 'pelotas de playa', buscar: ['pelota', 'playa'] },
+      { que: 'protector solar', buscar: ['protector', 'solar'] },
+      { que: 'repelente', buscar: ['repelente'] },
+      { que: 'ojotas', buscar: ['ojota'] },
+    ],
+    pistas: {
+      rubros: [],
+      palabras: ['verano', 'antiparra', 'inflable', 'inflables', 'flota flota', 'juego de playa', 'regadera',
+        'pistola agua', 'pistola de agua', 'piluso', 'gorra', 'gorrita', 'abanico', 'abanicos',
+        'anteojos de sol', 'lentes de sol', 'aros buceo', 'bracitos', 'colchoneta', 'pelota de playa',
+        'protector solar', 'ojota', 'ojotas', 'sombrilla', 'burbujero'],
+      colores: [],
+      excluir: [...DE_OTRA_FECHA],
+    },
+    nota: 'De diciembre a febrero: juegos de playa, antiparras, inflables, pilusos, gorras y abanicos.',
+  },
 ];
 
 const POR_ID = new Map(TEMPORADAS.map(t => [t.id, t]));
@@ -474,7 +539,10 @@ export function temporadasProximas(hoyYmd, { avisoDias = null, temporadas = TEMP
   const anio = Number(hoy.slice(0, 4));
   const out = [];
   for (const t of temporadas) {
-    for (const y of [anio, anio + 1]) {
+    // Una época larga puede venir del año anterior: el verano que arrancó el 1
+    // de diciembre sigue en curso en enero y febrero.
+    const anios = t.larga ? [anio - 1, anio, anio + 1] : [anio, anio + 1];
+    for (const y of anios) {
       const v = ventanaDeTemporada(t, y);
       if (!v) continue;
       if (v.hasta < hoy) continue;               // ya pasó: no hay nada que comprar
@@ -495,6 +563,7 @@ export function temporadasProximas(hoyYmd, { avisoDias = null, temporadas = TEMP
         enVenta: hoy >= v.desde && hoy <= v.hasta,
         plazoAviso: plazo,
         larga: !!t.larga,
+        ...(t.estacion ? { estacion: true } : {}),
         // Lo que le queda a la ventana desde hoy (o desde que arranque).
         diasRestan: diasEntre(hoy > v.desde ? hoy : v.desde, v.hasta) + 1,
         // El día que la representa en pantalla: con el que se ordena, se pinta
@@ -545,6 +614,7 @@ function _datosDeFecha(proxima) {
     id: proxima?.id, nombre: proxima?.nombre, fecha: proxima?.fecha,
     diasFaltan: proxima?.diasFaltan,
     ...(proxima?.larga ? { larga: true, hasta: proxima.hasta, diasCompra: diasDeCompra(proxima) } : {}),
+    ...(proxima?.estacion ? { estacion: true } : {}),
   };
 }
 
@@ -843,7 +913,79 @@ export function estudiarTemporadas(items, {
   // `grupos` son TODAS las fechas que se miraron, hayan dado algo o no: es lo
   // que permite saber, cuando el almanaque suma una fecha, que el estudio
   // guardado todavía no la conoce.
-  return { desde, hasta, dias: diasTotales, anios, grupos, temporadas: out };
+  const estaciones = _estudiarEstaciones(filas, { temporadas, desde, hasta, catalogoPorNombre, topeProductos });
+  return {
+    desde, hasta, dias: diasTotales, anios, grupos, temporadas: out,
+    ...(Object.keys(estaciones).length ? { estaciones } : {}),
+  };
+}
+
+/**
+ * Lo que vendió cada producto de la estación la ÚLTIMA temporada entera.
+ *
+ * Solo cuenta una temporada que las ventas cubren de punta a punta: medio
+ * invierno daría la mitad de lo que hace falta. Y solo los productos que son
+ * de la estación (por las mismas pistas con las que se los reconoce): todo lo
+ * vendido de junio a agosto no entra en un documento y no sirve.
+ *
+ * Por producto queda `{ n, c, u, d }`: nombre, variedad, unidades y días con
+ * venta. Un día suelto no puede pesar más que todos los demás juntos (ver
+ * `PISO_DIA_ESTACION`).
+ */
+function _estudiarEstaciones(filas, { temporadas, desde, hasta, catalogoPorNombre, topeProductos }) {
+  const out = {};
+  if (!desde || !hasta) return out;
+  const anioMax = Number(hasta.slice(0, 4));
+  const anioMin = Number(desde.slice(0, 4)) - 1;
+  for (const t of temporadas) {
+    if (!t.estacion) continue;
+    // La más reciente que entra entera en lo que hay registrado.
+    let v = null, anio = 0;
+    for (let y = anioMax; y >= anioMin; y--) {
+      const w = ventanaDeTemporada(t, y);
+      if (w && w.desde >= desde && w.hasta <= hasta) { v = w; anio = y; break; }
+    }
+    if (!v) continue;
+
+    const esDeLaEstacion = new Map();   // "nombre||color" → bool, para no repetir la cuenta
+    const porClave = new Map();         // clave → { n, c, u, d: Map(dia → uds) }
+    for (const f of filas) {
+      if (f.dia < v.desde || f.dia > v.hasta) continue;
+      const clave = claveProducto(f.nombre, f.color);
+      let es = esDeLaEstacion.get(clave);
+      if (es === undefined) {
+        const prod = catalogoPorNombre ? catalogoPorNombre.get(f.nombre) : null;
+        es = coincidePorPista(t, {
+          nombre: prod?.nombre || f.nombre, color: f.color,
+          rubro: prod?.rubro || '', subRubro: prod?.sub_rubro || '',
+        });
+        esDeLaEstacion.set(clave, es);
+      }
+      if (!es) continue;
+      const e = porClave.get(clave);
+      if (e) { e.u += f.uds; e.d.set(f.dia, (e.d.get(f.dia) || 0) + f.uds); }
+      else porClave.set(clave, { n: f.nombre, c: f.color, u: f.uds, d: new Map([[f.dia, f.uds]]) });
+    }
+
+    const productos = [];
+    for (const e of porClave.values()) {
+      let mayor = 0;
+      for (const x of e.d.values()) if (x > mayor) mayor = x;
+      const resto = e.u - mayor;
+      const u = resto + Math.min(mayor, Math.max(PISO_DIA_ESTACION, resto));
+      if (!(u > 0)) continue;
+      productos.push({ n: e.n, c: e.c || '', u: Math.round(u * 100) / 100, d: e.d.size });
+    }
+    productos.sort((a, b) => b.u - a.u || b.d - a.d);
+    out[t.id] = {
+      anio,
+      desde: v.desde,
+      hasta: v.hasta,
+      dias: diasEntre(v.desde, v.hasta) + 1,
+      productos: productos.slice(0, topeProductos),
+    };
+  }
+  return out;
 }
 
 /**
@@ -1026,6 +1168,108 @@ export function recomendarPorPistas(proxima, {
 }
 
 /**
+ * Lo que conviene comprar para el invierno o el verano.
+ *
+ * Distinto de las fechas: no hay "empuje" que medir. Lo que manda es cuánto
+ * se vendió de cada producto LA TEMPORADA PASADA, llevado a los días que se
+ * compran ahora (`diasDeCompra`, un mes). De ahí, tres casos, del más firme al
+ * más flojo, y cada recomendación dice de cuál salió (`estacion.fuente`):
+ *
+ *   'pasada'  la temporada pasada está medida y el producto se vendió;
+ *   'ritmo'   no hay temporada pasada (o el producto es nuevo), pero se está
+ *             vendiendo: se proyecta lo de hoy, doble si la estación todavía
+ *             no arrancó, igual que una corazonada;
+ *   'exhibir' no hay ninguna de las dos: alcanza con tener uno a la vista
+ *             (`MINIMO_ESTACION_SIN_HISTORIA`), así que entra sólo lo que está
+ *             en cero.
+ *
+ * Si la temporada pasada está medida y el producto NO se vendió, no entra: es
+ * lo que pidió el dueño, que recomiende "si hace falta y si no no". Lo que él
+ * sumó a mano (`sumados`) entra siempre a la cuenta.
+ *
+ * `candidatos`: `{ nombre, color, rubro, subRubro, stock, velDia, docId,
+ * producto }` de TODO el catálogo, se venda o no (el verano se compra en
+ * octubre, cuando las antiparras no se venden).
+ */
+export function recomendarPorEstacion(proxima, {
+  candidatos = [],
+  estudio = null,
+  sumados = null,
+  minUrgencia = 1,
+  tope = 30,
+} = {}) {
+  const temp = temporadaPorId(proxima?.id);
+  if (!temp?.estacion) return [];
+  const dias = diasDeCompra(proxima);
+  const medida = estudio?.estaciones?.[temp.id] || null;
+  const diasPasada = Math.max(1, Number(medida?.dias) || 1);
+  const pasada = new Map((medida?.productos || []).map(p => [claveProducto(p.n, p.c), p]));
+  const aMano = sumados || {};
+  // Cuánto pesa cada fuente en la urgencia. Lo medido la temporada pasada es
+  // un dato del mostrador y va al tope; el ritmo de hoy, a la mitad; tener uno
+  // a la vista es una corazonada y pesa como tal.
+  const PESO = { pasada: EMPUJE_TOPE, ritmo: 5.5, exhibir: EMPUJE_MINIMO };
+  const out = [];
+  for (const c of candidatos) {
+    const clave = claveProducto(c.nombre, c.color);
+    const sumado = !!aMano[clave];
+    if (!sumado && !coincidePorPista(temp, c)) continue;
+    const stock = Math.max(0, Number(c.stock) || 0);
+    const velDia = Math.max(0, Number(c.velDia) || 0);
+    const vendido = pasada.get(clave);
+    let fuente, esperado;
+    if (vendido) {
+      fuente = 'pasada';
+      esperado = (Number(vendido.u) || 0) / diasPasada * dias;
+    } else if (velDia > 0) {
+      fuente = 'ritmo';
+      esperado = velDia * dias * (proxima.enVenta ? 1 : EMPUJE_MINIMO);
+    } else if (medida && !sumado) {
+      continue;   // la temporada pasada no se vendió: no hace falta
+    } else {
+      fuente = 'exhibir';
+      esperado = MINIMO_ESTACION_SIN_HISTORIA;
+    }
+    const urgencia = urgenciaDeTemporada({
+      empuje: PESO[fuente],
+      esperado, stock,
+      diasFaltan: proxima.diasFaltan,
+      plazoAviso: proxima.plazoAviso,
+      porPista: fuente === 'exhibir',
+    });
+    if (urgencia < minUrgencia) continue;
+    out.push({
+      clave,
+      nombre: c.nombre,
+      color: c.color || '',
+      docId: c.docId,
+      producto: c.producto || null,
+      stock,
+      esperado,
+      empuje: 0,
+      faltan: Math.max(0, esperado - stock),
+      urgencia,
+      porPista: fuente === 'exhibir',
+      // Cargado en el subrubro de la estación (INVIERNO, VERANO): es lo más
+      // seguro de lo que entra por pista y va primero.
+      ...(normTxt(c.subRubro).includes(temp.id) ? { propio: true } : {}),
+      estacion: {
+        fuente,
+        ...(vendido ? { vendidas: Number(vendido.u) || 0, anio: medida.anio } : {}),
+        ...(fuente === 'ritmo' ? { velDia } : {}),
+      },
+      temporada: _datosDeFecha(proxima),
+    });
+  }
+  const orden = { pasada: 0, ritmo: 1, exhibir: 2 };
+  out.sort((a, b) => orden[a.estacion.fuente] - orden[b.estacion.fuente]
+    || b.urgencia - a.urgencia || b.faltan - a.faltan
+    || (b.propio === true) - (a.propio === true)
+    || String(a.nombre).localeCompare(String(b.nombre), 'es'));
+  return out.slice(0, tope);
+}
+
+/**
  * Cuánta urgencia tiene comprar algo por la época: 0–100.
  *
  * Tres cosas la mueven:
@@ -1145,6 +1389,15 @@ export function motivoTemporada(rec, { conFecha = true } = {}) {
   // Lo que el dueño sumó a mano no tiene cuenta que mostrar: decir "se vende 0
   // veces más que el resto del año" es peor que no decir nada.
   if (rec.porMano) return conFecha ? `lo sumaste vos a ${donde}` : 'lo sumaste vos a esta fecha';
+  if (rec.estacion) {
+    const est = rec.estacion;
+    const de = conFecha ? ` (${t.nombre}, ${cuando})` : '';
+    if (est.fuente === 'pasada') {
+      return `el ${normTxt(t.nombre)} pasado se vendieron ${_veces(est.vendidas)}${de}`;
+    }
+    if (est.fuente === 'ritmo') return `es de la temporada y se está vendiendo${de}`;
+    return `es de la temporada y no hay stock${de}`;
+  }
   if (rec.porPista) return `suele venderse para ${donde}`;
   const e = Number(rec.empuje) || 0;
   const veces = e >= EMPUJE_TOPE ? 'casi solo se vende en esta fecha'
@@ -1171,6 +1424,24 @@ export function explicarTemporada(rec) {
   if (rec.porMano) {
     lineas.push('· Lo sumaste vos a esta fecha');
     lineas.push('· No sale de tus ventas: está acá porque lo pediste');
+  } else if (rec.estacion) {
+    const est = rec.estacion;
+    const temporada = normTxt(t.nombre);
+    if (est.fuente === 'pasada') {
+      lineas.push(`· En el ${temporada} ${est.anio ? `de ${est.anio}` : 'pasado'} se vendieron ${n(est.vendidas)}`);
+    } else if (est.fuente === 'ritmo') {
+      lineas.push(`· No hay un ${temporada} anterior para medirlo: la cuenta sale de lo que vende hoy`);
+    } else {
+      lineas.push(`· No hay un ${temporada} anterior ni ventas de este mes para medirlo`);
+      lineas.push('· Te lo marco porque está en cero: conviene tener al menos uno a la vista');
+    }
+    if (est.fuente !== 'exhibir') lineas.push(`· Para los próximos ${t.diasCompra} días harían falta ${n(rec.esperado)}`);
+    lineas.push(`· Stock de hoy: ${n(rec.stock)}`);
+    if (rec.faltan > 0) lineas.push(`· Faltarían ${n(rec.faltan)}`);
+    lineas.push(est.fuente === 'pasada'
+      ? 'Sale de tus propias ventas de la temporada pasada.'
+      : 'Revisalo antes de comprar: todavía no hay una temporada entera para medirlo.');
+    return lineas.join('\n');
   } else if (rec.porPista && t.larga) {
     lineas.push('· Una época de meses no se puede medir contra el resto del año');
     lineas.push(`· Entra por el tipo de producto; la cantidad sale de lo que vende hoy`);

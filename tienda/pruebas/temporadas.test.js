@@ -22,7 +22,7 @@ import {
   fechaDeTemporada, ventanaDeTemporada, temporadasProximas,
   estudiarTemporadas, recomendarParaTemporada, recomendarPorPistas,
   coincidePorPista, urgenciaDeTemporada, motivoTemporada, explicarTemporada,
-  estudioVigente, claveProducto, normTxt, aplicarAjustes, motivoParaRehacer,
+  estudioVigente, claveProducto, normTxt, aplicarAjustes, motivoParaRehacer, recomendarPorEstacion,
   EMPUJE_MINIMO, AVISO_DEFAULT_DIAS, HORIZONTE_LARGA, cuandoEs, diasDeCompra,
 } from '../../webapp/src/temporadas.js';
 import { pascua, domingoN, diasEntre, sumarDiasYmd, deYmd } from '../../webapp/src/fechas_ar.js';
@@ -800,5 +800,143 @@ describe('cuándo se rehace el estudio solo', () => {
   it('el estudio guarda todas las fechas que miró, dieran algo o no', () => {
     const est = estudiarTemporadas([venta('2026-05-04', 'CUADERNO', 1)], { aYmd });
     expect(est.grupos).toEqual(todas);
+  });
+});
+
+// ── Invierno y Verano ─────────────────────────────────────────────────────────
+// Pedido del 07/10/2026: las estaciones como épocas largas, medidas con lo que
+// cada producto vendió la temporada pasada, para recomendar "si hace falta y si
+// no no".
+describe('estaciones: invierno y verano', () => {
+  const cand = (nombre, extra = {}) => ({
+    nombre, color: '', rubro: 'ACCESORIOS', subRubro: '', stock: 0, velDia: 0, docId: nombre, ...extra,
+  });
+
+  it('están en el almanaque como épocas largas de tres meses', () => {
+    const inv = temporadaPorId('invierno');
+    const ver = temporadaPorId('verano');
+    expect(inv.larga && inv.estacion).toBe(true);
+    expect(ver.larga && ver.estacion).toBe(true);
+    expect(ventanaDeTemporada(inv, 2027)).toMatchObject({ desde: '2027-06-01', hasta: '2027-08-31' });
+    expect(ventanaDeTemporada(ver, 2026)).toMatchObject({ desde: '2026-12-01', hasta: '2027-02-28' });
+  });
+
+  it('en enero el verano que arrancó en diciembre sigue en curso', () => {
+    const v = temporadasProximas('2027-01-15').find(x => x.id === 'verano');
+    expect(v).toBeTruthy();
+    expect(v.enVenta).toBe(true);
+    expect(v.estacion).toBe(true);
+    expect(v.desde).toBe('2026-12-01');
+    expect(cuandoEs(v)).toBe('hasta el 28 de febrero');
+  });
+
+  it('el fin de año no reaparece en enero por mirar el año anterior', () => {
+    expect(temporadasProximas('2027-01-01').some(x => x.id === 'fin_anio' && x.anio === 2026)).toBe(false);
+  });
+
+  it('avisa a dos meses: el 7 de octubre el verano está a 55 días', () => {
+    const v = temporadasProximas('2026-10-07').find(x => x.id === 'verano');
+    expect(v.diasFaltan).toBe(55);
+    expect(v.enVenta).toBe(false);
+    expect(temporadasProximas('2026-10-07').some(x => x.id === 'invierno')).toBe(false);
+  });
+
+  it('se reconocen por el subrubro y por lo que son, no por cualquier palabra', () => {
+    const inv = temporadaPorId('invierno');
+    expect(coincidePorPista(inv, { nombre: 'GORRO CON RAYAS', subRubro: 'INVIERNO' })).toBe(true);
+    expect(coincidePorPista(inv, { nombre: 'BUFANDA POLAR LISA' })).toBe(true);
+    expect(coincidePorPista(inv, { nombre: 'LANA CIRCULO MOLLET X 40GRS', subRubro: 'LANA' })).toBe(true);
+    // Medidos contra el catálogo real: entraban por la palabra y no son del invierno.
+    expect(coincidePorPista(inv, { nombre: 'GUANTES ALGODON BLANCO NIÑO X PAR', subRubro: 'GUANTES' })).toBe(false);
+    expect(coincidePorPista(inv, { nombre: 'GUANTES FUTBOL ARQUERO BELGRANO', subRubro: 'DEPORTES' })).toBe(false);
+    const ver = temporadaPorId('verano');
+    expect(coincidePorPista(ver, { nombre: 'JUEGO DE PLAYA DURAVIT 522', subRubro: 'VERANO' })).toBe(true);
+    expect(coincidePorPista(ver, { nombre: 'PILUSO LA CHAPELLE', subRubro: 'PILUSO' })).toBe(true);
+    expect(coincidePorPista(ver, { nombre: 'PISTOLA SILICONA CBX GRANDE', subRubro: 'PISTOLA SILICONA' })).toBe(false);
+  });
+
+  it('el estudio guarda lo que vendió cada producto la última temporada entera', () => {
+    const items = [
+      ...repartido(['2026-04-20', '2026-09-30'], 'CUADERNO RIVADAVIA', 2),
+      ...repartido(['2026-06-03', '2026-06-20', '2026-07-08', '2026-08-15'], 'BUFANDA POLAR LISA', 2),
+      venta('2026-07-01', 'GUANTE HOMBRE 17011', 1),
+      // Un colegio que se llevó 40 de una: no es el ritmo del invierno.
+      venta('2026-07-02', 'CUELLO POLAR CON AJUSTE', 40),
+      venta('2026-07-20', 'CUELLO POLAR CON AJUSTE', 1),
+    ];
+    const est = estudiarTemporadas(items, { aYmd });
+    const inv = est.estaciones?.invierno;
+    expect(inv).toMatchObject({ anio: 2026, desde: '2026-06-01', hasta: '2026-08-31', dias: 92 });
+    const por = Object.fromEntries(inv.productos.map(p => [p.n, p.u]));
+    expect(por['bufanda polar lisa']).toBe(8);
+    expect(por['guante hombre 17011']).toBe(1);       // una venta suelta cuenta entera
+    expect(por['cuello polar con ajuste']).toBe(4);   // el día grande pesa como mucho 3
+    expect(por['cuaderno rivadavia']).toBeUndefined(); // no es de la estación
+    // Del verano no hay una temporada entera registrada: no se inventa.
+    expect(est.estaciones?.verano).toBeUndefined();
+  });
+
+  it('una temporada a medias no se mide', () => {
+    const est = estudiarTemporadas(repartido(['2026-07-01', '2026-07-10', '2026-09-01'], 'BUFANDA POLAR LISA', 2), { aYmd });
+    expect(est.estaciones?.invierno).toBeUndefined();
+  });
+
+  it('con la temporada pasada medida: recomienda lo que falta y nada más', () => {
+    const prox = temporadasProximas('2027-04-15').find(x => x.id === 'invierno');
+    const estudio = { estaciones: { invierno: { anio: 2026, dias: 92, productos: [
+      { n: 'bufanda polar lisa', c: '', u: 92, d: 20 },
+      { n: 'gorro con rayas', c: '', u: 9.2, d: 6 },
+    ] } } };
+    const recs = recomendarPorEstacion(prox, {
+      estudio,
+      candidatos: [
+        cand('BUFANDA POLAR LISA', { stock: 10, subRubro: 'INVIERNO' }),   // hacen falta 30: faltan 20
+        cand('GORRO CON RAYAS', { stock: 10, subRubro: 'INVIERNO' }),      // hacen falta 3: sobra
+        cand('GUANTES SKORA', { stock: 0, subRubro: 'INVIERNO' }),         // no se vendió el invierno pasado
+      ],
+    });
+    expect(recs.map(r => r.nombre)).toEqual(['BUFANDA POLAR LISA']);
+    expect(recs[0].esperado).toBeCloseTo(30, 5);
+    expect(recs[0].faltan).toBeCloseTo(20, 5);
+    expect(recs[0].estacion).toMatchObject({ fuente: 'pasada', vendidas: 92, anio: 2026 });
+    expect(motivoTemporada(recs[0], { conFecha: false })).toBe('el invierno pasado se vendieron 92');
+    expect(explicarTemporada(recs[0])).toContain('En el invierno de 2026 se vendieron 92');
+  });
+
+  it('lo que el dueño sumó a mano entra aunque no sea de la estación por el nombre', () => {
+    const prox = temporadasProximas('2027-04-15').find(x => x.id === 'invierno');
+    const estudio = { estaciones: { invierno: { anio: 2026, dias: 92, productos: [] } } };
+    const recs = recomendarPorEstacion(prox, {
+      estudio,
+      candidatos: [cand('TERMO SKORA 1000ML', { stock: 0 })],
+      sumados: { [claveProducto('TERMO SKORA 1000ML', '')]: { n: 'termo skora 1000ml', c: '' } },
+    });
+    expect(recs).toHaveLength(1);
+    expect(recs[0].estacion.fuente).toBe('exhibir');
+  });
+
+  it('sin temporada pasada: lo que se vende va por el ritmo y lo que no, sólo si está en cero', () => {
+    const prox = temporadasProximas('2026-10-07').find(x => x.id === 'verano');
+    const recs = recomendarPorEstacion(prox, {
+      candidatos: [
+        cand('PILUSO LA CHAPELLE', { stock: 1, velDia: 0.2, subRubro: 'PILUSO' }),
+        cand('ANTIPARRA BESTWAY', { stock: 0, subRubro: 'VERANO' }),
+        cand('FLOTA FLOTA', { stock: 9, subRubro: 'VERANO' }),          // tiene: no hace falta
+        cand('CUADERNO RIVADAVIA', { stock: 0, velDia: 3 }),             // no es de la estación
+      ],
+    });
+    expect(recs.map(r => r.nombre)).toEqual(['PILUSO LA CHAPELLE', 'ANTIPARRA BESTWAY']);
+    // El verano todavía no arrancó: lo de hoy se proyecta doble, como cualquier corazonada.
+    expect(recs[0].estacion.fuente).toBe('ritmo');
+    expect(recs[0].esperado).toBeCloseTo(0.2 * 30 * EMPUJE_MINIMO, 5);
+    expect(recs[1].estacion.fuente).toBe('exhibir');
+    expect(recs[1].faltan).toBe(1);
+    expect(recs[1].porPista).toBe(true);
+    expect(motivoTemporada(recs[1], { conFecha: false })).toBe('es de la temporada y no hay stock');
+  });
+
+  it('una fecha que no es estación no pasa por acá', () => {
+    const prox = temporadasProximas('2026-10-07').find(x => x.id === 'dia_madre');
+    expect(recomendarPorEstacion(prox, { candidatos: [cand('BUFANDA POLAR LISA')] })).toEqual([]);
   });
 });

@@ -17,8 +17,8 @@ import {
 } from './config.js';
 import {
   TEMPORADAS, estudiarTemporadas, temporadasProximas, recomendarParaTemporada,
-  recomendarPorPistas, claveProducto, normTxt, estudioVigente, temporadaPorId, tienePalabra,
-  aplicarAjustes, ajustesDeFecha, motivoParaRehacer,
+  recomendarPorPistas, recomendarPorEstacion, claveProducto, normTxt, estudioVigente, temporadaPorId,
+  tienePalabra, aplicarAjustes, ajustesDeFecha, motivoParaRehacer,
 } from './temporadas.js';
 import { ritmoDe } from './urgencia_compra.js';
 import { esServicio, esIlimitado } from './notifications.js';
@@ -212,12 +212,43 @@ export function recomendacionesDeTemporada({
     return candidatos;
   };
 
+  // Para el invierno y el verano entra TODO el catálogo, se venda hoy o no:
+  // las antiparras se encargan en octubre, cuando no las compra nadie.
+  let candidatosEstacion = null;
+  const armarCandidatosEstacion = () => {
+    if (candidatosEstacion) return candidatosEstacion;
+    candidatosEstacion = [];
+    for (const [, info] of idx) {
+      const p = info.producto;
+      const nombre = normTxt(p?.nombre);
+      if (!nombre) continue;
+      if (!info.color && Array.isArray(p?.conjunto_colores) && p.conjunto_colores.length) continue;
+      const r = ventanas ? ritmoDe(ventanas, { nombre, color: info.color, docId: info.docId }) : null;
+      candidatosEstacion.push({
+        nombre: p?.nombre || nombre,
+        color: info.color,
+        rubro: p?.rubro || '',
+        subRubro: p?.sub_rubro || '',
+        stock: info.stock,
+        velDia: r?.velDia || 0,
+        docId: info.docId,
+        producto: p,
+      });
+    }
+    return candidatosEstacion;
+  };
+
   const mejorPorClave = new Map();
   for (const prox of proximas) {
     const medido = !!medidoDe(estudio, prox);
-    const calculadas = medido
-      ? recomendarParaTemporada(prox, estudio, { stockDe, tope: topePorFecha })
-      : recomendarPorPistas(prox, { candidatos: armarCandidatos(), tope: topePorFecha });
+    const calculadas = prox.estacion
+      ? recomendarPorEstacion(prox, {
+          candidatos: armarCandidatosEstacion(), estudio,
+          sumados: ajustesDeFecha(ajustes, prox.id).suma, tope: topePorFecha,
+        })
+      : medido
+        ? recomendarParaTemporada(prox, estudio, { stockDe, tope: topePorFecha })
+        : recomendarPorPistas(prox, { candidatos: armarCandidatos(), tope: topePorFecha });
     // Lo que el dueño corrigió a mano manda sobre lo calculado.
     const recs = aplicarAjustes(calculadas, ajustes, prox, { stockDe });
     for (const r of recs) {
@@ -226,7 +257,7 @@ export function recomendacionesDeTemporada({
     }
   }
   return {
-    proximas: proximas.map(p => ({ ...p, medida: !!medidoDe(estudio, p) })),
+    proximas: proximas.map(p => ({ ...p, medida: estadoDeFecha(estudio, p).medida })),
     recomendaciones: [...mejorPorClave.values()].sort((a, b) => b.urgencia - a.urgencia),
   };
 }
@@ -259,6 +290,13 @@ export function medidoDe(estudio, temp) {
 }
 
 export function estadoDeFecha(estudio, temp) {
+  // Una estación se mide aparte: con lo que vendió cada producto la temporada
+  // pasada entera (`estudio.estaciones`).
+  if (temp?.estacion || temporadaPorId(temp?.id)?.estacion) {
+    const est = estudio?.estaciones?.[temp.id];
+    if (!est) return { medida: false, veces: 0, productos: 0 };
+    return { medida: true, veces: 1, productos: (est.productos || []).length, estacion: { anio: est.anio } };
+  }
   const datos = medidoDe(estudio, temp);
   if (!datos) return { medida: false, veces: 0, productos: 0 };
   return {
