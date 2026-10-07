@@ -46,6 +46,18 @@ COLOR_WHATSAPP = '#1f7a45'
 
 FILTROS = [('hacer', 'A hacer'), ('cobrar', 'A cobrar'), ('hechos', 'Entregados')]
 
+# Desde qué ancho del detalle los productos y el cliente van uno al lado del
+# otro: en 1920 todo apilado dejaba el precio a 1.400 px del producto.
+ANCHO_DOS_COLUMNAS = 1000
+
+# Cada cuánto se vuelve a preguntar si el cliente subió el comprobante, como
+# mucho, al mirar un pedido por transferencia que todavía no lo tiene.
+REVISAR_COMPROBANTE_S = 30
+
+# Estados en los que se está armando el pedido: ahí se puede ir tildando cada
+# producto a medida que entra a la bolsa.
+ESTADOS_PARA_ARMAR = ('nuevo', 'preparando', 'listo')
+
 # Cada cuánto se revisan los cobros que esta PC dejó a medias.
 REVISION_COBROS_MS = 60_000
 
@@ -192,6 +204,11 @@ class PedidosWebView(QWidget):
         self._firma_lista = None
         self._firma_detalle = None
         self._whatsapp_app = None
+        self._comprobantes = {}          # pid → 'si' | 'no' (lo que se sabe del comprobante)
+        self._comprobante_mirado = {}    # pid → time.time() de la última consulta
+        self._tildados = {}              # pid → índices de los productos ya guardados en la bolsa
+        self._dos_columnas = None
+        self._comp_lbl = None             # (pid, QLabel) de la línea del comprobante a la vista
         self._build_ui()
         self._redibujar()
 
@@ -461,7 +478,9 @@ class PedidosWebView(QWidget):
     def _firma_de_detalle(self):
         p = self._pedidos.get(self._seleccion) if self._seleccion else None
         return (self._firma_comun(), self._seleccion, self._sin_renovacion(p), bool(self._pedidos),
-                self._seleccion in self._ocupados, self._seleccion in self._cobrando)
+                self._seleccion in self._ocupados, self._seleccion in self._cobrando,
+                tuple(sorted(self._tildados.get(self._seleccion, ()))),
+                self._es_ancho())
 
     def showEvent(self, event):
         super().showEvent(event)
@@ -470,7 +489,15 @@ class PedidosWebView(QWidget):
 
     def resizeEvent(self, event):
         super().resizeEvent(event)
+        if self._dos_columnas is not None and self._es_ancho() != self._dos_columnas:
+            QTimer.singleShot(0, self._redibujar)
         QTimer.singleShot(0, self._ajustar_alto_detalle)
+
+    def _es_ancho(self):
+        try:
+            return self.detalle_scroll.viewport().width() >= ANCHO_DOS_COLUMNAS
+        except (AttributeError, RuntimeError):
+            return False
 
     def _ajustar_alto_detalle(self):
         """El área con scroll no respeta el alto que piden los textos de varias
@@ -639,8 +666,11 @@ class PedidosWebView(QWidget):
 
     def _pastilla(self, texto, color):
         l = QLabel(texto)
-        l.setStyleSheet(f"color:white; background:{color}; border-radius:8px; padding:1px 7px;"
-                        " font-size:10px; font-weight:800;")
+        # Con un radio mayor que la mitad del alto, Qt no redondea nada: en el
+        # encabezado salía cuadrada y en la lista redonda.
+        l.setStyleSheet(f"color:white; background:{color}; border-radius:5px; padding:2px 8px;"
+                        " font-size:10px; font-weight:800; letter-spacing:0.5px;")
+        l.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Fixed)
         return l
 
     def _seleccionar(self, pedido_id):
@@ -684,10 +714,72 @@ class PedidosWebView(QWidget):
         # al entregar (pedido del 07/10/2026).
         self.detalle_v.addWidget(self._tarjeta_encabezado(p, self._avisos_del_pedido(p)))
         self.detalle_v.addWidget(self._tarjeta_acciones(p))
-        self.detalle_v.addWidget(self._tarjeta_renglones(p))
-        self.detalle_v.addWidget(self._tarjeta_cliente(p))
+        # En pantalla ancha, productos y cliente uno al lado del otro: apilados
+        # a 1920 px el precio quedaba lejísimos del producto y sobraba media
+        # pantalla abajo. En una pantalla chica, uno debajo del otro.
+        self._dos_columnas = self._es_ancho()
+        if self._dos_columnas:
+            fila = QWidget()
+            fila.setStyleSheet('background:transparent;')
+            h = QHBoxLayout(fila)
+            h.setContentsMargins(0, 0, 0, 0)
+            h.setSpacing(10)
+            h.addWidget(self._tarjeta_renglones(p), 3, Qt.AlignTop)
+            h.addWidget(self._tarjeta_cliente(p), 2, Qt.AlignTop)
+            self.detalle_v.addWidget(fila)
+        else:
+            self.detalle_v.addWidget(self._tarjeta_renglones(p))
+            self.detalle_v.addWidget(self._tarjeta_cliente(p))
         self.detalle_v.addStretch(1)
         QTimer.singleShot(0, self._ajustar_alto_detalle)
+        self._consultar_comprobante(p)
+
+    def _consultar_comprobante(self, p):
+        """¿El cliente subió el comprobante? Vive en otra colección que la del
+        pedido, así que se pregunta al abrirlo (una lectura) y no más de una vez
+        cada `REVISAR_COMPROBANTE_S`. Una vez que está, no se vuelve a mirar."""
+        import time
+        pid = p.get('id')
+        if (not pid or self._nube is None or (p.get('pago') or {}).get('modo') != 'transferencia'
+                or self._comprobantes.get(pid) == 'si'):
+            return
+        if time.time() - self._comprobante_mirado.get(pid, 0) < REVISAR_COMPROBANTE_S:
+            return
+        self._comprobante_mirado[pid] = time.time()
+
+        def mirar():
+            snap = self._nube.db.collection('tienda_comprobantes').document(pid).get()
+            datos = (snap.to_dict() or {}) if snap.exists else {}
+            return 'si' if datos.get('url') else 'no'
+
+        def listo(r):
+            if r in ('si', 'no'):
+                self._comprobantes[pid] = r
+                self._pintar_comprobante(pid)
+        self._en_fondo(mirar, listo)
+
+    def _pintar_comprobante(self, pid):
+        """Actualiza solo la línea del comprobante. Rearmar el detalle entero
+        por esto borraba los botones mientras el cajero los estaba tocando."""
+        actual = self._comp_lbl
+        if not actual or actual[0] != pid:
+            return
+        l = actual[1]
+        estado = self._comprobantes.get(pid)
+        if estado == 'si':
+            texto, fondo, color = ('Comprobante subido. Revisalo con "Ver comprobante" antes de entregar.',
+                                   _T['success_bg'], _T['success'])
+        elif estado == 'no':
+            texto, fondo, color = ('Todavía no subió el comprobante de la transferencia.',
+                                   _T['warning_bg'], _T['warning'])
+        else:
+            texto, fondo, color = ('Buscando el comprobante…', _T['surface_alt'], _T['text_muted'])
+        try:
+            l.setText(texto)
+            l.setStyleSheet(f"color:{color}; background:{fondo}; border-radius:6px; padding:7px 12px;"
+                            " font-size:13px; font-weight:600;")
+        except RuntimeError:
+            self._comp_lbl = None       # el detalle se rearmó y la etiqueta ya no existe
 
     def _tarjeta(self, nombre, color_borde=None):
         f = QFrame()
@@ -732,12 +824,24 @@ class PedidosWebView(QWidget):
         tomado = p.get('tomado_por') or {}
         if tomado:
             linea.append(f"lo aceptó {reglas.quien_texto(tomado)}")
+        entrega = self._texto_entregado(p)
+        if entrega:
+            linea.append(entrega)
         v.addWidget(self._texto(' · '.join(linea), 12, _T['text_muted']))
         if avisos:
             v.addSpacing(2)
             for aviso in avisos:
                 v.addWidget(aviso)
         return f
+
+    def _texto_entregado(self, p):
+        if p.get('estado') != 'entregado':
+            return ''
+        quien = {'reparto': 'el repartidor', 'panel': 'el panel', 'pos': 'una caja'}.get(p.get('entregado_por'), '')
+        texto = f"entregado {hace(p.get('entregado_en'), self._ahora())}" + (f" por {quien}" if quien else '')
+        if p.get('venta_pendiente') is True:
+            texto += ' (descontando el stock…)'
+        return texto
 
     def _aviso(self, texto, fondo, color):
         l = QLabel(texto)
@@ -755,16 +859,16 @@ class PedidosWebView(QWidget):
             avisos.append(self._aviso(
                 f"Lo está cobrando {reglas.quien_texto(marca)} desde {hace(marca.get('desde'), ahora)}.",
                 _T['warning_bg'], _T['warning']))
-        if p.get('estado') == 'entregado':
-            quien = {'reparto': 'el repartidor', 'panel': 'el panel', 'pos': 'una caja'}.get(
-                p.get('entregado_por'), '')
-            texto = f"Entregado {hace(p.get('entregado_en'), ahora)}" + (f" por {quien}" if quien else '')
-            if p.get('entregado_por') == 'reparto' and (p.get('pago') or {}).get('modo') == 'efectivo':
-                texto += ('. El repartidor cobró el efectivo' if (p.get('pago') or {}).get('pagado')
-                          else '. El repartidor no marcó que cobró')
-            if p.get('venta_pendiente') is True:
-                texto += '. Descontando el stock…'
-            avisos.append(self._aviso(texto + '.', _T['surface_alt'], _T['text']))
+        # El "Entregado hace N min por …" va como texto en el encabezado
+        # (`_texto_entregado`): en una franja gris casi no se distinguía del
+        # blanco de la tarjeta. Lo del efectivo del repartidor sí es para leer.
+        if (p.get('estado') == 'entregado' and p.get('entregado_por') == 'reparto'
+                and (p.get('pago') or {}).get('modo') == 'efectivo'):
+            if (p.get('pago') or {}).get('pagado'):
+                avisos.append(self._aviso('El repartidor cobró el efectivo.', _T['success_bg'], _T['success']))
+            else:
+                avisos.append(self._aviso('El repartidor no marcó que cobró el efectivo.',
+                                          _T['warning_bg'], _T['warning']))
         if (reglas.a_cobrar(p) and not reglas.marca_vigente(marca, ahora, yo)
                 and accion_principal(p)[0] != 'cobrar'):
             avisos.append(self._aviso('Falta cobrarlo en la caja.', _T['accent_soft'], _T['accent']))
@@ -969,19 +1073,30 @@ class PedidosWebView(QWidget):
             medio = 'Paga en efectivo' + (' · el repartidor marcó que cobró' if pago.get('pagado') else '')
         else:
             medio = 'Paga con transferencia'
-        if reglas.es_envio(p):
-            v.addWidget(self._texto(medio, 13, _T['text_muted']))
-        else:
-            fila = QHBoxLayout()
-            fila.setSpacing(6)
+        fila = QHBoxLayout()
+        fila.setSpacing(6)
+        if not reglas.es_envio(p):
             fila.addWidget(self._texto('Retira en el local', 13, peso=700, envolver=False))
             fila.addWidget(self._texto('·', 13, _T['text_dim'], envolver=False))
-            fila.addWidget(self._texto(medio, 13, _T['text_muted'], envolver=False))
-            fila.addStretch(1)
-            v.addLayout(fila)
+        fila.addWidget(self._texto(medio, 13, _T['text_muted'], envolver=False))
+        fila.addStretch(1)
+        v.addLayout(fila)
+        if pago.get('modo') == 'transferencia':
+            # Lo primero que necesita saber la caja antes de entregar: antes
+            # había que tocar "Ver comprobante" para enterarse.
+            l = self._aviso('', _T['surface_alt'], _T['text_muted'])
+            v.addWidget(l)
+            self._comp_lbl = (p.get('id'), l)
+            self._pintar_comprobante(p.get('id'))
         if p.get('nota'):
             v.addWidget(self._aviso(f"Nota del cliente: {p.get('nota')}", _T['warning_bg'], _T['warning']))
         return f
+
+    def _tildar(self, pid, indice):
+        marcados = set(self._tildados.get(pid, set()))
+        marcados.symmetric_difference_update({indice})
+        self._tildados[pid] = marcados
+        self._redibujar_detalle()
 
     def _abrir_whatsapp(self, numero, texto):
         if self._whatsapp_app is None:
@@ -1008,28 +1123,58 @@ class PedidosWebView(QWidget):
         f, v = self._tarjeta('pwRen')
         items = p.get('items') or []
         unidades = sum(int(round(reglas.num(it.get('cantidad')))) for it in items if it.get('unidad') != 'metro')
+        pid = p.get('id')
+        armando = p.get('estado') in ESTADOS_PARA_ARMAR
+        tildados = self._tildados.get(pid, set()) if armando else set()
         rotulo = f"PRODUCTOS · {len(items)}"
         if unidades and unidades != len(items):
             rotulo += f" · {unidades} unidades"
-        v.addWidget(self._titulo_tarjeta(rotulo))
-        for it in items:
+        cab = QHBoxLayout()
+        cab.addWidget(self._titulo_tarjeta(rotulo))
+        cab.addStretch(1)
+        if armando and items:
+            # Pedido del mostrador: ir tildando lo que ya está en la bolsa. Es de
+            # esta PC y de este momento; no se guarda en la nube.
+            listos = len([i for i in tildados if i < len(items)])
+            cab.addWidget(self._texto(
+                'Tocá cada producto cuando lo guardes' if not listos
+                else ('Todo en la bolsa' if listos == len(items) else f'{listos} de {len(items)} en la bolsa'),
+                12, _T['success'] if listos == len(items) else _T['text_muted'], 600, envolver=False))
+        v.addLayout(cab)
+        for i, it in enumerate(items):
             fila = QHBoxLayout()
             fila.setSpacing(10)
+            tilde = i in tildados
+            if armando:
+                marca = QPushButton('✓' if tilde else '')
+                marca.setCursor(Qt.PointingHandCursor)
+                marca.setToolTip('Ya está en la bolsa' if tilde else 'Marcar que ya está en la bolsa')
+                marca.setStyleSheet(
+                    f"QPushButton {{ background:{_T['success'] if tilde else _T['surface']}; color:white;"
+                    f" border:2px solid {_T['success'] if tilde else _T['border']}; border-radius:5px;"
+                    " min-width:20px; max-width:20px; min-height:20px; max-height:20px; padding:0;"
+                    " font-size:13px; font-weight:900; }"
+                    f" QPushButton:hover {{ border-color:{_T['success']}; }}")
+                marca.clicked.connect(lambda _c, pid=pid, i=i: self._tildar(pid, i))
+                fila.addWidget(marca, 0, Qt.AlignVCenter)
             cant = (f"{reglas.num(it.get('cantidad')):.1f} m".replace('.', ',') if it.get('unidad') == 'metro'
                     else str(int(round(reglas.num(it.get('cantidad'))))))
-            c = self._texto(cant, 14, _T['accent'], 800, mono=True, envolver=False)
+            c = self._texto(cant, 14, _T['text_dim'] if tilde else _T['accent'], 800, mono=True, envolver=False)
             c.setMinimumWidth(40)
-            fila.addWidget(c, 0, Qt.AlignTop)
+            fila.addWidget(c, 0, Qt.AlignVCenter)
             detalle = str(it.get('nombre') or '')
             extras = []
             if it.get('variedad'):
                 extras.append(str(it['variedad']))
             if it.get('es_pack'):
                 extras.append(f"pack de {int(reglas.num(it.get('pack_contenido'), 1))}")
-            nombre = self._texto(detalle + (f"  ·  {' · '.join(extras)}" if extras else ''), 14, peso=600)
+            nombre = self._texto(detalle + (f"  ·  {' · '.join(extras)}" if extras else ''), 14,
+                                 _T['text_dim'] if tilde else None, peso=600)
+            if tilde:
+                nombre.setStyleSheet(nombre.styleSheet() + ' text-decoration: line-through;')
             fila.addWidget(nombre, 1)
             sub = it.get('subtotal') if it.get('subtotal') is not None else reglas.num(it.get('precio')) * reglas.num(it.get('cantidad'))
-            fila.addWidget(self._texto(pesos(sub), 14, peso=700, mono=True, envolver=False), 0, Qt.AlignTop)
+            fila.addWidget(self._texto(pesos(sub), 14, peso=700, mono=True, envolver=False), 0, Qt.AlignVCenter)
             v.addLayout(fila)
 
         sep = QFrame()
@@ -1243,6 +1388,9 @@ class PedidosWebView(QWidget):
 
         def abrir(r):
             estado = (r or {}).get('estado') if isinstance(r, dict) else None
+            if estado in ('sin_comprobante', 'imagen', 'navegador'):
+                self._comprobantes[pid] = 'no' if estado == 'sin_comprobante' else 'si'
+                self._pintar_comprobante(pid)
             if estado == 'sin_comprobante':
                 self._mensaje('Comprobante', 'El cliente todavía no subió el comprobante.')
             elif estado == 'ajeno':
