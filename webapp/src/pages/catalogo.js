@@ -2277,9 +2277,11 @@ export async function renderCatalogo(container, db) {
           const valores = variedades.map(c => {
             const pack = (c.precio_pack && c.precio_pack > 0) ? c.precio_pack : globalPack;
             const cont = (c.contenido   && c.contenido   > 0) ? c.contenido   : globalCont;
+            // Variedad con bulto propio: lleva el 15% aunque el conjunto sea "unidad".
+            const frac = c.contenido > 1 ? 1.15 : FRACCION;
             const unit = (c.precio      && c.precio      > 0)
               ? c.precio
-              : (pack > 0 && cont > 0 ? (pack / cont) * FRACCION : 0);
+              : (pack > 0 && cont > 0 ? (pack / cont) * frac : 0);
             return { color: c.color, unit };
           });
           const lineas = valores.map(v => v.unit > 0
@@ -4648,9 +4650,10 @@ export async function renderCatalogo(container, db) {
 
     // Recalcula el precio unitario auto de cada fila cuyo dataset.precioUnitManual === '0'.
     // Auto = (precioPack o global) / (contenido o global) × 1.15
-    // Si TIPO === 'unidad', no se aplica el 15% extra (venta directa por unidad).
+    // Si TIPO === 'unidad', no se aplica el 15% extra (venta directa por unidad),
+    // salvo en la variedad que trae su propio bulto (U/pack > 1): ahí se vende
+    // suelto lo que entra cerrado, igual que en cualquier otro tipo.
     function _recalcularPrecioUnitarioAuto() {
-      const FRACCION = conjTipo.value === 'unidad' ? 1 : 1.15;
       const globalPack       = parseFloat(inPrecio.value) || 0;
       const globalContenido  = parseFloat(conjC.value) || 0;
       coloresList.querySelectorAll('[data-color-row]').forEach(row => {
@@ -4659,6 +4662,7 @@ export async function renderCatalogo(container, db) {
         const cc = parseFloat(row.querySelector('.ed_color_contenido').value) || 0;
         const pack      = pp > 0 ? pp : globalPack;
         const contenido = cc > 0 ? cc : globalContenido;
+        const FRACCION  = (conjTipo.value === 'unidad' && !(cc > 1)) ? 1 : 1.15;
         const inpPU = row.querySelector('.ed_color_precio');
         if (pack > 0 && contenido > 0) {
           const sugerido = (pack / contenido) * FRACCION;
