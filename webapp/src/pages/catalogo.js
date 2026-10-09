@@ -2900,6 +2900,11 @@ export async function renderCatalogo(container, db) {
   function abrirEditorCompleto(prod) {
     prod = prod || {};
     const esNuevo = !prod.doc_id;
+    // Desde el 09-10-2026 el 15% de venta suelta se suma como puntos sobre el
+    // costo: un bulto al 65% deja la unidad al 80%, no al 89,75% de multiplicar
+    // por 1.15. Solo para los productos que nacen desde ahora (quedan marcados);
+    // los que ya estaban siguen con la cuenta vieja aunque se abran y se guarden.
+    const detalleSobreCosto = esNuevo || prod.conjunto_detalle_sobre_costo === true;
     const overlay = document.createElement('div');
     overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:2000;display:flex;align-items:center;justify-content:center;padding:8px;overflow-y:auto';
 
@@ -3624,6 +3629,13 @@ export async function renderCatalogo(container, db) {
     // Margen del 15% al detalle aplicado al precio por unidad sugerido.
     // Ej: caja $8000 con 12 unidades → ($8000 / 12) × 1.15 = $766,67 por unidad.
     const FRACCION_MARGIN = 1.15;
+    // Factor que va sobre (precio del bulto ÷ contenido). Sobre costo:
+    // (pack + 15% del costo) ÷ contenido = pack ÷ contenido × (1 + 0.15 × costo/pack).
+    // Sin costo cargado no hay sobre qué sumar y queda el 1.15 de siempre.
+    function _factorDetalle(costo, pack) {
+      if (detalleSobreCosto && costo > 0 && pack > 0) return 1 + 0.15 * (costo / pack);
+      return 1.15;
+    }
     // Trackeo si el usuario tocó manualmente el precio por unidad. Si lo hizo,
     // dejamos de auto-calcular para no pisar su valor.
     let precioPUManual = !!(prod.conjunto_precio_unidad && Number(prod.conjunto_precio_unidad) > 0);
@@ -3764,8 +3776,10 @@ export async function renderCatalogo(container, db) {
       // directa por unidad, sin margen al detalle).
       if (conjPU && conjHint) {
         const esTipoUnidad  = conjTipo.value === 'unidad';
-        const margen        = esTipoUnidad ? 1 : FRACCION_MARGIN;
         const precioPaquete = parseFloat(inPrecio.value) || 0;
+        const costoPaquete  = parseFloat(inCosto.value) || 0;
+        const margen        = esTipoUnidad ? 1 : _factorDetalle(costoPaquete, precioPaquete);
+        const sobreCosto    = !esTipoUnidad && margen !== 1.15;
         const contenido     = c;
         if (precioPaquete > 0 && contenido > 0) {
           const sugerido = (precioPaquete / contenido) * margen;
@@ -3775,9 +3789,14 @@ export async function renderCatalogo(container, db) {
           if (!precioPUManual) {
             conjPU.value = sugerido.toFixed(2);
           }
+          const margenUnidad = sobreCosto
+            ? Math.round(((sugerido * contenido - costoPaquete) / costoPaquete) * 1000) / 10
+            : null;
           const formula = esTipoUnidad
             ? `(${sg.toLowerCase()} $${precioPaquete.toLocaleString('es-AR')} ÷ ${contenido} ${um}, sin 15% detalle).`
-            : `(${sg.toLowerCase()} $${precioPaquete.toLocaleString('es-AR')} ÷ ${contenido} ${um} × 1.15).`;
+            : sobreCosto
+              ? `(${sg.toLowerCase()} $${precioPaquete.toLocaleString('es-AR')} ÷ ${contenido} ${um} + 15% del costo: margen ${margenUnidad.toLocaleString('es-AR')}% por ${umSg}).`
+              : `(${sg.toLowerCase()} $${precioPaquete.toLocaleString('es-AR')} ÷ ${contenido} ${um} × 1.15).`;
           conjHint.innerHTML =
             `<b>Sugerido:</b> $${sugeridoTxt}/${umSg} ` +
             formula + `<br/>` +
@@ -3788,7 +3807,9 @@ export async function renderCatalogo(container, db) {
         } else {
           const formulaHint = esTipoUnidad
             ? `<b>precio ÷ ${um}</b> (sin 15 % adicional, venta por unidad)`
-            : `<b>precio ÷ ${um} × 1.15</b> (15 % margen al detalle)`;
+            : detalleSobreCosto
+              ? `<b>precio ÷ ${um} + 15 % del costo</b> (margen del ${sg.toLowerCase()} + 15 puntos)`
+              : `<b>precio ÷ ${um} × 1.15</b> (15 % margen al detalle)`;
           conjHint.innerHTML =
             `Cargá <b>precio del ${sg.toLowerCase()}</b> y <b>${um} por ${sg.toLowerCase()}</b> ` +
             `para que se calcule automáticamente como ${formulaHint}.`;
@@ -4655,14 +4676,22 @@ export async function renderCatalogo(container, db) {
     // suelto lo que entra cerrado, igual que en cualquier otro tipo.
     function _recalcularPrecioUnitarioAuto() {
       const globalPack       = parseFloat(inPrecio.value) || 0;
+      const globalCosto      = parseFloat(inCosto.value) || 0;
       const globalContenido  = parseFloat(conjC.value) || 0;
       coloresList.querySelectorAll('[data-color-row]').forEach(row => {
         if (row.dataset.precioUnitManual === '1') return;
         const pp = parseFloat(row.querySelector('.ed_color_precio_pack').value) || 0;
+        const co = parseFloat(row.querySelector('.ed_color_costo')?.value) || 0;
         const cc = parseFloat(row.querySelector('.ed_color_contenido').value) || 0;
         const pack      = pp > 0 ? pp : globalPack;
         const contenido = cc > 0 ? cc : globalContenido;
-        const FRACCION  = (conjTipo.value === 'unidad' && !(cc > 1)) ? 1 : 1.15;
+        // Costo del mismo bulto que el precio: el de la fila si tiene pack
+        // propio; si no tiene costo, el del producto llevado a la misma
+        // proporción (mismo margen que el global).
+        const costo = pp > 0
+          ? (co > 0 ? co : (globalCosto > 0 && globalPack > 0 ? pp * (globalCosto / globalPack) : 0))
+          : globalCosto;
+        const FRACCION  = (conjTipo.value === 'unidad' && !(cc > 1)) ? 1 : _factorDetalle(costo, pack);
         const inpPU = row.querySelector('.ed_color_precio');
         if (pack > 0 && contenido > 0) {
           const sugerido = (pack / contenido) * FRACCION;
@@ -4927,9 +4956,11 @@ export async function renderCatalogo(container, db) {
         // Precio por metro a propagar: valor del campo o el sugerido automático.
         let val = parseFloat(conjPU && conjPU.value) || 0;
         if (!(val > 0)) {
-          const FRACCION = conjTipo.value === 'unidad' ? 1 : 1.15;
           const pack = parseFloat(inPrecio.value) || 0;
           const cont = parseFloat(conjC.value) || 0;
+          const FRACCION = conjTipo.value === 'unidad'
+            ? 1
+            : _factorDetalle(parseFloat(inCosto.value) || 0, pack);
           if (pack > 0 && cont > 0) val = (pack / cont) * FRACCION;
         }
         if (!(val > 0)) {
@@ -5419,6 +5450,9 @@ export async function renderCatalogo(container, db) {
           conjunto_total:        cTotal,
           conjunto_colores:      tieneColores ? coloresArr : null,
         };
+        // Marca de "15% sobre el costo": solo la llevan los que nacieron con
+        // esa cuenta, para que al reabrirlos no vuelvan a la vieja.
+        if (detalleSobreCosto) conjuntoFields.conjunto_detalle_sobre_costo = true;
         // Sincronizar el stock clásico con el total calculado del conjunto.
         // Así el POS que aún no soporta "Producto Conjunto" sigue viendo un stock
         // razonable, y el campo no queda con basura del input oculto.
