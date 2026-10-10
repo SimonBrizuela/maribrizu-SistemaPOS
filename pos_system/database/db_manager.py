@@ -1083,7 +1083,8 @@ class DatabaseManager:
 
         IMPORTANTE: solo actúa sobre rows que tienen el MISMO nombre que otro
         (case-insensitive, sin espacios extras). Productos con nombre único,
-        independientemente de su stock, NUNCA se tocan.
+        independientemente de su stock, NUNCA se tocan. Tampoco los que tienen
+        nombre repetido pero firebase_id distinto: son productos distintos.
 
         El sobreviviente entre duplicados se elige por prioridades:
           1. es_conjunto = 1  (un rollo/conjunto manda sobre la copia normal)
@@ -1136,8 +1137,28 @@ class DatabaseManager:
                 ) or []
                 if len(rows) <= 1:
                     continue
-                survivor = rows[0]
-                losers = rows[1:]
+                # Mismo nombre no es mismo producto: COLLAR INFINITO son tres
+                # collares con codigo y precio propios (987158/59/60). Borrar
+                # dos los sacaba de la caja en cada arranque y el sync los
+                # volvia a bajar (2026-10-10). Cada firebase_id distinto se
+                # queda; solo sobra la copia sin firebase_id o la repetida.
+                vistos = set()
+                survivors, losers = [], []
+                for r in rows:
+                    fid = str(r.get('firebase_id') or '').strip()
+                    if r['id'] == 0:
+                        # Sentinel de "Varios": es del sistema, no del catalogo.
+                        continue
+                    if fid and fid not in vistos:
+                        vistos.add(fid)
+                        survivors.append(r)
+                    else:
+                        losers.append(r)
+                if not survivors:
+                    survivors, losers = [losers[0]], losers[1:]
+                if not losers:
+                    continue
+                survivor = survivors[0]
 
                 # Restaurar nombre del sobreviviente si está marcado [DUPLICADO]
                 if str(survivor.get('name', '')).startswith('[DUPLICADO]'):
