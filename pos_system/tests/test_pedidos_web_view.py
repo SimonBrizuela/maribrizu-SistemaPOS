@@ -1098,7 +1098,10 @@ def test_en_pantalla_ancha_productos_y_cliente_van_lado_a_lado(pantalla):
 
 def test_la_entrega_va_como_texto_del_encabezado(pantalla):
     from PyQt5.QtWidgets import QLabel
-    t = pantalla([pedido('c1', estado='entregado', entregado_en=AHORA, entregado_por='panel',
+    # La hora se toma aca y no de AHORA: en la suite entera pasa mas de un
+    # minuto desde que se carga el archivo y la entrega deja de ser "recién".
+    t = pantalla([pedido('c1', estado='entregado', entregado_en=datetime.now(reglas.TZ_AR),
+                         entregado_por='panel',
                          stock_descontado=True, cobro_pendiente=True)])
     vista = t['vista']
     vista._filtro = 'cobrar'
