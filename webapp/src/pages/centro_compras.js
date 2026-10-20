@@ -1181,7 +1181,7 @@ function pageHtml() {
             <span class="material-icons">close</span>
           </button>
         </div>
-        <span class="cc-hint">Del más urgente al que puede esperar: conjuga lo que más se vende en el mes, lo que más se movió estos días y el stock mínimo · Registrar descuenta el presupuesto, no el stock · La lapicera marca lo que ya está en el cuaderno.</span>
+        <span class="cc-hint">Del más urgente al que puede esperar: pesa más lo que se vende todas las semanas que una venta grande suelta, y nunca se olvida de lo que está sin stock o bajo el mínimo ·Registrar descuenta el presupuesto, no el stock · La lapicera marca lo que ya está en el cuaderno.</span>
       </div>
       <div class="cc-filtros" id="cc-filtros">
         <span class="material-icons cc-filtros-ico" title="Los filtros se combinan entre sí y con la lupa">filter_list</span>

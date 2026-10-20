@@ -465,6 +465,17 @@ describe('por qué está donde está', () => {
     expect(m).toEqual(['de lo que más se vende, todas las semanas']);
   });
 
+  it('un producto nuevo que vendió la mitad de sus semanas no es "de vez en cuando"', () => {
+    // El Bolígrafo Filgo de la captura del 20/10: 2 de las 4 semanas que lleva.
+    const m = motivosUrgencia({ frecuencia: 0.5, semanas_con_venta: 2, semanas_observadas: 4, stock: 0, stock_min: 0 });
+    expect(m).toEqual(['se vende seguido (2 de 4 semanas)']);
+  });
+
+  it('pocas semanas de doce sí es "de vez en cuando"', () => {
+    const m = motivosUrgencia({ frecuencia: 3 / 12, semanas_con_venta: 3, semanas_observadas: 12, stock: 0, stock_min: 0 });
+    expect(m).toEqual(['se vende de vez en cuando (3 de 12 semanas)']);
+  });
+
   it('una venta sola en tres meses lo dice, así se entiende por qué está abajo', () => {
     const m = motivosUrgencia({ frecuencia: 1 / 12, semanas_con_venta: 1, semanas_observadas: 12, stock: 0, stock_min: 0 });
     expect(m).toEqual(['se vendió una sola vez en 12 semanas']);

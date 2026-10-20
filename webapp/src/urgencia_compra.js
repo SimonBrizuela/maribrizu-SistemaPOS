@@ -606,7 +606,11 @@ export function motivosUrgencia(r) {
   else if (frec >= 0.6) out.push(`se vende casi todas las semanas (${semanas} de ${observadas})`);
   else if (acelera) out.push('se está moviendo más que de costumbre');
   else if (semanas === 1) out.push(`se vendió una sola vez en ${observadas} semanas`);
-  else if (semanas > 1 && semanas < MIN_SEMANAS_ROTA) out.push(`se vende de vez en cuando (${semanas} de ${observadas} semanas)`);
+  // "De vez en cuando" es menos de una semana de cada tres. Se mira la
+  // proporción, no las semanas sueltas: un producto nuevo que vendió 2 de las
+  // 4 semanas que lleva se vende la mitad de las semanas.
+  else if (semanas > 1 && frec < 1 / 3) out.push(`se vende de vez en cuando (${semanas} de ${observadas} semanas)`);
+  else if (semanas > 1) out.push(`se vende seguido (${semanas} de ${observadas} semanas)`);
 
   // El mínimo, solo si no quedó dicho ya en el "Sin stock" de la cobertura.
   if (Number(r.stock) > 0 && Number(r.stock_min) > 0 && Number(r.stock) < Number(r.stock_min)) {
