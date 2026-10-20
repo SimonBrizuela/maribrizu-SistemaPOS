@@ -19,7 +19,7 @@
  *     todo (no implementado todavía, dejado para futuro).
  */
 import { collection, getDocs, doc, onSnapshot, query, orderBy, limit, setDoc, arrayUnion, arrayRemove } from 'firebase/firestore';
-import { getCached } from './cache.js';
+import { getCached, peekCacheValue } from './cache.js';
 import { fechaDMYtoYMD } from './config.js';
 import { alertaPorBulto, bultoDe, textoBultos } from './bulto.js';
 import { mostrarToast } from './components/toasts.js';
@@ -52,6 +52,10 @@ let _baselineDone = false;
 // de reposición. Se carga desde la misma cache que "Productos más vendidos"
 // (`productos:items_rich`), así no agrega lecturas a Firestore.
 let _ventanas = computarVentanas([], { hoyYmd: '', aYmd: () => '' });
+// Si el ritmo se midió con el historial entero (doce semanas) o solo con los
+// últimos renglones. El Centro de Compras lo mira para rehacer la lista cuando
+// llega el historial.
+let _ventanasConHistoria = false;
 
 const UMBRAL_DIAS_COBERTURA = 7;  // si al ritmo actual se agota en ≤ esto → urgente
 const MIN_VENTAS_URGENTE = 3;     // mínimo vendido para escalar a urgente una alerta ya existente
@@ -399,11 +403,22 @@ export function _alertasProducto(p) {
 // correrla contra un volcado de Firestore desde un script.
 async function _cargarVelocidades() {
   try {
-    const items = await getCached('productos:items_rich', async () => {
-      // orderBy por fecha_dt (Timestamp): el string `fecha` + limit recortaba el mes nuevo.
-      const snap = await getDocs(query(collection(_db, 'ventas_por_dia'), orderBy('fecha_dt', 'desc'), limit(5000)));
-      return snap.docs.map(d => d.data());
-    }, { ttl: 5 * 60 * 1000, memOnly: true });
+    // Para saber si algo se vende SIEMPRE hacen falta doce semanas. El store
+    // ya tiene el historial entero en memoria cuando la pantalla pidió
+    // `ventas_por_dia` (el Centro de Compras lo pide): se usa ese, sin leer
+    // nada más. Sirve aunque sea el de la sesión anterior: para medir el ritmo
+    // de tres meses, unas horas de atraso no cambian nada.
+    // Si no está, los últimos 5.000 renglones de siempre: hoy son ~18 días,
+    // alcanza para las alertas de las otras pantallas.
+    const historial = peekCacheValue('historial:ventas_dia:v3');
+    const conHistoria = Array.isArray(historial) && historial.length > 0;
+    const items = conHistoria
+      ? historial
+      : await getCached('productos:items_rich', async () => {
+        // orderBy por fecha_dt (Timestamp): el string `fecha` + limit recortaba el mes nuevo.
+        const snap = await getDocs(query(collection(_db, 'ventas_por_dia'), orderBy('fecha_dt', 'desc'), limit(5000)));
+        return snap.docs.map(d => d.data());
+      }, { ttl: 5 * 60 * 1000, memOnly: true });
 
     // Catálogo por nombre normalizado, para traducir las presentaciones ("1
     // pack(s)" es un 1 que son 500 hojas). Se arma acá porque `_productos` ya
@@ -421,6 +436,7 @@ async function _cargarVelocidades() {
       catalogoPorNombre: catPorNombre,
       ventanaLarga: VENTANA_DIAS,
     });
+    _ventanasConHistoria = conHistoria;
   } catch (e) {
     console.warn('[notificaciones] no se pudieron cargar velocidades de venta:', e);
   }
@@ -461,7 +477,15 @@ function _aplicarUrgencia(a) {
   a.vel_dia_7 = r.velCorta;
   a.rank_mes = r.rankMes;
   a.rank_reciente = r.rankReciente;
-  a.es_top = r.rankMes >= UMBRAL_TOP;
+  // Lo de las doce semanas: si se vende siempre o fue una vez.
+  a.semanas_con_venta = r.semanasConVenta;
+  a.semanas_observadas = r.semanasObservadas;
+  a.frecuencia = r.frecuencia;
+  a.rank_volumen = r.rankVolumen;
+  a.vel_historia = r.velHistoria;
+  a.unidades_historia = r.unidadesHistoria;
+  // "Top ventas" es lo que vende mucho Y seguido, no el que tuvo un día grande.
+  a.es_top = r.rankVolumen >= UMBRAL_TOP && r.frecuencia >= 0.6;
   // Cobertura en UNIDADES SUELTAS: en alertas por variedad `stock` es el contador
   // de packs/rollos, pero el ritmo se mide en unidades — usar el total real en
   // unidades para no inflar (ni ocultar) la urgencia de los conjuntos.
@@ -488,10 +512,17 @@ function _coberturaTexto(a) {
     : `~${_fmt(Math.max(1, Math.round(a.vel_dia * 30)))}/mes`;
   // Con un producto nuevo las dos ventanas son la misma medición ("3 en 7 días,
   // 3 en los últimos 7"): ahí el segundo número no agrega nada.
-  const recientes = (Number(a.unidades_7) > 0 && Number(a.ritmo_dias || VENTANA_DIAS) > VENTANA_CORTA_DIAS)
-    ? `, ${_fmt(Math.round(a.unidades_7))} en los últimos ${VENTANA_CORTA_DIAS}`
+  // Lo vendido en las doce semanas (o desde que se empezó a vender, si es
+  // nuevo): es la medida con la que se decide. Con el mes solo, lo que se quedó
+  // sin stock hace tres semanas decía "vendiste 0" y seguía arriba sin explicar.
+  const semanas = Number(a.semanas_observadas) || 0;
+  const conHistoria = semanas > 0 && Number(a.unidades_historia) > 0;
+  const recientes = Number(a.unidades_7) > 0 && (conHistoria ? semanas > 1 : Number(a.ritmo_dias || VENTANA_DIAS) > VENTANA_CORTA_DIAS)
+    ? `, ${_fmt(Math.round(a.unidades_7))} en los últimos ${VENTANA_CORTA_DIAS} días`
     : '';
-  const vendidos = `vendiste ${_fmt(Math.round(a.unidades_ventana))} en ${a.ritmo_dias || VENTANA_DIAS} días${recientes}`;
+  const vendidos = conHistoria
+    ? `vendiste ${_fmt(Math.round(a.unidades_historia))} en ${semanas} ${semanas === 1 ? 'semana' : 'semanas'}${recientes}`
+    : `vendiste ${_fmt(Math.round(a.unidades_ventana))} en ${a.ritmo_dias || VENTANA_DIAS} días${recientes}`;
   if (a.stock <= 0) return `Sin stock · ${vendidos} (${ritmo})`;
   const d = Math.max(1, Math.round(a.dias_cobertura));
   return `Se agota en ~${d} ${d === 1 ? 'día' : 'días'} · ${vendidos} (${ritmo})`;
@@ -960,6 +991,10 @@ export function obtenerCandidatosCompra(dias = 30) {
 // alerta. Devuelve la estructura de `computarVentanas`, que es de sólo lectura.
 export function obtenerVentanasVenta() {
   return _ventanas;
+}
+
+export function ritmoConHistoria() {
+  return _ventanasConHistoria;
 }
 
 export function onAlertasCambian(cb) {

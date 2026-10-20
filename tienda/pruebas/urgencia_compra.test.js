@@ -22,8 +22,8 @@ import {
   riesgoPorCobertura, riesgoPorMinimo, importanciaDeVenta,
   puntajeUrgencia, nivelPorPuntaje, compararUrgencia,
   motivosUrgencia, explicarUrgencia,
-  computarVentanas, ritmoDe,
-  UMBRAL_SISI, UMBRAL_IMPORTANTE, MIN_MUESTRA_RANKING,
+  computarVentanas, ritmoDe, estadisticaHistoria,
+  UMBRAL_SISI, UMBRAL_IMPORTANTE, MIN_MUESTRA_RANKING, MIN_SEMANAS_ROTA, SEMANAS_HISTORIA,
 } from '../../webapp/src/urgencia_compra.js';
 
 // Las fechas de `ventas_por_dia` vienen "dd/mm/yyyy" (réplica de fechaDMYtoYMD,
@@ -160,6 +160,83 @@ describe('las dos ventanas de venta', () => {
   });
 });
 
+describe('las doce semanas: si se vende siempre o fue una vez', () => {
+  // El fibrón: de a uno o dos, tres días por semana, las doce semanas.
+  const fibron = [];
+  for (let sem = 0; sem < 12; sem++) for (const d of [0, 2, 4]) fibron.push(renglon('FIBRON PIZARRA', d === 2 ? 2 : 1, sem * 7 + d));
+  // La cinta: 30 metros ayer, y antes nada en tres meses.
+  const cinta = [renglon('CINTA BEIGE', 30, 1)];
+  // Relleno del local, para que el ranking tenga muestra.
+  const relleno = ['A', 'B', 'C', 'D', 'E', 'F'].map((x, i) => renglon('RELLENO ' + x, i + 1, 3));
+
+  it('cuenta en cuántas semanas se vendió', () => {
+    const v = ventanas([...fibron, ...cinta, ...relleno]);
+    const f = ritmoDe(v, { nombre: 'FIBRON PIZARRA' });
+    expect(f.semanasConVenta).toBe(12);
+    expect(f.semanasObservadas).toBe(SEMANAS_HISTORIA);
+    expect(f.frecuencia).toBe(1);
+    const c = ritmoDe(v, { nombre: 'CINTA BEIGE' });
+    expect(c.semanasConVenta).toBe(1);
+    expect(c.frecuencia).toBeCloseTo(1 / 12, 10);
+  });
+
+  it('el fibrón le gana a la cinta aunque la cinta vendió más este mes', () => {
+    const v = ventanas([...fibron, ...cinta, ...relleno]);
+    const peso = (nombre) => {
+      const r = ritmoDe(v, { nombre });
+      return importanciaDeVenta({ frecuencia: r.frecuencia, rankVolumen: r.rankVolumen, rankReciente: r.rankReciente, diasConMov7: r.diasConMov7 });
+    };
+    expect(peso('FIBRON PIZARRA')).toBeGreaterThan(peso('CINTA BEIGE') + 0.3);
+  });
+
+  it('una venta grande no infla el ritmo de lo que vende de a poco', () => {
+    // Doce días de 1 y un día de 50: el de 50 cuenta como 3 (tres días normales).
+    const dias = new Map();
+    for (let i = 0; i < 12; i++) dias.set(restarDias(HOY, i * 7), 1);
+    dias.set(restarDias(HOY, 3), 50);
+    const e = estadisticaHistoria(dias, HOY);
+    expect(e.total).toBe(62);
+    expect(e.volumen).toBe(15);
+  });
+
+  it('con un solo día de venta ese día cuenta entero', () => {
+    const e = estadisticaHistoria(new Map([[HOY, 80]]), HOY);
+    expect(e.volumen).toBe(80);
+    expect(e.semanas).toBe(1);
+  });
+
+  it('lo que se vendía antes de las doce semanas no es nuevo', () => {
+    // Vendió dos veces estos días y antes, hace cuatro meses: se lo mide
+    // contra las doce semanas, no como si recién arrancara.
+    const v = ventanas([renglon('TIJERA', 1, 2), renglon('TIJERA', 1, 9), renglon('TIJERA', 1, 120)]);
+    const r = ritmoDe(v, { nombre: 'TIJERA' });
+    expect(r.semanasObservadas).toBe(12);
+    expect(r.frecuencia).toBeCloseTo(2 / 12, 10);
+  });
+
+  it('el producto nuevo se mide desde que se empezó a vender, con piso de cuatro semanas', () => {
+    const v = ventanas([renglon('NOVEDAD', 2, 1), renglon('NOVEDAD', 1, 8), renglon('NOVEDAD', 3, 15)]);
+    const r = ritmoDe(v, { nombre: 'NOVEDAD' });
+    expect(r.semanasObservadas).toBe(4);
+    expect(r.frecuencia).toBeCloseTo(3 / 4, 10);
+  });
+
+  it('con una sola venta no se lo trata como nuevo', () => {
+    const v = ventanas([renglon('RARO', 80, 2)]);
+    expect(ritmoDe(v, { nombre: 'RARO' }).semanasObservadas).toBe(12);
+  });
+
+  it('lo que se quedó sin stock hace semanas sigue con su ritmo', () => {
+    // Vendía todas las semanas y hace un mes no hay: el mes dice cero, pero
+    // el ritmo de fondo sigue ahí y la cantidad a comprar no se va a cero.
+    const items = [];
+    for (let sem = 5; sem < 12; sem++) items.push(renglon('LIMPIA PIPA', 6, sem * 7));
+    const r = ritmoDe(ventanas(items), { nombre: 'LIMPIA PIPA' });
+    expect(r.unidades).toBe(0);
+    expect(r.velDia).toBeGreaterThan(0.4);
+  });
+});
+
 describe('el ranking de ventas del local', () => {
   const escala = escalaVentas([1, 2, 3, 10, 50, 400]);   // 400 = las hojas
 
@@ -230,7 +307,7 @@ describe('el riesgo de quedarse sin nada', () => {
     // Stock para 20 días (riesgo bajo) pero en la mitad del mínimo cargado.
     const p = puntajeUrgencia({
       diasCobertura: 20, coberturaObjetivo: 30, stock: 5, stockMin: 10,
-      rankMes: 1, rankReciente: 1, unidadesMes: 20,
+      frecuencia: 1, rankVolumen: 1, rankReciente: 1, diasConMov7: 5, semanasConVenta: 12,
     });
     expect(p.riesgo).toBeCloseTo(0.5, 10);
     expect(p.riesgo).toBeGreaterThan(p.riesgo_cobertura);
@@ -239,23 +316,41 @@ describe('el riesgo de quedarse sin nada', () => {
 
 describe('el peso en las ventas', () => {
   it('el que no vende nada no queda en cero: queda en el piso', () => {
-    expect(importanciaDeVenta(0, 0)).toBeGreaterThan(0);
-    expect(importanciaDeVenta(0, 0)).toBeLessThan(0.3);
+    expect(importanciaDeVenta({})).toBeGreaterThan(0);
+    expect(importanciaDeVenta({})).toBeLessThan(0.3);
   });
 
-  it('el más vendido del mes y de la semana llega a uno', () => {
-    expect(importanciaDeVenta(1, 1)).toBeCloseTo(1, 10);
+  it('lo que se vende todas las semanas, mucho y estos días llega a uno', () => {
+    expect(importanciaDeVenta({ frecuencia: 1, rankVolumen: 1, rankReciente: 1, diasConMov7: 4 }))
+      .toBeCloseTo(1, 10);
   });
 
-  it('las dos ventanas pesan igual', () => {
-    expect(importanciaDeVenta(1, 0)).toBeCloseTo(importanciaDeVenta(0, 1), 10);
+  it('vender todas las semanas pesa más que vender mucho de una vez', () => {
+    // El pedido del dueño (20/10): el fibrón que sale siempre antes que la
+    // cinta que se vendió ayer y antes hacía meses que no.
+    const siempre = importanciaDeVenta({ frecuencia: 1, rankVolumen: 0.5 });
+    const unaVez = importanciaDeVenta({ frecuencia: 1 / 12, rankVolumen: 0.95 });
+    expect(siempre).toBeGreaterThan(unaVez + 0.3);
+  });
+
+  it('el volumen de una venta suelta casi no suma', () => {
+    const sinVolumen = importanciaDeVenta({ frecuencia: 1 / 12, rankVolumen: 0 });
+    const conVolumen = importanciaDeVenta({ frecuencia: 1 / 12, rankVolumen: 1 });
+    expect(conVolumen - sinVolumen).toBeLessThan(0.1);
+  });
+
+  it('lo de estos días cuenta solo si se vendió en más de un día', () => {
+    const unDia = importanciaDeVenta({ frecuencia: 0.5, rankReciente: 1, diasConMov7: 1 });
+    const dosDias = importanciaDeVenta({ frecuencia: 0.5, rankReciente: 1, diasConMov7: 2 });
+    expect(unDia).toBeCloseTo(importanciaDeVenta({ frecuencia: 0.5 }), 10);
+    expect(dosDias).toBeGreaterThan(unDia);
   });
 });
 
 describe('el puntaje de urgencia', () => {
   const hojas = () => puntajeUrgencia({
     diasCobertura: 3, coberturaObjetivo: 30, stock: 1200, stockMin: 0,
-    rankMes: 0.98, rankReciente: 0.95, unidadesMes: 4000,
+    frecuencia: 1, rankVolumen: 0.98, rankReciente: 0.95, diasConMov7: 6, semanasConVenta: 12,
   });
 
   it('las hojas que se acaban esta semana van arriba de todo', () => {
@@ -269,7 +364,7 @@ describe('el puntaje de urgencia', () => {
     // aunque tuviera para tres meses. Multiplicando, sin riesgo no hay urgencia.
     const p = puntajeUrgencia({
       diasCobertura: 120, coberturaObjetivo: 30, stock: 9000, stockMin: 0,
-      rankMes: 1, rankReciente: 1, unidadesMes: 4000,
+      frecuencia: 1, rankVolumen: 1, rankReciente: 1, diasConMov7: 6, semanasConVenta: 12,
     });
     expect(p.score).toBe(0);
     expect(nivelPorPuntaje(p.score)).toBe('opcional');
@@ -278,7 +373,7 @@ describe('el puntaje de urgencia', () => {
   it('quedarse sin nada de algo que rota es sí o sí, venda lo que venda', () => {
     const p = puntajeUrgencia({
       diasCobertura: 0, coberturaObjetivo: 30, stock: 0, stockMin: 0,
-      rankMes: 0, rankReciente: 0, unidadesMes: 5,
+      frecuencia: MIN_SEMANAS_ROTA / 12, semanasConVenta: MIN_SEMANAS_ROTA,
     });
     expect(p.score).toBeGreaterThanOrEqual(UMBRAL_SISI);
     expect(nivelPorPuntaje(p.score)).toBe('sisi');
@@ -287,11 +382,21 @@ describe('el puntaje de urgencia', () => {
   it('quedarse sin nada de algo que casi no rota es importante, no sí o sí', () => {
     const p = puntajeUrgencia({
       diasCobertura: Infinity, coberturaObjetivo: 30, stock: 0, stockMin: 5,
-      rankMes: 0, rankReciente: 0, unidadesMes: 1,
+      frecuencia: 1 / 12, semanasConVenta: 1,
     });
     expect(nivelPorPuntaje(p.score)).toBe('importante');
     expect(p.score).toBeLessThan(UMBRAL_SISI);
     expect(p.score).toBeGreaterThanOrEqual(UMBRAL_IMPORTANTE);
+  });
+
+  it('una compra grande suelta sin stock es importante, no sí o sí', () => {
+    // El caso de los 80 alfileres: llegaban primeros de la lista por una sola
+    // venta. Siguen figurando (no hay), pero no como imprescindibles.
+    const p = puntajeUrgencia({
+      diasCobertura: 0, coberturaObjetivo: 45, stock: 0, stockMin: 0,
+      frecuencia: 1 / 12, semanasConVenta: 1, rankVolumen: 0.97, rankReciente: 0.97, diasConMov7: 1,
+    });
+    expect(nivelPorPuntaje(p.score)).toBe('importante');
   });
 
   it('un envase abierto no es quedarse sin nada', () => {
@@ -299,21 +404,21 @@ describe('el puntaje de urgencia', () => {
     // aviso de `sinStock` el piso lo mandaba a "sí o sí" teniendo mercadería.
     const p = puntajeUrgencia({
       diasCobertura: 25, coberturaObjetivo: 30, stock: 0.4, stockMin: 1,
-      sinStock: false, rankMes: 0.2, rankReciente: 0, unidadesMes: 4,
+      sinStock: false, frecuencia: 0.25, semanasConVenta: 3, rankVolumen: 0.2,
     });
     expect(nivelPorPuntaje(p.score)).not.toBe('sisi');
   });
 
   it('entre dos que no venden nada, ordena el que está más lejos del mínimo', () => {
-    const lejos = puntajeUrgencia({ diasCobertura: Infinity, stock: 1, stockMin: 10, unidadesMes: 0 });
-    const cerca = puntajeUrgencia({ diasCobertura: Infinity, stock: 8, stockMin: 10, unidadesMes: 0 });
+    const lejos = puntajeUrgencia({ diasCobertura: Infinity, stock: 1, stockMin: 10 });
+    const cerca = puntajeUrgencia({ diasCobertura: Infinity, stock: 8, stockMin: 10 });
     expect(lejos.score).toBeGreaterThan(cerca.score);
   });
 
-  it('el de la semana caliente le gana al que solo figura en el mes', () => {
-    const base = { diasCobertura: 5, coberturaObjetivo: 30, stock: 10, stockMin: 0, unidadesMes: 30 };
-    const caliente = puntajeUrgencia({ ...base, rankMes: 0.6, rankReciente: 0.95 });
-    const dormido = puntajeUrgencia({ ...base, rankMes: 0.6, rankReciente: 0 });
+  it('a igual constancia, el que se movió estos días va antes', () => {
+    const base = { diasCobertura: 5, coberturaObjetivo: 30, stock: 10, stockMin: 0, frecuencia: 0.6, rankVolumen: 0.6, semanasConVenta: 7 };
+    const caliente = puntajeUrgencia({ ...base, rankReciente: 0.95, diasConMov7: 3 });
+    const dormido = puntajeUrgencia({ ...base, rankReciente: 0, diasConMov7: 0 });
     expect(caliente.score).toBeGreaterThan(dormido.score);
   });
 });
@@ -350,9 +455,19 @@ describe('el orden de la lista', () => {
 });
 
 describe('por qué está donde está', () => {
-  it('lo que más se vende en el mes lo dice', () => {
-    const m = motivosUrgencia({ rank_mes: 0.97, rank_reciente: 0.5, unidades_7: 0, stock: 5, stock_min: 0 });
-    expect(m.join(' ')).toContain('más se vende en el mes');
+  it('lo que se vende todas las semanas lo dice', () => {
+    const m = motivosUrgencia({ frecuencia: 1, semanas_con_venta: 12, semanas_observadas: 12, rank_volumen: 0.5, stock: 5, stock_min: 0 });
+    expect(m.join(' ')).toContain('se vende todas las semanas');
+  });
+
+  it('lo que vende mucho y todas las semanas lo dice', () => {
+    const m = motivosUrgencia({ frecuencia: 1, semanas_con_venta: 12, semanas_observadas: 12, rank_volumen: 0.95, stock: 5, stock_min: 0 });
+    expect(m).toEqual(['de lo que más se vende, todas las semanas']);
+  });
+
+  it('una venta sola en tres meses lo dice, así se entiende por qué está abajo', () => {
+    const m = motivosUrgencia({ frecuencia: 1 / 12, semanas_con_venta: 1, semanas_observadas: 12, stock: 0, stock_min: 0 });
+    expect(m).toEqual(['se vendió una sola vez en 12 semanas']);
   });
 
   it('avisa cuando se está moviendo más que de costumbre', () => {
@@ -374,10 +489,11 @@ describe('por qué está donde está', () => {
 
   it('una sola razón de venta, no cuatro frases con los mismos números', () => {
     const m = motivosUrgencia({
-      rank_mes: 0.97, rank_reciente: 0.99, unidades_7: 20, dias_con_mov_7: 5,
+      frecuencia: 1, semanas_con_venta: 12, semanas_observadas: 12, rank_volumen: 0.97,
+      rank_reciente: 0.99, unidades_7: 20, dias_con_mov_7: 5,
       vel_dia_30: 1, vel_dia_7: 2.9, stock: 5, stock_min: 0,
     });
-    expect(m).toEqual(['de lo que más se vende en el mes']);
+    expect(m).toEqual(['de lo que más se vende, todas las semanas']);
   });
 
   it('dice cuando está por debajo del mínimo cargado', () => {
@@ -391,12 +507,14 @@ describe('por qué está donde está', () => {
 
   it('la cuenta se puede leer entera', () => {
     const t = explicarUrgencia({
-      urgencia: 87, riesgo: 0.87, importancia: 1, rank_mes: 0.98, rank_reciente: 0.9, stock_min: 0,
+      urgencia: 87, riesgo: 0.87, importancia: 1, rank_volumen: 0.98, rank_reciente: 0.9,
+      semanas_con_venta: 11, semanas_observadas: 12, dias_con_mov_7: 3, stock_min: 0,
     });
     expect(t).toContain('Urgencia 87 de 100');
     expect(t).toContain('Riesgo de quedarse sin stock: 87%');
     expect(t).toContain('Peso en las ventas: 100%');
-    expect(t).toContain('98%');   // lo que vende en el mes contra el resto
+    expect(t).toContain('Se vendió en 11 de las últimas 12 semanas');
+    expect(t).toContain('98%');   // lo que vende contra el resto, sin picos
     expect(t).toContain('90%');   // y en los últimos días
     expect(t).not.toContain('Mínimo cargado');   // sin mínimo, no se inventa la línea
   });

@@ -387,7 +387,8 @@ describe('Centro de Compras: en qué orden hay que comprar', () => {
     for (let d = 1; d <= 5; d++) ventas.push(venta('CINTA PAPEL', 6, d));
     for (let d = 1; d <= 25; d++) ventas.push(venta('CINTA TELA', 2, d));
     ventas.push(venta('CINTA TELA', 1, 26));
-    for (const d of [20, 22, 24, 26]) ventas.push(venta('TIJERA ESCOLAR', 1, d));
+    // La tijera sale de a una, una vez por semana: rota aunque venda poco.
+    for (const d of [6, 13, 20, 27, 34, 41]) ventas.push(venta('TIJERA ESCOLAR', 1, d));
     for (let d = 1; d <= 30; d++) ventas.push(venta('LAPIZ NEGRO', 2, d));
     for (let d = 1; d <= 20; d++) ventas.push(venta('MARCADOR', 1, d));
     for (let d = 1; d <= 24; d += 2) ventas.push(venta('CUADERNO', 1, d));
@@ -481,8 +482,30 @@ describe('Centro de Compras: en qué orden hay que comprar', () => {
       .find(tr => (tr.querySelector('.cc-prod-btn')?.firstChild?.textContent || '').trim() === 'HOJA A4');
     const detalle = fila.querySelector('.cc-cob').textContent;
     expect(detalle).toContain('Se agota en');
-    expect(detalle).toContain('más se vende en el mes');
+    expect(detalle).toContain('todas las semanas');
     expect(detalle).toContain('últimos 7');
+  });
+
+  it('lo que se vende todas las semanas va antes que una venta grande suelta', async () => {
+    // Pedido del dueño (20/10/2026): la cinta que se vendió ayer (30 metros, y
+    // antes nada en tres meses) aparecía arriba del fibrón que sale siempre.
+    datos.porColeccion.catalogo.push(
+      prod('f1', 'FIBRON PIZARRA NEGRO', { stock: 3 }),
+      prod('k1', 'CINTA BEIGE N10', { stock: 0 }),
+    );
+    for (let sem = 0; sem < 12; sem++) {
+      for (const d of [1, 3, 5]) datos.porColeccion.ventas_por_dia.push(venta('FIBRON PIZARRA NEGRO', 1, sem * 7 + d));
+    }
+    datos.porColeccion.ventas_por_dia.push(venta('CINTA BEIGE N10', 30, 1));
+    await montar('centro_compras', 'renderCentroCompras');
+    const nombres = nombresEnLista();
+    expect(nombres.indexOf('FIBRON PIZARRA NEGRO')).toBeGreaterThanOrEqual(0);
+    expect(nombres.indexOf('CINTA BEIGE N10')).toBeGreaterThan(nombres.indexOf('FIBRON PIZARRA NEGRO'));
+    const cinta = [...document.querySelectorAll('#cc-tbody tr[data-idx]')]
+      .find(tr => (tr.querySelector('.cc-prod-btn')?.firstChild?.textContent || '').trim() === 'CINTA BEIGE N10');
+    // Sigue en la lista (no hay), pero no como imprescindible, y dice por qué.
+    expect(cinta.querySelector('.cc-chip-sisi')).toBe(null);
+    expect(cinta.querySelector('.cc-cob').textContent).toContain('una sola vez');
   });
 });
 

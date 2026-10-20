@@ -32,7 +32,7 @@
 
 import { doc, updateDoc, serverTimestamp, deleteField } from 'firebase/firestore';
 import { loadBalanceConfig, loadDiasMes, saveDiasMes, loadComprasConfig, saveComprasConfig } from '../config.js';
-import { refrescarAlertas, obtenerCandidatosCompra, obtenerVentanasVenta } from '../notifications.js';
+import { refrescarAlertas, obtenerCandidatosCompra, obtenerVentanasVenta, ritmoConHistoria } from '../notifications.js';
 import { peekCacheValue, isHydrated } from '../cache.js';
 import { onStoreChange } from '../store.js';
 import { sugerirCantidad } from '../inventario_resumen.js';
@@ -218,9 +218,12 @@ function urgenciaDe(a, coberturaObj) {
     // es el umbral con el que se las detecta, no una decisión del dueño.
     stockMin: auto ? 0 : (Number(a.stock_min) || 0),
     sinStock: stockUnidades <= 0,
+    frecuencia: Number(a.frecuencia) || 0,
+    semanasConVenta: Number(a.semanas_con_venta) || 0,
+    rankVolumen: Number(a.rank_volumen) || 0,
     rankMes: Number(a.rank_mes) || 0,
     rankReciente: Number(a.rank_reciente) || 0,
-    unidadesMes: Number(a.unidades_ventana) || 0,
+    diasConMov7: Number(a.dias_con_mov_7) || 0,
   });
 }
 
@@ -411,6 +414,10 @@ function buildRows(alertas, comprasCfg) {
       importancia: urg.importancia,
       rank_mes: urg.rank_mes,
       rank_reciente: urg.rank_reciente,
+      rank_volumen: urg.rank_volumen,
+      frecuencia: urg.frecuencia,
+      semanas_con_venta: Number(a.semanas_con_venta) || 0,
+      semanas_observadas: Number(a.semanas_observadas) || 0,
       tier: nivelPorPuntaje(urg.score),
       cobertura_texto: a.cobertura_texto || '',
       stock: Number(a.stock) || 0,
@@ -558,6 +565,10 @@ function aplicarTemporadas(rows, recomendaciones, comprasCfg) {
       importancia: 0,
       rank_mes: 0,
       rank_reciente: 0,
+      rank_volumen: 0,
+      frecuencia: 0,
+      semanas_con_venta: 0,
+      semanas_observadas: 0,
       tier: nivelPorPuntaje(rec.urgencia),
       // Sin texto de cobertura: este producto no está en la lista porque se
       // agote, y poner "se agota en X días" al lado de la fecha confunde los
@@ -762,6 +773,7 @@ export async function renderCentroCompras(container, db) {
   bindEvents(root);
   recalc(true);
   limpiarAnotadosViejos();
+  if (!ritmoConHistoria()) rehacerCuandoLlegueElHistorial();
 
   // Se llegó acá desde el aviso "se viene tal fecha": abrir esa fecha con todo
   // lo suyo, que es lo que el dueño fue a buscar al tocar el aviso.
@@ -782,6 +794,34 @@ export async function renderCentroCompras(container, db) {
     if (ventasEnMemoria()) estudiarEpocas({ auto: true });
     else estudiarCuandoLleguenLasVentas();
   }
+}
+
+/**
+ * La lista se armó con los últimos renglones (el historial todavía no había
+ * llegado, pasa al entrar apenas se inicia sesión). Cuando llega, se rehace una
+ * vez con las doce semanas: sin eso, lo que se vende siempre no se distingue de
+ * lo que se vendió ayer hasta tocar Actualizar.
+ */
+let _esperaHistorial = null;
+function rehacerCuandoLlegueElHistorial() {
+  if (_esperaHistorial) return;
+  _esperaHistorial = onStoreChange(async col => {
+    if (col !== 'ventas_por_dia' || !peekCacheValue('historial:ventas_dia:v3')?.length) return;
+    _esperaHistorial?.();
+    _esperaHistorial = null;
+    if (!document.getElementById('cc-root') || !_state) return;   // ya se fueron de la pantalla
+    try {
+      const alertas = await refrescarAlertas({ silent: true });
+      if (!document.getElementById('cc-root')) return;
+      const s = _state;
+      s.alertasBase = alertas;
+      s.rows = buildRows(fuentesCompra(alertas, s.comprasCfg), s.comprasCfg);
+      mezclarTemporadas();
+      recalc(true);
+    } catch (e) {
+      console.warn('[centro_compras] no se pudo rehacer la lista con el historial:', e);
+    }
+  });
 }
 
 /**
@@ -1791,13 +1831,17 @@ function rowHtml(r, i, esContinuacion) {
   const ritmoTitle = r.vel_dia > 0
     ? [
         `Ritmo con el que se decide: ~${fmt(r.vel_semana, 1)} por semana`,
+        r.semanas_observadas > 0
+          ? `Se vendió en ${fmt(r.semanas_con_venta, 0)} de las últimas ${fmt(r.semanas_observadas, 0)} semanas`
+          : '',
         `Últimos 30 días: ${fmt(r.unidades_ventana, 0)} unidades`,
         `Últimos ${VENTANA_CORTA_DIAS} días: ${fmt(r.unidades_7, 0)} unidades en ${fmt(r.dias_con_mov_7, 0)} día(s) distintos`,
         r.dias_con_mov_7 <= 1 && r.unidades_7 > 0
-          ? 'Una sola venta en la semana no cuenta como ritmo: manda el promedio del mes.'
+          ? 'Una sola venta en la semana no cuenta como ritmo: manda lo de las doce semanas.'
           : '',
+        'Las ventas grandes sueltas no inflan el ritmo: ningún día cuenta más que tres días normales.',
       ].filter(Boolean).join('\n')
-    : 'Sin ventas registradas en el último mes';
+    : 'Sin ventas registradas en las últimas doce semanas';
   const tendencia = tendenciaDe(r);
   const ritmo = `<span class="cc-tip-ancla" data-tip="${esc(ritmoTitle)}">${ritmoTxt}${tendencia}</span>`;
 
