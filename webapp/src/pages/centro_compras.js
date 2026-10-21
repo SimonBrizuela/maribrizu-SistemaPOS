@@ -43,7 +43,7 @@ import { listaCuadernoHtml } from '../lista_cuaderno.js';
 import {
   CAMPOS_FILTRO, SIN_VALOR, filtrosVacios, sanearFiltros, cantidadFiltros,
   coincideCompra, opcionesCompras, filtrarOpciones, campoTieneValores, textoBusquedaCompra,
-  CAMPO_CUADERNO, fechasCuaderno, ordenarPorAnotado,
+  CAMPO_CUADERNO, fechasCuaderno, ordenarPorAnotado, fechaVecina, fechaCuadernoLabel,
 } from '../filtros_compras.js';
 import {
   puntajeUrgencia, nivelPorPuntaje, compararUrgencia, motivosUrgencia, explicarUrgencia, ritmoDe,
@@ -1189,6 +1189,12 @@ function pageHtml() {
         <span class="material-icons cc-filtros-ico" title="Los filtros se combinan entre sí y con la lupa">filter_list</span>
         ${CAMPOS_FILTRO.map(ddHtml).join('')}
         ${ddHtml(CAMPO_CUADERNO)}
+        <div class="cc-dia-nav" id="cc-dia-nav" hidden>
+          <button type="button" class="cc-dia-nav-btn" data-action="dia-anterior" aria-label="Día anterior">
+            <span class="material-icons">chevron_left</span></button>
+          <button type="button" class="cc-dia-nav-btn" data-action="dia-siguiente" aria-label="Día siguiente">
+            <span class="material-icons">chevron_right</span></button>
+        </div>
         <button type="button" class="cc-filtros-clear" data-action="filtros-clear" hidden
                 title="Sacar todos los filtros (la búsqueda queda)">
           <span class="material-icons">filter_alt_off</span> Limpiar filtros
@@ -1526,7 +1532,9 @@ function onKeydown(e) {
 function pintarDdCuaderno(dd) {
   const s = _state;
   const def = CAMPO_CUADERNO;
+  const nav = document.getElementById('cc-dia-nav');
   dd.hidden = !s.filtroAnotados;
+  if (nav) nav.hidden = dd.hidden;
   if (dd.hidden) {
     if (_dd.abierto === def.k) cerrarDropdown();
     s.cuadernoFecha = '';
@@ -1535,6 +1543,15 @@ function pintarDdCuaderno(dd) {
   const opts = opcionesDd(def.k);
   if (s.cuadernoFecha && !s.rows.some(r => r.anotado === s.cuadernoFecha && !r.registrado)) s.cuadernoFecha = '';
   const sel = s.cuadernoFecha ? opts.find(o => o.valor === s.cuadernoFecha) : null;
+  // Flechas: ‹ va al día más viejo, › al más nuevo. Se apagan en las puntas.
+  if (nav) {
+    for (const [accion, dir, texto] of [['dia-anterior', 'anterior', 'Día anterior'], ['dia-siguiente', 'siguiente', 'Día siguiente']]) {
+      const b = nav.querySelector(`[data-action="${accion}"]`);
+      const destino = fechaVecina(opts, s.cuadernoFecha, dir);
+      b.disabled = !destino;
+      b.title = destino ? `${texto}: ${fechaCuadernoLabel(destino)}` : (dir === 'anterior' ? 'No hay días más viejos' : 'No hay días más nuevos');
+    }
+  }
   dd.classList.toggle('is-on', !!sel);
   dd.querySelector('.cc-dd-value').textContent = sel ? sel.label : 'Todas';
   dd.querySelector('.cc-dd-btn').title = sel ? `Anotado el ${sel.label} (${sel.n})` : 'Lo anotado en cualquier fecha';
@@ -2856,6 +2873,14 @@ function onClick(e) {
     case 'anotar':
       toggleAnotado(Number(btn.dataset.idx));
       break;
+    case 'dia-anterior':
+    case 'dia-siguiente': {
+      const destino = fechaVecina(opcionesDd(CAMPO_CUADERNO.k), s.cuadernoFecha,
+        btn.dataset.action === 'dia-anterior' ? 'anterior' : 'siguiente');
+      if (destino) elegirOpcionDd(CAMPO_CUADERNO.k, destino);
+      btn.focus({ preventScroll: true });
+      break;
+    }
     case 'filtro-anotados':
       s.filtroAnotados = !s.filtroAnotados;
       paintTable();

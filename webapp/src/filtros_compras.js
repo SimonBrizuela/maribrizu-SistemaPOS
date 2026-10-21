@@ -196,6 +196,20 @@ export function fechasCuaderno(rows, criterios) {
     .map(([valor, n]) => ({ valor, label: fechaCuadernoLabel(valor), n }));
 }
 
+// Flechas para recorrer los días anotados. `fechas` viene de fechasCuaderno
+// (del más nuevo al más viejo); los días que quedaron en cero no se pisan.
+// 'anterior' va al día más viejo que el actual; 'siguiente', al más nuevo.
+// Desde "todas las fechas", 'anterior' arranca por el día más reciente.
+// Devuelve null si no hay hacia dónde ir.
+export function fechaVecina(fechas, actual, dir) {
+  const dias = (fechas || []).filter(f => f.n > 0).map(f => f.valor);
+  if (!dias.length) return null;
+  if (!actual) return dir === 'anterior' ? dias[0] : null;
+  if (dir === 'anterior') return dias.find(d => d < actual) ?? null;
+  const nuevos = dias.filter(d => d > actual);
+  return nuevos.length ? nuevos[nuevos.length - 1] : null;
+}
+
 // Orden de lo anotado: del día más nuevo al más viejo. Es estable, así que
 // dentro de un mismo día queda el orden por urgencia que ya traía la lista.
 export function ordenarPorAnotado(indices, rows) {

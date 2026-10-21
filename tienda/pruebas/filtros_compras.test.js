@@ -12,7 +12,7 @@ import { describe, it, expect } from 'vitest';
 import {
   SIN_VALOR, claveFiltro, filtrosVacios, sanearFiltros, cantidadFiltros,
   coincideCompra, opcionesCompras, filtrarOpciones, campoTieneValores, textoBusquedaCompra,
-  fechasCuaderno, ordenarPorAnotado, fechaCuadernoLabel,
+  fechasCuaderno, ordenarPorAnotado, fechaCuadernoLabel, fechaVecina,
 } from '../../webapp/src/filtros_compras.js';
 
 const fila = (over = {}) => {
@@ -212,5 +212,32 @@ describe('fecha del cuaderno', () => {
 
   it('formatea la fecha como día/mes/año', () => {
     expect(fechaCuadernoLabel('2026-03-05')).toBe('05/03/2026');
+  });
+});
+
+describe('flechas entre días anotados', () => {
+  const F = [
+    { valor: '2026-10-21', n: 8 },
+    { valor: '2026-10-20', n: 0 },
+    { valor: '2026-10-19', n: 62 },
+    { valor: '2026-08-31', n: 9 },
+  ];
+  it('desde todas las fechas, la flecha de atrás arranca por el día más nuevo', () => {
+    expect(fechaVecina(F, '', 'anterior')).toBe('2026-10-21');
+    expect(fechaVecina(F, '', 'siguiente')).toBeNull();
+  });
+  it('va al día vecino salteando los que quedaron en cero', () => {
+    expect(fechaVecina(F, '2026-10-21', 'anterior')).toBe('2026-10-19');
+    expect(fechaVecina(F, '2026-10-19', 'siguiente')).toBe('2026-10-21');
+    expect(fechaVecina(F, '2026-10-19', 'anterior')).toBe('2026-08-31');
+  });
+  it('en las puntas no hay a dónde ir', () => {
+    expect(fechaVecina(F, '2026-08-31', 'anterior')).toBeNull();
+    expect(fechaVecina(F, '2026-10-21', 'siguiente')).toBeNull();
+    expect(fechaVecina([], '', 'anterior')).toBeNull();
+  });
+  it('desde un día que quedó en cero sigue al vecino que tiene algo', () => {
+    expect(fechaVecina(F, '2026-10-20', 'anterior')).toBe('2026-10-19');
+    expect(fechaVecina(F, '2026-10-20', 'siguiente')).toBe('2026-10-21');
   });
 });

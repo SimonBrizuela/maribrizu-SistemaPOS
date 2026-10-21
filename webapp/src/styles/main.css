@@ -4697,6 +4697,22 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
 .cc-filtros-clear:hover { color: var(--primary); border-color: var(--primary); }
 .cc-filtros-clear .material-icons { font-size: 15px !important; }
 .cc-filtros-clear[hidden] { display: none; }
+/* Flechas para pasar de un día anotado al otro, pegadas al desplegable. */
+.cc-dia-nav { display: inline-flex; gap: 2px; flex: none; }
+.cc-dia-nav[hidden] { display: none; }
+.cc-dia-nav-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 32px; height: 32px; padding: 0;
+  border: 1px solid var(--border); background: var(--surface); border-radius: 8px;
+  color: var(--text); cursor: pointer; transition: border-color .15s, color .15s;
+}
+.cc-dia-nav-btn .material-icons { font-size: 20px !important; }
+.cc-dia-nav-btn:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+.cc-dia-nav-btn:focus-visible {
+  outline: none; border-color: var(--primary);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 18%, transparent);
+}
+.cc-dia-nav-btn:disabled { opacity: .4; cursor: default; }
 .cc-filtros-count {
   margin-left: auto; font-size: 12px; font-weight: 600; color: var(--text-muted);
   font-variant-numeric: tabular-nums; white-space: nowrap;
