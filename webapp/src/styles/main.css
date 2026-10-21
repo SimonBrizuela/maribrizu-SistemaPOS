@@ -5202,6 +5202,17 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
   border-color: var(--tint-green-fg);
 }
 .cc-cutoff-cuaderno .material-icons { color: var(--tint-green-fg); }
+/* Día en que se anotó: separa lo anotado por fecha, del más nuevo al más
+   viejo. Más liviano que el corte: es un título dentro del bloque verde. */
+.cc-dia-cuaderno td {
+  background: var(--surface); color: var(--text);
+  font-weight: 600; font-size: 12px; padding: 7px 12px;
+  border-top: 1px solid var(--border); border-bottom: 1px solid var(--border);
+}
+.cc-dia-cuaderno .material-icons {
+  font-size: 15px !important; vertical-align: -3px; margin-right: 6px; color: var(--tint-green-fg);
+}
+.cc-dia-n { margin-left: 8px; font-weight: 500; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 /* Sin nada que entre en la plata no hay dos grupos que separar: es un aviso,
    no un corte, y va sin las líneas punteadas que parten la tabla en dos. */
 .cc-sinplata td {

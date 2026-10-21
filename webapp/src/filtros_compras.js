@@ -103,6 +103,9 @@ export function tokensBusqueda(busqueda) {
 export function coincideCompra(row, criterios, ignorar = null) {
   const filtros = criterios?.filtros || {};
   if (criterios?.soloAnotados && !(row.anotado && !row.registrado)) return false;
+  // Día en que se anotó en el cuaderno: solo cuenta con el cuaderno filtrado.
+  if (criterios?.soloAnotados && criterios.fechaAnotado && ignorar !== CAMPO_CUADERNO.k
+      && row.anotado !== criterios.fechaAnotado) return false;
   // "Ver solo lo de esta fecha", desde la franja de épocas de arriba.
   if (criterios?.soloTemporada && row.temporada?.id !== criterios.soloTemporada) return false;
   for (const c of CAMPOS_FILTRO) {
@@ -161,6 +164,46 @@ export function opcionesCompras(rows, criterios, campo) {
     return a.label.localeCompare(b.label, 'es', { sensitivity: 'base' });
   });
   return out;
+}
+
+// ── Fecha del cuaderno ────────────────────────────────────────────────────────
+// La marca del cuaderno guarda el día en que se anotó (YYYY-MM-DD). Con el
+// filtro del cuaderno puesto aparece un desplegable más para elegir un día, y
+// la lista va del día más nuevo al más viejo: lo que se anotó hace dos meses
+// no queda mezclado con lo de esta semana (pedido del 21/10/2026).
+export const CAMPO_CUADERNO = { k: 'anotado', label: 'Anotado', todos: 'Todas las fechas', sin: '' };
+
+// "2026-10-21" → "21/10/2026".
+export function fechaCuadernoLabel(ymd) {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(ymd || ''));
+  return m ? `${m[3]}/${m[2]}/${m[1]}` : String(ymd || '');
+}
+
+// Días con algo anotado, con cuántos renglones quedan en cada uno según los
+// demás criterios (rubro, lupa, etc.). Del más nuevo al más viejo. El día ya
+// elegido se mantiene aunque quede en cero, para poder sacarlo.
+export function fechasCuaderno(rows, criterios) {
+  const crit = { ...criterios, soloAnotados: true };
+  const cuenta = new Map();
+  for (const r of rows || []) {
+    if (!coincideCompra(r, crit, CAMPO_CUADERNO.k)) continue;
+    cuenta.set(r.anotado, (cuenta.get(r.anotado) || 0) + 1);
+  }
+  const elegida = criterios?.fechaAnotado || '';
+  if (elegida && !cuenta.has(elegida)) cuenta.set(elegida, 0);
+  return [...cuenta.entries()]
+    .sort((a, b) => (a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0))
+    .map(([valor, n]) => ({ valor, label: fechaCuadernoLabel(valor), n }));
+}
+
+// Orden de lo anotado: del día más nuevo al más viejo. Es estable, así que
+// dentro de un mismo día queda el orden por urgencia que ya traía la lista.
+export function ordenarPorAnotado(indices, rows) {
+  return [...indices].sort((a, b) => {
+    const fa = rows[a]?.anotado || '';
+    const fb = rows[b]?.anotado || '';
+    return fa < fb ? 1 : fa > fb ? -1 : 0;
+  });
 }
 
 // ¿Algún renglón de la lista tiene valor en este campo? Si ninguno lo tiene

@@ -12,6 +12,7 @@ import { describe, it, expect } from 'vitest';
 import {
   SIN_VALOR, claveFiltro, filtrosVacios, sanearFiltros, cantidadFiltros,
   coincideCompra, opcionesCompras, filtrarOpciones, campoTieneValores, textoBusquedaCompra,
+  fechasCuaderno, ordenarPorAnotado, fechaCuadernoLabel,
 } from '../../webapp/src/filtros_compras.js';
 
 const fila = (over = {}) => {
@@ -162,5 +163,54 @@ describe('lo que vuelve del storage', () => {
     expect(sanearFiltros({ proveedor: SIN_VALOR }).proveedor).toBe(SIN_VALOR);
     expect(sanearFiltros('basura')).toEqual(filtrosVacios());
     expect(cantidadFiltros({ rubro: 'a', marca: '' })).toBe(1);
+  });
+});
+
+describe('fecha del cuaderno', () => {
+  const CUADERNO = [
+    fila({ nombre: 'HILO ROJO', codigo: 'H1', rubro: 'MERCERIA', anotado: '2026-08-20' }),
+    fila({ nombre: 'HILO AZUL', codigo: 'H2', rubro: 'MERCERIA', anotado: '2026-10-21' }),
+    fila({ nombre: 'AGUJA', codigo: 'A1', rubro: 'MERCERÍA', anotado: '2026-10-21' }),
+    fila({ nombre: 'CINTA', codigo: 'C1', rubro: 'MERCERIA', anotado: '2026-09-02', registrado: true }),
+    fila({ nombre: 'GOMA', codigo: 'G9', rubro: 'LIBRERIA', anotado: '2026-09-02' }),
+    fila({ nombre: 'LAPIZ', codigo: 'L9', rubro: 'LIBRERIA' }),
+  ];
+
+  it('lista los días con algo anotado, del más nuevo al más viejo', () => {
+    const f = fechasCuaderno(CUADERNO, crit());
+    expect(f).toEqual([
+      { valor: '2026-10-21', label: '21/10/2026', n: 2 },
+      { valor: '2026-09-02', label: '02/09/2026', n: 1 },
+      { valor: '2026-08-20', label: '20/08/2026', n: 1 },
+    ]);
+  });
+
+  it('la cuenta de cada día respeta el rubro elegido', () => {
+    const f = fechasCuaderno(CUADERNO, crit({ rubro: 'merceria' }, { soloAnotados: true }));
+    expect(f.map(o => [o.valor, o.n])).toEqual([['2026-10-21', 2], ['2026-08-20', 1]]);
+  });
+
+  it('elegir un día deja solo lo anotado ese día', () => {
+    const c = crit({}, { soloAnotados: true, fechaAnotado: '2026-10-21' });
+    expect(CUADERNO.filter(r => coincideCompra(r, c)).map(r => r.codigo)).toEqual(['H2', 'A1']);
+  });
+
+  it('sin el cuaderno filtrado, la fecha no filtra nada', () => {
+    const c = crit({}, { soloAnotados: false, fechaAnotado: '2026-10-21' });
+    expect(CUADERNO.filter(r => coincideCompra(r, c)).length).toBe(CUADERNO.length);
+  });
+
+  it('el día elegido queda en la lista aunque no quede nada en él', () => {
+    const f = fechasCuaderno(CUADERNO, crit({ rubro: 'libreria' }, { soloAnotados: true, fechaAnotado: '2026-08-20' }));
+    expect(f.find(o => o.valor === '2026-08-20')).toEqual({ valor: '2026-08-20', label: '20/08/2026', n: 0 });
+  });
+
+  it('ordena del día más nuevo al más viejo sin desordenar los del mismo día', () => {
+    const orden = ordenarPorAnotado([0, 1, 2, 4], CUADERNO);
+    expect(orden.map(i => CUADERNO[i].codigo)).toEqual(['H2', 'A1', 'G9', 'H1']);
+  });
+
+  it('formatea la fecha como día/mes/año', () => {
+    expect(fechaCuadernoLabel('2026-03-05')).toBe('05/03/2026');
   });
 });

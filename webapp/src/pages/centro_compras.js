@@ -43,6 +43,7 @@ import { listaCuadernoHtml } from '../lista_cuaderno.js';
 import {
   CAMPOS_FILTRO, SIN_VALOR, filtrosVacios, sanearFiltros, cantidadFiltros,
   coincideCompra, opcionesCompras, filtrarOpciones, campoTieneValores, textoBusquedaCompra,
+  CAMPO_CUADERNO, fechasCuaderno, ordenarPorAnotado,
 } from '../filtros_compras.js';
 import {
   puntajeUrgencia, nivelPorPuntaje, compararUrgencia, motivosUrgencia, explicarUrgencia, ritmoDe,
@@ -745,6 +746,7 @@ export async function renderCentroCompras(container, db) {
     rows,
     period: 'mes',        // 'mes' | 'semana'
     filtroAnotados: false,   // true = la tabla muestra solo lo marcado "en el cuaderno"
+    cuadernoFecha: '',       // con el cuaderno filtrado: día de anotado elegido (YYYY-MM-DD) o '' = todos
     busqueda: guardado.busqueda,   // texto del buscador de la lista (se filtra sin acentos)
     filtros: guardado.filtros,     // rubro / subrubro / proveedor / marca / nivel elegidos
     topeManual: null,
@@ -1186,6 +1188,7 @@ function pageHtml() {
       <div class="cc-filtros" id="cc-filtros">
         <span class="material-icons cc-filtros-ico" title="Los filtros se combinan entre sí y con la lupa">filter_list</span>
         ${CAMPOS_FILTRO.map(ddHtml).join('')}
+        ${ddHtml(CAMPO_CUADERNO)}
         <button type="button" class="cc-filtros-clear" data-action="filtros-clear" hidden
                 title="Sacar todos los filtros (la búsqueda queda)">
           <span class="material-icons">filter_alt_off</span> Limpiar filtros
@@ -1324,6 +1327,7 @@ function criteriosLista() {
     filtros: s.filtros,
     busqueda: s.busqueda,
     soloAnotados: s.filtroAnotados,
+    fechaAnotado: s.filtroAnotados ? s.cuadernoFecha : '',
     soloTemporada: s.temporadaFiltro || '',
   };
 }
@@ -1372,6 +1376,21 @@ function ddHtml(c) {
   </div>`;
 }
 
+// El desplegable "Anotado" (día en que se anotó en el cuaderno) usa el mismo
+// componente que los filtros del catálogo, pero sus opciones son días y lo
+// elegido vive aparte: no es un campo del producto ni se guarda en la sesión.
+function defCampo(campo) {
+  return campo === CAMPO_CUADERNO.k ? CAMPO_CUADERNO : CAMPOS_FILTRO.find(c => c.k === campo);
+}
+function opcionesDd(campo) {
+  return campo === CAMPO_CUADERNO.k
+    ? fechasCuaderno(_state.rows, criteriosLista())
+    : opcionesCompras(_state.rows, criteriosLista(), campo);
+}
+function elegidoDd(campo) {
+  return campo === CAMPO_CUADERNO.k ? _state.cuadernoFecha : (_state.filtros[campo] || '');
+}
+
 function ddDe(campo) {
   return campo ? document.querySelector(`.cc-dd[data-campo="${campo}"]`) : null;
 }
@@ -1380,7 +1399,7 @@ function ddDe(campo) {
 // criterios), las opciones que coinciden con la lupa, y "Sin proveedor" al
 // final separado. Con texto en la lupa, "Todos" no se muestra.
 function pintarListaDd(dd, campo, opts, elegido, texto) {
-  const def = CAMPOS_FILTRO.find(c => c.k === campo);
+  const def = defCampo(campo);
   const lista = dd.querySelector('.cc-dd-lista');
   if (!def || !lista) return;
   const item = (valor, label, n, extra = '') => {
@@ -1404,9 +1423,8 @@ function tokensDd(texto) { return String(texto || '').trim().length > 0; }
 function repintarListaDd(campo) {
   const dd = ddDe(campo);
   if (!dd) return;
-  const opts = opcionesCompras(_state.rows, criteriosLista(), campo);
   const input = dd.querySelector('.cc-dd-input');
-  pintarListaDd(dd, campo, opts, _state.filtros[campo] || '', input ? input.value : '');
+  pintarListaDd(dd, campo, opcionesDd(campo), elegidoDd(campo), input ? input.value : '');
 }
 
 function abrirDropdown(campo) {
@@ -1452,11 +1470,17 @@ function onDocMouseDown(e) {
 
 function elegirOpcionDd(campo, valor) {
   const s = _state;
-  if (!(campo in s.filtros)) return;
-  s.filtros[campo] = valor || '';
-  cerrarDropdown();
-  guardarFiltros();
-  paintTable();
+  if (campo === CAMPO_CUADERNO.k) {
+    s.cuadernoFecha = valor || '';
+    cerrarDropdown();
+    paintTable();
+  } else {
+    if (!(campo in s.filtros)) return;
+    s.filtros[campo] = valor || '';
+    cerrarDropdown();
+    guardarFiltros();
+    paintTable();
+  }
   const btn = ddDe(campo)?.querySelector('.cc-dd-btn');
   if (btn) btn.focus({ preventScroll: true });
 }
@@ -1497,6 +1521,29 @@ function onKeydown(e) {
 // si ya filtraste por proveedor, en rubro se ven solo los rubros de ese
 // proveedor. Los campos que nadie tiene cargado (sin marcas en toda la lista)
 // no se muestran. Al final, "N de M" para saber cuánto quedó afuera.
+// Desplegable "Anotado": solo con el filtro del cuaderno puesto. Si el día
+// elegido ya no tiene nada (se compró todo lo de ese día), vuelve a "Todas".
+function pintarDdCuaderno(dd) {
+  const s = _state;
+  const def = CAMPO_CUADERNO;
+  dd.hidden = !s.filtroAnotados;
+  if (dd.hidden) {
+    if (_dd.abierto === def.k) cerrarDropdown();
+    s.cuadernoFecha = '';
+    return;
+  }
+  const opts = opcionesDd(def.k);
+  if (s.cuadernoFecha && !s.rows.some(r => r.anotado === s.cuadernoFecha && !r.registrado)) s.cuadernoFecha = '';
+  const sel = s.cuadernoFecha ? opts.find(o => o.valor === s.cuadernoFecha) : null;
+  dd.classList.toggle('is-on', !!sel);
+  dd.querySelector('.cc-dd-value').textContent = sel ? sel.label : 'Todas';
+  dd.querySelector('.cc-dd-btn').title = sel ? `Anotado el ${sel.label} (${sel.n})` : 'Lo anotado en cualquier fecha';
+  if (_dd.abierto === def.k) {
+    const input = dd.querySelector('.cc-dd-input');
+    pintarListaDd(dd, def.k, opts, s.cuadernoFecha, input ? input.value : '');
+  }
+}
+
 function paintFiltros(visibles) {
   const s = _state;
   const host = document.getElementById('cc-filtros');
@@ -1504,6 +1551,7 @@ function paintFiltros(visibles) {
   const crit = criteriosLista();
   for (const dd of host.querySelectorAll('.cc-dd[data-campo]')) {
     const campo = dd.dataset.campo;
+    if (campo === CAMPO_CUADERNO.k) { pintarDdCuaderno(dd); continue; }
     const def = CAMPOS_FILTRO.find(c => c.k === campo);
     if (!def) continue;
     const mostrar = campoTieneValores(s.rows, campo);
@@ -1527,7 +1575,7 @@ function paintFiltros(visibles) {
   }
   const nFiltros = cantidadFiltros(s.filtros);
   const btn = host.querySelector('[data-action="filtros-clear"]');
-  if (btn) btn.hidden = nFiltros === 0;
+  if (btn) btn.hidden = nFiltros === 0 && !s.cuadernoFecha;
   const cnt = document.getElementById('cc-filtros-count');
   if (cnt) {
     const total = s.rows.length;
@@ -1557,6 +1605,21 @@ function paintTable() {
   window.scrollBy(0, delta);
 }
 
+// "Anotado hoy", "Anotado ayer" o "Anotado el martes 2/9/2026".
+function diaAnotadoTexto(ymd) {
+  const hoy = hoyAR();
+  if (ymd === hoy) return 'Anotado hoy';
+  const ayer = new Date(Date.parse(`${hoy}T12:00:00-03:00`) - 86400000)
+    .toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+  if (ymd === ayer) return 'Anotado ayer';
+  const t = Date.parse(`${ymd}T12:00:00-03:00`);
+  if (Number.isNaN(t)) return 'Anotado';
+  const d = new Date(t);
+  const dia = d.toLocaleDateString('es-AR', { weekday: 'long', timeZone: 'America/Argentina/Buenos_Aires' });
+  const fecha = d.toLocaleDateString('es-AR', { day: 'numeric', month: 'numeric', year: 'numeric', timeZone: 'America/Argentina/Buenos_Aires' });
+  return `Anotado el ${dia} ${fecha}`;
+}
+
 function pintarFilas() {
   const s = _state;
   const tbody = document.getElementById('cc-tbody');
@@ -1573,6 +1636,8 @@ function pintarFilas() {
   // solo lo anotado. Si no queda nada anotado, el filtro se apaga solo (la
   // píldora desaparece y no habría forma de sacarlo).
   if (s.filtroAnotados && !s.rows.some(r => r.anotado && !r.registrado)) s.filtroAnotados = false;
+  if (!s.filtroAnotados) s.cuadernoFecha = '';
+  if (s.cuadernoFecha && !s.rows.some(r => r.anotado === s.cuadernoFecha && !r.registrado)) s.cuadernoFecha = '';
   // Selects (rubro, subrubro, proveedor, marca, nivel), lupa y cuaderno se
   // combinan en Y: cada uno achica lo que dejó el anterior.
   const crit = criteriosLista();
@@ -1627,6 +1692,34 @@ function pintarFilas() {
     parts.push(rowHtml(r, i, r.esVariedad && String(r.doc_id) === prevDoc));
     prevDoc = String(r.doc_id);
   };
+  // Lo anotado va por día, del más nuevo al más viejo, con un renglón que
+  // dice qué día se anotó. Lo de hace dos meses no queda mezclado con lo de
+  // esta semana.
+  const emitirPorDia = (indices) => {
+    const orden = ordenarPorAnotado(indices, s.rows);
+    const porDia = new Map();
+    for (const i of orden) porDia.set(s.rows[i].anotado, (porDia.get(s.rows[i].anotado) || 0) + 1);
+    let dia = null;
+    for (const i of orden) {
+      const f = s.rows[i].anotado;
+      if (f !== dia) {
+        dia = f;
+        prevDoc = null;
+        const n = porDia.get(f);
+        parts.push(`<tr class="cc-dia-cuaderno"><td colspan="10">
+          <span class="material-icons">event_note</span>${esc(diaAnotadoTexto(f))}
+          <span class="cc-dia-n">${n} ${n === 1 ? 'producto' : 'productos'}</span></td></tr>`);
+      }
+      emit(i);
+    }
+  };
+  // Con el filtro del cuaderno puesto, todo lo que se ve está anotado: la
+  // lista entera va por día y no hay corte de presupuesto que la parta.
+  if (s.filtroAnotados) {
+    emitirPorDia([...arriba, ...abajo]);
+    tbody.innerHTML = parts.join('');
+    return;
+  }
   arriba.forEach(emit);
   if (abajo.length) {
     // El corte separa lo que entra en la plata de lo que no. Sin nada arriba no
@@ -1662,7 +1755,7 @@ function pintarFilas() {
       <span class="material-icons">edit_note</span>
       Esto ya lo anotaste en el cuaderno (${enElCuaderno.length}) · ${nota}</td></tr>`);
     prevDoc = null;
-    enElCuaderno.forEach(emit);
+    emitirPorDia(enElCuaderno);
   }
   tbody.innerHTML = parts.join('');
 }
@@ -2029,8 +2122,9 @@ function paintResumen() {
 // mano cuánto se compró y cuánto se pagó. El armado del HTML es lógica pura
 // (lista_cuaderno.js); acá solo se juntan los renglones y se abre la ventana.
 function imprimirCuaderno() {
+  const fecha = _state.filtroAnotados ? _state.cuadernoFecha : '';
   const items = _state.rows
-    .filter(r => r.anotado && !r.registrado)
+    .filter(r => r.anotado && !r.registrado && (!fecha || r.anotado === fecha))
     .map(r => {
       const stk = stockRealDe(r);
       return {
@@ -2834,6 +2928,7 @@ function onClick(e) {
     case 'filtros-clear':
       cerrarDropdown();
       s.filtros = filtrosVacios();
+      s.cuadernoFecha = '';
       guardarFiltros();
       paintTable();
       break;
