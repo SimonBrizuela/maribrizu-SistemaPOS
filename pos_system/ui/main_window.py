@@ -3,7 +3,8 @@ import threading
 from pathlib import Path
 from PyQt5.QtWidgets import (QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
                              QTabWidget, QLabel, QStatusBar, QShortcut,
-                             QPushButton, QMessageBox, QSizePolicy, QApplication)
+                             QPushButton, QMessageBox, QSizePolicy, QApplication,
+                             QDialog)
 from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtCore import Qt, QTimer
 from PyQt5.QtGui import QFont, QKeySequence, QPixmap
@@ -177,6 +178,8 @@ class MainWindow(QMainWindow):
         self.pedidos_web_view.pendientes_cambio.connect(self._franja_pedidos.actualizar)
         self._franja_pedidos.ver.connect(self._abrir_pedido_web)
         QTimer.singleShot(1500, self._iniciar_pedidos_web)
+        # Ventas abiertas en las otras cajas (traer la venta a esta PC).
+        QTimer.singleShot(1800, self._iniciar_carritos_vivos)
 
         # Pestañas adicionales solo para admin
         if is_admin:
@@ -332,6 +335,27 @@ class MainWindow(QMainWindow):
         title_box.addWidget(title_lbl)
         title_box.addWidget(self._header_subtitle)
         hl.addLayout(title_box)
+
+        # ── Nombre de esta caja (Compu 1, Compu 2...) ──────────────────────
+        # El admin lo toca para cambiarlo; el cajero solo lo ve.
+        chip_css = (
+            f'background: #e5dcc8; border: none; border-radius: 10px; padding: {pad};'
+            f' color: {COLORS["text"]}; font-size: {fs + 1}px; font-weight: 700;'
+        )
+        if self.current_user.get('role') == 'admin':
+            self._nombre_caja_chip = QPushButton('')
+            self._nombre_caja_chip.setCursor(Qt.PointingHandCursor)
+            self._nombre_caja_chip.setStyleSheet(
+                f'QPushButton {{ {chip_css} }} QPushButton:hover {{ background: #d7cab2; }}'
+            )
+            self._nombre_caja_chip.clicked.connect(self._cambiar_nombre_caja)
+        else:
+            self._nombre_caja_chip = QLabel('')
+            self._nombre_caja_chip.setStyleSheet(chip_css)
+        self._nombre_caja_chip.setFont(QFont('Segoe UI', fs, QFont.Bold))
+        hl.addSpacing(6)
+        hl.addWidget(self._nombre_caja_chip)
+        self._pintar_nombre_caja()
         hl.addStretch(1)
 
         user_role = self.current_user.get('role', '')
@@ -944,6 +968,79 @@ class MainWindow(QMainWindow):
             logger.warning(f"Pedidos web: no se pudo conectar ({e}); se reintenta.")
             QTimer.singleShot(30_000, self._iniciar_pedidos_web)
 
+    def _iniciar_carritos_vivos(self):
+        """Conecta el carrito de Ventas con los de las otras cajas cuando la
+        nube está lista. Sin nube, Ventas anda igual: solo no ve las otras."""
+        cc = self.sales_view.carrito_compartido
+        if cc.conectado:
+            return
+        try:
+            from pos_system.utils.firebase_sync import get_firebase_sync
+            fb = get_firebase_sync()
+            if not fb or not fb.enabled:
+                QTimer.singleShot(3000, self._iniciar_carritos_vivos)
+                return
+            from pos_system.utils.carritos_vivos_nube import NubeCarritos
+            self._nube_carritos = NubeCarritos(fb.db)
+            cc.conectar(self._nube_carritos)
+            logger.info("Carritos vivos: conectado.")
+        except Exception as e:
+            logger.warning(f"Carritos vivos: no se pudo conectar ({e}); se reintenta.")
+            QTimer.singleShot(30_000, self._iniciar_carritos_vivos)
+
+    def _apagar_carritos_vivos(self):
+        try:
+            cc = self.sales_view.carrito_compartido
+            cc.vaciar_al_cerrar()
+            cc.detener()
+        except Exception:
+            pass
+
+    def _cambiar_nombre_caja(self):
+        """El admin le pone nombre a esta PC (Compu 1, Compu 2...)."""
+        from pos_system.utils import nombre_caja
+        from pos_system.ui.otras_cajas import NombreCajaDialog
+        from pos_system.utils.firebase_sync import _get_pc_id
+        en_uso = {}
+        nube = getattr(self, '_nube_carritos', None)
+        if nube is not None:
+            try:
+                en_uso = nube.nombres_en_uso(_get_pc_id())
+            except Exception as e:
+                logger.info(f"Nombre de caja: no se pudo ver qué nombres están usados ({e})")
+        dlg = NombreCajaDialog(self, actual=nombre_caja.leer(), en_uso=en_uso,
+                               sugeridos=nombre_caja.SUGERIDOS)
+        if dlg.exec_() != QDialog.Accepted or not dlg.nombre:
+            return
+        try:
+            nuevo = nombre_caja.guardar(dlg.nombre)
+        except OSError as e:
+            MessageBox.warning(self, 'Nombre de la caja', f'No se pudo guardar el nombre: {e}')
+            return
+        self._pintar_nombre_caja()
+        if nube is not None:
+            def _subir():
+                try:
+                    nube.guardar_nombre(_get_pc_id(), nuevo)
+                except Exception as e:
+                    logger.warning(f"Nombre de caja: no se pudo subir a pcs ({e})")
+            threading.Thread(target=_subir, daemon=True, name='nombre-caja').start()
+        # Las otras cajas lo ven con la próxima publicación del carrito.
+        self.sales_view.carrito_compartido.cambio()
+
+    def _pintar_nombre_caja(self):
+        from pos_system.utils import nombre_caja
+        chip = getattr(self, '_nombre_caja_chip', None)
+        if chip is None:
+            return
+        nombre = nombre_caja.leer()
+        if isinstance(chip, QPushButton):
+            chip.setText(nombre or 'Ponerle nombre a la caja')
+            chip.setToolTip('Cambiar el nombre de esta caja' if nombre else
+                            'Las otras cajas ven esta PC con este nombre')
+        else:
+            chip.setText(nombre_caja.para_mostrar(nombre))
+
     def _apagar_pedidos_web(self):
         vigia = getattr(self, '_vigia_pedidos', None)
         if vigia is not None:
@@ -1012,8 +1109,10 @@ class MainWindow(QMainWindow):
                     cr_id = reg['id'] if reg else None
                 except Exception:
                     cr_id = None
+                from pos_system.utils import nombre_caja
                 return {'cajero': cajero, 'turno_nombre': turno,
-                        'cash_register_id': cr_id}
+                        'cash_register_id': cr_id,
+                        'nombre_caja': nombre_caja.leer()}
 
             handlers = {
                 'sync_upload':        self._cmd_sync_upload,
@@ -1405,6 +1504,7 @@ class MainWindow(QMainWindow):
             self.stock_timer.stop()
         except Exception:
             pass
+        self._apagar_carritos_vivos()
         # Cerrar la app por completo (no reabrir ventana)
         from PyQt5.QtWidgets import QApplication
         QApplication.quit()
@@ -1805,6 +1905,7 @@ class MainWindow(QMainWindow):
                     logger.info("Application closed with open cash register")
                     self._shutdown_pc_status()
                     self._apagar_pedidos_web()
+                    self._apagar_carritos_vivos()
                     event.accept()
                 else:
                     event.ignore()
@@ -1812,6 +1913,7 @@ class MainWindow(QMainWindow):
                 logger.info("Application closed normally")
                 self._shutdown_pc_status()
                 self._apagar_pedidos_web()
+                self._apagar_carritos_vivos()
                 event.accept()
         except Exception as e:
             logger.error(f"Error during close: {e}")

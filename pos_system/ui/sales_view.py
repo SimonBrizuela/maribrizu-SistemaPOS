@@ -40,6 +40,10 @@ from pos_system.models.fiado import Fiado, nuevo_entrega_id
 from pos_system.ui.presupuesto_dialog import PresupuestoDialog
 from pos_system.models.mother_product import MotherProduct, Node, Discount
 from pos_system.ui.mp_variant_dialog import MPVariantDialog
+from pos_system.models import carrito_vivo as _vivo
+from pos_system.ui.otras_cajas import OtrasCajasCard, CarritoAjenoDialog, AvisoVenta
+from pos_system.utils.carritos_vivos import CarritoCompartido
+from pos_system.utils import nombre_caja as _nombre_caja
 
 
 def _fmt_qty(q):
@@ -1018,7 +1022,7 @@ class SalesView(QWidget):
     # por señal por lo mismo: la trae un hilo de red.
     cotizacion_usd_lista = pyqtSignal(float)
 
-    def __init__(self, parent=None, current_user: dict = None):
+    def __init__(self, parent=None, current_user: dict = None, pc_id: str = None):
         super().__init__(parent)
         from pos_system.database.db_manager import DatabaseManager
         self.db = DatabaseManager()
@@ -1069,7 +1073,31 @@ class SalesView(QWidget):
         # Historial de búsquedas (expira 4 min): lista de (termino, timestamp)
         self._search_history = []
         self._history_popup = None
+        # ── Venta compartida entre cajas (carritos vivos) ──
+        # El carrito se publica para que otra caja pueda traerlo. `_venta_epoch`
+        # identifica la venta en curso y viaja con ella; `_cart_cajero_fijo` es
+        # el cajero que la empezó cuando llegó de otra caja: se cobra a su nombre.
+        if pc_id is None:
+            from pos_system.utils.firebase_sync import _get_pc_id
+            pc_id = _get_pc_id()
+        self.pc_id = pc_id
+        self._venta_epoch = None
+        self._venta_epoch_cerrada = None
+        self._cart_cajero_fijo = None
+        self._venta_traida_de = None
+        self._cobrando_vivo = False
+        # Mientras se trae o se entrega una venta, lo que se carga espera en fila.
+        self._congelado = 0
+        self._cola_carga = []
+        # El nombre que ven las otras cajas (Compu 1...). Función y no valor:
+        # el admin lo puede cambiar con el POS abierto.
+        self._nombre_caja = _nombre_caja.para_mostrar
+        self.carrito_compartido = CarritoCompartido(
+            self.pc_id, self._estado_carrito_vivo, lambda: self._nombre_caja(), parent=self)
         self.init_ui()
+        self.carrito_compartido.otras_cajas.connect(self._pintar_otras_cajas)
+        self.carrito_compartido.piden_la_venta.connect(self._al_pedir_la_venta)
+        self.carrito_compartido.venta_llego.connect(self._adoptar_venta)
         self._start_firebase_listener()
         self.inventory_updated.connect(self.refresh_data)
         self.fiado_cliente_changed.connect(self._refrescar_fiado_cliente)
@@ -1380,6 +1408,15 @@ class SalesView(QWidget):
         cart_title.setFont(QFont('Segoe UI', 12, QFont.Bold))
         cart_title.setStyleSheet(f"color:{_T['text']}; background:transparent; border:none;")
         cart_hdr_l.addWidget(cart_title)
+        # De qué caja vino la venta y a nombre de quién se cobra (solo si vino
+        # de otra caja).
+        self._venta_origen_lbl = QLabel('')
+        self._venta_origen_lbl.setStyleSheet(
+            f"color:{_T['accent']}; background:{_T['accent_soft']}; border:none;"
+            f" border-radius:4px; padding:2px 8px; font-size:11px; font-weight:700;"
+        )
+        self._venta_origen_lbl.setVisible(False)
+        cart_hdr_l.addWidget(self._venta_origen_lbl)
         cart_hdr_l.addStretch(1)
         self.items_count_lbl = QLabel('0 items')
         self.items_count_lbl.setStyleSheet(
@@ -1392,6 +1429,19 @@ class SalesView(QWidget):
         # Banda de Modo Fiado: sólo visible con el modo activo. Es la señal
         # principal de que el carrito NO se va a cobrar ahora.
         cart_v.addWidget(self._build_fiado_banner())
+
+        # Aviso de una línea: "La venta pasó a la Compu 3". Va dentro del
+        # carrito, arriba de la tabla: no tapa el botón Cobrar ni se apila.
+        aviso_box = QWidget()
+        aviso_box.setStyleSheet('background:transparent;')
+        aviso_l = QVBoxLayout(aviso_box)
+        aviso_l.setContentsMargins(10, 8, 10, 0)
+        self.aviso_venta = AvisoVenta()
+        aviso_l.addWidget(self.aviso_venta)
+        aviso_box.setVisible(False)
+        self._aviso_box = aviso_box
+        self.aviso_venta.installEventFilter(self)
+        cart_v.addWidget(aviso_box)
 
         # Tabla del carrito (4 columnas estilo mockup)
         self.cart_table = QTableWidget()
@@ -1542,6 +1592,10 @@ class SalesView(QWidget):
         side_v.addWidget(self._build_estado_card())
         # PENDIENTES (ventas en espera)
         side_v.addWidget(self._build_pending_card())
+        # EN OTRAS CAJAS (ventas abiertas en otras PCs, para traerlas)
+        self._otras_cajas_card = OtrasCajasCard()
+        self._otras_cajas_card.elegida.connect(self._abrir_carrito_ajeno)
+        side_v.addWidget(self._otras_cajas_card)
 
         side_v.addStretch(1)
         body.addWidget(side)
@@ -1994,6 +2048,8 @@ class SalesView(QWidget):
 
     def _add_to_pending(self):
         """Guarda el carrito actual como pendiente y lo vacía."""
+        if self._congelado:
+            return
         if not self.cart:
             QMessageBox.warning(self, 'Carrito vacío',
                 'No hay nada para dejar pendiente. Agregá productos primero.')
@@ -2001,20 +2057,17 @@ class SalesView(QWidget):
 
         # Quién dejó la venta = quien INICIÓ el carrito (sellado en
         # update_cart_display), no quien la archiva. Fallback al turno actual.
-        cajero_nombre = getattr(self, '_cart_cajero', None) or self._current_turno_nombre()
-        pc_id = ''
-        try:
-            mw = self.get_main_window()
-            pc_id = getattr(mw, 'pc_id', '') if mw else ''
-        except Exception:
-            pass
+        cajero_nombre = (self._cart_cajero_fijo or getattr(self, '_cart_cajero', None)
+                         or self._current_turno_nombre())
 
         try:
             self.pending_model.create(
                 items=self.cart,
                 cajero_nombre=cajero_nombre,
                 user_id=self.current_user.get('id'),
-                pc_id=pc_id,
+                pc_id=self.pc_id,
+                # Al restaurarla se cobra a nombre de quien la empezó.
+                cajero_original=cajero_nombre,
             )
         except Exception as e:
             logger.exception('Error dejando venta pendiente')
@@ -2117,9 +2170,13 @@ class SalesView(QWidget):
             return
 
         self.cart = items
-        # Conservar al cajero original del pendiente (si se vuelve a dejar
-        # pendiente, sigue figurando quien lo inició, no quien lo retomó).
+        # Conservar al cajero original del pendiente: figura y se cobra a su
+        # nombre aunque la retome otro. Los pendientes de antes de la columna
+        # (cajero_original NULL) se siguen cobrando a nombre del turno.
         self._cart_cajero = (p.get('cajero_nombre') or '').strip() or None
+        self._venta_epoch = None
+        self._cart_cajero_fijo = (p.get('cajero_original') or '').strip() or None
+        self._venta_traida_de = None
         self.update_cart_display()
         self._refresh_pending_panel()
 
@@ -2216,6 +2273,395 @@ class SalesView(QWidget):
             )
             return resp == QMessageBox.Yes
         return True
+
+    # ════════════════════════════════════════════════════════════════════
+    # ── VENTA COMPARTIDA ENTRE CAJAS (carritos vivos) ───────────────────
+    # ════════════════════════════════════════════════════════════════════
+    def _estado_carrito_vivo(self):
+        """(epoch, estado) para publicar. Con el carrito vacío, estado None y el
+        epoch de la última venta, para que su documento quede vacío."""
+        if not self.cart:
+            return self._venta_epoch_cerrada, None
+        if not self._venta_epoch:
+            self._venta_epoch = _vivo.nuevo_epoch()
+        try:
+            items_json = _vivo.serializar_items(self.cart, self._ref_producto)
+            descuento_monto = self._descuento_total()
+        except Exception:
+            logger.exception('Carritos vivos: no se pudo armar el carrito para publicar')
+            return None, None
+        return self._venta_epoch, _vivo.armar_estado(
+            pc_id=self.pc_id,
+            pc_nombre=self._nombre_caja(),
+            epoch=self._venta_epoch,
+            items_json=items_json,
+            items=self.cart,
+            cajero=self._cart_cajero_fijo or self._cart_cajero or self._current_turno_nombre(),
+            descuento=self.descuento_manual,
+            descuento_monto=descuento_monto,
+            presupuesto=self._ref_presupuesto(),
+            fiado=self._ref_fiado(),
+            cobrando=self._cobrando_vivo,
+            traida_de=self._venta_traida_de,
+        )
+
+    def _ref_producto(self, product_id):
+        rows = self.db.execute_query(
+            "SELECT firebase_id, barcode FROM products WHERE id = ? LIMIT 1", (int(product_id),)
+        ) or []
+        return dict(rows[0]) if rows else None
+
+    def _buscar_producto_local(self, ref):
+        """Id local del producto que en otra caja tenía este firebase_id o
+        código de barras."""
+        for campo in ('firebase_id', 'barcode'):
+            valor = str((ref or {}).get(campo) or '').strip()
+            if not valor:
+                continue
+            rows = self.db.execute_query(
+                f"SELECT id FROM products WHERE {campo} = ? LIMIT 1", (valor,)
+            ) or []
+            if rows:
+                return int(rows[0]['id'])
+        return None
+
+    def _ref_presupuesto(self):
+        pres_id = getattr(self, '_pending_presupuesto_id', None)
+        if not pres_id:
+            return None
+        rows = self.db.execute_query(
+            "SELECT firebase_id, numero FROM presupuestos WHERE id = ? LIMIT 1", (int(pres_id),)
+        ) or []
+        if not rows:
+            return None
+        return {'firebase_id': str(rows[0].get('firebase_id') or ''), 'numero': rows[0].get('numero')}
+
+    def _presupuesto_local(self, ref):
+        fid = str((ref or {}).get('firebase_id') or '').strip()
+        if not fid:
+            return None
+        rows = self.db.execute_query(
+            "SELECT id FROM presupuestos WHERE firebase_id = ? LIMIT 1", (fid,)
+        ) or []
+        return int(rows[0]['id']) if rows else None
+
+    def _ref_fiado(self):
+        if not self._fiado_mode or not self._fiado_cliente:
+            return None
+        cli = self._fiado_cliente
+        return {'firebase_id': str(cli.get('firebase_id') or ''), 'nombre': str(cli.get('nombre') or '')}
+
+    def _cliente_fiado_local(self, ref):
+        fid = str((ref or {}).get('firebase_id') or '').strip()
+        if not fid:
+            return None
+        try:
+            return next((c for c in self.fiado_model.get_clientes()
+                         if str(c.get('firebase_id') or '') == fid), None)
+        except Exception:
+            logger.exception('Carritos vivos: no se pudo leer el cliente de fiado')
+            return None
+
+    def _carrito_cambio(self):
+        """Lo llaman los repintados del carrito: lleva el id de la venta y
+        avisa que hay que publicar."""
+        if self.cart:
+            if not self._venta_epoch:
+                self._venta_epoch = _vivo.nuevo_epoch()
+        else:
+            if self._venta_epoch:
+                self._venta_epoch_cerrada = self._venta_epoch
+                self._venta_epoch = None
+                # Venta cobrada o vaciada: el aviso de esa venta ya no aplica.
+                aviso = getattr(self, 'aviso_venta', None)
+                if aviso is not None:
+                    aviso.ocultar()
+            self._cart_cajero_fijo = None
+            self._venta_traida_de = None
+            self._cobrando_vivo = False
+        self._actualizar_origen_lbl()
+        cc = getattr(self, 'carrito_compartido', None)
+        if cc is not None:
+            cc.cambio()
+
+    def _cajero_de_la_venta(self):
+        """A nombre de quién se cobra: el cajero que empezó la venta si vino de
+        otra caja; si no, el de turno (como siempre)."""
+        return self._cart_cajero_fijo or self._current_turno_nombre()
+
+    def _actualizar_origen_lbl(self):
+        lbl = getattr(self, '_venta_origen_lbl', None)
+        if lbl is None:
+            return
+        origen = self._venta_traida_de or {}
+        cajero = self._cart_cajero_fijo or ''
+        if self.cart and origen:
+            lbl.setText(f"Vino de la {origen.get('pc_nombre') or 'otra caja'}"
+                        + (f" · se cobra a nombre de {cajero}" if cajero else ''))
+            lbl.setVisible(True)
+        elif self.cart and cajero and cajero != self._current_turno_nombre():
+            # Pendiente retomado por otro cajero: se cobra a nombre de quien la empezó.
+            lbl.setText(f"Se cobra a nombre de {cajero}")
+            lbl.setVisible(True)
+        else:
+            lbl.setVisible(False)
+
+    def _mostrar_aviso(self, texto, tono='aviso', ms=None):
+        self._aviso_box.setVisible(True)
+        self.aviso_venta.mostrar(texto, tono, ms)
+
+    # ── Congelar el carrito un instante (traer / entregar) ──
+    # Mientras la nube contesta, lo que se escanea o se busca no entra al
+    # carrito: queda en fila y entra apenas termina. Así no se pierde nada ni
+    # se mezcla con la venta que llega o que se va.
+    def _congelar(self):
+        self._congelado += 1
+        self.cart_table.setEnabled(False)
+        for b in (self._cobrar_btn, self._pending_btn):
+            b.setEnabled(False)
+
+    def _descongelar(self):
+        self._congelado = max(0, self._congelado - 1)
+        if self._congelado:
+            return
+        self.cart_table.setEnabled(True)
+        for b in (self._cobrar_btn, self._pending_btn):
+            b.setEnabled(True)
+        cola, self._cola_carga = self._cola_carga, []
+        for tipo, dato in cola:
+            if tipo == 'producto':
+                self.add_to_cart(dato)
+            elif tipo == 'mp':
+                self._add_mp_lineas_to_cart(dato)
+            elif tipo == 'linea':
+                self.cart.append(dato)
+                self.update_cart_display()
+
+    def _encolar_si_congelado(self, tipo, dato):
+        """True si el carrito está congelado y `dato` quedó en la fila."""
+        if not self._congelado:
+            return False
+        self._cola_carga.append((tipo, dato))
+        return True
+
+    def _pintar_otras_cajas(self, carritos=None):
+        cc = self.carrito_compartido
+        if carritos is None:
+            carritos = cc.carritos()
+        self._otras_cajas_card.mostrar(carritos, cc.en_linea, conectado=cc.conectado)
+        dlg = getattr(self, '_dialogo_ajeno', None)
+        if dlg is not None:
+            try:
+                dlg.actualizar(cc.doc_de(dlg.pc_id))
+            except RuntimeError:
+                self._dialogo_ajeno = None
+
+    def _bloqueo_para_traer(self, doc):
+        """Por qué no se puede traer esa venta ahora ('' si se puede)."""
+        nombre = _vivo.nombre_de_caja(doc)
+        if self.cart:
+            return ('Tu carrito tiene productos. Cobralo o dejalo pendiente '
+                    'antes de traer esta venta.')
+        cc = self.carrito_compartido
+        if not cc.conectado or cc.en_linea is False:
+            return 'Sin conexión: ahora no se puede traer. Probá en un rato.'
+        if doc.get('cobrando'):
+            return f'La están cobrando en la {nombre}.'
+        if not _vivo.vigente(doc, cc.ahora()):
+            return (f'La {nombre} no da señales hace rato (apagada o sin internet). '
+                    f'Terminá la venta allá.')
+        _items, faltan = _vivo.adaptar_items(_vivo.leer_items(doc.get('items_json')),
+                                             self._buscar_producto_local)
+        if faltan:
+            lista = ', '.join(faltan[:3]) + ('…' if len(faltan) > 3 else '')
+            return (f'Esta caja todavía no tiene en su catálogo: {lista}. '
+                    f'Sincronizá (F8) y probá de nuevo.')
+        return ''
+
+    def _abrir_carrito_ajeno(self, pc_id):
+        cc = self.carrito_compartido
+        doc = cc.doc_de(pc_id)
+        if not _vivo.tiene_venta(doc):
+            self._pintar_otras_cajas()
+            return
+        dlg = CarritoAjenoDialog(self, pc_id, doc, self._bloqueo_para_traer, ahora=cc.ahora)
+        dlg.setAttribute(Qt.WA_DeleteOnClose)
+        self._dialogo_ajeno = dlg
+        try:
+            dlg.exec_()
+            accion, visto = dlg.action, dict(dlg.doc or {})
+        finally:
+            self._dialogo_ajeno = None
+        if accion == 'traer':
+            self._traer_venta(pc_id, visto)
+
+    def _traer_venta(self, pc_id, doc):
+        """Pide la venta a la otra caja y la carga cuando la entrega."""
+        motivo = self._bloqueo_para_traer(doc)
+        if motivo:
+            QMessageBox.information(self, 'Traer venta', motivo)
+            return
+        nombre = _vivo.nombre_de_caja(doc, pc_id)
+        quien = {'pc_id': self.pc_id, 'pc_nombre': self._nombre_caja(),
+                 'cajero': self._current_turno_nombre()}
+        self._mostrar_aviso(f'Pidiendo la venta a la {nombre}…', 'espera', ms=60_000)
+        QApplication.setOverrideCursor(Qt.WaitCursor)
+        self._congelar()
+        try:
+            r = self.carrito_compartido.traer(pc_id, str(doc.get('epoch') or ''), quien)
+            if r.get('ok'):
+                self._cargar_venta_traida(r.get('entrega') or {})
+            else:
+                self.aviso_venta.ocultar()
+        finally:
+            QApplication.restoreOverrideCursor()
+            # Lo escaneado durante la espera entra ahora, después de lo traído.
+            self._descongelar()
+        if not r.get('ok'):
+            self._mostrar_aviso(r.get('rechazo') or f'La {nombre} no entregó la venta.', 'aviso', ms=6000)
+            self._pintar_otras_cajas()
+
+    def _cargar_venta_traida(self, origen, texto=None):
+        """Pone en este carrito la venta que llegó, con su cajero, su descuento,
+        su presupuesto y su fiado. Si algo entró al carrito mientras se
+        esperaba, queda después de lo traído."""
+        origen_caja = origen.get('traida_de') or {}
+        nombre = origen_caja.get('pc_nombre') or _vivo.nombre_de_caja(origen)
+        items, faltan = _vivo.adaptar_items(_vivo.leer_items(origen.get('items_json')),
+                                            self._buscar_producto_local, convertir=True)
+        cajero = str(origen.get('cajero') or '').strip() or None
+        notas = []
+
+        self.cart = items + list(self.cart)
+        self._venta_epoch = str(origen.get('epoch') or '') or _vivo.nuevo_epoch()
+        self._venta_epoch_cerrada = None
+        self._cart_cajero = cajero
+        self._cart_cajero_fijo = cajero
+        self._venta_traida_de = {'pc_id': str(origen_caja.get('pc_id') or ''), 'pc_nombre': nombre}
+        desc = origen.get('descuento')
+        self.descuento_manual = dict(desc) if isinstance(desc, dict) and desc.get('nombre') else None
+        self._pending_presupuesto_id = self._presupuesto_local(origen.get('presupuesto'))
+
+        fiado = origen.get('fiado') or {}
+        if fiado:
+            cliente = self._cliente_fiado_local(fiado)
+            if cliente:
+                self._fiado_cliente = cliente
+                self._set_fiado_mode(True)
+            else:
+                if self._fiado_mode:
+                    self._set_fiado_mode(False)
+                notas.append(f"{fiado.get('nombre') or 'El cliente del fiado'} no está en esta caja: "
+                             f"elegilo de nuevo con el botón Fiado.")
+        elif self._fiado_mode:
+            # Esta caja estaba en Modo Fiado y la venta que llega no: se cargaría
+            # a la cuenta equivocada.
+            self._set_fiado_mode(False)
+
+        self.update_cart_display()
+        if faltan:
+            notas.append('Esta caja no tiene en su catálogo estos productos; van como Varios '
+                         '(sin descontar stock): ' + ', '.join(faltan))
+        if texto is None:
+            texto = f'Trajiste la venta de la {nombre}.'
+            if cajero:
+                texto += f' Se cobra a nombre de {cajero}.'
+        self._mostrar_aviso(texto, 'ok')
+
+        problemas = [(p['nombre'] or 'Item', p['texto']) for p in self._recalcular_conjuntos_del_carrito()
+                     if p['motivo'] == 'sin_stock']
+        if problemas:
+            notas.append('El stock de estos productos por fracción ya no alcanza: '
+                         + '; '.join(f'{n} ({e})' for n, e in problemas))
+        if notas:
+            QMessageBox.warning(self, 'Venta traída', '\n\n'.join(notas))
+
+    def _al_pedir_la_venta(self, sol):
+        """Otra caja pide la venta de esta. Se entrega en una transacción con el
+        carrito de este momento (lo último escaneado incluido). Lo que se
+        escanee después arranca un carrito nuevo: no se pierde."""
+        cc = self.carrito_compartido
+        destino = str((sol.get('de') or {}).get('pc_nombre') or '').strip() or 'otra caja'
+        mi_nombre = self._nombre_caja()
+        if not self.cart or sol.get('epoch') != self._venta_epoch:
+            cc.rechazar(sol, f'Esa venta ya no está abierta en la {mi_nombre}.')
+            return
+        if self._cobrando_vivo or getattr(self, '_reservando_cobro', False) or self._congelado:
+            cc.rechazar(sol, f'La están cobrando en la {mi_nombre}.')
+            return
+        self._congelar()
+        try:
+            epoch, estado = self._estado_carrito_vivo()
+            entregados = len(self.cart)
+            r = cc.entregar(sol, epoch, estado)
+            if r.get('ok'):
+                # Lo que se agregó mientras la nube contestaba (un diálogo que
+                # se cerró en ese momento) queda: arranca una venta nueva.
+                resto = list(self.cart[entregados:])
+                self._venta_epoch = None
+                self._venta_epoch_cerrada = None
+                self.cart = []
+                self.descuento_manual = None
+                self._pending_presupuesto_id = None
+                if self._fiado_mode:
+                    self._set_fiado_mode(False)
+                self.update_cart_display()
+                self._mostrar_aviso(f'La venta pasó a la {destino}.')
+                if resto:
+                    self.cart = resto
+                    self.update_cart_display()
+            else:
+                logger.info(f"Carritos vivos: no se entregó la venta ({r.get('motivo')})")
+                if r.get('motivo') == 'destino_ocupado':
+                    cc.rechazar(sol, f'La {destino} tiene otra venta abierta: cobrala o dejala '
+                                     f'pendiente y pedila de nuevo.')
+                elif r.get('motivo') == 'no_esta':
+                    cc.rechazar(sol, f'Esa venta ya no está abierta en la {mi_nombre}.')
+        finally:
+            self._descongelar()
+
+    def _adoptar_venta(self, doc):
+        """Una venta que otra caja entregó a esta y no se cargó (llegó después
+        de dejar de esperar, o con el POS cerrado). Con el carrito vacío entra
+        al carrito; si no, queda en PENDIENTES con su cajero. Nunca se pierde."""
+        if not _vivo.tiene_venta(doc) or doc.get('epoch') == self._venta_epoch:
+            return
+        nombre = (doc.get('traida_de') or {}).get('pc_nombre') or 'otra caja'
+        if not self.cart and not self._congelado:
+            self._cargar_venta_traida(doc, texto=f'Llegó la venta de la {nombre}.')
+            return
+        items, faltan = _vivo.adaptar_items(_vivo.leer_items(doc.get('items_json')),
+                                            self._buscar_producto_local, convertir=True)
+        cajero = str(doc.get('cajero') or '').strip() or self._current_turno_nombre()
+        try:
+            self.pending_model.create(items=items, cajero_nombre=cajero,
+                                      user_id=self.current_user.get('id'), pc_id=self.pc_id,
+                                      cajero_original=cajero)
+        except Exception:
+            logger.exception('Carritos vivos: no se pudo dejar en pendientes la venta que llegó')
+            return
+        # Se vacía la llegada y se publica el carrito propio, en ese orden.
+        self.carrito_compartido.soltar(doc.get('epoch'))
+        self.carrito_compartido.publicar_ya()
+        self._refresh_pending_panel()
+        self._mostrar_aviso(f'Llegó la venta de la {nombre}: quedó en Pendientes.', 'ok', ms=6000)
+
+    def _reservar_cobro_vivo(self):
+        """Antes de cobrar: marca la venta como "cobrando". Mientras tanto esta
+        caja no la entrega (la otra recibe "la están cobrando"). No espera a
+        la nube: nadie más puede mover la venta, así que sin internet se cobra
+        igual y sin demora."""
+        if self._congelado:
+            return False
+        if self.carrito_compartido.conectado and self.cart:
+            self._cobrando_vivo = True
+            self.carrito_compartido.publicar_ya()
+        return True
+
+    def _soltar_cobro_vivo(self):
+        if self._cobrando_vivo:
+            self._cobrando_vivo = False
+            self.carrito_compartido.cambio()
 
     # ════════════════════════════════════════════════════════════════════
     # ── MODO FIADO (cuenta corriente) ───────────────────────────────────
@@ -2497,7 +2943,7 @@ class SalesView(QWidget):
         # descuente de nuevo.
         try:
             self.sale_model.descontar_stock_items(
-                self.cart, usuario=self._current_turno_nombre()
+                self.cart, usuario=self._cajero_de_la_venta()
             )
         except Exception as e:
             logger.exception('Fiado: error descontando stock al cargar el carrito')
@@ -2518,7 +2964,7 @@ class SalesView(QWidget):
                 cliente=cliente,
                 items=self.cart,
                 entrega_id=nuevo_entrega_id(),
-                cajero=self._current_turno_nombre(),
+                cajero=self._cajero_de_la_venta(),
                 pc_id=pc_id,
                 origen='pos',
             )
@@ -2528,7 +2974,7 @@ class SalesView(QWidget):
             # mercadería desaparecería del inventario sin dejar rastro.
             try:
                 self.sale_model.reponer_stock_items(
-                    self.cart, usuario=self._current_turno_nombre()
+                    self.cart, usuario=self._cajero_de_la_venta()
                 )
                 for it in self.cart:
                     it.pop('stock_descontado', None)
@@ -2687,6 +3133,10 @@ class SalesView(QWidget):
             elif event.type() == QEvent.KeyPress:
                 if event.key() == Qt.Key_Escape:
                     self._hide_history_popup()
+        elif obj is getattr(self, 'aviso_venta', None):
+            # El aviso se cerró (toque o tiempo): se va también su margen.
+            if event.type() == QEvent.Hide and obj.isHidden():
+                self._aviso_box.setVisible(False)
         return super().eventFilter(obj, event)
 
     def _prune_search_history(self):
@@ -3017,6 +3467,8 @@ class SalesView(QWidget):
         descuente stock de mp_nodes/mp_discounts y registre mp_stock_movements al
         cobrar la venta.
         """
+        if self._encolar_si_congelado('mp', lineas):
+            return
         if any(it.get('is_varios_2') for it in self.cart):
             QMessageBox.warning(
                 self, 'Carrito en modo Varios 2',
@@ -4242,6 +4694,8 @@ class SalesView(QWidget):
         }
 
     def add_to_cart(self, product):
+        if self._encolar_si_congelado('producto', product):
+            return
         # Si el carrito tiene Varios 2, bloquear: son exclusivos (no se registran como venta).
         if any(it.get('is_varios_2') for it in self.cart):
             QMessageBox.warning(
@@ -4426,6 +4880,8 @@ class SalesView(QWidget):
             }
             # Promos del panel: la mejor que aplique a esta cantidad/modo/color.
             self._reprice_conjunto_line(item, product=product)
+            if self._encolar_si_congelado('linea', item):
+                continue
             self.cart.append(item)
         self.update_cart_display()
 
@@ -4488,6 +4944,7 @@ class SalesView(QWidget):
         else:
             self._cart_cajero = None
 
+        self._soltar_widgets_de_celda()
         self.cart_table.setRowCount(len(self.cart))
         total = 0
 
@@ -4698,6 +5155,34 @@ class SalesView(QWidget):
             self.total_amount_label.setTextFormat(Qt.PlainText)
         self._update_change()
         self._update_promo_hints()
+        self._carrito_cambio()
+
+    def _soltar_widgets_de_celda(self):
+        """Saca los widgets de celda del dibujo anterior antes de rearmar.
+
+        `setCellWidget` sobre una celda ocupada, `removeCellWidget` y achicar la
+        tabla le hacen `deleteLater` al widget viejo pero NO lo ocultan: hasta
+        que el bucle de eventos lo borra sigue visible, y como la tabla ya no lo
+        acomoda queda dibujado en la esquina de arriba (el "Quitar" fantasma
+        sobre el primer renglón). Ocultarlo primero lo saca de la vista ya.
+        """
+        tabla = self.cart_table
+        for fila in range(tabla.rowCount()):
+            for col in range(tabla.columnCount()):
+                w = tabla.cellWidget(fila, col)
+                if w is not None:
+                    w.hide()
+                    tabla.removeCellWidget(fila, col)
+
+    def _sacar_widget_de_celda(self, fila, col):
+        w = self.cart_table.cellWidget(fila, col)
+        if w is not None:
+            w.hide()
+            self.cart_table.removeCellWidget(fila, col)
+
+    def _poner_widget_en_celda(self, fila, col, widget):
+        self._sacar_widget_de_celda(fila, col)
+        self.cart_table.setCellWidget(fila, col, widget)
 
     def _update_promo_hints(self):
         """
@@ -4984,11 +5469,11 @@ class SalesView(QWidget):
             sub.setStyleSheet(f"font-size:10px; background:transparent; border:none;")
             sub.setToolTip(promo_label or 'Descuento aplicado')
             wl.addWidget(n); wl.addWidget(sub); wl.addStretch(1)
-            self.cart_table.setCellWidget(row, 0, w)
+            self._poner_widget_en_celda(row, 0, w)
             self.cart_table.setItem(row, 0, QTableWidgetItem(''))
             self.cart_table.setRowHeight(row, 56)
         else:
-            self.cart_table.removeCellWidget(row, 0)
+            self._sacar_widget_de_celda(row, 0)
             name_item = QTableWidgetItem(name_text)
             name_item.setFont(QFont('Segoe UI', 10))
             name_item.setForeground(QColor(_T['text']))
@@ -4998,7 +5483,7 @@ class SalesView(QWidget):
 
         # ── Col 2: Precio unitario ──
         if has_discount:
-            self.cart_table.removeCellWidget(row, 2)
+            self._sacar_widget_de_celda(row, 2)
             w2 = QWidget()
             wl2 = QVBoxLayout(w2); wl2.setContentsMargins(4, 4, 8, 4); wl2.setSpacing(0)
             wl2.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -5016,12 +5501,12 @@ class SalesView(QWidget):
             final2.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             wl2.addWidget(strike2); wl2.addWidget(final2)
             w2.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-            self.cart_table.setCellWidget(row, 2, w2)
+            self._poner_widget_en_celda(row, 2, w2)
             b2 = QTableWidgetItem('')
             b2.setToolTip('Clic para editar el precio unitario')
             self.cart_table.setItem(row, 2, b2)
         else:
-            self.cart_table.removeCellWidget(row, 2)
+            self._sacar_widget_de_celda(row, 2)
             price_item = QTableWidgetItem(f'${_fmt_money(item["unit_price"])}')
             price_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             price_item.setFont(QFont('Consolas', 11))
@@ -5032,7 +5517,7 @@ class SalesView(QWidget):
         # ── Col 3: Subtotal (con tachado del precio original si hay descuento) ──
         if has_discount:
             orig_total = orig * item['quantity']
-            self.cart_table.removeCellWidget(row, 3)
+            self._sacar_widget_de_celda(row, 3)
             w = QWidget()
             wl = QVBoxLayout(w); wl.setContentsMargins(8, 4, 12, 4); wl.setSpacing(0)
             wl.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
@@ -5049,10 +5534,10 @@ class SalesView(QWidget):
             )
             final.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             wl.addWidget(strike); wl.addWidget(final)
-            self.cart_table.setCellWidget(row, 3, w)
+            self._poner_widget_en_celda(row, 3, w)
             self.cart_table.setItem(row, 3, QTableWidgetItem(''))
         else:
-            self.cart_table.removeCellWidget(row, 3)
+            self._sacar_widget_de_celda(row, 3)
             sub_item = QTableWidgetItem(f'${_fmt_money(item["subtotal"])}')
             sub_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
             sub_item.setFont(QFont('Consolas', 11, QFont.Bold))
@@ -5255,7 +5740,8 @@ class SalesView(QWidget):
             self._update_change()
         except Exception:
             pass
-            
+        self._carrito_cambio()
+
     def remove_from_cart(self, row):
         if row < len(self.cart):
             del self.cart[row]
@@ -5691,6 +6177,8 @@ class SalesView(QWidget):
         )
 
     def clear_cart(self):
+        if self._congelado:
+            return
         if self.cart:
             reply = QMessageBox.question(
                 self, 'Confirmar',
@@ -5705,10 +6193,19 @@ class SalesView(QWidget):
 
     def complete_sale(self):
         from PyQt5.QtWidgets import QMessageBox
+        # Mientras se confirma con la nube que la venta sigue siendo de esta
+        # caja, un segundo F2 no arranca otro cobro.
+        if getattr(self, '_reservando_cobro', False):
+            return
         # Modo Fiado: el carrito no se cobra ahora, se anota a la cuenta del
         # cliente. El cobro (y el descuento de stock) pasa en la pestaña Fiados.
         if self._fiado_mode:
-            self._cargar_al_fiado()
+            if self.cart and not self._reservar_cobro_vivo():
+                return
+            try:
+                self._cargar_al_fiado()
+            finally:
+                self._soltar_cobro_vivo()
             return
         if not self.cart:
             QMessageBox.warning(self, 'Carrito vacio', 'Agregue productos al carrito antes de facturar')
@@ -5716,7 +6213,12 @@ class SalesView(QWidget):
 
         # Modo Varios 2: todos los items son is_varios_2 → flujo exclusivo factura AFIP
         if all(it.get('is_varios_2') for it in self.cart):
-            self._emit_factura_varios_2()
+            if not self._reservar_cobro_vivo():
+                return
+            try:
+                self._emit_factura_varios_2()
+            finally:
+                self._soltar_cobro_vivo()
             return
 
         current_register = self.cash_register_model.get_current()
@@ -5730,6 +6232,18 @@ class SalesView(QWidget):
         if not self._conjuntos_listos_para_cobrar():
             return
 
+        # La venta queda marcada "cobrando": ninguna otra caja la puede traer
+        # mientras está abierta la pantalla de cobro.
+        if not self._reservar_cobro_vivo():
+            return
+        try:
+            self._cobrar_y_registrar()
+        finally:
+            self._soltar_cobro_vivo()
+
+    def _cobrar_y_registrar(self):
+        """Pantalla de cobro, venta, factura o ticket. La llama complete_sale
+        con el carrito ya revisado."""
         # El descuento con nombre se aplica sobre las líneas antes de cobrar: la
         # venta, el ticket y la factura tienen que mostrar el precio que se
         # cobró de verdad, no el de lista con una resta suelta al final.
@@ -5752,8 +6266,9 @@ class SalesView(QWidget):
         payment_subtype = dialog.payment_subtype
         nota_factura = dialog.nota_factura
 
-        # Resolver nombre del cajero de turno
-        turno_nombre = (
+        # Resolver nombre del cajero: el de turno, o el que empezó la venta si
+        # vino de otra caja (se cobra a su nombre).
+        turno_nombre = self._cart_cajero_fijo or (
             self.current_user.get('turno_nombre')
             or self.current_user.get('full_name')
             or self.current_user.get('username', '')
@@ -5821,7 +6336,7 @@ class SalesView(QWidget):
                         u = self.current_user or {}
                         # Firma el cajero DE TURNO (igual que la venta), no el
                         # usuario logueado: casi siempre se entra como admin.
-                        uname = self._current_turno_nombre()
+                        uname = self._cajero_de_la_venta()
                         pc = _get_pc_id()
                         created_at = now_ar().strftime('%Y-%m-%d %H:%M:%S')
                         fb = get_firebase_sync()
@@ -6039,6 +6554,8 @@ class SalesView(QWidget):
             'is_varios':       True,
             'pending_observation': obs_text,
         }
+        if self._encolar_si_congelado('linea', cart_item):
+            return
         self.cart.append(cart_item)
         self.update_cart_display()
         # Nota: la observación NO se crea acá — quedaría con sale_id=None
@@ -6080,6 +6597,8 @@ class SalesView(QWidget):
             'category':        'Varios 2',
             'is_varios_2':     True,
         }
+        if self._encolar_si_congelado('linea', cart_item):
+            return
         self.cart.append(cart_item)
         self.update_cart_display()
 

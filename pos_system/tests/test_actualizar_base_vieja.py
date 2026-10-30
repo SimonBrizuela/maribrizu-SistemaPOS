@@ -113,3 +113,26 @@ def test_el_registro_de_cobros_a_medias_se_crea_en_la_base_vieja(base_vieja):
     cobros_pedido.anotar(db, intento='i1', pedido_id='p1', codigo='AB12', pedido={'total': 1},
                          pago={'payment_type': 'cash'}, lineas=[])
     assert len(cobros_pedido.pendientes(db)) == 1
+
+
+def test_los_pendientes_viejos_ganan_la_columna_del_cajero_original(base_vieja):
+    """30-10: `pending_carts.cajero_original` (quién empezó la venta). Los
+    pendientes que ya estaban quedan en NULL y se siguen cobrando a nombre del
+    turno; los nuevos la guardan."""
+    from pos_system.database.db_manager import DatabaseManager
+    from pos_system.models.pending_cart import PendingCart
+    ruta, pid = base_vieja
+    import sqlite3
+    with sqlite3.connect(ruta) as conn:
+        conn.execute("INSERT INTO pending_carts (cajero_nombre, items_json, total, items_count, created_at) "
+                     "VALUES ('Marta', '[]', 0, 0, '2026-09-01 10:00:00')")
+    db = DatabaseManager(ruta)
+    db.initialize_database()
+    db.initialize_database()
+    assert 'cajero_original' in columnas(db, 'pending_carts')
+    modelo = PendingCart(db)
+    viejo = modelo.get_all()[0]
+    assert viejo['cajero_nombre'] == 'Marta' and viejo['cajero_original'] is None
+    nuevo = modelo.create([{'product_id': pid, 'product_name': 'CUADERNO', 'quantity': 1,
+                            'subtotal': 3000.0}], cajero_nombre='Ana', cajero_original='Ana')
+    assert modelo.get_by_id(nuevo)['cajero_original'] == 'Ana'

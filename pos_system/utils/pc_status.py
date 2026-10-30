@@ -119,6 +119,8 @@ class PCStatusReporter:
             'python_version':   _sys.version.split()[0],
             'cajero_actual':    ctx.get('cajero') or '',
             'turno_actual':     ctx.get('turno_nombre') or '',
+            # Nombre que le puso el admin (Compu 1...); lo ven las otras cajas.
+            'nombre_caja':      ctx.get('nombre_caja') or '',
             'cash_register_id': ctx.get('cash_register_id'),
             'productos_locales': self._count_productos_locales(),
             'last_sync_at':     self.last_sync_at,

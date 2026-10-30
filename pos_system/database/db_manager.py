@@ -690,6 +690,13 @@ class DatabaseManager:
                 )
             """)
             cursor.execute("CREATE INDEX IF NOT EXISTS idx_pending_carts_created ON pending_carts(created_at)")
+            # Quién empezó la venta pendiente: al restaurarla se cobra a su
+            # nombre (también si vino de otra caja). NULL en los pendientes de
+            # antes: esos se siguen cobrando a nombre del turno, como siempre.
+            try:
+                cursor.execute("ALTER TABLE pending_carts ADD COLUMN cajero_original TEXT DEFAULT NULL")
+            except Exception:
+                pass
 
             # ── FIADO (cuenta corriente de clientes) ───────────────────────
             # Espejo local de las colecciones Firestore fiado_clientes /

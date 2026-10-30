@@ -28,8 +28,12 @@ class PendingCart:
 
     def create(self, items: List[Dict], cajero_nombre: str = '',
                user_id: Optional[int] = None, pc_id: str = '',
-               nota: str = '') -> Optional[int]:
-        """Guarda el carrito como pendiente. Devuelve el id nuevo o None."""
+               nota: str = '', cajero_original: Optional[str] = None) -> Optional[int]:
+        """Guarda el carrito como pendiente. Devuelve el id nuevo o None.
+
+        `cajero_original`: quien empezó la venta. Al restaurarla se cobra a su
+        nombre, aunque la retome otro cajero u otra caja.
+        """
         items = items or []
         total = round(sum(float(it.get('subtotal') or 0) for it in items), 2)
         items_count = sum(float(it.get('quantity') or 0) for it in items)
@@ -37,10 +41,11 @@ class PendingCart:
         items_json = json.dumps(items, ensure_ascii=False, default=str)
         return self.db.execute_update(
             "INSERT INTO pending_carts "
-            "(cajero_nombre, user_id, pc_id, items_json, total, items_count, nota) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(cajero_nombre, user_id, pc_id, items_json, total, items_count, nota, cajero_original) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (str(cajero_nombre or ''), user_id, str(pc_id or ''),
-             items_json, total, items_count, str(nota or ''))
+             items_json, total, items_count, str(nota or ''),
+             (str(cajero_original).strip() or None) if cajero_original else None)
         )
 
     def get_all(self) -> List[Dict]:
