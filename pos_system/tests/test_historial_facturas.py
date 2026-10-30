@@ -106,8 +106,8 @@ class TestFiltrar:
         self.filas = hf.combinar(nube(
             doc(1, total=100),
             doc(2, pv=1990, cuit='20149210408', total=200),
-            doc(3, total=300, cuando='2026-10-28T23:59:00-03:00', cliente='MINISTERIO DE EDUCACION',
-                receptor='30999252449'),
+            doc(3, total=300, cuando='2026-10-28T23:59:00-03:00', cliente='ESCUELA DE PRUEBA',
+                receptor='30111111118'),
         ), [])
 
     def test_por_emisor(self):
@@ -120,10 +120,10 @@ class TestFiltrar:
         assert sorted(f['nro'] for f in hf.filtrar(self.filas, PERFILES, desde=hoy, hasta=hoy)) == [1, 2]
 
     def test_buscar_por_cliente_sin_tildes_ni_mayusculas(self):
-        assert [f['nro'] for f in hf.filtrar(self.filas, PERFILES, texto='educación')] == [3]
+        assert [f['nro'] for f in hf.filtrar(self.filas, PERFILES, texto='escuela')] == [3]
 
     def test_buscar_por_cuit_con_guiones(self):
-        assert [f['nro'] for f in hf.filtrar(self.filas, PERFILES, texto='30-99925244-9')] == [3]
+        assert [f['nro'] for f in hf.filtrar(self.filas, PERFILES, texto='30-11111111-8')] == [3]
 
     def test_buscar_por_numero(self):
         assert [f['nro'] for f in hf.filtrar(self.filas, PERFILES, texto='01990-00000002')] == [2]
@@ -135,8 +135,8 @@ class TestTotales:
     def test_los_cuatro_recuadros(self):
         filas = nube(
             doc(1, total=150000, varios=True),
-            doc(2, total=40000, pago='Transferencia', cliente='EMPRESA SA', receptor='30711314810'),
-            doc(3, total=9600, pago='Efectivo', cliente='MINISTERIO'),
+            doc(2, total=40000, pago='Transferencia', cliente='EMPRESA SA', receptor='30222222226'),
+            doc(3, total=9600, pago='Efectivo', cliente='ESCUELA'),
         )
         t = hf.totales(filas)
         assert t['total'] == 199600
@@ -255,7 +255,7 @@ def pantalla(app, tmp_path, monkeypatch):
     hoy = fv.now_ar().date().isoformat()
     docs = [
         doc(10, total=150000, varios=True, cuando=f'{hoy}T10:00:00-03:00'),
-        doc(11, total=42400, pago='Transferencia', cliente='BOMBEROS', receptor='33718648179',
+        doc(11, total=42400, pago='Transferencia', cliente='CLUB DE PRUEBA', receptor='30500010912',
             cuando=f'{hoy}T11:00:00-03:00'),
         doc(20, pv=1990, cuit='20149210408', razon='DI FILIPPO JOSE LUIS', total=4000,
             pago='Transferencia', cuando=f'{hoy}T12:00:00-03:00'),
@@ -330,9 +330,9 @@ class TestPantalla:
 
     def test_detalle_de_la_factura(self, pantalla):
         w, _ = pantalla
-        w.h_table.selectRow(1)   # la de BOMBEROS
-        assert w._detalle_vals['cliente'].text() == 'BOMBEROS'
-        assert w._detalle_vals['documento'].text().startswith('CUIT 33-71864817-9')
+        w.h_table.selectRow(1)   # la de CLUB DE PRUEBA
+        assert w._detalle_vals['cliente'].text() == 'CLUB DE PRUEBA'
+        assert w._detalle_vals['documento'].text().startswith('CUIT 30-50001091-2')
         assert 'CUIT 23-35108063-9' in w._detalle_vals['emisor'].text()
         assert w.btn_nc.isEnabled()
 
