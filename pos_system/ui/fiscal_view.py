@@ -2,17 +2,74 @@
 Vista Fiscal — Pestaña principal para gestión de facturas electrónicas AFIP.
 Contiene dos sub-tabs: Emitir Factura (manual) e Historial de Facturas.
 """
+import html
+import logging
+
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QTabWidget, QTableWidget,
     QTableWidgetItem, QLabel, QPushButton, QLineEdit, QFormLayout,
-    QGroupBox, QComboBox, QHeaderView, QMessageBox, QFrame, QScrollArea
+    QGroupBox, QComboBox, QHeaderView, QMessageBox, QFrame, QScrollArea,
+    QDateEdit, QGridLayout, QSplitter, QStackedWidget, QSizePolicy
 )
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import Qt, QDate, QThread, QTimer, pyqtSignal
 from PyQt5.QtGui import QFont, QColor
 from datetime import datetime, timezone, timedelta
 from pos_system.utils.firebase_sync import now_ar
+from pos_system.utils import historial_facturas as hf
+from pos_system.ui.theme import COLORS as _T
+
+logger = logging.getLogger(__name__)
 
 _TZ_AR = timezone(timedelta(hours=-3))
+
+
+def _pesos(valor: float) -> str:
+    """$ 1.234.567,89 — como se escribe acá."""
+    s = f'{abs(valor):,.2f}'.replace(',', '#').replace('.', ',').replace('#', '.')
+    return f'-${s}' if valor < 0 else f'${s}'
+
+
+def _html(texto) -> str:
+    return html.escape(str(texto or ''))
+
+
+def _leer_facturas_nube(desde, hasta):
+    """Facturas de todas las cajas entre dos días, desde Firestore.
+
+    Devuelve None si no hay conexión (la pantalla avisa y muestra lo local).
+    `created_at` es texto ISO en hora argentina, así que el rango se pide como
+    texto: desde <= created_at < día siguiente.
+    """
+    from pos_system.utils.firebase_sync import get_firebase_sync
+    fb = get_firebase_sync()
+    if not fb or not getattr(fb, 'enabled', False) or getattr(fb, 'db', None) is None:
+        return None
+    from google.cloud.firestore_v1.base_query import FieldFilter
+    lo, hi = hf.limites_iso(desde, hasta)
+    consulta = (fb.db.collection('facturas')
+                .where(filter=FieldFilter('created_at', '>=', lo))
+                .where(filter=FieldFilter('created_at', '<', hi)))
+    return [hf.fila_de_nube(s.id, s.to_dict()) for s in consulta.stream(timeout=25)]
+
+
+class _CargaFacturasNube(QThread):
+    """Lee la nube fuera del hilo de la pantalla: sin internet, Firestore puede
+    tardar varios segundos en rendirse y la caja no se puede congelar."""
+    listo = pyqtSignal(int, object)
+
+    def __init__(self, generacion, desde, hasta, parent=None):
+        super().__init__(parent)
+        self._gen = generacion
+        self._desde = desde
+        self._hasta = hasta
+
+    def run(self):
+        try:
+            filas = _leer_facturas_nube(self._desde, self._hasta)
+        except Exception as e:
+            logger.warning(f'Fiscal: no se pudieron leer las facturas de la nube: {e}')
+            filas = None
+        self.listo.emit(self._gen, filas)
 
 def _parse_ar(s):
     """Parsea un timestamp guardado en SQLite y lo devuelve en hora AR (naive).
@@ -53,11 +110,18 @@ class FiscalView(QWidget):
         layout.setContentsMargins(12, 12, 12, 12)
         layout.setSpacing(10)
 
-        # Título
+        # Título, con la explicación en la misma línea para dejarle alto a la lista.
+        cabecera = QHBoxLayout()
+        cabecera.setSpacing(12)
         title = QLabel('Facturación Electrónica AFIP')
         title.setFont(QFont('Segoe UI', 15, QFont.Bold))
         title.setStyleSheet('color: #c1521f;')
-        layout.addWidget(title)
+        cabecera.addWidget(title, 0, Qt.AlignBaseline)
+        self.lbl_subtitulo = QLabel('Las facturas de todas las cajas, separadas por emisor.')
+        self.lbl_subtitulo.setStyleSheet(
+            f'color:{_T["text_muted"]}; font-size:12px; background:transparent;')
+        cabecera.addWidget(self.lbl_subtitulo, 1, Qt.AlignBaseline)
+        layout.addLayout(cabecera)
 
         # Solo se expone Historial de Facturas. La emisión manual, la config
         # AFIP global y los perfiles ARCA están detrás (siguen accesibles desde
@@ -533,186 +597,727 @@ class FiscalView(QWidget):
             QMessageBox.critical(self, 'Error', f'CAE obtenido pero error al generar PDF:\n{str(e)}')
 
     # ── TAB 2: Historial ──────────────────────────────────────────────────────
+    #
+    # Muestra las facturas de TODAS las cajas (colección `facturas` de la nube)
+    # más las de esta PC que no llegaron a subir, y las separa por emisor.
+    # La lógica de filas, emisores y totales vive en utils/historial_facturas.py.
+
+    _COLUMNAS = ['Comprobante', 'Fecha', 'Emisor', 'Cliente', 'CUIT / DNI',
+                 'Pago', 'Origen', 'Total', 'CAE']
+    _COL_EMISOR = 2
+
     def _build_historial_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
-        layout.setContentsMargins(10, 10, 10, 10)
-        layout.setSpacing(8)
+        layout.setContentsMargins(0, 2, 0, 0)
+        layout.setSpacing(10)
 
-        # Selector de perfil (toma los perfiles_facturacion ya cargados)
-        perfil_row = QHBoxLayout()
-        perfil_row.setSpacing(8)
-        perfil_lbl = QLabel('Perfil ARCA:')
-        perfil_lbl.setFont(QFont('Segoe UI', 10, QFont.Bold))
-        perfil_row.addWidget(perfil_lbl)
+        self._perfiles = []
+        self._filas = []
+        self._visibles = []
+        self._sin_nube = False
+        self._generacion = 0
+        self._cargas = set()
+        self._pendiente = True
+        self._cargado_alguna_vez = False
+
+        # ── Filtros ─────────────────────────────────────────────────────────
+        filter_scroll = QScrollArea()
+        filter_scroll.setWidgetResizable(True)
+        filter_scroll.setMaximumHeight(64)
+        filter_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        filter_scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        filter_scroll.setFrameShape(QFrame.NoFrame)
+        filter_scroll.setStyleSheet('QScrollArea { background:transparent; border:none; }')
+
+        filter_frame = QFrame()
+        filter_frame.setObjectName('fiscalFiltros')
+        filter_frame.setStyleSheet(
+            f'QFrame#fiscalFiltros {{ background:{_T["surface"]}; border:1px solid {_T["border"]};'
+            f' border-radius:8px; }}'
+        )
+        fl = QHBoxLayout(filter_frame)
+        fl.setContentsMargins(12, 8, 12, 8)
+        fl.setSpacing(8)
+
+        input_qss = (
+            f"QDateEdit, QComboBox, QLineEdit {{ border:1px solid {_T['border']}; border-radius:6px;"
+            f" background:{_T['surface']}; padding:4px 10px; color:{_T['text']}; }}"
+            f"QDateEdit:focus, QComboBox:focus, QLineEdit:focus {{ border-color:{_T['accent']}; }}"
+            f"QComboBox::drop-down, QDateEdit::drop-down {{ border:none; width:20px; }}"
+        )
+        flabel_qss = (f'color:{_T["text_muted"]}; font-size:11px; font-weight:600;'
+                      ' background:transparent; border:none;')
+
+        def _flabel(txt):
+            lbl = QLabel(txt)
+            lbl.setStyleSheet(flabel_qss)
+            return lbl
+
+        fl.addWidget(_flabel('Emisor'))
         self.perfil_combo = QComboBox()
-        self.perfil_combo.setFont(QFont('Segoe UI', 10))
-        self.perfil_combo.setMinimumWidth(280)
+        self.perfil_combo.setMinimumHeight(34)
+        self.perfil_combo.setMinimumWidth(250)
+        self.perfil_combo.setStyleSheet(input_qss)
+        self.perfil_combo.setToolTip('Perfil ARCA que emitió la factura')
         self._cargar_perfiles_combo()
-        perfil_row.addWidget(self.perfil_combo)
+        self.perfil_combo.currentIndexChanged.connect(self._aplicar_filtro)
+        fl.addWidget(self.perfil_combo)
 
-        test_nc_btn = QPushButton('Probar permisos NC')
-        test_nc_btn.setFont(QFont('Segoe UI', 9, QFont.Bold))
-        test_nc_btn.setMinimumHeight(34)
-        test_nc_btn.setToolTip(
-            'Consulta a AFIP si el perfil seleccionado puede emitir Nota de Crédito.\n'
-            'No emite ningún comprobante.'
-        )
-        test_nc_btn.setStyleSheet(
-            'QPushButton { background:#fff; color:#a01616;'
-            '              border:2px solid #a01616; border-radius:6px; padding:0 12px; }'
-            'QPushButton:hover { background:#fff5f5; }'
-        )
-        test_nc_btn.clicked.connect(self._test_permisos_nc)
-        perfil_row.addWidget(test_nc_btn)
-        perfil_row.addStretch()
-        layout.addLayout(perfil_row)
+        fl.addSpacing(6)
+        fl.addWidget(_flabel('Desde'))
+        hoy = QDate.currentDate()
+        self.f_desde = QDateEdit()
+        self.f_hasta = QDateEdit()
+        for de in (self.f_desde, self.f_hasta):
+            de.setCalendarPopup(True)
+            de.setDisplayFormat('dd/MM/yyyy')
+            de.setMinimumHeight(34)
+            de.setMinimumWidth(112)
+            de.setStyleSheet(input_qss)
+        self.f_desde.setDate(QDate(hoy.year(), hoy.month(), 1))
+        self.f_hasta.setDate(hoy)
+        fl.addWidget(self.f_desde)
+        fl.addWidget(_flabel('Hasta'))
+        fl.addWidget(self.f_hasta)
 
-        # Barra de acciones
-        action_row = QHBoxLayout()
+        # Un solo recargado aunque se toquen las dos fechas seguidas.
+        self._timer_fechas = QTimer(self)
+        self._timer_fechas.setSingleShot(True)
+        self._timer_fechas.setInterval(350)
+        self._timer_fechas.timeout.connect(self._cargar)
+        self.f_desde.dateChanged.connect(self._fechas_cambiadas)
+        self.f_hasta.dateChanged.connect(self._fechas_cambiadas)
+
+        rango_qss = (
+            f"QPushButton {{ background:{_T['surface_alt']}; color:{_T['text_muted']};"
+            f" border:1px solid {_T['border']}; border-radius:6px;"
+            f" padding:4px 10px; font-size:11px; font-weight:700; min-height:32px; }}"
+            f"QPushButton:hover {{ border-color:{_T['accent']}; color:{_T['accent']}; }}"
+            f"QPushButton:checked {{ background:{_T['accent']}; color:white; border-color:{_T['accent']}; }}"
+        )
+        self._botones_rango = {}
+        for clave, texto in hf.PERIODOS:
+            b = QPushButton(texto)
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setStyleSheet(rango_qss)
+            b.clicked.connect(lambda _=False, c=clave: self._elegir_periodo(c))
+            fl.addWidget(b)
+            self._botones_rango[clave] = b
+
+        fl.addSpacing(6)
+        self.f_buscar = QLineEdit()
+        self.f_buscar.setPlaceholderText('Buscar cliente, CUIT o número')
+        self.f_buscar.setClearButtonEnabled(True)
+        self.f_buscar.setMinimumHeight(34)
+        self.f_buscar.setMinimumWidth(210)
+        self.f_buscar.setStyleSheet(input_qss)
+        self.f_buscar.textChanged.connect(self._aplicar_filtro)
+        fl.addWidget(self.f_buscar, 1)
+
         refresh_btn = QPushButton('Actualizar')
-        refresh_btn.setFont(QFont('Segoe UI', 9))
-        refresh_btn.clicked.connect(self.refresh_data)
-        action_row.addWidget(refresh_btn)
-        action_row.addStretch()
-        layout.addLayout(action_row)
+        refresh_btn.setCursor(Qt.PointingHandCursor)
+        refresh_btn.setToolTip('Vuelve a traer las facturas de todas las cajas')
+        refresh_btn.setStyleSheet(
+            f"QPushButton {{ background:{_T['accent']}; color:white; border:none;"
+            f" border-radius:6px; padding:4px 18px; font-weight:700; min-height:34px; }}"
+            f"QPushButton:hover {{ background:{_T['accent_hover']}; }}"
+        )
+        refresh_btn.clicked.connect(lambda: (self._cargar_perfiles_combo(), self._cargar()))
+        fl.addWidget(refresh_btn)
 
-        # ── Panel de totales ────────────────────────────────────────────────
+        filter_scroll.setWidget(filter_frame)
+        layout.addWidget(filter_scroll)
+
+        # ── Totales ─────────────────────────────────────────────────────────
         totales_row = QHBoxLayout()
         totales_row.setSpacing(10)
 
-        def _totbox(color_bg, color_txt):
+        def _totbox(color_bg, color_txt, titulo):
             box = QFrame()
+            box.setObjectName('fiscalTot')
             box.setStyleSheet(
-                f'background:{color_bg}; border:1px solid {color_txt}; '
-                'border-radius:8px; padding:10px 14px;'
+                f'QFrame#fiscalTot {{ background:{color_bg}; border:1px solid {color_txt};'
+                ' border-radius:8px; }'
             )
             v = QVBoxLayout(box)
-            v.setContentsMargins(10, 8, 10, 8)
-            v.setSpacing(2)
-            title = QLabel()
-            title.setFont(QFont('Segoe UI', 9, QFont.Bold))
-            title.setStyleSheet(f'color:{color_txt}; background:transparent; border:none;')
-            value = QLabel('$0.00')
-            value.setFont(QFont('Segoe UI', 14, QFont.Bold))
-            value.setStyleSheet(f'color:{color_txt}; background:transparent; border:none;')
-            v.addWidget(title)
-            v.addWidget(value)
-            return box, title, value
+            v.setContentsMargins(14, 8, 14, 9)
+            v.setSpacing(1)
+            t = QLabel(titulo)
+            t.setFont(QFont('Segoe UI', 9, QFont.Bold))
+            t.setStyleSheet(f'color:{color_txt}; background:transparent; border:none;')
+            val = QLabel('$0,00')
+            val.setFont(QFont('Segoe UI', 15, QFont.Bold))
+            val.setStyleSheet(f'color:{color_txt}; background:transparent; border:none;')
+            sub = QLabel('')
+            sub.setFont(QFont('Segoe UI', 9))
+            sub.setStyleSheet(f'color:{_T["text_muted"]}; background:transparent; border:none;')
+            v.addWidget(t)
+            v.addWidget(val)
+            v.addWidget(sub)
+            totales_row.addWidget(box, 1)
+            return val, sub
 
-        box_total, self.t_total_title, self.t_total_value = _totbox('#fbeee5', '#7a3514')
-        self.t_total_title.setText('Total facturado')
-        totales_row.addWidget(box_total)
-
-        box_v2, self.t_v2_title, self.t_v2_value = _totbox('#f3e8ff', '#a3441a')
-        self.t_v2_title.setText('Varios 2 facturado')
-        totales_row.addWidget(box_v2)
-
-        box_reg, self.t_reg_title, self.t_reg_value = _totbox('#e7f4ec', '#0a3622')
-        self.t_reg_title.setText('Facturas regulares')
-        totales_row.addWidget(box_reg)
-
-        box_cnt, self.t_cnt_title, self.t_cnt_value = _totbox('#fbeee5', '#664d03')
-        self.t_cnt_title.setText('Cant. total / Varios 2')
-        totales_row.addWidget(box_cnt)
-
+        self.t_total_value, self.t_total_sub = _totbox('#fbeee5', '#7a3514', 'Total facturado')
+        self.t_v2_value, self.t_v2_sub = _totbox('#f3e8ff', '#a3441a', 'Varios 2 facturado')
+        self.t_reg_value, self.t_reg_sub = _totbox('#e7f4ec', '#0a3622', 'Facturas a clientes')
+        self.t_transf_value, self.t_transf_sub = _totbox(
+            '#fbeee5', '#664d03', 'Clientes por transferencia')
+        self.t_transf_value.parentWidget().setToolTip(
+            'Facturas a clientes o empresas cobradas por transferencia.\n'
+            'Es lo que hay que restar de lo que entró por Mercado Pago\n'
+            'antes de hacer la factura Varios 2 del día.'
+        )
         layout.addLayout(totales_row)
 
-        # Tabla
+        # Reparto por emisor (solo con "Todos los emisores")
+        self.lbl_por_emisor = QLabel('')
+        self.lbl_por_emisor.setTextFormat(Qt.RichText)
+        self.lbl_por_emisor.setStyleSheet(
+            f'color:{_T["text_muted"]}; font-size:12px; background:transparent;')
+        layout.addWidget(self.lbl_por_emisor)
+
+        # ── Tabla + detalle ─────────────────────────────────────────────────
+        splitter = QSplitter(Qt.Vertical)
+        splitter.setHandleWidth(8)
+        splitter.setChildrenCollapsible(False)
+        splitter.setStyleSheet('QSplitter::handle { background:transparent; }')
+
         self.h_table = QTableWidget()
-        self.h_table.setColumnCount(9)
-        self.h_table.setHorizontalHeaderLabels(
-            ['#', 'Tipo', 'Nro.', 'Fecha', 'Cliente', 'CAE', 'Total', 'PDF', 'Origen']
-        )
+        self.h_table.setColumnCount(len(self._COLUMNAS))
+        self.h_table.setHorizontalHeaderLabels(self._COLUMNAS)
         self.h_table.verticalHeader().setVisible(False)
         self.h_table.setEditTriggers(QTableWidget.NoEditTriggers)
         self.h_table.setSelectionBehavior(QTableWidget.SelectRows)
+        self.h_table.setSelectionMode(QTableWidget.SingleSelection)
         self.h_table.setAlternatingRowColors(True)
+        self.h_table.setShowGrid(False)
+        self.h_table.setWordWrap(False)
+        self.h_table.verticalHeader().setDefaultSectionSize(28)
+        self.h_table.setStyleSheet(self._tabla_qss())
         hh = self.h_table.horizontalHeader()
-        hh.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(4, QHeaderView.Stretch)
-        hh.setSectionResizeMode(5, QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(6, QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(7, QHeaderView.ResizeToContents)
-        hh.setSectionResizeMode(8, QHeaderView.ResizeToContents)
-        layout.addWidget(self.h_table)
+        hh.setHighlightSections(False)
+        for c in range(len(self._COLUMNAS)):
+            hh.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        hh.setSectionResizeMode(3, QHeaderView.Stretch)
+        self.h_table.itemSelectionChanged.connect(self._mostrar_detalle)
+        self.h_table.cellDoubleClicked.connect(lambda *_: self._reprint_selected())
 
-        # Botones de acción sobre la fila seleccionada
-        actions_row = QHBoxLayout()
-        actions_row.setSpacing(8)
+        self._tabla_stack = QStackedWidget()
+        self._tabla_stack.addWidget(self.h_table)
+        vacio = QFrame()
+        vacio.setObjectName('fiscalVacio')
+        vacio.setStyleSheet(
+            f'QFrame#fiscalVacio {{ background:{_T["surface"]}; border:1px solid {_T["border"]};'
+            ' border-radius:8px; }')
+        vv = QVBoxLayout(vacio)
+        vv.addStretch(1)
+        self.lbl_vacio = QLabel('Cargando facturas…')
+        self.lbl_vacio.setAlignment(Qt.AlignCenter)
+        self.lbl_vacio.setStyleSheet(
+            f'color:{_T["text"]}; font-size:14px; font-weight:700; background:transparent;')
+        self.lbl_vacio_sub = QLabel('')
+        self.lbl_vacio_sub.setAlignment(Qt.AlignCenter)
+        self.lbl_vacio_sub.setStyleSheet(
+            f'color:{_T["text_muted"]}; font-size:12px; background:transparent;')
+        vv.addWidget(self.lbl_vacio)
+        vv.addWidget(self.lbl_vacio_sub)
+        vv.addStretch(1)
+        self._tabla_stack.addWidget(vacio)
+        self._tabla_stack.setCurrentIndex(1)
+        splitter.addWidget(self._tabla_stack)
+        splitter.addWidget(self._build_detalle())
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 1)
+        splitter.setSizes([400, 175])
+        layout.addWidget(splitter, 1)
 
-        reimp_btn = QPushButton('Abrir / Reimprimir seleccionada')
-        reimp_btn.setFont(QFont('Segoe UI', 10))
-        reimp_btn.setMinimumHeight(40)
-        reimp_btn.clicked.connect(self._reprint_selected)
-        actions_row.addWidget(reimp_btn)
-
-        nc_btn = QPushButton('Hacer Nota de Crédito')
-        nc_btn.setFont(QFont('Segoe UI', 10, QFont.Bold))
-        nc_btn.setMinimumHeight(40)
-        nc_btn.setToolTip(
-            'Emite una NC vinculada a la factura seleccionada (total o parcial).\n'
-            'Solicita CAE a AFIP automáticamente.'
-        )
-        nc_btn.setStyleSheet(
-            'QPushButton { background:#a01616; color:white; border:none;'
-            '              border-radius:8px; padding:0 18px; }'
-            'QPushButton:hover { background:#7a1010; }'
-        )
-        nc_btn.clicked.connect(self._on_nota_credito)
-        actions_row.addWidget(nc_btn)
-
-        layout.addLayout(actions_row)
-
+        self._marcar_periodo()
         return widget
 
-    def _on_nota_credito(self):
-        """Abre el diálogo de Nota de Crédito sobre la factura seleccionada."""
-        row = self.h_table.currentRow()
-        if row < 0:
-            QMessageBox.information(self, 'Sin selección',
-                'Seleccioná una factura del historial para emitir su NC.')
-            return
-        # Recuperar la factura por ID (columna 0)
-        try:
-            id_item = self.h_table.item(row, 0)
-            fid = int(id_item.text()) if id_item else 0
-        except (ValueError, AttributeError):
-            QMessageBox.warning(self, 'Error', 'No se pudo leer la fila seleccionada.')
-            return
+    def _tabla_qss(self):
+        return (
+            # Sin `color` en ::item: pisaría los colores por celda (CAE, Varios 2, NC).
+            f"QTableWidget {{ border:1px solid {_T['border']}; border-radius:8px;"
+            f" background:{_T['surface']}; alternate-background-color:{_T['surface_alt']};"
+            f" gridline-color:{_T['border_soft']}; outline:none; color:{_T['text']};"
+            f" selection-background-color:{_T['accent_soft']}; selection-color:{_T['text']}; }}"
+            f"QTableWidget::item {{ padding:4px 10px; border:none; }}"
+            f"QHeaderView::section {{ background:{_T['surface_alt']}; color:{_T['text_muted']};"
+            f" padding:8px 10px; border:none; border-bottom:1px solid {_T['border']};"
+            f" font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:0.4px; }}"
+            f"QScrollBar:vertical {{ background:transparent; width:10px; margin:2px; }}"
+            f"QScrollBar::handle:vertical {{ background:{_T['border']}; border-radius:5px; min-height:30px; }}"
+            f"QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {{ height:0; }}"
+        )
+
+    def _build_detalle(self):
+        panel = QWidget()
+        v = QVBoxLayout(panel)
+        v.setContentsMargins(0, 4, 0, 0)
+        v.setSpacing(8)
+
+        cab = QHBoxLayout()
+        cab.setSpacing(8)
+        self.lbl_detalle_titulo = QLabel('Detalle de la factura')
+        self.lbl_detalle_titulo.setFont(QFont('Segoe UI', 12, QFont.Bold))
+        self.lbl_detalle_titulo.setStyleSheet(f'color:{_T["text"]}; background:transparent;')
+        cab.addWidget(self.lbl_detalle_titulo)
+        cab.addStretch()
+
+        quiet_qss = (
+            f"QPushButton {{ background:{_T['surface']}; color:{_T['text']};"
+            f" border:1px solid {_T['border']}; border-radius:6px; padding:6px 16px;"
+            f" font-weight:600; min-height:34px; }}"
+            f"QPushButton:hover {{ background:{_T['surface_alt']}; border-color:{_T['text_dim']}; }}"
+            f"QPushButton:disabled {{ color:{_T['text_dim']}; border-color:{_T['border_soft']}; }}"
+        )
+        outline_danger_qss = (
+            f"QPushButton {{ background:{_T['surface']}; color:{_T['danger']};"
+            f" border:1px solid {_T['danger']}; border-radius:6px; padding:6px 14px;"
+            f" font-weight:600; min-height:34px; }}"
+            f"QPushButton:hover {{ background:{_T['danger_bg']}; }}"
+        )
+        danger_qss = (
+            f"QPushButton {{ background:{_T['danger']}; color:white; border:none;"
+            f" border-radius:6px; padding:6px 16px; font-weight:700; min-height:34px; }}"
+            f"QPushButton:hover {{ background:#7a1010; }}"
+            f"QPushButton:disabled {{ background:{_T['border']}; color:{_T['text_dim']}; }}"
+        )
+
+        self.btn_pdf = QPushButton('Abrir PDF')
+        self.btn_pdf.setStyleSheet(quiet_qss)
+        self.btn_pdf.setCursor(Qt.PointingHandCursor)
+        self.btn_pdf.setToolTip('Abre la factura. Si se hizo en otra caja, se arma el PDF de nuevo.')
+        self.btn_pdf.clicked.connect(self._reprint_selected)
+        cab.addWidget(self.btn_pdf)
+
+        test_nc_btn = QPushButton('Probar permisos NC')
+        test_nc_btn.setStyleSheet(outline_danger_qss)
+        test_nc_btn.setCursor(Qt.PointingHandCursor)
+        test_nc_btn.setToolTip(
+            'Consulta a AFIP si el emisor puede hacer Notas de Crédito.\n'
+            'Usa el emisor elegido arriba o, si están todos, el de la factura marcada.\n'
+            'No emite ningún comprobante.'
+        )
+        test_nc_btn.clicked.connect(self._test_permisos_nc)
+        cab.addWidget(test_nc_btn)
+
+        self.btn_nc = QPushButton('Hacer Nota de Crédito')
+        self.btn_nc.setStyleSheet(danger_qss)
+        self.btn_nc.setCursor(Qt.PointingHandCursor)
+        self.btn_nc.setToolTip(
+            'Anula total o parcialmente la factura marcada.\n'
+            'Sale con el CUIT y el punto de venta de quien la emitió.'
+        )
+        self.btn_nc.clicked.connect(self._on_nota_credito)
+        cab.addWidget(self.btn_nc)
+        v.addLayout(cab)
+
+        cuerpo = QHBoxLayout()
+        cuerpo.setSpacing(10)
+
+        datos = QFrame()
+        datos.setObjectName('fiscalDatos')
+        datos.setStyleSheet(
+            f'QFrame#fiscalDatos {{ background:{_T["surface"]}; border:1px solid {_T["border"]};'
+            ' border-radius:8px; }')
+        g = QGridLayout(datos)
+        g.setContentsMargins(14, 10, 14, 10)
+        g.setHorizontalSpacing(12)
+        g.setVerticalSpacing(6)
+        self._detalle_vals = {}
+        # Dos columnas de datos: a la izquierda quién y cuándo, a la derecha a quién y cómo.
+        campos = [('emisor', 'Emisor', 0, 0), ('comprobante', 'Comprobante', 1, 0),
+                  ('fecha', 'Fecha', 2, 0), ('cae', 'CAE', 3, 0),
+                  ('cliente', 'Cliente', 0, 2), ('documento', 'Documento', 1, 2),
+                  ('pago', 'Pago', 2, 2), ('venta', 'Venta', 3, 2)]
+        for clave, rotulo, fila, col in campos:
+            r = QLabel(rotulo)
+            r.setStyleSheet(f'color:{_T["text_muted"]}; font-size:11px; font-weight:600;'
+                            ' background:transparent; border:none;')
+            val = QLabel('—')
+            val.setStyleSheet(f'color:{_T["text"]}; font-size:12px; background:transparent; border:none;')
+            val.setTextInteractionFlags(Qt.TextSelectableByMouse)
+            # Ignorado a lo ancho: un nombre de empresa largo se corta en vez de
+            # empujar el panel; el texto entero queda en el globito.
+            val.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Preferred)
+            g.addWidget(r, fila, col, Qt.AlignLeft | Qt.AlignTop)
+            g.addWidget(val, fila, col + 1, Qt.AlignTop)
+            self._detalle_vals[clave] = val
+        g.setColumnStretch(1, 1)
+        g.setColumnStretch(3, 1)
+        g.setColumnMinimumWidth(2, 70)
+        g.setRowStretch(4, 1)
+        cuerpo.addWidget(datos, 7)
+
+        self.items_table = QTableWidget()
+        self.items_table.setColumnCount(4)
+        self.items_table.setHorizontalHeaderLabels(['Producto', 'Cant.', 'Precio', 'Importe'])
+        self.items_table.verticalHeader().setVisible(False)
+        self.items_table.setEditTriggers(QTableWidget.NoEditTriggers)
+        self.items_table.setSelectionMode(QTableWidget.NoSelection)
+        self.items_table.setFocusPolicy(Qt.NoFocus)
+        self.items_table.setAlternatingRowColors(True)
+        self.items_table.setShowGrid(False)
+        self.items_table.setStyleSheet(self._tabla_qss())
+        ih = self.items_table.horizontalHeader()
+        ih.setHighlightSections(False)
+        ih.setSectionResizeMode(0, QHeaderView.Stretch)
+        for c in (1, 2, 3):
+            ih.setSectionResizeMode(c, QHeaderView.ResizeToContents)
+        cuerpo.addWidget(self.items_table, 5)
+        v.addLayout(cuerpo, 1)
+
+        self._limpiar_detalle()
+        return panel
+
+    # ── Cargar ─────────────────────────────────────────────────────────────
+    def _rango(self):
+        return self.f_desde.date().toPyDate(), self.f_hasta.date().toPyDate()
+
+    def _fechas_cambiadas(self, *_):
+        self._marcar_periodo()
+        self._timer_fechas.start()
+
+    def _elegir_periodo(self, clave):
+        desde, hasta = hf.rango_de(clave, now_ar().date())
+        for de, d in ((self.f_desde, desde), (self.f_hasta, hasta)):
+            de.blockSignals(True)
+            de.setDate(QDate(d.year, d.month, d.day))
+            de.blockSignals(False)
+        self._marcar_periodo()
+        self._timer_fechas.stop()
+        self._cargar()
+
+    def _marcar_periodo(self):
+        """Prende el botón de rango que coincide con las fechas elegidas."""
+        desde, hasta = self._rango()
+        hoy = now_ar().date()
+        for clave, b in self._botones_rango.items():
+            b.setChecked(hf.rango_de(clave, hoy) == (desde, hasta))
+
+    def _leer_locales(self):
         from pos_system.database.db_manager import DatabaseManager
-        db = DatabaseManager()
-        rows = db.execute_query("SELECT * FROM facturas WHERE id=? LIMIT 1", (fid,))
-        if not rows:
-            QMessageBox.warning(self, 'Error', f'No se encontró la factura #{fid}.')
+        try:
+            rows = DatabaseManager().execute_query(
+                "SELECT * FROM facturas ORDER BY created_at DESC LIMIT 5000") or []
+        except Exception as e:
+            logger.warning(f'Fiscal: no se pudo leer la base local de facturas: {e}')
+            return []
+        filas = []
+        for r in rows:
+            f = hf.fila_local(r)
+            try:
+                # Filas viejas guardadas en UTC: misma corrección que el resto de la pestaña.
+                f['fecha'] = _parse_ar(r['created_at']) if r.get('created_at') else f['fecha']
+            except Exception:
+                pass
+            filas.append(f)
+        return filas
+
+    def _cargar(self):
+        if not hasattr(self, 'h_table'):
             return
-        factura = rows[0]
-        # Validar que sea una factura (no otra NC) — para simplificar, no permitir
-        # encadenar NC sobre NC.
-        tipo = (factura.get('tipo_comprobante') or '').upper()
-        if tipo.startswith('NOTA'):
+        self._pendiente = False
+        self._generacion += 1
+        gen = self._generacion
+        desde, hasta = self._rango()
+        if desde > hasta:
+            desde, hasta = hasta, desde
+        if not self._filas:
+            self.lbl_vacio.setText('Cargando facturas…')
+            self.lbl_vacio_sub.setText('')
+            self._tabla_stack.setCurrentIndex(1)
+        hilo = _CargaFacturasNube(gen, desde, hasta, self)
+        hilo.listo.connect(self._nube_lista)
+        hilo.finished.connect(lambda h=hilo: self._cargas.discard(h))
+        self._cargas.add(hilo)
+        hilo.start()
+
+    def _nube_lista(self, gen, nube):
+        if gen != self._generacion:
+            return  # llegó tarde: el usuario ya pidió otro rango
+        self._cargado_alguna_vez = True
+        locales = self._leer_locales()
+        if nube is None:
+            self._sin_nube = True
+            self._filas = hf.combinar([], locales)
+            self.lbl_subtitulo.setText('Sin conexión con la nube: se ven solo las facturas de esta PC.')
+            self.lbl_subtitulo.setStyleSheet(
+                f'color:{_T["warning"]}; font-size:12px; font-weight:600; background:transparent;')
+        else:
+            self._sin_nube = False
+            self._filas = hf.combinar(nube, locales)
+            self.lbl_subtitulo.setStyleSheet(
+                f'color:{_T["text_muted"]}; font-size:12px; background:transparent;')
+            self.lbl_subtitulo.setText(
+                'Las facturas de todas las cajas, separadas por emisor. '
+                f'Actualizado a las {now_ar():%H:%M}.')
+        self._aplicar_filtro()
+
+    # ── Filtrar y dibujar ──────────────────────────────────────────────────
+    def _perfil_filtro(self):
+        pid = self.perfil_combo.currentData() if hasattr(self, 'perfil_combo') else None
+        if pid is None:
+            return None
+        return next((p for p in self._perfiles if p.get('id') == pid), None)
+
+    def _aplicar_filtro(self, *_):
+        if not hasattr(self, 'h_table'):
+            return
+        perfil = self._perfil_filtro()
+        desde, hasta = self._rango()
+        if desde > hasta:
+            desde, hasta = hasta, desde
+        self._visibles = hf.filtrar(self._filas, self._perfiles, perfil=perfil,
+                                    desde=desde, hasta=hasta,
+                                    texto=self.f_buscar.text())
+        self.h_table.setColumnHidden(self._COL_EMISOR, perfil is not None)
+        self._dibujar_tabla()
+        self._dibujar_totales(perfil)
+
+    def _dibujar_tabla(self):
+        t = self.h_table
+        t.setUpdatesEnabled(False)
+        t.clearSelection()
+        t.setRowCount(len(self._visibles))
+        rojo, verde = QColor(_T['danger']), QColor(_T['success'])
+        for i, f in enumerate(self._visibles):
+            es_nc = hf.es_nota_de_credito(f['tipo'])
+            letra = (f['tipo'].split()[-1] if f['tipo'] else '').upper()
+            prefijo = f'NC {letra}' if es_nc else f'Fac. {letra}'
+            comp = QTableWidgetItem(f"{prefijo}  {f['pv']:05d}-{f['nro']:08d}")
+            comp.setData(Qt.UserRole, i)
+            comp.setFont(QFont('Consolas', 9))
+            if es_nc:
+                comp.setForeground(rojo)
+            t.setItem(i, 0, comp)
+
+            t.setItem(i, 1, QTableWidgetItem(
+                f['fecha'].strftime('%d/%m/%Y %H:%M') if f['fecha'] else '—'))
+            t.setItem(i, 2, QTableWidgetItem(hf.nombre_de_emisor(f, self._perfiles)))
+            cli = QTableWidgetItem(f['cliente'])
+            cli.setToolTip(f['cliente'])
+            t.setItem(i, 3, cli)
+            t.setItem(i, 4, QTableWidgetItem(hf.formatear_documento(f['doc_receptor']) or '—'))
+            t.setItem(i, 5, QTableWidgetItem(f['pago'] or '—'))
+
+            if f['solo_local'] and not self._sin_nube:
+                origen = QTableWidgetItem('Sin subir')
+                origen.setForeground(QColor(_T['warning']))
+                origen.setToolTip('Está solo en esta PC: no llegó a la nube al facturar.')
+            elif es_nc:
+                origen = QTableWidgetItem('Nota de crédito')
+                origen.setForeground(rojo)
+            elif f['es_varios_2']:
+                origen = QTableWidgetItem('Varios 2')
+                origen.setForeground(QColor('#a3441a'))
+                origen.setFont(QFont('Segoe UI', 9, QFont.Bold))
+            else:
+                origen = QTableWidgetItem('Venta')
+            t.setItem(i, 6, origen)
+
+            imp = hf.importe_con_signo(f)
+            tot = QTableWidgetItem(_pesos(imp))
+            tot.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            tot.setFont(QFont('Segoe UI', 9, QFont.Bold))
+            if imp < 0:
+                tot.setForeground(rojo)
+            t.setItem(i, 7, tot)
+
+            cae = QTableWidgetItem(f['cae'] or 'Sin CAE')
+            cae.setFont(QFont('Consolas', 9) if f['cae'] else QFont('Segoe UI', 9, QFont.Bold))
+            cae.setForeground(verde if f['cae'] else rojo)
+            t.setItem(i, 8, cae)
+        t.setUpdatesEnabled(True)
+
+        if self._visibles:
+            self._tabla_stack.setCurrentIndex(0)
+        else:
+            self._tabla_stack.setCurrentIndex(1)
+            if self.f_buscar.text().strip():
+                self.lbl_vacio.setText('Ninguna factura coincide con la búsqueda')
+                self.lbl_vacio_sub.setText('Probá con otro nombre, CUIT o número.')
+            elif self._filas or self._cargado_alguna_vez:
+                self.lbl_vacio.setText('No hay facturas en este período')
+                self.lbl_vacio_sub.setText('Cambiá las fechas o el emisor.')
+        self._limpiar_detalle()
+
+    def _dibujar_totales(self, perfil):
+        tt = hf.totales(self._visibles)
+
+        def _cant(n, uno, varios):
+            return f'{n} {uno if n == 1 else varios}'
+
+        self.t_total_value.setText(_pesos(tt['total']))
+        sub = _cant(tt['cant'], 'comprobante', 'comprobantes')
+        if tt['cant_notas_credito']:
+            sub += f" · {_cant(tt['cant_notas_credito'], 'nota de crédito', 'notas de crédito')}"
+        if tt['sin_cae']:
+            sub += f" · <span style='color:{_T['danger']};'>{tt['sin_cae']} sin CAE</span>"
+        self.t_total_sub.setText(sub)
+        self.t_v2_value.setText(_pesos(tt['varios_2']))
+        self.t_v2_sub.setText(_cant(tt['cant_varios_2'], 'factura del día', 'facturas del día'))
+        self.t_reg_value.setText(_pesos(tt['clientes']))
+        self.t_reg_sub.setText(_cant(tt['cant_clientes'], 'factura', 'facturas'))
+        self.t_transf_value.setText(_pesos(tt['clientes_transferencia']))
+        self.t_transf_sub.setText(_cant(tt['cant_clientes_transferencia'], 'factura', 'facturas'))
+
+        partes = []
+        if perfil is None:
+            for nombre, total, cant in hf.por_emisor(self._visibles, self._perfiles):
+                partes.append(
+                    f"<b style='color:{_T['text']};'>{_html(nombre)}</b> "
+                    f"{_pesos(total)} <span style='color:{_T['text_dim']};'>"
+                    f"({_cant(cant, 'comprobante', 'comprobantes')})</span>")
+        estado = []
+        # Sin conexión ya lo dice el subtítulo de arriba.
+        if not self._sin_nube:
+            sin_subir = sum(1 for f in self._visibles if f['solo_local'])
+            if sin_subir:
+                estado.append(f"<span style='color:{_T['warning']};'>"
+                              f"{_cant(sin_subir, 'factura', 'facturas')} de esta PC sin subir a la nube.</span>")
+        texto = '&nbsp;&nbsp;&nbsp;·&nbsp;&nbsp;&nbsp;'.join(partes)
+        if estado:
+            texto = (texto + '&nbsp;&nbsp;&nbsp;&nbsp;' if texto else '') + ' '.join(estado)
+        self.lbl_por_emisor.setText(texto)
+        self.lbl_por_emisor.setVisible(bool(texto))
+
+    # ── Detalle ────────────────────────────────────────────────────────────
+    def _fila_seleccionada(self):
+        row = self.h_table.currentRow()
+        if row < 0 or not self.h_table.selectionModel().hasSelection():
+            return None
+        item = self.h_table.item(row, 0)
+        if item is None:
+            return None
+        idx = item.data(Qt.UserRole)
+        if idx is None or idx >= len(self._visibles):
+            return None
+        return self._visibles[idx]
+
+    def _limpiar_detalle(self):
+        if not hasattr(self, '_detalle_vals'):
+            return
+        self.lbl_detalle_titulo.setText('Detalle de la factura')
+        for clave, val in self._detalle_vals.items():
+            val.setText('Elegí una factura de la lista.' if clave == 'emisor' else '—')
+        self.items_table.setRowCount(0)
+        self.btn_pdf.setEnabled(False)
+        self.btn_nc.setEnabled(False)
+
+    def _mostrar_detalle(self):
+        f = self._fila_seleccionada()
+        if f is None:
+            self._limpiar_detalle()
+            return
+        es_nc = hf.es_nota_de_credito(f['tipo'])
+        letra = (f['tipo'].split()[-1] if f['tipo'] else '').upper()
+        nombre_tipo = f'Nota de crédito {letra}' if es_nc else f'Factura {letra}'
+        numero = f"{f['pv']:05d}-{f['nro']:08d}"
+        self.lbl_detalle_titulo.setText(f'{nombre_tipo}  {numero}')
+
+        perfil = hf.perfil_de(f, self._perfiles)
+        emisor = hf.nombre_de_emisor(f, self._perfiles)
+        cuit_em = f['cuit_emisor'] or (hf.solo_digitos(perfil.get('cuit')) if perfil else '')
+        self._detalle_vals['emisor'].setText(
+            f"{emisor}  ·  CUIT {hf.formatear_documento(cuit_em)}" if cuit_em else emisor)
+        self._detalle_vals['comprobante'].setText(f"{nombre_tipo}  ·  PV {f['pv']}  ·  N.º {f['nro']}")
+        self._detalle_vals['fecha'].setText(
+            f['fecha'].strftime('%d/%m/%Y  %H:%M') if f['fecha'] else '—')
+        self._detalle_vals['cliente'].setText(f['cliente'])
+        doc = hf.formatear_documento(f['doc_receptor'])
+        if doc:
+            tipo_doc = 'CUIT' if len(f['doc_receptor']) == 11 else 'DNI'
+            doc_txt = f'{tipo_doc} {doc}'
+        else:
+            doc_txt = 'Sin identificar'
+        if f['cond_iva_receptor']:
+            doc_txt += f"  ·  {f['cond_iva_receptor']}"
+        self._detalle_vals['documento'].setText(doc_txt)
+        self._detalle_vals['pago'].setText(f['pago'] or '—')
+        if f['cae']:
+            vto = f['vto_cae']
+            if len(vto) == 8 and vto.isdigit():
+                vto = f'{vto[6:]}/{vto[4:6]}/{vto[:4]}'
+            self._detalle_vals['cae'].setText(f"{f['cae']}  ·  vence {vto}" if vto else f['cae'])
+        else:
+            self._detalle_vals['cae'].setText('Sin CAE: ARCA no la autorizó')
+        venta = []
+        if f['es_varios_2']:
+            venta.append('Factura Varios 2 del día')
+        elif f['turno'] and f['turno'].strip('0'):
+            venta.append(f"Venta N.º {f['turno'].lstrip('0')}")
+        if f['solo_local'] and not self._sin_nube:
+            venta.append('solo en esta PC')
+        if f['notas']:
+            venta.append(f['notas'])
+        self._detalle_vals['venta'].setText('  ·  '.join(venta) or '—')
+
+        items = f['items']
+        self.items_table.setRowCount(len(items))
+        for i, it in enumerate(items):
+            desc = str(it.get('descripcion') or it.get('nombre') or '')
+            cant = float(it.get('cantidad') or 0)
+            precio = float(it.get('precio') or it.get('precio_unitario') or 0)
+            importe = float(it.get('importe') or it.get('subtotal') or cant * precio)
+            d_item = QTableWidgetItem(desc)
+            d_item.setToolTip(desc)
+            self.items_table.setItem(i, 0, d_item)
+            c_item = QTableWidgetItem(f'{cant:g}'.replace('.', ','))
+            c_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.items_table.setItem(i, 1, c_item)
+            p_item = QTableWidgetItem(_pesos(precio))
+            p_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.items_table.setItem(i, 2, p_item)
+            m_item = QTableWidgetItem(_pesos(importe))
+            m_item.setTextAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            self.items_table.setItem(i, 3, m_item)
+        if not items:
+            self.items_table.setRowCount(1)
+            vacio = QTableWidgetItem('El detalle de productos está en el PDF.'
+                                     if f['solo_local'] else 'Sin renglones guardados.')
+            vacio.setForeground(QColor(_T['text_dim']))
+            self.items_table.setItem(0, 0, vacio)
+
+        for val in self._detalle_vals.values():
+            val.setToolTip(val.text())
+        self.btn_pdf.setEnabled(bool(f['pdf_path'] or f['documento']))
+        self.btn_nc.setEnabled(bool(f['cae']) and not es_nc)
+
+    # ── Acciones ───────────────────────────────────────────────────────────
+    def _on_nota_credito(self):
+        """Nota de crédito sobre la factura marcada, con el emisor de esa factura."""
+        f = self._fila_seleccionada()
+        if f is None:
+            QMessageBox.information(self, 'Sin selección',
+                'Elegí una factura de la lista para hacerle la Nota de Crédito.')
+            return
+        if hf.es_nota_de_credito(f['tipo']):
             QMessageBox.warning(self, 'No permitido',
-                'No se puede emitir una Nota de Crédito sobre otra Nota de Crédito.')
+                'No se puede hacer una Nota de Crédito sobre otra Nota de Crédito.')
             return
-        # Validar que tenga CAE (factura emitida en AFIP)
-        if not (factura.get('cae') or '').strip():
+        if not f['cae']:
             QMessageBox.warning(self, 'Factura sin CAE',
-                'Solo se pueden hacer Notas de Crédito sobre facturas con CAE.\n'
-                'Esta factura figura como "manual" o aún no fue autorizada por AFIP.')
+                'Solo se pueden hacer Notas de Crédito sobre facturas autorizadas por ARCA.')
             return
-        # Pasar el perfil seleccionado para que la NC use sus credenciales
-        perfil = self._get_perfil_seleccionado()
+        # Antes salía con el perfil elegido arriba: con José elegido, una NC sobre
+        # una factura de Agustín iba con el CUIT y el punto de venta equivocados.
+        p = hf.perfil_de(f, self._perfiles)
+        perfil = self._perfil_completo(p.get('id')) if p else {}
         if not perfil:
-            QMessageBox.warning(self, 'Sin perfil',
-                'Seleccioná un perfil ARCA del combo arriba antes de emitir la NC.')
+            QMessageBox.warning(self, 'Emisor no encontrado',
+                'No encontré el perfil ARCA que emitió esta factura '
+                f"(punto de venta {f['pv']}"
+                + (f", CUIT {hf.formatear_documento(f['cuit_emisor'])}" if f['cuit_emisor'] else '')
+                + ').\nRevisá que el perfil esté activo en esta PC.')
             return
         from pos_system.ui.nota_credito_dialog import NotaCreditoDialog
-        dlg = NotaCreditoDialog(factura, self, perfil=perfil)
+        dlg = NotaCreditoDialog(hf.factura_para_nota_de_credito(f), self, perfil=perfil)
         if dlg.exec_() == dlg.Accepted:
-            self.refresh_data()
+            self._cargar()
             pdf = getattr(dlg, 'pdf_path', '')
             if pdf:
                 resp = QMessageBox.question(
@@ -727,26 +1332,29 @@ class FiscalView(QWidget):
                         pass
 
     def _reprint_selected(self):
-        row = self.h_table.currentRow()
-        if row < 0:
-            QMessageBox.information(self, 'Sin selección', 'Seleccione una factura de la lista.')
+        import os
+        f = self._fila_seleccionada()
+        if f is None:
+            QMessageBox.information(self, 'Sin selección', 'Elegí una factura de la lista.')
             return
-        pdf_item = self.h_table.item(row, 7)
-        if not pdf_item:
+        if f['pdf_path'] and os.path.exists(f['pdf_path']):
+            self._abrir_pdf(f['pdf_path'])
             return
-        pdf_path = pdf_item.data(Qt.UserRole)
-        if not pdf_path:
-            QMessageBox.warning(self, 'Sin PDF', 'No hay PDF disponible para esta factura.')
+        if not f['documento']:
+            QMessageBox.warning(self, 'Sin PDF',
+                'Esta factura no tiene PDF guardado en esta PC.')
             return
-        import os, subprocess, sys
-        if not os.path.exists(pdf_path):
-            QMessageBox.warning(self, 'Archivo no encontrado',
-                                f'No se encontró el archivo:\n{pdf_path}')
+        # Hecha en otra caja (o el PDF se borró): se arma de nuevo con los
+        # mismos datos que se usaron al emitirla.
+        try:
+            from pos_system.utils.pdf_generator import PDFGenerator
+            ruta = PDFGenerator().generate_factura_afip_a4(dict(f['documento']))
+        except Exception as e:
+            logger.exception('Fiscal: no se pudo armar el PDF de la factura')
+            QMessageBox.critical(self, 'Error', f'No se pudo armar el PDF:\n{e}')
             return
-        if sys.platform == 'win32':
-            os.startfile(pdf_path)
-        else:
-            subprocess.Popen(['xdg-open', pdf_path])
+        f['pdf_path'] = ruta
+        self._abrir_pdf(ruta)
 
     # ── TAB 3: Configuración AFIP ─────────────────────────────────────────────
     def _build_config_tab(self):
@@ -855,37 +1463,43 @@ class FiscalView(QWidget):
         return widget
 
     def _cargar_perfiles_combo(self):
-        """Llena el combo con los perfiles de perfiles_facturacion.activo=1."""
+        """Llena el selector de emisor con los perfiles ARCA activos.
+
+        Conserva lo elegido: los perfiles se vuelven a leer en cada recarga
+        (pueden cambiar desde el panel) y no tiene que saltar a "Todos".
+        """
         from pos_system.database.db_manager import DatabaseManager
         try:
-            db = DatabaseManager()
-            rows = db.execute_query(
-                "SELECT id, nombre, cuit, punto_venta FROM perfiles_facturacion "
-                "WHERE activo=1 ORDER BY nombre"
+            rows = DatabaseManager().execute_query(
+                "SELECT id, nombre, razon_social, cuit, punto_venta FROM perfiles_facturacion "
+                "WHERE activo=1"
             ) or []
         except Exception:
             rows = []
-        self.perfil_combo.clear()
-        if not rows:
-            self.perfil_combo.addItem('— sin perfiles cargados —', None)
-            return
-        for r in rows:
-            cuit = (r.get('cuit') or '').strip()
-            pv = int(r.get('punto_venta') or 1)
-            label = f"{r.get('nombre', '?')} — CUIT {cuit} — PV {pv}"
-            self.perfil_combo.addItem(label, int(r['id']))
+        self._perfiles = [dict(r, id=int(r['id'])) for r in rows]
+        self._perfiles.sort(key=hf.nombre_de_perfil)
 
-    def _get_perfil_seleccionado(self) -> dict:
-        """Devuelve el dict completo del perfil seleccionado en el combo, o {}."""
-        if not hasattr(self, 'perfil_combo') or self.perfil_combo is None:
-            return {}
-        pid = self.perfil_combo.currentData()
+        elegido = self.perfil_combo.currentData()
+        self.perfil_combo.blockSignals(True)
+        self.perfil_combo.clear()
+        self.perfil_combo.addItem('Todos los emisores', None)
+        for p in self._perfiles:
+            cuit = hf.formatear_documento(p.get('cuit')) or 'sin CUIT'
+            pv = int(p.get('punto_venta') or 1)
+            self.perfil_combo.addItem(f"{hf.nombre_de_perfil(p)}  ·  PV {pv}", p['id'])
+            self.perfil_combo.setItemData(
+                self.perfil_combo.count() - 1, f'CUIT {cuit} · punto de venta {pv}', Qt.ToolTipRole)
+        idx = self.perfil_combo.findData(elegido) if elegido is not None else 0
+        self.perfil_combo.setCurrentIndex(max(idx, 0))
+        self.perfil_combo.blockSignals(False)
+
+    def _perfil_completo(self, pid) -> dict:
+        """La fila entera del perfil (con certificado y clave), o {}."""
         if not pid:
             return {}
         from pos_system.database.db_manager import DatabaseManager
         try:
-            db = DatabaseManager()
-            rows = db.execute_query(
+            rows = DatabaseManager().execute_query(
                 "SELECT * FROM perfiles_facturacion WHERE id=? AND activo=1 LIMIT 1",
                 (int(pid),)
             ) or []
@@ -893,15 +1507,26 @@ class FiscalView(QWidget):
         except Exception:
             return {}
 
+    def _get_perfil_seleccionado(self) -> dict:
+        """El emisor elegido arriba; con "Todos", el de la factura marcada."""
+        if not hasattr(self, 'perfil_combo') or self.perfil_combo is None:
+            return {}
+        pid = self.perfil_combo.currentData()
+        if pid is None:
+            f = self._fila_seleccionada()
+            p = hf.perfil_de(f, self._perfiles) if f else None
+            pid = p.get('id') if p else None
+        return self._perfil_completo(pid)
+
     def _test_permisos_nc(self):
         """Llama a AFIP para verificar si el perfil seleccionado puede emitir NC."""
         from PyQt5.QtWidgets import QApplication
         perfil = self._get_perfil_seleccionado()
         if not perfil:
             QMessageBox.warning(
-                self, 'Sin perfil',
-                'Seleccioná un perfil ARCA del combo de arriba.\n'
-                'Los perfiles se cargan en la pestaña "Perfiles ARCA".'
+                self, 'Elegí un emisor',
+                'Elegí un emisor arriba, o marcá una factura de la lista,\n'
+                'para saber con qué perfil ARCA hacer la prueba.'
             )
             return
 
@@ -1049,72 +1674,26 @@ class FiscalView(QWidget):
 
     # ── Refresh ───────────────────────────────────────────────────────────────
     def refresh_data(self):
-        self._load_historial()
+        """La llama la ventana después de cada venta, cierre o sync.
+
+        Leer la nube en cada venta sería gastar consultas en una pestaña que
+        nadie está mirando: si no está a la vista, solo queda anotado y se
+        recarga al abrirla.
+        """
+        self._cargar_perfiles_combo()
         self._load_config_fields()
+        if self.isVisible():
+            self._cargar()
+        else:
+            self._pendiente = True
+
+    def showEvent(self, event):
+        super().showEvent(event)
+        if getattr(self, '_pendiente', False):
+            self._cargar()
 
     def _load_historial(self):
-        try:
-            from pos_system.database.db_manager import DatabaseManager
-            db = DatabaseManager()
-            rows = db.execute_query(
-                "SELECT * FROM facturas ORDER BY created_at DESC LIMIT 500"
-            )
-            self.h_table.setRowCount(len(rows))
-            total_all = 0.0
-            total_v2 = 0.0
-            total_reg = 0.0
-            count_v2 = 0
-            for i, r in enumerate(rows):
-                fecha_str = ''
-                try:
-                    fecha_str = _parse_ar(r['created_at']).strftime('%d/%m/%Y %H:%M')
-                except Exception:
-                    fecha_str = r.get('created_at', '')
-
-                cae_short = str(r.get('cae', ''))[:14] if r.get('cae') else '—'
-                has_cae = bool(r.get('cae'))
-                es_v2 = bool(r.get('es_varios_2'))
-                tot = float(r.get('total', 0) or 0)
-                total_all += tot
-                if es_v2:
-                    total_v2 += tot
-                    count_v2 += 1
-                else:
-                    total_reg += tot
-
-                self.h_table.setItem(i, 0, QTableWidgetItem(str(r['id'])))
-                self.h_table.setItem(i, 1, QTableWidgetItem(r.get('tipo_comprobante', '')))
-                nro_item = QTableWidgetItem(str(r.get('nro_comprobante', '')).zfill(8))
-                self.h_table.setItem(i, 2, nro_item)
-                self.h_table.setItem(i, 3, QTableWidgetItem(fecha_str))
-                self.h_table.setItem(i, 4, QTableWidgetItem(r.get('cliente', '')))
-                cae_item = QTableWidgetItem(cae_short)
-                if has_cae:
-                    cae_item.setForeground(QColor('#3d7a3a'))
-                else:
-                    cae_item.setForeground(QColor('#a01616'))
-                self.h_table.setItem(i, 5, cae_item)
-                self.h_table.setItem(i, 6, QTableWidgetItem(f'${tot:,.2f}'))
-
-                pdf_item = QTableWidgetItem('Abrir' if r.get('pdf_path') else '—')
-                pdf_item.setData(Qt.UserRole, r.get('pdf_path'))
-                if r.get('pdf_path'):
-                    pdf_item.setForeground(QColor('#c1521f'))
-                self.h_table.setItem(i, 7, pdf_item)
-
-                origen_item = QTableWidgetItem('Varios 2' if es_v2 else 'Venta/Manual')
-                if es_v2:
-                    origen_item.setForeground(QColor('#a3441a'))
-                    origen_item.setFont(QFont('Segoe UI', 9, QFont.Bold))
-                self.h_table.setItem(i, 8, origen_item)
-
-            # Actualizar panel de totales
-            self.t_total_value.setText(f'${total_all:,.2f}')
-            self.t_v2_value.setText(f'${total_v2:,.2f}')
-            self.t_reg_value.setText(f'${total_reg:,.2f}')
-            self.t_cnt_value.setText(f'{len(rows)}  /  {count_v2}')
-        except Exception:
-            pass
+        self._cargar()
 
     def _on_tab_changed(self, index):
         if index == 1:
