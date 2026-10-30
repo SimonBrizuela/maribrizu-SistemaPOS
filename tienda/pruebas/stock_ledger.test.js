@@ -167,3 +167,28 @@ describe('los motivos', () => {
     expect(MOTIVOS.fiado).toBe('Cargado a fiado');
   });
 });
+
+describe('desde qué equipo se movió', () => {
+  it('el navegador y el sistema, en pocas palabras', async () => {
+    const { agenteCorto } = await import('../../webapp/src/stock_ledger.js');
+    expect(agenteCorto('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36'))
+      .toBe('Chrome/Windows');
+    expect(agenteCorto('Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Mobile Safari/537.36'))
+      .toBe('Chrome/Android');
+    expect(agenteCorto('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1'))
+      .toBe('Safari/iPhone');
+    expect(agenteCorto('Mozilla/5.0 (Windows NT 10.0) AppleWebKit/537.36 Chrome/130.0 Safari/537.36 Edg/130.0'))
+      .toBe('Edge/Windows');
+    expect(agenteCorto('')).toBe('otro/otro');
+  });
+
+  it('cada movimiento lleva de qué pestaña y navegador salió', async () => {
+    await registrarMovimiento({}, { docId: 'p1', motivo: 'reposicion', antes: 1, despues: 3 });
+    const d = escrituras[0].datos;
+    expect(d).toHaveProperty('panel_pestana');
+    expect(d).toHaveProperty('panel_navegador');
+    expect(typeof d.panel_agente).toBe('string');
+    // pc_id sigue siendo 'webapp': los scripts de diagnóstico filtran por eso.
+    expect(d.pc_id).toBe('webapp');
+  });
+});

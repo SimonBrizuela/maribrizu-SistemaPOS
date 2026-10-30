@@ -16,11 +16,18 @@
  * `ultima_actualizacion` (serverTimestamp) nunca entra en el diff: el motor la
  * agrega siempre al escribir. Inventario es derivado: en cada apply se re-sincroniza
  * desde precio_venta/stock/costo del estado resultante, no se snapshotea aparte.
+ *
+ * Un paso que movió stock NO se deshace escribiendo el número viejo: desde el
+ * 29-10 se aplica como diferencia sobre lo que hay hoy en la nube (si en el
+ * medio se vendió algo, la venta se respeta) y deja su fila en
+ * `stock_movimientos`. Ver `stock_concurrencia.js`.
  */
 import {
   doc, setDoc, updateDoc, deleteDoc, writeBatch, serverTimestamp,
 } from 'firebase/firestore';
 import { invalidateCacheByPrefix } from './cache.js';
+import { tocaCamposDeStock, resolverDeshacer, aplicarPlan } from './stock_concurrencia.js';
+import { escribirReleyendo } from './stock_guardar.js';
 
 const STORAGE_KEY = 'pos_catalogo_history_v1';
 const MAX_ENTRIES = 80;            // tope de pasos guardados
@@ -119,8 +126,58 @@ export function initCatalogoHistory(deps) {
   }
 
   // ── Motor de apply (inventario derivado + memoria + cache + meta) ─────────
-  async function _writeOne(change, direction) {
-    const { docId, invId, syncInv } = change;
+
+  // Sincroniza `inventario` (lo lee el POS) con lo que quedó escrito.
+  async function _syncInventario(change, escrito) {
+    if (!change.syncInv || change.invId == null) return;
+    const invFields = {};
+    if ('precio_venta' in escrito) invFields.precio = escrito.precio_venta;
+    if ('stock' in escrito)        invFields.stock  = escrito.stock;
+    if ('costo' in escrito)        invFields.costo  = escrito.costo;
+    if (!Object.keys(invFields).length) return;
+    try {
+      const prod = getProducto(change.docId) || {};
+      const invDocId = String(change.invId);
+      await setDoc(doc(db, 'inventario', invDocId), {
+        ...invFields,
+        nombre: prod.nombre || prod.name || '',
+        id: parseInt(invDocId) || invDocId,
+        ultima_actualizacion: serverTimestamp(),
+      }, { merge: true });
+    } catch (_) { /* inventario es best-effort, igual que en el resto del catálogo */ }
+  }
+
+  // Un paso que movió stock: se relee el producto en una transacción y se
+  // aplica la diferencia del paso sobre lo que hay hoy, con su movimiento.
+  // Devuelve los campos que quedaron escritos.
+  async function _writeStockChange(change, direction, ctx = {}) {
+    const { docId } = change;
+    const hacia = direction === 'undo' ? change.before : change.after;
+    const desde = direction === 'undo' ? change.after : change.before;
+    const accion = ctx.tipo === 'hacer' ? 'Panel'
+      : direction === 'undo' ? 'Deshacer' : 'Rehacer';
+    const r = await escribirReleyendo(db, docId, (nube) => {
+      const plan = resolverDeshacer({ desde, hacia, nube });
+      const datos = aplicarPlan({ ...hacia }, plan);
+      datos.ultima_actualizacion = serverTimestamp();
+      const prod = getProducto(docId) || {};
+      return {
+        plan, datos,
+        movimiento: {
+          nombre: nube.nombre || prod.nombre || prod.name || '',
+          motivo: 'edicion_manual',
+          detalle: `${accion}: ${ctx.label || 'cambio del catálogo'}`,
+        },
+      };
+    });
+    const escrito = { ...r.datos };
+    delete escrito.ultima_actualizacion;
+    applyToMemory(docId, { fields: escrito });
+    return escrito;
+  }
+
+  async function _writeOne(change, direction, ctx = {}) {
+    const { docId } = change;
     const target = direction === 'undo' ? change.before : change.after;
     const counterpart = direction === 'undo' ? change.after : change.before;
 
@@ -144,32 +201,24 @@ export function initCatalogoHistory(deps) {
       return;
     }
 
+    // Paso con stock: diferencia sobre la nube, nunca el número viejo.
+    if (tocaCamposDeStock(target)) {
+      const escrito = await _writeStockChange(change, direction, ctx);
+      await _syncInventario(change, escrito);
+      return;
+    }
+
     // Update normal: escribir solo los campos del target.
     await updateDoc(doc(db, 'catalogo', docId), { ...target, ultima_actualizacion: serverTimestamp() });
     applyToMemory(docId, { fields: target });
 
-    // Sincronizar inventario (POS) si el change lo pide y tocó precio/stock/costo.
-    if (syncInv && invId != null) {
-      const invFields = {};
-      if ('precio_venta' in target) invFields.precio = target.precio_venta;
-      if ('stock' in target)        invFields.stock  = target.stock;
-      if ('costo' in target)        invFields.costo  = target.costo;
-      if (Object.keys(invFields).length) {
-        try {
-          const prod = getProducto(docId) || {};
-          const invDocId = String(invId);
-          await setDoc(doc(db, 'inventario', invDocId), {
-            ...invFields,
-            nombre: prod.nombre || prod.name || '',
-            id: parseInt(invDocId) || invDocId,
-            ultima_actualizacion: serverTimestamp(),
-          }, { merge: true });
-        } catch (_) { /* inventario es best-effort, igual que en el resto del catálogo */ }
-      }
-    }
+    // Sincronizar inventario (POS) si el change lo pide y tocó precio/costo.
+    await _syncInventario(change, target);
   }
 
-  async function _applyChangeSet(changes, direction) {
+  // `ctx` = { label, tipo: 'hacer' | 'deshacer' | 'rehacer' }: sólo se usa
+  // para el detalle del movimiento de stock.
+  async function _applyChangeSet(changes, direction, ctx = {}) {
     // Flag para que main.js/onStoreChange no re-renderice por nuestro propio write.
     try { window.__catalogoLocalEditUntil = Date.now() + 8000; } catch (_) {}
 
@@ -186,7 +235,7 @@ export function initCatalogoHistory(deps) {
     for (let i = 0; i < special.length; i += SPECIAL_PER_BATCH) {
       const slice = special.slice(i, i + SPECIAL_PER_BATCH);
       if (slice.length === 1) {
-        try { await _writeOne(slice[0], direction); } catch (e) { console.error('[hist] writeOne', e); }
+        try { await _writeOne(slice[0], direction, ctx); } catch (e) { console.error('[hist] writeOne', e); }
         continue;
       }
       const batch = writeBatch(db);
@@ -212,10 +261,18 @@ export function initCatalogoHistory(deps) {
       catch (e) { console.error('[hist] batch special', e); }
     }
 
-    for (let i = 0; i < simple.length; i += BATCH_SIZE) {
-      const slice = simple.slice(i, i + BATCH_SIZE);
+    // Los pasos que mueven stock van de a uno, cada uno en su transacción: un
+    // lote escribiría números absolutos y pisaría lo vendido en el medio.
+    const conStock = simple.filter(c => tocaCamposDeStock(direction === 'undo' ? c.before : c.after));
+    const sinStock = simple.filter(c => !conStock.includes(c));
+    for (const c of conStock) {
+      try { await _writeOne(c, direction, ctx); } catch (e) { console.error('[hist] stock', e); }
+    }
+
+    for (let i = 0; i < sinStock.length; i += BATCH_SIZE) {
+      const slice = sinStock.slice(i, i + BATCH_SIZE);
       if (slice.length === 1) {
-        try { await _writeOne(slice[0], direction); } catch (e) { console.error('[hist] writeOne', e); }
+        try { await _writeOne(slice[0], direction, ctx); } catch (e) { console.error('[hist] writeOne', e); }
         continue;
       }
       const batch = writeBatch(db);
@@ -228,21 +285,7 @@ export function initCatalogoHistory(deps) {
       try { await batch.commit(); } catch (e) { console.error('[hist] batch', e); }
       // Sync inventario fuera del batch (colección distinta).
       for (const c of slice) {
-        const target = direction === 'undo' ? c.before : c.after;
-        if (!c.syncInv || c.invId == null) continue;
-        const invFields = {};
-        if ('precio_venta' in target) invFields.precio = target.precio_venta;
-        if ('stock' in target)        invFields.stock  = target.stock;
-        if ('costo' in target)        invFields.costo  = target.costo;
-        if (!Object.keys(invFields).length) continue;
-        try {
-          const prod = getProducto(c.docId) || {};
-          const invDocId = String(c.invId);
-          await setDoc(doc(db, 'inventario', invDocId), {
-            ...invFields, nombre: prod.nombre || prod.name || '',
-            id: parseInt(invDocId) || invDocId, ultima_actualizacion: serverTimestamp(),
-          }, { merge: true });
-        } catch (_) {}
+        await _syncInventario(c, direction === 'undo' ? c.before : c.after);
       }
     }
 
@@ -255,7 +298,7 @@ export function initCatalogoHistory(deps) {
   async function undo() {
     const entry = undoStack.pop();
     if (!entry) return null;
-    await _applyChangeSet(entry.changes, 'undo');
+    await _applyChangeSet(entry.changes, 'undo', { label: entry.label, tipo: 'deshacer' });
     redoStack.push(entry);
     _persist();
     _renderPanelIfOpen();
@@ -266,7 +309,7 @@ export function initCatalogoHistory(deps) {
   async function redo() {
     const entry = redoStack.pop();
     if (!entry) return null;
-    await _applyChangeSet(entry.changes, 'redo');
+    await _applyChangeSet(entry.changes, 'redo', { label: entry.label, tipo: 'rehacer' });
     undoStack.push(entry);
     _persist();
     _renderPanelIfOpen();
@@ -301,7 +344,7 @@ export function initCatalogoHistory(deps) {
     const invId = syncInv ? (prod.id || docId) : null;
     const before = _captureBefore(prod, afterFields);
     const change = { docId, invId, syncInv, before, after: { ...afterFields } };
-    await _applyChangeSet([change], 'redo');
+    await _applyChangeSet([change], 'redo', { label, tipo: 'hacer' });
     const entry = _pushEntry('update', label || 'Editar producto', [change], ts);
     return entry;
   }

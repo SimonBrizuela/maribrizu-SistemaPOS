@@ -18,13 +18,18 @@
  */
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
-const { escrituras } = vi.hoisted(() => ({ escrituras: [] }));
+const { escrituras, enLaNube } = vi.hoisted(() => ({ escrituras: [], enLaNube: {} }));
 
 vi.mock('firebase/firestore', async () => {
   const { firestoreFalso } = await import('./firestore_falso.js');
-  return firestoreFalso({ registro: escrituras });
+  // Deshacer un paso de stock relee el producto en una transacción.
+  return firestoreFalso({ registro: escrituras, leerTx: ref => enLaNube[ref?.id] || null });
 });
 vi.mock('../../webapp/src/firebase.js', () => ({ db: {}, app: {} }));
+// Deshacer stock anota el movimiento, que firma con el usuario de la sesión.
+vi.mock('../../webapp/src/auth.js', () => ({
+  auth: { currentUser: { displayName: 'Mari', email: 'mari@liceo' } },
+}));
 
 const { initCatalogoHistory, fieldLabel } =
   await import('../../webapp/src/catalogo_history.js');
@@ -386,5 +391,53 @@ describe('el aviso con el botón de deshacer', () => {
     await new Promise(r => setTimeout(r, 0));
 
     expect(catalogo.p1.precio_venta).toBe(1000);
+  });
+});
+
+describe('deshacer un cambio de stock (29-10)', () => {
+  // Antes deshacer escribía el número viejo: si en el medio el POS vendió,
+  // la venta volvía al stock. Ahora deshace la DIFERENCIA del paso.
+  const movimientos = () => escrituras.filter(e => e.ref?._col === 'stock_movimientos');
+
+  it('una venta en el medio queda: deshace lo que cambió, no vuelve al número', async () => {
+    const h = armar();
+    // Celda: 8 → 12 (cargó 4). Después el POS vendió 2: la nube tiene 10.
+    h.recordUpdate('p1', { stock: 8 }, { stock: 12 }, { label: 'Stock de CUADERNO', syncInv: true, invId: 501 });
+    enLaNube.p1 = { ...catalogo.p1, stock: 10 };
+    escrituras.length = 0;
+
+    await h.undo();
+
+    const w = enColeccion('catalogo').at(-1);
+    expect(w.tipo).toBe('tx-update');
+    expect(w.datos.stock).toBe(6);
+    expect(catalogo.p1.stock).toBe(6);
+    expect(movimientos()).toHaveLength(1);
+    expect(movimientos()[0].datos).toMatchObject({
+      stock_antes: 10, stock_despues: 6, cantidad: -4, motivo: 'edicion_manual',
+      detalle: 'Deshacer: Stock de CUADERNO',
+    });
+    expect(enColeccion('inventario').at(-1).datos.stock).toBe(6);
+  });
+
+  it('rehacer vuelve a sumar lo que cambió', async () => {
+    const h = armar();
+    h.recordUpdate('p1', { stock: 8 }, { stock: 12 }, { label: 'Stock' });
+    enLaNube.p1 = { ...catalogo.p1, stock: 10 };
+    await h.undo();
+    enLaNube.p1 = { ...catalogo.p1, stock: 6 };
+    escrituras.length = 0;
+    await h.redo();
+    expect(enColeccion('catalogo').at(-1).datos.stock).toBe(10);
+    expect(movimientos()[0].datos.detalle).toBe('Rehacer: Stock');
+  });
+
+  it('un precio se sigue deshaciendo como antes, sin transacción ni movimiento', async () => {
+    const h = armar();
+    await h.commitFields(catalogo.p1, { precio_venta: 1500 }, { label: 'Precio' });
+    escrituras.length = 0;
+    await h.undo();
+    expect(enColeccion('catalogo').at(-1).tipo).toBe('update');
+    expect(movimientos()).toHaveLength(0);
   });
 });

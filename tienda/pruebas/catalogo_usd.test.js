@@ -21,7 +21,12 @@ const { datos } = vi.hoisted(() => ({
 
 vi.mock('firebase/firestore', async () => {
   const { firestoreFalso } = await import('./firestore_falso.js');
-  const base = firestoreFalso({ registro: datos.escrituras });
+  // La ficha y la celda de stock releen el producto en una transacción.
+  const base = firestoreFalso({
+    registro: datos.escrituras,
+    leerTx: (ref) => (datos.porColeccion[ref?._col] || [])
+      .find(d => (d.__id || d.doc_id) === ref?.id) || null,
+  });
   const snapshot = (nombre) => {
     const lista = datos.porColeccion[nombre] || [];
     return {
@@ -379,7 +384,9 @@ describe('un producto fraccionado en dólares', () => {
     await guardar();
 
     const d = ultimoGuardado();
-    expect(d.conjunto_total).toBe(100);
+    // Sin tocar el stock, la ficha no reescribe el total (desde el 29-10):
+    // queda el de la nube, con lo que se haya vendido mientras estaba abierta.
+    expect(d.conjunto_total).toBeUndefined();
     expect(d.conjunto_colores.map(c => c.unidades)).toEqual([1, 1]);
     expect(d.conjunto_colores.every(c => c.precio_pack_usd === undefined)).toBe(true);
   });

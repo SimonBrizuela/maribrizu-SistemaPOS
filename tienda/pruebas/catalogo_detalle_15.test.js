@@ -19,7 +19,12 @@ const { datos } = vi.hoisted(() => ({
 
 vi.mock('firebase/firestore', async () => {
   const { firestoreFalso } = await import('./firestore_falso.js');
-  const base = firestoreFalso({ registro: datos.escrituras });
+  // La ficha y la celda de stock releen el producto en una transacción.
+  const base = firestoreFalso({
+    registro: datos.escrituras,
+    leerTx: (ref) => (datos.porColeccion[ref?._col] || [])
+      .find(d => (d.__id || d.doc_id) === ref?.id) || null,
+  });
   const snapshot = (nombre) => {
     const lista = datos.porColeccion[nombre] || [];
     return {

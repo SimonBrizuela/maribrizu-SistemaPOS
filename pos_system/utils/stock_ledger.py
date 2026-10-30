@@ -39,6 +39,7 @@ MOTIVOS = {
     'conteo':         'Ajuste por conteo',
     'importacion':    'Importación',
     'variante':       'Variante / conjunto',
+    'correccion':     'Corrección de auditoría',
 }
 
 _DDL = """

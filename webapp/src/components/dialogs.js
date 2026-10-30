@@ -141,6 +141,53 @@ export function confirmDialog({
   });
 }
 
+/**
+ * Elegir entre varias salidas. `opciones` = [{ valor, texto, principal }]; la
+ * principal va con el color del tipo y queda a la derecha. Cancelar (o Escape)
+ * devuelve null.
+ */
+export function elegirDialog({
+  title = 'Elegí una opción',
+  message = '',
+  opciones = [],
+  cancelText = 'Cancelar',
+  type = 'warning',
+} = {}) {
+  return new Promise(resolve => {
+    const accent = _color(type);
+    const botones = opciones.map((o, i) => (o.principal
+      ? `<button data-op="${i}" style="padding:10px 16px;border-radius:8px;border:none;background:${accent};color:#fff;cursor:pointer;font-size:13px;font-weight:700">${_esc(o.texto)}</button>`
+      : `<button data-op="${i}" style="padding:10px 16px;border-radius:8px;border:1px solid ${accent};background:var(--surface);color:var(--text);cursor:pointer;font-size:13px;font-weight:600">${_esc(o.texto)}</button>`
+    ));
+    // La principal al final, como en el resto de los diálogos.
+    const orden = opciones.map((o, i) => i).sort((a, b) => Number(!!opciones[a].principal) - Number(!!opciones[b].principal));
+    const overlay = _buildOverlay({
+      title,
+      bodyHtml: message,
+      footerHtml: `<span style="flex:1"></span>${_btnSecondary(cancelText)}${orden.map(i => botones[i]).join('')}`,
+      type,
+      maxWidth: 520,
+    });
+    const footer = overlay.querySelector('.app-dialog-footer');
+    if (footer) footer.style.flexWrap = 'wrap';
+    const cleanup = (val) => {
+      document.removeEventListener('keydown', onKey);
+      overlay.remove();
+      resolve(val);
+    };
+    const onKey = (e) => {
+      if (e.key === 'Escape') { e.preventDefault(); cleanup(null); }
+    };
+    document.addEventListener('keydown', onKey);
+    overlay.querySelectorAll('[data-op]').forEach(b => b.addEventListener('click', () => {
+      cleanup(opciones[Number(b.dataset.op)].valor);
+    }));
+    overlay.querySelector('.ad-cancel').addEventListener('click', () => cleanup(null));
+    overlay.addEventListener('click', e => { if (e.target === overlay && overlay._bajoPropio) cleanup(null); });
+    setTimeout(() => overlay.querySelector('[data-op]')?.focus(), 30);
+  });
+}
+
 export function alertDialog({
   title = 'Aviso',
   message = '',

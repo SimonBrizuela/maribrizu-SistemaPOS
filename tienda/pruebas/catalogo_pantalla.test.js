@@ -18,7 +18,12 @@ const { datos } = vi.hoisted(() => ({
 
 vi.mock('firebase/firestore', async () => {
   const { firestoreFalso } = await import('./firestore_falso.js');
-  const base = firestoreFalso({ registro: datos.escrituras });
+  // La ficha y la celda de stock releen el producto en una transacción.
+  const base = firestoreFalso({
+    registro: datos.escrituras,
+    leerTx: (ref) => (datos.porColeccion[ref?._col] || [])
+      .find(d => (d.__id || d.doc_id) === ref?.id) || null,
+  });
   const snapshot = (nombre) => {
     const lista = datos.porColeccion[nombre] || [];
     return {
@@ -466,5 +471,160 @@ describe('lo que se ve de un vistazo', () => {
     expect(fila.querySelector('.btn-editar')).toBeTruthy();
     expect(fila.querySelector('.btn-detalle')).toBeTruthy();
     expect(fila.querySelector('.btn-eliminar')).toBeTruthy();
+  });
+});
+
+describe('guardar stock mientras el POS vende (29-10)', () => {
+  // La ficha y la celda escribían el número de la pantalla: lo vendido entre
+  // que se abrió y se guardó volvía al stock. Ahora se relee la nube.
+  //
+  // Las cuentas se hacen contra el número con que abre la ficha, no contra el
+  // del arreglo de arriba: el catálogo puede venir del cache que dejó la
+  // prueba anterior.
+
+  /** El POS vende: la nube cambia, la memoria del panel no. */
+  function venderEnLaNube(id, stock) {
+    const lista = datos.porColeccion.catalogo;
+    const i = lista.findIndex(p => p.__id === id);
+    lista[i] = { ...lista[i], stock };
+  }
+
+  // Espera a que la ficha esté abierta de verdad (la venta tiene que caer
+  // DESPUÉS de abrirla) y devuelve el stock que muestra.
+  async function abrirFicha(nombre) {
+    filaDe(nombre).querySelector('.btn-editar').click();
+    for (let i = 0; i < 50 && !document.getElementById('ed_guardar'); i++) await esperar();
+    expect(document.getElementById('ed_guardar')).toBeTruthy();
+    return Number(document.getElementById('ed_stock').value);
+  }
+
+  // Guarda y espera a que pase algo: o escribió, o apareció el aviso.
+  async function guardarFicha() {
+    document.getElementById('ed_guardar').click();
+    for (let i = 0; i < 60; i++) {
+      await esperar();
+      if (document.querySelector('.app-dialog-overlay') || !document.getElementById('ed_nombre')) break;
+    }
+  }
+
+  /** Espera (con tope) a que algo pase: una corrida lenta tarda más en cerrar la ficha. */
+  async function hasta(condicion) {
+    for (let i = 0; i < 60 && !condicion(); i++) await esperar();
+  }
+
+  /** Los botones del aviso de carrera, por texto. */
+  const botonAviso = (texto) => [...document.querySelectorAll('.app-dialog-overlay button')]
+    .find(b => b.textContent.includes(texto));
+
+  const movimientos = () => enColeccion('stock_movimientos');
+
+  it('cambiar el precio con una venta en el medio no devuelve lo vendido', async () => {
+    await abrirCatalogo();
+    const abierto = await abrirFicha('LAPIZ FABER');
+    venderEnLaNube('p2', abierto - 5);
+    tipear(document.getElementById('ed_precio'), '950');
+    await guardarFicha();
+
+    const d = enColeccion('catalogo').at(-1).datos;
+    expect(d.precio_venta).toBe(950);
+    expect(d.stock, 'sin tocar el stock no se escribe stock').toBeUndefined();
+    expect(movimientos()).toHaveLength(0);
+    expect(document.querySelector('.app-dialog-overlay')).toBeNull();
+  });
+
+  it('cargar stock con una venta en el medio pregunta, y "sumar" respeta la venta', async () => {
+    await abrirCatalogo();
+    const abierto = await abrirFicha('CUADERNO RIVADAVIA');
+    venderEnLaNube('p1', abierto - 2);                          // el POS vendió 2
+    tipear(document.getElementById('ed_stock'), String(abierto + 7)); // cargó 7
+    await guardarFicha();
+
+    expect(enColeccion('catalogo')).toHaveLength(0);   // todavía no escribió
+    const aviso = document.querySelector('.app-dialog-overlay');
+    expect(aviso).toBeTruthy();
+    expect(aviso.textContent).toContain(`pasó a ${abierto - 2}`);
+    botonAviso('Sumar').click();
+    await hasta(() => !document.getElementById('ed_nombre'));
+
+    expect(enColeccion('catalogo').at(-1).datos.stock).toBe(abierto + 5);
+    const mov = movimientos().at(-1).datos;
+    expect(mov).toMatchObject({ stock_antes: abierto - 2, stock_despues: abierto + 5, cantidad: 7, motivo: 'edicion_manual' });
+    expect(mov.detalle).toContain('sumó su cambio');
+    expect(document.getElementById('ed_nombre'), 'la ficha se cierra al guardar').toBeNull();
+  });
+
+  it('"dejar lo que escribí" fija el número, con el antes real', async () => {
+    await abrirCatalogo();
+    const abierto = await abrirFicha('CUADERNO RIVADAVIA');
+    venderEnLaNube('p1', abierto - 2);
+    tipear(document.getElementById('ed_stock'), String(abierto + 7));
+    await guardarFicha();
+    botonAviso('lo que escribí').click();
+    await hasta(() => movimientos().length > 0);
+
+    expect(enColeccion('catalogo').at(-1).datos.stock).toBe(abierto + 7);
+    expect(movimientos().at(-1).datos).toMatchObject({ stock_antes: abierto - 2, stock_despues: abierto + 7 });
+  });
+
+  it('"volver sin guardar" deja la ficha abierta y no escribe nada', async () => {
+    await abrirCatalogo();
+    const abierto = await abrirFicha('CUADERNO RIVADAVIA');
+    venderEnLaNube('p1', abierto - 2);
+    tipear(document.getElementById('ed_stock'), String(abierto + 7));
+    await guardarFicha();
+    botonAviso('Volver sin guardar').click();
+    for (let i = 0; i < 6; i++) await esperar();
+
+    expect(enColeccion('catalogo')).toHaveLength(0);
+    expect(movimientos()).toHaveLength(0);
+    expect(document.getElementById('ed_nombre')).toBeTruthy();
+    expect(document.getElementById('ed_guardar').disabled).toBe(false);
+  });
+
+  it('sin venta en el medio no pregunta y anota el movimiento', async () => {
+    await abrirCatalogo();
+    const abierto = await abrirFicha('CUADERNO RIVADAVIA');
+    venderEnLaNube('p1', abierto);   // la nube igual a lo que se ve
+    tipear(document.getElementById('ed_stock'), String(abierto + 3));
+    await guardarFicha();
+
+    expect(document.querySelector('.app-dialog-overlay')).toBeNull();
+    expect(enColeccion('catalogo').at(-1).datos.stock).toBe(abierto + 3);
+    expect(movimientos().at(-1).datos).toMatchObject({
+      stock_antes: abierto, stock_despues: abierto + 3, detalle: 'Ficha del producto',
+    });
+  });
+
+  it('la celda de stock también pregunta y anota', async () => {
+    await abrirCatalogo();
+    const celda = filaDe('CUADERNO RIVADAVIA').querySelector('.precio-cell[data-field="stock"]');
+    celda.click();
+    await esperar();
+    const input = celda.querySelector('input');
+    const abierto = Number(input.value);
+    venderEnLaNube('p1', abierto - 2);
+    input.value = String(abierto + 8);
+    input.dispatchEvent(new Event('blur'));
+    await hasta(() => botonAviso('Sumar'));
+
+    botonAviso('Sumar').click();
+    await hasta(() => enColeccion('inventario').length > 0);
+    expect(enColeccion('catalogo').at(-1).datos.stock).toBe(abierto + 6);
+    expect(movimientos().at(-1).datos).toMatchObject({
+      stock_antes: abierto - 2, stock_despues: abierto + 6, detalle: expect.stringContaining('Celda'),
+    });
+    const inv = enColeccion('inventario').at(-1);
+    expect(inv.datos.stock, 'el inventario del POS recibe lo escrito').toBe(abierto + 6);
+  });
+
+  it('la celda sin cambios no escribe nada', async () => {
+    await abrirCatalogo();
+    const celda = filaDe('RESMA PAMPA').querySelector('.precio-cell[data-field="stock"]');
+    celda.click();
+    await esperar();
+    const input = celda.querySelector('input');
+    input.dispatchEvent(new Event('blur'));
+    for (let i = 0; i < 6; i++) await esperar();
+    expect(enColeccion('catalogo')).toHaveLength(0);
   });
 });

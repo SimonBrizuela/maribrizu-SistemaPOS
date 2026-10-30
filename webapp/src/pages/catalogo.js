@@ -10,12 +10,14 @@ import { registrarMovimiento, movimientosDe, MOTIVOS } from '../stock_ledger.js'
 import { avisarStockALaTienda, reflejarSiPublicado, sacarDeLaTienda, usarCatalogoParaRecontar,
   leerDocRest, escribirLote, actualizarDoc, esDocumentoYaExistente }
   from '../tienda_espejo.js';
-import { camposStockRapido, precioDesdeVariedades, num as numConj } from '../conjunto.js';
+import { camposStockRapido, precioDesdeVariedades } from '../conjunto.js';
+import { resolverGuardado, resolverDeshacer, aplicarPlan, stockVisible, textoCarrera } from '../stock_concurrencia.js';
+import { escribirPreguntando, escribirReleyendo } from '../stock_guardar.js';
 import {
   recomputarResumenInventario, resumenEstaVencido, computarResumen,
   sugerirCantidad, valorizarStock, validarInventario,
 } from '../inventario_resumen.js';
-import { alertDialog, promptDialog } from '../components/dialogs.js';
+import { alertDialog, promptDialog, elegirDialog } from '../components/dialogs.js';
 import {
   TIPOS_BULTO, bultoDe, labelTipo, aUnidades, aUnidadesEstable, aBultos, textoBultos, alertaPorBulto,
 } from '../bulto.js';
@@ -5253,6 +5255,48 @@ export async function renderCatalogo(container, db) {
     // (si no, restauraría el botón en pleno guardado en curso).
     let _dupBtnResetTimer = null;
 
+    // Stock tal como lo muestra el formulario, leído con las mismas cuentas
+    // que el guardado. Se toma una vez al abrir (`_stockInicial`) para saber
+    // qué cambió el usuario: guardar la ficha ya no escribe el número de la
+    // pantalla sino la diferencia, porque mientras estaba abierta el POS pudo
+    // vender (36 stocks pisados encontrados el 29-10).
+    function _stockDelForm() {
+      if (!overlay.querySelector('#ed_es_conjunto')?.checked) {
+        return { es_conjunto: false, stock: Math.max(0, parseInt(overlay.querySelector('#ed_stock').value) || 0) };
+      }
+      const cCraw = (overlay.querySelector('#ed_conj_contenido').value || '').trim();
+      const cC = cCraw === '' ? 1 : (parseFloat(cCraw) || 1);
+      const filas = [...coloresList.querySelectorAll('[data-color-row]')];
+      if (filas.length) {
+        return {
+          es_conjunto: true,
+          conjunto_contenido: cC,
+          conjunto_colores: filas.map(r => {
+            const c = {
+              color:    (r.querySelector('.ed_color_nombre').value || '').trim(),
+              unidades: parseFloat(r.querySelector('.ed_color_unidades').value) || 0,
+              restante: parseFloat(r.querySelector('.ed_color_restante').value) || 0,
+            };
+            const contRaw = (r.querySelector('.ed_color_contenido').value || '').trim();
+            const cont = contRaw === '' ? null : (parseFloat(contRaw) || 0);
+            if (r.dataset.contenidoLinked !== '1' && cont && cont > 0) c.contenido = cont;
+            return c;
+          }),
+        };
+      }
+      const cRraw = overlay.querySelector('#ed_conj_restante').value.trim();
+      return {
+        es_conjunto: true,
+        conjunto_contenido: cC,
+        conjunto_unidades: Math.max(0, parseFloat(overlay.querySelector('#ed_conj_unidades').value) || 0),
+        conjunto_restante: cRraw === '' ? null : (parseFloat(cRraw) || 0),
+      };
+    }
+    const _stockInicial = esNuevo ? null : _stockDelForm();
+    // Y el producto como estaba al abrir: contra esto se mide si la nube se
+    // movió. Copia, porque otras pantallas a veces modifican el objeto en memoria.
+    const _stockVisto = esNuevo ? null : _copiaStock(prod);
+
     overlay.querySelector('#ed_guardar').addEventListener('click', async () => {
       const btn = overlay.querySelector('#ed_guardar');
       // Cancelar un flash de "repetidas" pendiente para que no pise el spinner.
@@ -5542,9 +5586,16 @@ export async function renderCatalogo(container, db) {
       // que main.js ya vea el flag para no re-renderizar la página entera.
       try { window.__catalogoLocalEditUntil = Date.now() + 8000; } catch(_) {}
 
+      // Lo que quedó en el formulario, en la misma forma que `_stockInicial`.
+      const _stockEscrito = { stock: nuevoStock, ...conjuntoFields };
+
       try {
         let docIdFinal;
         let idNumFinal;
+        // Lo que de verdad se escribió y cómo estaba la nube justo antes:
+        // con esto se arma la memoria, el inventario, la tienda y el deshacer.
+        let escrito = update;
+        let nubeAntes = null;
 
         if (esNuevo) {
           // Modo CREAR: el doc_id es el código interno. Validamos que sea único
@@ -5628,31 +5679,54 @@ export async function renderCatalogo(container, db) {
         } else {
           docIdFinal = prod.doc_id;
           idNumFinal = prod.id || docIdFinal;
-          await updateDoc(doc(db, 'catalogo', docIdFinal), update);
+          // Se relee el producto en una transacción y el stock se escribe
+          // como diferencia sobre lo que hay HOY (o se pregunta, si cambió
+          // mientras la ficha estaba abierta). El movimiento del historial va
+          // en la misma transacción, con el antes y el después reales de la
+          // nube: antes salían de la memoria, y convertir un producto en
+          // conjunto dejaba "+40" donde había pasado de 103 a 40.
+          const r = await escribirPreguntando(db, docIdFinal, (nube, decision) => {
+            const plan = resolverGuardado({
+              inicial: _stockInicial, escrito: _stockEscrito, visto: _stockVisto, nube, decision,
+            });
+            return {
+              plan,
+              datos: plan.campos ? aplicarPlan(update, plan) : update,
+              movimiento: {
+                nombre: nuevoNombre || '', motivo: 'edicion_manual',
+                detalle: _detalleGuardadoStock('Ficha del producto', plan),
+              },
+            };
+          }, (plan) => _preguntarCarreraStock(plan, {
+            unidad: _pluralStock(update), inicio: 'Al abrir la ficha',
+          }));
+          if (!r) {
+            // Prefirió volver a la ficha sin guardar.
+            btn.disabled = false; btn.innerHTML = _btnLabel;
+            return;
+          }
+          escrito = r.datos;
+          nubeAntes = r.nube;
         }
 
         invalidateCacheByPrefix('catalogo');
         _touchCatalogoMeta(db).catch(() => {});
 
-        // La ficha también mueve stock, y hasta ahora era la única puerta que
-        // no dejaba rastro: 366 productos con el stock cambiado por fuera del
-        // historial el 22-08, entre ellos las correcciones a mano de los papeles.
-        try {
-          const antesStk  = esNuevo ? 0 : (esConjunto ? numConj(prod.conjunto_total) : numConj(prod.stock));
-          const despuesStk = esConjunto ? numConj(conjuntoFields.conjunto_total) : numConj(nuevoStock);
-          if (antesStk !== despuesStk) {
-            registrarMovimiento(db, {
-              docId: docIdFinal, nombre: nuevoNombre || '',
-              motivo: 'edicion_manual', antes: antesStk, despues: despuesStk,
-              detalle: esNuevo ? 'Alta desde la ficha' : 'Ficha del producto',
-            });
-          }
-        } catch (_) {}
+        // El alta deja su fila en el historial. Desde cero de verdad: el alta
+        // va con `crear`, que se rechaza si el código ya existe en la nube.
+        // (La edición ya la anotó adentro de la transacción.)
+        if (esNuevo) {
+          registrarMovimiento(db, {
+            docId: docIdFinal, nombre: nuevoNombre || '',
+            motivo: 'edicion_manual', antes: 0, despues: stockVisible(update),
+            detalle: 'Alta desde la ficha',
+          });
+        }
 
         // Si está en la tienda, que la tienda lo vea ya: nombre, precio, stock,
         // pack, variedades. Antes esperaba al sync de las 6 horas.
         if (!esNuevo) {
-          reflejarSiPublicado(db, docIdFinal, { ...prod, ...update, doc_id: docIdFinal }).catch(() => {});
+          reflejarSiPublicado(db, docIdFinal, { ...prod, ...nubeAntes, ...escrito, doc_id: docIdFinal }).catch(() => {});
         }
 
         // Sincronizar con inventario para que el POS reciba el precio actualizado.
@@ -5660,7 +5734,9 @@ export async function renderCatalogo(container, db) {
           const invDocId = String(idNumFinal);
           const invUpdate = { ultima_actualizacion: serverTimestamp(), nombre: nuevoNombre || '' };
           if (nuevoPrecio !== undefined) invUpdate.precio = nuevoPrecio;
-          if (nuevoStock !== undefined)  invUpdate.stock  = nuevoStock;
+          // El stock sólo si se escribió: si no se tocó, el de inventario sigue
+          // siendo el que dejó la última venta.
+          if ('stock' in escrito)        invUpdate.stock  = escrito.stock;
           if (nuevoCosto !== undefined)  invUpdate.costo  = nuevoCosto;
           invUpdate.id = parseInt(invDocId) || invDocId;
           await actualizarDoc(db, 'inventario', invDocId, invUpdate, { crearSiFalta: true });
@@ -5677,22 +5753,27 @@ export async function renderCatalogo(container, db) {
           };
           allProductos.unshift(nuevoEnMemoria);
         } else {
+          // La memoria queda como la nube: lo leído en la transacción más lo
+          // escrito (si no se tocó el stock, el de la nube, no el de la pantalla).
           const idx = allProductos.findIndex(p => p.doc_id === prod.doc_id);
-          if (idx !== -1) allProductos[idx] = { ...allProductos[idx], ...update };
+          if (idx !== -1) allProductos[idx] = { ...allProductos[idx], ...nubeAntes, ...escrito };
           const idxF = filtrados.findIndex(p => p.doc_id === prod.doc_id);
-          if (idxF !== -1) filtrados[idxF] = { ...filtrados[idxF], ...update };
+          if (idxF !== -1) filtrados[idxF] = { ...filtrados[idxF], ...nubeAntes, ...escrito };
         }
 
         // Registrar en el historial para poder deshacer (alta o edición).
+        // El "antes" es la nube justo antes de escribir: deshacer aplica la
+        // diferencia de ese paso, no vuelve a un número de la memoria.
         try {
-          const _campos = { ...update };
+          const _campos = { ...escrito };
           delete _campos.ultima_actualizacion;
           if (esNuevo) {
             hist.recordCreate(docIdFinal, { ..._campos, id: idNumFinal }, { label: `Crear ${nuevoNombre || docIdFinal}` });
           } else {
+            const _base = nubeAntes || prod;
             const _before = {}, _after = {};
             for (const k of Object.keys(_campos)) {
-              const ov = (k in prod ? prod[k] : null);
+              const ov = (k in _base ? _base[k] : null);
               if (JSON.stringify(ov) !== JSON.stringify(_campos[k])) { _before[k] = ov; _after[k] = _campos[k]; }
             }
             if (Object.keys(_after).length) hist.recordUpdate(docIdFinal, _before, _after, {
@@ -5745,6 +5826,60 @@ export async function renderCatalogo(container, db) {
     });
   }
 
+  // ── Guardar stock sin pisar lo que se movió mientras tanto ──────────────
+  // Las cuentas viven en `stock_concurrencia.js` (sin Firebase, con pruebas);
+  // acá sólo lo que necesita la pantalla.
+
+  // Copia de los campos de stock de un producto, tal como estaban en memoria.
+  function _copiaStock(p) {
+    const out = {};
+    for (const k of ['es_conjunto', 'stock', 'stock_ilimitado', 'conjunto_contenido',
+      'conjunto_unidades', 'conjunto_restante', 'conjunto_total', 'conjunto_colores']) {
+      if (p && k in p) out[k] = p[k];
+    }
+    return JSON.parse(JSON.stringify(out));
+  }
+
+  // Cómo se llama lo que se cuenta, para el aviso ("unidades", "metros").
+  function _pluralStock(campos) {
+    const um = String(campos?.conjunto_unidad_medida || '').toLowerCase();
+    return (campos?.es_conjunto && um && um !== 'unidades') ? um : 'unidades';
+  }
+
+  // Detalle del movimiento: de dónde vino y, si la nube se había movido, qué
+  // eligió la persona. Es lo que se lee después para entender un número raro.
+  function _detalleGuardadoStock(origen, plan) {
+    const fmtN = n => Number(n || 0).toLocaleString('es-AR', { maximumFractionDigits: 2 });
+    if (!plan.carrera || !plan.tocado) return origen;
+    const enElMedio = `mientras editaba pasó de ${fmtN(plan.resumen.visto)} a ${fmtN(plan.resumen.nube)}`;
+    if (plan.decision === 'sumar') return `${origen} · sumó su cambio (${enElMedio})`;
+    if (plan.decision === 'literal') return `${origen} · dejó lo que escribió (${enElMedio})`;
+    return origen;
+  }
+
+  // El aviso cuando el stock cambió mientras se editaba. Devuelve 'sumar',
+  // 'literal' o null (volver sin guardar).
+  async function _preguntarCarreraStock(plan, { unidad = 'unidades', inicio } = {}) {
+    const t = textoCarrera(plan.resumen, { unidad, inicio });
+    const opciones = [];
+    if (t.sumar && plan.opciones.includes('sumar')) {
+      opciones.push({ valor: 'sumar', texto: t.sumar, principal: true });
+    }
+    opciones.push({ valor: 'literal', texto: t.literal, principal: opciones.length === 0 });
+    return elegirDialog({
+      title: t.titulo,
+      message: `${_escHtml(t.cuerpo)}`
+        + (t.sumar
+          ? '<div style="margin-top:10px;color:var(--text-muted);font-size:13px">'
+            + 'Sumar respeta lo que pasó en el medio. Dejar lo que escribiste sirve si contaste la góndola recién.'
+            + '</div>'
+          : ''),
+      opciones,
+      cancelText: 'Volver sin guardar',
+      type: 'warning',
+    });
+  }
+
   async function editarCampo(cell) {
     const id = cell.dataset.id;
     const field = cell.dataset.field;
@@ -5778,9 +5913,69 @@ export async function renderCatalogo(container, db) {
     input.focus();
     input.select();
 
+    // El stock va aparte: se relee la nube y se escribe la diferencia, con su
+    // movimiento en el historial. Antes la celda escribía el número absoluto,
+    // redondeado y sin rastro.
+    if (field === 'stock') {
+      const visto = _copiaStock(prod);
+      const deCelda = v => Math.max(0, Math.round((parseFloat(v) || 0) * 10000) / 10000);
+      const inicial = { stock: deCelda(valorActual) };
+      const guardarStock = async () => {
+        const escritoCelda = { stock: deCelda(input.value) };
+        if (escritoCelda.stock === inicial.stock) { renderTabla(); return; }
+        try {
+          const r = await escribirPreguntando(db, id, (nube, decision) => {
+            const plan = resolverGuardado({ inicial, escrito: escritoCelda, visto, nube, decision });
+            return {
+              plan,
+              datos: { ...aplicarPlan({}, plan), ultima_actualizacion: serverTimestamp() },
+              movimiento: {
+                nombre: prod.nombre || prod.name || '', motivo: 'edicion_manual',
+                detalle: _detalleGuardadoStock('Celda de la grilla', plan),
+              },
+            };
+          }, (plan) => _preguntarCarreraStock(plan, { inicio: 'Cuando empezaste a editar' }));
+          if (!r) { renderTabla(); return; }
+          const escrito = { ...r.datos };
+          delete escrito.ultima_actualizacion;
+          _touchCatalogoMeta(db).catch(() => {});
+          if ('stock' in escrito) {
+            try {
+              const invDocId = String(prod.id || id);
+              await setDoc(doc(db, 'inventario', invDocId), {
+                stock: escrito.stock, nombre: prod.nombre || prod.name || '',
+                id: parseInt(invDocId) || invDocId, ultima_actualizacion: serverTimestamp(),
+              }, { merge: true });
+            } catch (e2) {
+              console.warn('No se pudo actualizar inventario:', e2.message);
+            }
+          }
+          const i = allProductos.findIndex(p => p.doc_id === id);
+          if (i !== -1) allProductos[i] = { ...allProductos[i], ...r.nube, ...escrito };
+          if (r.plan.despues !== r.plan.antes) {
+            reflejarSiPublicado(db, id, { ...(i !== -1 ? allProductos[i] : prod), doc_id: id }).catch(() => {});
+            hist.recordUpdate(id, { stock: r.nube.stock ?? null }, { stock: escrito.stock }, {
+              label: `${fieldLabel(field)} de ${prod.nombre || prod.name || id}`,
+              syncInv: true, invId: prod.id || id,
+            });
+          }
+          aplicarFiltros();
+          renderStats();
+        } catch (e) {
+          alertDialog({ title: 'Error', message: 'No se pudo guardar: ' + _escHtml(e.message), type: 'error' });
+          renderTabla();
+        }
+      };
+      input.addEventListener('blur', guardarStock, { once: true });
+      input.addEventListener('keydown', e => {
+        if (e.key === 'Enter') input.blur();
+        if (e.key === 'Escape') { input.removeEventListener('blur', guardarStock); renderTabla(); }
+      });
+      return;
+    }
+
     const guardar = async () => {
-      let nuevo = parseFloat(input.value) || 0;
-      if (field === 'stock') nuevo = Math.max(0, Math.round(nuevo));
+      const nuevo = parseFloat(input.value) || 0;
       const _before = { [field]: (field in prod ? prod[field] : null) };
       const _after  = { [field]: nuevo };
       if (field === 'costo') {
@@ -5793,13 +5988,12 @@ export async function renderCatalogo(container, db) {
       try {
         await updateDoc(doc(db, 'catalogo', id), update);
         _touchCatalogoMeta(db).catch(() => {});
-        // Si se editó el stock o el precio, también actualizar inventario
+        // Si se editó el precio o el costo, también actualizar inventario
         // para que el POS lo reciba en tiempo real via listener.
         // inventario usa el ID numérico del producto (campo 'id'), no el doc_id del catálogo.
-        if (field === 'stock' || field === 'precio_venta' || field === 'costo') {
+        if (field === 'precio_venta' || field === 'costo') {
           try {
             const invUpdate = { ultima_actualizacion: serverTimestamp() };
-            if (field === 'stock') invUpdate.stock = nuevo;
             if (field === 'precio_venta') invUpdate.precio = nuevo;
             if (field === 'costo') invUpdate.costo = nuevo;
             invUpdate.nombre = prod.nombre || prod.name || '';
@@ -5814,13 +6008,13 @@ export async function renderCatalogo(container, db) {
           }
         }
         allProductos[prodIdx] = { ...prod, ...update };
-        // Precio o stock tocados en la grilla: la tienda los ve al instante.
-        if (_cambio && (field === 'precio_venta' || field === 'stock')) {
+        // Precio tocado en la grilla: la tienda lo ve al instante.
+        if (_cambio && field === 'precio_venta') {
           reflejarSiPublicado(db, id, { ...allProductos[prodIdx], doc_id: id }).catch(() => {});
         }
         if (_cambio) hist.recordUpdate(id, _before, _after, {
           label: `${fieldLabel(field)} de ${prod.nombre || prod.name || id}`,
-          syncInv: (field === 'stock' || field === 'precio_venta' || field === 'costo'),
+          syncInv: (field === 'precio_venta' || field === 'costo'),
           invId: prod.id || id,
         });
         aplicarFiltros();
@@ -6970,7 +7164,19 @@ export async function renderCatalogo(container, db) {
       for (const a of ajustes) {
         const _docId = a.p.doc_id || a.p.id;
         try {
-          await updateDoc(doc(db, 'catalogo', _docId), { stock: a.cont, ultima_actualizacion: serverTimestamp() });
+          // Un conteo fija el número contado (no se suma), pero el "antes"
+          // del historial es el de la nube en ese momento, no el de la lista.
+          const r = await escribirReleyendo(db, _docId, (nube) => {
+            const plan = resolverGuardado({
+              inicial: { stock: a.sis }, escrito: { stock: a.cont }, visto: _copiaStock(a.p), nube,
+              decision: 'literal',
+            });
+            return {
+              plan,
+              datos: { stock: a.cont, ultima_actualizacion: serverTimestamp() },
+              movimiento: { nombre: a.p.nombre || '', motivo: 'conteo', detalle: 'Conteo físico' },
+            };
+          });
           try {
             const invDocId = String(a.p.id || _docId);
             await setDoc(doc(db, 'inventario', invDocId), {
@@ -6978,12 +7184,7 @@ export async function renderCatalogo(container, db) {
             }, { merge: true });
           } catch (_) {}
           const idx = (allProductos || []).findIndex(x => (x.doc_id || x.id) === _docId);
-          if (idx !== -1) allProductos[idx].stock = a.cont;
-          await registrarMovimiento(db, {
-            docId: _docId, nombre: a.p.nombre || '',
-            motivo: 'conteo', antes: a.sis, despues: a.cont,
-            detalle: 'Conteo físico',
-          });
+          if (idx !== -1) allProductos[idx] = { ...allProductos[idx], ...r.nube, stock: a.cont };
           // Con el producto entero: la vidriera saca lo que quedó por debajo
           // de la venta mínima, no solo lo que quedó en cero.
           avisarStockALaTienda(db, _docId, a.cont, { ...a.p, stock: a.cont });
@@ -7663,6 +7864,9 @@ export async function renderCatalogo(container, db) {
         row.querySelectorAll('input').forEach(i => i.addEventListener('input', actualizarResumen));
       }
 
+      // Las variedades como estaban al abrir: contra esto se mide qué cambió
+      // y si en el medio el POS vendió.
+      const _vistoVar = _copiaStock(p);
       desglose.forEach(d => _addRow(d.color, d));
       overlay.querySelector('#rellInv_add').addEventListener('click', () => _addRow('', null, true));
 
@@ -7745,50 +7949,49 @@ export async function renderCatalogo(container, db) {
         const nuevoConjunto = [...existentesActualizadas, ...restoOriginal, ...nuevasACrear];
 
         try {
-          const totalNuevo = nuevoConjunto.reduce((acc, c) => {
-            const uu = Number(c.unidades) || 0;
-            const rr = Number(c.restante) || 0;
-            const cc = (Number(c.contenido) > 0) ? Number(c.contenido) : globalCont;
-            return acc + (uu * cc + rr);
-          }, 0);
           const _docId = p.doc_id || p.id;
-          const _before = { conjunto_colores: (p.conjunto_colores ?? null), conjunto_total: (p.conjunto_total ?? null) };
-          const _after  = { conjunto_colores: nuevoConjunto, conjunto_total: Math.round(totalNuevo) };
-          await updateDoc(doc(db, 'catalogo', _docId), {
-            ..._after,
-            // Los agregados planos acompañan a las variedades: el POS y la
-            // tienda leen el total, pero un número viejo acá confunde al que mira.
-            conjunto_unidades: nuevoConjunto.reduce((acc, c) => acc + (Number(c.unidades) || 0), 0),
-            conjunto_restante: nuevoConjunto.reduce((acc, c) => acc + (Number(c.restante) || 0), 0),
-            conjunto_packs_cerrados: true,
-            // El stock plano acompaña al total del conjunto, como en la ficha:
-            // dejarlo atrás hacía dudar de los dos números.
-            stock: Math.max(0, Math.round(totalNuevo)),
-            ultima_actualizacion: serverTimestamp(),
-          });
-          registrarMovimiento(db, {
-            docId: _docId, nombre: p.nombre || p.name || '',
-            motivo: 'edicion_manual', antes: numConj(p.conjunto_total), despues: Math.round(totalNuevo),
-            detalle: 'Stock por variedad desde Inventario',
-          });
+          // Se relee la nube y cada variedad recibe lo que se le cambió; si
+          // en el medio se vendió algo, se pregunta (como en la ficha). Los
+          // agregados planos (`conjunto_unidades`, `stock`) acompañan al total.
+          const escritoVar = { ..._vistoVar, conjunto_colores: nuevoConjunto };
+          const r = await escribirPreguntando(db, _docId, (nube, decision) => {
+            const plan = resolverGuardado({ inicial: _vistoVar, escrito: escritoVar, visto: _vistoVar, nube, decision });
+            const datos = plan.campos
+              ? aplicarPlan({ conjunto_packs_cerrados: true }, plan)
+              : { conjunto_packs_cerrados: true };
+            datos.ultima_actualizacion = serverTimestamp();
+            return {
+              plan, datos,
+              movimiento: {
+                nombre: p.nombre || p.name || '', motivo: 'edicion_manual',
+                detalle: _detalleGuardadoStock('Stock por variedad desde Inventario', plan),
+              },
+            };
+          }, (plan) => _preguntarCarreraStock(plan, { unidad: u.pl, inicio: 'Al abrir el editor' }));
+          if (!r) { btn.disabled = false; btn.textContent = 'Guardar stock'; return; }
+          const escrito = { ...r.datos };
+          delete escrito.ultima_actualizacion;
+          const totalNuevo = r.plan.despues;
+          const _before = {}, _after = {};
+          for (const k of ['conjunto_colores', 'conjunto_total']) {
+            if (k in escrito) { _before[k] = r.nube[k] ?? null; _after[k] = escrito[k]; }
+          }
           invalidateCacheByPrefix('catalogo');
           // Avisar al POS + sincronizar inventario con el total agregado del conjunto.
           _touchCatalogoMeta(db).catch(() => {});
           try {
             const invDocId = String(p.id || _docId);
             await setDoc(doc(db, 'inventario', invDocId), {
-              stock: Math.round(totalNuevo), nombre: p.nombre || p.name || '',
+              stock: Math.max(0, Math.floor(totalNuevo)), nombre: p.nombre || p.name || '',
               id: parseInt(invDocId) || invDocId, ultima_actualizacion: serverTimestamp(),
             }, { merge: true });
           } catch (e2) { console.warn('No se pudo actualizar inventario:', e2.message); }
           // Reflejar el cambio en memoria sin re-fetchear todo Firestore.
           const idx2 = (allProductos || []).findIndex(x => (x.doc_id || x.id) === _docId);
-          if (idx2 !== -1) {
-            allProductos[idx2].conjunto_colores = nuevoConjunto;
-            allProductos[idx2].conjunto_total = Math.round(totalNuevo);
-            allProductos[idx2].stock = Math.max(0, Math.round(totalNuevo));
+          if (idx2 !== -1) allProductos[idx2] = { ...allProductos[idx2], ...r.nube, ...escrito };
+          if (Object.keys(_after).length) {
+            hist.recordUpdate(_docId, _before, _after, { label: `Variantes de ${p.nombre || p.name || _docId}` });
           }
-          hist.recordUpdate(_docId, _before, _after, { label: `Variantes de ${p.nombre || p.name || _docId}` });
           cerrar();
           // Refrescar dashboard
           const tc = document.getElementById('tabContent');
@@ -7865,10 +8068,20 @@ export async function renderCatalogo(container, db) {
       if (!q || q <= 0) { alertDialog({ title: 'Cantidad inválida', message: 'Ingresá una cantidad mayor a 0.', type: 'warning' }); return; }
       const btn = overlay.querySelector('#rellInv_guardar2');
       btn.disabled = true; btn.textContent = 'Guardando...';
-      const nuevoStock = stockBase + q;
       const _docId = p.doc_id || p.id;
       try {
-        await updateDoc(doc(db, 'catalogo', _docId), { stock: nuevoStock, ultima_actualizacion: serverTimestamp() });
+        // Una reposición es una suma: se suma sobre lo que hay HOY en la
+        // nube, no sobre el número que se veía al abrir (si en el medio se
+        // vendió, la venta queda). Sin pregunta: sumar es lo que se pidió.
+        const r = await escribirReleyendo(db, _docId, (nube) => {
+          const plan = resolverDeshacer({ desde: { stock: stockBase }, hacia: { stock: stockBase + q }, nube });
+          return {
+            plan,
+            datos: { ...aplicarPlan({}, plan), ultima_actualizacion: serverTimestamp() },
+            movimiento: { nombre: p.nombre || p.name || '', motivo: 'reposicion', detalle: 'Reposición desde el panel' },
+          };
+        });
+        const nuevoStock = r.datos.stock ?? r.plan.despues;
         invalidateCacheByPrefix('catalogo');
         // Avisar al POS que el catálogo cambió + sincronizar la colección
         // `inventario` (que el POS lee por id numérico) para que vea el stock nuevo.
@@ -7881,16 +8094,11 @@ export async function renderCatalogo(container, db) {
           }, { merge: true });
         } catch (e2) { console.warn('No se pudo actualizar inventario:', e2.message); }
         const idx2 = (allProductos || []).findIndex(x => (x.doc_id || x.id) === _docId);
-        if (idx2 !== -1) allProductos[idx2].stock = nuevoStock;
-        hist.recordUpdate(_docId, { stock: (p.stock ?? null) }, { stock: nuevoStock }, {
+        if (idx2 !== -1) allProductos[idx2] = { ...allProductos[idx2], ...r.nube, stock: nuevoStock };
+        hist.recordUpdate(_docId, { stock: (r.nube.stock ?? null) }, { stock: nuevoStock }, {
           label: `Stock de ${p.nombre || p.name || _docId}`,
         });
-        registrarMovimiento(db, {
-          docId: _docId, nombre: p.nombre || p.name || '',
-          motivo: 'reposicion', antes: stockBase, despues: nuevoStock,
-          detalle: 'Reposición desde el panel',
-        });
-        avisarStockALaTienda(db, _docId, nuevoStock, { ...p, stock: nuevoStock });
+        avisarStockALaTienda(db, _docId, nuevoStock, { ...p, ...r.nube, stock: nuevoStock });
         cerrar();
         const tc = document.getElementById('tabContent');
         if (tc) renderTabInventario(tc);
@@ -8149,6 +8357,15 @@ export async function renderCatalogo(container, db) {
   // La pregunta que contesta esta ventana es "¿por qué el sistema dice 12 si en
   // el mostrador hay 10?". Muestra cada entrada y salida con el antes, el
   // después, quién y desde dónde, del movimiento más nuevo al más viejo.
+  // El número de hoy, el mismo que deja el último movimiento: para un
+  // conjunto es el total (la venta del POS no toca `stock`), y un servicio no
+  // tiene número.
+  function _stockHoyTexto(p) {
+    const n = stockVisible(p);
+    if (n === -1) return '∞ (servicio)';
+    return Number(n).toLocaleString('es-AR', { maximumFractionDigits: 2 });
+  }
+
   async function abrirMovimientosStock(p) {
     const docId = p.doc_id || p.id;
     document.querySelector('.stkmov-overlay')?.remove();
@@ -8165,7 +8382,7 @@ export async function renderCatalogo(container, db) {
         <div style="padding:0 20px 8px">
           <div style="font-weight:700;font-size:14px">${_escHtml(p.nombre || '')}</div>
           <div style="font-size:12px;color:var(--text-muted)">
-            Código ${_escHtml(String(docId))} · stock hoy: <b>${Number(p.stock) || 0}</b>
+            Código ${_escHtml(String(docId))} · stock hoy: <b>${_stockHoyTexto(p)}</b>
           </div>
         </div>
         <div class="stkmov-cuerpo" style="padding:8px 20px 20px;max-height:60vh;overflow:auto">
@@ -8239,10 +8456,14 @@ export async function renderCatalogo(container, db) {
   async function editarStockInv(docId) {
     const p = allProductos.find(x => x.doc_id === docId);
     if (!p) return;
+    // Lo que se ve y contra lo que se mide el cambio: para un conjunto, el
+    // total (el `stock` plano de un conjunto queda viejo después de cada venta).
+    const visto = _copiaStock(p);
+    const actual = Math.max(0, stockVisible(p));
     const nuevo = await promptDialog({
       title: 'Editar stock',
-      message: `Stock actual de <b>"${_escHtml(p.nombre)}"</b>: ${p.stock || 0}<br>Ingresá el nuevo stock:`,
-      defaultValue: String(p.stock || 0),
+      message: `Stock actual de <b>"${_escHtml(p.nombre)}"</b>: ${actual}<br>Ingresá el nuevo stock:`,
+      defaultValue: String(actual),
       confirmText: 'Guardar',
     });
     if (nuevo === null) return;
@@ -8259,23 +8480,34 @@ export async function renderCatalogo(container, db) {
       });
       return;
     }
-    const _stockPrev = p.stock ?? null;
+    if (valor === actual) return;
     try {
-      const antes = {};
-      for (const k of Object.keys(campos)) antes[k] = p[k] ?? null;
-      await updateDoc(doc(db, 'catalogo', docId), { ...campos, ultima_actualizacion: serverTimestamp() });
+      // Se relee la nube: si mientras tanto se vendió, se pregunta si sumar
+      // el cambio o dejar el número escrito (igual que en la ficha).
+      const r = await escribirPreguntando(db, docId, (nube, decision) => {
+        const plan = resolverGuardado({ inicial: visto, escrito: { ...visto, ...campos }, visto, nube, decision });
+        const datos = plan.campos ? aplicarPlan({ ...campos }, plan) : { ...campos };
+        datos.ultima_actualizacion = serverTimestamp();
+        return {
+          plan, datos,
+          movimiento: {
+            nombre: p.nombre || p.name || '',
+            motivo: valor > actual ? 'reposicion' : 'edicion_manual',
+            detalle: _detalleGuardadoStock('Editado desde el panel', plan),
+          },
+        };
+      }, (plan) => _preguntarCarreraStock(plan, { unidad: _unidadInv(p).pl, inicio: 'Cuando abriste el editor' }));
+      if (!r) return;
+      const escrito = { ...r.datos };
+      delete escrito.ultima_actualizacion;
       invalidateCacheByPrefix('catalogo');
-      Object.assign(p, campos);
-      if (_stockPrev !== valor) hist.recordUpdate(docId, antes, { ...campos }, {
+      const antes = {};
+      for (const k of Object.keys(escrito)) antes[k] = r.nube[k] ?? null;
+      Object.assign(p, r.nube, escrito);
+      if (r.plan.despues !== r.plan.antes) hist.recordUpdate(docId, antes, escrito, {
         label: `Stock de ${p.nombre || p.name || docId}`,
       });
-      registrarMovimiento(db, {
-        docId, nombre: p.nombre || p.name || '',
-        motivo: valor > (_stockPrev || 0) ? 'reposicion' : 'edicion_manual',
-        antes: _stockPrev, despues: valor,
-        detalle: 'Editado desde el panel',
-      });
-      avisarStockALaTienda(db, docId, valor, { ...p, ...campos });
+      avisarStockALaTienda(db, docId, r.plan.despues, { ...p });
       renderTabInventario(document.getElementById('tabContent'));
       renderStats();
       renderBannerCriticos();

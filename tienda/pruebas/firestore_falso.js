@@ -13,8 +13,9 @@
  *
  * Quien necesite espiar una escritura pasa `registro`: es un array donde se
  * apilan los `addDoc` / `setDoc` / `updateDoc` en el orden en que ocurren.
+ * Quien necesite que una transacción lea algo pasa `leerTx(ref)`.
  */
-export function firestoreFalso({ registro = null, docs = [] } = {}) {
+export function firestoreFalso({ registro = null, docs = [], leerTx = null } = {}) {
   const anotar = (tipo, ref, datos) => {
     if (registro) registro.push({ tipo, ref, datos });
   };
@@ -43,8 +44,13 @@ export function firestoreFalso({ registro = null, docs = [] } = {}) {
     updateDoc: async (ref, datos) => { anotar('update', ref, datos); },
     deleteDoc: async (ref) => { anotar('delete', ref, null); },
     onSnapshot: () => () => {},
+    // `leerTx(ref)` devuelve los datos del documento (o null si no existe):
+    // así una prueba puede simular lo que hay en la nube al guardar.
     runTransaction: async (_db, fn) => fn({
-      get: async (ref) => ({ exists: () => false, data: () => ({}), ref }),
+      get: async (ref) => {
+        const d = leerTx ? leerTx(ref) : null;
+        return { exists: () => !!d, data: () => (d ? { ...d } : {}), ref };
+      },
       set: (ref, datos) => anotar('tx-set', ref, datos),
       update: (ref, datos) => anotar('tx-update', ref, datos),
     }),

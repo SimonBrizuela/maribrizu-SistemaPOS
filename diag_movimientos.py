@@ -35,7 +35,7 @@ MOTIVOS = {
     'fiado_quitado': 'Quitado de un fiado', 'vinculacion': 'Consumido por otro',
     'edicion_manual': 'Editado a mano', 'reposicion': 'Reposición',
     'conteo': 'Ajuste por conteo', 'importacion': 'Importación',
-    'variante': 'Variante / conjunto',
+    'variante': 'Variante / conjunto', 'correccion': 'Corrección de auditoría',
 }
 
 

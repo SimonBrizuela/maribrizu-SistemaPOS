@@ -13,6 +13,7 @@ import { buscarPorNombre, parseNombreItem } from '../nombre_item.js';
 // El almanaque de fechas que mueven venta. Es una cuenta, no una lectura: no
 // agrega nada al arranque del Dashboard.
 import { temporadasProximas, cuandoEs } from '../temporadas.js';
+import { stockVisible } from '../stock_concurrencia.js';
 
 /** El nombre del producto de un renglón, sin la variedad ni la presentación. */
 function nombreBaseDelItem(it) {
@@ -233,7 +234,8 @@ export async function renderDashboard(container, db) {
   function _esVinculado(p) { return _dashLinks(p).length > 0; }
   function _stkEf(p) {
     const links = _dashLinks(p);
-    if (!links.length) return Number(p.stock || 0);
+    // Un conjunto se mide por su total: la venta del POS no actualiza `stock`.
+    if (!links.length) return stockVisible(p);
     let min = Infinity;
     for (const l of links) {
       const t = catalogo.find(x => x.doc_id === l.doc_id);
@@ -1050,7 +1052,7 @@ export async function renderDashboard(container, db) {
   });
 
   // 10. Stock por estado (donut)
-  const stockOk = catalogo.filter(p => (p.stock || 0) > 3).length;
+  const stockOk = catalogo.filter(p => _stkEf(p) > 3).length;
   // 11. Margen por categoría (barras horizontales)
   if (categoriasMargen.length > 0) {
     mkChart('chMargenCat', {
