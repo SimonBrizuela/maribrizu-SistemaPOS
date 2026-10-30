@@ -539,9 +539,16 @@ class PresupuestosView(QWidget):
                                     'No se encontró la pestaña Ventas.')
                 return
 
-            # Cargar al carrito
+            # Cargar al carrito. Los conjuntos (packs, rollos, variedades) no:
+            # el presupuesto guarda solo nombre, cantidad y precio, y cobrados
+            # así no descuentan stock (la venta #348 del 15-10). Se avisan para
+            # cargarlos desde el buscador, que pide presentación y variedad.
             sales_view.cart = []
+            a_recargar = []
             for it in items:
+                if self._es_conjunto(it.get('product_id')):
+                    a_recargar.append(it.get('product_name') or 'Producto')
+                    continue
                 sales_view.cart.append({
                     'product_id':   it.get('product_id'),
                     'product_name': it.get('product_name', ''),
@@ -567,14 +574,38 @@ class PresupuestosView(QWidget):
                         tabs.setCurrentIndex(i)
                         break
 
-            QMessageBox.information(
-                self, 'Carrito cargado',
-                f'Se cargaron {len(items)} items al carrito.\n'
-                f'Cobrá normalmente para concretar la conversión.'
-            )
+            cargados = len(items) - len(a_recargar)
+            if a_recargar:
+                detalle = '\n'.join(f'•  {n}' for n in a_recargar)
+                QMessageBox.warning(
+                    self, 'Carrito cargado',
+                    f'Se cargaron {cargados} de {len(items)} items al carrito.\n\n'
+                    f'Estos se venden por pack, rollo o variedad y hay que '
+                    f'cargarlos desde el buscador para que descuenten bien el '
+                    f'stock:\n\n{detalle}\n\n'
+                    f'Después cobrá normalmente para concretar la conversión.'
+                )
+            else:
+                QMessageBox.information(
+                    self, 'Carrito cargado',
+                    f'Se cargaron {len(items)} items al carrito.\n'
+                    f'Cobrá normalmente para concretar la conversión.'
+                )
         except Exception as e:
             logger.exception('Error convirtiendo')
             QMessageBox.critical(self, 'Error', f'No se pudo convertir:\n{e}')
+
+    def _es_conjunto(self, product_id) -> bool:
+        if not product_id:
+            return False
+        try:
+            rows = self.db.execute_query(
+                "SELECT COALESCE(es_conjunto, 0) AS c FROM products WHERE id = ? LIMIT 1",
+                (int(product_id),)
+            ) or []
+        except Exception:
+            return False
+        return bool(rows and int(rows[0].get('c') or 0) == 1)
 
     def _delete(self):
         if not self._current_pres:

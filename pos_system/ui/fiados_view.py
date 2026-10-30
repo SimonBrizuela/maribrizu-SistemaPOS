@@ -53,54 +53,29 @@ def revalidar_conjunto(db, item: dict) -> tuple:
 
     Un fiado puede quedar meses sin cobrarse: el snapshot que se guardó al
     cargarlo ya no sirve para setear el stock del rollo/pack. Usa la misma
-    función que el diálogo de conjunto, así el cálculo es idéntico al de una
-    venta normal.
+    cuenta que la venta al cobrar (`venta_conjunto`), con el pack propio de
+    la variedad si lo tiene.
     """
-    try:
-        import json as _json
-        from pos_system.ui.conjunto_dialog import aplicar_venta
-    except Exception:
-        return True, ''
-    try:
-        pid = item.get('product_id')
-        if not pid:
-            return True, ''
-        rows = db.execute_query(
-            "SELECT conjunto_unidades, conjunto_restante, conjunto_contenido, "
-            "conjunto_colores FROM products WHERE id = ? LIMIT 1", (int(pid),)
-        ) or []
-        if not rows:
-            return True, ''
-        live = rows[0]
-        contenido = float(live.get('conjunto_contenido') or 0)
-        color = (item.get('conjunto_color') or '').strip()
-        if color and live.get('conjunto_colores'):
-            try:
-                colores = _json.loads(live.get('conjunto_colores') or '[]')
-                if not isinstance(colores, list):
-                    colores = []
-            except Exception:
-                colores = []
-            entry = next((c for c in colores if isinstance(c, dict)
-                          and str(c.get('color', '')).strip() == color), None)
-            base_u = float(entry.get('unidades') or 0) if entry else 0.0
-            base_r = float(entry.get('restante') or 0) if entry else 0.0
-        else:
-            base_u = float(live.get('conjunto_unidades') or 0)
-            base_r = float(live.get('conjunto_restante') or 0)
+    from pos_system.models.venta_conjunto import simular_carrito
 
-        ok, err, after_u, after_r = aplicar_venta(
-            base_u, contenido, base_r,
-            float(item.get('conjunto_cantidad') or 0),
-            item.get('conjunto_vender_por', 'conjunto'),
-            item.get('conjunto_unidad_base'),
-            item.get('conjunto_unidad_venta'),
-        )
-        if not ok:
-            return False, err or 'Stock insuficiente'
-        item['conjunto_after_unidades'] = after_u
-        item['conjunto_after_restante'] = after_r
-        return True, ''
+    def _leer(pid):
+        rows = db.execute_query(
+            "SELECT es_conjunto, conjunto_unidades, conjunto_restante, "
+            "conjunto_contenido, conjunto_colores FROM products WHERE id = ? LIMIT 1",
+            (int(pid),)
+        ) or []
+        return rows[0] if rows else None
+
+    try:
+        problemas = simular_carrito([item], _leer)
+        if not problemas:
+            return True, ''
+        p = problemas[0]
+        if p['motivo'] == 'sin_stock':
+            return False, f"faltan {p['falta']:g} para cubrir la venta"
+        if p['motivo'] == 'sin_variedad':
+            return False, 'no tiene elegida la variedad'
+        return False, 'esa variedad ya no existe en el catálogo'
     except Exception:
         logger.exception('Fiado: no se pudo revalidar el stock de un conjunto')
         return True, ''

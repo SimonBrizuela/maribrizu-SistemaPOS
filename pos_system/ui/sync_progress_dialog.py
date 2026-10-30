@@ -11,6 +11,7 @@ from PyQt5.QtGui import QFont, QColor, QTextCursor
 import logging
 
 from pos_system.models.conjunto import precio_vendible
+from pos_system.utils.firebase_sync import stock_de_la_nube
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,7 @@ class DownloadWorker(QThread):
                     local_by_id[str(lid)] = ts
                     local_data_by_id[lid] = {
                         'price':       float(row.get('price') or 0),
-                        'stock':       int(row.get('stock') or 0),
+                        'stock':       stock_de_la_nube(row.get('stock')),
                         'barcode':     str(row.get('barcode') or ''),
                         'firebase_id': str(row.get('firebase_id') or ''),
                         'name':        str(row.get('name') or ''),
@@ -237,7 +238,7 @@ class DownloadWorker(QThread):
                 # precio_venta es el campo correcto en 'catalogo'; fallback a precio/price
                 precio  = float(p.get('precio_venta') or p.get('precio') or p.get('price') or 0)
                 costo   = float(p.get('costo') or p.get('cost') or 0)
-                stock   = int(p.get('stock') or 0)
+                stock   = stock_de_la_nube(p.get('stock'))
                 cat     = str(p.get('categoria') or p.get('category') or '').strip() or 'Sin categoría'
                 rubro   = str(p.get('rubro') or '').strip() or None
                 barcode = str(p.get('cod_barra') or p.get('barcode') or p.get('codigo_barra') or '').strip() or None
@@ -309,7 +310,7 @@ class DownloadWorker(QThread):
                     local_data = local_data_by_id.get(local_id, {})
                     datos_iguales = (
                         abs(float(local_data.get('price') or 0) - precio) < 0.01
-                        and int(local_data.get('stock') or 0) == stock
+                        and abs(float(local_data.get('stock') or 0) - stock) < 1e-9
                         and str(local_data.get('name') or '').strip() == nombre
                         and str(local_data.get('barcode') or '') == (barcode or '')
                         and int(local_data.get('es_conjunto') or 0) == es_conjunto

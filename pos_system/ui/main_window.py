@@ -1455,6 +1455,14 @@ class MainWindow(QMainWindow):
                 except Exception as _me3:
                     logger.debug(f"retry_pending vinculaciones: {_me3}")
 
+                # Ventas de conjuntos: se aplican en la nube como diferencia
+                # contra el documento (cola `conj_pendientes`). Sin internet
+                # esperan acá; la marca en la nube impide repetirlas.
+                try:
+                    fb.push_conjuntos_pendientes(self.db, en_hilo=False)
+                except Exception as _me4:
+                    logger.debug(f"retry_pending conjuntos: {_me4}")
+
                 cutoff = (now_ar() - timedelta(days=30)).strftime('%Y-%m-%d %H:%M:%S')
                 rows = self.db.execute_query(
                     "SELECT id FROM sales "

@@ -9,9 +9,24 @@ from pos_system.database.db_manager import DatabaseManager
 from pos_system.models.conjunto import (
     contenido_de, repartir_total, total_conjunto, total_variedad,
 )
-from pos_system.utils import medios_de_pago, stock_ledger, vinculos_pendientes
+from pos_system.models.venta_conjunto import (
+    buscar_color, descontar, parse_colores, pedido_de_linea, stock_plano,
+)
+from pos_system.utils import (
+    conjuntos_pendientes, medios_de_pago, stock_ledger, vinculos_pendientes,
+)
 
 logger = logging.getLogger(__name__)
+
+
+def _fmt_cant(x) -> str:
+    try:
+        n = float(x or 0)
+    except (TypeError, ValueError):
+        return str(x)
+    if abs(n - round(n)) < 1e-9:
+        return str(int(round(n)))
+    return f'{n:.2f}'.rstrip('0').rstrip('.').replace('.', ',')
 
 
 class VentaDePedidoRepetida(ValueError):
@@ -145,6 +160,7 @@ class Sale:
                     usuario=turno_nombre,
                     motivo='venta',
                     referencia=f'Venta #{sale_id}',
+                    sale_id=sale_id,
                 )
 
             # Los descuentos de papel (vinculaciones) quedan en cola en ESTA
@@ -198,6 +214,11 @@ class Sale:
         if vincs_para_sync_remoto:
             self._sync_vincs_to_firebase()
 
+        # Los conjuntos quedaron en su cola en la misma transacción: se empujan
+        # ya, y lo que no suba lo reintenta la ventana principal.
+        if any(it.get('is_conjunto') for it in items):
+            self._sync_conjuntos_to_firebase()
+
         # Sincronizar resumen mensual
         try:
             from pos_system.utils.firebase_sync import get_firebase_sync
@@ -223,7 +244,8 @@ class Sale:
                                vincs_acumulador: List[Dict],
                                usuario: str = '',
                                motivo: str = 'venta',
-                               referencia: str = '') -> None:
+                               referencia: str = '',
+                               sale_id: Optional[int] = None) -> None:
         """Aplica a SQLite el descuento de stock de UNA línea de carrito.
 
         Cubre los tres tipos de producto del sistema:
@@ -294,132 +316,42 @@ class Sale:
         vincs_prod = self._parse_vinculos_producto(cursor, item['product_id'])
 
         if item.get('is_conjunto'):
-            # Producto conjunto: no se descuenta stock clásico.
-            # Si el item viene con `conjunto_color`, actualizamos el
-            # color dentro del array `conjunto_colores` y recomputamos
-            # los agregados planos (unidades / restante / total) como
-            # SUMA de todos los colores. Si no trae color (legacy o
-            # producto sin colores), updateamos los planos directamente.
-            after_u = float(item.get('conjunto_after_unidades') or 0)
-            after_r = float(item.get('conjunto_after_restante') or 0)
-            color = (item.get('conjunto_color') or '').strip()
-            row = cursor.execute(
-                "SELECT conjunto_contenido, conjunto_colores, conjunto_total "
-                "FROM products WHERE id = ?",
-                (item['product_id'],)
-            ).fetchone()
-            contenido = float(row[0]) if row and row[0] is not None else 0.0
-            colores_raw = row[1] if row and len(row) > 1 else None
-            total_antes = float(row[2] or 0) if row and len(row) > 2 else 0.0
-
-            if color and colores_raw:
-                try:
-                    colores = json.loads(colores_raw)
-                    if not isinstance(colores, list):
-                        colores = []
-                except Exception:
-                    colores = []
-                # Actualizar el color correspondiente. La variedad puede venir en
-                # otra presentacion que el resto del producto, asi que el pack
-                # que vale es el suyo y no el del producto.
-                encontrado = False
-                antes_color = 0.0
-                cont_var = contenido
-                for c in colores:
-                    if isinstance(c, dict) and str(c.get('color', '')).strip() == color:
-                        cont_var = contenido_de(c, contenido)
-                        antes_color = total_variedad(c, contenido)
-                        c['unidades'] = after_u
-                        c['restante'] = after_r
-                        encontrado = True
-                        break
-                consumido_base = max(
-                    0.0, antes_color - (after_u * cont_var + after_r)
-                )
-                if not encontrado:
-                    colores.append({
-                        'color':    color,
-                        'unidades': after_u,
-                        'restante': after_r,
-                    })
-                # Agregados = suma de todos los colores
-                sum_u = sum(float(c.get('unidades') or 0) for c in colores if isinstance(c, dict))
-                sum_r = sum(float(c.get('restante') or 0) for c in colores if isinstance(c, dict))
-                sum_total = total_conjunto(colores, contenido)
-                nuevo_total = sum_total
-                cursor.execute(
-                    """UPDATE products
-                       SET conjunto_unidades = ?,
-                           conjunto_restante = ?,
-                           conjunto_total    = ?,
-                           conjunto_colores  = ?,
-                           updated_at        = ?
-                       WHERE id = ?""",
-                    (sum_u, sum_r, sum_total,
-                     json.dumps(colores, ensure_ascii=False),
-                     now_iso, item['product_id'])
-                )
-            else:
-                # Legacy / sin colores: usar after_u / after_r directos
-                after_total = after_u * contenido + after_r
-                nuevo_total = after_total
-                consumido_base = max(0.0, total_antes - after_total)
-                cursor.execute(
-                    """UPDATE products
-                       SET conjunto_unidades = ?,
-                           conjunto_restante = ?,
-                           conjunto_total    = ?,
-                           updated_at        = ?
-                       WHERE id = ?""",
-                    (after_u, after_r, after_total, now_iso, item['product_id'])
-                )
-
-            # Cuánto salió realmente del rollo/pack en unidades base. Se guarda
-            # en la línea porque el descuento de conjunto es un SET absoluto:
-            # sin este dato no hay forma de devolver la fracción si después se
-            # anula (ej: un producto fiado que el cliente trae de vuelta).
-            item['conjunto_consumido_base'] = round(consumido_base, 4)
-
-            # El conjunto se guarda con un SET absoluto, así que el movimiento
-            # es la diferencia entre los dos totales — negativa si salió, y
-            # positiva sola cuando esto es un reverso.
-            previo = stock_ledger.snapshot(cursor, item['product_id'])
-
-            # Un conjunto lleva DOS contadores del mismo stock: `conjunto_total`
-            # (packs × contenido + sueltas), que es el que mueve la venta, y el
-            # `stock` plano que leen los reportes y el diagnóstico. Hasta acá la
-            # venta movía sólo el primero y el segundo se quedaba con el número
-            # del día que se cargó el producto, así que la brecha crecía con
-            # cada venta: 453 conjuntos habían llegado a diferir en 17.630
-            # unidades, y `diag_movimientos.py --sospechosos` los marcaba como
-            # tocados por fuera del registro cuando nadie los había tocado.
-            # Los dos se escriben juntos, en la misma transacción.
-            if not previo.get('ilimitado'):
-                cursor.execute(
-                    "UPDATE products SET stock = ?, updated_at = ? WHERE id = ?",
-                    (max(0, int(math.floor(nuevo_total))), now_iso,
-                     item['product_id'])
-                )
-
-            stock_ledger.registrar(
-                cursor,
-                motivo=motivo,
-                cantidad=nuevo_total - total_antes,
-                producto_id=item['product_id'],
-                firebase_id=previo.get('firebase_id') or '',
-                producto_nombre=item.get('product_name') or previo.get('nombre') or '',
-                stock_antes=total_antes,
-                stock_despues=nuevo_total,
-                referencia=referencia,
-                detalle=f'Variedad {color}' if color else '',
-                usuario=usuario,
+            self._aplicar_conjunto(
+                cursor, item, item_idx, now_iso,
+                usuario=usuario, motivo=motivo, referencia=referencia,
+                sale_id=sale_id,
             )
         else:
             # Descontar stock — se permite vender aunque no haya stock
             # suficiente. EXCEPTO si el producto está vinculado: en ese
             # caso el stock real vive en los productos fuente (se descuentan
             # más abajo) y NO se toca el propio para que no quede negativo.
-            if not vincs_prod:
+            if not vincs_prod and self._es_conjunto_en_base(cursor, item['product_id']):
+                # La línea es de un conjunto pero llegó sin sus datos de venta
+                # (un presupuesto convertido, un fiado cargado desde la web).
+                # Restarle la cantidad al `stock` plano mezclaría packs con
+                # unidades y dejaría `conjunto_total` como estaba: la venta
+                # #348 del 15-10 lo hizo así. No se toca y queda anotado.
+                logger.warning(
+                    "Venta: '%s' es un conjunto y la línea no trae cómo se "
+                    "vendió; no se descuenta su stock.", item.get('product_name'))
+                previo = stock_ledger.snapshot(cursor, item['product_id'])
+                stock_ledger.registrar(
+                    cursor,
+                    motivo=motivo,
+                    cantidad=0,
+                    producto_id=item['product_id'],
+                    firebase_id=previo.get('firebase_id') or '',
+                    producto_nombre=item.get('product_name') or previo.get('nombre') or '',
+                    stock_antes=previo.get('conjunto_total'),
+                    stock_despues=previo.get('conjunto_total'),
+                    referencia=referencia,
+                    detalle=(f"Sin descontar: línea de conjunto sin variedad ni "
+                             f"presentación ({_fmt_cant(item.get('quantity'))} vendidos)"),
+                    usuario=usuario,
+                    aunque_sea_cero=True,
+                )
+            elif not vincs_prod:
                 previo = stock_ledger.snapshot(cursor, item['product_id'])
                 # Un servicio no lleva control de stock. Lo dice su bandera, NO
                 # el número: cualquier producto vendido estando en cero llega a
@@ -456,6 +388,205 @@ class Sale:
         self._aplicar_vinculaciones_local(
             cursor, item, item_idx, now_iso, vincs_acumulador, vincs_prod
         )
+
+    @staticmethod
+    def _es_conjunto_en_base(cursor, product_id) -> bool:
+        try:
+            row = cursor.execute(
+                "SELECT COALESCE(es_conjunto, 0) FROM products WHERE id = ?",
+                (product_id,)
+            ).fetchone()
+        except Exception:
+            return False
+        return bool(row and int(row[0] or 0) == 1)
+
+    def _aplicar_conjunto(self, cursor, item: Dict, item_idx: int, now_iso: str,
+                          *, usuario: str, motivo: str, referencia: str,
+                          sale_id: Optional[int]) -> None:
+        """Descuenta (o devuelve) una línea de conjunto en SQLite y la anota en
+        la cola de la nube, todo en la transacción de la venta.
+
+        El estado final se calcula ACÁ, contra el stock vivo de la base, a
+        partir de lo que pidió la línea (packs o sueltos). Antes se escribía el
+        `conjunto_after_*` que el carrito había calculado al agregarla, y el
+        carrito lo arruinaba al cambiar la cantidad (contenido confundido con
+        cantidad vendida): ELÁSTICO 9,5 → 200,92; LÁPIZ MAPED 69 → 4.752.
+
+        Reglas:
+          · Una venta nunca suma stock. La línea que vendría a subirlo se
+            rechaza (sin tocar nada) y queda en el log y en el historial.
+          · Si no alcanza, el conjunto queda en cero y lo que faltó va al
+            historial: el modelo de packs y sueltos no guarda negativos.
+          · La devolución (cantidad negativa) sigue usando el `after` que armó
+            `_preparar_reverso_conjunto` a partir de lo consumido.
+        """
+        pid = item['product_id']
+        row = cursor.execute(
+            "SELECT conjunto_contenido, conjunto_colores, conjunto_total, "
+            "       conjunto_unidades, conjunto_restante, firebase_id "
+            "FROM products WHERE id = ?",
+            (pid,)
+        ).fetchone()
+        if not row:
+            logger.warning("Venta: conjunto '%s' (id %s) no está en la base local; "
+                           "no se descuenta.", item.get('product_name'), pid)
+            return
+        contenido = float(row[0] or 0)
+        colores = parse_colores(row[1])
+        total_antes = float(row[2] or 0)
+        firebase_id = str(row[5] or '').strip()
+        color = (item.get('conjunto_color') or '').strip()
+        es_devolucion = float(item.get('quantity') or 0) < 0
+        nombre = item.get('product_name') or ''
+
+        if colores and not color:
+            # Producto con variedades vendido sin elegir cuál: no hay de dónde
+            # descontar sin inventar. El carrito ya no deja cobrarlo así.
+            logger.warning("Venta: '%s' tiene variedades y la línea no trae cuál; "
+                           "no se descuenta.", nombre)
+            stock_ledger.registrar(
+                cursor, motivo=motivo, cantidad=0, producto_id=pid,
+                firebase_id=firebase_id, producto_nombre=nombre,
+                stock_antes=total_antes, stock_despues=total_antes,
+                referencia=referencia, usuario=usuario, aunque_sea_cero=True,
+                detalle='Sin descontar: conjunto con variedades vendido sin elegir variedad',
+            )
+            return
+
+        con_variedad = bool(color and colores)
+        entry = buscar_color(colores, color) if con_variedad else None
+        if con_variedad:
+            cont_var = contenido_de(entry, contenido) if entry else contenido
+            base_u = float(entry.get('unidades') or 0) if entry else 0.0
+            base_r = float(entry.get('restante') or 0) if entry else 0.0
+            antes_linea = total_variedad(entry, contenido) if entry else 0.0
+        else:
+            cont_var = contenido
+            base_u = float(row[3] or 0)
+            base_r = float(row[4] or 0)
+            antes_linea = total_antes
+
+        falta = 0.0
+        pedido = None
+        if es_devolucion:
+            after_u = float(item.get('conjunto_after_unidades') or 0)
+            after_r = float(item.get('conjunto_after_restante') or 0)
+        else:
+            pedido = pedido_de_linea(item, cont_var)
+            if pedido is not None:
+                after_u, after_r, falta = descontar(base_u, base_r, cont_var, *pedido)
+                previsto_u = item.get('conjunto_after_unidades')
+                previsto_r = item.get('conjunto_after_restante')
+                if previsto_u is not None and (
+                        abs(float(previsto_u or 0) - after_u) > 1e-6
+                        or abs(float(previsto_r or 0) - after_r) > 1e-6):
+                    logger.info(
+                        "Venta: '%s' el carrito traía %s/%s y contra la base "
+                        "quedan %s/%s; vale lo de la base.",
+                        nombre, previsto_u, previsto_r, after_u, after_r)
+            else:
+                # Línea vieja que solo trae el estado final.
+                after_u = float(item.get('conjunto_after_unidades') or 0)
+                after_r = float(item.get('conjunto_after_restante') or 0)
+
+        after_linea = after_u * cont_var + after_r
+        if not es_devolucion and after_linea > antes_linea + 1e-6:
+            logger.error(
+                "Venta: '%s' quedaría con %s y tenía %s; una venta no suma "
+                "stock, la línea no se aplica.", nombre, after_linea, antes_linea)
+            stock_ledger.registrar(
+                cursor, motivo=motivo, cantidad=0, producto_id=pid,
+                firebase_id=firebase_id, producto_nombre=nombre,
+                stock_antes=total_antes, stock_despues=total_antes,
+                referencia=referencia, usuario=usuario, aunque_sea_cero=True,
+                detalle=(f'Rechazada: la línea dejaba {_fmt_cant(after_linea)} '
+                         f'sobre {_fmt_cant(antes_linea)}'),
+            )
+            return
+
+        if con_variedad:
+            if entry is not None:
+                entry['unidades'] = after_u
+                entry['restante'] = after_r
+            sum_u = sum(float(c.get('unidades') or 0) for c in colores)
+            sum_r = sum(float(c.get('restante') or 0) for c in colores)
+            nuevo_total = total_conjunto(colores, contenido)
+            cursor.execute(
+                """UPDATE products
+                   SET conjunto_unidades = ?,
+                       conjunto_restante = ?,
+                       conjunto_total    = ?,
+                       conjunto_colores  = ?,
+                       updated_at        = ?
+                   WHERE id = ?""",
+                (sum_u, sum_r, nuevo_total,
+                 json.dumps(colores, ensure_ascii=False), now_iso, pid)
+            )
+        else:
+            nuevo_total = after_linea
+            cursor.execute(
+                """UPDATE products
+                   SET conjunto_unidades = ?,
+                       conjunto_restante = ?,
+                       conjunto_total    = ?,
+                       updated_at        = ?
+                   WHERE id = ?""",
+                (after_u, after_r, nuevo_total, now_iso, pid)
+            )
+
+        item['conjunto_after_unidades'] = after_u
+        item['conjunto_after_restante'] = after_r
+        # Cuánto salió de verdad, en unidades base: con esto se devuelve la
+        # fracción si después se anula (un fiado que el cliente trae).
+        consumido_base = max(0.0, antes_linea - after_linea)
+        if not es_devolucion:
+            item['conjunto_consumido_base'] = round(consumido_base, 4)
+            item['conjunto_faltante_base'] = round(falta, 4)
+
+        previo = stock_ledger.snapshot(cursor, pid)
+
+        # `conjunto_total` y el `stock` plano se escriben juntos: si no, la
+        # brecha crece con cada venta (453 conjuntos llegaron a diferir en
+        # 17.630 unidades).
+        if not previo.get('ilimitado'):
+            cursor.execute(
+                "UPDATE products SET stock = ?, updated_at = ? WHERE id = ?",
+                (stock_plano(nuevo_total), now_iso, pid)
+            )
+
+        detalle = f'Variedad {color}' if color else ''
+        if falta > 0:
+            nota = f'faltaron {_fmt_cant(falta)} sin stock'
+            detalle = f'{detalle} · {nota}' if detalle else nota.capitalize()
+            logger.warning("Venta: '%s' se vendió sin stock suficiente; %s.", nombre, nota)
+        stock_ledger.registrar(
+            cursor,
+            motivo=motivo,
+            cantidad=nuevo_total - total_antes,
+            producto_id=pid,
+            firebase_id=previo.get('firebase_id') or firebase_id,
+            producto_nombre=nombre or previo.get('nombre') or '',
+            stock_antes=total_antes,
+            stock_despues=nuevo_total,
+            referencia=referencia,
+            detalle=detalle,
+            usuario=usuario,
+            aunque_sea_cero=falta > 0,
+        )
+
+        # La nube recibe lo que se llevó la línea, no el número de esta PC.
+        if es_devolucion:
+            entrada = {'devolucion': float(item.get('conjunto_consumido_base') or 0)}
+        elif pedido is not None:
+            entrada = {'packs': pedido[0], 'sueltos': pedido[1]}
+        else:
+            entrada = {'sueltos': consumido_base}
+        entrada.update({
+            'product_fid': firebase_id, 'product_local_id': pid, 'color': color,
+            'faltante_local': falta, 'sale_id': sale_id, 'item_idx': item_idx,
+            'motivo': motivo, 'contexto': nombre,
+        })
+        conjuntos_pendientes.encolar(cursor, entrada)
 
     def descontar_stock_items(self, items: List[Dict], usuario: str = '',
                               motivo: str = 'fiado',
@@ -624,6 +755,8 @@ class Sale:
         # movió el stock, en su misma transacción); acá sólo se empujan.
         if any(not v.get('solo_marcar') for v in (vincs_para_sync or [])):
             self._sync_vincs_to_firebase()
+        if any(it.get('is_conjunto') for it in (items or [])):
+            self._sync_conjuntos_to_firebase()
         # El historial de movimientos sube siempre, haya o no items que empujar:
         # una vinculación o un conjunto mueven stock sin pasar por `items`.
         try:
@@ -969,6 +1102,18 @@ class Sale:
             fb.push_vinculos_pendientes(self.db)
         except Exception as e:
             logger.warning(f"_sync_vincs_to_firebase: error general: {e}")
+
+    def _sync_conjuntos_to_firebase(self) -> None:
+        """Empuja la cola local de ventas de conjuntos (`conj_pendientes`).
+        Corre en hilo; lo que no suba lo reintenta la ventana principal."""
+        try:
+            from pos_system.utils.firebase_sync import get_firebase_sync
+            fb = get_firebase_sync()
+            if not fb or not getattr(fb, 'enabled', False):
+                return
+            fb.push_conjuntos_pendientes(self.db)
+        except Exception as e:
+            logger.warning(f"_sync_conjuntos_to_firebase: error general: {e}")
 
     def update(self, sale_id: int, payment_type: Optional[str] = None,
                items_updates: Optional[List[Dict]] = None) -> Optional[Dict]:

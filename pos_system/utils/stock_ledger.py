@@ -89,14 +89,19 @@ def registrar(cursor, *, motivo: str, cantidad, firebase_id: str = '',
               producto_id=None, producto_nombre: str = '',
               stock_antes=None, stock_despues=None,
               referencia: str = '', detalle: str = '',
-              usuario: str = '', origen: str = 'pos') -> None:
+              usuario: str = '', origen: str = 'pos',
+              aunque_sea_cero: bool = False) -> None:
     """Anota un movimiento en la misma transacción que lo produjo.
 
     Nunca levanta: un fallo escribiendo el historial no puede voltear una venta
     que ya está cobrada. Si algo sale mal queda en el log y la venta sigue.
+
+    Un movimiento en cero no se anota, salvo `aunque_sea_cero`: una venta que
+    no pudo descontar (conjunto sin stock, línea sin variedad) tiene que
+    quedar en el historial justamente porque no movió nada.
     """
     delta = _num(cantidad)
-    if not delta:
+    if not delta and not aunque_sea_cero:
         return
     try:
         from pos_system.utils.firebase_sync import _get_pc_id, now_ar

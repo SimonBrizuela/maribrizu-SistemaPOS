@@ -17,7 +17,7 @@ import uuid as _uuid
 from datetime import datetime, timezone, timedelta
 from typing import Optional, Callable
 
-from pos_system.models.conjunto import precio_vendible, total_conjunto
+from pos_system.models.conjunto import precio_vendible
 from pos_system.utils import stock_links as _stock_links
 from pos_system.utils import medios_de_pago
 
@@ -79,6 +79,25 @@ def _retry_on_429(fn, *, attempts: int = 4, base_delay: float = 1.5,
             delay *= 2
     if last_e is not None:
         raise last_e
+
+
+def stock_de_la_nube(valor):
+    """El `stock` de un documento del catálogo tal como se guarda en SQLite.
+
+    Se bajaba con `int()`, que trunca: 2,5 metros de cinta vendidos por metro
+    (producto plano, no conjunto) quedaban en 2 en la caja. Entero si es
+    entero, para no cambiar nada en los productos por unidad; con decimales si
+    los tiene. Lo que no es número vale 0, como antes.
+    """
+    try:
+        n = float(valor if valor not in (None, '', False) else 0)
+    except (TypeError, ValueError):
+        return 0
+    if n != n or n in (float('inf'), float('-inf')):
+        return 0
+    if abs(n - round(n)) < 1e-9:
+        return int(round(n))
+    return round(n, 4)
 
 
 def merge_colores_con_nube(nube, locales, colores_vendidos):
@@ -656,7 +675,7 @@ class FirebaseSync:
                     if vendible is None:
                         continue
                     precio, costo = vendible
-                    stock   = int(d.get('stock') or 0)
+                    stock   = stock_de_la_nube(d.get('stock'))
                     categ   = str(d.get('categoria') or d.get('category') or '').strip() or 'Sin categoría'
                     rubro   = str(d.get('rubro') or '').strip() or None
                     barcode = str(d.get('cod_barra') or d.get('barcode') or '').strip() or None
@@ -900,7 +919,7 @@ class FirebaseSync:
                             (r.get('name') or '')     != nombre or
                             float(r.get('price') or 0) != precio or
                             float(r.get('cost')  or 0) != costo  or
-                            int(r.get('stock')   or 0) != stock  or
+                            not _eq_float(r.get('stock') or 0, stock) or
                             (r.get('barcode') or '')  != (barcode or '') or
                             (r.get('category') or '') != categ or
                             (r.get('rubro') or '')    != (rubro or '') or
@@ -2447,18 +2466,6 @@ class FirebaseSync:
                 updated = 0
                 tienda = []          # (firebase_id, stock que quedó) para la web
 
-                # Que color de que producto vendio ESTA venta: el merge contra
-                # la nube solo pisa unidades/restante de esos colores.
-                vendidos_por_pid = {}
-                for it in items:
-                    try:
-                        pid_it = int(it.get('product_id') or 0)
-                    except (TypeError, ValueError):
-                        continue
-                    color_it = str(it.get('conjunto_color') or '').strip()
-                    if pid_it and color_it:
-                        vendidos_por_pid.setdefault(pid_it, set()).add(color_it)
-
                 for it in items:
                     pid = it.get('product_id')
                     # Negativa = devolución: Increment(-qty) termina sumando.
@@ -2490,77 +2497,14 @@ class FirebaseSync:
                     if _stock_links.has_links(row):
                         continue
 
-                    # Producto Conjunto: no se toca `stock`, se sincroniza el
-                    # estado absoluto (unidades / restante / total) que el modelo
-                    # de venta ya actualizó en SQLite. Si tiene stock por color,
-                    # se sube el array completo a Firestore.
+                    # Producto Conjunto: viaja por su propia cola
+                    # (`conj_pendientes`), que la venta anotó en la misma
+                    # transacción. Esa subida lee el documento de la nube y le
+                    # aplica la diferencia; acá antes se subía el número
+                    # absoluto de esta PC y pisaba cargas y ventas que la PC no
+                    # había visto. Una línea de conjunto que llegó sin sus datos
+                    # tampoco toca el `stock` plano (ver Sale._aplicar_stock_de_item).
                     if int(row.get('es_conjunto') or 0) == 1:
-                        payload_conj = {
-                            'conjunto_unidades':    float(row.get('conjunto_unidades') or 0),
-                            'conjunto_restante':    float(row.get('conjunto_restante') or 0),
-                            'conjunto_total':       float(row.get('conjunto_total') or 0),
-                            'ultima_actualizacion': now_dt,
-                        }
-                        colores_json = row.get('conjunto_colores')
-                        ajustes_tienda = None
-                        if colores_json:
-                            try:
-                                import json as _json
-                                colores = _json.loads(colores_json)
-                            except Exception:
-                                colores = None
-                            if isinstance(colores, list) and colores:
-                                vendidos = vendidos_por_pid.get(int(pid))
-                                if firebase_id and vendidos:
-                                    # Merge contra la nube: la fila de un color
-                                    # guarda cosas que no son de esta PC y una
-                                    # copia local vieja las pisaba. Si la nube
-                                    # no responde, viaja lo local como siempre.
-                                    try:
-                                        snap = self.db.collection('catalogo') \
-                                            .document(firebase_id).get()
-                                        del_catalogo = snap.to_dict() or {}
-                                        nube = del_catalogo.get('conjunto_colores')
-                                        # De la MISMA lectura sale cómo se
-                                        # llama cada color de cara al cliente.
-                                        # Sin esto el aviso a la tienda no
-                                        # sabe que "AZUL FRANCIA" salió
-                                        # publicado como "Azul". El `or {}`
-                                        # distingue "leí y no hay retoques"
-                                        # de "no pude leer".
-                                        ajustes_tienda = del_catalogo.get('tienda_variedades') or {}
-                                        colores = merge_colores_con_nube(
-                                            nube, colores, vendidos)
-                                        payload_conj['conjunto_unidades'] = sum(
-                                            float(c.get('unidades') or 0)
-                                            for c in colores if isinstance(c, dict))
-                                        payload_conj['conjunto_restante'] = sum(
-                                            float(c.get('restante') or 0)
-                                            for c in colores if isinstance(c, dict))
-                                        payload_conj['conjunto_total'] = total_conjunto(
-                                            colores, float(row.get('conjunto_contenido') or 0))
-                                    except Exception as e:
-                                        logger.warning(
-                                            f"sync_stock_after_sale: sin merge de colores "
-                                            f"para {firebase_id} ({e}); sube lo local")
-                                payload_conj['conjunto_colores'] = colores
-                        inv_ref = self.db.collection('inventario').document(str(pid))
-                        batch.set(inv_ref, payload_conj, merge=True)
-                        if firebase_id:
-                            cat_ref = self.db.collection('catalogo').document(firebase_id)
-                            batch.set(cat_ref, payload_conj, merge=True)
-                            # En un conjunto lo que se vende son las unidades
-                            # sueltas, no los packs cerrados: la tienda mira
-                            # `conjunto_total`, igual que el sync. Los colores
-                            # viajan con el total porque la tienda publica el
-                            # stock de cada uno y hasta ahora se quedaban con el
-                            # número viejo.
-                            tienda.append((firebase_id,
-                                           float(payload_conj['conjunto_total']),
-                                           payload_conj.get('conjunto_colores'),
-                                           float(row.get('conjunto_contenido') or 0),
-                                           ajustes_tienda))
-                        updated += 1
                         continue
 
                     # Servicio/ilimitado: no tocar el stock en Firebase.
@@ -2615,8 +2559,9 @@ class FirebaseSync:
                 logger.error(f"Firebase: Error actualizando stock post-venta: {e}")
 
         self._run(_do)
-        # El historial de movimientos viaja por su cuenta: lo que no suba ahora
-        # queda pendiente en SQLite y se reintenta, sin frenar la venta.
+        # Los conjuntos y el historial de movimientos viajan por su cuenta: lo
+        # que no suba ahora queda pendiente en SQLite y se reintenta.
+        self.push_conjuntos_pendientes(db_manager)
         self.push_stock_movimientos(db_manager)
 
     # Cuánto vale la anotación de "este producto no está en la tienda".
@@ -2804,6 +2749,160 @@ class FirebaseSync:
             self._run(_do)
         else:
             _do()
+
+    # Una sola subida de la cola de conjuntos a la vez: la lanzan la venta, el
+    # reintento de la cola offline y el sync post-venta. La marca en la nube ya
+    # impide descontar dos veces; esto ahorra transacciones que se pisan.
+    _conj_lock = threading.Lock()
+
+    def push_conjuntos_pendientes(self, db_manager, en_hilo: bool = True) -> None:
+        """Aplica en Firestore las ventas de conjuntos que esperan en la cola
+        local (`conj_pendientes`).
+
+        Cada línea va en UNA transacción: lee el documento del catálogo, le
+        aplica lo que se llevó la venta (o lo que se devolvió) y escribe la
+        variedad, los agregados, `conjunto_total` y `stock` juntos, más la
+        marca `conjuntos_aplicados/{pc}_{clave}` que impide repetirla. Recién
+        con el commit la fila local pasa a `fb_synced = 1`; sin internet queda
+        y la empuja el reintento de la cola offline.
+        """
+        if not self.enabled or db_manager is None:
+            return
+
+        def _do():
+            if not self._conj_lock.acquire(blocking=False):
+                return
+            try:
+                from pos_system.utils import conjuntos_pendientes as _cp
+                filas = _cp.pendientes(db_manager)
+                aplicadas = 0
+                tienda = []
+                for fila in filas:
+                    res = self._aplicar_conjunto_remoto(fila)
+                    if res is None:
+                        # Casi siempre es falta de internet: las que siguen
+                        # fallarían igual. Se anota el intento y se corta.
+                        _cp.marcar_fallo(db_manager, fila['id'])
+                        break
+                    _cp.marcar_subida(db_manager, fila['id'])
+                    if res.get('aviso_tienda'):
+                        tienda.append(res['aviso_tienda'])
+                    if res.get('aplicada'):
+                        aplicadas += 1
+                if aplicadas:
+                    now_str = now_ar().astimezone(timezone.utc).strftime('%Y-%m-%dT%H:%M:%S%z')
+                    try:
+                        self.db.collection('config').document('catalogo_meta').set(
+                            {'last_updated': now_str}, merge=True)
+                        self.db.collection('config').document('inventario_meta').set(
+                            {'last_updated': now_str}, merge=True)
+                    except Exception:
+                        pass
+                    logger.info(f"Firebase: {aplicadas} venta(s) de conjunto aplicadas en la nube.")
+                if tienda:
+                    try:
+                        self._avisar_a_la_tienda(tienda)
+                    except Exception as e:
+                        logger.debug(f"Firebase: aviso a la tienda de conjuntos: {e}")
+            except Exception as e:
+                logger.warning(f"Firebase: no se pudo subir la cola de conjuntos: {e}")
+            finally:
+                self._conj_lock.release()
+
+        if en_hilo:
+            self._run(_do)
+        else:
+            _do()
+
+    def _aplicar_conjunto_remoto(self, fila: dict):
+        """Una fila de `conj_pendientes` contra Firestore, en una transacción.
+
+        Devuelve None si no se pudo (reintentar), o un dict con `aplicada`
+        (False si ya estaba aplicada o se salteó) y `aviso_tienda`.
+        """
+        from firebase_admin import firestore as _fs
+        from pos_system.utils import conjuntos_pendientes as _cp
+
+        fid = str(fila.get('product_fid') or '').strip()
+        if not fid:
+            return {'aplicada': False}
+        now_dt = now_ar().astimezone(timezone.utc)
+        pc_id = _get_pc_id()
+        cat_ref = self.db.collection('catalogo').document(fid)
+        marca_ref = self.db.collection(_cp.COLECCION_MARCAS).document(_cp.id_de_marca(pc_id, fila))
+        inv_ref = None
+        if fila.get('product_local_id') is not None:
+            try:
+                inv_ref = self.db.collection('inventario').document(str(int(fila['product_local_id'])))
+            except (TypeError, ValueError):
+                inv_ref = None
+
+        try:
+            transaccion = self.db.transaction()
+
+            @_fs.transactional
+            def _tx(tx):
+                # Lecturas primero (Firestore lo exige).
+                marca = marca_ref.get(transaction=tx)
+                if marca.exists:
+                    return {'ya': True}
+                snap = cat_ref.get(transaction=tx)
+                doc = (snap.to_dict() or {}) if snap.exists else None
+                plan = _cp.plan_de_fila(fila, doc)
+                if 'saltado' in plan:
+                    return plan
+                campos = dict(plan['campos'])
+                campos['ultima_actualizacion'] = now_dt
+                tx.set(cat_ref, campos, merge=True)
+                if inv_ref is not None:
+                    tx.set(inv_ref, campos, merge=True)
+                tx.set(marca_ref, {
+                    'pc_id':      pc_id,
+                    'sale_id':    fila.get('sale_id'),
+                    'item_idx':   fila.get('item_idx'),
+                    'firebase_id': fid,
+                    'color':      fila.get('color') or '',
+                    'packs':      float(fila.get('packs') or 0),
+                    'sueltos':    float(fila.get('sueltos') or 0),
+                    'devolucion': float(fila.get('devolucion') or 0),
+                    'motivo':     fila.get('motivo') or '',
+                    'antes':      plan['antes'],
+                    'despues':    plan['despues'],
+                    'faltante':   plan['faltante'],
+                    'ts':         now_dt,
+                })
+                # De la MISMA lectura salen el pack y cómo se llama cada color
+                # de cara al cliente ("AZUL FRANCIA" publicado como "Azul").
+                plan['tienda'] = (doc or {}).get('tienda_variedades') or {}
+                try:
+                    plan['contenido'] = float((doc or {}).get('conjunto_contenido') or 0)
+                except (TypeError, ValueError):
+                    plan['contenido'] = 0.0
+                return plan
+
+            plan = _tx(transaccion)
+        except Exception as e:
+            logger.warning(f"Firebase: venta de conjunto {fid} no subió: {e}")
+            return None
+
+        if plan.get('ya'):
+            logger.info(f"Firebase: la venta de conjunto {fila.get('clave')} ya estaba aplicada.")
+            return {'aplicada': False}
+        if 'saltado' in plan:
+            logger.warning(f"Firebase: venta de conjunto {fid} ({fila.get('contexto')}) "
+                           f"salteada: {plan['saltado']}.")
+            return {'aplicada': False}
+        if plan.get('faltante', 0) > 0:
+            logger.warning(f"Firebase: {fila.get('contexto')} se vendió sin stock en la "
+                           f"nube; faltaron {plan['faltante']:g}.")
+        campos = plan['campos']
+        return {
+            'aplicada': True,
+            'aviso_tienda': (fid, float(campos['conjunto_total']),
+                             campos.get('conjunto_colores'),
+                             plan.get('contenido') or 0.0,
+                             plan.get('tienda')),
+        }
 
     def push_vinculos_pendientes(self, db_manager, en_hilo: bool = True) -> None:
         """Sube a Firestore los descuentos por vinculación que esperan en la cola
@@ -3094,7 +3193,7 @@ class FirebaseSync:
                     precio, costo = vendible
 
                     fb_ts  = str(d.get('ultima_actualizacion', '') or '')
-                    stock  = int(d.get('stock') or 0)
+                    stock  = stock_de_la_nube(d.get('stock'))
                     categ  = str(d.get('categoria') or d.get('category') or '').strip() or 'Sin categoría'
                     rubro  = str(d.get('rubro') or '').strip() or None
                     barcode = str(d.get('cod_barra') or d.get('barcode') or '').strip() or None
@@ -5087,7 +5186,7 @@ class FirebaseSync:
                 except (TypeError, ValueError):
                     return None
 
-            stock      = int(_to_float(d.get('stock')) or 0)
+            stock      = stock_de_la_nube(d.get('stock'))
             price      = float(_to_float(
                 d.get('precio_venta') or d.get('precio') or d.get('price')
             ) or 0)

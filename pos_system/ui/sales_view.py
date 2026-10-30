@@ -17,7 +17,7 @@ import logging
 logger = logging.getLogger(__name__)
 
 from pos_system.models.product import Product
-from pos_system.models.conjunto import contenido_de, total_variedad
+from pos_system.models.conjunto import total_variedad
 from pos_system.models.sale import Sale
 from pos_system.models.cash_register import CashRegister
 from pos_system.models.promotion import Promotion
@@ -2091,17 +2091,13 @@ class SalesView(QWidget):
                 return
 
         # ── Revalidar stock de items conjunto contra el stock VIVO ──
-        # El descuento de conjuntos es un SET absoluto (sale.py), basado en un
-        # snapshot tomado al agregar el item. Como el pendiente pudo quedar
-        # guardado un buen rato, recomputamos el "after" sobre el stock actual
-        # para no pisar ventas/altas intermedias. (mp_* descuenta por delta vivo,
-        # no necesita esto.)
-        stock_warnings = []
-        for it in items:
-            if it.get('is_conjunto'):
-                ok, err = self._revalidate_conjunto_after(it)
-                if not ok:
-                    stock_warnings.append((it.get('product_name', 'Item'), err))
+        # El pendiente pudo quedar guardado un buen rato: se avisa si el stock
+        # de algún conjunto ya no alcanza. (La venta igual recalcula todo contra
+        # la base al cobrar.)
+        stock_warnings = [
+            (pr['nombre'] or 'Item', pr['texto'])
+            for pr in self._recalcular_conjuntos_del_carrito(items)
+        ]
 
         # ── Borrar la fila ANTES de poblar el carrito ──
         # Si el DELETE no afecta ninguna fila (o falla), abortamos sin tocar el
@@ -2136,62 +2132,90 @@ class SalesView(QWidget):
                 '\n\nRevisá o recargá esas líneas antes de cobrar.'
             )
 
-    def _revalidate_conjunto_after(self, item):
-        """Recalcula conjunto_after_unidades/restante de un item conjunto contra
-        el stock VIVO actual (local). Devuelve (ok, mensaje_error).
-
-        Reusa aplicar_venta() del diálogo de conjunto, la MISMA función que se
-        usa al agregar el item, así que el cálculo es idéntico. Si no se puede
-        validar (producto ausente, error), degrada de forma segura dejando el
-        snapshot tal cual (ok=True)."""
+    def _leer_conjunto(self, product_id):
+        """Fila de stock de un conjunto en la base local, o None."""
         try:
-            from pos_system.ui.conjunto_dialog import aplicar_venta
-        except Exception:
-            return True, ''
-        try:
-            pid = item.get('product_id')
             rows = self.db.execute_query(
-                "SELECT conjunto_unidades, conjunto_restante, conjunto_contenido, "
-                "conjunto_colores FROM products WHERE id = ? LIMIT 1", (int(pid),)
+                "SELECT id, name, es_conjunto, conjunto_unidades, conjunto_restante, "
+                "conjunto_contenido, conjunto_colores, conjunto_unidad_medida "
+                "FROM products WHERE id = ? LIMIT 1", (int(product_id),)
             ) or []
-            if not rows:
-                return True, ''
-            live = rows[0]
-            contenido = float(live.get('conjunto_contenido') or 0)
-            color = (item.get('conjunto_color') or '').strip()
-            if color and live.get('conjunto_colores'):
-                try:
-                    colores = json.loads(live.get('conjunto_colores') or '[]')
-                    if not isinstance(colores, list):
-                        colores = []
-                except Exception:
-                    colores = []
-                entry = next((c for c in colores if isinstance(c, dict)
-                              and str(c.get('color', '')).strip() == color), None)
-                base_u = float(entry.get('unidades') or 0) if entry else 0.0
-                base_r = float(entry.get('restante') or 0) if entry else 0.0
-                # La variedad puede venir en otra presentacion que el producto.
-                if entry:
-                    contenido = contenido_de(entry, contenido)
-            else:
-                base_u = float(live.get('conjunto_unidades') or 0)
-                base_r = float(live.get('conjunto_restante') or 0)
-
-            ok, err, after_u, after_r = aplicar_venta(
-                base_u, contenido, base_r,
-                float(item.get('conjunto_cantidad') or 0),
-                item.get('conjunto_vender_por', 'conjunto'),
-                item.get('conjunto_unidad_base'),
-                item.get('conjunto_unidad_venta'),
-            )
-            if not ok:
-                return False, err or 'Stock insuficiente'
-            item['conjunto_after_unidades'] = after_u
-            item['conjunto_after_restante'] = after_r
-            return True, ''
         except Exception:
-            logger.exception('No se pudo revalidar stock de conjunto al restaurar')
-            return True, ''
+            logger.exception('No se pudo leer el stock de un conjunto')
+            return None
+        return rows[0] if rows else None
+
+    def _recalcular_conjuntos_del_carrito(self, items=None):
+        """Recalcula lo que queda de cada conjunto del carrito contra el stock
+        VIVO de la base, encadenando las líneas del mismo producto y variedad.
+
+        Es la misma cuenta que hace la venta al cobrar (`venta_conjunto`), así
+        que lo que ve el carrito y lo que se descuenta no pueden separarse.
+        Devuelve los problemas con un texto para el cajero.
+        """
+        from pos_system.models.venta_conjunto import simular_carrito
+        problemas = simular_carrito(self.cart if items is None else items,
+                                    self._leer_conjunto)
+        for pr in problemas:
+            if pr['motivo'] == 'sin_stock':
+                pr['texto'] = f"faltan {_fmt_qty(pr['falta'])} para cubrir la venta"
+            elif pr['motivo'] == 'sin_variedad':
+                pr['texto'] = 'no tiene elegida la variedad (color o modelo)'
+            else:
+                pr['texto'] = 'esa variedad ya no existe en el catálogo'
+        return problemas
+
+    def _lineas_de_conjunto_incompletas(self, items):
+        """Líneas de un producto conjunto que no traen cómo se vende (un
+        presupuesto viejo convertido): cobradas así no descuentan nada."""
+        malas = []
+        for it in items or []:
+            if it.get('is_conjunto') or it.get('is_mp') or it.get('stock_descontado'):
+                continue
+            pid = it.get('product_id')
+            if not pid:
+                continue
+            fila = self._leer_conjunto(pid)
+            if fila and int(fila.get('es_conjunto') or 0) == 1:
+                malas.append(it.get('product_name') or fila.get('name') or 'Item')
+        return malas
+
+    def _conjuntos_listos_para_cobrar(self):
+        """Revisa los conjuntos del carrito antes de abrir el cobro.
+
+        Bloquea lo que no se puede descontar sin inventar (línea sin variedad,
+        variedad borrada, conjunto cargado sin presentación). Si el stock ya no
+        alcanza, avisa cuánto falta y deja cobrar igual: la mercadería está en
+        la mano del cliente; se descuenta lo que hay y el faltante queda en el
+        historial. Devuelve True si se puede seguir.
+        """
+        incompletas = self._lineas_de_conjunto_incompletas(self.cart)
+        problemas = self._recalcular_conjuntos_del_carrito()
+        bloqueantes = [p for p in problemas if p['motivo'] != 'sin_stock']
+        if incompletas or bloqueantes:
+            renglones = [f'•  {n}: falta elegir presentación y variedad'
+                         for n in incompletas]
+            renglones += [f"•  {p['nombre']}: {p['texto']}" for p in bloqueantes]
+            QMessageBox.warning(
+                self, 'Revisá el carrito',
+                'Estos productos no se pueden cobrar así porque no se sabe de '
+                'dónde descontar el stock:\n\n' + '\n'.join(renglones) +
+                '\n\nQuitalos y volvé a cargarlos desde el buscador.'
+            )
+            return False
+        faltan = [p for p in problemas if p['motivo'] == 'sin_stock']
+        if faltan:
+            detalle = '\n'.join(f"•  {p['nombre']}: {p['texto']}" for p in faltan)
+            resp = QMessageBox.question(
+                self, 'Stock insuficiente',
+                'Según el sistema no alcanza el stock de:\n\n' + detalle +
+                '\n\nSi la mercadería está en la mano, cobrá igual: se descuenta '
+                'lo que hay y la diferencia queda anotada en el historial para '
+                'revisar el conteo.\n\n¿Cobrar igual?',
+                QMessageBox.Yes | QMessageBox.No, QMessageBox.No
+            )
+            return resp == QMessageBox.Yes
+        return True
 
     # ════════════════════════════════════════════════════════════════════
     # ── MODO FIADO (cuenta corriente) ───────────────────────────────────
@@ -4834,12 +4858,19 @@ class SalesView(QWidget):
         if item.get('is_conjunto'):
             old_qty = float(item.get('quantity') or 0)
             new_qty = float(quantity)
-            delta = new_qty - old_qty
+            # Una línea decimal entra como "1 × 1,5 m": el spinner multiplica
+            # esa porción. En las enteras la proporción es 1.
+            old_cant = float(item.get('conjunto_cantidad') or old_qty or 0)
+            por_unidad = (old_cant / old_qty) if old_qty > 0 else 1.0
             item['quantity'] = new_qty
             item['subtotal'] = round(new_qty * item['unit_price'], 2)
-            item['conjunto_cantidad'] = new_qty
-            if abs(delta) > 1e-9:
-                self._adjust_conjunto_after_for_delta(item, delta)
+            item['conjunto_cantidad'] = round(new_qty * por_unidad, 6)
+            if abs(new_qty - old_qty) > 1e-9:
+                # Lo que queda se recalcula desde la base, con la misma cuenta
+                # que usa la venta al cobrar. Antes se ajustaba por diferencia
+                # tomando la cantidad vendida como si fuera el contenido del
+                # pack, y el stock se inflaba (LÁPIZ MAPED 69 → 4.752).
+                self._recalcular_conjuntos_del_carrito()
             item['product_name'] = self._rebuild_conjunto_name(item)
             # Las promos del panel dependen de la cantidad Y del modo de venta:
             # al cruzar el mínimo se activan, y al bajar de él se van. Antes la
@@ -4893,60 +4924,6 @@ class SalesView(QWidget):
             self._refresh_cart_row_pricing(row, item)
         else:
             self._refresh_cart_totals(row)
-
-    def _adjust_conjunto_after_for_delta(self, item, delta):
-        """Aplica `delta` al stock final del item (conjunto_after_unidades/restante).
-
-        `delta` está en unidades de venta del item (packs para vender_por='conjunto',
-        unidades de `unidad_venta` para 'unidad'/'fraccion'). Para 'unidad'/'fraccion'
-        convertimos a `unidad_base` antes de subir/bajar restante y abrir/cerrar packs."""
-        vender_por = item.get('conjunto_vender_por', 'conjunto')
-        after_u = float(item.get('conjunto_after_unidades') or 0)
-        after_r = float(item.get('conjunto_after_restante') or 0)
-        contenido = float(item.get('conjunto_cantidad_base') or 0)
-
-        if vender_por == 'conjunto':
-            item['conjunto_after_unidades'] = max(0.0, after_u - delta)
-            return
-
-        unidad_venta = item.get('conjunto_unidad_venta')
-        unidad_base  = item.get('conjunto_unidad_base')
-        delta_base = delta
-        if unidad_venta and unidad_base and unidad_venta != unidad_base:
-            try:
-                from pos_system.ui.conjunto_dialog import convertir as _conj_convertir
-                c = _conj_convertir(abs(delta), unidad_venta, unidad_base)
-                if c is not None:
-                    delta_base = c if delta >= 0 else -c
-            except Exception:
-                pass
-
-        if delta_base >= 0:
-            if after_r >= delta_base - 1e-9:
-                item['conjunto_after_restante'] = max(0.0, after_r - delta_base)
-                return
-            rem = delta_base - after_r
-            new_r = 0.0
-            new_u = after_u
-            while rem > 1e-9 and new_u > 0 and contenido > 0:
-                new_u -= 1
-                if rem >= contenido - 1e-9:
-                    rem -= contenido
-                else:
-                    new_r = contenido - rem
-                    rem = 0
-            item['conjunto_after_unidades'] = max(0.0, new_u)
-            item['conjunto_after_restante'] = max(0.0, new_r)
-            return
-
-        add = -delta_base
-        new_r = after_r + add
-        new_u = after_u
-        if contenido > 0 and new_r >= contenido:
-            new_u += int(new_r // contenido)
-            new_r = new_r % contenido
-        item['conjunto_after_unidades'] = new_u
-        item['conjunto_after_restante'] = new_r
 
     def _rebuild_conjunto_name(self, item):
         """Re-arma `product_name` con el sufijo "N pack(s)/u/m" actualizado a la
@@ -5234,8 +5211,10 @@ class SalesView(QWidget):
                     sub_it.setText(f'${_fmt_money(item["subtotal"])}')
         # Total y contador
         if not self.cart:
-            # El descuento no sobrevive al carrito que lo motivó.
+            # El descuento y el presupuesto no sobreviven al carrito que los
+            # motivó: la próxima venta no tiene nada que ver con ellos.
             self.descuento_manual = None
+            self._pending_presupuesto_id = None
         desc_manual = self._descuento_total()
         self._actualizar_boton_descuento(desc_manual)
         total = round(sum(item['subtotal'] for item in self.cart) - desc_manual, 2)
@@ -5673,6 +5652,11 @@ class SalesView(QWidget):
                                  f'No se pudo crear el presupuesto:\n{e}')
             return
 
+        # El carrito sigue cargado: si se cobra tal cual, la venta cierra este
+        # presupuesto. Sin esto quedaba "pendiente" y convertirlo después
+        # cobraba la misma mercadería otra vez (#347 y #348 del 15-10).
+        self._pending_presupuesto_id = pres['id']
+
         # Generar PDF
         try:
             pdf_gen = PDFGenerator()
@@ -5716,6 +5700,7 @@ class SalesView(QWidget):
             if reply == QMessageBox.Yes:
                 self.cart = []
                 self.descuento_manual = None
+                self._pending_presupuesto_id = None
                 self.update_cart_display()
 
     def complete_sale(self):
@@ -5738,6 +5723,11 @@ class SalesView(QWidget):
         if not current_register:
             QMessageBox.warning(self, 'Caja cerrada',
                                 'Debe abrir la caja antes de realizar ventas.\n\nVaya a la seccion de Caja.')
+            return
+
+        # Conjuntos: lo que no se puede descontar no se cobra, y si el stock ya
+        # no alcanza el cajero lo sabe antes de cobrar, no después.
+        if not self._conjuntos_listos_para_cobrar():
             return
 
         # El descuento con nombre se aplica sobre las líneas antes de cobrar: la
@@ -5789,6 +5779,7 @@ class SalesView(QWidget):
             'descuento_nombre': desc_manual_nombre,
         }
 
+        sale_id = None
         try:
             sale_id = self.sale_model.create(sale_data)
             if sale_id:
@@ -5931,7 +5922,27 @@ class SalesView(QWidget):
                 QMessageBox.critical(self, 'Error', 'No se pudo registrar la venta')
 
         except Exception as e:
-            QMessageBox.critical(self, 'Error', f'Error al registrar la venta: {str(e)}')
+            logger.exception('complete_sale')
+            if not sale_id:
+                QMessageBox.critical(self, 'Error', f'Error al registrar la venta: {str(e)}')
+                return
+            # La venta YA quedó guardada y el error vino después (factura,
+            # ticket, presupuesto). Con el carrito lleno y un "Error al
+            # registrar" el cajero la vuelve a cobrar: se vacía y se dice claro.
+            self.cart = []
+            self.descuento_manual = None
+            self._pending_presupuesto_id = None
+            self.update_cart_display()
+            QMessageBox.warning(
+                self, 'Venta registrada',
+                f'La venta #{sale_id} quedó registrada y cobrada.\n\n'
+                f'Falló un paso posterior: {e}\n\n'
+                'No la vuelvas a cobrar. Si faltó la factura o el ticket, '
+                'sacala desde el Historial de ventas.'
+            )
+            main_window = self.get_main_window()
+            if main_window:
+                main_window.refresh_all_views()
 
 
     def _upload_sale_to_firebase(self, sale: dict):
