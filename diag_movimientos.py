@@ -48,6 +48,43 @@ def conectar():
     return firestore.client()
 
 
+def stock_que_manda(x):
+    """El número de stock que vale para el producto.
+
+    En un conjunto (packs, rollos, variedades) es `conjunto_total`: eso es lo que
+    mueve la venta y lo que anota el historial. El campo `stock` de un conjunto es
+    un espejo entero (floor del total) y compararlo daba falsos sospechosos: 730
+    de 752 el 29-10.
+    """
+    if x.get('es_conjunto') and x.get('conjunto_total') is not None:
+        return float(x.get('conjunto_total') or 0)
+    return float(x.get('stock') or 0)
+
+
+def _orden(doc_id, m):
+    """Orden de los movimientos: por hora y, en empate, por el número de fila de la PC.
+
+    Una venta de varios colores deja una fila por renglón con la MISMA hora; el id
+    es `{pc_id}_{fila}` y comparado como texto ordena 9999 después de 10000. Sin
+    esto se tomaba como "último" un renglón intermedio de la venta.
+    """
+    ts = m.get('ts') or datetime.datetime.min.replace(tzinfo=datetime.timezone.utc)
+    n = str(doc_id).rsplit('_', 1)[-1]
+    return (ts, int(n) if n.isdigit() else 0)
+
+
+def _anota_otra_escala(m):
+    """Las filas de la migración del 28-08 anotaron el stock PLANO de un conjunto."""
+    return str(m.get('detalle') or '').startswith('fix_stock_catalogo: descuadre')
+
+
+def _solo_decimales(m, dif):
+    """La PC guarda el stock entero (trunca al bajarlo de la nube), así que en lo
+    que se vende por metro su historial anota sin decimales. Una diferencia menor
+    a 1 contra un movimiento de una PC no es un cambio por afuera."""
+    return m.get('origen') == 'pos' and abs(dif) < 1
+
+
 def resolver_producto(db, termino):
     """Acepta el código exacto o un pedazo del nombre."""
     doc = db.collection('catalogo').document(termino).get()
@@ -85,14 +122,15 @@ def historial(db, args):
         return
 
     print(f'\n{prod.get("nombre")}')
-    print(f'código {doc_id} · stock hoy: {prod.get("stock")}')
+    print(f'código {doc_id} · stock hoy: {stock_que_manda(prod):g}'
+          + (' (total del conjunto)' if prod.get('es_conjunto') else ''))
     print('─' * 100)
 
     q = db.collection('stock_movimientos').where(
         filter=firestore.FieldFilter('firebase_id', '==', str(doc_id)))
-    movs = [d.to_dict() or {} for d in q.stream()]
-    movs.sort(key=lambda m: m.get('ts') or datetime.datetime.min.replace(
-        tzinfo=datetime.timezone.utc))
+    pares = [(d.id, d.to_dict() or {}) for d in q.stream()]
+    pares.sort(key=lambda par: _orden(*par))
+    movs = [m for _, m in pares]
 
     if args.dias:
         corte = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=args.dias)
@@ -123,9 +161,10 @@ def historial(db, args):
     print('─' * 100)
     print(f'Entró: {entradas:+g} · salió: {salidas:+g} · neto: {entradas + salidas:+g}')
 
-    ultimo = movs[-1].get('stock_despues')
-    actual = prod.get('stock')
-    if ultimo is not None and actual is not None and abs(float(ultimo) - float(actual)) > 0.001:
+    validos = [m for m in movs if not _anota_otra_escala(m)]
+    ultimo = validos[-1].get('stock_despues') if validos else None
+    actual = stock_que_manda(prod)
+    if ultimo is not None and abs(float(ultimo) - actual) > 0.001             and not _solo_decimales(validos[-1], actual - float(ultimo)):
         print(f'\nOJO: el último movimiento dejó {ultimo:g} y hoy el catálogo dice {actual}.')
         print('Ese salto no pasó por el registro — alguien lo cambió por afuera.')
 
@@ -138,11 +177,12 @@ def sospechosos(db, args):
         m = d.to_dict() or {}
         fid = str(m.get('firebase_id') or '')
         ts = m.get('ts')
-        if not fid or not isinstance(ts, datetime.datetime):
+        if not fid or not isinstance(ts, datetime.datetime) or _anota_otra_escala(m):
             continue
+        clave = _orden(d.id, m)
         prev = ultimo_por_producto.get(fid)
-        if prev is None or ts > prev[0]:
-            ultimo_por_producto[fid] = (ts, m.get('stock_despues'))
+        if prev is None or clave > prev[0]:
+            ultimo_por_producto[fid] = (clave, m.get('stock_despues'), m)
     print(f'Productos con historial: {len(ultimo_por_producto)}')
 
     filas = []
@@ -152,12 +192,12 @@ def sospechosos(db, args):
         if not reg or reg[1] is None:
             continue
         try:
-            actual = float(x.get('stock') or 0)
+            actual = stock_que_manda(x)
         except (TypeError, ValueError):
             continue
         dif = actual - float(reg[1])
-        if abs(dif) > 0.001:
-            filas.append((abs(dif), d.id, str(x.get('nombre'))[:44], float(reg[1]), actual, dif, reg[0]))
+        if abs(dif) > 0.001 and not _solo_decimales(reg[2], dif):
+            filas.append((abs(dif), d.id, str(x.get('nombre'))[:44], float(reg[1]), actual, dif, reg[0][0]))
 
     filas.sort(reverse=True)
     print(f'\nCon el stock cambiado por fuera del registro: {len(filas)}\n')
