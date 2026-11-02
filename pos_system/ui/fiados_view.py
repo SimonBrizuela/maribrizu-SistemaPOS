@@ -544,6 +544,22 @@ class FiadosView(QWidget):
         h.addLayout(saldo_col)
 
         botones = QVBoxLayout(); botones.setSpacing(6)
+        resumen = QPushButton('Imprimir resumen')
+        resumen.setMinimumHeight(34)
+        resumen.setCursor(Qt.PointingHandCursor)
+        resumen.setEnabled(bool(self._pendientes))
+        resumen.setToolTip('Imprimir el detalle de lo que debe para dárselo al cliente.\n'
+                           'No cobra nada: la deuda queda igual.')
+        resumen.setStyleSheet(
+            f"QPushButton {{ background:{_T['surface']}; color:{FIADO};"
+            f" border:1.5px solid {FIADO}; border-radius:6px; padding:0 14px;"
+            f" font-size:11px; font-weight:700; }}"
+            f"QPushButton:hover {{ background:{FIADO_SOFT}; }}"
+            f"QPushButton:disabled {{ color:{_T['text_dim']}; border-color:{_T['border']}; }}"
+        )
+        resumen.clicked.connect(self._imprimir_resumen)
+        botones.addWidget(resumen)
+
         editar = QPushButton('Editar')
         editar.setMinimumHeight(34)
         editar.setCursor(Qt.PointingHandCursor)
@@ -964,6 +980,15 @@ class FiadosView(QWidget):
                 or self.current_user.get('full_name')
                 or self.current_user.get('username', '')
                 or 'Cajero')
+
+    def _imprimir_resumen(self):
+        """Resumen de lo que debe el cliente, para dárselo antes de que pague.
+        No cobra ni crea venta: el ticket de compra sale recién al cobrar."""
+        if not self._cliente or not self._pendientes:
+            return
+        from pos_system.utils.ticket_printer import imprimir_resumen_fiado
+        imprimir_resumen_fiado(self._cliente, self._pendientes, parent=self,
+                               cajero_name=self._cajero())
 
     def _nuevo_cliente(self):
         dlg = FiadoClienteDialog(self)

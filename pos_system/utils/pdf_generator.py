@@ -671,6 +671,105 @@ class PDFGenerator:
         html = _render_mustache(template, ctx)
         return html
 
+    # ─── Resumen de cuenta del fiado ─────────────────────────────────────────
+    # Lo que el cliente debe, con el detalle de cada cosa que se llevó, para
+    # dárselo antes de que pague. No cobra nada ni toca la caja: el ticket de
+    # venta sale recién al cobrar, desde la pestaña Fiados.
+    def render_resumen_fiado_html(self, cliente, items, cajero_name=''):
+        """HTML del resumen de cuenta de un cliente de fiado.
+
+        Args:
+            cliente: dict de `Fiado.get_clientes` (nombre, dni, telefono,
+                pendiente, credito, deuda).
+            items: renglones pendientes de `Fiado.get_items(cliente)`.
+            cajero_name: quien lo imprime.
+        """
+        tpl_path = os.path.join(os.path.dirname(__file__), '..', 'assets', 'resumen_fiado.html')
+        meipass = getattr(sys, '_MEIPASS', None)
+        if meipass:
+            tpl_path = os.path.join(meipass, 'pos_system', 'assets', 'resumen_fiado.html')
+        with open(tpl_path, 'r', encoding='utf-8') as f:
+            template = f.read()
+
+        logo_path = _asset_path('logo_liceo_ticket.png')
+        logo_src = ''
+        if os.path.exists(logo_path):
+            with open(logo_path, 'rb') as f:
+                logo_src = 'data:image/png;base64,' + base64.b64encode(f.read()).decode('ascii')
+
+        perfil = self._resolve_emisor_perfil()
+        empresa_direccion = perfil.get('domicilio', '') or self.company_info.get('address', '')
+        if perfil.get('localidad'):
+            empresa_direccion = f"{empresa_direccion} - {perfil['localidad']}".strip(' -')
+
+        # Agrupado por entrega (lo que se llevó de una sola vez), de la más
+        # vieja a la más nueva, como se lee una cuenta.
+        grupos = {}
+        for it in items or []:
+            clave = str(it.get('entrega_id') or '') or f"__{it.get('id')}"
+            grupos.setdefault(clave, []).append(it)
+        ordenados = sorted(grupos.values(),
+                           key=lambda g: min(str(i.get('fecha') or '') for i in g))
+
+        grupos_ctx = []
+        total_productos = 0.0
+        cantidad_items = 0
+        for renglones in ordenados:
+            renglones = sorted(renglones, key=lambda i: int(i.get('id') or 0))
+            filas = []
+            total_grupo = 0.0
+            for it in renglones:
+                qty = float(it.get('quantity') or 0)
+                subtotal = float(it.get('subtotal') or 0)
+                partes = []
+                if qty != 1:
+                    partes.append(f"{_fmt_qty(qty)} x ${_fmt_money_ar(it.get('unit_price'))}")
+                if it.get('nota'):
+                    partes.append(str(it.get('nota')))
+                filas.append({
+                    'cantidad': _fmt_qty(qty),
+                    'producto': (it.get('product_name') or '-').strip(),
+                    'detalle':  ' · '.join(partes),
+                    'subtotal': _fmt_money_ar(subtotal),
+                })
+                total_grupo += subtotal
+            total_productos += total_grupo
+            cantidad_items += len(filas)
+            grupos_ctx.append({
+                'fecha': _parse_ar(min(str(i.get('fecha') or '') for i in renglones)
+                                   or None).strftime('%d/%m/%Y'),
+                'total':   _fmt_money_ar(total_grupo),
+                'primero': filas[:1],
+                'resto':   filas[1:],
+            })
+
+        credito = float(cliente.get('credito') or 0)
+        saldo = max(0.0, total_productos - credito)
+        datos = ' · '.join(x for x in [
+            f"DNI {cliente.get('dni')}" if cliente.get('dni') else '',
+            str(cliente.get('telefono') or ''),
+        ] if x)
+
+        ahora = datetime.now(_TZ_AR)
+        ctx = {
+            'logo_src':          logo_src,
+            'empresa_nombre':    perfil.get('razon_social') or perfil.get('nombre') or self.company_info.get('name', ''),
+            'empresa_direccion': empresa_direccion,
+            'empresa_tel':       perfil.get('telefono', '') or self.company_info.get('phone', ''),
+            'empresa_email':     perfil.get('email', '')    or self.company_info.get('email', ''),
+            'cliente':           str(cliente.get('nombre') or ''),
+            'cliente_datos':     datos,
+            'fecha':             ahora.strftime('%d/%m/%Y'),
+            'hora':              ahora.strftime('%H:%M'),
+            'cajero':            cajero_name,
+            'grupos':            grupos_ctx,
+            'cantidad_items':    cantidad_items,
+            'total_productos':   _fmt_money_ar(total_productos),
+            'credito':           _fmt_money_ar(credito) if credito > 0 else '',
+            'saldo':             _fmt_money_ar(saldo),
+        }
+        return _render_mustache(template, ctx)
+
     # ─── Remito X (HTML A4 → vista previa / impresión nativa) ───────────────
     # Documento de entrega NO fiscal ("para firmar al recibir"). Usa el mismo
     # motor de preview/print que el ticket no fiscal (QWebEngineView) pero con

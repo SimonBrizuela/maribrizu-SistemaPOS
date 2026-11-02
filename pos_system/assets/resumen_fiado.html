@@ -1,0 +1,241 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Resumen de cuenta · Librería Liceo</title>
+<style>
+  :root {
+    --ink: #000;
+    --paper: #fff;
+    --ticket-width: 72mm;
+    --mono: "Courier New", "Courier", ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #e9e9ec;
+    color: #111;
+  }
+
+  .paper-stack {
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 30px 16px 60px;
+    box-sizing: border-box;
+  }
+
+  .ticket {
+    width: var(--ticket-width);
+    background: var(--paper);
+    color: var(--ink);
+    padding: 6mm 4mm 10mm;
+    box-sizing: border-box;
+    font-family: var(--mono);
+    font-size: 11pt;
+    line-height: 1.35;
+    box-shadow: 0 1px 0 rgba(0,0,0,0.05), 0 10px 30px rgba(0,0,0,0.08);
+  }
+
+  .t-logo { display: block; margin: 0 auto 3mm; width: 30mm; height: auto; }
+  .t-center { text-align: center; }
+  .t-bold { font-weight: 700; }
+
+  .t-name {
+    font-size: 13pt;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    text-align: center;
+    margin: 0 0 1mm;
+  }
+  .t-tag {
+    text-align: center;
+    font-size: 9pt;
+    letter-spacing: 0.18em;
+    margin: 0 0 3mm;
+  }
+  .t-meta { text-align: center; font-size: 9.5pt; margin: 0; }
+  .t-meta p { margin: 0; }
+
+  .t-rule { border: 0; border-top: 1px dashed #000; margin: 2.5mm 0; }
+  .t-rule-solid { border: 0; border-top: 1px solid #000; margin: 2.5mm 0; }
+
+  .t-title {
+    text-align: center;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.18em;
+    font-size: 11pt;
+    margin: 0 0 2mm;
+  }
+
+  .t-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 10pt;
+  }
+  .t-row + .t-row { margin-top: 0.5mm; }
+  .t-row .lbl { font-weight: 700; white-space: nowrap; }
+  .t-row .val { text-align: right; }
+
+  /* Cada entrega: fecha arriba, productos, subtotal */
+  .t-grp { margin-top: 3mm; }
+  .t-grp-head {
+    display: flex;
+    justify-content: space-between;
+    gap: 3mm;
+    font-size: 9pt;
+    font-weight: 700;
+    border-bottom: 1px solid #000;
+    padding-bottom: 0.8mm;
+  }
+  .t-grp-head span:first-child { flex: 1; min-width: 0; }
+  /* El Chromium del POS (Qt 5) ignora `gap` en flex: la separación va con margen. */
+  .t-grp-head span:last-child { white-space: nowrap; margin-left: 3mm; }
+  .t-row > span + span { margin-left: 3mm; }
+
+  .t-items { width: 100%; border-collapse: collapse; font-size: 10pt; }
+  .t-items tr { page-break-inside: avoid; break-inside: avoid; }
+  .t-items td { padding: 1.2mm 0 0; vertical-align: top; }
+  .t-items td.qty { width: 8mm; font-weight: 700; }
+  .t-items td.prod { word-break: break-word; }
+  .t-items td.amt { width: 18mm; white-space: nowrap; text-align: right; padding-left: 2mm; }
+  .t-item-sub { font-size: 8.5pt; }
+
+  .t-total-big {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-weight: 800;
+    font-size: 13pt;
+    letter-spacing: 0.03em;
+    padding: 2mm 0;
+    border-top: 1px solid #000;
+    border-bottom: 1px solid #000;
+    margin: 2mm 0;
+  }
+
+  .t-aviso {
+    border: 1px dashed #000;
+    padding: 1.5mm 2mm;
+    text-align: center;
+    font-size: 9pt;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    margin: 2.5mm 0 0;
+  }
+  .t-nocopy {
+    text-align: center;
+    font-size: 8pt;
+    letter-spacing: 0.08em;
+    margin-top: 2mm;
+  }
+
+  .t-keep { page-break-inside: avoid; break-inside: avoid; }
+
+  @page {
+    size: A4 portrait;
+    margin: 6mm;
+  }
+  @media print {
+    html, body { background: #fff; }
+    .paper-stack { display: block; padding: 0; min-height: 0; }
+    /* Sin "no partir" en el documento entero: una cuenta larga tiene que
+       seguir en la hoja siguiente, no saltar entera y dejar la primera vacía. */
+    .ticket {
+      margin: 0 auto;
+      width: 80mm;
+      box-shadow: none;
+      padding: 3mm 4mm 4mm;
+      zoom: 0.86;
+    }
+    .ticket .t-logo { width: 24mm; margin-bottom: 2mm; }
+  }
+</style>
+</head>
+<body>
+
+<div class="paper-stack">
+  <div class="ticket">
+
+    <img class="t-logo" src="{{logo_src}}" alt="Logo">
+
+    <h1 class="t-name">{{empresa_nombre}}</h1>
+    <p class="t-tag">LIBRERIA · MERCERIA · REGALERIA</p>
+
+    <div class="t-meta">
+      <p>{{empresa_direccion}}</p>
+      <p>Tel: {{empresa_tel}}</p>
+      <p>{{empresa_email}}</p>
+    </div>
+
+    <hr class="t-rule-solid">
+
+    <p class="t-title">Resumen de cuenta</p>
+
+    <div class="t-row"><span class="lbl">Cliente</span><span class="val">{{cliente}}</span></div>
+    {{#cliente_datos}}
+    <div class="t-row"><span class="lbl">Datos</span><span class="val">{{cliente_datos}}</span></div>
+    {{/cliente_datos}}
+    <div class="t-row"><span class="lbl">Fecha</span><span class="val">{{fecha}} · {{hora}}</span></div>
+    <div class="t-row"><span class="lbl">Atendió</span><span class="val">{{cajero}}</span></div>
+
+    <hr class="t-rule">
+
+    {{#grupos}}
+    <div class="t-grp">
+      <!-- La fecha va pegada al primer producto: si cae al pie de una hoja,
+           pasan juntos a la siguiente en vez de dejar el título solo. -->
+      <div class="t-keep">
+        <div class="t-grp-head"><span>Se llevó el {{fecha}}</span><span>${{total}}</span></div>
+        <table class="t-items">
+          <tbody>
+            {{#primero}}
+            <tr>
+              <td class="qty">{{cantidad}}</td>
+              <td class="prod">{{producto}}{{#detalle}}<div class="t-item-sub">{{detalle}}</div>{{/detalle}}</td>
+              <td class="amt">${{subtotal}}</td>
+            </tr>
+            {{/primero}}
+          </tbody>
+        </table>
+      </div>
+      <table class="t-items">
+        <tbody>
+          {{#resto}}
+          <tr>
+            <td class="qty">{{cantidad}}</td>
+            <td class="prod">{{producto}}{{#detalle}}<div class="t-item-sub">{{detalle}}</div>{{/detalle}}</td>
+            <td class="amt">${{subtotal}}</td>
+          </tr>
+          {{/resto}}
+        </tbody>
+      </table>
+    </div>
+    {{/grupos}}
+
+    <hr class="t-rule">
+
+    <div class="t-keep">
+      <div class="t-row"><span>Productos ({{cantidad_items}})</span><span>${{total_productos}}</span></div>
+      {{#credito}}
+      <div class="t-row"><span>Entregas a cuenta</span><span>-${{credito}}</span></div>
+      {{/credito}}
+
+      <div class="t-total-big">
+        <span>SALDO</span>
+        <span>${{saldo}}</span>
+      </div>
+
+      <p class="t-aviso">ESTE RESUMEN NO ES UN COMPROBANTE DE PAGO</p>
+      <p class="t-nocopy">— Documento no válido como factura —</p>
+    </div>
+
+  </div>
+</div>
+
+</body>
+</html>

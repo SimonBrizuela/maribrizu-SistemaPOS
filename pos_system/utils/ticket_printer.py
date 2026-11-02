@@ -49,7 +49,7 @@ class TicketPreviewDialog(QDialog):
     """
 
     def __init__(self, html, sale_id='', parent=None, doc_label='Ticket',
-                 pdf_name=None, grayscale=True, margins_mm=6):
+                 pdf_name=None, grayscale=True, margins_mm=6, titulo=None):
         super().__init__(parent)
         from PyQt5.QtWebEngineWidgets import QWebEngineView
 
@@ -57,8 +57,9 @@ class TicketPreviewDialog(QDialog):
         self._pdf_name = pdf_name
         self._grayscale = grayscale
         self._margins_mm = margins_mm
+        self._titulo = titulo or f'{doc_label} — Venta #{sale_id}'
 
-        self.setWindowTitle(f'{doc_label} — Venta #{sale_id}')
+        self.setWindowTitle(self._titulo)
         self.setWindowFlags(self.windowFlags() | Qt.Window)
 
         # Tamaño responsive: 80% del ancho de la pantalla actual hasta máx 900px,
@@ -95,7 +96,7 @@ class TicketPreviewDialog(QDialog):
         toolbar.setContentsMargins(14, 10, 14, 10)
         toolbar.setSpacing(10)
 
-        title = QLabel(f'<b style="font-size:14px">{doc_label} — Venta #{sale_id}</b>')
+        title = QLabel(f'<b style="font-size:14px">{self._titulo}</b>')
         title.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         toolbar.addWidget(title)
 
@@ -185,7 +186,7 @@ class TicketPreviewDialog(QDialog):
                                self._margins_mm, self._margins_mm, QPrinter.Millimeter)
 
         dialog = QPrintDialog(printer, self)
-        dialog.setWindowTitle(f'Imprimir {self._doc_label.lower()} — Venta #{self._sale_id}')
+        dialog.setWindowTitle(f'Imprimir: {self._titulo}')
         logger.info('_imprimir: abriendo QPrintDialog…')
         result = dialog.exec_()
         logger.info(f'_imprimir: QPrintDialog.exec_() = {result} (Accepted={QPrintDialog.Accepted})')
@@ -366,6 +367,50 @@ def imprimir_ticket_no_fiscal(sale, parent=None,
         try:
             QMessageBox.critical(parent, 'Error de impresión',
                                  f'No se pudo abrir el ticket:\n{e}')
+        except Exception:
+            pass
+        return False
+
+
+def imprimir_resumen_fiado(cliente, items, parent=None, cajero_name=''):
+    """
+    Vista previa del resumen de cuenta de un cliente de fiado, con Imprimir y
+    Guardar PDF. Es lo que se le da al cliente para que sepa qué debe antes de
+    pagar: no cobra, no crea venta y no toca la caja.
+
+    Returns:
+        True si se mostró, False si falló.
+    """
+    nombre = str(cliente.get('nombre') or '').strip()
+    logger.info(f'imprimir_resumen_fiado: {nombre} ({len(items or [])} renglones)')
+    try:
+        if not _qweb_available():
+            QMessageBox.warning(parent, 'Falta dependencia',
+                'PyQtWebEngine no está instalado. Para imprimir el resumen correr:\n\n'
+                'pip install PyQtWebEngine')
+            return False
+
+        from pos_system.utils.pdf_generator import PDFGenerator
+        html = PDFGenerator().render_resumen_fiado_html(
+            cliente, items, cajero_name=cajero_name
+        )
+        archivo = ''.join(ch if ch.isalnum() else '_' for ch in nombre).strip('_') or 'cliente'
+        dlg = TicketPreviewDialog(
+            html, parent=parent, doc_label='Resumen de cuenta',
+            pdf_name=f'resumen_{archivo}.pdf',
+            titulo=f'Resumen de cuenta — {nombre}',
+        )
+        dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+        QApplication.processEvents()
+        dlg.exec_()
+        return True
+    except Exception as e:
+        logger.exception('Error imprimiendo resumen de fiado')
+        try:
+            QMessageBox.critical(parent, 'Error de impresión',
+                                 f'No se pudo abrir el resumen:\n{e}')
         except Exception:
             pass
         return False
