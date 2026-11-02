@@ -39,6 +39,33 @@ def venta(**extra):
     return base
 
 
+class TestTicketLargo:
+    """Una venta de 26 renglones (la 394 del 02-11) salía en 3 hojas: la
+    cabecera sola en la primera, la tabla en la segunda y el código de barras
+    partido en la tercera. El ticket entero y la tabla llevaban "no partir", y
+    lo que no entra en una hoja con esa regla se manda completo a la próxima."""
+
+    @pytest.fixture(scope='class')
+    def css_impresion(self):
+        tpl = open(os.path.join(os.path.dirname(__file__), '..', 'assets',
+                                'ticket_nofiscal.html'), encoding='utf-8').read()
+        return tpl.split('@media print')[1].split('</style>')[0]
+
+    def test_el_ticket_entero_puede_seguir_en_la_hoja_siguiente(self, css_impresion):
+        regla = css_impresion.split('.ticket {')[1].split('}')[0]
+        assert 'break-inside' not in regla
+        # Un elemento con transform se partía mal y repetía el código de barras.
+        assert 'transform' not in regla
+
+    def test_la_tabla_de_productos_se_parte_por_renglon(self, css_impresion):
+        assert '.t-items tr' in css_impresion
+        assert '.t-items,' not in css_impresion
+
+    def test_el_pie_no_se_parte(self, css_impresion, html):
+        assert '.t-end' in css_impresion
+        assert 'class="t-end"' in html(venta())
+
+
 @pytest.fixture(scope='module')
 def html():
     def render(v, **kw):

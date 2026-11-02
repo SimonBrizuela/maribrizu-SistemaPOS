@@ -215,7 +215,12 @@
     letter-spacing: 0.28em;
   }
 
-  /* Impresión: una sola hoja A4 */
+  /* Impresión en A4. Un ticket corto entra en una hoja; uno largo sigue en
+     la siguiente. Ni el ticket entero ni la tabla de productos llevan "no
+     partir": con muchos renglones no entran en una hoja y el navegador
+     mandaba la tabla completa a la página 2, dejando la 1 casi vacía. El
+     achique va con zoom y no con transform: un elemento transformado se
+     partía mal entre hojas y repetía el código de barras. */
   @page {
     size: A4 portrait;
     margin: 6mm;
@@ -230,15 +235,12 @@
       width: 80mm;
       box-shadow: none;
       padding: 3mm 4mm 4mm;
-      page-break-inside: avoid;
-      break-inside: avoid;
-      transform: scale(0.86);
-      transform-origin: top center;
+      zoom: 0.86;
     }
     .ticket .t-logo { width: 24mm; margin-bottom: 2mm; }
     .ticket .t-barcode { margin: 2mm auto 1mm; }
 
-    .t-items, .t-total-big, .t-pay, .t-totals {
+    .t-items tr, .t-total-big, .t-pay, .t-totals, .t-end {
       page-break-inside: avoid;
       break-inside: avoid;
     }
@@ -357,11 +359,13 @@
     <hr class="t-rule">
 
     <!-- Barcode + footer -->
-    <div class="t-barcode" aria-hidden="true"></div>
-    <div class="t-barcode-num">{{nro_ticket}}</div>
+    <div class="t-end">
+      <div class="t-barcode" aria-hidden="true"></div>
+      <div class="t-barcode-num">{{nro_ticket}}</div>
 
-    <p class="t-thanks">¡GRACIAS POR SU COMPRA!</p>
-    <p class="t-nocopy">— Documento no válido como factura —</p>
+      <p class="t-thanks">¡GRACIAS POR SU COMPRA!</p>
+      <p class="t-nocopy">— Documento no válido como factura —</p>
+    </div>
   </div>
   <!-- /ticket -->
 
