@@ -5,7 +5,8 @@
  * cosas y el orden importa:
  *
  *   1. se marca la caja original con la separación "en curso" — si el navegador
- *      se cierra a la mitad, al volver se sabe qué quedó colgado y se retoma;
+ *      se cierra a la mitad, al volver se sabe qué quedó colgado y se retoma —
+ *      y se reserva el número de cada caja nueva, así ninguna apertura lo toma;
  *   2. se reparten los renglones de `ventas_por_dia` y las `ventas` según el día
  *      de cada uno (los renglones borrados y los VARIOS 2 se mueven igual: si
  *      quedaran apuntando a la caja vieja, cualquier recálculo posterior los
@@ -17,6 +18,7 @@
  */
 import {
   collection, query, where, getDocs, getDoc, doc, setDoc, updateDoc, writeBatch, deleteField, Timestamp,
+  runTransaction,
 } from 'firebase/firestore';
 import { fechaDMYtoYMD, isItemVarios2 } from './config.js';
 import { repartoDeItem } from './medios_de_pago.js';
@@ -146,6 +148,35 @@ export function documentoDeCaja(caja, { esNuevo }) {
 }
 
 /**
+ * Crea el documento de cada caja nueva, con lo que va a tener al terminar, para
+ * que su número quede tomado. Va en una transacción: si entre el chequeo y la
+ * reserva alguien abrió una caja con ese número, no se pisa nada y se avisa.
+ * En un reintento, las cajas que ya son de esta separación se dejan como están.
+ */
+export async function reservarNumeros(db, plan, { idsPropios = [] } = {}) {
+  const original = plan.cajas[0];
+  const propios = new Set(idsPropios.map(Number));
+  for (const caja of plan.cajas.slice(1)) {
+    const ref = doc(db, 'cierres_caja', String(caja.id));
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(ref);
+      if (snap.exists()) {
+        const actual = snap.data() || {};
+        if (propios.has(caja.id) || Number(actual.reservada_por) === Number(original.id)) return;
+        throw new Error(`el número #${caja.id} lo tomó otra caja recién: volvé a abrir la separación`);
+      }
+      const datos = documentoDeCaja(caja, { esNuevo: true });
+      // Un documento nuevo no tiene diferencia vieja que borrar, y `deleteField`
+      // no se puede usar al crear.
+      delete datos.diferencia;
+      if (!caja.pendiente_conteo) datos.diferencia = num(caja.diferencia);
+      datos.reservada_por = Number(original.id);
+      tx.set(ref, datos);
+    });
+  }
+}
+
+/**
  * Reparte los documentos de una colección entre las cajas del plan.
  * `diaDelDoc` saca el día argentino de cada documento.
  */
@@ -269,6 +300,22 @@ export async function ejecutarSeparacion(db, { plan, onProgreso = () => {}, idsP
   };
   await updateDoc(doc(db, 'cierres_caja', String(original.id)), { separacion: marca });
 
+  // El número de cada caja nueva se reserva ANTES de mover nada. Si no, una
+  // caja que se abre mientras tanto toma el mismo número (el siguiente libre
+  // es el más alto + 1) y se queda con los renglones movidos: pasó con la
+  // #175, el 02/11, cuando la separación se cortó a la mitad.
+  onProgreso('Reservando el número de la caja nueva...');
+  try {
+    await reservarNumeros(db, plan, { idsPropios });
+  } catch (e) {
+    // No se movió nada todavía: se saca la marca para que la caja no quede
+    // ofreciendo retomar algo que nunca empezó.
+    if (!idsPropios.length) {
+      await updateDoc(doc(db, 'cierres_caja', String(original.id)), { separacion: deleteField() });
+    }
+    throw e;
+  }
+
   onProgreso('Repartiendo los renglones de venta por día...');
   const renglones = await repartirColeccion(
     db, 'ventas_por_dia', idsInvolucrados, plan.mapaDias, original.id,
@@ -286,8 +333,10 @@ export async function ejecutarSeparacion(db, { plan, onProgreso = () => {}, idsP
   onProgreso('Escribiendo las cajas...');
   for (const caja of plan.cajas) {
     const esNuevo = caja.id !== original.id;
-    await setDoc(doc(db, 'cierres_caja', String(caja.id)),
-                 documentoDeCaja(caja, { esNuevo }), { merge: true });
+    const datos = documentoDeCaja(caja, { esNuevo });
+    // Terminada la separación, la caja ya es una caja como cualquier otra.
+    if (esNuevo) datos.reservada_por = deleteField();
+    await setDoc(doc(db, 'cierres_caja', String(caja.id)), datos, { merge: true });
   }
 
   onProgreso('Verificando cómo quedó...');

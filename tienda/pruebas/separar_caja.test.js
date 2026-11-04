@@ -64,11 +64,16 @@ vi.mock('firebase/firestore', () => {
     deleteDoc: async (ref) => { delete coleccion(ref._col)[ref.id]; },
     writeBatch: () => {
       const ops = [];
+      const cols = new Set();
       return {
-        set: (ref, datos, opciones = {}) => ops.push(() => aplicar(ref, datos, { merge: opciones.merge === true })),
-        update: (ref, datos) => ops.push(() => aplicar(ref, datos, { merge: true })),
-        delete: (ref) => ops.push(() => { delete coleccion(ref._col)[ref.id]; }),
-        commit: async () => { nube.lotes++; ops.forEach(fn => fn()); },
+        set: (ref, datos, opciones = {}) => { cols.add(ref._col); ops.push(() => aplicar(ref, datos, { merge: opciones.merge === true })); },
+        update: (ref, datos) => { cols.add(ref._col); ops.push(() => aplicar(ref, datos, { merge: true })); },
+        delete: (ref) => { cols.add(ref._col); ops.push(() => { delete coleccion(ref._col)[ref.id]; }); },
+        commit: async () => {
+          // `nube.cortarEn`: la colección en la que "se cierra el navegador".
+          if (nube.cortarEn && cols.has(nube.cortarEn)) throw new Error('se cortó la conexión');
+          nube.lotes++; ops.forEach(fn => fn());
+        },
       };
     },
     deleteField: () => borrar,
@@ -77,7 +82,20 @@ vi.mock('firebase/firestore', () => {
       now: () => ({ toDate: () => new Date() }),
     },
     onSnapshot: () => () => {},
-    runTransaction: async (_db, fn) => fn({ get: async () => ({ exists: () => false }), set: () => {}, update: () => {} }),
+    runTransaction: async (_db, fn) => {
+      // Las escrituras se juntan y se aplican sólo si la función no falla.
+      const ops = [];
+      const r = await fn({
+        get: async (ref) => {
+          const datos = coleccion(ref._col)[ref.id];
+          return { id: ref.id, exists: () => datos !== undefined, data: () => datos };
+        },
+        set: (ref, datos, opciones = {}) => ops.push(() => aplicar(ref, datos, { merge: opciones.merge === true })),
+        update: (ref, datos) => ops.push(() => aplicar(ref, datos, { merge: true })),
+      });
+      ops.forEach(op => op());
+      return r;
+    },
     serverTimestamp: () => 'AHORA',
     getDocFromCache: async () => { throw new Error('sin cache'); },
     addDoc: async () => ({ id: 'nuevo' }),
@@ -622,6 +640,56 @@ describe('separar de verdad', () => {
     await ejecutarSeparacion({}, { plan });
     const despues = await verificarDespuesDeEscribir({}, plan);
     expect(despues.ok).toBe(true);
+  });
+
+  it('el número de la caja nueva queda tomado aunque se corte a la mitad', async () => {
+    // Lo que pasó con la #175 el 02/11: se movieron los renglones, se cortó,
+    // y a la mañana la caja del día se abrió con el número que iba a usar la
+    // separación. Con la reserva, el más alto ya es la caja nueva.
+    nube.cortarEn = 'ventas';
+    try {
+      await expect(ejecutarSeparacion({}, { plan: planDeDosDias() })).rejects.toThrow();
+    } finally {
+      nube.cortarEn = null;
+    }
+    const reservada = filaEn('cierres_caja', '139');
+    expect(reservada, 'la #139 existe desde antes de mover nada').toBeTruthy();
+    expect(reservada.register_id).toBe(139);
+    expect(reservada.reservada_por).toBe(138);
+    expect(reservada.fecha_cierre, 'no parece una caja abierta').toBeTruthy();
+    const usados = numerosOcupados(Object.entries(nube.col.cierres_caja).map(([id, d]) => ({ id, ...d })));
+    expect(Math.max(...usados) + 1, 'la próxima apertura sería la #140').toBe(140);
+    expect(separacionPendiente(filaEn('cierres_caja', '138')).ids_nuevos).toEqual([139]);
+  });
+
+  it('retomar una separación cortada usa la reserva y termina igual', async () => {
+    nube.cortarEn = 'ventas';
+    try { await ejecutarSeparacion({}, { plan: planDeDosDias() }).catch(() => {}); } finally { nube.cortarEn = null; }
+    const r = await ejecutarSeparacion({}, { plan: planDeDosDias(), idsPropios: [139] });
+    expect(r.verificacion.ok).toBe(true);
+    expect(ventasDe(139)).toHaveLength(8);
+    expect('reservada_por' in filaEn('cierres_caja', '139'), 'terminada, ya no es una reserva').toBe(false);
+  });
+
+  it('si otra caja tomó el número recién, no mueve nada y no deja marca', async () => {
+    // La caja se abrió entre que el diálogo chequeó el número y la reserva.
+    const plan = planDeDosDias();
+    expect(nube.col.cierres_caja['139']).toBeUndefined();
+    // Se ocupa justo después del chequeo, cuando la marca ya está escrita.
+    const espiar = new Proxy(nube.col.cierres_caja, {
+      set(t, k, v) {
+        t[k] = v;
+        if (k === '138' && v.separacion?.estado === 'en_curso' && !t['139']) {
+          t['139'] = { register_id: 139, pc_id: 'WEB', fecha_cierre: '', abierto_desde: 'web' };
+        }
+        return true;
+      },
+    });
+    nube.col.cierres_caja = espiar;
+    await expect(ejecutarSeparacion({}, { plan })).rejects.toThrow(/#139/);
+    expect(filaEn('cierres_caja', '139').pc_id, 'la caja que se abrió sigue intacta').toBe('WEB');
+    expect(renglonesDe(139)).toHaveLength(0);
+    expect(filaEn('cierres_caja', '138').separacion, 'sin marca de retomar').toBeUndefined();
   });
 
   it('deja la separación marcada como hecha', async () => {
