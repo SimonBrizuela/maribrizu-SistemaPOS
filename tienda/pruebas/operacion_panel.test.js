@@ -335,6 +335,53 @@ describe('Centro de Compras', () => {
     expect(plano(c)).not.toContain('NaN');
   });
 
+  // Pedido del 03/11/2026: ver el mínimo en la lista para poner la cantidad
+  // sin entrar al producto.
+  const filaDe = (nombre) => [...document.querySelectorAll('#cc-tbody tr[data-idx]')]
+    .find(tr => tr.querySelector('.cc-prod-btn')?.textContent.includes(nombre));
+
+  it('cada fila muestra el mínimo cargado debajo del stock', async () => {
+    datos.porColeccion.catalogo.find(p => p.__id === 'p3').stock_max = 20;
+    await montar('centro_compras', 'renderCentroCompras');
+    const min = filaDe('RESMA PAMPA').querySelector('.cc-stock-min');
+    expect(min.textContent.trim()).toBe('mín 6 u. · máx 20 u.');
+    expect(min.classList.contains('is-raro')).toBe(false);
+  });
+
+  it('el mínimo de una variedad va en la unidad en que se carga, y avisa si parece mal cargado', async () => {
+    // Como la Goma Eva de producción: pack de 10 planchas y "15" de mínimo
+    // sin unidad elegida, que se lee como 15 packs = 150 planchas.
+    datos.porColeccion.catalogo.push({
+      __id: 'g1', doc_id: 'g1', id: 11, nombre: 'GOMA EVA 40X60', rubro: 'LIBRERIA', estado: 'activo',
+      precio_venta: 900, costo: 500, es_conjunto: true, conjunto_tipo: 'pack', conjunto_contenido: 10,
+      conjunto_colores: [
+        { color: 'Plata', unidades: 3, restante: 4, stock_min: 15 },
+        { color: 'Azul', unidades: 0, restante: 2, stock_min: 1 },
+        { color: 'Rojo', unidades: 0, restante: 5, stock_min: 30, stock_min_um: 'unidad' },
+      ],
+    });
+    await montar('centro_compras', 'renderCentroCompras');
+    const filas = [...document.querySelectorAll('#cc-tbody tr[data-idx]')]
+      .filter(tr => tr.querySelector('.cc-prod-btn')?.textContent.includes('GOMA EVA'));
+    const de = (color) => filas.find(tr => tr.querySelector('.cc-chip-varnt')?.textContent.includes(color))
+      .querySelector('.cc-stock-min');
+    expect(de('Plata').textContent).toContain('mín 15 packs');
+    expect(de('Plata').classList.contains('is-raro'), '150 planchas sin ventas: raro').toBe(true);
+    expect(de('Plata').getAttribute('data-tip')).toContain('¿Eran 15 unidades?');
+    expect(de('Azul').textContent).toContain('mín 1 pack');
+    expect(de('Azul').classList.contains('is-raro'), 'un pack de mínimo es razonable').toBe(false);
+    // Con la unidad elegida a mano no se cuestiona nada.
+    expect(de('Rojo').textContent).toContain('mín 30 u.');
+    expect(de('Rojo').classList.contains('is-raro')).toBe(false);
+  });
+
+  it('el stock en negativo se dice: el número no es real', async () => {
+    datos.porColeccion.catalogo.find(p => p.__id === 'p4').stock = -7;
+    await montar('centro_compras', 'renderCentroCompras');
+    expect(filaDe('TIJERA ESCOLAR').querySelector('.cc-cob').textContent)
+      .toContain('el stock figura en -7: se vendió más de lo cargado, conviene contarlo');
+  });
+
   it('un servicio nunca entra en la lista de compra', async () => {
     datos.porColeccion.catalogo.push({
       __id: 'p9', doc_id: 'p9', id: 9, nombre: 'FOTOCOPIA SIMPLE', rubro: 'SERVICIOS',

@@ -4810,7 +4810,16 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
   color: var(--text-muted);
 }
 .cc-tip-ancla { cursor: help; }
-.cc-table .cc-stock[data-tip] { cursor: help; }
+.cc-table .cc-stock [data-tip] { cursor: help; }
+/* El mínimo cargado, debajo del stock: dato de consulta, apagado. Si parece
+   cargado en la unidad equivocada, en ámbar con un signo de pregunta. */
+.cc-stock-min {
+  margin-top: 3px; font-size: 11px; font-weight: 500; color: var(--text-muted);
+  display: flex; align-items: center; justify-content: flex-end; gap: 3px;
+}
+.cc-stock-min.is-vacio { opacity: .7; }
+.cc-stock-min.is-raro { color: var(--tint-yellow-fg); font-weight: 600; }
+.cc-stock-min .material-icons { font-size: 13px !important; }
 
 /* "Ya lo anoté en el cuaderno": la fila queda verde con el contorno marcado y
    un chip que dice desde cuándo; la lapicera de la fila prende o saca la marca.

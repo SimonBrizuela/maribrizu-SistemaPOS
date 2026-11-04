@@ -338,6 +338,63 @@ function stockRealDe(r) {
   return { texto: `${fmt(st, 0)} u.`, title: '', total: st };
 }
 
+// ── El mínimo cargado, a la vista ─────────────────────────────────────────────
+// Pedido del 03/11/2026: "que en la lista aparezca el stock mínimo, así pongo
+// directamente cuánto quiero comprar sin entrar al producto". Se lee del
+// catálogo, en la misma unidad en la que se carga (packs o unidades, como lo
+// decide notifications.js), y con el máximo al lado si hay uno.
+//
+// `sospechoso`: el mínimo de una variedad sin unidad elegida se lee en packs.
+// Las Goma Eva tienen "15" (150 planchas) para colores que venden 9 en doce
+// semanas: lo cargaron pensando en planchas. Se avisa, no se corrige solo: el
+// dato es del dueño.
+export const MIN_SOSPECHOSO_PACKS = 3;
+export const MIN_SOSPECHOSO_VECES = 2;
+export function minimoDeFila(r) {
+  const p = r?.producto;
+  if (!p) return null;
+  if (r.esVariedad) {
+    const c = (Array.isArray(p.conjunto_colores) ? p.conjunto_colores : [])
+      .find(x => (x.color || '') === r.variedad);
+    const min = Number(c?.stock_min) || 0;
+    const max = Number(c?.stock_max) || 0;
+    if (!(min > 0)) return { min: 0, texto: 'sin mínimo', title: 'Esta variedad no tiene mínimo cargado.', sospechoso: false };
+    const cont = Number(r.packSize) || 0;
+    const elegida = c.stock_min_um === 'pack' || c.stock_min_um === 'unidad' ? c.stock_min_um : '';
+    const enPacks = (elegida || (cont > 1 ? 'pack' : 'unidad')) === 'pack' && cont > 1;
+    const enUnidad = (n) => enPacks ? `${fmt(n, 0)} ${unidadConjunto(p, n)}` : `${fmt(n, 0)} u.`;
+    const texto = `mín ${enUnidad(min)}${max > min ? ` · máx ${enUnidad(max)}` : ''}`;
+    const vendido = Math.max(0, Number(r.unidades_historia) || 0);
+    const sospechoso = enPacks && !elegida && min >= MIN_SOSPECHOSO_PACKS
+      && min * cont > MIN_SOSPECHOSO_VECES * Math.max(vendido, 1);
+    const lineas = [
+      `Mínimo cargado: ${enUnidad(min)}${enPacks ? ` (${fmt(min * cont, 0)} u.)` : ''}`,
+      max > min ? `Máximo cargado: ${enUnidad(max)}` : '',
+    ];
+    if (sospechoso) {
+      lineas.push(
+        `En las últimas doce semanas se vendieron ${fmt(vendido, 0)} u.: el mínimo pide ${fmt(min * cont, 0)}.`,
+        `¿Eran ${fmt(min, 0)} unidades? En el Catálogo, en esta variedad, cambiá la unidad del mínimo a unidades.`,
+      );
+    }
+    return { min, texto, title: lineas.filter(Boolean).join('\n'), sospechoso };
+  }
+  const min = Number(p.stock_min) || 0;
+  const max = Number(p.stock_max) || 0;
+  if (!(min > 0)) return { min: 0, texto: 'sin mínimo', title: 'Este producto no tiene mínimo cargado.', sospechoso: false };
+  // En cajas o packs (el aviso del producto se configuró así), con las unidades
+  // al lado: el stock de la fila va en unidades y "5 u." contra "mín 5 cajas"
+  // parecía que sobraba.
+  const minTxt = r.min_texto ? `${r.min_texto} (${fmt(min, 0)} u.)` : `${fmt(min, 0)} u.`;
+  const maxTxt = max > min ? (r.max_texto || `${fmt(max, 0)} u.`) : '';
+  return {
+    min,
+    texto: `mín ${minTxt}${maxTxt ? ` · máx ${maxTxt}` : ''}`,
+    title: [`Mínimo cargado: ${minTxt}`, maxTxt ? `Máximo cargado: ${maxTxt}` : ''].filter(Boolean).join('\n'),
+    sospechoso: false,
+  };
+}
+
 // Clave de la marca "anotado en el cuaderno": por producto, o por variante si la
 // fila es una variedad (se anotan por separado, cada color se consigue o no).
 function keyAnotado(r) {
@@ -424,6 +481,9 @@ function buildRows(alertas, comprasCfg) {
       cobertura_texto: a.cobertura_texto || '',
       stock: Number(a.stock) || 0,
       stock_min: Number(a.stock_min) || 0,
+      min_texto: a.min_texto || '',
+      max_texto: a.max_texto || '',
+      unidades_historia: Number(a.unidades_historia) || 0,
       esVariedad,
       variedad: esVariedad ? (a.variedad || '') : null,
       packSize,
@@ -1991,6 +2051,14 @@ function rowHtml(r, i, esContinuacion) {
 
   const stk = stockRealDe(r);
   const stockTitle = [stk.title, 'Stock real leído del Catálogo'].filter(Boolean).join('\n');
+  // Stock en negativo: se vendió más de lo que figuraba cargado. No cambia el
+  // orden (para la lista es "no hay"), pero dice que el número no es real.
+  if (!r.registrado && stk.total < 0) {
+    detalles.push(`el stock figura en ${fmt(stk.total, 0)}: se vendió más de lo cargado, conviene contarlo`);
+  }
+  const mini = minimoDeFila(r);
+  const minHtml = !mini ? '' : `<div class="cc-stock-min${mini.min > 0 ? '' : ' is-vacio'}${mini.sospechoso ? ' is-raro' : ''}"
+      data-tip="${esc(mini.title)}">${mini.sospechoso ? '<span class="material-icons">help_outline</span>' : ''}${esc(mini.texto)}</div>`;
 
   // Variantes: nombre BASE del producto + chip violeta con la variante, así se
   // ve de qué producto es. Consecutivas del mismo producto van con ↳ enganchado.
@@ -2018,7 +2086,7 @@ function rowHtml(r, i, esContinuacion) {
       <span class="badge badge-gray"${r.marca ? ` title="Marca: ${esc(r.marca)}"` : ''}>${esc(r.rubro || 'Sin rubro')}</span>
       ${(r.sub_rubro || r.proveedor) ? `<div class="cc-rubro-sub">${[r.sub_rubro, r.proveedor].filter(Boolean).map(esc).join(' · ')}</div>` : ''}
     </td>
-    <td class="cc-stock${stk.total <= 0 ? ' is-cero' : ''}" data-tip="${esc(stockTitle)}">${esc(stk.texto)}</td>
+    <td class="cc-stock${stk.total <= 0 ? ' is-cero' : ''}"><span class="cc-stock-val" data-tip="${esc(stockTitle)}">${esc(stk.texto)}</span>${minHtml}</td>
     <td style="text-align:right">${ritmo}</td>
     <td style="text-align:center">
       <input type="text" inputmode="numeric" class="cc-qty" data-idx="${i}" value="${r.qty}" title="${qtyTitle}"${r.registrado ? ' disabled' : ''} />
