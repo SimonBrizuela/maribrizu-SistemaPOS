@@ -44,6 +44,16 @@ vi.mock('firebase/firestore', async () => {
       try { cb?.(snapshot(q?._col || q?.col?._col)); } catch (_) {}
       return () => {};
     },
+    // La transacción lee lo mismo que `getDoc` (el primer documento de la
+    // colección) y anota lo que escribe, como el resto.
+    runTransaction: async (_db, fn) => fn({
+      get: async (ref) => {
+        const lista = datos.porColeccion[ref?._col] || [];
+        return { exists: () => lista.length > 0, data: () => lista[0], id: ref?.id || 'x' };
+      },
+      set: (ref, d, opciones) => datos.escrituras.push({ tipo: 'tx-set', ref, datos: d, opciones }),
+      update: (ref, d) => datos.escrituras.push({ tipo: 'tx-update', ref, datos: d }),
+    }),
   };
 });
 vi.mock('../../webapp/src/firebase.js', () => ({ db: {}, app: {}, storage: {} }));
@@ -764,6 +774,110 @@ describe('Centro de Compras: lo anotado en el cuaderno se va al fondo', () => {
     expect(numerosDe('AAA PRIMERO')).toEqual(antes);
     // Lo único que cambia es la marca.
     expect(fila('AAA PRIMERO').classList.contains('cc-row-anotado')).toBe(true);
+  });
+});
+
+describe('Centro de Compras: el cuaderno se refresca una vez por semana', () => {
+  // Pedido del 03/11/2026: lo anotado que no se consiguió quedaba al fondo y no
+  // se volvía a pedir. El día elegido (lunes) vuelve solo a su lugar.
+  const hoyYmd = () => new Date().toLocaleDateString('en-CA', { timeZone: 'America/Argentina/Buenos_Aires' });
+  const menos = (ymd, n) => new Date(Date.UTC(+ymd.slice(0, 4), +ymd.slice(5, 7) - 1, +ymd.slice(8, 10) - n))
+    .toISOString().slice(0, 10);
+  let lunes;
+  const prod = (id, nombre, extra) => ({
+    __id: id, doc_id: id, id, nombre, codigo: id.toUpperCase(), rubro: 'LIBRERIA',
+    precio_venta: 1000, costo: 500, stock: 0, stock_min: 5, estado: 'activo', ...extra,
+  });
+
+  beforeEach(async () => {
+    const { ultimoDiaDeRefresco } = await import('../../webapp/src/cuaderno_refresco.js');
+    lunes = ultimoDiaDeRefresco(hoyYmd(), 1);
+    datos.porColeccion.catalogo = [
+      prod('a', 'AAA VIEJO', { stock_min: 50 }),
+      prod('b', 'BBB DE ESTA SEMANA', { stock_min: 40 }),
+      prod('c', 'CCC SIN MARCA', { stock_min: 30 }),
+    ];
+    datos.porColeccion.ventas_por_dia = [];
+    datos.porColeccion.control_config = [{
+      __id: 'compras',
+      anotados: { a: menos(lunes, 5), b: lunes },
+    }];
+  });
+
+  const marcadas = () => [...document.querySelectorAll('#cc-tbody tr.cc-row-anotado .cc-prod-btn')]
+    .map(b => (b.firstChild?.textContent || '').trim());
+  const escrituraRefresco = () => datos.escrituras.find(e => e.tipo === 'tx-set' && e.datos?.cuaderno_refrescado);
+  const listo = async () => { for (let i = 0; i < 20; i++) await esperar(); };
+
+  it('lo anotado antes del lunes que sigue faltando vuelve a la lista; lo de esta semana queda', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    await listo();
+    expect(marcadas()).toEqual(['BBB DE ESTA SEMANA']);
+    const w = escrituraRefresco();
+    expect(w.datos.cuaderno_refrescado).toBe(lunes);
+    expect(w.datos.anotados.a?._borrar, 'se borra la marca vieja').toBe(true);
+    expect('b' in w.datos.anotados, 'la de esta semana no se toca').toBe(false);
+    expect(w.datos.cuaderno_desmarcados.claves).toEqual({ a: menos(lunes, 5) });
+    expect(w.opciones?.merge).toBe(true);
+    const aviso = document.querySelector('.cc-warn-cuaderno');
+    expect(aviso.textContent.replace(/\s+/g, ' ')).toContain('volvieron a la lista 1 producto que estaba anotado');
+  });
+
+  it('una vez hecho esta semana no se repite', async () => {
+    datos.porColeccion.control_config[0].cuaderno_refrescado = lunes;
+    await montar('centro_compras', 'renderCentroCompras');
+    await listo();
+    expect(escrituraRefresco()).toBeUndefined();
+    expect(marcadas().sort()).toEqual(['AAA VIEJO', 'BBB DE ESTA SEMANA']);
+    expect(document.querySelector('.cc-warn-cuaderno')).toBeNull();
+  });
+
+  it('"Volver a marcarlos" deja todo como estaba', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    await listo();
+    datos.escrituras.length = 0;
+    document.querySelector('[data-action="cuaderno-deshacer"]').click();
+    await listo();
+    expect(marcadas().sort()).toEqual(['AAA VIEJO', 'BBB DE ESTA SEMANA']);
+    const w = datos.escrituras.find(e => e.datos?.anotados);
+    expect(w.datos.anotados).toEqual({ a: menos(lunes, 5) });
+    expect(w.datos.cuaderno_desmarcados.visto).toBe(true);
+    expect(document.querySelector('.cc-warn-cuaderno')).toBeNull();
+  });
+
+  it('"Entendido" cierra el aviso sin tocar las marcas', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    await listo();
+    document.querySelector('[data-action="cuaderno-visto"]').click();
+    await listo();
+    expect(document.querySelector('.cc-warn-cuaderno')).toBeNull();
+    expect(marcadas()).toEqual(['BBB DE ESTA SEMANA']);
+  });
+
+  it('con "Nunca" en Ajustes no desmarca nada', async () => {
+    datos.porColeccion.control_config[0].cuaderno_refresco_dia = -1;
+    await montar('centro_compras', 'renderCentroCompras');
+    await listo();
+    expect(escrituraRefresco()).toBeUndefined();
+    expect(marcadas().sort()).toEqual(['AAA VIEJO', 'BBB DE ESTA SEMANA']);
+  });
+
+  it('cambiar el día en Ajustes arranca la semana que viene', async () => {
+    datos.porColeccion.control_config[0].cuaderno_refrescado = lunes;
+    await montar('centro_compras', 'renderCentroCompras');
+    await listo();
+    document.querySelector('[data-action="ajustes"]').click();
+    await listo();
+    const sel = document.getElementById('cc-aj-cuaderno');
+    expect(sel, 'el ajuste está a la vista').toBeTruthy();
+    expect(sel.value).toBe('1');
+    sel.value = '3';
+    document.querySelector('[data-action="ajustes-save"]').click();
+    await listo();
+    const w = datos.escrituras.find(e => e.datos?.cuaderno_refresco_dia === 3);
+    expect(w, 'guardó el miércoles').toBeTruthy();
+    const { ultimoDiaDeRefresco } = await import('../../webapp/src/cuaderno_refresco.js');
+    expect(w.datos.cuaderno_refrescado).toBe(ultimoDiaDeRefresco(hoyYmd(), 3));
   });
 });
 

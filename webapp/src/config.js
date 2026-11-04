@@ -194,6 +194,9 @@ export async function saveComprasConfig(db, partial) {
   invalidateCache(COMPRAS_KEY);
 }
 
+/** Para quien escribe la config de compras por otro camino (una transacción). */
+export function invalidateComprasConfig() { invalidateCache(COMPRAS_KEY); }
+
 // ── Temporadas de venta (config/temporadas_aprendidas) ────────────────────────
 // Lo que el sistema aprendió de las ventas viejas sobre cada fecha del año: qué
 // productos y qué colores se despegan de su ritmo normal para el Día de la

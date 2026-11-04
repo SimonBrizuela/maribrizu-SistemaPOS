@@ -30,8 +30,13 @@
 // libro diario del Balance, así el semáforo baja y el gasto queda contabilizado
 // en un solo lugar.
 
-import { doc, updateDoc, serverTimestamp, deleteField } from 'firebase/firestore';
-import { loadBalanceConfig, loadDiasMes, saveDiasMes, loadComprasConfig, saveComprasConfig } from '../config.js';
+import { doc, updateDoc, serverTimestamp, deleteField, runTransaction } from 'firebase/firestore';
+import {
+  loadBalanceConfig, loadDiasMes, saveDiasMes, loadComprasConfig, saveComprasConfig, invalidateComprasConfig,
+} from '../config.js';
+import {
+  diaDeRefresco, planRefrescoCuaderno, ultimoDiaDeRefresco, textoCorte, DIAS_SEMANA, SIN_REFRESCO,
+} from '../cuaderno_refresco.js';
 import { refrescarAlertas, obtenerCandidatosCompra, obtenerVentanasVenta, ritmoConHistoria } from '../notifications.js';
 import { peekCacheValue, isHydrated } from '../cache.js';
 import { onStoreChange } from '../store.js';
@@ -836,6 +841,8 @@ export async function renderCentroCompras(container, db) {
   bindEvents(root);
   recalc(true);
   limpiarAnotadosViejos();
+  paintAvisoCuaderno();
+  refrescarCuadernoSemanal();
   if (!ritmoConHistoria()) rehacerCuandoLlegueElHistorial();
 
   // Se llegó acá desde el aviso "se viene tal fecha": abrir esa fecha con todo
@@ -1126,6 +1133,139 @@ function limpiarAnotadosViejos() {
     .catch(e => console.warn('[centro_compras] limpiar anotados viejos:', e));
 }
 
+// ── Refresco semanal del cuaderno ─────────────────────────────────────────────
+// Lo anotado antes del día de refresco que sigue faltando se desmarca y vuelve a
+// su lugar en la lista (ver `cuaderno_refresco.js`). Se hace en una transacción
+// contra el documento recién leído: con varias PCs abiertas el lunes, la
+// primera lo hace y las demás ven que ya está, y una marca puesta hoy en otra
+// pestaña no se pierde por una copia vieja de la config.
+async function refrescarCuadernoSemanal() {
+  const s = _state;
+  const hoy = hoyAR();
+  const enLista = new Set(s.rows.filter(r => !r.registrado).map(keyAnotado));
+  const local = planRefrescoCuaderno({
+    anotados: s.comprasCfg.anotados, enLista, hoyYmd: hoy,
+    dia: diaDeRefresco(s.comprasCfg), refrescadoHasta: s.comprasCfg.cuaderno_refrescado,
+  });
+  if (!local.corte) return;
+  const ref = doc(_db, 'control_config', 'compras');
+  let cfg;
+  try {
+    cfg = await runTransaction(_db, async (tx) => {
+      const snap = await tx.get(ref);
+      const actual = snap.exists() ? (snap.data() || {}) : {};
+      const plan = planRefrescoCuaderno({
+        anotados: actual.anotados, enLista, hoyYmd: hoy,
+        dia: diaDeRefresco(actual), refrescadoHasta: actual.cuaderno_refrescado,
+      });
+      if (!plan.corte) return actual;   // otra PC ya lo hizo esta semana
+      const borrar = {};
+      for (const k of Object.keys(plan.desmarcar)) borrar[k] = deleteField();
+      const registro = { corte: plan.corte, cuando: new Date().toISOString(), claves: plan.desmarcar, visto: false };
+      tx.set(ref, {
+        anotados: borrar, cuaderno_refrescado: plan.corte, cuaderno_desmarcados: registro,
+        updatedAt: serverTimestamp(),
+      }, { merge: true });
+      const anotados = { ...(actual.anotados || {}) };
+      for (const k of Object.keys(plan.desmarcar)) delete anotados[k];
+      return { ...actual, anotados, cuaderno_refrescado: plan.corte, cuaderno_desmarcados: registro };
+    });
+  } catch (e) {
+    console.warn('[centro_compras] refrescar el cuaderno:', e);
+    return;
+  }
+  invalidateComprasConfig();
+  if (_state !== s) return;   // se fue de la página mientras tanto
+  aplicarMarcasDelCuaderno(cfg);
+}
+
+// Deja en la pantalla las marcas que dice la config (después del refresco o de
+// deshacerlo).
+function aplicarMarcasDelCuaderno(cfg) {
+  const s = _state;
+  s.comprasCfg = {
+    ...s.comprasCfg,
+    anotados: cfg.anotados || {},
+    cuaderno_refrescado: cfg.cuaderno_refrescado,
+    cuaderno_desmarcados: cfg.cuaderno_desmarcados,
+  };
+  for (const r of s.rows) r.anotado = (s.comprasCfg.anotados || {})[keyAnotado(r)] || null;
+  paintTable();
+  paintResumen();
+  paintAvisoCuaderno();
+}
+
+// El aviso de lo que se desmarcó, hasta que alguien lo da por visto. Con un
+// botón para volver a marcar todo, por si el viaje de esta semana todavía no se
+// hizo o el refresco cayó en un mal día.
+function registroRefrescoVigente() {
+  const s = _state;
+  const reg = s.comprasCfg.cuaderno_desmarcados;
+  if (!reg || reg.visto || !reg.claves) return null;
+  const n = Object.keys(reg.claves).length;
+  if (!n) return null;
+  const dia = diaDeRefresco(s.comprasCfg);
+  if (dia === SIN_REFRESCO || reg.corte !== ultimoDiaDeRefresco(hoyAR(), dia)) return null;
+  return { ...reg, n };
+}
+
+function paintAvisoCuaderno() {
+  const el = document.getElementById('cc-cuaderno-aviso');
+  if (!el) return;
+  const reg = registroRefrescoVigente();
+  if (!reg) { el.innerHTML = ''; return; }
+  const cuando = reg.corte === hoyAR() ? 'Hoy' : textoCorte(reg.corte).replace(/^el /, 'El ');
+  el.innerHTML = `<div class="cc-warn cc-warn-cuaderno" role="status">
+    <span class="material-icons">autorenew</span>
+    <div class="cc-warn-txt">${esc(cuando)} volvieron a la lista <b>${fmt(reg.n, 0)}</b>
+      ${reg.n === 1 ? 'producto que estaba anotado en el cuaderno y sigue' : 'productos que estaban anotados en el cuaderno y siguen'}
+      faltando. Están otra vez en su lugar según la urgencia.</div>
+    <div class="cc-warn-acc">
+      <button type="button" class="cc-btn-ghost" data-action="cuaderno-deshacer"
+        title="Volver a marcar como anotado todo lo que se desmarcó">Volver a marcarlos</button>
+      <button type="button" class="cc-btn-ghost" data-action="cuaderno-visto">Entendido</button>
+    </div>
+  </div>`;
+}
+
+async function deshacerRefrescoCuaderno() {
+  const s = _state;
+  const reg = registroRefrescoVigente();
+  if (!reg) return;
+  // Lo que alguien volvió a anotar después del refresco queda con su fecha nueva.
+  const actuales = s.comprasCfg.anotados || {};
+  const vuelta = {};
+  for (const [k, f] of Object.entries(reg.claves)) if (!actuales[k]) vuelta[k] = f;
+  const anotados = { ...actuales, ...vuelta };
+  const registro = { ...s.comprasCfg.cuaderno_desmarcados, visto: true, deshecho: true };
+  try {
+    await saveComprasConfig(_db, { anotados: vuelta, cuaderno_desmarcados: { visto: true, deshecho: true } });
+  } catch (e) {
+    console.warn('[centro_compras] deshacer el refresco del cuaderno:', e);
+    await alertDialog({ title: 'No se pudo', message: 'Revisá la conexión e intentá de nuevo.', type: 'error' });
+    return;
+  }
+  aplicarMarcasDelCuaderno({ ...s.comprasCfg, anotados, cuaderno_desmarcados: registro });
+}
+
+async function cerrarAvisoCuaderno() {
+  const s = _state;
+  if (!s.comprasCfg.cuaderno_desmarcados) return;
+  s.comprasCfg = { ...s.comprasCfg, cuaderno_desmarcados: { ...s.comprasCfg.cuaderno_desmarcados, visto: true } };
+  paintAvisoCuaderno();
+  try {
+    await saveComprasConfig(_db, { cuaderno_desmarcados: { visto: true } });
+  } catch (e) {
+    console.warn('[centro_compras] cerrar el aviso del cuaderno:', e);
+  }
+}
+
+// "los lunes" para los textos de ayuda.
+function cuandoSeRefresca() {
+  const dia = diaDeRefresco(_state?.comprasCfg);
+  return dia === SIN_REFRESCO ? '' : `los ${DIAS_SEMANA[dia]}${dia === 0 || dia === 6 ? 's' : ''}`;
+}
+
 function fuenteValida(f) { return MEDIOS.some(m => m.k === f) ? f : 'efectivo'; }
 
 // ── Presupuesto activo según período / tope ───────────────────────────────────
@@ -1201,7 +1341,7 @@ function pageHtml() {
       <button class="cc-icon-btn" data-action="actualizar" title="Actualizar stock y ritmo">
         <span class="material-icons">refresh</span>
       </button>
-      <button class="cc-icon-btn" data-action="ajustes" title="Ajustes de rentabilidad">
+      <button class="cc-icon-btn" data-action="ajustes" title="Ajustes: rentabilidad, cobertura y cuaderno">
         <span class="material-icons">tune</span>
       </button>
     </div>
@@ -1209,6 +1349,7 @@ function pageHtml() {
     <div id="cc-fechas" class="cc-fechas" style="display:none"></div>
     <div id="cc-epocas" class="cc-epocas"></div>
     <div id="cc-warn"></div>
+    <div id="cc-cuaderno-aviso"></div>
     <div id="cc-tiers" class="cc-tiers"></div>
 
     <div class="cc-registrar">
@@ -1976,7 +2117,8 @@ function rowHtml(r, i, esContinuacion) {
   // o sacar la marca. No toca la selección ni el presupuesto: es solo para no
   // volver a anotar lo mismo cada vez que se repasa la lista.
   const fAnot = anotado ? `${r.anotado.slice(8, 10)}/${r.anotado.slice(5, 7)}` : '';
-  if (anotado) chip += `<span class="cc-chip cc-chip-anotado" title="Lo anotaste en el cuaderno el ${fAnot}. Sigue en la lista hasta que lo compres o le saques la marca.">en el cuaderno ${fAnot}</span>`;
+  const refresca = cuandoSeRefresca();
+  if (anotado) chip += `<span class="cc-chip cc-chip-anotado" title="Lo anotaste en el cuaderno el ${fAnot}. Queda marcado hasta que lo compres o le saques la marca${refresca ? `; si sigue faltando, ${refresca} vuelve a su lugar en la lista` : ''}.">en el cuaderno ${fAnot}</span>`;
   const btnAnotar = r.registrado ? '' :
     `<button type="button" class="cc-anotar${anotado ? ' is-on' : ''}" data-action="anotar" data-idx="${i}"
        title="${anotado ? 'Sacar la marca del cuaderno' : 'Marcar que ya lo anotaste en el cuaderno'}">
@@ -2134,6 +2276,13 @@ function paintAjustes() {
         <label>Cobertura objetivo (días)</label>
         <input id="cc-aj-cob" type="text" inputmode="numeric" value="${c.cobertura_dias_objetivo != null ? c.cobertura_dias_objetivo : COBERTURA_DEFAULT}" placeholder="${COBERTURA_DEFAULT}" />
       </div>
+      <div class="cc-reg-field">
+        <label for="cc-aj-cuaderno">El cuaderno se refresca</label>
+        <select id="cc-aj-cuaderno">
+          ${[1, 2, 3, 4, 5, 6, 0].map(d => `<option value="${d}"${diaDeRefresco(c) === d ? ' selected' : ''}>${d === 0 || d === 6 ? `Los ${DIAS_SEMANA[d]}s` : `Los ${DIAS_SEMANA[d]}`}</option>`).join('')}
+          <option value="${SIN_REFRESCO}"${diaDeRefresco(c) === SIN_REFRESCO ? ' selected' : ''}>Nunca</option>
+        </select>
+      </div>
     </div>
     <div class="cc-ajustes-actions">
       <button class="cc-btn-ghost" data-action="ajustes-cancel">Cancelar</button>
@@ -2142,6 +2291,7 @@ function paintAjustes() {
       </button>
     </div>
     <div class="cc-ajustes-hint">La rentabilidad efectiva es la mayor entre el monto fijo y el piso % de los ingresos del mes.</div>
+    <div class="cc-ajustes-hint">El día que se refresca el cuaderno, lo anotado antes de ese día que sigue faltando se desmarca solo y vuelve a su lugar en la lista. Lo que anotes ese mismo día o después queda marcado para el viaje que viene.</div>
     <div class="cc-ajustes-hint">La cobertura objetivo es hasta dónde mirás para adelante: con ${COBERTURA_DEFAULT} días, lo que tenga stock para más que eso no urge todavía. Subila para comprar con más anticipación (lo que más se vende sube en la lista y las cantidades sugeridas crecen); bajala para viajes más chicos y más seguidos.</div>`;
 }
 
@@ -2955,6 +3105,12 @@ function onClick(e) {
       paintTable();
       paintResumen();
       break;
+    case 'cuaderno-deshacer':
+      deshacerRefrescoCuaderno();
+      break;
+    case 'cuaderno-visto':
+      cerrarAvisoCuaderno();
+      break;
     case 'filtro-epoca': {
       const id = btn.dataset.id || '';
       s.temporadaFiltro = s.temporadaFiltro === id ? '' : id;
@@ -3163,6 +3319,17 @@ async function guardarAjustes() {
     rentabilidad_piso_pct: piso,
     cobertura_dias_objetivo: cob,
   };
+  const selCuaderno = document.getElementById('cc-aj-cuaderno');
+  if (selCuaderno) {
+    const dia = diaDeRefresco({ cuaderno_refresco_dia: selCuaderno.value });
+    if (dia !== diaDeRefresco(s.comprasCfg)) {
+      partial.cuaderno_refresco_dia = dia;
+      // El día nuevo arranca la semana que viene. Si no, pasar del lunes al
+      // miércoles un jueves desmarcaría lo anotado el lunes para el viaje de hoy.
+      const corte = ultimoDiaDeRefresco(hoyAR(), dia);
+      if (corte) partial.cuaderno_refrescado = corte;
+    }
+  }
   s.comprasCfg = { ...s.comprasCfg, ...partial };
   try {
     await saveComprasConfig(_db, partial);

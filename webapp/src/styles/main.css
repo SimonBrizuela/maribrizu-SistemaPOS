@@ -4515,6 +4515,14 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
 .cc-warn:empty { display: none; }
 .cc-warn .material-icons { font-size: 18px !important; }
 .cc-warn-danger { background: var(--tint-red-bg); color: var(--tint-red-fg); }
+/* Lo que el refresco semanal sacó del cuaderno: verde como la marca del
+   cuaderno, con el texto y los dos botones que se acomodan en el celular. */
+.cc-warn-cuaderno {
+  background: var(--tint-green-bg); color: var(--tint-green-fg); font-weight: 500; flex-wrap: wrap;
+}
+.cc-warn-cuaderno .cc-warn-txt { flex: 1 1 260px; line-height: 1.4; }
+.cc-warn-cuaderno .cc-warn-acc { display: flex; gap: 6px; flex-wrap: wrap; }
+.cc-warn-cuaderno .cc-btn-ghost { padding: 5px 10px; font-size: 12px; }
 
 /* Resumen por nivel de prioridad. Píldoras neutras con un punto de color: el
    nivel se identifica igual y la cabecera deja de competir con la tabla (tres
