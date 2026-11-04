@@ -1139,8 +1139,14 @@ function limpiarAnotadosViejos() {
 // contra el documento recién leído: con varias PCs abiertas el lunes, la
 // primera lo hace y las demás ven que ya está, y una marca puesta hoy en otra
 // pestaña no se pierde por una copia vieja de la config.
-async function refrescarCuadernoSemanal() {
+// Si el panel arrancó sin conexión (pasa: "Could not reach Cloud Firestore
+// backend"), la transacción falla y la pantalla queda con la copia vieja del
+// cuaderno. Se reintenta solo, cada vez más espaciado, mientras siga abierta.
+const REINTENTOS_CUADERNO_MS = [15000, 30000, 60000, 120000];
+
+async function refrescarCuadernoSemanal(intento = 0) {
   const s = _state;
+  if (!s) return;
   const hoy = hoyAR();
   const enLista = new Set(s.rows.filter(r => !r.registrado).map(keyAnotado));
   const local = planRefrescoCuaderno({
@@ -1172,6 +1178,8 @@ async function refrescarCuadernoSemanal() {
     });
   } catch (e) {
     console.warn('[centro_compras] refrescar el cuaderno:', e);
+    const espera = REINTENTOS_CUADERNO_MS[intento];
+    if (espera) setTimeout(() => { if (_state === s) refrescarCuadernoSemanal(intento + 1); }, espera);
     return;
   }
   invalidateComprasConfig();

@@ -46,14 +46,17 @@ vi.mock('firebase/firestore', async () => {
     },
     // La transacción lee lo mismo que `getDoc` (el primer documento de la
     // colección) y anota lo que escribe, como el resto.
-    runTransaction: async (_db, fn) => fn({
+    runTransaction: async (_db, fn) => {
+      if (datos.txFallan > 0) { datos.txFallan--; throw new Error('Failed to get document because the client is offline.'); }
+      return fn({
       get: async (ref) => {
         const lista = datos.porColeccion[ref?._col] || [];
         return { exists: () => lista.length > 0, data: () => lista[0], id: ref?.id || 'x' };
       },
       set: (ref, d, opciones) => datos.escrituras.push({ tipo: 'tx-set', ref, datos: d, opciones }),
       update: (ref, d) => datos.escrituras.push({ tipo: 'tx-update', ref, datos: d }),
-    }),
+      });
+    },
   };
 });
 vi.mock('../../webapp/src/firebase.js', () => ({ db: {}, app: {}, storage: {} }));
@@ -821,6 +824,25 @@ describe('Centro de Compras: el cuaderno se refresca una vez por semana', () => 
     expect(w.opciones?.merge).toBe(true);
     const aviso = document.querySelector('.cc-warn-cuaderno');
     expect(aviso.textContent.replace(/\s+/g, ' ')).toContain('volvieron a la lista 1 producto que estaba anotado');
+  });
+
+  it('si arranca sin conexión, reintenta solo y corrige la pantalla', async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    datos.txFallan = 1;
+    try {
+      await montar('centro_compras', 'renderCentroCompras');
+      await listo();
+      expect(escrituraRefresco(), 'sin conexión no escribió nada').toBeUndefined();
+      expect(marcadas().sort()).toEqual(['AAA VIEJO', 'BBB DE ESTA SEMANA']);
+      await vi.advanceTimersByTimeAsync(16000);
+      await listo();
+      expect(escrituraRefresco()?.datos.cuaderno_refrescado).toBe(lunes);
+      expect(marcadas()).toEqual(['BBB DE ESTA SEMANA']);
+      expect(document.querySelector('.cc-warn-cuaderno')).toBeTruthy();
+    } finally {
+      datos.txFallan = 0;
+      vi.useRealTimers();
+    }
   });
 
   it('una vez hecho esta semana no se repite', async () => {
