@@ -412,6 +412,7 @@ function buildRows(alertas, comprasCfg) {
       // lo explica salen de acá.
       urgencia: urg.score,
       riesgo: urg.riesgo,
+      peso_minimo: urg.peso_minimo,
       importancia: urg.importancia,
       rank_mes: urg.rank_mes,
       rank_reciente: urg.rank_reciente,

@@ -488,6 +488,30 @@ export function riesgoPorMinimo(stock, stockMin) {
   return Math.max(PISO_RIESGO_MINIMO, clamp01((min - st) / min));
 }
 
+// ── Cuánto pesa el mínimo cuando el stock sobra ──────────────────────────────
+// Pedido del 03/11/2026: "que se refleje lo más posible a la realidad". Medido
+// con producción: la Goma Eva Plata, con stock para 208 días al ritmo de doce
+// semanas, salía en el puesto 38 —arriba de cosas que se acaban en cinco días—
+// porque su mínimo cargado era 15 packs (150 planchas para algo que vende 9 en
+// tres meses).
+//
+// El mínimo sigue mandando cuando el ritmo no sirve para decidir (se vendió en
+// menos de MIN_SEMANAS_ROTA semanas) o cuando el stock no llega a la cobertura
+// objetivo. Solo cuando el ritmo es confiable Y el stock cubre más que eso, el
+// mínimo pesa menos: entero hasta la cobertura objetivo, y va bajando hasta
+// PISO_MINIMO_CON_SOBRA cuando el stock alcanza para el triple. El producto no
+// sale de la lista (el mínimo lo sigue poniendo ahí); baja en el orden.
+export const MULTIPLO_SOBRA = 3;
+export const PISO_MINIMO_CON_SOBRA = 0.30;
+export function pesoDelMinimo(diasCobertura, coberturaObjetivo = COBERTURA_DEFAULT_DIAS, semanasConVenta = 0) {
+  const obj = Math.max(1, Number(coberturaObjetivo) || COBERTURA_DEFAULT_DIAS);
+  const d = Number(diasCobertura);
+  if ((Number(semanasConVenta) || 0) < MIN_SEMANAS_ROTA) return 1;
+  if (!Number.isFinite(d) || d <= obj) return 1;
+  const tramo = obj * (MULTIPLO_SOBRA - 1);
+  return Math.max(PISO_MINIMO_CON_SOBRA, 1 - (1 - PISO_MINIMO_CON_SOBRA) * (d - obj) / tramo);
+}
+
 // ── Importancia: cuánto duele que falte ──────────────────────────────────────
 // Sale de tres cosas, en este orden de peso:
 //   · frecuencia  → en cuántas de las doce semanas se vendió (0 a 1). Es lo que
@@ -535,7 +559,9 @@ export function puntajeUrgencia({
   diasConMov7 = 0,
 } = {}) {
   const rCob = riesgoPorCobertura(diasCobertura, coberturaObjetivo);
-  const rMin = riesgoPorMinimo(stock, stockMin);
+  const rMinCargado = riesgoPorMinimo(stock, stockMin);
+  const pesoMin = rMinCargado > 0 ? pesoDelMinimo(diasCobertura, coberturaObjetivo, semanasConVenta) : 1;
+  const rMin = rMinCargado * pesoMin;
   const riesgo = Math.max(rCob, rMin);
   const importancia = importanciaDeVenta({ frecuencia, rankVolumen, rankReciente, diasConMov7 });
   let score = 100 * riesgo * importancia;
@@ -550,6 +576,8 @@ export function puntajeUrgencia({
     riesgo,
     riesgo_cobertura: rCob,
     riesgo_minimo: rMin,
+    // < 1 cuando el stock sobra y el mínimo se tomó con menos peso.
+    peso_minimo: pesoMin,
     importancia,
     frecuencia: clamp01(frecuencia),
     rank_volumen: clamp01(rankVolumen),
@@ -633,6 +661,9 @@ export function explicarUrgencia(r) {
   ];
   if (Number(r.dias_con_mov_7) >= 2) lineas.push(`· En los últimos días, más que el ${pct(r.rank_reciente)}`);
   if (Number(r.stock_min) > 0) lineas.push(`· Mínimo cargado: ${_num(r.stock_min)}`);
+  if (Number(r.peso_minimo) < 1 && Number.isFinite(Number(r.dias_cobertura))) {
+    lineas.push(`· Está debajo del mínimo, pero al ritmo de siempre el stock alcanza para ~${_num(Math.round(r.dias_cobertura))} días: el mínimo pesa menos`);
+  }
   lineas.push('Urgencia = riesgo × peso en las ventas. Pesa más lo que se vende todas las semanas que una venta grande suelta.');
   return lineas.join('\n');
 }

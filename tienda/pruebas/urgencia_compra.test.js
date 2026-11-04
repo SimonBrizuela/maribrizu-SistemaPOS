@@ -19,11 +19,12 @@ import { describe, it, expect } from 'vitest';
 import {
   ritmoPonderado, confianzaRitmoCorto,
   escalaVentas, rankEnEscala, restarDias,
-  riesgoPorCobertura, riesgoPorMinimo, importanciaDeVenta,
+  riesgoPorCobertura, riesgoPorMinimo, importanciaDeVenta, pesoDelMinimo,
   puntajeUrgencia, nivelPorPuntaje, compararUrgencia,
   motivosUrgencia, explicarUrgencia,
   computarVentanas, ritmoDe, estadisticaHistoria,
   UMBRAL_SISI, UMBRAL_IMPORTANTE, MIN_MUESTRA_RANKING, MIN_SEMANAS_ROTA, SEMANAS_HISTORIA,
+  PISO_MINIMO_CON_SOBRA,
 } from '../../webapp/src/urgencia_compra.js';
 
 // Las fechas de `ventas_por_dia` vienen "dd/mm/yyyy" (réplica de fechaDMYtoYMD,
@@ -420,6 +421,60 @@ describe('el puntaje de urgencia', () => {
     const caliente = puntajeUrgencia({ ...base, rankReciente: 0.95, diasConMov7: 3 });
     const dormido = puntajeUrgencia({ ...base, rankReciente: 0, diasConMov7: 0 });
     expect(caliente.score).toBeGreaterThan(dormido.score);
+  });
+});
+
+describe('el mínimo cuando el stock sobra', () => {
+  // La Goma Eva Plata de producción (04/11/2026): 3 packs y 4 planchas, mínimo
+  // cargado 15 packs, se vendió en 6 de 8 semanas, stock para ~208 días.
+  const plata = (extra = {}) => puntajeUrgencia({
+    diasCobertura: 208, coberturaObjetivo: 45, stock: 3.4, stockMin: 15, sinStock: false,
+    frecuencia: 0.75, semanasConVenta: 6, rankVolumen: 0.71, rankReciente: 0, diasConMov7: 1, ...extra,
+  });
+
+  it('con stock para meses y un ritmo confiable, el mínimo ya no lo pone arriba', () => {
+    const p = plata();
+    expect(p.peso_minimo).toBe(PISO_MINIMO_CON_SOBRA);
+    expect(nivelPorPuntaje(p.score)).toBe('opcional');
+  });
+
+  it('sin ritmo confiable el mínimo manda entero, aunque los días digan que sobra', () => {
+    // Se vendió en 2 semanas: los "208 días" salen de casi nada.
+    const p = plata({ semanasConVenta: 2, frecuencia: 2 / 12 });
+    expect(p.peso_minimo).toBe(1);
+  });
+
+  it('hasta la cobertura objetivo el mínimo pesa entero', () => {
+    expect(pesoDelMinimo(45, 45, 12)).toBe(1);
+    expect(pesoDelMinimo(30, 45, 12)).toBe(1);
+    expect(pesoDelMinimo(Infinity, 45, 12)).toBe(1);   // sin ritmo no hay días
+  });
+
+  it('va bajando de a poco entre la cobertura y el triple', () => {
+    const a = pesoDelMinimo(60, 45, 12), b = pesoDelMinimo(90, 45, 12), c = pesoDelMinimo(135, 45, 12);
+    expect(a).toBeLessThan(1);
+    expect(b).toBeLessThan(a);
+    expect(c).toBeCloseTo(PISO_MINIMO_CON_SOBRA, 6);
+    expect(pesoDelMinimo(400, 45, 12)).toBe(PISO_MINIMO_CON_SOBRA);
+  });
+
+  it('no toca a lo que se queda sin nada', () => {
+    const p = puntajeUrgencia({
+      diasCobertura: 0, coberturaObjetivo: 45, stock: 0, stockMin: 15,
+      frecuencia: 1, semanasConVenta: 12, rankVolumen: 0.9,
+    });
+    expect(p.peso_minimo).toBe(1);
+    expect(nivelPorPuntaje(p.score)).toBe('sisi');
+  });
+
+  it('la cuenta lo explica', () => {
+    const p = plata();
+    const t = explicarUrgencia({
+      urgencia: p.score, riesgo: p.riesgo, importancia: p.importancia, peso_minimo: p.peso_minimo,
+      dias_cobertura: 208, stock_min: 15, semanas_con_venta: 6, semanas_observadas: 8,
+    });
+    expect(t).toContain('alcanza para ~208 días');
+    expect(t).toContain('el mínimo pesa menos');
   });
 });
 
