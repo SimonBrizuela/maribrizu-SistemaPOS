@@ -780,6 +780,142 @@ describe('Centro de Compras: lo anotado en el cuaderno se va al fondo', () => {
   });
 });
 
+describe('Centro de Compras: en espera del proveedor', () => {
+  // Pedido del dueño (16/11/2026): productos que el proveedor no consigue o no
+  // tiene. No se pueden borrar porque van a volver a entrar, pero ocupaban los
+  // primeros lugares de la lista y se comían la plata.
+  const prod = (id, nombre, extra) => ({
+    __id: id, doc_id: id, id, nombre, codigo: id.toUpperCase(), rubro: 'LIBRERIA',
+    precio_venta: 1000, costo: 500, stock: 0, stock_min: 5, estado: 'activo', ...extra,
+  });
+
+  beforeEach(() => {
+    datos.porColeccion.catalogo = [
+      prod('a', 'AAA PRIMERO', { stock_min: 50 }),
+      prod('b', 'BBB SEGUNDO', { stock_min: 40 }),
+      prod('c', 'CCC TERCERO', { stock_min: 30 }),
+      prod('d', 'DDD CUARTO', { stock_min: 20 }),
+    ];
+    datos.porColeccion.ventas_por_dia = [];
+    datos.porColeccion.control_config = [];
+  });
+
+  const filas = () => [...document.querySelectorAll('#cc-tbody tr[data-idx]')];
+  const enPantalla = () => filas().map(tr => (tr.querySelector('.cc-prod-btn')?.firstChild?.textContent || '').trim());
+  const fila = (nombre) => filas().find(tr => tr.textContent.includes(nombre));
+  const cortePausa = () => document.querySelector('.cc-cutoff-pausa');
+  const corteDePlata = () => document.querySelector('.cc-cutoff:not(.cc-cutoff-cuaderno):not(.cc-cutoff-pausa)');
+  // Lo que queda arriba del corte de la plata: lo que entra en el presupuesto.
+  const entran = () => {
+    const corte = corteDePlata();
+    return filas().filter(tr => !corte || (tr.compareDocumentPosition(corte) & Node.DOCUMENT_POSITION_FOLLOWING))
+      .filter(tr => !tr.classList.contains('cc-row-pausa') && !tr.classList.contains('cc-row-anotado'))
+      .map(tr => tr.querySelector('.cc-prod-btn').firstChild.textContent.trim());
+  };
+  const guardadoEnEspera = () => datos.escrituras
+    .filter(e => e.datos && 'en_espera' in e.datos).map(e => e.datos.en_espera);
+
+  async function tocar(nombre, accion, clase) {
+    const tr = fila(nombre);
+    const estaba = tr.classList.contains(clase);
+    tr.querySelector(`[data-action="${accion}"]`).click();
+    for (let i = 0; i < 120; i++) {
+      await esperar(5);
+      const ahora = fila(nombre);
+      if (ahora && !ahora.classList.contains('cc-row-yendose') && ahora.classList.contains(clase) !== estaba) return;
+    }
+  }
+  const pausar = (nombre) => tocar(nombre, 'en-espera', 'cc-row-pausa');
+  const anotar = (nombre) => tocar(nombre, 'anotar', 'cc-row-anotado');
+
+  it('ponerlo en espera lo manda al fondo, en su bloque y guardado', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    const antes = enPantalla();
+    expect(cortePausa()).toBeNull();
+    await pausar('AAA PRIMERO');
+    expect(enPantalla()).toEqual([...antes.slice(1), 'AAA PRIMERO']);
+    expect(cortePausa().textContent).toContain('(1)');
+    expect(fila('AAA PRIMERO').querySelector('.cc-chip-pausa')).toBeTruthy();
+    // No se puede tildar para comprar mientras espera.
+    expect(fila('AAA PRIMERO').querySelector('.cc-check')).toBeNull();
+    for (let i = 0; i < 6; i++) await esperar();
+    const guardado = guardadoEnEspera().at(-1);
+    expect(Object.keys(guardado)).toEqual(['a']);
+    expect(guardado.a).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('va abajo de lo anotado en el cuaderno', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    await anotar('BBB SEGUNDO');
+    await pausar('AAA PRIMERO');
+    expect(enPantalla().slice(-2)).toEqual(['BBB SEGUNDO', 'AAA PRIMERO']);
+    const cuaderno = document.querySelector('.cc-cutoff-cuaderno');
+    expect(cuaderno.compareDocumentPosition(cortePausa()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('deja de contar en el presupuesto: la plata pasa a lo que sigue', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    const tope = document.getElementById('cc-tope');
+    tipear(tope, '30000');
+    await esperar(320);
+    for (let i = 0; i < 12; i++) await esperar();
+    const antes = entran();
+    expect(antes[0]).toBe('AAA PRIMERO');
+
+    await pausar('AAA PRIMERO');
+    const despues = entran();
+    expect(despues).not.toContain('AAA PRIMERO');
+    expect(despues.length).toBeGreaterThan(antes.length - 1);
+    expect(despues.some(n => !antes.includes(n)), 'algo que no entraba tiene que entrar').toBe(true);
+    expect(fila('AAA PRIMERO').classList.contains('cc-row-espera'), 'no se atenúa como lo que no entra').toBe(false);
+
+    tipear(tope, '');
+    await esperar(320);
+  });
+
+  it('sacarle la marca lo devuelve a su lugar', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    const antes = enPantalla();
+    await pausar('AAA PRIMERO');
+    await pausar('AAA PRIMERO');
+    expect(enPantalla()).toEqual(antes);
+    expect(cortePausa()).toBeNull();
+    for (let i = 0; i < 6; i++) await esperar();
+    expect(guardadoEnEspera().at(-1)).toHaveProperty('a');
+    expect(typeof guardadoEnEspera().at(-1).a, 'se borra, no queda una fecha').not.toBe('string');
+  });
+
+  it('una marca saca a la otra', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    await anotar('AAA PRIMERO');
+    await pausar('AAA PRIMERO');
+    expect(fila('AAA PRIMERO').classList.contains('cc-row-anotado')).toBe(false);
+    expect(document.querySelector('.cc-cutoff-cuaderno')).toBeNull();
+    await anotar('AAA PRIMERO');
+    expect(fila('AAA PRIMERO').classList.contains('cc-row-pausa')).toBe(false);
+    expect(cortePausa()).toBeNull();
+  });
+
+  it('la píldora filtra a solo lo que está en espera', async () => {
+    await montar('centro_compras', 'renderCentroCompras');
+    await pausar('AAA PRIMERO');
+    await pausar('CCC TERCERO');
+    const pill = document.querySelector('[data-action="filtro-en-espera"]');
+    expect(pill.textContent).toContain('2');
+    pill.click();
+    for (let i = 0; i < 12; i++) await esperar();
+    expect(enPantalla()).toEqual(['AAA PRIMERO', 'CCC TERCERO']);
+    expect(cortePausa()).toBeNull();
+  });
+
+  it('lo guardado en otra PC se ve al abrir', async () => {
+    datos.porColeccion.control_config = [{ __id: 'compras', en_espera: { b: '2026-11-10' } }];
+    await montar('centro_compras', 'renderCentroCompras');
+    expect(enPantalla().at(-1)).toBe('BBB SEGUNDO');
+    expect(fila('BBB SEGUNDO').querySelector('.cc-chip-pausa').textContent).toContain('10/11');
+  });
+});
+
 describe('Centro de Compras: el cuaderno se refresca una vez por semana', () => {
   // Pedido del 03/11/2026: lo anotado que no se consiguió quedaba al fondo y no
   // se volvía a pedir. El día elegido (lunes) vuelve solo a su lugar.

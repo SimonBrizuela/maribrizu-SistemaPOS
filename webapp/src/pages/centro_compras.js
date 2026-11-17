@@ -409,6 +409,7 @@ function keyAnotado(r) {
 function buildRows(alertas, comprasCfg) {
   const cobertura = Number(comprasCfg.cobertura_dias_objetivo) || COBERTURA_DEFAULT;
   const anotados = comprasCfg.anotados || {};
+  const enEspera = comprasCfg.en_espera || {};
   const rows = [];
   for (const a of (alertas || [])) {
     const cost = Math.max(0, Number(a.producto?.costo) || 0);
@@ -517,8 +518,10 @@ function buildRows(alertas, comprasCfg) {
       checked: false,
       registrado: false,
       anotado: null,
+      enEspera: null,
     };
-    row.anotado = anotados[keyAnotado(row)] || null;
+    row.enEspera = enEspera[keyAnotado(row)] || null;
+    row.anotado = row.enEspera ? null : (anotados[keyAnotado(row)] || null);
     row.busca = textoBusquedaCompra(row);
     rows.push(row);
   }
@@ -566,6 +569,7 @@ function variedadDelCatalogo(producto, color) {
 // filas nuevas que hay que agregar (las existentes se modifican en el lugar).
 function aplicarTemporadas(rows, recomendaciones, comprasCfg) {
   const anotados = comprasCfg.anotados || {};
+  const enEspera = comprasCfg.en_espera || {};
   const porClave = new Map();
   for (const r of rows) porClave.set(claveFila(r.doc_id, r.variedad), r);
 
@@ -670,6 +674,7 @@ function aplicarTemporadas(rows, recomendaciones, comprasCfg) {
       checked: false,
       registrado: false,
       anotado: null,
+      enEspera: null,
       porTemporada: true,
       temporada: rec.temporada,
       temporada_empuje: rec.empuje,
@@ -681,7 +686,8 @@ function aplicarTemporadas(rows, recomendaciones, comprasCfg) {
       temporada_estacion: rec.estacion || null,
       temporada_urgencia: rec.urgencia,
     };
-    row.anotado = anotados[keyAnotado(row)] || null;
+    row.enEspera = enEspera[keyAnotado(row)] || null;
+    row.anotado = row.enEspera ? null : (anotados[keyAnotado(row)] || null);
     row.busca = textoBusquedaCompra(row);
     nuevas.push(row);
     porClave.set(claveFila(row.doc_id, row.variedad), row);
@@ -718,8 +724,11 @@ function qtyADias(r, dias) {
 //      menores — esa plata es de los imprescindibles.
 // Deja en cada fila subtotal / fits / acumulado y devuelve corte + totales para
 // los avisos.
+//
+// Lo que está "en espera" (el proveedor no lo tiene) no se puede comprar: no
+// entra en el reparto y la plata queda para lo que sigue en la lista.
 function asignarPresupuesto(rows, budget, coberturaObj) {
-  const sisi = rows.filter(r => r.tier === 'sisi' && !r.sinCosto && !r.registrado);
+  const sisi = rows.filter(r => r.tier === 'sisi' && !r.sinCosto && !r.registrado && !r.enEspera);
   const costoSisiA = dias => sisi.reduce((t, r) => t + (r.qtyManual ? r.qty : qtyADias(r, dias)) * r.cost, 0);
 
   const costoSisiObjetivo = costoSisiA(coberturaObj);
@@ -740,7 +749,7 @@ function asignarPresupuesto(rows, budget, coberturaObj) {
   rows.forEach(r => {
     r.subtotal = r.qty * r.cost;
     r.fits = false;
-    if (r.sinCosto || r.registrado || !(r.subtotal > 0)) { r.acumulado = running; return; }
+    if (r.sinCosto || r.registrado || r.enEspera || !(r.subtotal > 0)) { r.acumulado = running; return; }
     const bloqueado = sisiCorto && r.tier !== 'sisi';
     if (!bloqueado && running + r.subtotal <= budget) {
       running += r.subtotal;
@@ -812,6 +821,7 @@ export async function renderCentroCompras(container, db) {
     rows,
     period: 'mes',        // 'mes' | 'semana'
     filtroAnotados: false,   // true = la tabla muestra solo lo marcado "en el cuaderno"
+    filtroEnEspera: false,   // true = la tabla muestra solo lo que está en espera del proveedor
     cuadernoFecha: '',       // con el cuaderno filtrado: día de anotado elegido (YYYY-MM-DD) o '' = todos
     busqueda: guardado.busqueda,   // texto del buscador de la lista (se filtra sin acentos)
     filtros: guardado.filtros,     // rubro / subrubro / proveedor / marca / nivel elegidos
@@ -841,6 +851,9 @@ export async function renderCentroCompras(container, db) {
   bindEvents(root);
   recalc(true);
   limpiarAnotadosViejos();
+  // Sin el historial de ventas la lista sale incompleta: lo que falta no
+  // salió de la lista, todavía no llegó. Se limpia cuando llegue.
+  if (ritmoConHistoria()) limpiarEsperasTerminadas();
   paintAvisoCuaderno();
   refrescarCuadernoSemanal();
   if (!ritmoConHistoria()) rehacerCuandoLlegueElHistorial();
@@ -888,6 +901,7 @@ function rehacerCuandoLlegueElHistorial() {
       s.rows = buildRows(fuentesCompra(alertas, s.comprasCfg), s.comprasCfg);
       mezclarTemporadas();
       recalc(true);
+      limpiarEsperasTerminadas();
     } catch (e) {
       console.warn('[centro_compras] no se pudo rehacer la lista con el historial:', e);
     }
@@ -1102,14 +1116,91 @@ async function toggleAnotado(i) {
   const mapa = { ...(s.comprasCfg.anotados || {}) };
   if (r.anotado) mapa[k] = r.anotado; else delete mapa[k];
   s.comprasCfg = { ...s.comprasCfg, anotados: mapa };
+  // Anotarlo es que se consiguió: si estaba en espera, deja de estarlo.
+  const salioDeEspera = !!(r.anotado && r.enEspera);
+  const cambios = { anotados: { [k]: r.anotado ? r.anotado : deleteField() } };
+  if (salioDeEspera) {
+    r.enEspera = null;
+    const espera = { ...(s.comprasCfg.en_espera || {}) };
+    delete espera[k];
+    s.comprasCfg = { ...s.comprasCfg, en_espera: espera };
+    cambios.en_espera = { [k]: deleteField() };
+  }
   if (r.anotado) await verLaFilaIrse(i);
-  paintTable();
-  paintResumen();
+  if (salioDeEspera) reasignarPresupuesto();
+  else { paintTable(); paintResumen(); }
   try {
-    await saveComprasConfig(_db, { anotados: { [k]: r.anotado ? r.anotado : deleteField() } });
+    await saveComprasConfig(_db, cambios);
   } catch (e) {
     console.warn('[centro_compras] no se pudo guardar la marca de anotado:', e);
   }
+}
+
+// ── Marca "en espera" ─────────────────────────────────────────────────────────
+// Pedido del dueño (16/11/2026): hay productos que el proveedor no consigue o no
+// tiene, y pueden tardar semanas en volver. No se pueden borrar (van a volver a
+// entrar), pero ocupaban los primeros lugares de la lista y se comían la plata
+// del presupuesto. En espera, el producto baja a su propio bloque al fondo, en
+// naranja, y deja de contar en el presupuesto: la plata pasa a lo que sigue.
+// Es una marca distinta de la del cuaderno: anotado = lo voy a comprar; en
+// espera = no lo puedo comprar todavía. Una saca a la otra.
+// Se va sola cuando se registra la compra o cuando el producto sale de la lista
+// porque volvió a entrar stock.
+async function toggleEnEspera(i) {
+  const s = _state;
+  const r = s.rows[i];
+  if (!r || r.registrado) return;
+  const k = keyAnotado(r);
+  r.enEspera = r.enEspera ? null : hoyAR();
+  const espera = { ...(s.comprasCfg.en_espera || {}) };
+  if (r.enEspera) espera[k] = r.enEspera; else delete espera[k];
+  s.comprasCfg = { ...s.comprasCfg, en_espera: espera };
+  const cambios = { en_espera: { [k]: r.enEspera ? r.enEspera : deleteField() } };
+  if (r.enEspera) {
+    r.checked = false;
+    if (r.anotado) {
+      r.anotado = null;
+      const mapa = { ...(s.comprasCfg.anotados || {}) };
+      delete mapa[k];
+      s.comprasCfg = { ...s.comprasCfg, anotados: mapa };
+      cambios.anotados = { [k]: deleteField() };
+    }
+    await verLaFilaIrse(i);
+  }
+  reasignarPresupuesto();
+  try {
+    await saveComprasConfig(_db, cambios);
+  } catch (e) {
+    console.warn('[centro_compras] no se pudo guardar la marca de en espera:', e);
+  }
+}
+
+// Vuelve a repartir la plata sin pisar lo que el dueño tildó o destildó a mano:
+// solo cambia la tilde de las filas que entraron o salieron del presupuesto.
+function reasignarPresupuesto() {
+  const s = _state;
+  const antes = s.rows.map(r => r.fits);
+  s.alloc = asignarPresupuesto(s.rows, budgetActivo(), coberturaObjetivo());
+  s.rows.forEach((r, j) => { if (r.fits !== antes[j]) r.checked = r.fits; });
+  recalc(false);
+}
+
+// La espera termina cuando el producto sale de la lista: volvió a entrar
+// stock. Si la lista vino vacía no se toca nada (puede ser que no cargó).
+function limpiarEsperasTerminadas() {
+  const s = _state;
+  const mapa = s.comprasCfg.en_espera || {};
+  const claves = Object.keys(mapa);
+  if (!claves.length || !s.rows.length) return;
+  const vivos = new Set(s.rows.map(keyAnotado));
+  const borrar = claves.filter(k => !vivos.has(k));
+  if (!borrar.length) return;
+  const nuevo = { ...mapa };
+  const partial = {};
+  for (const k of borrar) { delete nuevo[k]; partial[k] = deleteField(); }
+  s.comprasCfg = { ...s.comprasCfg, en_espera: nuevo };
+  saveComprasConfig(_db, { en_espera: partial })
+    .catch(e => console.warn('[centro_compras] limpiar esperas terminadas:', e));
 }
 
 // Limpieza silenciosa: marcas de productos que ya no figuran en la lista (se
@@ -1197,7 +1288,7 @@ function aplicarMarcasDelCuaderno(cfg) {
     cuaderno_refrescado: cfg.cuaderno_refrescado,
     cuaderno_desmarcados: cfg.cuaderno_desmarcados,
   };
-  for (const r of s.rows) r.anotado = (s.comprasCfg.anotados || {})[keyAnotado(r)] || null;
+  for (const r of s.rows) r.anotado = r.enEspera ? null : ((s.comprasCfg.anotados || {})[keyAnotado(r)] || null);
   paintTable();
   paintResumen();
   paintAvisoCuaderno();
@@ -1393,7 +1484,7 @@ function pageHtml() {
             <span class="material-icons">close</span>
           </button>
         </div>
-        <span class="cc-hint">Del más urgente al que puede esperar: pesa más lo que se vende todas las semanas que una venta grande suelta, y nunca se olvida de lo que está sin stock o bajo el mínimo ·Registrar descuenta el presupuesto, no el stock · La lapicera marca lo que ya está en el cuaderno.</span>
+        <span class="cc-hint">Del más urgente al que puede esperar: pesa más lo que se vende todas las semanas que una venta grande suelta, y nunca se olvida de lo que está sin stock o bajo el mínimo ·Registrar descuenta el presupuesto, no el stock · La lapicera marca lo que ya está en el cuaderno · La pausa deja en espera lo que el proveedor no tiene.</span>
       </div>
       <div class="cc-filtros" id="cc-filtros">
         <span class="material-icons cc-filtros-ico" title="Los filtros se combinan entre sí y con la lupa">filter_list</span>
@@ -1543,6 +1634,7 @@ function criteriosLista() {
     filtros: s.filtros,
     busqueda: s.busqueda,
     soloAnotados: s.filtroAnotados,
+    soloEnEspera: s.filtroEnEspera,
     fechaAnotado: s.filtroAnotados ? s.cuadernoFecha : '',
     soloTemporada: s.temporadaFiltro || '',
   };
@@ -1863,6 +1955,7 @@ function pintarFilas() {
   // solo lo anotado. Si no queda nada anotado, el filtro se apaga solo (la
   // píldora desaparece y no habría forma de sacarlo).
   if (s.filtroAnotados && !s.rows.some(r => r.anotado && !r.registrado)) s.filtroAnotados = false;
+  if (s.filtroEnEspera && !s.rows.some(r => r.enEspera && !r.registrado)) s.filtroEnEspera = false;
   if (!s.filtroAnotados) s.cuadernoFecha = '';
   if (s.cuadernoFecha && !s.rows.some(r => r.anotado === s.cuadernoFecha && !r.registrado)) s.cuadernoFecha = '';
   // Selects (rubro, subrubro, proveedor, marca, nivel), lupa y cuaderno se
@@ -1888,15 +1981,20 @@ function pintarFilas() {
   //
   // Con el filtro "en el cuaderno" puesto no se separa nada: ahí TODO lo que se
   // ve está anotado, y el bloque quedaría con la lista entera adentro.
-  const arriba = [], abajo = [], enElCuaderno = [];
+  //
+  // Lo que está en espera del proveedor va todavía más abajo, después del
+  // cuaderno: no se puede comprar, así que no tiene que tapar nada.
+  const arriba = [], abajo = [], enElCuaderno = [], enEspera = [];
   const revisado = r => !!r.anotado && !r.registrado && !s.filtroAnotados;
+  const esperando = r => !!r.enEspera && !r.registrado && !s.filtroEnEspera;
   s.rows.forEach((r, i) => {
     if (!visible(r)) return;
-    if (revisado(r)) enElCuaderno.push(i);
+    if (esperando(r)) enEspera.push(i);
+    else if (revisado(r)) enElCuaderno.push(i);
     else ((r.registrado || r.fits) ? arriba : abajo).push(i);
   });
-  paintFiltros(arriba.length + abajo.length + enElCuaderno.length);
-  if (!arriba.length && !abajo.length && !enElCuaderno.length) {
+  paintFiltros(arriba.length + abajo.length + enElCuaderno.length + enEspera.length);
+  if (!arriba.length && !abajo.length && !enElCuaderno.length && !enEspera.length) {
     const nFiltros = cantidadFiltros(s.filtros);
     const epoca = s.temporadaFiltro
       ? (s.proximas.find(p => p.id === s.temporadaFiltro)?.nombre || 'la fecha elegida') : '';
@@ -1904,6 +2002,7 @@ function pintarFilas() {
       s.busqueda ? `la búsqueda "${esc(s.busqueda)}"` : '',
       nFiltros ? (nFiltros === 1 ? 'el filtro puesto' : 'los filtros puestos') : '',
       s.filtroAnotados ? 'lo del cuaderno' : '',
+      s.filtroEnEspera ? 'lo que está en espera' : '',
       epoca ? `lo de ${esc(epoca)}` : '',
     ].filter(Boolean).join(' y ');
     tbody.innerHTML = `<tr><td colspan="10" class="cc-empty">
@@ -1947,6 +2046,13 @@ function pintarFilas() {
     tbody.innerHTML = parts.join('');
     return;
   }
+  // Con el filtro de espera puesto se ve solo eso, en el orden de urgencia:
+  // lo primero que hay que volver a pedirle al proveedor queda arriba.
+  if (s.filtroEnEspera) {
+    [...arriba, ...abajo].forEach(emit);
+    tbody.innerHTML = parts.join('');
+    return;
+  }
   arriba.forEach(emit);
   if (abajo.length) {
     // El corte separa lo que entra en la plata de lo que no. Sin nada arriba no
@@ -1983,6 +2089,13 @@ function pintarFilas() {
       Esto ya lo anotaste en el cuaderno (${enElCuaderno.length}) · ${nota}</td></tr>`);
     prevDoc = null;
     emitirPorDia(enElCuaderno);
+  }
+  if (enEspera.length) {
+    parts.push(`<tr class="cc-cutoff cc-cutoff-pausa"><td colspan="10">
+      <span class="material-icons">pause_circle</span>
+      En espera del proveedor (${enEspera.length}) · no cuentan en el presupuesto hasta que vuelvan a entrar</td></tr>`);
+    prevDoc = null;
+    enEspera.forEach(emit);
   }
   tbody.innerHTML = parts.join('');
 }
@@ -2075,8 +2188,9 @@ function tendenciaDe(r) {
 
 function rowHtml(r, i, esContinuacion) {
   // Atenuada solo si quedó fuera del plan y el usuario tampoco la marcó a mano.
-  const espera = !r.registrado && !r.sinCosto && !r.fits && !r.checked;
-  const anotado = !r.registrado && !!r.anotado;
+  const pausado = !r.registrado && !!r.enEspera;
+  const espera = !r.registrado && !r.sinCosto && !r.fits && !r.checked && !pausado;
+  const anotado = !r.registrado && !!r.anotado && !pausado;
   // Lo que está por la fecha del año se pinta distinto: era el pedido del
   // dueño, poder ver de un vistazo que ese producto no figura porque se esté
   // acabando sino porque se viene el Día de la Madre.
@@ -2084,6 +2198,7 @@ function rowHtml(r, i, esContinuacion) {
   const cls = [
     r.registrado ? 'cc-row-reg' : '',
     anotado ? 'cc-row-anotado' : '',
+    pausado ? 'cc-row-pausa' : '',
     porEpoca ? 'cc-row-epoca' : '',
     espera ? 'cc-row-espera' : '',
     esContinuacion ? 'cc-row-varcont' : '',
@@ -2133,13 +2248,26 @@ function rowHtml(r, i, esContinuacion) {
        <span class="material-icons">edit_note</span></button>`;
   // Sumar el producto a una temporada o fecha, desde la misma fila: el dueño
   // ve guantes en la lista y con dos toques quedan en el Invierno para siempre.
+  // En espera: el proveedor no lo tiene. Chip con la fecha desde que se espera
+  // + botón para prender o sacar la marca.
+  const fEsp = pausado ? `${r.enEspera.slice(8, 10)}/${r.enEspera.slice(5, 7)}` : '';
+  if (pausado) chip += `<span class="cc-chip cc-chip-pausa" title="En espera desde el ${fEsp}: el proveedor no lo tiene. No cuenta en el presupuesto. Sacale la marca cuando vuelva a conseguirse; si entra stock, sale sola de la lista.">en espera desde ${fEsp}</span>`;
+  const btnEspera = r.registrado ? '' :
+    `<button type="button" class="cc-anotar cc-btn-pausa${pausado ? ' is-on' : ''}" data-action="en-espera" data-idx="${i}"
+       title="${pausado ? 'Volver a la lista: el proveedor ya lo tiene' : 'Poner en espera: el proveedor no lo tiene o no hay stock. Baja al fondo y deja de contar en el presupuesto'}">
+       <span class="material-icons">${pausado ? 'play_circle' : 'pause_circle'}</span></button>`;
   const btnTemporada = r.registrado ? '' :
     `<button type="button" class="cc-anotar cc-btn-temp" data-action="menu-temporada" data-idx="${i}"
        aria-haspopup="menu" title="Sumar a una temporada (Invierno, Verano) o a una fecha">
        <span class="material-icons">event_available</span></button>`;
-  const chipAcciones = chip + btnTemporada + btnAnotar;
+  // Los botones van juntos: si no entran al lado del chip bajan los tres, no
+  // uno solo colgado en otra línea.
+  const botones = btnTemporada + btnAnotar + btnEspera;
+  const chipAcciones = chip + (botones ? `<span class="cc-prod-btns">${botones}</span>` : '');
 
-  const checkbox = r.sinCosto || r.registrado
+  const checkbox = pausado
+    ? `<span class="material-icons cc-check-off" title="En espera del proveedor: no se compra por ahora">pause</span>`
+    : r.sinCosto || r.registrado
     ? `<span class="material-icons cc-check-off" title="${r.sinCosto ? 'Sin costo cargado' : 'Ya registrado'}">${r.sinCosto ? 'block' : 'check_circle'}</span>`
     : `<input type="checkbox" class="cc-check" data-idx="${i}"${r.checked ? ' checked' : ''} />`;
 
@@ -2309,7 +2437,9 @@ function paintAjustes() {
 function paintResumen() {
   const el = document.getElementById('cc-tiers');
   if (!el) return;
-  const act = _state.rows.filter(r => !r.registrado);
+  const todas = _state.rows.filter(r => !r.registrado);
+  // Lo que está en espera no se puede comprar: no suma en la plata de cada nivel.
+  const act = todas.filter(r => !r.enEspera);
   const totalDe = tier => {
     const list = act.filter(r => r.tier === tier && !r.sinCosto);
     return { n: list.length, total: list.reduce((t, r) => t + r.qty * r.cost, 0) };
@@ -2335,6 +2465,14 @@ function paintResumen() {
        <span class="material-icons">${filtroOn ? 'filter_alt_off' : 'filter_alt'}</span></button>`;
   // Con el filtro del cuaderno puesto aparece la impresión: la hoja para llevar
   // al mayorista y anotar a mano cuánto se compró y se pagó de cada cosa.
+  const enEspera = todas.filter(r => r.enEspera).length;
+  if (enEspera === 0) _state.filtroEnEspera = false;
+  const esperaOn = _state.filtroEnEspera;
+  const pillEspera = enEspera === 0 ? '' :
+    `<button type="button" class="cc-tier-pill cc-tier-pausa${esperaOn ? ' is-on' : ''}" data-action="filtro-en-espera"
+       title="${esperaOn ? 'Mostrando solo lo que está en espera. Click para ver la lista completa.' : 'Click para ver solo lo que está en espera del proveedor'}">
+       En espera <span>${enEspera}</span>
+       <span class="material-icons">${esperaOn ? 'filter_alt_off' : 'filter_alt'}</span></button>`;
   const btnImprimir = (anotados === 0 || !filtroOn) ? '' :
     `<button type="button" class="cc-tier-pill cc-tier-print" data-action="imprimir-cuaderno"
        title="La lista del cuaderno en una hoja para imprimir o guardar como PDF, con columnas para anotar a mano lo comprado y lo pagado">
@@ -2357,6 +2495,7 @@ function paintResumen() {
     + pillEpoca
     + pillAnotados
     + btnImprimir
+    + pillEspera
     + warnCosto;
 }
 
@@ -3108,8 +3247,18 @@ function onClick(e) {
       btn.focus({ preventScroll: true });
       break;
     }
+    case 'en-espera':
+      toggleEnEspera(Number(btn.dataset.idx));
+      break;
+    case 'filtro-en-espera':
+      s.filtroEnEspera = !s.filtroEnEspera;
+      if (s.filtroEnEspera) s.filtroAnotados = false;
+      paintTable();
+      paintResumen();
+      break;
     case 'filtro-anotados':
       s.filtroAnotados = !s.filtroAnotados;
+      if (s.filtroAnotados) s.filtroEnEspera = false;
       paintTable();
       paintResumen();
       break;
@@ -3418,13 +3567,22 @@ async function registrarCompra(btn) {
   // nada pendiente de conseguir.
   const idsReg = new Set(items.map(r => r.doc_id));
   const anotDel = {};
+  const espDel = {};
   s.rows.forEach(r => {
     if (idsReg.has(r.doc_id)) {
       r.registrado = true;
       r.checked = false;
       if (r.anotado) { anotDel[keyAnotado(r)] = deleteField(); r.anotado = null; }
+      if (r.enEspera) { espDel[keyAnotado(r)] = deleteField(); r.enEspera = null; }
     }
   });
+  if (Object.keys(espDel).length) {
+    const mapa = { ...(s.comprasCfg.en_espera || {}) };
+    for (const k of Object.keys(espDel)) delete mapa[k];
+    s.comprasCfg = { ...s.comprasCfg, en_espera: mapa };
+    saveComprasConfig(_db, { en_espera: espDel })
+      .catch(e => console.warn('[centro_compras] limpiar esperas compradas:', e));
+  }
   if (Object.keys(anotDel).length) {
     const mapa = { ...(s.comprasCfg.anotados || {}) };
     for (const k of Object.keys(anotDel)) delete mapa[k];

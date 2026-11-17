@@ -4559,6 +4559,15 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
 .cc-tier-print .material-icons { font-size: 15px !important; }
 .cc-tier-print:hover { border-color: var(--primary); color: var(--primary); }
 .cc-tier-print:hover .material-icons { color: var(--primary); }
+/* Píldora "En espera": filtra la tabla a lo que el proveedor no tiene. */
+.cc-tier-pausa { --cc-dot: var(--tint-orange-fg); cursor: pointer; font-family: inherit; }
+.cc-tier-pausa .material-icons { font-size: 15px !important; color: var(--text-muted); }
+.cc-tier-pausa:hover { border-color: var(--tint-orange-fg); }
+.cc-tier-pausa.is-on {
+  background: var(--tint-orange-bg); border-color: var(--tint-orange-fg);
+  color: var(--tint-orange-fg);
+}
+.cc-tier-pausa.is-on span, .cc-tier-pausa.is-on .material-icons { color: var(--tint-orange-fg); }
 
 /* Barra de registro */
 .cc-registrar {
@@ -4764,6 +4773,7 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
    mismo lugar. Mezclado con el nombre, el acomodo cambiaba en cada fila según
    cuánto medía el nombre. */
 .cc-prod-acc { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-top: 5px; }
+.cc-prod-btns { display: inline-flex; align-items: center; gap: 6px; flex-wrap: nowrap; }
 .cc-table tbody tr:hover { background: var(--surface-hover); }
 .cc-prod { font-weight: 600; color: var(--text); display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .cc-cob {
@@ -4854,6 +4864,23 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
   color: var(--tint-green-fg);
 }
 .cc-row-anotado .cc-anotar.is-on { background: var(--card-bg); }
+
+/* En espera del proveedor: no se consigue por ahora. Mismo tratamiento que el
+   cuaderno pero en naranja, así de lejos se distingue "lo voy a comprar" de
+   "no lo puedo comprar todavía". Gana sobre el azul de la época. */
+.cc-row-pausa, .cc-row-pausa.cc-row-epoca { background: color-mix(in srgb, var(--tint-orange-fg) 9%, var(--card-bg)) !important; }
+.cc-row-pausa td, .cc-row-pausa.cc-row-epoca td { border-top: 1px solid var(--tint-orange-fg); border-bottom: 1px solid var(--tint-orange-fg); border-color: var(--tint-orange-fg); }
+.cc-row-pausa td:first-child { border-left: 3px solid var(--tint-orange-fg); }
+.cc-row-pausa td:last-child { border-right: 1px solid var(--tint-orange-fg); }
+.cc-chip-pausa {
+  background: var(--card-bg); color: var(--tint-orange-fg);
+  border: 1px solid var(--tint-orange-fg); text-transform: none;
+}
+.cc-btn-pausa:hover { border-color: var(--tint-orange-fg); color: var(--tint-orange-fg); }
+.cc-btn-pausa.is-on {
+  background: var(--card-bg); border-color: var(--tint-orange-fg);
+  color: var(--tint-orange-fg);
+}
 
 /* Lo que está en la lista POR LA FECHA del año (Día de la Madre, el 6 de
    septiembre, las patrias). El pedido del dueño fue poder ver de un vistazo que
@@ -5235,6 +5262,12 @@ tr.cc-row-varcont .cc-prod-btn:hover { color: var(--primary); }
   border-color: var(--tint-green-fg);
 }
 .cc-cutoff-cuaderno .material-icons { color: var(--tint-green-fg); }
+.cc-cutoff-pausa td {
+  background: color-mix(in srgb, var(--tint-orange-fg) 8%, var(--surface-2));
+  color: var(--tint-orange-fg);
+  border-color: var(--tint-orange-fg);
+}
+.cc-cutoff-pausa .material-icons { color: var(--tint-orange-fg); }
 /* Día en que se anotó: separa lo anotado por fecha, del más nuevo al más
    viejo. Más liviano que el corte: es un título dentro del bloque verde. */
 .cc-dia-cuaderno td {

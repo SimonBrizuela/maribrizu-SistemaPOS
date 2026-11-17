@@ -86,6 +86,13 @@ describe('qué renglón pasa', () => {
     expect(LISTA.filter(r => coincideCompra(r, crit({ rubro: 'libreria' }, { soloAnotados: true })))).toEqual([]);
   });
 
+  it('"en espera" deja solo lo que espera al proveedor y se combina con los selects', () => {
+    const lista = [...LISTA, fila({ nombre: 'CINTA BEBE', codigo: 'C01', rubro: 'MERCERIA', enEspera: '2026-11-16' }),
+      fila({ nombre: 'CINTA YA COMPRADA', codigo: 'C02', enEspera: '2026-11-01', registrado: true })];
+    expect(lista.filter(r => coincideCompra(r, crit({}, { soloEnEspera: true }))).map(r => r.nombre)).toEqual(['CINTA BEBE']);
+    expect(lista.filter(r => coincideCompra(r, crit({ rubro: 'libreria' }, { soloEnEspera: true })))).toEqual([]);
+  });
+
   it('ignorar un campo lo saca de la evaluación (para armar sus opciones)', () => {
     const c = crit({ rubro: 'papeleria', proveedor: 'distri sur' });
     expect(LISTA.filter(r => coincideCompra(r, c))).toEqual([]);

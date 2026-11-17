@@ -103,6 +103,8 @@ export function tokensBusqueda(busqueda) {
 export function coincideCompra(row, criterios, ignorar = null) {
   const filtros = criterios?.filtros || {};
   if (criterios?.soloAnotados && !(row.anotado && !row.registrado)) return false;
+  // "En espera": lo que el proveedor no tiene y se sacó de la lista por ahora.
+  if (criterios?.soloEnEspera && !(row.enEspera && !row.registrado)) return false;
   // Día en que se anotó en el cuaderno: solo cuenta con el cuaderno filtrado.
   if (criterios?.soloAnotados && criterios.fechaAnotado && ignorar !== CAMPO_CUADERNO.k
       && row.anotado !== criterios.fechaAnotado) return false;
